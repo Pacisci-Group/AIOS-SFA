@@ -1,0 +1,25 @@
+{
+  "name": "sfa-apps",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "api:dev": "npm run dev -w @sfa/api",
+    "api:build": "npm run build -w @sfa/api",
+    "api:start": "npm run start:prod -w @sfa/api",
+    "api:seed": "npm run seed -w @sfa/api",
+    "api:seed:dev": "npm run seed:dev -w @sfa/api",
+    "web:dev": "npm run dev -w @sfa/web",
+    "web:build": "npm run build -w @sfa/web",
+    "web:preview": "npm run preview -w @sfa/web",
+    "shared:build": "npm run build -w @sfa/shared",
+    "dev": "npm run api:dev",
+    "test:e2e": "npm run test:e2e -w @sfa/api",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

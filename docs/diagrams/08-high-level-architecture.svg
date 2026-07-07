@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 420" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1565C0"/>
+    </marker>
+    <style>
+      .client { fill: #E3F2FD; stroke: #1565C0; stroke-width: 2; rx: 10; }
+      .api { fill: #FFF3E0; stroke: #EF6C00; stroke-width: 2; rx: 10; }
+      .data { fill: #E8F5E9; stroke: #2E7D32; stroke-width: 2; rx: 10; }
+      .node { fill: #fff; stroke: #546E7A; stroke-width: 1.5; rx: 6; }
+      .db { fill: #E8F5E9; stroke: #2E7D32; stroke-width: 2; }
+      .label { font-size: 12px; fill: #263238; }
+      .title { font-size: 13px; font-weight: bold; }
+      .line { stroke: #1565C0; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .line-label { font-size: 10px; fill: #1565C0; }
+    </style>
+  </defs>
+  <rect class="client" x="140" y="20" width="220" height="70"/>
+  <text class="title" fill="#1565C0" x="250" y="45" text-anchor="middle">Client Layer</text>
+  <rect class="node" x="170" y="55" width="160" height="28"/><text class="label" x="250" y="74" text-anchor="middle">Next.js Web App (PWA)</text>
+
+  <rect class="api" x="100" y="140" width="300" height="120"/>
+  <text class="title" fill="#EF6C00" x="250" y="165" text-anchor="middle">API Layer</text>
+  <rect class="node" x="120" y="180" width="120" height="30"/><text class="label" x="180" y="200" text-anchor="middle">NestJS Backend</text>
+  <rect class="node" x="260" y="180" width="110" height="30"/><text class="label" x="315" y="200" text-anchor="middle">Auth &amp; Guards</text>
+  <rect class="node" x="180" y="220" width="140" height="30"/><text class="label" x="250" y="240" text-anchor="middle">Business Modules</text>
+
+  <rect class="data" x="100" y="310" width="300" height="90"/>
+  <text class="title" fill="#2E7D32" x="250" y="335" text-anchor="middle">Data Layer</text>
+  <ellipse class="db" cx="180" cy="370" rx="55" ry="28"/><text class="label" x="180" y="375" text-anchor="middle">MongoDB</text>
+  <rect class="node" x="270" y="350" width="110" height="40"/><text class="label" x="325" y="368" text-anchor="middle">File Storage</text><text class="label" x="325" y="382" text-anchor="middle" font-size="10">S3 / equivalent</text>
+
+  <line class="line" x1="250" y1="90" x2="250" y2="140"/>
+  <text class="line-label" x="258" y="120">HTTPS + JWT</text>
+  <line class="line" x1="210" y1="260" x2="180" y2="342"/>
+  <line class="line" x1="290" y1="260" x2="325" y2="350"/>
+</svg>

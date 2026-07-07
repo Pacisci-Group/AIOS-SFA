@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 120" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1565C0"/>
+    </marker>
+    <style>
+      .box { fill: #E3F2FD; stroke: #1565C0; stroke-width: 2; rx: 8; }
+      .diamond { fill: #FFF8E1; stroke: #F9A825; stroke-width: 2; }
+      .end { fill: #E8F5E9; stroke: #2E7D32; stroke-width: 2; rx: 8; }
+      .label { font-size: 11px; fill: #263238; }
+      .line { stroke: #1565C0; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="box" x="10" y="40" width="100" height="40"/><text class="label" x="60" y="65" text-anchor="middle">User logs in</text>
+  <polygon class="diamond" points="150,60 200,30 250,60 200,90"/><text class="label" x="200" y="58" text-anchor="middle">Agency?</text>
+  <polygon class="diamond" points="290,60 340,30 390,60 340,90"/><text class="label" x="340" y="58" text-anchor="middle">Branch?</text>
+  <polygon class="diamond" points="430,60 490,30 550,60 490,90"/><text class="label" x="490" y="55" text-anchor="middle">Feature on?</text>
+  <polygon class="diamond" points="590,60 650,30 710,60 650,90"/><text class="label" x="650" y="55" text-anchor="middle">Role allows?</text>
+  <rect class="end" x="750" y="40" width="120" height="40"/><text class="label" x="810" y="65" text-anchor="middle">Allow or Deny</text>
+  <line class="line" x1="110" y1="60" x2="150" y2="60"/>
+  <line class="line" x1="250" y1="60" x2="290" y2="60"/>
+  <line class="line" x1="390" y1="60" x2="430" y2="60"/>
+  <line class="line" x1="550" y1="60" x2="590" y2="60"/>
+  <line class="line" x1="710" y1="60" x2="750" y2="60"/>
+</svg>

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#455A64"/>
+    </marker>
+    <style>
+      .box { fill: #fff; stroke: #455A64; stroke-width: 2; rx: 8; }
+      .title { font-size: 14px; font-weight: bold; fill: #263238; }
+      .label { font-size: 12px; fill: #37474F; }
+      .group { fill: #ECEFF1; stroke: #90A4AE; stroke-width: 2; rx: 12; }
+      .line { stroke: #455A64; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="group" x="240" y="20" width="240" height="70"/>
+  <text class="title" x="360" y="45" text-anchor="middle">Platform Level</text>
+  <rect class="box" x="280" y="55" width="160" height="28"/>
+  <text class="label" x="360" y="74" text-anchor="middle">Super Admin</text>
+
+  <rect class="group" x="240" y="120" width="240" height="70"/>
+  <text class="title" x="360" y="145" text-anchor="middle">Agency Level</text>
+  <rect class="box" x="270" y="155" width="180" height="28"/>
+  <text class="label" x="360" y="174" text-anchor="middle">Agency Owner</text>
+
+  <rect class="group" x="40" y="240" width="280" height="250"/>
+  <text class="title" x="180" y="265" text-anchor="middle">Branch A</text>
+  <rect class="box" x="100" y="285" width="160" height="28"/><text class="label" x="180" y="304" text-anchor="middle">Branch Manager</text>
+  <rect class="box" x="70" y="340" width="120" height="28"/><text class="label" x="130" y="359" text-anchor="middle">Producers</text>
+  <rect class="box" x="210" y="340" width="120" height="28"/><text class="label" x="270" y="359" text-anchor="middle">CRM Staff</text>
+
+  <rect class="group" x="400" y="240" width="280" height="250"/>
+  <text class="title" x="540" y="265" text-anchor="middle">Branch B</text>
+  <rect class="box" x="460" y="285" width="160" height="28"/><text class="label" x="540" y="304" text-anchor="middle">Branch Manager</text>
+  <rect class="box" x="430" y="340" width="120" height="28"/><text class="label" x="490" y="359" text-anchor="middle">Producers</text>
+  <rect class="box" x="570" y="340" width="120" height="28"/><text class="label" x="630" y="359" text-anchor="middle">CRM Staff</text>
+
+  <line class="line" x1="360" y1="90" x2="360" y2="120"/>
+  <line class="line" x1="360" y1="190" x2="180" y2="240"/>
+  <line class="line" x1="360" y1="190" x2="540" y2="240"/>
+  <line class="line" x1="180" y1="313" x2="130" y2="340"/>
+  <line class="line" x1="180" y1="313" x2="270" y2="340"/>
+  <line class="line" x1="540" y1="313" x2="490" y2="340"/>
+  <line class="line" x1="540" y1="313" x2="630" y2="340"/>
+
+  <text class="label" x="300" y="218" text-anchor="middle">Oversees branches</text>
+  <text class="label" x="470" y="218" text-anchor="middle">Invites employees</text>
+</svg>
