@@ -11,5 +11,17 @@ services:
       - .env
     environment:
       PORT: 4000
+      CORS_ORIGIN: http://localhost:5173,http://localhost:4000
     command: >
       sh -c "node packages/api/dist/seed/seed.js && node packages/api/dist/main.js"
+
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+    container_name: sfa-web
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - api

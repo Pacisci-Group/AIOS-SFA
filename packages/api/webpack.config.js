@@ -1,10 +1,19 @@
 const path = require('path');
 
 /**
- * Dev: bundle @sfa/shared from TypeScript source; leave node_modules (bcrypt, etc.) external.
+ * Dev + prod: bundle @sfa/shared from TypeScript source; leave node_modules external.
+ * Emits dist/main.js and dist/seed/seed.js (used by Docker compose and npm run seed).
  */
 module.exports = (options) => ({
   ...options,
+  entry: {
+    main: options.entry,
+    'seed/seed': path.resolve(__dirname, 'src/seed/seed.ts'),
+  },
+  output: {
+    ...options.output,
+    filename: '[name].js',
+  },
   externals: [
     ...(Array.isArray(options.externals) ? options.externals : []),
     ({ request }, callback) => {
