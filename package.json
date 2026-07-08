@@ -16,7 +16,7 @@
     "shared:build": "npm run build -w @sfa/shared",
     "dev": "npm run api:dev",
     "test:e2e": "npm run test:e2e -w @sfa/api",
-    "docker:up": "docker compose up --build",
+    "docker:up": "docker compose up --build -d",
     "docker:down": "docker compose down"
   },
   "engines": {
