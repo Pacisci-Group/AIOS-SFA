@@ -5,7 +5,7 @@ COMPOSE := docker compose
 help:
 	@echo "SFA Platform — Docker commands"
 	@echo ""
-	@echo "  make up       Build and start API + web (detached)"
+	@echo "  make up       Build and start MongoDB, API, and web (detached)"
 	@echo "  make down     Stop and remove containers"
 	@echo "  make logs     Follow container logs"
 	@echo "  make build    Build images without starting"
@@ -16,8 +16,9 @@ up start: build
 	$(COMPOSE) up -d
 	@echo ""
 	@echo "SFA is running:"
-	@echo "  Web: http://localhost:5173"
-	@echo "  API: http://localhost:4000/api/v1"
+	@echo "  Web:   http://localhost:5173"
+	@echo "  API:   http://localhost:4000/api/v1"
+	@echo "  Mongo: mongodb://localhost:27017/sfa"
 
 down stop:
 	$(COMPOSE) down
