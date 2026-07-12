@@ -1,0 +1,72 @@
+# Production/staging/dev-server Docker Compose for SFA.
+#
+# Differences from local docker-compose.yml:
+#   - No MongoDB container (uses DigitalOcean Managed MongoDB via MONGODB_URI)
+#   - Uses pre-built images from the registry (no build on the droplet)
+#   - No auto-seed on startup (run `docker compose run --rm api node packages/api/dist/seed/seed.js` once, manually)
+#   - Web is published only to loopback (127.0.0.1:8080); host Nginx terminates TLS and proxies to it
+#   - API is not published to the host at all (only reachable inside the compose network)
+#
+# Required variables (from /opt/sfa/.env):
+#   API_IMAGE, WEB_IMAGE  -> full registry image refs (e.g. ghcr.io/owner/repo/api:sha)
+#   MONGODB_URI           -> managed MongoDB connection string
+#   JWT_ACCESS_SECRET, JWT_REFRESH_SECRET
+#   CORS_ORIGIN           -> e.g. https://dev.example.com
+#   WEB_BIND              -> host bind for web (default 127.0.0.1:8080)
+
+services:
+  api:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+    expose:
+      - "4000"
+    networks:
+      - sfa
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/v1/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  web:
+    image: ${WEB_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_BIND:-127.0.0.1:8080}:80"
+    networks:
+      - sfa
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  sfa:
+    driver: bridge

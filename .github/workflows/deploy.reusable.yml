@@ -1,0 +1,148 @@
+name: Deploy (reusable)
+
+# Shared build + deploy pipeline. Not triggered directly — called by the
+# per-environment workflows (deploy-dev / deploy-staging / deploy-production),
+# each of which passes the GitHub Environment to target.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target GitHub Environment (dev | staging | production)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      api_image: ${{ steps.meta.outputs.api_image }}
+      web_image: ${{ steps.meta.outputs.web_image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image refs
+        id: meta
+        run: |
+          OWNER_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "api_image=${REGISTRY}/${OWNER_REPO}/api:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "web_image=${REGISTRY}/${OWNER_REPO}/web:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/api/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.api_image }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/api:${{ inputs.environment }}
+          cache-from: type=gha,scope=api-${{ inputs.environment }}
+          cache-to: type=gha,scope=api-${{ inputs.environment }},mode=max
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/web/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.web_image }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/web:${{ inputs.environment }}
+          cache-from: type=gha,scope=web-${{ inputs.environment }}
+          cache-to: type=gha,scope=web-${{ inputs.environment }},mode=max
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # Selects the GitHub Environment. Its secrets (same names across all
+    # environments) resolve to that environment's values.
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy compose file to droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          source: "docker-compose.prod.yml"
+          target: "/opt/sfa"
+
+      - name: Deploy on droplet
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          API_IMAGE: ${{ needs.build-and-push.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.build-and-push.outputs.web_image }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          envs: API_IMAGE,WEB_IMAGE
+          script: |
+            set -euo pipefail
+            cd /opt/sfa
+
+            # Registry login (GHCR PAT with read:packages)
+            echo "${{ secrets.GHCR_PULL_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_PULL_USER }}" --password-stdin
+
+            # Write/refresh runtime env. App secrets come from the GitHub Environment.
+            umask 077
+            cat > /opt/sfa/.env <<EOF
+            API_IMAGE=${API_IMAGE}
+            WEB_IMAGE=${WEB_IMAGE}
+            WEB_BIND=127.0.0.1:8080
+            NODE_ENV=production
+            PORT=4000
+            MONGODB_URI=${{ secrets.MONGODB_URI }}
+            JWT_ACCESS_SECRET=${{ secrets.JWT_ACCESS_SECRET }}
+            JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
+            JWT_ACCESS_EXPIRES=15m
+            JWT_REFRESH_EXPIRES=7d
+            CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
+            EOF
+
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker image prune -f
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            for i in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null; then
+                echo "Health check passed."
+                exit 0
+              fi
+              echo "Waiting for app... ($i)"
+              sleep 5
+            done
+            echo "Health check failed."
+            docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100
+            exit 1
