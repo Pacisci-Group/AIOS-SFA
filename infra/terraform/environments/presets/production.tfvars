@@ -9,6 +9,12 @@ domain_root   = "example.com"
 dns_subdomain = "app"
 domain        = "app.example.com"
 
+# Production uses a reserved IP (stable across rebuilds), so first-boot Certbot is
+# reliable: point DNS at the reserved IP once, then rebuilds auto-issue TLS.
+# enable_tls is on, but it's a safe no-op until you set a real certbot_email.
+enable_tls    = true
+certbot_email = ""
+
 ssh_public_key  = "ssh-ed25519 CHANGE_ME"
 ssh_allowed_ips = ["0.0.0.0/0"]
 

@@ -15,6 +15,14 @@ resource "digitalocean_database_db" "app" {
 resource "digitalocean_database_user" "app" {
   cluster_id = digitalocean_database_cluster.this.id
   name       = var.db_user_name
+
+  # MongoDB users have no configurable "settings" (that block is for Kafka/MySQL/
+  # OpenSearch). Older provider versions can leave a phantom empty settings{} in
+  # state; removing it triggers a DO API 400 ("missing required field:
+  # user_settings"). Ignore it so applies converge cleanly.
+  lifecycle {
+    ignore_changes = [settings]
+  }
 }
 
 resource "digitalocean_database_firewall" "this" {

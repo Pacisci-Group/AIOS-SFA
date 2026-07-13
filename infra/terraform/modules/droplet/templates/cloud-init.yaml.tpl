@@ -16,7 +16,10 @@ write_files:
     content: |
       server {
           listen 80 default_server;
-          server_name _;
+          # server_name is baked from the environment's var.domain so it is set
+          # automatically on every (re)build. The trailing "_" keeps this the
+          # default vhost so plain-IP access still works before DNS/TLS exist.
+          server_name ${domain} _;
 
           location / {
               proxy_pass http://127.0.0.1:8080;
@@ -28,12 +31,33 @@ write_files:
           }
       }
 
+  - path: /opt/sfa/enable-tls.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Obtain/install a Let's Encrypt certificate for this environment's domain
+      # and switch Nginx to HTTPS (with HTTP->HTTPS redirect). Idempotent and
+      # safe to re-run. Requires that ${domain} already resolves to this droplet.
+      set -euo pipefail
+      DOMAIN="${domain}"
+      EMAIL="${certbot_email}"
+      if [ -z "$DOMAIN" ]; then
+          echo "enable-tls: no domain configured; skipping."
+          exit 0
+      fi
+      if [ -z "$EMAIL" ]; then
+          echo "enable-tls: certbot_email not set; skipping. Set certbot_email in tfvars."
+          exit 0
+      fi
+      certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect
+
   - path: /opt/sfa/README.txt
     permissions: "0644"
     content: |
       SFA application directory.
       Deploy with: docker compose -f docker-compose.prod.yml up -d
       Place .env in /opt/sfa/.env before starting.
+      Enable HTTPS (once DNS points here): sudo /opt/sfa/enable-tls.sh
 
 runcmd:
   - apt-get install -y ca-certificates curl gnupg ufw nginx certbot python3-certbot-nginx
@@ -56,5 +80,10 @@ runcmd:
   - ufw --force enable
   - systemctl enable docker nginx
   - systemctl start docker nginx
+%{ if enable_tls ~}
+  # Auto-issue TLS on boot (non-fatal). Exec-list form avoids YAML colon pitfalls.
+  # If DNS is not pointing here yet, complete later with: sudo /opt/sfa/enable-tls.sh
+  - ["bash", "-c", "/opt/sfa/enable-tls.sh || echo 'enable-tls skipped or failed; run sudo /opt/sfa/enable-tls.sh once DNS resolves'"]
+%{ endif ~}
 
 final_message: "SFA droplet bootstrap complete for ${domain}"

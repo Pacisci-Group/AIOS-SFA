@@ -37,6 +37,16 @@ variable "domain" {
   type = string
 }
 
+variable "enable_tls" {
+  type    = bool
+  default = false
+}
+
+variable "certbot_email" {
+  type    = string
+  default = ""
+}
+
 variable "ssh_public_key" {
   type      = string
   sensitive = true

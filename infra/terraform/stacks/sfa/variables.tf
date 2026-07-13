@@ -46,6 +46,18 @@ variable "domain" {
   type        = string
 }
 
+variable "enable_tls" {
+  description = "Auto-run Certbot on droplet first boot to issue a Let's Encrypt cert for var.domain. Requires DNS for var.domain to already point at the droplet (best paired with a reserved IP)."
+  type        = bool
+  default     = false
+}
+
+variable "certbot_email" {
+  description = "Email for Let's Encrypt registration/expiry notices. Required when enable_tls = true."
+  type        = string
+  default     = ""
+}
+
 variable "ssh_public_key" {
   description = "SSH public key for deploy user"
   type        = string
