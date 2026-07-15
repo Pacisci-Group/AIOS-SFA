@@ -11,8 +11,11 @@
     "start:prod": "node dist/main",
     "seed": "node dist/seed/seed.js",
     "seed:dev": "ts-node -r tsconfig-paths/register src/seed/seed.ts",
+    "migrate": "node dist/migration/migrate.js",
+    "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "test": "jest",
+    "test:unit": "jest --config ./test/jest-unit.json",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
