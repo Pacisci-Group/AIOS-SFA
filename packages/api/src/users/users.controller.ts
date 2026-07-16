@@ -7,7 +7,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { AgencyPermission } from '@sfa/shared';
+import { AgencyPermission, PageLevelOverride } from '@sfa/shared';
 import { AgencyId } from '../common/decorators/user.decorators';
 import {
   RequirePermissions,
@@ -71,8 +71,12 @@ export class UsersController {
   updatePermissions(
     @AgencyId() agencyId: string,
     @Param('userId') userId: string,
-    @Body() body: { grants?: string[]; revokes?: string[] },
+    @Body() body: { overrides: PageLevelOverride[] },
   ) {
-    return this.usersService.updatePermissions(agencyId!, userId, body);
+    return this.usersService.updatePermissions(
+      agencyId!,
+      userId,
+      body.overrides ?? [],
+    );
   }
 }

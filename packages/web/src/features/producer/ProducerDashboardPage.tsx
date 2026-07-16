@@ -23,7 +23,11 @@ export default function App() {
           {/* Scorecards */}
           <ScoreCards filter={activeFilter} />
 
-          {/* Workspace 60/40 split */}
+          {/* Workspace 60/40 split.
+              Page-level permission rule: access is all-or-nothing per page.
+              Reaching this route already requires `dashboard:read`, so every
+              panel the dashboard shows is part of the dashboard page and is
+              visible to anyone with `dashboard:read`. */}
           <div className="grid gap-4 px-6 pb-6" style={{ gridTemplateColumns: "3fr 2fr" }}>
             <DealsAuditBoard />
             <HotLeadsPanel />

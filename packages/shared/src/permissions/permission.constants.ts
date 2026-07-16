@@ -11,6 +11,8 @@ export const PlatformPermission = {
 export const AgencyPermission = {
   /** View system role templates when assigning roles to users. */
   RolesRead: 'agency:roles:read',
+  /** Edit a role's permission set. */
+  RolesWrite: 'agency:roles:write',
   UsersRead: 'agency:users:read',
   UsersWrite: 'agency:users:write',
   UsersPermissions: 'agency:users:permissions',

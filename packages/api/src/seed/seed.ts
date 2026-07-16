@@ -65,6 +65,11 @@ async function seed() {
     slug: 'agency_owner',
   });
 
+  const producerRole = await roleModel.findOne({
+    agencyId: agency._id,
+    slug: 'producer',
+  });
+
   const existingSuperAdmin = await userModel.findOne({ email: superAdminEmail });
   if (!existingSuperAdmin) {
     await userModel.create({
@@ -112,9 +117,43 @@ async function seed() {
     console.log('Agency owner updated with agency_owner role');
   }
 
+  const producerEmail =
+    process.env.SEED_PRODUCER_EMAIL ?? 'producer@smithfamily.local';
+  const producerPassword =
+    process.env.SEED_PRODUCER_PASSWORD ?? 'ChangeMe123!';
+
+  const existingProducer = await userModel.findOne({ email: producerEmail });
+  if (!existingProducer) {
+    await userModel.create({
+      agencyId: agency._id,
+      branchId: branch._id,
+      email: producerEmail,
+      passwordHash: await bcrypt.hash(producerPassword, 12),
+      roleIds: producerRole ? [producerRole._id] : [],
+      firstName: 'Pat',
+      lastName: 'Producer',
+      isActive: true,
+    });
+    console.log(`Created producer: ${producerEmail}`);
+  } else if (producerRole) {
+    await userModel.updateOne(
+      { _id: existingProducer._id },
+      {
+        $set: {
+          roleIds: [producerRole._id],
+          agencyId: agency._id,
+          branchId: branch._id,
+        },
+        $unset: { roles: 1 },
+      },
+    );
+    console.log('Producer updated with producer role');
+  }
+
   console.log('\nSeed complete.');
   console.log(`Super Admin: ${superAdminEmail} / ${superAdminPassword}`);
   console.log(`Agency Owner: ${ownerEmail} / ${ownerPassword}`);
+  console.log(`Producer: ${producerEmail} / ${producerPassword}`);
 
   await app.close();
 }

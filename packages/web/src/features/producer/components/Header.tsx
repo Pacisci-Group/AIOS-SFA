@@ -1,5 +1,7 @@
 import { Search, Plus, Sun, Moon, Bell } from "lucide-react";
 import { useState } from "react";
+import { useAuth } from "@/contexts/auth-context";
+import { usePermissions } from "@/hooks/usePermissions";
 
 const timeFilters = ["Today", "This Week", "This Month", "Last Month", "Custom"];
 
@@ -8,8 +10,24 @@ interface HeaderProps {
   onFilterChange: (f: string) => void;
 }
 
+function deriveFirstName(
+  name: string | null | undefined,
+  email: string | undefined,
+): string {
+  const fromName = name?.trim().split(/\s+/)[0];
+  if (fromName) return fromName;
+  if (!email) return "there";
+  const handle = email.split("@")[0] ?? "";
+  const first = handle.split(/[._-]/)[0] ?? handle;
+  return first ? first.charAt(0).toUpperCase() + first.slice(1) : "there";
+}
+
 export function Header({ activeFilter, onFilterChange }: HeaderProps) {
   const [search, setSearch] = useState("");
+  const { user } = useAuth();
+  const { canWrite } = usePermissions();
+
+  const firstName = deriveFirstName(user?.name, user?.email);
 
   const hour = new Date().getHours();
   const greeting =
@@ -28,7 +46,7 @@ export function Header({ activeFilter, onFilterChange }: HeaderProps) {
             className="text-[#E2E8F0] truncate"
             style={{ fontSize: "1.1rem", fontWeight: 600, letterSpacing: "-0.01em" }}
           >
-            {greeting}, Justin.{" "}
+            {greeting}, {firstName}.{" "}
             <span className="text-[#38BDF8]">Let's win today.</span>
           </h1>
           <p className="text-xs text-[#64748B] mt-0.5">
@@ -59,18 +77,20 @@ export function Header({ activeFilter, onFilterChange }: HeaderProps) {
             <Bell size={16} />
             <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full" style={{ background: "#F59E0B" }} />
           </button>
-          <button
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all hover:brightness-110 active:scale-95"
-            style={{
-              background: "linear-gradient(135deg, #38BDF8, #0EA5E9)",
-              color: "#0B0F19",
-              fontWeight: 600,
-              boxShadow: "0 0 20px rgba(56,189,248,0.25)",
-            }}
-          >
-            <Plus size={15} />
-            Add New Lead
-          </button>
+          {canWrite("leads") && (
+            <button
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all hover:brightness-110 active:scale-95"
+              style={{
+                background: "linear-gradient(135deg, #38BDF8, #0EA5E9)",
+                color: "#0B0F19",
+                fontWeight: 600,
+                boxShadow: "0 0 20px rgba(56,189,248,0.25)",
+              }}
+            >
+              <Plus size={15} />
+              Add New Lead
+            </button>
+          )}
         </div>
       </div>
 

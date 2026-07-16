@@ -44,7 +44,10 @@ export function ScoreCards({ filter }: ScoreCardsProps) {
   const d = dataByFilter[filter] ?? dataByFilter["This Month"];
 
   return (
-    <div className="grid grid-cols-3 gap-4 px-6 py-4">
+    <div
+      className="grid gap-4 px-6 py-4"
+      style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
+    >
       {/* Card A: Sold Engine */}
       <div
         className="rounded-xl p-5 flex flex-col gap-4 relative overflow-hidden"

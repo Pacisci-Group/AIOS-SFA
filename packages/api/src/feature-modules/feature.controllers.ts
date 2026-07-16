@@ -1,9 +1,14 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Patch } from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
-import { RequireModule, RequirePermissions } from '../common/decorators/access.decorators';
+import {
+  RequireModule,
+  RequirePermissions,
+  RequireWrite,
+} from '../common/decorators/access.decorators';
 import { AgencyId, BranchId } from '../common/decorators/user.decorators';
 
 function createFeatureController(path: string, moduleKey: ModuleKey) {
+  // Class-level guard: reading the page requires `{module}:read`.
   @Controller(path)
   @RequireModule(moduleKey)
   @RequirePermissions(modulePermission(moduleKey, 'read'))
@@ -19,6 +24,13 @@ function createFeatureController(path: string, moduleKey: ModuleKey) {
         agencyId,
         branchId,
       };
+    }
+
+    // Mutating handler: overrides the class read requirement with a write one.
+    @Patch()
+    @RequireWrite(moduleKey)
+    update(@AgencyId() agencyId: string | null) {
+      return { module: moduleKey, status: 'updated', agencyId };
     }
   }
   return FeatureController;

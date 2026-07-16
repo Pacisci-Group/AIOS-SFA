@@ -23,15 +23,28 @@ export function setTokens(accessToken: string, refreshToken: string) {
   localStorage.setItem('refreshToken', refreshToken);
 }
 
+/**
+ * Wipe every trace of the session from the browser. Clears the whole
+ * localStorage and sessionStorage rather than individual keys so no cached
+ * data (tokens, user, branch selection, or anything added later) can leak
+ * into the next session.
+ */
 export function clearTokens() {
-  localStorage.removeItem('accessToken');
-  localStorage.removeItem('refreshToken');
-  localStorage.removeItem('user');
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+  } catch {
+    // Storage may be unavailable (private mode / SSR); ignore.
+  }
 }
 
 export interface AuthUser {
   id: string;
   email: string;
+  /** Full name from firstName/lastName, or null if not set. */
+  name: string | null;
+  /** Human-readable role names (e.g. ["Owner"]). For display only. */
+  roles: string[];
   agencyId: string | null;
   branchId: string | null;
   permissions: string[];

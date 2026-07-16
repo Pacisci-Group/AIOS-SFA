@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   clearTokens,
   getStoredUser,
@@ -23,6 +24,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(() => getStoredUser());
 
   const login = useCallback(async (email: string, password: string) => {
@@ -31,9 +33,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    // Nuke persisted storage (tokens, user, branch) and the in-memory
+    // React Query cache so no stale session data survives into the next login.
     clearTokens();
+    queryClient.clear();
     setUser(null);
-  }, []);
+  }, [queryClient]);
 
   const value = useMemo(
     () => ({

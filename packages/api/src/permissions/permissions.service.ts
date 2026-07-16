@@ -7,6 +7,7 @@ import {
   DataScope,
   DEFAULT_ROLE_TEMPLATES,
   JwtPayload,
+  normalizeLegacyPermission,
   resolvePermissionSet,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
@@ -22,6 +23,32 @@ export class PermissionsService {
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
   ) {}
 
+  /**
+   * Resolve the role-default permissions for a user, ignoring any per-user
+   * owner overrides (grants/revokes). Used to diff overrides against defaults.
+   */
+  async resolveRoleDefaults(user: UserDocument): Promise<string[]> {
+    if (user.isPlatformAdmin) {
+      return ALL_PLATFORM_PERMISSIONS;
+    }
+    if (!user.agencyId) {
+      return [];
+    }
+
+    const { rolePermissions, grantsAll, enabledModules } =
+      await this.loadRoleContext(user);
+
+    return resolvePermissionSet({
+      rolePermissions,
+      enabledModules,
+      grantsAllEnabledModules: grantsAll,
+    });
+  }
+
+  /**
+   * Resolve the effective permissions for a user: role defaults plus the
+   * agency owner's per-user grants, minus revokes, filtered to enabled modules.
+   */
   async resolveForUser(user: UserDocument): Promise<string[]> {
     if (user.isPlatformAdmin) {
       return ALL_PLATFORM_PERMISSIONS;
@@ -31,6 +58,23 @@ export class PermissionsService {
       return [];
     }
 
+    const { rolePermissions, grantsAll, enabledModules } =
+      await this.loadRoleContext(user);
+
+    return resolvePermissionSet({
+      rolePermissions,
+      grants: user.permissionGrants ?? [],
+      revokes: user.permissionRevokes ?? [],
+      enabledModules,
+      grantsAllEnabledModules: grantsAll,
+    });
+  }
+
+  private async loadRoleContext(user: UserDocument): Promise<{
+    rolePermissions: string[];
+    grantsAll: boolean;
+    enabledModules: string[];
+  }> {
     const agency = await this.agencyModel.findById(user.agencyId).lean();
     const enabledModules = agency
       ? Object.entries(agency.modules ?? {})
@@ -47,13 +91,24 @@ export class PermissionsService {
     const rolePermissions = roles.flatMap((role) => role.permissions);
     const grantsAll = roles.some((role) => role.grantsAllEnabledModules);
 
-    return resolvePermissionSet({
-      rolePermissions,
-      grants: user.permissionGrants ?? [],
-      revokes: user.permissionRevokes ?? [],
-      enabledModules,
-      grantsAllEnabledModules: grantsAll,
-    });
+    return { rolePermissions, grantsAll, enabledModules };
+  }
+
+  /**
+   * Human-readable role names for the user (e.g. ["Owner"], ["Producer"]).
+   * Used for display in the UI — never for access decisions.
+   */
+  async resolveRoleNames(user: UserDocument): Promise<string[]> {
+    if (user.isPlatformAdmin) {
+      return ['Platform Admin'];
+    }
+    if (!user.roleIds?.length || !user.agencyId) {
+      return [];
+    }
+    const roles = await this.roleModel
+      .find({ _id: { $in: user.roleIds }, agencyId: user.agencyId })
+      .lean();
+    return roles.map((role) => role.name).filter(Boolean);
   }
 
   async resolveDataScope(user: UserDocument): Promise<DataScope> {
@@ -101,22 +156,41 @@ export class PermissionsService {
 
   async seedDefaultRoles(agencyId: Types.ObjectId): Promise<void> {
     for (const template of DEFAULT_ROLE_TEMPLATES) {
-      await this.roleModel.updateOne(
-        { agencyId, slug: template.slug },
-        {
-          $setOnInsert: {
-            agencyId,
-            name: template.name,
-            slug: template.slug,
-            description: template.description,
-            permissions: template.permissions,
-            dataScope: template.dataScope,
-            isSystemTemplate: true,
-            grantsAllEnabledModules: template.grantsAllEnabledModules ?? false,
-          },
-        },
-        { upsert: true },
+      const existing = await this.roleModel.findOne({
+        agencyId,
+        slug: template.slug,
+      });
+
+      if (!existing) {
+        await this.roleModel.create({
+          agencyId,
+          name: template.name,
+          slug: template.slug,
+          description: template.description,
+          permissions: template.permissions,
+          dataScope: template.dataScope,
+          isSystemTemplate: true,
+          grantsAllEnabledModules: template.grantsAllEnabledModules ?? false,
+        });
+        continue;
+      }
+
+      // Reconcile drift: normalize any legacy fine-grained permissions to the
+      // simplified read/write model, then merge in template defaults (union),
+      // keeping system-template flags current without dropping customizations.
+      const normalized = existing.permissions.flatMap((permission) =>
+        normalizeLegacyPermission(permission),
       );
+      existing.permissions = [
+        ...new Set([...normalized, ...template.permissions]),
+      ];
+      existing.dataScope = template.dataScope;
+      existing.grantsAllEnabledModules =
+        template.grantsAllEnabledModules ?? false;
+      if (!existing.description) {
+        existing.description = template.description;
+      }
+      await existing.save();
     }
   }
 
