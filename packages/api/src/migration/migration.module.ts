@@ -27,6 +27,44 @@ import {
   ProducerGoal,
   ProducerGoalSchema,
 } from '../producer-goals/schemas/producer-goal.schema';
+import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
+import {
+  ServiceTicket,
+  ServiceTicketSchema,
+} from '../service-tickets/schemas/service-ticket.schema';
+import {
+  DealAudit,
+  DealAuditSchema,
+} from '../deal-audits/schemas/deal-audit.schema';
+import {
+  InterestedParty,
+  InterestedPartySchema,
+} from '../interested-parties/schemas/interested-party.schema';
+import {
+  PriorInsurance,
+  PriorInsuranceSchema,
+} from '../prior-insurance/schemas/prior-insurance.schema';
+import {
+  PriorPolicy,
+  PriorPolicySchema,
+} from '../prior-policies/schemas/prior-policy.schema';
+import {
+  ProducerAssignment,
+  ProducerAssignmentSchema,
+} from '../producer-assignments/schemas/producer-assignment.schema';
+import {
+  CrmRotation,
+  CrmRotationSchema,
+} from '../crm-rotations/schemas/crm-rotation.schema';
+import {
+  TimeOffRequest,
+  TimeOffRequestSchema,
+} from '../time-off-requests/schemas/time-off-request.schema';
+import {
+  AuditTemplate,
+  AuditTemplateSchema,
+} from '../audit-templates/schemas/audit-template.schema';
 import { MigrationService } from './migration.service';
 
 /**
@@ -55,6 +93,17 @@ import { MigrationService } from './migration.service';
       { name: AuditRecord.name, schema: AuditRecordSchema },
       { name: Activity.name, schema: ActivitySchema },
       { name: ProducerGoal.name, schema: ProducerGoalSchema },
+      { name: Contact.name, schema: ContactSchema },
+      { name: Policy.name, schema: PolicySchema },
+      { name: ServiceTicket.name, schema: ServiceTicketSchema },
+      { name: DealAudit.name, schema: DealAuditSchema },
+      { name: InterestedParty.name, schema: InterestedPartySchema },
+      { name: PriorInsurance.name, schema: PriorInsuranceSchema },
+      { name: PriorPolicy.name, schema: PriorPolicySchema },
+      { name: ProducerAssignment.name, schema: ProducerAssignmentSchema },
+      { name: CrmRotation.name, schema: CrmRotationSchema },
+      { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
+      { name: AuditTemplate.name, schema: AuditTemplateSchema },
     ]),
   ],
   providers: [MigrationService],

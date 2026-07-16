@@ -7,30 +7,46 @@ The migration pipeline lives in the API package so it reuses the Mongoose schema
 - Runner/service: `packages/api/src/migration/migration.service.ts`
 - SmartSuite REST client + field/table ids: `packages/api/src/migration/smartsuite/`
 - Mapping/derivation helpers: `packages/api/src/migration/helpers/`
-- Collection schemas: `packages/api/src/{deals,quote-recaps,leads,households,audit-records,activities,producer-goals}/schemas/`
+- Collection schemas: `packages/api/src/{deals,quote-recaps,leads,households,contacts,policies,service-tickets,deal-audits,audit-records,audit-templates,interested-parties,prior-insurance,prior-policies,producer-assignments,crm-rotations,time-off-requests,activities,producer-goals}/schemas/`
 
 ## What it does (PAC-18)
 
-Migrates the producer-relevant SmartSuite tables into MongoDB:
+Migrates **all** SmartSuite tables from `docs/SFA SmartSuite Tables` into MongoDB.
+Tables are migrated in dependency order so cross-record links resolve to Mongo
+`ObjectId`s where possible (and always keep the source `legacy…Id`).
 
 | SmartSuite source | Mongo collection |
 |-------------------|------------------|
 | Users | `users` (producer refs + `legacySmartSuiteId`) |
 | Households | `households` |
+| Contacts | `contacts` |
 | Leads | `leads` |
 | Quote Recaps | `quoteRecaps` |
 | Deals (Sold Log) | `deals` |
+| Policies | `policies` |
 | Deal Audit Items | `auditRecords` |
+| Deal Audits | `dealAudits` |
+| Audit Templates | `auditTemplates` |
+| Interested Parties | `interestedParties` |
+| Prior Insurance | `priorInsurance` |
+| Prior Policies | `priorPolicies` |
+| Service Tickets | `serviceTickets` |
+| Producer Assignment | `producerAssignments` |
+| CRM Rotation | `crmRotations` |
+| Time Off Request | `timeOffRequests` |
 | _derived_ | `producerGoals`, `activities` |
 
 - Idempotent/re-runnable: upserts keyed on `{ agencyId, legacySmartSuiteId }`.
 - Preserves `legacySmartSuiteId` on every record.
-- Resolves producer scoping by mapping SmartSuite user record ids → Mongo `User._id`.
-- Normalizes lead source to the 14 canonical sources; flags test/sample/demo.
+- Resolves producer/CRM scoping by mapping SmartSuite user record ids → Mongo `User._id`,
+  and household/deal/policy links → their Mongo `ObjectId`s.
+- Normalizes lead source to the 14 canonical sources; flags test/sample/demo and
+  propagates the test flag from a linked deal to its children (policies, audits, prior insurance…).
 - Derives deal type (Auto/Home/Bundle), lead temperature/aging, and premium
   (rollup with snapshot fallback).
 - Scaffolds `producerGoals` (producer × month) from each user's Monthly Goal.
-- Emits a reconciliation report to stdout and `migration-report.json`.
+- Emits a reconciliation report (per-collection source/fetched/migrated/test/skipped
+  counts) to stdout and `migration-report.json`.
 
 ## Prerequisites
 

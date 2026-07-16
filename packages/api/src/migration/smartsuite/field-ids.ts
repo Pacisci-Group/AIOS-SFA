@@ -96,6 +96,144 @@ export const DEAL_AUDIT_ITEM_FIELDS = {
   firstCreated: 'first_created',
 } as const;
 
+export const CONTACT_FIELDS = {
+  firstName: 'sa5a6956b1',
+  lastName: 's463f12943',
+  email: 's311269c0c',
+  phone: 's03c983a27',
+  dateOfBirth: 's1fb9a8813',
+  roleInHousehold: 'se79ae4f7f',
+  isPrimary: 's413f031d4',
+  notes: 's39661d2f6',
+  household: 's66cf9402f',
+} as const;
+
+export const POLICY_FIELDS = {
+  policyNumber: 'title',
+  household: 's5cb27d5d9',
+  policyType: 'sc0d2e4b72',
+  carrier: 's33be9b77d',
+  active: 'sd4ff7d9f7',
+  effectiveDate: 's17370a3f9',
+  expirationDate: 'sb0fdb18f6',
+  renewalDate: 'sa2c7585b5',
+  premium: 's59b4726cc',
+  items: 's7839a0aac',
+  notes: 'se356ed81c',
+  policyStatus: 's87f83281a',
+  deal: 's63e96e0b6',
+} as const;
+
+export const SERVICE_TICKET_FIELDS = {
+  title: 'title',
+  createdDate: 'created_date',
+  category: 'category',
+  priority: 'priority',
+  dueDate: 'due_date',
+  policy: 's12d537d98',
+  household: 's85ccd75be',
+  assignedCrm: 's4ec085028',
+  status: 's7afd05edc',
+  dateResolved: 's879083121',
+  daysOpen: 's8a59a03dd',
+  createdBy: 's53333e8c3',
+  clientName: 'setuud00',
+  crmName: 's43ee2ba8f',
+  firstCreated: 'first_created',
+} as const;
+
+export const DEAL_AUDIT_FIELDS = {
+  title: 'title',
+  auditId: 'audit_id',
+  auditDate: 'audit_date',
+  result: 'result',
+  reasonCodes: 'reason_codes',
+  auditScore: 'sadb5c0227',
+  auditNotes: 'sbe10476c6',
+  deals: 's1841790f6',
+} as const;
+
+export const INTERESTED_PARTY_FIELDS = {
+  title: 'title',
+  status: 'status',
+  priority: 'priority',
+  notes: 'scdc78adaa',
+  policy: 'se907854ce',
+  mortgagee: 's2fb0c5024',
+  address: 's6a36e6f8f',
+  loanNumber: 's19be4460e',
+  household: 's005931699',
+} as const;
+
+export const PRIOR_INSURANCE_FIELDS = {
+  title: 'title',
+  deal: 'sc59cc32b8',
+  household: 'sb04421c43',
+  cancellationResponsibility: 'sb3cc60eb5',
+  cancelledPreviousInsurance: 's9fecf50b8',
+  cancellationDate: 'sb5bc8466d',
+  autoHomeSameCarrier: 'sd12264dbf',
+  previousCarrierAuto: 'sbd76ff6b4',
+  previousCarrierHome: 's005xf2q',
+  previousAgentName: 's7f775dc83',
+  producer: 's3dc982787',
+} as const;
+
+export const PRIOR_POLICY_FIELDS = {
+  title: 'title',
+  status: 'status',
+  deal: 'sc59cc32b8',
+  priorInsurance: 'sb04421c43',
+  policyType: 'sb3cc60eb5',
+  needsCancellation: 's9fecf50b8',
+  cancellationDate: 'sb5bc8466d',
+  accordFormNeeded: 'sd12264dbf',
+  previousCarrier: 'sbd76ff6b4',
+  notes: 'se683bb2aa',
+  completedDate: 's596e17941',
+  household: 's07708c46c',
+} as const;
+
+export const PRODUCER_ASSIGNMENT_FIELDS = {
+  title: 'title',
+  producer: 'sa4b1fdd09',
+  lastAssignedCrm: 's5501fe08f',
+  indexPointer: 's2bd7dda40',
+  activeForProducer: 's12e33f568',
+  lastAssignedAt: 's787019847',
+  lock: 'sb5b78f0b7',
+} as const;
+
+export const CRM_ROTATION_FIELDS = {
+  title: 'title',
+  crm: 's5501fe08f',
+  order: 's2bd7dda40',
+  activeForProducer: 's12e33f568',
+  producer: 's1d18f0067',
+} as const;
+
+export const TIME_OFF_REQUEST_FIELDS = {
+  title: 'title',
+  producer: 's11756232f',
+  startDate: 's797e8e425',
+  endDate: 'sfc03f2e87',
+  requestType: 's4de941e84',
+  hoursRequested: 's69a804f9d',
+  status: 's15cf96e61',
+  type: 'sec9109888',
+  decision: 's9f9622cf9',
+} as const;
+
+export const AUDIT_TEMPLATE_FIELDS = {
+  name: 'title',
+  category: 'sa38a2d635',
+  required: 's68ec160c0',
+  blocking: 'sowlcvdy',
+  active: 'sgdipwqk',
+  alwaysInclude: 'sa8f5c7a37',
+  task: 's53430cc34',
+} as const;
+
 /**
  * Select-choice value -> label maps for fields whose choices we normalize.
  * Only the codes we care about for the dashboard are listed.

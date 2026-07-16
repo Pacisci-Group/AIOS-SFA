@@ -12,24 +12,47 @@ import { Deal } from '../deals/schemas/deal.schema';
 import { AuditRecord } from '../audit-records/schemas/audit-record.schema';
 import { Activity } from '../activities/schemas/activity.schema';
 import { ProducerGoal } from '../producer-goals/schemas/producer-goal.schema';
+import { Contact } from '../contacts/schemas/contact.schema';
+import { Policy } from '../policies/schemas/policy.schema';
+import { ServiceTicket } from '../service-tickets/schemas/service-ticket.schema';
+import { DealAudit } from '../deal-audits/schemas/deal-audit.schema';
+import { InterestedParty } from '../interested-parties/schemas/interested-party.schema';
+import { PriorInsurance } from '../prior-insurance/schemas/prior-insurance.schema';
+import { PriorPolicy } from '../prior-policies/schemas/prior-policy.schema';
+import { ProducerAssignment } from '../producer-assignments/schemas/producer-assignment.schema';
+import { CrmRotation } from '../crm-rotations/schemas/crm-rotation.schema';
+import { TimeOffRequest } from '../time-off-requests/schemas/time-off-request.schema';
+import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
 import {
   SmartSuiteClient,
   loadSmartSuiteConfig,
 } from './smartsuite/smartsuite.client';
 import { SMARTSUITE_TABLE_IDS } from './smartsuite/table-ids';
 import {
+  AUDIT_TEMPLATE_FIELDS,
+  CONTACT_FIELDS,
+  CRM_ROTATION_FIELDS,
   DEAL_AUDIT_CATEGORY_LABELS,
+  DEAL_AUDIT_FIELDS,
   DEAL_AUDIT_ITEM_FIELDS,
   DEAL_AUDIT_ITEM_NAME_LABELS,
   DEAL_AUDIT_STATUS_LABELS,
   DEAL_AUDIT_UPDATE_STATUS_LABELS,
   DEAL_FIELDS,
   HOUSEHOLD_FIELDS,
+  INTERESTED_PARTY_FIELDS,
   LEAD_FIELDS,
+  POLICY_FIELDS,
+  PRIOR_INSURANCE_FIELDS,
+  PRIOR_POLICY_FIELDS,
+  PRODUCER_ASSIGNMENT_FIELDS,
   QUOTE_RECAP_FIELDS,
+  SERVICE_TICKET_FIELDS,
+  TIME_OFF_REQUEST_FIELDS,
   USER_FIELDS,
 } from './smartsuite/field-ids';
 import {
+  allLinkedIds,
   firstLinkedId,
   selectCode,
   toBool,
@@ -119,6 +142,26 @@ export class MigrationService {
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     @InjectModel(ProducerGoal.name)
     private readonly producerGoalModel: Model<ProducerGoal>,
+    @InjectModel(Contact.name) private readonly contactModel: Model<Contact>,
+    @InjectModel(Policy.name) private readonly policyModel: Model<Policy>,
+    @InjectModel(ServiceTicket.name)
+    private readonly serviceTicketModel: Model<ServiceTicket>,
+    @InjectModel(DealAudit.name)
+    private readonly dealAuditModel: Model<DealAudit>,
+    @InjectModel(InterestedParty.name)
+    private readonly interestedPartyModel: Model<InterestedParty>,
+    @InjectModel(PriorInsurance.name)
+    private readonly priorInsuranceModel: Model<PriorInsurance>,
+    @InjectModel(PriorPolicy.name)
+    private readonly priorPolicyModel: Model<PriorPolicy>,
+    @InjectModel(ProducerAssignment.name)
+    private readonly producerAssignmentModel: Model<ProducerAssignment>,
+    @InjectModel(CrmRotation.name)
+    private readonly crmRotationModel: Model<CrmRotation>,
+    @InjectModel(TimeOffRequest.name)
+    private readonly timeOffRequestModel: Model<TimeOffRequest>,
+    @InjectModel(AuditTemplate.name)
+    private readonly auditTemplateModel: Model<AuditTemplate>,
   ) {}
 
   async run(options: MigrationOptions): Promise<MigrationReport> {
@@ -131,7 +174,14 @@ export class MigrationService {
     const producers = await this.migrateUsers(ss, ctx, options, report);
     report.producers.mapped = producers.size;
 
-    await this.migrateHouseholds(ss, ctx, producers, options, report);
+    const households = await this.migrateHouseholds(
+      ss,
+      ctx,
+      producers,
+      options,
+      report,
+    );
+    await this.migrateContacts(ss, ctx, households, options, report);
     const leads = await this.migrateLeads(ss, ctx, producers, options, report);
     const quotes = await this.migrateQuoteRecaps(
       ss,
@@ -141,7 +191,54 @@ export class MigrationService {
       report,
     );
     const deals = await this.migrateDeals(ss, ctx, producers, options, report);
+    const policies = await this.migratePolicies(
+      ss,
+      ctx,
+      households,
+      deals,
+      options,
+      report,
+    );
     await this.migrateAuditItems(ss, ctx, deals, options, report);
+    await this.migrateDealAudits(ss, ctx, deals, options, report);
+    await this.migrateAuditTemplates(ss, ctx, options, report);
+    await this.migrateInterestedParties(
+      ss,
+      ctx,
+      households,
+      policies,
+      options,
+      report,
+    );
+    await this.migratePriorInsurance(
+      ss,
+      ctx,
+      producers,
+      households,
+      deals,
+      options,
+      report,
+    );
+    await this.migratePriorPolicies(
+      ss,
+      ctx,
+      households,
+      deals,
+      options,
+      report,
+    );
+    await this.migrateServiceTickets(
+      ss,
+      ctx,
+      producers,
+      households,
+      policies,
+      options,
+      report,
+    );
+    await this.migrateProducerAssignments(ss, ctx, producers, options, report);
+    await this.migrateCrmRotations(ss, ctx, producers, options, report);
+    await this.migrateTimeOffRequests(ss, ctx, producers, options, report);
 
     await this.deriveProducerGoals(ctx, producers, report);
     await this.deriveActivities(ctx, leads, quotes, deals, report);
@@ -149,6 +246,22 @@ export class MigrationService {
     report.finishedAt = new Date().toISOString();
     report.durationMs = Date.now() - started;
     return report;
+  }
+
+  /** Resolve a legacy link id to a Mongo ObjectId via a prebuilt map. */
+  private ref(
+    legacyId: string | undefined,
+    map: Map<string, Types.ObjectId>,
+  ): Types.ObjectId | undefined {
+    return legacyId ? map.get(legacyId) : undefined;
+  }
+
+  /** A producer/user link's Mongo _id from the producers map. */
+  private userRef(
+    legacyId: string | undefined,
+    producers: Map<string, ProducerEntry>,
+  ): Types.ObjectId | undefined {
+    return legacyId ? producers.get(legacyId)?.userId : undefined;
   }
 
   // ---------------------------------------------------------------------------
@@ -283,9 +396,10 @@ export class MigrationService {
     producers: Map<string, ProducerEntry>,
     options: MigrationOptions,
     report: MigrationReport,
-  ): Promise<void> {
+  ): Promise<Map<string, Types.ObjectId>> {
     const stat = emptyStat();
     report.collections.households = stat;
+    const map = new Map<string, Types.ObjectId>();
 
     stat.source = await ss.count(SMARTSUITE_TABLE_IDS.households);
     const records = await ss.listAll(
@@ -310,7 +424,7 @@ export class MigrationService {
       const legacyCrmId = firstLinkedId(rec[HOUSEHOLD_FIELDS.assignedCrm]);
       const crm = legacyCrmId ? producers.get(legacyCrmId) : undefined;
 
-      await this.persist(
+      const id = await this.persist(
         this.householdModel,
         ctx,
         legacyId,
@@ -331,8 +445,70 @@ export class MigrationService {
         stat,
         report,
       );
+      if (id) map.set(legacyId, id);
     }
     this.logger.log(`Households: fetched ${stat.fetched}`);
+    return map;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Contacts
+  // ---------------------------------------------------------------------------
+
+  private async migrateContacts(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    households: Map<string, Types.ObjectId>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.contacts = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.contacts);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.contacts,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const firstName = toText(rec[CONTACT_FIELDS.firstName]);
+      const lastName = toText(rec[CONTACT_FIELDS.lastName]);
+      const name = [firstName, lastName].filter(Boolean).join(' ');
+      const test = isTestRecord(null, name, toText(rec.title));
+      if (test) stat.excludedTest++;
+
+      const legacyHouseholdId = firstLinkedId(rec[CONTACT_FIELDS.household]);
+
+      await this.persist(
+        this.contactModel,
+        ctx,
+        legacyId,
+        {
+          firstName,
+          lastName,
+          emails: toStringArray(rec[CONTACT_FIELDS.email]),
+          phones: toPhoneArray(rec[CONTACT_FIELDS.phone]),
+          dateOfBirth: toDate(rec[CONTACT_FIELDS.dateOfBirth]),
+          roleInHousehold: selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
+          isPrimary: toBool(rec[CONTACT_FIELDS.isPrimary]),
+          notes: toText(rec[CONTACT_FIELDS.notes]),
+          householdId: this.ref(legacyHouseholdId, households),
+          legacyHouseholdId,
+          isTestRecord: test,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Contacts: fetched ${stat.fetched}`);
   }
 
   // ---------------------------------------------------------------------------
@@ -683,6 +859,642 @@ export class MigrationService {
       );
     }
     this.logger.log(`Audit items: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Policies
+  // ---------------------------------------------------------------------------
+
+  private async migratePolicies(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    households: Map<string, Types.ObjectId>,
+    deals: Map<string, DealRef>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<Map<string, Types.ObjectId>> {
+    const stat = emptyStat();
+    report.collections.policies = stat;
+    const map = new Map<string, Types.ObjectId>();
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.policies);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.policies,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyHouseholdId = firstLinkedId(rec[POLICY_FIELDS.household]);
+      const legacyDealId = firstLinkedId(rec[POLICY_FIELDS.deal]);
+      const deal = legacyDealId ? deals.get(legacyDealId) : undefined;
+      const test = deal?.isTest ?? false;
+      if (test) stat.excludedTest++;
+
+      const id = await this.persist(
+        this.policyModel,
+        ctx,
+        legacyId,
+        {
+          policyNumber: toText(rec[POLICY_FIELDS.policyNumber]),
+          policyType: selectCode(rec[POLICY_FIELDS.policyType]),
+          carrier: selectCode(rec[POLICY_FIELDS.carrier]),
+          active: toBool(rec[POLICY_FIELDS.active]),
+          effectiveDate: toDate(rec[POLICY_FIELDS.effectiveDate]),
+          expirationDate: toDate(rec[POLICY_FIELDS.expirationDate]),
+          renewalDate: toDate(rec[POLICY_FIELDS.renewalDate]),
+          premium: toNumber(rec[POLICY_FIELDS.premium]),
+          items: toNumber(rec[POLICY_FIELDS.items]),
+          policyStatus: selectCode(rec[POLICY_FIELDS.policyStatus]),
+          notes: toText(rec[POLICY_FIELDS.notes]),
+          householdId: this.ref(legacyHouseholdId, households),
+          legacyHouseholdId,
+          dealId: deal?.dealId,
+          legacyDealId,
+          isTestRecord: test,
+        },
+        stat,
+        report,
+      );
+      if (id) map.set(legacyId, id);
+    }
+    this.logger.log(`Policies: fetched ${stat.fetched}`);
+    return map;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deal Audits (parent audit summaries)
+  // ---------------------------------------------------------------------------
+
+  private async migrateDealAudits(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    deals: Map<string, DealRef>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.dealAudits = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.dealAudits);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.dealAudits,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyDealIds = allLinkedIds(rec[DEAL_AUDIT_FIELDS.deals]);
+      const firstDeal = legacyDealIds[0]
+        ? deals.get(legacyDealIds[0])
+        : undefined;
+      const test = firstDeal?.isTest ?? false;
+      if (test) stat.excludedTest++;
+
+      await this.persist(
+        this.dealAuditModel,
+        ctx,
+        legacyId,
+        {
+          title: toText(rec[DEAL_AUDIT_FIELDS.title]),
+          auditId: toText(rec[DEAL_AUDIT_FIELDS.auditId]),
+          auditDate: toDate(rec[DEAL_AUDIT_FIELDS.auditDate]),
+          result: selectCode(rec[DEAL_AUDIT_FIELDS.result]),
+          reasonCodes: this.selectCodes(rec[DEAL_AUDIT_FIELDS.reasonCodes]),
+          auditScore: toNumber(rec[DEAL_AUDIT_FIELDS.auditScore]),
+          auditNotes: toText(rec[DEAL_AUDIT_FIELDS.auditNotes]),
+          dealId: firstDeal?.dealId,
+          legacyDealIds,
+          isTestRecord: test,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Deal audits: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Audit Templates
+  // ---------------------------------------------------------------------------
+
+  private async migrateAuditTemplates(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.auditTemplates = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.auditTemplates);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.auditTemplates,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const categoryCode = selectCode(rec[AUDIT_TEMPLATE_FIELDS.category]);
+      await this.persist(
+        this.auditTemplateModel,
+        ctx,
+        legacyId,
+        {
+          name: toText(rec[AUDIT_TEMPLATE_FIELDS.name]),
+          category: categoryCode
+            ? (DEAL_AUDIT_CATEGORY_LABELS[categoryCode] ?? categoryCode)
+            : undefined,
+          required: toBool(rec[AUDIT_TEMPLATE_FIELDS.required]),
+          blocking: toBool(rec[AUDIT_TEMPLATE_FIELDS.blocking]),
+          active: toBool(rec[AUDIT_TEMPLATE_FIELDS.active]),
+          alwaysInclude: toBool(rec[AUDIT_TEMPLATE_FIELDS.alwaysInclude]),
+          task: toText(rec[AUDIT_TEMPLATE_FIELDS.task]),
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Audit templates: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Interested Parties
+  // ---------------------------------------------------------------------------
+
+  private async migrateInterestedParties(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    households: Map<string, Types.ObjectId>,
+    policies: Map<string, Types.ObjectId>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.interestedParties = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.interestedParties);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.interestedParties,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyPolicyId = firstLinkedId(rec[INTERESTED_PARTY_FIELDS.policy]);
+      const legacyHouseholdId = firstLinkedId(
+        rec[INTERESTED_PARTY_FIELDS.household],
+      );
+
+      await this.persist(
+        this.interestedPartyModel,
+        ctx,
+        legacyId,
+        {
+          title: toText(rec[INTERESTED_PARTY_FIELDS.title]),
+          status: selectCode(rec[INTERESTED_PARTY_FIELDS.status]),
+          priority: selectCode(rec[INTERESTED_PARTY_FIELDS.priority]),
+          mortgagee: toText(rec[INTERESTED_PARTY_FIELDS.mortgagee]),
+          loanNumber: toText(rec[INTERESTED_PARTY_FIELDS.loanNumber]),
+          address: this.asObject(rec[INTERESTED_PARTY_FIELDS.address]),
+          notes: toText(rec[INTERESTED_PARTY_FIELDS.notes]),
+          policyId: this.ref(legacyPolicyId, policies),
+          legacyPolicyId,
+          householdId: this.ref(legacyHouseholdId, households),
+          legacyHouseholdId,
+          isTestRecord: false,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Interested parties: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Prior Insurance
+  // ---------------------------------------------------------------------------
+
+  private async migratePriorInsurance(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    producers: Map<string, ProducerEntry>,
+    households: Map<string, Types.ObjectId>,
+    deals: Map<string, DealRef>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.priorInsurance = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.priorInsurance);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.priorInsurance,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyDealId = firstLinkedId(rec[PRIOR_INSURANCE_FIELDS.deal]);
+      const legacyHouseholdId = firstLinkedId(
+        rec[PRIOR_INSURANCE_FIELDS.household],
+      );
+      const legacyProducerId = firstLinkedId(
+        rec[PRIOR_INSURANCE_FIELDS.producer],
+      );
+      const deal = legacyDealId ? deals.get(legacyDealId) : undefined;
+      const test = deal?.isTest ?? false;
+      if (test) stat.excludedTest++;
+
+      await this.persist(
+        this.priorInsuranceModel,
+        ctx,
+        legacyId,
+        {
+          title: toText(rec[PRIOR_INSURANCE_FIELDS.title]),
+          cancellationResponsibility: selectCode(
+            rec[PRIOR_INSURANCE_FIELDS.cancellationResponsibility],
+          ),
+          cancelledPreviousInsurance: selectCode(
+            rec[PRIOR_INSURANCE_FIELDS.cancelledPreviousInsurance],
+          ),
+          cancellationDate: toDate(
+            rec[PRIOR_INSURANCE_FIELDS.cancellationDate],
+          ),
+          autoHomeSameCarrier: selectCode(
+            rec[PRIOR_INSURANCE_FIELDS.autoHomeSameCarrier],
+          ),
+          previousCarrierAuto: toText(
+            rec[PRIOR_INSURANCE_FIELDS.previousCarrierAuto],
+          ),
+          previousCarrierHome: toText(
+            rec[PRIOR_INSURANCE_FIELDS.previousCarrierHome],
+          ),
+          previousAgentName: toText(
+            rec[PRIOR_INSURANCE_FIELDS.previousAgentName],
+          ),
+          dealId: deal?.dealId,
+          legacyDealId,
+          householdId: this.ref(legacyHouseholdId, households),
+          legacyHouseholdId,
+          producerId: this.userRef(legacyProducerId, producers),
+          legacyProducerId,
+          isTestRecord: test,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Prior insurance: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Prior Policies
+  // ---------------------------------------------------------------------------
+
+  private async migratePriorPolicies(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    households: Map<string, Types.ObjectId>,
+    deals: Map<string, DealRef>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.priorPolicies = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.priorPolicies);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.priorPolicies,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyDealId = firstLinkedId(rec[PRIOR_POLICY_FIELDS.deal]);
+      const legacyHouseholdId = firstLinkedId(
+        rec[PRIOR_POLICY_FIELDS.household],
+      );
+      const legacyPriorInsuranceId = firstLinkedId(
+        rec[PRIOR_POLICY_FIELDS.priorInsurance],
+      );
+      const deal = legacyDealId ? deals.get(legacyDealId) : undefined;
+      const test = deal?.isTest ?? false;
+      if (test) stat.excludedTest++;
+
+      await this.persist(
+        this.priorPolicyModel,
+        ctx,
+        legacyId,
+        {
+          title: toText(rec[PRIOR_POLICY_FIELDS.title]),
+          cancellationStatus: selectCode(rec[PRIOR_POLICY_FIELDS.status]),
+          policyType: selectCode(rec[PRIOR_POLICY_FIELDS.policyType]),
+          needsCancellation: selectCode(
+            rec[PRIOR_POLICY_FIELDS.needsCancellation],
+          ),
+          cancellationDate: toDate(rec[PRIOR_POLICY_FIELDS.cancellationDate]),
+          accordFormNeeded: selectCode(
+            rec[PRIOR_POLICY_FIELDS.accordFormNeeded],
+          ),
+          previousCarrier: toText(rec[PRIOR_POLICY_FIELDS.previousCarrier]),
+          notes: toText(rec[PRIOR_POLICY_FIELDS.notes]),
+          completedDate: toDate(rec[PRIOR_POLICY_FIELDS.completedDate]),
+          dealId: deal?.dealId,
+          legacyDealId,
+          householdId: this.ref(legacyHouseholdId, households),
+          legacyHouseholdId,
+          legacyPriorInsuranceId,
+          isTestRecord: test,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Prior policies: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Service Tickets
+  // ---------------------------------------------------------------------------
+
+  private async migrateServiceTickets(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    producers: Map<string, ProducerEntry>,
+    households: Map<string, Types.ObjectId>,
+    policies: Map<string, Types.ObjectId>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.serviceTickets = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.serviceTickets);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.serviceTickets,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyPolicyId = firstLinkedId(rec[SERVICE_TICKET_FIELDS.policy]);
+      const legacyHouseholdId = firstLinkedId(
+        rec[SERVICE_TICKET_FIELDS.household],
+      );
+      const legacyAssignedCrmId = firstLinkedId(
+        rec[SERVICE_TICKET_FIELDS.assignedCrm],
+      );
+      const legacyCreatedById = firstLinkedId(
+        rec[SERVICE_TICKET_FIELDS.createdBy],
+      );
+      const clientName = toText(rec[SERVICE_TICKET_FIELDS.clientName]);
+      const test = isTestRecord(null, clientName, toText(rec.title));
+      if (test) stat.excludedTest++;
+      const firstCreatedAt = toDate(rec[SERVICE_TICKET_FIELDS.firstCreated]);
+
+      await this.persist(
+        this.serviceTicketModel,
+        ctx,
+        legacyId,
+        {
+          title: toText(rec[SERVICE_TICKET_FIELDS.title]),
+          createdDate:
+            toDate(rec[SERVICE_TICKET_FIELDS.createdDate]) ?? firstCreatedAt,
+          category: selectCode(rec[SERVICE_TICKET_FIELDS.category]),
+          priority: selectCode(rec[SERVICE_TICKET_FIELDS.priority]),
+          dueDate: toDate(rec[SERVICE_TICKET_FIELDS.dueDate]),
+          status: selectCode(rec[SERVICE_TICKET_FIELDS.status]),
+          dateResolved: toDate(rec[SERVICE_TICKET_FIELDS.dateResolved]),
+          daysOpen:
+            toNumber(rec[SERVICE_TICKET_FIELDS.daysOpen]) ||
+            daysSince(firstCreatedAt),
+          clientName,
+          crmName: toText(rec[SERVICE_TICKET_FIELDS.crmName]),
+          policyId: this.ref(legacyPolicyId, policies),
+          legacyPolicyId,
+          householdId: this.ref(legacyHouseholdId, households),
+          legacyHouseholdId,
+          assignedCrmId: this.userRef(legacyAssignedCrmId, producers),
+          legacyAssignedCrmId,
+          createdById: this.userRef(legacyCreatedById, producers),
+          legacyCreatedById,
+          isTestRecord: test,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Service tickets: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Producer Assignments
+  // ---------------------------------------------------------------------------
+
+  private async migrateProducerAssignments(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    producers: Map<string, ProducerEntry>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.producerAssignments = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.producerAssignments);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.producerAssignments,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyProducerId = firstLinkedId(
+        rec[PRODUCER_ASSIGNMENT_FIELDS.producer],
+      );
+      const legacyCrmId = firstLinkedId(
+        rec[PRODUCER_ASSIGNMENT_FIELDS.lastAssignedCrm],
+      );
+
+      await this.persist(
+        this.producerAssignmentModel,
+        ctx,
+        legacyId,
+        {
+          title: toText(rec[PRODUCER_ASSIGNMENT_FIELDS.title]),
+          indexPointer: toNumber(rec[PRODUCER_ASSIGNMENT_FIELDS.indexPointer]),
+          activeForProducer: toBool(
+            rec[PRODUCER_ASSIGNMENT_FIELDS.activeForProducer],
+          ),
+          lastAssignedAt: toDate(
+            rec[PRODUCER_ASSIGNMENT_FIELDS.lastAssignedAt],
+          ),
+          lock: toBool(rec[PRODUCER_ASSIGNMENT_FIELDS.lock]),
+          producerId: this.userRef(legacyProducerId, producers),
+          legacyProducerId,
+          lastAssignedCrmId: this.userRef(legacyCrmId, producers),
+          legacyLastAssignedCrmId: legacyCrmId,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Producer assignments: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // CRM Rotations
+  // ---------------------------------------------------------------------------
+
+  private async migrateCrmRotations(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    producers: Map<string, ProducerEntry>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.crmRotations = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.crmRotations);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.crmRotations,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyCrmId = firstLinkedId(rec[CRM_ROTATION_FIELDS.crm]);
+      const legacyProducerId = firstLinkedId(rec[CRM_ROTATION_FIELDS.producer]);
+
+      await this.persist(
+        this.crmRotationModel,
+        ctx,
+        legacyId,
+        {
+          title: toText(rec[CRM_ROTATION_FIELDS.title]),
+          order: toNumber(rec[CRM_ROTATION_FIELDS.order]),
+          activeForProducer: toBool(rec[CRM_ROTATION_FIELDS.activeForProducer]),
+          crmId: this.userRef(legacyCrmId, producers),
+          legacyCrmId,
+          producerId: this.userRef(legacyProducerId, producers),
+          legacyProducerId,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`CRM rotations: fetched ${stat.fetched}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Time Off Requests
+  // ---------------------------------------------------------------------------
+
+  private async migrateTimeOffRequests(
+    ss: SmartSuiteClient,
+    ctx: TenantCtx,
+    producers: Map<string, ProducerEntry>,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.timeOffRequests = stat;
+
+    stat.source = await ss.count(SMARTSUITE_TABLE_IDS.timeOffRequests);
+    const records = await ss.listAll(
+      SMARTSUITE_TABLE_IDS.timeOffRequests,
+      {},
+      options.pageSize,
+    );
+    stat.fetched = records.length;
+
+    for (const rec of records) {
+      const legacyId = rec.id as string;
+      if (!legacyId) {
+        stat.skipped++;
+        continue;
+      }
+      const legacyProducerId = firstLinkedId(
+        rec[TIME_OFF_REQUEST_FIELDS.producer],
+      );
+
+      await this.persist(
+        this.timeOffRequestModel,
+        ctx,
+        legacyId,
+        {
+          title: toText(rec[TIME_OFF_REQUEST_FIELDS.title]),
+          startDate: toDate(rec[TIME_OFF_REQUEST_FIELDS.startDate]),
+          endDate: toDate(rec[TIME_OFF_REQUEST_FIELDS.endDate]),
+          requestType: selectCode(rec[TIME_OFF_REQUEST_FIELDS.requestType]),
+          hoursRequested: toNumber(rec[TIME_OFF_REQUEST_FIELDS.hoursRequested]),
+          status: selectCode(rec[TIME_OFF_REQUEST_FIELDS.status]),
+          type: selectCode(rec[TIME_OFF_REQUEST_FIELDS.type]),
+          decision: selectCode(rec[TIME_OFF_REQUEST_FIELDS.decision]),
+          producerId: this.userRef(legacyProducerId, producers),
+          legacyProducerId,
+        },
+        stat,
+        report,
+      );
+    }
+    this.logger.log(`Time off requests: fetched ${stat.fetched}`);
   }
 
   // ---------------------------------------------------------------------------
