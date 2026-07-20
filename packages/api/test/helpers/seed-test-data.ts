@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { Model } from 'mongoose';
-import { ALL_MODULE_KEYS } from '@sfa/shared';
+import { ALL_MODULE_KEYS, DataScope } from '@sfa/shared';
 import { Branch } from '../../src/branches/schemas/branch.schema';
 import { PermissionsService } from '../../src/permissions/permissions.service';
 import { Agency } from '../../src/platform/schemas/agency.schema';
@@ -16,9 +16,11 @@ export interface TestSeedContext {
   branchId: string;
   ownerRoleId: string;
   producerRoleId: string;
+  readOnlyRoleId: string;
   superAdminEmail: string;
   ownerEmail: string;
   producerEmail: string;
+  readOnlyEmail: string;
 }
 
 export async function seedTestData(
@@ -59,9 +61,21 @@ export async function seedTestData(
     slug: 'producer',
   });
 
+  // A role with read-only access to every page (no write anywhere). Used to
+  // assert that mutating endpoints require `{module}:write` on every page.
+  const readOnlyRole = await roleModel.create({
+    agencyId: agency._id,
+    name: 'Read Only',
+    slug: 'read_only',
+    permissions: ALL_MODULE_KEYS.map((key) => `${key}:read`),
+    dataScope: DataScope.Agency,
+    isSystemTemplate: false,
+  });
+
   const superAdminEmail = 'test-super-admin@sfa.local';
   const ownerEmail = 'test-owner@sfa.local';
   const producerEmail = 'test-producer@sfa.local';
+  const readOnlyEmail = 'test-read-only@sfa.local';
   const passwordHash = await bcrypt.hash(TEST_PASSWORD, 12);
 
   await userModel.create({
@@ -94,13 +108,26 @@ export async function seedTestData(
     isActive: true,
   });
 
+  await userModel.create({
+    agencyId: agency._id,
+    branchId: branch._id,
+    email: readOnlyEmail,
+    passwordHash,
+    roleIds: [readOnlyRole._id],
+    firstName: 'Test',
+    lastName: 'ReadOnly',
+    isActive: true,
+  });
+
   return {
     agencyId: agency._id.toString(),
     branchId: branch._id.toString(),
     ownerRoleId: ownerRole!._id.toString(),
     producerRoleId: producerRole!._id.toString(),
+    readOnlyRoleId: readOnlyRole._id.toString(),
     superAdminEmail,
     ownerEmail,
     producerEmail,
+    readOnlyEmail,
   };
 }

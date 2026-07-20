@@ -12,6 +12,12 @@ domain_root     = "example.com"       # Your domain zone in DigitalOcean DNS
 dns_subdomain   = "{{ENV}}"
 domain          = "{{ENV}}.example.com"
 
+# nginx server_name is baked from `domain` automatically. Set certbot_email and run
+# `sudo /opt/sfa/enable-tls.sh` once DNS resolves, or set enable_tls = true (best
+# with a reserved IP) to auto-issue TLS on first boot / rebuilds.
+enable_tls      = false
+certbot_email   = ""
+
 ssh_public_key  = "ssh-ed25519 AAAA... your-key"  # REQUIRED
 ssh_allowed_ips = ["YOUR.IP.ADDRESS/32"]          # REQUIRED
 

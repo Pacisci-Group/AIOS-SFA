@@ -24,4 +24,5 @@ export class AuthController {
   acceptInvite(@Body() dto: AcceptInviteDto) {
     return this.authService.acceptInvite(dto);
   }
+  
 }

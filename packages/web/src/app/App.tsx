@@ -1,10 +1,13 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ModuleKey } from '@sfa/shared';
 import { AuthProvider } from '@/contexts/auth-context';
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/layout/ProtectedRoute';
+import { RequirePermission } from '@/components/layout/RequirePermission';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
+import { usePermissions } from '@/hooks/usePermissions';
 
 const ProducerDashboardPage = lazy(
   () => import('@/features/producer/ProducerDashboardPage'),
@@ -25,6 +28,13 @@ const HouseholdDetailsPage = lazy(
   () => import('@/features/household/HouseholdDetailsPage'),
 );
 const LeadDetailsPage = lazy(() => import('@/features/lead/LeadDetailsPage'));
+const RolePermissionsPage = lazy(
+  () => import('@/features/admin/RolePermissionsPage'),
+);
+const UsersPage = lazy(() => import('@/features/admin/UsersPage'));
+const UserPermissionsPage = lazy(
+  () => import('@/features/admin/UserPermissionsPage'),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -47,6 +57,34 @@ function LazyPage({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
 }
 
+/**
+ * Role-based landing for `/`. Each user is sent to the most relevant
+ * dashboard for their permissions. Owners/managers land on the
+ * management dashboard, producers on the producer dashboard, etc.
+ * Anyone without an obvious dashboard (e.g. platform admin) gets the
+ * navigation hub.
+ */
+function RoleLanding() {
+  const { canRead } = usePermissions();
+
+  if (canRead(ModuleKey.Management)) {
+    return <Navigate to="/dashboard/management" replace />;
+  }
+  if (canRead(ModuleKey.Dashboard)) {
+    return <Navigate to="/dashboard/producer" replace />;
+  }
+  if (canRead(ModuleKey.CrmService)) {
+    return <Navigate to="/crm/service" replace />;
+  }
+  if (canRead(ModuleKey.Clients)) {
+    return <Navigate to="/clients/demo" replace />;
+  }
+  if (canRead(ModuleKey.Leads)) {
+    return <Navigate to="/leads/demo" replace />;
+  }
+  return <DevNavPage />;
+}
+
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -58,79 +96,152 @@ export function App() {
             </Route>
 
             <Route element={<ProtectedRoute />}>
-              <Route path="/" element={<DevNavPage />} />
+              <Route path="/" element={<RoleLanding />} />
+              <Route path="/nav" element={<DevNavPage />} />
+
+              {/* Feature pages gated by per-page read access */}
               <Route
-                path="/dashboard/producer"
                 element={
-                  <LazyPage>
-                    <ProducerDashboardPage />
-                  </LazyPage>
+                  <RequirePermission permission={`${ModuleKey.Dashboard}:read`} />
                 }
-              />
+              >
+                <Route
+                  path="/dashboard/producer"
+                  element={
+                    <LazyPage>
+                      <ProducerDashboardPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               <Route
-                path="/dashboard/management"
                 element={
-                  <LazyPage>
-                    <ManagementDashboardPage />
-                  </LazyPage>
+                  <RequirePermission permission={`${ModuleKey.Management}:read`} />
                 }
-              />
+              >
+                <Route
+                  path="/dashboard/management"
+                  element={
+                    <LazyPage>
+                      <ManagementDashboardPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/dashboard/management-alt"
+                  element={
+                    <LazyPage>
+                      <ManagementDashboardAltPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               <Route
-                path="/dashboard/management-alt"
                 element={
-                  <LazyPage>
-                    <ManagementDashboardAltPage />
-                  </LazyPage>
+                  <RequirePermission permission={`${ModuleKey.CrmService}:read`} />
                 }
-              />
+              >
+                <Route
+                  path="/crm/service"
+                  element={
+                    <LazyPage>
+                      <ServiceDashboardPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/crm/tickets"
+                  element={
+                    <LazyPage>
+                      <TicketWorkspacePage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               <Route
-                path="/crm/service"
                 element={
-                  <LazyPage>
-                    <ServiceDashboardPage />
-                  </LazyPage>
+                  <RequirePermission permission={`${ModuleKey.Clients}:read`} />
                 }
-              />
+              >
+                <Route
+                  path="/clients/:id"
+                  element={
+                    <LazyPage>
+                      <HouseholdDetailsPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/clients/demo"
+                  element={
+                    <LazyPage>
+                      <HouseholdDetailsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               <Route
-                path="/crm/tickets"
                 element={
-                  <LazyPage>
-                    <TicketWorkspacePage />
-                  </LazyPage>
+                  <RequirePermission permission={`${ModuleKey.Leads}:read`} />
                 }
-              />
+              >
+                <Route
+                  path="/leads/:id"
+                  element={
+                    <LazyPage>
+                      <LeadDetailsPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/leads/demo"
+                  element={
+                    <LazyPage>
+                      <LeadDetailsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Owner-only role & per-user permission management */}
               <Route
-                path="/clients/:id"
-                element={
-                  <LazyPage>
-                    <HouseholdDetailsPage />
-                  </LazyPage>
-                }
-              />
+                element={<RequirePermission permission="agency:users:permissions" />}
+              >
+                <Route
+                  path="/settings/roles"
+                  element={
+                    <LazyPage>
+                      <RolePermissionsPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/settings/users/:userId/permissions"
+                  element={
+                    <LazyPage>
+                      <UserPermissionsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Owner-only user directory */}
               <Route
-                path="/clients/demo"
-                element={
-                  <LazyPage>
-                    <HouseholdDetailsPage />
-                  </LazyPage>
-                }
-              />
-              <Route
-                path="/leads/:id"
-                element={
-                  <LazyPage>
-                    <LeadDetailsPage />
-                  </LazyPage>
-                }
-              />
-              <Route
-                path="/leads/demo"
-                element={
-                  <LazyPage>
-                    <LeadDetailsPage />
-                  </LazyPage>
-                }
-              />
+                element={<RequirePermission permission="agency:users:read" />}
+              >
+                <Route
+                  path="/settings/users"
+                  element={
+                    <LazyPage>
+                      <UsersPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

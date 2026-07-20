@@ -1,5 +1,12 @@
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
-import { AgencyPermission } from '@sfa/shared';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  UseGuards,
+} from '@nestjs/common';
+import { AgencyPermission, PageLevelOverride } from '@sfa/shared';
 import { AgencyId } from '../common/decorators/user.decorators';
 import {
   RequirePermissions,
@@ -8,7 +15,7 @@ import {
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RolesService } from './roles.service';
 
-/** Read-only access to system role templates. Role permissions cannot be modified. */
+/** Read + permission-set editing for agency roles. */
 @Controller('roles')
 @SkipModule()
 @UseGuards(PermissionsGuard)
@@ -25,5 +32,15 @@ export class RolesController {
   @RequirePermissions(AgencyPermission.RolesRead)
   getOne(@AgencyId() agencyId: string, @Param('roleId') roleId: string) {
     return this.rolesService.findById(agencyId!, roleId);
+  }
+
+  @Patch(':roleId')
+  @RequirePermissions(AgencyPermission.RolesWrite)
+  updateLevels(
+    @AgencyId() agencyId: string,
+    @Param('roleId') roleId: string,
+    @Body() body: { levels: PageLevelOverride[] },
+  ) {
+    return this.rolesService.updateLevels(agencyId!, roleId, body.levels ?? []);
   }
 }

@@ -67,6 +67,9 @@ export class AuthService {
 
   private async issueTokens(user: UserDocument) {
     const payload = await this.permissionsService.buildJwtPayload(user);
+    const roles = await this.permissionsService.resolveRoleNames(user);
+    const name =
+      [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null;
     const accessToken = this.jwtService.sign(payload, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       expiresIn: this.configService.get<string>('JWT_ACCESS_EXPIRES', '15m') as `${number}m`,
@@ -82,6 +85,8 @@ export class AuthService {
       user: {
         id: user._id.toString(),
         email: user.email,
+        name,
+        roles,
         agencyId: user.agencyId?.toString() ?? null,
         branchId: user.branchId?.toString() ?? null,
         permissions: payload.permissions,

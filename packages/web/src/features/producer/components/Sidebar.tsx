@@ -9,16 +9,44 @@ import {
   Settings,
 } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
+import { ModuleKey } from "@sfa/shared";
+import { useAuth } from "@/contexts/auth-context";
+import { usePermissions } from "@/hooks/usePermissions";
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Dashboard", active: true },
-  { icon: Users, label: "Leads", active: false },
-  { icon: Mail, label: "Mailers", active: false },
-  { icon: TrendingUp, label: "My Performance", active: false },
+  { icon: LayoutDashboard, label: "Dashboard", module: ModuleKey.Dashboard },
+  { icon: Users, label: "Leads", module: ModuleKey.Leads },
+  { icon: Mail, label: "Mailers", module: ModuleKey.Mailers },
+  { icon: TrendingUp, label: "My Performance", module: ModuleKey.Performance },
 ];
+
+function nameFromEmail(email: string | undefined): string {
+  if (!email) return "User";
+  const handle = email.split("@")[0] ?? "";
+  return handle
+    .split(/[._-]/)
+    .filter(Boolean)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
+function initialsFromName(name: string): string {
+  const parts = name.split(/\s+/).filter(Boolean);
+  const letters = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "");
+  return (letters || name.slice(0, 2) || "U").toUpperCase();
+}
 
 export function Sidebar() {
   const [activeItem, setActiveItem] = useState("Dashboard");
+  const { user, logout } = useAuth();
+  const { canRead, can } = usePermissions();
+
+  const visibleNavItems = navItems.filter((item) => canRead(item.module));
+
+  const displayName = user?.name?.trim() || nameFromEmail(user?.email);
+  const roleLabel = user?.roles?.[0] ?? "Member";
+  const canManageUsers = can("agency:users:read");
 
   return (
     <aside
@@ -48,7 +76,7 @@ export function Sidebar() {
         <p className="text-[10px] text-[#64748B] uppercase tracking-widest px-3 mb-2">
           Sales Tools
         </p>
-        {navItems.map(({ icon: Icon, label }) => {
+        {visibleNavItems.map(({ icon: Icon, label }) => {
           const isActive = activeItem === label;
           return (
             <button
@@ -81,21 +109,34 @@ export function Sidebar() {
             className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-xs"
             style={{ background: "#1A3A8F", color: "#E2E8F0", fontWeight: 700 }}
           >
-            JL
+            {initialsFromName(displayName)}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm text-[#E2E8F0] truncate" style={{ fontWeight: 500 }}>
-              Justin L.
+              {displayName}
             </p>
-            <p className="text-xs text-[#64748B] truncate">Producer</p>
+            <p className="text-xs text-[#64748B] truncate">{roleLabel}</p>
           </div>
         </div>
         <div className="flex gap-1">
-          <button className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all text-xs">
-            <Settings size={13} />
-            Settings
-          </button>
-          <button className="flex items-center gap-2 px-3 py-2 rounded-md text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all text-xs">
+          {canManageUsers ? (
+            <Link
+              to="/settings/users"
+              className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all text-xs"
+            >
+              <Settings size={13} />
+              Settings
+            </Link>
+          ) : (
+            <button className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all text-xs">
+              <Settings size={13} />
+              Settings
+            </button>
+          )}
+          <button
+            onClick={logout}
+            className="flex items-center gap-2 px-3 py-2 rounded-md text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all text-xs"
+          >
             <LogOut size={13} />
           </button>
         </div>

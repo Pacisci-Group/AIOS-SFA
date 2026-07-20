@@ -11,6 +11,7 @@ export interface UserDetailResponse {
   lastName?: string;
   isActive: boolean;
   effectivePermissions: string[];
+  roleDefaultPermissions: string[];
   createdAt?: Date;
   updatedAt?: Date;
 }

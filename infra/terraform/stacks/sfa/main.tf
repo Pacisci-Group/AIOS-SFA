@@ -30,6 +30,8 @@ module "droplet" {
   user_data = templatefile("${path.module}/../../modules/droplet/templates/cloud-init.yaml.tpl", {
     ssh_public_key = var.ssh_public_key
     domain         = var.domain
+    enable_tls     = var.enable_tls
+    certbot_email  = var.certbot_email
   })
 }
 

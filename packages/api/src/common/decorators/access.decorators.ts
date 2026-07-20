@@ -11,6 +11,14 @@ export const REQUIRE_PERMISSIONS_KEY = 'requirePermissions';
 export const RequirePermissions = (...permissions: string[]) =>
   SetMetadata(REQUIRE_PERMISSIONS_KEY, permissions);
 
+/**
+ * Require read + write on a page/module for a mutating handler. Apply to
+ * POST/PATCH/PUT/DELETE handlers on feature controllers. Since `write` implies
+ * `read` at resolution time, requiring `{module}:write` is sufficient.
+ */
+export const RequireWrite = (moduleKey: string) =>
+  SetMetadata(REQUIRE_PERMISSIONS_KEY, [`${moduleKey}:write`]);
+
 export const SKIP_TENANT_KEY = 'skipTenant';
 export const SkipTenant = () => SetMetadata(SKIP_TENANT_KEY, true);
 

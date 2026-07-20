@@ -6,12 +6,27 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
+import {
+  ALL_MODULE_KEYS,
+  allPagePermissionKeys,
+  PageLevel,
+  PageLevelOverride,
+  pageLevelToPermissions,
+  permissionsToPageLevel,
+} from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import { AgencyRole, AgencyRoleDocument } from '../roles/schemas/agency-role.schema';
 import { User, UserDocument } from './schemas/user.schema';
 import { UserDetailResponse } from './users.types';
+
+/**
+ * Per-user overrides only ever move a user between page levels, so every
+ * grant/revoke must be a page `{module}:read|write` permission. Owner-only admin
+ * permissions are never overridable per user.
+ */
+const ALLOWED_PAGE_PERMISSIONS = new Set<string>(allPagePermissionKeys());
 
 @Injectable()
 export class UsersService {
@@ -24,7 +39,10 @@ export class UsersService {
 
   findByAgency(agencyId: string) {
     return this.userModel
-      .find({ agencyId: new Types.ObjectId(agencyId) })
+      .find({
+        agencyId: new Types.ObjectId(agencyId),
+        isPlatformAdmin: { $ne: true },
+      })
       .select('-passwordHash -inviteToken -passwordResetToken')
       .populate('roleIds', 'name slug')
       .lean();
@@ -43,11 +61,16 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const effectivePermissions = await this.permissionsService.resolveForUser(
-      user as UserDocument,
-    );
+    const [effectivePermissions, roleDefaultPermissions] = await Promise.all([
+      this.permissionsService.resolveForUser(user as UserDocument),
+      this.permissionsService.resolveRoleDefaults(user as UserDocument),
+    ]);
 
-    return { ...user, effectivePermissions } as UserDetailResponse;
+    return {
+      ...user,
+      effectivePermissions,
+      roleDefaultPermissions,
+    } as UserDetailResponse;
   }
 
   async inviteUser(input: {
@@ -103,10 +126,16 @@ export class UsersService {
     return this.findById(agencyId, userId);
   }
 
+  /**
+   * Apply per-page permission overrides for a user. The owner submits a desired
+   * level (`none` / `read` / `write`) per page; we diff each page against the
+   * user's role defaults and store only the differences as grants/revokes, so
+   * the user keeps inheriting role changes for pages left at their default.
+   */
   async updatePermissions(
     agencyId: string,
     userId: string,
-    input: { grants?: string[]; revokes?: string[] },
+    overrides: PageLevelOverride[],
   ): Promise<UserDetailResponse> {
     const user = await this.userModel.findOne({
       _id: new Types.ObjectId(userId),
@@ -116,27 +145,77 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const enabledModules = await this.getEnabledModules(agencyId);
-    const assignable = new Set(
-      this.permissionsService.allAssignablePermissions(enabledModules),
+    const enabledModules = new Set(await this.getEnabledModules(agencyId));
+    const roleDefaults = new Set(
+      await this.permissionsService.resolveRoleDefaults(user),
     );
 
-    if (input.grants) {
-      const invalid = input.grants.filter((p) => !assignable.has(p));
-      if (invalid.length) {
-        throw new BadRequestException(
-          `Cannot grant permissions not available for this agency: ${invalid.join(', ')}`,
-        );
+    const overrideMap = new Map<string, PageLevel>();
+    for (const { moduleKey, level } of overrides) {
+      if (enabledModules.has(moduleKey) && this.isValidLevel(level)) {
+        overrideMap.set(moduleKey, level);
       }
-      user.permissionGrants = [...new Set(input.grants)];
     }
 
-    if (input.revokes) {
-      user.permissionRevokes = [...new Set(input.revokes)];
+    const grants = new Set<string>();
+    const revokes = new Set<string>();
+
+    for (const moduleKey of ALL_MODULE_KEYS) {
+      if (!enabledModules.has(moduleKey)) {
+        continue;
+      }
+
+      const roleLevel = permissionsToPageLevel(roleDefaults, moduleKey);
+      const desiredLevel = overrideMap.get(moduleKey) ?? roleLevel;
+      if (desiredLevel === roleLevel) {
+        continue;
+      }
+
+      const rolePerms = new Set(pageLevelToPermissions(moduleKey, roleLevel));
+      const desiredPerms = new Set(
+        pageLevelToPermissions(moduleKey, desiredLevel),
+      );
+
+      for (const permission of desiredPerms) {
+        if (!rolePerms.has(permission)) {
+          grants.add(permission);
+        }
+      }
+      for (const permission of rolePerms) {
+        if (!desiredPerms.has(permission)) {
+          revokes.add(permission);
+        }
+      }
     }
 
+    const grantList = [...grants];
+    const revokeList = [...revokes];
+    this.assertPagePermissions([...grantList, ...revokeList]);
+
+    user.permissionGrants = grantList;
+    user.permissionRevokes = revokeList;
     await user.save();
+
     return this.findById(agencyId, userId);
+  }
+
+  private isValidLevel(level: string): level is PageLevel {
+    return level === 'none' || level === 'read' || level === 'write';
+  }
+
+  /**
+   * Guard against persisting anything other than page read/write permissions in
+   * per-user overrides. Never throws in normal operation; catches regressions.
+   */
+  private assertPagePermissions(permissions: string[]): void {
+    const invalid = permissions.filter(
+      (permission) => !ALLOWED_PAGE_PERMISSIONS.has(permission),
+    );
+    if (invalid.length) {
+      throw new BadRequestException(
+        `Invalid page permission override(s): ${invalid.join(', ')}`,
+      );
+    }
   }
 
   async listAssignablePermissions(agencyId: string): Promise<string[]> {

@@ -25,6 +25,8 @@ module "sfa" {
   domain_root        = var.domain_root
   dns_subdomain      = var.dns_subdomain
   domain             = var.domain
+  enable_tls         = var.enable_tls
+  certbot_email      = var.certbot_email
   ssh_public_key     = var.ssh_public_key
   ssh_allowed_ips    = var.ssh_allowed_ips
   enable_dns         = var.enable_dns

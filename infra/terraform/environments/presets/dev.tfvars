@@ -11,6 +11,12 @@ domain_root   = "example.com"
 dns_subdomain = "dev"
 domain        = "dev.example.com"
 
+# nginx server_name is baked from `domain` on every build. Set certbot_email and
+# run `sudo /opt/sfa/enable-tls.sh` once DNS points here (or set enable_tls = true
+# with a reserved IP so first-boot Certbot works automatically on rebuilds).
+enable_tls    = false
+certbot_email = ""
+
 # REQUIRED — set before apply (or override in terraform.tfvars)
 ssh_public_key  = "ssh-ed25519 CHANGE_ME"
 ssh_allowed_ips = ["0.0.0.0/0"] # Replace with your IP/32 before production use
