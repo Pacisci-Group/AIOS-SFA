@@ -6,7 +6,9 @@ coverage
 *.log
 .DS_Store
 
-# Local project folders (not pushed)
+# Local project folders / symlinks (not pushed)
+# Read-only reference to the legacy SFA app (see .cursor/rules/legacy-sfa-reference.mdc)
+/SFA
 SFA/
 agencyops/
 sfaforms/

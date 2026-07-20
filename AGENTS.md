@@ -1,11 +1,10 @@
 # AGENTS.md — AIOS-SFA (new platform)
 
 > Auto-loaded when Cursor is opened at the `AIOS-SFA/` repo root. This is the
-> **new, greenfield replacement** for the legacy SFA app. This file is
-> self-contained: it does **not** assume the old platform is present. The legacy
-> Next.js app (`SFA/`, source-of-truth for behaviour being ported) lives in the
-> parent workspace and is only needed for migration work — see the parent
-> `AGENTS.md` there when old-platform context is required.
+> **new, greenfield replacement** for the legacy SFA app. The legacy Next.js app
+> (source-of-truth for behaviour being ported) is available **read-only** inside
+> this repo at `./SFA` (a gitignored symlink to the sibling checkout) — see
+> `.cursor/rules/legacy-sfa-reference.mdc` for how to use it.
 
 ---
 
@@ -118,8 +117,7 @@ Wire `/dashboard/producer` to the new API (first fully-wired dashboard).
 
 **Open decisions:** grant Producer `deal_audits:read/write` (own) for the hand-off
 board? · derive deal "type" (Auto/Home/Bundle) and lead temperature/aging that
-aren't first-class in legacy payloads. See parent workspace's
-`AIOS-SFA-SESSION-HANDOFF.md` for full state.
+aren't first-class in legacy payloads. See `docs/SESSION-HANDOFF.md` for full state.
 
 ---
 
@@ -131,7 +129,21 @@ aren't first-class in legacy payloads. See parent workspace's
 
 ---
 
-## 10. Conventions
+## 10. Reference docs (`docs/`)
+
+- `docs/SYSTEM_ARCHITECTURE.md` — new system architecture (v1.0) + `docs/diagrams/`.
+- `docs/SESSION-HANDOFF.md` — most up-to-date session state, mappings, open questions. **Start here for continuation.**
+- `docs/form-pipeline/` — Lead→Quote→Sold→Audit spec (`Form Pipeline Technical Specification.md`) + architecture guide.
+- `docs/product/Figma Mockups.md` — design system + product direction (owner notes).
+- `docs/smartsuite-tables/` — legacy SmartSuite data model (migration source-of-record).
+
+> ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
+> these predate the monorepo decision. Reality: `packages/web` is **Vite/React**
+> and the backend is **NestJS/Mongo**. Do not build localStorage mocks.
+
+---
+
+## 11. Conventions
 
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
