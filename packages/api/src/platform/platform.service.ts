@@ -31,6 +31,8 @@ export class PlatformService {
         {
           enabled: [
             ModuleKey.Dashboard,
+            ModuleKey.Management,
+            ModuleKey.OwnerDashboard,
             ModuleKey.Leads,
             ModuleKey.Clients,
             ModuleKey.Performance,

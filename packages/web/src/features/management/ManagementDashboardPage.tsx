@@ -1,5 +1,8 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Shield, Crown, Users, Bell, Settings, ChevronDown, Building2 } from "lucide-react";
+import { usePermissions } from "@/hooks/usePermissions";
+import { AppSidebar } from "@/components/layout/AppSidebar";
 import { GlobalFilterBar } from "./components/GlobalFilterBar";
 import { OwnerDashboard } from "./components/OwnerDashboard";
 import { ManagerDashboard } from "./components/ManagerDashboard";
@@ -24,17 +27,23 @@ const DEFAULT_FILTERS: FilterState = {
 export default function App() {
   const [view, setView] = useState<"owner" | "manager">("owner");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  const { can } = usePermissions();
+  const canManageUsers = can("agency:users:read");
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "var(--background)",
-        display: "flex",
-        flexDirection: "column",
-        fontFamily: "var(--font-sans)",
-      }}
-    >
+    <div style={{ display: "flex", minHeight: "100vh", background: "var(--background)" }}>
+      <AppSidebar />
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: "100vh",
+          background: "var(--background)",
+          display: "flex",
+          flexDirection: "column",
+          fontFamily: "var(--font-sans)",
+        }}
+      >
       {/* ── Top Header ── */}
       <header
         style={{
@@ -173,22 +182,26 @@ export default function App() {
             />
           </div>
 
-          <button
-            style={{
-              width: "32px",
-              height: "32px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "var(--secondary)",
-              border: "1px solid var(--border)",
-              borderRadius: "6px",
-              cursor: "pointer",
-              color: "var(--muted-foreground)",
-            }}
-          >
-            <Settings size={14} />
-          </button>
+          {canManageUsers && (
+            <Link
+              to="/settings/users"
+              title="Users & Permissions"
+              style={{
+                width: "32px",
+                height: "32px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "var(--secondary)",
+                border: "1px solid var(--border)",
+                borderRadius: "6px",
+                cursor: "pointer",
+                color: "var(--muted-foreground)",
+              }}
+            >
+              <Settings size={14} />
+            </Link>
+          )}
 
           <div
             style={{
@@ -317,6 +330,7 @@ export default function App() {
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #334155; }
       `}</style>
+      </div>
     </div>
   );
 }

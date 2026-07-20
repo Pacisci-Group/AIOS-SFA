@@ -11,6 +11,8 @@
     "start:prod": "node dist/main",
     "seed": "node dist/seed/seed.js",
     "seed:dev": "ts-node -r tsconfig-paths/register src/seed/seed.ts",
+    "migrate:permissions": "node dist/seed/migrate-permissions.js",
+    "migrate:permissions:dev": "ts-node -r tsconfig-paths/register src/seed/migrate-permissions.ts",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"

@@ -20,11 +20,11 @@ export class User {
   @Prop({ type: [{ type: Types.ObjectId, ref: 'AgencyRole' }], default: [] })
   roleIds: Types.ObjectId[];
 
-  /** Extra permissions granted directly by the agency owner. */
+  /** Page permissions added on top of role defaults by the agency owner. */
   @Prop({ type: [String], default: [] })
   permissionGrants: string[];
 
-  /** Permissions removed from the user's effective set by the agency owner. */
+  /** Page permissions removed from role defaults by the agency owner. */
   @Prop({ type: [String], default: [] })
   permissionRevokes: string[];
 

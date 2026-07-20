@@ -55,10 +55,9 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
     dataScope: DataScope.Own,
     permissions: [
       modulePermission(ModuleKey.Dashboard, 'read'),
-      modulePermission(ModuleKey.Leads, 'read'),
-      modulePermission(ModuleKey.Leads, 'write'),
-      modulePermission(ModuleKey.QuoteRecaps, 'read'),
-      modulePermission(ModuleKey.QuoteRecaps, 'write'),
+      ...permissionsForModule(ModuleKey.Leads),
+      ...permissionsForModule(ModuleKey.QuoteRecaps),
+      ...permissionsForModule(ModuleKey.DealAudits),
       modulePermission(ModuleKey.Performance, 'read'),
       modulePermission(ModuleKey.Leaderboard, 'read'),
     ],

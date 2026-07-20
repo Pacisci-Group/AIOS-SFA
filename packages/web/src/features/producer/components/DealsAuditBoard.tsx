@@ -1,5 +1,6 @@
 import { Car, Home, Package, Clock, CheckCircle2 } from "lucide-react";
 import { useState } from "react";
+import { usePermissions } from "@/hooks/usePermissions";
 import { ResolvePanel } from "./ResolvePanel";
 
 export interface Deal {
@@ -29,6 +30,8 @@ const TypeIcon = ({ type }: { type: Deal["type"] }) => {
 export function DealsAuditBoard() {
   const [deals, setDeals] = useState<Deal[]>(initialDeals);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
+  const { canWrite } = usePermissions();
+  const canResolve = canWrite("deal_audits");
 
   const handleResolved = (id: number) => {
     setDeals((prev) =>
@@ -158,20 +161,24 @@ export function DealsAuditBoard() {
                 </div>
 
                 {/* Resolve */}
-                <button
-                  onClick={() => setSelectedDeal(deal)}
-                  className="text-xs px-3 py-1.5 rounded-lg transition-all hover:brightness-110 active:scale-95"
-                  style={{
-                    background: urgent
-                      ? "rgba(245,158,11,0.12)"
-                      : "rgba(56,189,248,0.1)",
-                    color: urgent ? "#F59E0B" : "#38BDF8",
-                    border: `1px solid ${urgent ? "rgba(245,158,11,0.2)" : "rgba(56,189,248,0.2)"}`,
-                    fontWeight: 600,
-                  }}
-                >
-                  Resolve
-                </button>
+                {canResolve ? (
+                  <button
+                    onClick={() => setSelectedDeal(deal)}
+                    className="text-xs px-3 py-1.5 rounded-lg transition-all hover:brightness-110 active:scale-95"
+                    style={{
+                      background: urgent
+                        ? "rgba(245,158,11,0.12)"
+                        : "rgba(56,189,248,0.1)",
+                      color: urgent ? "#F59E0B" : "#38BDF8",
+                      border: `1px solid ${urgent ? "rgba(245,158,11,0.2)" : "rgba(56,189,248,0.2)"}`,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Resolve
+                  </button>
+                ) : (
+                  <span className="text-xs text-[#4B5563]">—</span>
+                )}
               </div>
             );
           })}

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Phone, MessageSquare, X, Search, ExternalLink, ChevronRight, Flame, Clock, AlertCircle, CheckCircle2, Mail, User, Home, DollarSign, Zap, Bell } from "lucide-react";
+import { AppSidebar } from "@/components/layout/AppSidebar";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -411,7 +412,9 @@ export default function App() {
   const sidecarOpen = sidecarState !== "closed";
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col" style={{ fontFamily: "'Inter', sans-serif" }}>
+    <div className="flex min-h-screen bg-background">
+      <AppSidebar />
+      <div className="flex-1 min-w-0 min-h-screen bg-background text-foreground flex flex-col" style={{ fontFamily: "'Inter', sans-serif" }}>
       {/* Top Nav Bar */}
       <header className="shrink-0 h-14 border-b border-border flex items-center justify-between px-6 bg-[#0d1421]">
         <div className="flex items-center gap-3">
@@ -643,6 +646,7 @@ export default function App() {
         <Mail size={15} />
         Fast Log Mailer <span className="font-mono font-bold">(QCN)</span>
       </button>
+      </div>
     </div>
   );
 }

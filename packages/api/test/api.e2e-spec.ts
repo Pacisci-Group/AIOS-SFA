@@ -20,6 +20,7 @@ describe('SFA API (e2e)', () => {
   let superAdminToken: string;
   let ownerToken: string;
   let producerToken: string;
+  let readOnlyToken: string;
   let refreshToken: string;
 
   beforeAll(async () => {
@@ -36,6 +37,9 @@ describe('SFA API (e2e)', () => {
 
     const producer = await login(app, seed.producerEmail, TEST_PASSWORD);
     producerToken = producer.accessToken;
+
+    const readOnly = await login(app, seed.readOnlyEmail, TEST_PASSWORD);
+    readOnlyToken = readOnly.accessToken;
   });
 
   afterAll(async () => {
@@ -207,6 +211,54 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(producerToken))
         .expect(403);
     });
+
+    it('PATCH /api/v1/roles/:roleId — owner sets page levels', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/roles/${seed.readOnlyRoleId}`)
+        .set(authHeader(ownerToken))
+        .send({
+          levels: [
+            { moduleKey: ModuleKey.Leads, level: 'write' },
+            { moduleKey: ModuleKey.Mailers, level: 'none' },
+          ],
+        })
+        .expect(200);
+
+      // Write always carries read; a `none` level removes the page entirely.
+      expect(res.body.permissions).toContain('leads:read');
+      expect(res.body.permissions).toContain('leads:write');
+      expect(res.body.permissions).not.toContain('mailers:read');
+
+      // Only page read/write or owner-only admin strings may be persisted.
+      for (const permission of res.body.permissions as string[]) {
+        const isAdmin =
+          permission.startsWith('agency:') ||
+          permission.startsWith('platform:');
+        const action = permission.split(':')[1];
+        expect(isAdmin || action === 'read' || action === 'write').toBe(true);
+      }
+    });
+
+    it('PATCH /api/v1/roles/:roleId — preserves owner admin permissions', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/roles/${seed.ownerRoleId}`)
+        .set(authHeader(ownerToken))
+        .send({ levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
+        .expect(200);
+
+      // Page levels change, but agency-admin permissions are never dropped.
+      expect(res.body.permissions).toContain('agency:roles:read');
+      expect(res.body.permissions).toContain('agency:roles:write');
+      expect(res.body.permissions).toContain('leads:read');
+    });
+
+    it('PATCH /api/v1/roles/:roleId — forbidden for producer', async () => {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/roles/${seed.readOnlyRoleId}`)
+        .set(authHeader(producerToken))
+        .send({ levels: [] })
+        .expect(403);
+    });
   });
 
   describe('Branches', () => {
@@ -297,18 +349,39 @@ describe('SFA API (e2e)', () => {
       expect(res.body.roleIds.length).toBe(1);
     });
 
-    it('PATCH /api/v1/users/:userId/permissions — grants and revokes', async () => {
+    it('PATCH /api/v1/users/:userId/permissions — per-page overrides', async () => {
       const res = await request(app.getHttpServer())
         .patch(`/api/v1/users/${invitedUserId}/permissions`)
         .set(authHeader(ownerToken))
         .send({
-          grants: ['mailers:read'],
-          revokes: ['leads:write'],
+          overrides: [
+            // Grant read on a page the producer role lacks.
+            { moduleKey: ModuleKey.Mailers, level: 'read' },
+            // Downgrade a page the producer role has write on to read only.
+            { moduleKey: ModuleKey.Leads, level: 'read' },
+          ],
         })
         .expect(200);
 
       expect(res.body.effectivePermissions).toContain('mailers:read');
       expect(res.body.effectivePermissions).not.toContain('leads:write');
+      expect(res.body.effectivePermissions).toContain('leads:read');
+    });
+
+    it('PATCH /api/v1/users/:userId/permissions — reset restores role defaults', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/users/${invitedUserId}/permissions`)
+        .set(authHeader(ownerToken))
+        .send({
+          overrides: [
+            { moduleKey: ModuleKey.Mailers, level: 'none' },
+            { moduleKey: ModuleKey.Leads, level: 'write' },
+          ],
+        })
+        .expect(200);
+
+      expect(res.body.effectivePermissions).not.toContain('mailers:read');
+      expect(res.body.effectivePermissions).toContain('leads:write');
       expect(res.body.effectivePermissions).toContain('leads:read');
     });
 
@@ -373,6 +446,23 @@ describe('SFA API (e2e)', () => {
         .expect(403);
     });
 
+    it('PATCH /api/v1/leads — producer has write access', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/api/v1/leads')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(res.body.status).toBe('updated');
+    });
+
+    it('PATCH /api/v1/performance — forbidden without write (read-only page)', async () => {
+      // Producer role grants performance:read but not performance:write.
+      await request(app.getHttpServer())
+        .patch('/api/v1/performance')
+        .set(authHeader(producerToken))
+        .expect(403);
+    });
+
     it('GET /api/v1/mailers — module disabled', async () => {
       await request(app.getHttpServer())
         .patch(`/api/v1/platform/agencies/${seed.agencyId}/modules`)
@@ -389,6 +479,70 @@ describe('SFA API (e2e)', () => {
         .patch(`/api/v1/platform/agencies/${seed.agencyId}/modules`)
         .set(authHeader(superAdminToken))
         .send({ modules: { mailers: { enabled: true } } })
+        .expect(200);
+    });
+  });
+
+  describe('Page-level permission guardrails', () => {
+    // Every feature controller: GET requires `{module}:read`, and every mutating
+    // handler (PATCH) requires `{module}:write`. `files` is read-only (no PATCH).
+    const mutatingFeatureRoutes = [
+      { path: 'dashboard', module: ModuleKey.Dashboard },
+      { path: 'contacts', module: ModuleKey.Clients },
+      { path: 'households', module: ModuleKey.Clients },
+      { path: 'leads', module: ModuleKey.Leads },
+      { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
+      { path: 'deals', module: ModuleKey.Clients },
+      { path: 'deal-audits', module: ModuleKey.DealAudits },
+      { path: 'crm/service-tickets', module: ModuleKey.CrmService },
+      { path: 'performance', module: ModuleKey.Performance },
+      { path: 'leaderboard', module: ModuleKey.Leaderboard },
+      { path: 'mailers', module: ModuleKey.Mailers },
+      { path: 'onboardings', module: ModuleKey.Onboardings },
+      { path: 'management', module: ModuleKey.Management },
+      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
+      { path: 'command-center', module: ModuleKey.CommandCenter },
+    ];
+
+    it.each(mutatingFeatureRoutes)(
+      'GET /api/v1/$path — read-only user can read every page',
+      async ({ path, module }) => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(readOnlyToken))
+          .expect(200);
+
+        expect(res.body.module).toBe(module);
+      },
+    );
+
+    it.each(mutatingFeatureRoutes)(
+      'PATCH /api/v1/$path — read-only user is forbidden from writing',
+      async ({ path }) => {
+        await request(app.getHttpServer())
+          .patch(`/api/v1/${path}`)
+          .set(authHeader(readOnlyToken))
+          .expect(403);
+      },
+    );
+
+    it.each(mutatingFeatureRoutes)(
+      'PATCH /api/v1/$path — write user (owner) can write',
+      async ({ path, module }) => {
+        const res = await request(app.getHttpServer())
+          .patch(`/api/v1/${path}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(res.body.module).toBe(module);
+        expect(res.body.status).toBe('updated');
+      },
+    );
+
+    it('GET /api/v1/files — read-only user can read (read-only page)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/files')
+        .set(authHeader(readOnlyToken))
         .expect(200);
     });
   });

@@ -1,4 +1,5 @@
 import { Phone, MessageSquare, Mail, Star, Clock } from "lucide-react";
+import { usePermissions } from "@/hooks/usePermissions";
 
 interface Lead {
   id: number;
@@ -71,6 +72,9 @@ const leads: Lead[] = [
 ];
 
 export function HotLeadsPanel() {
+  const { canWrite } = usePermissions();
+  const canContact = canWrite("leads");
+
   return (
     <div
       className="flex flex-col rounded-xl overflow-hidden"
@@ -160,6 +164,7 @@ export function HotLeadsPanel() {
             </div>
 
             {/* Action bar */}
+            {canContact && (
             <div className="flex items-center gap-2 mt-3 ml-12">
               <button
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-all hover:brightness-110 active:scale-95"
@@ -198,6 +203,7 @@ export function HotLeadsPanel() {
                 Email
               </button>
             </div>
+            )}
           </div>
         ))}
       </div>
