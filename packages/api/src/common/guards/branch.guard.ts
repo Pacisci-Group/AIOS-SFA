@@ -5,7 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AccessScope, DataScope, JwtPayload } from '@sfa/shared';
+import { AccessContext, AccessScope, DataScope } from '@sfa/shared';
 import { BRANCH_HEADER } from '../constants/permissions.constants';
 import { SKIP_BRANCH_KEY } from '../decorators/access.decorators';
 import { isPublicRoute } from './guard.utils';
@@ -28,12 +28,12 @@ export class BranchGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest();
-    const user = request.user as JwtPayload | undefined;
-    if (!user) {
+    const access = request.access as AccessContext | undefined;
+    if (!access) {
       throw new ForbiddenException('Authentication required');
     }
 
-    if (user.isPlatformAdmin || user.scope === AccessScope.Platform) {
+    if (access.isPlatformAdmin || access.scope === AccessScope.Platform) {
       request.resolvedBranchId =
         request.headers[BRANCH_HEADER] ??
         request.params?.branchId ??
@@ -48,23 +48,23 @@ export class BranchGuard implements CanActivate {
       request.query?.branchId ??
       request.body?.branchId;
 
-    const isAgencyWide = user.dataScope === DataScope.Agency;
+    const isAgencyWide = access.dataScope === DataScope.Agency;
 
     if (isAgencyWide) {
       request.resolvedBranchId = headerBranchId ?? routeBranchId ?? null;
       return true;
     }
 
-    if (!user.branchId) {
+    if (!access.branchId) {
       throw new ForbiddenException('Branch assignment required');
     }
 
     const requestedBranch = routeBranchId ?? headerBranchId;
-    if (requestedBranch && requestedBranch !== user.branchId) {
+    if (requestedBranch && requestedBranch !== access.branchId) {
       throw new ForbiddenException('Access denied for this branch');
     }
 
-    request.resolvedBranchId = user.branchId;
+    request.resolvedBranchId = access.branchId;
     return true;
   }
 }

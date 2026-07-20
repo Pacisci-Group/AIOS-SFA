@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
+  AccessContext,
   AccessScope,
   ALL_PLATFORM_PERMISSIONS,
   AgencyPermission,
@@ -12,7 +13,10 @@ import {
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
-import { AgencyRole, AgencyRoleDocument } from '../roles/schemas/agency-role.schema';
+import {
+  AgencyRole,
+  AgencyRoleDocument,
+} from '../roles/schemas/agency-role.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 
 @Injectable()
@@ -133,7 +137,12 @@ export class PermissionsService {
     return DataScope.Own;
   }
 
-  async buildJwtPayload(user: UserDocument): Promise<JwtPayload> {
+  /**
+   * Resolve the full authorization context for a user from the database. This
+   * is the source of truth used by the request guards (via the resolver/cache)
+   * and to build the login response — never trusted from the JWT.
+   */
+  async buildAccessContext(user: UserDocument): Promise<AccessContext> {
     const permissions = await this.resolveForUser(user);
     const dataScope = await this.resolveDataScope(user);
 
@@ -144,13 +153,24 @@ export class PermissionsService {
         : AccessScope.Branch;
 
     return {
-      sub: user._id.toString(),
+      userId: user._id.toString(),
       agencyId: user.agencyId?.toString() ?? null,
       branchId: user.branchId?.toString() ?? null,
-      permissions,
+      isPlatformAdmin: user.isPlatformAdmin ?? false,
       scope,
       dataScope,
-      isPlatformAdmin: user.isPlatformAdmin ?? false,
+      permissions,
+    };
+  }
+
+  /** Slim, stable claims that are safe to embed in the signed JWT. */
+  buildJwtClaims(context: AccessContext): JwtPayload {
+    return {
+      sub: context.userId,
+      agencyId: context.agencyId,
+      branchId: context.branchId,
+      scope: context.scope,
+      isPlatformAdmin: context.isPlatformAdmin,
     };
   }
 

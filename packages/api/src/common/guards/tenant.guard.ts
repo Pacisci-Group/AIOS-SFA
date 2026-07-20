@@ -5,7 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AccessScope, JwtPayload } from '@sfa/shared';
+import { AccessContext, AccessScope } from '@sfa/shared';
 import { SKIP_TENANT_KEY } from '../decorators/access.decorators';
 import { isPublicRoute } from './guard.utils';
 
@@ -27,21 +27,21 @@ export class TenantGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest();
-    const user = request.user as JwtPayload | undefined;
-    if (!user) {
+    const access = request.access as AccessContext | undefined;
+    if (!access) {
       throw new ForbiddenException('Authentication required');
     }
 
-    if (user.isPlatformAdmin || user.scope === AccessScope.Platform) {
+    if (access.isPlatformAdmin || access.scope === AccessScope.Platform) {
       const routeAgencyId =
         request.params?.agencyId ??
         request.query?.agencyId ??
         request.body?.agencyId;
-      request.resolvedAgencyId = routeAgencyId ?? user.agencyId ?? null;
+      request.resolvedAgencyId = routeAgencyId ?? access.agencyId ?? null;
       return true;
     }
 
-    if (!user.agencyId) {
+    if (!access.agencyId) {
       throw new ForbiddenException('Agency context required');
     }
 
@@ -50,11 +50,11 @@ export class TenantGuard implements CanActivate {
       request.query?.agencyId ??
       request.body?.agencyId;
 
-    if (routeAgencyId && routeAgencyId !== user.agencyId) {
+    if (routeAgencyId && routeAgencyId !== access.agencyId) {
       throw new ForbiddenException('Access denied for this agency');
     }
 
-    request.resolvedAgencyId = user.agencyId;
+    request.resolvedAgencyId = access.agencyId;
     return true;
   }
 }

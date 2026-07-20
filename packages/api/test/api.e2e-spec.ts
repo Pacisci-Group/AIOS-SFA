@@ -1,7 +1,11 @@
 import { INestApplication } from '@nestjs/common';
+import { getModelToken } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
+import { AccessResolverService } from '../src/permissions/access-resolver.service';
+import { User } from '../src/users/schemas/user.schema';
 import { authHeader, login } from './helpers/auth.helper';
 import {
   seedTestData,
@@ -190,9 +194,9 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       expect(res.body.length).toBeGreaterThanOrEqual(5);
-      expect(res.body.some((r: { slug: string }) => r.slug === 'producer')).toBe(
-        true,
-      );
+      expect(
+        res.body.some((r: { slug: string }) => r.slug === 'producer'),
+      ).toBe(true);
     });
 
     it('GET /api/v1/roles/:roleId', async () => {
@@ -214,7 +218,7 @@ describe('SFA API (e2e)', () => {
 
     it('PATCH /api/v1/roles/:roleId — owner sets page levels', async () => {
       const res = await request(app.getHttpServer())
-        .patch(`/api/v1/roles/${seed.readOnlyRoleId}`)
+        .patch(`/api/v1/roles/${seed.editableRoleId}`)
         .set(authHeader(ownerToken))
         .send({
           levels: [
@@ -556,6 +560,89 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .get('/api/v1/leads')
         .set(authHeader('invalid.jwt.token'))
+        .expect(401);
+    });
+  });
+
+  // The store (MongoDB) is the source of truth for authorization, not the JWT.
+  // These tests use a dedicated user and keep reusing the SAME access token to
+  // prove that owner edits / de-provisioning take effect on the next request
+  // without re-login. (No REDIS_URL in tests => DB-only resolution.)
+  describe('Live authorization (backend store is source of truth)', () => {
+    let liveToken: string;
+    let liveUserId: string;
+
+    beforeAll(async () => {
+      const invite = await request(app.getHttpServer())
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({
+          email: 'live-auth-user@sfa.local',
+          roleIds: [seed.producerRoleId],
+          branchId: seed.branchId,
+          firstName: 'Live',
+          lastName: 'Auth',
+        })
+        .expect(201);
+
+      const accepted = await request(app.getHttpServer())
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: invite.body.inviteToken, password: 'LivePass123!' })
+        .expect(201);
+
+      liveToken = accepted.body.accessToken;
+      liveUserId = accepted.body.user.id;
+    });
+
+    it('signed access token does not embed the permissions array', () => {
+      const [, payload] = liveToken.split('.');
+      const claims = JSON.parse(
+        Buffer.from(payload, 'base64').toString('utf8'),
+      );
+      expect(claims.sub).toBeDefined();
+      expect(claims.permissions).toBeUndefined();
+      expect(claims.dataScope).toBeUndefined();
+    });
+
+    it('baseline: producer token can write leads', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/leads')
+        .set(authHeader(liveToken))
+        .expect(200);
+    });
+
+    it('owner downgrading the user takes effect on the next request (same token)', async () => {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/users/${liveUserId}/permissions`)
+        .set(authHeader(ownerToken))
+        .send({ overrides: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
+        .expect(200);
+
+      // Same token as before — write is now revoked, read still works.
+      await request(app.getHttpServer())
+        .patch('/api/v1/leads')
+        .set(authHeader(liveToken))
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/leads')
+        .set(authHeader(liveToken))
+        .expect(200);
+    });
+
+    it('deactivating the user blocks the next request even with a valid token', async () => {
+      // A real deactivation flow updates the store and invalidates any cached
+      // context. Modeling both keeps this correct whether or not Redis is on.
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      await userModel.updateOne(
+        { _id: liveUserId },
+        { $set: { isActive: false } },
+      );
+      await app.get(AccessResolverService).invalidateUser(liveUserId);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/leads')
+        .set(authHeader(liveToken))
         .expect(401);
     });
   });

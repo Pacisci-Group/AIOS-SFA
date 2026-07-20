@@ -7,9 +7,12 @@ import {
 import { Reflector } from '@nestjs/core';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { JwtPayload } from '@sfa/shared';
+import { AccessContext } from '@sfa/shared';
 import { Agency, AgencyDocument } from '../../platform/schemas/agency.schema';
-import { SKIP_MODULE_KEY, REQUIRE_MODULE_KEY } from '../decorators/access.decorators';
+import {
+  SKIP_MODULE_KEY,
+  REQUIRE_MODULE_KEY,
+} from '../decorators/access.decorators';
 import { isPublicRoute } from './guard.utils';
 
 @Injectable()
@@ -41,20 +44,20 @@ export class ModuleGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest();
-    const user = request.user as JwtPayload | undefined;
-    if (!user) {
+    const access = request.access as AccessContext | undefined;
+    if (!access) {
       throw new ForbiddenException('Authentication required');
     }
 
-    if (user.isPlatformAdmin) {
+    if (access.isPlatformAdmin) {
       return true;
     }
 
-    if (!user.agencyId) {
+    if (!access.agencyId) {
       throw new ForbiddenException('Agency context required');
     }
 
-    const agency = await this.agencyModel.findById(user.agencyId).lean();
+    const agency = await this.agencyModel.findById(access.agencyId).lean();
     if (!agency) {
       throw new ForbiddenException('Agency not found');
     }

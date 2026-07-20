@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ALL_MODULE_KEYS, ModuleKey } from '@sfa/shared';
+import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from './schemas/agency.schema';
 
@@ -10,6 +11,7 @@ export class PlatformService {
   constructor(
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
     private permissionsService: PermissionsService,
+    private accessResolver: AccessResolverService,
   ) {}
 
   findAllAgencies() {
@@ -36,7 +38,7 @@ export class PlatformService {
             ModuleKey.Leads,
             ModuleKey.Clients,
             ModuleKey.Performance,
-          ].includes(key as ModuleKey),
+          ].includes(key),
         },
       ]),
     );
@@ -69,6 +71,11 @@ export class PlatformService {
 
     agency.markModified('modules');
     await agency.save();
+
+    // Enabled-module changes alter every user's effective permission set (perms
+    // are filtered to enabled modules), so invalidate the whole agency.
+    await this.accessResolver.invalidateAgency(agencyId);
+
     return agency.toObject();
   }
 }

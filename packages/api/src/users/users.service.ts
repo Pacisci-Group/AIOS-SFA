@@ -15,9 +15,13 @@ import {
   permissionsToPageLevel,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
-import { AgencyRole, AgencyRoleDocument } from '../roles/schemas/agency-role.schema';
+import {
+  AgencyRole,
+  AgencyRoleDocument,
+} from '../roles/schemas/agency-role.schema';
 import { User, UserDocument } from './schemas/user.schema';
 import { UserDetailResponse } from './users.types';
 
@@ -35,6 +39,7 @@ export class UsersService {
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
     private permissionsService: PermissionsService,
+    private accessResolver: AccessResolverService,
   ) {}
 
   findByAgency(agencyId: string) {
@@ -48,7 +53,10 @@ export class UsersService {
       .lean();
   }
 
-  async findById(agencyId: string, userId: string): Promise<UserDetailResponse> {
+  async findById(
+    agencyId: string,
+    userId: string,
+  ): Promise<UserDetailResponse> {
     const user = await this.userModel
       .findOne({
         _id: new Types.ObjectId(userId),
@@ -70,7 +78,7 @@ export class UsersService {
       ...user,
       effectivePermissions,
       roleDefaultPermissions,
-    } as UserDetailResponse;
+    };
   }
 
   async inviteUser(input: {
@@ -123,6 +131,7 @@ export class UsersService {
 
     user.roleIds = roleIds.map((id) => new Types.ObjectId(id));
     await user.save();
+    await this.accessResolver.invalidateUser(userId);
     return this.findById(agencyId, userId);
   }
 
@@ -195,6 +204,7 @@ export class UsersService {
     user.permissionGrants = grantList;
     user.permissionRevokes = revokeList;
     await user.save();
+    await this.accessResolver.invalidateUser(userId);
 
     return this.findById(agencyId, userId);
   }
@@ -233,7 +243,9 @@ export class UsersService {
       _id: { $in: roleIds.map((id) => new Types.ObjectId(id)) },
     });
     if (count !== roleIds.length) {
-      throw new BadRequestException('One or more roles are invalid for this agency');
+      throw new BadRequestException(
+        'One or more roles are invalid for this agency',
+      );
     }
   }
 

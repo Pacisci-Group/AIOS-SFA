@@ -29,6 +29,26 @@
 
 ---
 
+## 1b. Authorization model change (PAC-25, sub-issue of PAC-7)
+
+The API now treats the **backend store (MongoDB) as the source of truth for
+authorization**, resolved on every request — the JWT no longer carries the
+effective permission set. Right after auth, `AccessContextGuard` resolves the
+caller's live `AccessContext` (via `AccessResolverService`) and attaches it to
+`request.access`; the Tenant/Branch/Module/Permissions guards read from there.
+Owner permission/role edits and user de-provisioning therefore take effect on the
+**next request** (no re-login), and a still-valid token cannot outlive a
+revocation.
+
+**Redis is optional:** resolution reads from Mongo unless `REDIS_URL` is set, in
+which case resolved contexts are cached in Redis (safety TTL + explicit
+invalidation on role/user/module changes). Behavior is identical either way; the
+day-one default is DB-only. New env: `REDIS_URL`, `PERMISSION_CACHE_TTL_SECONDS`
+(both optional). Key files: `packages/api/src/permissions/access-resolver.service.ts`,
+`packages/api/src/permissions/cache/*`, `packages/api/src/common/guards/access-context.guard.ts`.
+
+---
+
 ## 2. Tech stacks
 
 **New — `AIOS-SFA/packages/web`:** React 18, Vite 6, TypeScript, Tailwind 4, Radix UI, React Router 7, TanStack Query, Recharts, lucide-react. All screens render from **hard-coded mock data**; auth + api-client scaffolded but **no dashboard is wired to the API yet**.
