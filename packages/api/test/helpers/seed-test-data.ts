@@ -17,6 +17,13 @@ export interface TestSeedContext {
   ownerRoleId: string;
   producerRoleId: string;
   readOnlyRoleId: string;
+  /**
+   * A disposable role for tests that mutate a role's page levels. Kept separate
+   * from `readOnlyRoleId` so that role-editing tests don't change the effective
+   * permissions of the read-only user (permissions are now resolved live from
+   * the store, so mutating a shared role would leak into other suites).
+   */
+  editableRoleId: string;
   superAdminEmail: string;
   ownerEmail: string;
   producerEmail: string;
@@ -67,6 +74,17 @@ export async function seedTestData(
     agencyId: agency._id,
     name: 'Read Only',
     slug: 'read_only',
+    permissions: ALL_MODULE_KEYS.map((key) => `${key}:read`),
+    dataScope: DataScope.Agency,
+    isSystemTemplate: false,
+  });
+
+  // A throwaway role for role-editing tests to mutate freely, so the shared
+  // read-only role above stays pristine for the page-level guardrail suite.
+  const editableRole = await roleModel.create({
+    agencyId: agency._id,
+    name: 'Editable Test Role',
+    slug: 'editable_test',
     permissions: ALL_MODULE_KEYS.map((key) => `${key}:read`),
     dataScope: DataScope.Agency,
     isSystemTemplate: false,
@@ -125,6 +143,7 @@ export async function seedTestData(
     ownerRoleId: ownerRole!._id.toString(),
     producerRoleId: producerRole!._id.toString(),
     readOnlyRoleId: readOnlyRole._id.toString(),
+    editableRoleId: editableRole._id.toString(),
     superAdminEmail,
     ownerEmail,
     producerEmail,

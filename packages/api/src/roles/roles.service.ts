@@ -12,6 +12,7 @@ import {
   pageLevelToPermissions,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { AccessResolverService } from '../permissions/access-resolver.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import { AgencyRole, AgencyRoleDocument } from './schemas/agency-role.schema';
 
@@ -31,6 +32,7 @@ export class RolesService {
   constructor(
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
+    private accessResolver: AccessResolverService,
   ) {}
 
   findByAgency(agencyId: string) {
@@ -101,6 +103,9 @@ export class RolesService {
 
     role.permissions = next;
     await role.save();
+
+    // Every member of this role must re-resolve their effective permissions.
+    await this.accessResolver.invalidateRole(agencyId, roleId);
 
     return role.toObject();
   }

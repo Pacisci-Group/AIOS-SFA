@@ -11,10 +11,13 @@
     "start:prod": "node dist/main",
     "seed": "node dist/seed/seed.js",
     "seed:dev": "ts-node -r tsconfig-paths/register src/seed/seed.ts",
+    "migrate": "node dist/migration/migrate.js",
+    "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
     "migrate:permissions": "node dist/seed/migrate-permissions.js",
     "migrate:permissions:dev": "ts-node -r tsconfig-paths/register src/seed/migrate-permissions.ts",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "test": "jest",
+    "test:unit": "jest --config ./test/jest-unit.json",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
@@ -29,6 +32,7 @@
     "bcrypt": "^5.1.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "ioredis": "^5.11.1",
     "mongoose": "^8.12.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",

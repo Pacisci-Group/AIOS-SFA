@@ -2,7 +2,10 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
-import { AgencyRole, AgencyRoleSchema } from '../roles/schemas/agency-role.schema';
+import {
+  AgencyRole,
+  AgencyRoleSchema,
+} from '../roles/schemas/agency-role.schema';
 import { User, UserSchema } from './schemas/user.schema';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';

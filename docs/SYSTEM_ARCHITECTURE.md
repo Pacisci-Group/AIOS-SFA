@@ -307,6 +307,29 @@ Every API request passes through four checks:
 
 ![Four-layer guard model — auth through permission checks](diagrams/09-four-layer-guard.svg)
 
+#### Authorization source of truth (PAC-25)
+
+The JWT is used for **authentication + stable identity claims only**. The
+**effective permission set is resolved from the backend store (MongoDB) on every
+authenticated request** — it is *not* trusted from the token. Immediately after
+`JwtAuthGuard`, an `AccessContextGuard` resolves the caller's live
+`AccessContext` (permissions, data scope, tenant/branch, active flag) via
+`AccessResolverService` and attaches it to `request.access`; every downstream
+guard reads from there.
+
+Consequences:
+
+- Owner permission/role edits and user de-provisioning take effect on the
+  **next request** — no re-login and no waiting for the token to expire.
+- A deactivated/deleted user is rejected even while holding a still-valid token.
+
+**Optional Redis cache.** Resolution always reads from MongoDB unless `REDIS_URL`
+is configured, in which case resolved contexts are cached in Redis (with a safety
+TTL) to avoid a DB read per request. Redis is strictly optional — behavior is
+identical either way. Cache entries are explicitly invalidated when a role's
+levels change (all members), a user's role/overrides change (that user), or an
+agency's module entitlements change (all members).
+
 ### 7.2 Scope matrix
 
 | Actor | Agency data | Branch data | Module disabled |
@@ -428,17 +451,22 @@ src/
 | Super Admin | Seeded account; platform scope |
 | Password reset | Email-based token flow |
 
-**JWT payload:**
+**JWT payload (slim — identity claims only):**
 
 ```typescript
 {
   sub: string;              // userId
   agencyId: string | null;  // null for super_admin
   branchId: string | null;  // null for agency-wide roles
-  roles: string[];
   scope: 'platform' | 'agency' | 'branch';
+  isPlatformAdmin: boolean;
 }
 ```
+
+The token intentionally does **not** carry the effective permission set — that is
+resolved live from the store per request (see §7.1). The login response still
+returns the resolved `permissions` / `dataScope` / role names for the web app to
+gate its UI.
 
 Agency Owners may pass `X-Branch-Id` header to filter UI to a specific branch without losing agency-wide access.
 

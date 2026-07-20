@@ -5,7 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { JwtPayload } from '@sfa/shared';
+import { AccessContext } from '@sfa/shared';
 import { REQUIRE_PERMISSIONS_KEY } from '../decorators/access.decorators';
 import { isPublicRoute } from './guard.utils';
 
@@ -27,12 +27,12 @@ export class PermissionsGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest();
-    const user = request.user as JwtPayload | undefined;
-    if (!user) {
+    const access = request.access as AccessContext | undefined;
+    if (!access) {
       throw new ForbiddenException('Authentication required');
     }
 
-    const userPermissions = new Set(user.permissions ?? []);
+    const userPermissions = new Set(access.permissions ?? []);
     const hasAll = requiredPermissions.every((permission) =>
       userPermissions.has(permission),
     );

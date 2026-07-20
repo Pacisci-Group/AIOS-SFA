@@ -19,7 +19,9 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto) {
-    const user = await this.userModel.findOne({ email: dto.email.toLowerCase() });
+    const user = await this.userModel.findOne({
+      email: dto.email.toLowerCase(),
+    });
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -66,17 +68,27 @@ export class AuthService {
   }
 
   private async issueTokens(user: UserDocument) {
-    const payload = await this.permissionsService.buildJwtPayload(user);
+    const access = await this.permissionsService.buildAccessContext(user);
+    // Only slim, stable identity claims are signed into the token. The effective
+    // permission set is resolved from the store on every request, not trusted
+    // from here.
+    const claims = this.permissionsService.buildJwtClaims(access);
     const roles = await this.permissionsService.resolveRoleNames(user);
     const name =
       [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null;
-    const accessToken = this.jwtService.sign(payload, {
+    const accessToken = this.jwtService.sign(claims, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
-      expiresIn: this.configService.get<string>('JWT_ACCESS_EXPIRES', '15m') as `${number}m`,
+      expiresIn: this.configService.get<string>(
+        'JWT_ACCESS_EXPIRES',
+        '15m',
+      ) as `${number}m`,
     });
-    const refreshToken = this.jwtService.sign(payload, {
+    const refreshToken = this.jwtService.sign(claims, {
       secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
-      expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRES', '7d') as `${number}d`,
+      expiresIn: this.configService.get<string>(
+        'JWT_REFRESH_EXPIRES',
+        '7d',
+      ) as `${number}d`,
     });
 
     return {
@@ -87,12 +99,12 @@ export class AuthService {
         email: user.email,
         name,
         roles,
-        agencyId: user.agencyId?.toString() ?? null,
-        branchId: user.branchId?.toString() ?? null,
-        permissions: payload.permissions,
-        scope: payload.scope,
-        dataScope: payload.dataScope,
-        isPlatformAdmin: payload.isPlatformAdmin,
+        agencyId: access.agencyId,
+        branchId: access.branchId,
+        permissions: access.permissions,
+        scope: access.scope,
+        dataScope: access.dataScope,
+        isPlatformAdmin: access.isPlatformAdmin,
       },
     };
   }
