@@ -29,7 +29,7 @@ npm workspaces (`workspaces: ["packages/*"]`, Node >= 20):
 
 | Package | Stack | State |
 |---|---|---|
-| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, Radix UI, React Router 7, TanStack Query, Recharts, lucide-react | Figma mockups render from **hard-coded mock data**; auth + api-client scaffolded but **no dashboard is wired to the API yet** |
+| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, **shadcn/ui (Radix UI primitives)**, React Router 7, TanStack Query, Recharts, lucide-react | Figma mockups render from **hard-coded mock data**; auth + api-client scaffolded but **no dashboard is wired to the API yet** |
 | `packages/api` | **NestJS 11**, **Mongoose 8 (MongoDB)**, JWT/passport, class-validator | Full **permission/multi-tenancy spine**; every domain module is an **empty stub** returning `{ status: 'ready' }` (no schemas/queries/data yet) |
 | `packages/shared` | Shared enums / permission constants / types / role templates | Source of truth for module keys & permissions |
 
@@ -153,9 +153,42 @@ aren't first-class in legacy payloads. See `docs/SESSION-HANDOFF.md` for full st
 
 ## 11. Conventions
 
+### UI: shadcn/ui is the component base (`packages/web`)
+
+The web app is built on **shadcn/ui** — Radix UI primitives + Tailwind, with the
+component **source copied into the repo** (we own & edit it). This is the base for
+the whole app; do **not** introduce a second component library (MUI, Radix Themes,
+Chakra, etc.).
+
+- **Primitives live in `src/components/ui/`** and are managed by the shadcn CLI —
+  add new ones with `npx shadcn@latest add <component>` (from `packages/web`),
+  don't hand-write them. Config is `packages/web/components.json`
+  (style `new-york`, `cssVariables: true`, icon library `lucide`).
+- **`cn` util is `@/lib/utils`** (shadcn convention). Use it for dynamic classes;
+  do not use Tailwind `@apply`.
+- **Generated `radix-ui` (unified package)** backs the primitives — the older
+  individual `@radix-ui/react-*` deps are legacy and being removed.
+- **Compose, don't fork.** Build features from `ui/` primitives (`Card`, `Button`,
+  `Table`, `Badge`, `Dialog`, `Sheet`, …). App-specific composites live in the
+  relevant `features/*` folder, never in `components/ui`. Add variants via `cva`
+  inside the primitive rather than one-off wrappers.
+- **Style with design tokens, never hard-coded hex/inline styles.** The mockup
+  palette is encoded as CSS-variable tokens in `src/styles/theme.css`
+  (`bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`,
+  `border-border`, `text-primary` = Allstate sky, `text-accent` = emerald,
+  `text-destructive` = amber). For status accents use Tailwind's default palette,
+  which matches the mockups exactly (`amber-500` `#F59E0B`, `sky-400` `#38BDF8`,
+  `emerald-500` `#10B981`, `slate-{200,400,500}`). This keeps the designer's look
+  intact **and** gives us light/dark theming for free.
+- **Match the mockups.** `./agencyops_fe_mockups` is still the visual
+  source-of-truth (see `.cursor/rules/figma-mockups-reference.mdc`); port layout
+  and spacing onto shadcn primitives + tokens.
+
+### General
+
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
-- TypeScript strict; functional React components with named exports; keep reusable UI modular. Use a `cn` (clsx + tailwind-merge) utility for dynamic classes — do not use Tailwind `@apply`.
+- TypeScript strict; functional React components with named exports; keep reusable UI modular.
 - Forms: prefer `react-hook-form` + `zod` resolvers.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
 - Run each package's `lint` (`npm run lint -w @sfa/api` / `-w @sfa/web`) before finishing.

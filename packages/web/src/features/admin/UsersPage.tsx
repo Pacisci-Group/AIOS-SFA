@@ -3,6 +3,11 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, Search, Users } from 'lucide-react';
 import { listUsers, type AgencyUser } from '@/lib/users-api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { cn } from '@/lib/utils';
 
 function displayName(user: AgencyUser): string {
   const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
@@ -41,76 +46,63 @@ export default function UsersPage() {
   );
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-[#E2E8F0]">
-      <header
-        className="flex items-center justify-between px-6 py-4 border-b"
-        style={{ borderColor: 'rgba(255,255,255,0.06)' }}
-      >
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-border">
         <div className="flex items-center gap-3">
-          <Link
-            to="/"
-            className="p-2 rounded-lg text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all"
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground hover:text-slate-300 hover:bg-white/5"
           >
-            <ArrowLeft size={16} />
-          </Link>
-          <div className="w-8 h-8 rounded-lg bg-[#38BDF8] flex items-center justify-center">
-            <Users size={16} className="text-[#0B0F19]" />
+            <Link to="/">
+              <ArrowLeft size={16} />
+            </Link>
+          </Button>
+          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
+            <Users size={16} className="text-primary-foreground" />
           </div>
           <div>
             <h1 className="text-sm font-bold">Agency Users</h1>
-            <p className="text-[10px] text-[#64748B] uppercase tracking-widest">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
               People in your agency
             </p>
           </div>
         </div>
         {!usersQuery.isLoading && (
-          <span className="text-xs text-[#64748B]">{totalUsers} users</span>
+          <span className="text-xs text-muted-foreground">{totalUsers} users</span>
         )}
       </header>
 
       <main className="max-w-3xl mx-auto px-6 py-8">
         {usersQuery.isError && (
-          <div
-            className="mb-5 px-4 py-3 rounded-lg text-sm"
-            style={{
-              background: 'rgba(245,158,11,0.1)',
-              border: '1px solid rgba(245,158,11,0.25)',
-              color: '#F59E0B',
-            }}
-          >
+          <div className="mb-5 px-4 py-3 rounded-lg text-sm bg-amber-500/10 border border-amber-500/25 text-amber-500">
             {(usersQuery.error as Error).message}
           </div>
         )}
 
-        <div
-          className="flex items-center gap-2 px-3 py-2.5 rounded-lg mb-6"
-          style={{ background: '#161F30', border: '1px solid rgba(255,255,255,0.07)' }}
-        >
-          <Search size={15} className="text-[#64748B] shrink-0" />
-          <input
+        <div className="relative mb-6">
+          <Search
+            size={15}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+          />
+          <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search users by name, email or role…"
-            className="bg-transparent text-sm text-[#E2E8F0] placeholder:text-[#4B5563] flex-1 outline-none"
+            className="pl-9 bg-card border-border"
           />
         </div>
 
         {usersQuery.isLoading ? (
-          <p className="text-sm text-[#64748B]">Loading users…</p>
+          <p className="text-sm text-muted-foreground">Loading users…</p>
         ) : users.length === 0 ? (
-          <p className="text-sm text-[#64748B]">No users found.</p>
+          <p className="text-sm text-muted-foreground">No users found.</p>
         ) : (
-          <div
-            className="rounded-xl overflow-hidden"
-            style={{ background: '#161F30', border: '1px solid rgba(255,255,255,0.07)' }}
-          >
+          <div className="rounded-xl overflow-hidden bg-card border border-border">
             <div
-              className="grid px-5 py-2.5 gap-3 text-[10px] uppercase tracking-widest"
-              style={{
-                gridTemplateColumns: '1.4fr 1fr 90px 20px',
-                color: '#4B5563',
-                borderBottom: '1px solid rgba(255,255,255,0.06)',
-              }}
+              className="grid px-5 py-2.5 gap-3 text-[10px] uppercase tracking-widest text-slate-600 border-b border-border"
+              style={{ gridTemplateColumns: '1.4fr 1fr 90px 20px' }}
             >
               <span>User</span>
               <span>Roles</span>
@@ -122,60 +114,55 @@ export default function UsersPage() {
               <Link
                 key={user._id}
                 to={`/settings/users/${user._id}/permissions`}
-                className="grid px-5 py-3.5 gap-3 items-center transition-colors hover:bg-white/[0.03]"
-                style={{
-                  gridTemplateColumns: '1.4fr 1fr 90px 20px',
-                  borderBottom:
-                    i < users.length - 1
-                      ? '1px solid rgba(255,255,255,0.04)'
-                      : 'none',
-                }}
+                className={cn(
+                  'grid px-5 py-3.5 gap-3 items-center transition-colors hover:bg-white/[0.03]',
+                  i < users.length - 1 && 'border-b border-border',
+                )}
+                style={{ gridTemplateColumns: '1.4fr 1fr 90px 20px' }}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-xs"
-                    style={{ background: '#1A3A8F', color: '#E2E8F0', fontWeight: 700 }}
-                  >
-                    {initials(user)}
-                  </div>
+                  <Avatar className="w-8 h-8">
+                    <AvatarFallback className="bg-blue-900 text-foreground text-xs font-bold">
+                      {initials(user)}
+                    </AvatarFallback>
+                  </Avatar>
                   <div className="min-w-0">
-                    <p className="text-sm text-[#E2E8F0] truncate" style={{ fontWeight: 500 }}>
+                    <p className="text-sm text-foreground truncate font-medium">
                       {displayName(user)}
                     </p>
-                    <p className="text-xs text-[#64748B] truncate">{user.email}</p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {user.email}
+                    </p>
                   </div>
                 </div>
 
                 <div className="flex flex-wrap gap-1">
                   {user.roleIds.length ? (
                     user.roleIds.map((role) => (
-                      <span
+                      <Badge
                         key={role._id}
-                        className="text-[10px] px-2 py-0.5 rounded-full"
-                        style={{ background: 'rgba(56,189,248,0.12)', color: '#38BDF8' }}
+                        className="bg-primary/12 text-primary border-transparent rounded-full text-[10px] px-2 py-0.5 font-normal"
                       >
                         {role.name}
-                      </span>
+                      </Badge>
                     ))
                   ) : (
-                    <span className="text-xs text-[#4B5563]">No role</span>
+                    <span className="text-xs text-slate-600">No role</span>
                   )}
                 </div>
 
-                <span
-                  className="text-[10px] px-2 py-0.5 rounded-full w-fit"
-                  style={{
-                    background: user.isActive
-                      ? 'rgba(16,185,129,0.12)'
-                      : 'rgba(245,158,11,0.15)',
-                    color: user.isActive ? '#10B981' : '#F59E0B',
-                    fontWeight: 600,
-                  }}
+                <Badge
+                  className={cn(
+                    'rounded-full text-[10px] px-2 py-0.5 w-fit border-transparent font-semibold',
+                    user.isActive
+                      ? 'bg-emerald-500/12 text-emerald-500'
+                      : 'bg-amber-500/15 text-amber-500',
+                  )}
                 >
                   {user.isActive ? 'Active' : 'Invited'}
-                </span>
+                </Badge>
 
-                <ChevronRight size={16} className="text-[#475569] justify-self-end" />
+                <ChevronRight size={16} className="text-slate-600 justify-self-end" />
               </Link>
             ))}
           </div>

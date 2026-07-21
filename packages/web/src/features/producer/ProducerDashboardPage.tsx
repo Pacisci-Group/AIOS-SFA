@@ -5,14 +5,11 @@ import { ScoreCards } from "./components/ScoreCards";
 import { DealsAuditBoard } from "./components/DealsAuditBoard";
 import { HotLeadsPanel } from "./components/HotLeadsPanel";
 
-export default function App() {
+export default function ProducerDashboardPage() {
   const [activeFilter, setActiveFilter] = useState("This Month");
 
   return (
-    <div
-      className="flex min-h-screen w-full"
-      style={{ background: "#0B0F19", color: "#E2E8F0", fontFamily: "'Inter', 'system-ui', sans-serif" }}
-    >
+    <div className="flex min-h-screen w-full bg-background text-foreground">
       <Sidebar />
 
       {/* Main content */}
@@ -28,7 +25,10 @@ export default function App() {
               Reaching this route already requires `dashboard:read`, so every
               panel the dashboard shows is part of the dashboard page and is
               visible to anyone with `dashboard:read`. */}
-          <div className="grid gap-4 px-6 pb-6" style={{ gridTemplateColumns: "3fr 2fr" }}>
+          <div
+            className="grid gap-4 px-6 pb-6"
+            style={{ gridTemplateColumns: "3fr 2fr" }}
+          >
             <DealsAuditBoard />
             <HotLeadsPanel />
           </div>

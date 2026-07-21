@@ -47,7 +47,7 @@ const queryClient = new QueryClient({
 
 function PageLoader() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0B0F19] text-[#64748B] text-sm">
+    <div className="min-h-screen flex items-center justify-center bg-background text-muted-foreground text-sm">
       Loading…
     </div>
   );
