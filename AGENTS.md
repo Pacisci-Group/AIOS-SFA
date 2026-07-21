@@ -1,10 +1,13 @@
 # AGENTS.md — AIOS-SFA (new platform)
 
 > Auto-loaded when Cursor is opened at the `AIOS-SFA/` repo root. This is the
-> **new, greenfield replacement** for the legacy SFA app. The legacy Next.js app
-> (source-of-truth for behaviour being ported) is available **read-only** inside
-> this repo at `./SFA` (a gitignored symlink to the sibling checkout) — see
-> `.cursor/rules/legacy-sfa-reference.mdc` for how to use it.
+> **new, greenfield replacement** for the legacy SFA app. Two read-only reference
+> checkouts are symlinked in (gitignored, never committed here):
+> - `./SFA` → legacy Next.js app, **source-of-truth for behaviour** being ported —
+>   see `.cursor/rules/legacy-sfa-reference.mdc`.
+> - `./agencyops_fe_mockups` → Figma FE mockups (design screenshots + exported
+>   React components/CSS + agent-context docs), **source-of-truth for UI/design** —
+>   see `.cursor/rules/figma-mockups-reference.mdc`.
 
 ---
 
@@ -57,17 +60,19 @@ Env: copy `.env.example` → `.env`. Deployment notes in `DEPLOYMENT.md`.
 ## 4. Web app — the 7 mockup dashboards (`packages/web`)
 
 Dev "Screen Navigator" at `/` (`src/pages/DevNavPage.tsx`) links all 7; routes in
-`src/app/App.tsx`, all behind `ProtectedRoute`.
+`src/app/App.tsx`, all behind `ProtectedRoute`. The **design source-of-truth** for
+each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
+(read-only symlink — see `.cursor/rules/figma-mockups-reference.mdc`).
 
-| Screen | Route | Persona |
-|---|---|---|
-| **Producer Dashboard** ← current focus | `/dashboard/producer` | Sales producer (`DataScope = own`) |
-| Lead Details | `/leads/:id`, `/leads/demo` | Producer |
-| Management v1 | `/dashboard/management` | Owner + Manager |
-| Management v2 (actually an "Agency Command Center" / lead-distribution board — clarify intent) | `/dashboard/management-alt` | Owner/Manager |
-| Service Dashboard | `/crm/service` | Service rep |
-| Ticket Workspace | `/crm/tickets` | CRM/service |
-| Household Details | `/clients/:id`, `/clients/demo` | 360° client view |
+| Screen | Route | Persona | Design mockup folder |
+|---|---|---|---|
+| **Producer Dashboard** ← current focus | `/dashboard/producer` | Sales producer (`DataScope = own`) | `Insurance-Producer-Dashboard` |
+| Lead Details | `/leads/:id`, `/leads/demo` | Producer | `Insurance-Lead-Details` |
+| Management v1 | `/dashboard/management` | Owner + Manager | `Insurance-Management-Dashboard` |
+| Management v2 (actually an "Agency Command Center" / lead-distribution board — clarify intent) | `/dashboard/management-alt` | Owner/Manager | `Insurance-Management-Dashboard-2` |
+| Service Dashboard | `/crm/service` | Service rep | `Insurance-Service-Dashboard-Design` |
+| Ticket Workspace | `/crm/tickets` | CRM/service | `Insurance-Dashboard-Design` |
+| Household Details | `/clients/:id`, `/clients/demo` | 360° client view | `Insurance-Household-Details` |
 
 ---
 
@@ -136,6 +141,9 @@ aren't first-class in legacy payloads. See `docs/SESSION-HANDOFF.md` for full st
 - `docs/form-pipeline/` — Lead→Quote→Sold→Audit spec (`Form Pipeline Technical Specification.md`) + architecture guide.
 - `docs/product/Figma Mockups.md` — design system + product direction (owner notes).
 - `docs/smartsuite-tables/` — legacy SmartSuite data model (migration source-of-record).
+- `./agencyops_fe_mockups/` — **read-only symlink** to the Figma FE mockups repo
+  (design screenshots, exported React components/CSS, per-dashboard `guidelines/`).
+  UI design source-of-truth — see `.cursor/rules/figma-mockups-reference.mdc`.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**
