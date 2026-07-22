@@ -17,13 +17,13 @@ export class BranchesController {
   @Get()
   @RequirePermissions(AgencyPermission.BranchesRead)
   list(@AgencyId() agencyId: string) {
-    return this.branchesService.findByAgency(agencyId!);
+    return this.branchesService.findByAgency(agencyId);
   }
 
   @Get(':branchId')
   @RequirePermissions(AgencyPermission.BranchesRead)
   getOne(@AgencyId() agencyId: string, @Param('branchId') branchId: string) {
-    return this.branchesService.findById(agencyId!, branchId);
+    return this.branchesService.findById(agencyId, branchId);
   }
 
   @Post()
@@ -32,6 +32,6 @@ export class BranchesController {
     @AgencyId() agencyId: string,
     @Body() body: { name: string; slug: string; isDefault?: boolean },
   ) {
-    return this.branchesService.create(agencyId!, body);
+    return this.branchesService.create(agencyId, body);
   }
 }

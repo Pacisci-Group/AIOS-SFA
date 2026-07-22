@@ -10,6 +10,8 @@
     "api:start": "npm run start:prod -w @sfa/api",
     "api:seed": "npm run seed -w @sfa/api",
     "api:seed:dev": "npm run seed:dev -w @sfa/api",
+    "api:seed:demo": "npm run seed:demo -w @sfa/api",
+    "api:seed:demo:dev": "npm run seed:demo:dev -w @sfa/api",
     "api:migrate": "npm run migrate -w @sfa/api",
     "api:migrate:dev": "npm run migrate:dev -w @sfa/api",
     "web:dev": "npm run dev -w @sfa/web",

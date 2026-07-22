@@ -7,6 +7,13 @@ import {
   updateRoleLevels,
   type AgencyRole,
 } from '@/lib/roles-api';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { PermissionCatalogEditor } from './PermissionCatalogEditor';
 
 export default function RolePermissionsPage() {
@@ -37,7 +44,7 @@ export default function RolePermissionsPage() {
 
   if (rolesQuery.isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0B0F19] text-[#64748B] text-sm">
+      <div className="min-h-screen flex items-center justify-center bg-background text-muted-foreground text-sm">
         Loading roles…
       </div>
     );
@@ -45,9 +52,9 @@ export default function RolePermissionsPage() {
 
   if (!rolesQuery.data?.length || !selectedRole) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-[#0B0F19] text-[#94A3B8] text-sm">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-background text-slate-400 text-sm">
         <p>No roles found for this agency.</p>
-        <Link to="/" className="text-[#38BDF8]">
+        <Link to="/" className="text-primary">
           Back to navigator
         </Link>
       </div>
@@ -55,18 +62,18 @@ export default function RolePermissionsPage() {
   }
 
   const roleSelector = (
-    <select
-      value={selectedRoleId}
-      onChange={(e) => setSelectedRoleId(e.target.value)}
-      className="px-3 py-2 rounded-lg text-sm bg-[#161F30] text-[#E2E8F0] outline-none"
-      style={{ border: '1px solid rgba(255,255,255,0.1)' }}
-    >
-      {rolesQuery.data.map((role) => (
-        <option key={role._id} value={role._id}>
-          {role.name}
-        </option>
-      ))}
-    </select>
+    <Select value={selectedRoleId} onValueChange={setSelectedRoleId}>
+      <SelectTrigger className="w-[200px] bg-card border-border text-sm">
+        <SelectValue placeholder="Select a role" />
+      </SelectTrigger>
+      <SelectContent>
+        {rolesQuery.data.map((role) => (
+          <SelectItem key={role._id} value={role._id}>
+            {role.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 
   return (

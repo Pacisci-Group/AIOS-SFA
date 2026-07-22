@@ -10,5 +10,8 @@ coverage
 # Read-only reference to the legacy SFA app (see .cursor/rules/legacy-sfa-reference.mdc)
 /SFA
 SFA/
+# Read-only reference to the Figma FE mockups repo (see .cursor/rules/figma-mockups-reference.mdc)
+/agencyops_fe_mockups
+agencyops_fe_mockups/
 agencyops/
 sfaforms/

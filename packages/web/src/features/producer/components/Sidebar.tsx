@@ -7,14 +7,17 @@ import {
   Shield,
   LogOut,
   Settings,
+  type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ModuleKey } from "@sfa/shared";
 import { useAuth } from "@/contexts/auth-context";
 import { usePermissions } from "@/hooks/usePermissions";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { cn } from "@/lib/utils";
 
-const navItems = [
+const navItems: { icon: LucideIcon; label: string; module: ModuleKey }[] = [
   { icon: LayoutDashboard, label: "Dashboard", module: ModuleKey.Dashboard },
   { icon: Users, label: "Leads", module: ModuleKey.Leads },
   { icon: Mail, label: "Mailers", module: ModuleKey.Mailers },
@@ -49,23 +52,17 @@ export function Sidebar() {
   const canManageUsers = can("agency:users:read");
 
   return (
-    <aside
-      style={{ background: "#0D1B3E", borderRight: "1px solid rgba(255,255,255,0.06)" }}
-      className="w-[260px] min-h-screen flex flex-col shrink-0"
-    >
+    <aside className="w-[260px] min-h-screen flex flex-col shrink-0 bg-sidebar border-r border-sidebar-border">
       {/* Logo */}
-      <div className="px-6 py-5 flex items-center gap-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-        <div
-          className="w-8 h-8 rounded flex items-center justify-center shrink-0"
-          style={{ background: "#38BDF8" }}
-        >
-          <Shield size={16} className="text-[#0B0F19]" />
+      <div className="px-6 py-5 flex items-center gap-3 border-b border-sidebar-border">
+        <div className="w-8 h-8 rounded flex items-center justify-center shrink-0 bg-primary">
+          <Shield size={16} className="text-primary-foreground" />
         </div>
         <div>
-          <p className="text-[#E2E8F0] text-sm leading-tight" style={{ fontWeight: 700, letterSpacing: "0.01em" }}>
+          <p className="text-foreground text-sm leading-tight font-bold tracking-[0.01em]">
             ALLSTATE
           </p>
-          <p className="text-[10px] text-[#64748B] leading-tight uppercase tracking-widest">
+          <p className="text-[10px] text-muted-foreground leading-tight uppercase tracking-widest">
             Agency Portal
           </p>
         </div>
@@ -73,7 +70,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-5 flex flex-col gap-1">
-        <p className="text-[10px] text-[#64748B] uppercase tracking-widest px-3 mb-2">
+        <p className="text-[10px] text-muted-foreground uppercase tracking-widest px-3 mb-2">
           Sales Tools
         </p>
         {visibleNavItems.map(({ icon: Icon, label }) => {
@@ -82,60 +79,62 @@ export function Sidebar() {
             <button
               key={label}
               onClick={() => setActiveItem(label)}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-all duration-150 group"
-              style={{
-                background: isActive ? "rgba(56,189,248,0.12)" : "transparent",
-                color: isActive ? "#38BDF8" : "#94A3B8",
-              }}
+              className={cn(
+                "w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-all duration-150 group",
+                isActive
+                  ? "bg-primary/10 text-primary"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5",
+              )}
             >
               <Icon
                 size={16}
-                style={{ color: isActive ? "#38BDF8" : "#64748B" }}
-                className="shrink-0 transition-colors"
+                className={cn(
+                  "shrink-0 transition-colors",
+                  isActive
+                    ? "text-primary"
+                    : "text-muted-foreground group-hover:text-slate-300",
+                )}
               />
               <span className="text-sm flex-1">{label}</span>
-              {isActive && (
-                <ChevronRight size={12} style={{ color: "#38BDF8" }} />
-              )}
+              {isActive && <ChevronRight size={12} className="text-primary" />}
             </button>
           );
         })}
       </nav>
 
       {/* Bottom */}
-      <div className="px-3 py-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="px-3 py-4 border-t border-sidebar-border">
         <div className="flex items-center gap-3 px-3 py-2 mb-2">
-          <div
-            className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-xs"
-            style={{ background: "#1A3A8F", color: "#E2E8F0", fontWeight: 700 }}
-          >
-            {initialsFromName(displayName)}
-          </div>
+          <Avatar className="w-8 h-8">
+            <AvatarFallback className="bg-blue-900 text-foreground text-xs font-bold">
+              {initialsFromName(displayName)}
+            </AvatarFallback>
+          </Avatar>
           <div className="flex-1 min-w-0">
-            <p className="text-sm text-[#E2E8F0] truncate" style={{ fontWeight: 500 }}>
+            <p className="text-sm text-foreground truncate font-medium">
               {displayName}
             </p>
-            <p className="text-xs text-[#64748B] truncate">{roleLabel}</p>
+            <p className="text-xs text-muted-foreground truncate">{roleLabel}</p>
           </div>
         </div>
         <div className="flex gap-1">
           {canManageUsers ? (
             <Link
               to="/settings/users"
-              className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all text-xs"
+              className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-muted-foreground hover:text-slate-300 hover:bg-white/5 transition-all text-xs"
             >
               <Settings size={13} />
               Settings
             </Link>
           ) : (
-            <button className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all text-xs">
+            <button className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-muted-foreground hover:text-slate-300 hover:bg-white/5 transition-all text-xs">
               <Settings size={13} />
               Settings
             </button>
           )}
           <button
             onClick={logout}
-            className="flex items-center gap-2 px-3 py-2 rounded-md text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all text-xs"
+            className="flex items-center gap-2 px-3 py-2 rounded-md text-muted-foreground hover:text-slate-300 hover:bg-white/5 transition-all text-xs"
           >
             <LogOut size={13} />
           </button>

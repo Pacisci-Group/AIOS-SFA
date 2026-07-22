@@ -11,7 +11,10 @@ import { Model } from 'mongoose';
 import { AppModule } from '../app.module';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
-import { AgencyRole, AgencyRoleDocument } from '../roles/schemas/agency-role.schema';
+import {
+  AgencyRole,
+  AgencyRoleDocument,
+} from '../roles/schemas/agency-role.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 
 /**
@@ -33,7 +36,9 @@ async function migrate() {
     getModelToken(AgencyRole.name),
   );
   const userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
-  const agencyModel = app.get<Model<AgencyDocument>>(getModelToken(Agency.name));
+  const agencyModel = app.get<Model<AgencyDocument>>(
+    getModelToken(Agency.name),
+  );
   const permissionsService = app.get(PermissionsService);
 
   // Admin (`agency:` / `platform:`) permissions each system template should

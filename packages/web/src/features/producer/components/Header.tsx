@@ -1,7 +1,10 @@
-import { Search, Plus, Sun, Moon, Bell } from "lucide-react";
+import { Search, Plus, Bell } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { usePermissions } from "@/hooks/usePermissions";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const timeFilters = ["Today", "This Week", "This Month", "Last Month", "Custom"];
 
@@ -34,22 +37,16 @@ export function Header({ activeFilter, onFilterChange }: HeaderProps) {
     hour < 12 ? "Good Morning" : hour < 17 ? "Good Afternoon" : "Good Evening";
 
   return (
-    <div
-      className="flex flex-col gap-4 px-6 py-5"
-      style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
-    >
+    <div className="flex flex-col gap-4 px-6 py-5 border-b border-border">
       {/* Row 1 */}
       <div className="flex items-center gap-4">
         {/* Greeting */}
         <div className="flex-1 min-w-0">
-          <h1
-            className="text-[#E2E8F0] truncate"
-            style={{ fontSize: "1.1rem", fontWeight: 600, letterSpacing: "-0.01em" }}
-          >
+          <h1 className="text-foreground truncate text-[1.1rem] font-semibold -tracking-[0.01em]">
             {greeting}, {firstName}.{" "}
-            <span className="text-[#38BDF8]">Let's win today.</span>
+            <span className="text-primary">Let's win today.</span>
           </h1>
-          <p className="text-xs text-[#64748B] mt-0.5">
+          <p className="text-xs text-muted-foreground mt-0.5">
             {new Date().toLocaleDateString("en-US", {
               weekday: "long",
               year: "numeric",
@@ -60,55 +57,51 @@ export function Header({ activeFilter, onFilterChange }: HeaderProps) {
         </div>
 
         {/* Search */}
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg flex-1 max-w-sm" style={{ background: "#1E2B44", border: "1px solid rgba(255,255,255,0.07)" }}>
-          <Search size={14} className="text-[#64748B] shrink-0" />
-          <input
+        <div className="relative flex-1 max-w-sm">
+          <Search
+            size={14}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+          />
+          <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search leads, clients, or policy types..."
-            className="bg-transparent text-[#E2E8F0] text-sm placeholder:text-[#4B5563] flex-1 outline-none min-w-0"
+            className="pl-9 pr-12 bg-input border-border"
           />
-          <kbd className="text-[10px] text-[#4B5563] hidden sm:block">⌘K</kbd>
+          <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-600 hidden sm:block">
+            ⌘K
+          </kbd>
         </div>
 
         {/* Actions */}
         <div className="flex items-center gap-2 shrink-0">
-          <button className="relative p-2 rounded-lg text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all">
+          <button className="relative p-2 rounded-lg text-muted-foreground hover:text-slate-300 hover:bg-white/5 transition-all">
             <Bell size={16} />
-            <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full" style={{ background: "#F59E0B" }} />
+            <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
           </button>
           {canWrite("leads") && (
-            <button
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all hover:brightness-110 active:scale-95"
-              style={{
-                background: "linear-gradient(135deg, #38BDF8, #0EA5E9)",
-                color: "#0B0F19",
-                fontWeight: 600,
-                boxShadow: "0 0 20px rgba(56,189,248,0.25)",
-              }}
-            >
+            <Button className="bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110 active:scale-95 shadow-[0_0_20px_rgba(56,189,248,0.25)]">
               <Plus size={15} />
               Add New Lead
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
       {/* Row 2 — Temporal filter */}
-      <div className="flex items-center gap-1 w-fit rounded-lg p-1" style={{ background: "#111827" }}>
+      <div className="flex items-center gap-1 w-fit rounded-lg p-1 bg-gray-900">
         {timeFilters.map((f) => {
           const isActive = activeFilter === f;
           return (
             <button
               key={f}
               onClick={() => onFilterChange(f)}
-              className="px-3 py-1.5 rounded-md text-xs transition-all duration-150"
-              style={{
-                background: isActive ? "#1E2B44" : "transparent",
-                color: isActive ? "#38BDF8" : "#64748B",
-                fontWeight: isActive ? 600 : 400,
-                border: isActive ? "1px solid rgba(56,189,248,0.2)" : "1px solid transparent",
-              }}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-xs transition-all duration-150 border",
+                isActive
+                  ? "bg-muted text-primary border-primary/20 font-semibold"
+                  : "bg-transparent text-muted-foreground border-transparent",
+              )}
             >
               {f === "Custom" ? "📅 Custom Date" : f}
             </button>

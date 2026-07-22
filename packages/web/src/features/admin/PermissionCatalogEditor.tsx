@@ -6,6 +6,10 @@ import {
   type PageLevelOverride,
 } from '@sfa/shared';
 import { ArrowLeft, Check, RotateCcw, Search } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 const LEVELS: { value: PageLevel; label: string }[] = [
   { value: 'none', label: 'No Access' },
@@ -103,21 +107,22 @@ export function PermissionCatalogEditor({
   };
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-[#E2E8F0]">
-      <header
-        className="flex items-center justify-between px-6 py-4 border-b"
-        style={{ borderColor: 'rgba(255,255,255,0.06)' }}
-      >
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-border">
         <div className="flex items-center gap-3">
-          <Link
-            to={backTo}
-            className="p-2 rounded-lg text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all"
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground hover:text-slate-300 hover:bg-white/5"
           >
-            <ArrowLeft size={16} />
-          </Link>
+            <Link to={backTo}>
+              <ArrowLeft size={16} />
+            </Link>
+          </Button>
           <div>
             <h1 className="text-sm font-bold">{title}</h1>
-            <p className="text-[10px] text-[#64748B] uppercase tracking-widest">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
               {subtitle}
             </p>
           </div>
@@ -125,63 +130,44 @@ export function PermissionCatalogEditor({
         <div className="flex items-center gap-3">
           {headerControl}
           {saved && !saving && (
-            <span className="flex items-center gap-1.5 text-xs text-[#10B981]">
+            <span className="flex items-center gap-1.5 text-xs text-emerald-500">
               <Check size={13} /> Saved
             </span>
           )}
-          <button
+          <Button
             type="button"
             disabled={saving || readOnly}
             onClick={handleSave}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all hover:brightness-110 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
-            style={{
-              background: 'linear-gradient(135deg, #38BDF8, #0EA5E9)',
-              color: '#0B0F19',
-              fontWeight: 600,
-            }}
+            className="bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110"
           >
             {saving ? 'Saving…' : 'Save Changes'}
-          </button>
+          </Button>
         </div>
       </header>
 
       <main className="max-w-3xl mx-auto px-6 py-8">
         {readOnly && (
-          <div
-            className="mb-5 px-4 py-3 rounded-lg text-sm"
-            style={{
-              background: 'rgba(56,189,248,0.1)',
-              border: '1px solid rgba(56,189,248,0.25)',
-              color: '#7DD3FC',
-            }}
-          >
+          <div className="mb-5 px-4 py-3 rounded-lg text-sm bg-sky-400/10 border border-sky-400/25 text-sky-300">
             {readOnlyNotice}
           </div>
         )}
 
         {error && (
-          <div
-            className="mb-5 px-4 py-3 rounded-lg text-sm"
-            style={{
-              background: 'rgba(245,158,11,0.1)',
-              border: '1px solid rgba(245,158,11,0.25)',
-              color: '#F59E0B',
-            }}
-          >
+          <div className="mb-5 px-4 py-3 rounded-lg text-sm bg-amber-500/10 border border-amber-500/25 text-amber-500">
             {error}
           </div>
         )}
 
-        <div
-          className="flex items-center gap-2 px-3 py-2.5 rounded-lg mb-6"
-          style={{ background: '#161F30', border: '1px solid rgba(255,255,255,0.07)' }}
-        >
-          <Search size={15} className="text-[#64748B] shrink-0" />
-          <input
+        <div className="relative mb-6">
+          <Search
+            size={15}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+          />
+          <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Type to search pages…"
-            className="bg-transparent text-sm text-[#E2E8F0] placeholder:text-[#4B5563] flex-1 outline-none"
+            className="pl-9 bg-card border-border"
           />
         </div>
 
@@ -195,47 +181,34 @@ export function PermissionCatalogEditor({
             return (
               <section
                 key={page.moduleKey}
-                className="rounded-xl px-5 py-4 flex items-center justify-between gap-4"
-                style={{
-                  background: '#161F30',
-                  border: isOverride
-                    ? '1px solid rgba(56,189,248,0.35)'
-                    : '1px solid rgba(255,255,255,0.07)',
-                }}
+                className={cn(
+                  'rounded-xl px-5 py-4 flex items-center justify-between gap-4 bg-card border',
+                  isOverride ? 'border-primary/35' : 'border-border',
+                )}
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span
-                      className="text-sm text-[#E2E8F0]"
-                      style={{ fontWeight: 500 }}
-                    >
+                    <span className="text-sm text-foreground font-medium">
                       {page.label}
                     </span>
                     {isOverride && (
-                      <span
-                        className="text-[10px] px-1.5 py-0.5 rounded-full"
-                        style={{
-                          background: 'rgba(56,189,248,0.12)',
-                          color: '#7DD3FC',
-                        }}
-                      >
+                      <Badge className="bg-primary/12 text-sky-300 border-transparent rounded-full text-[10px] px-1.5 py-0.5">
                         Override
-                      </span>
+                      </Badge>
                     )}
                   </div>
-                  <p className="text-xs text-[#64748B] mt-0.5">{page.description}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {page.description}
+                  </p>
                   {defaultLevel !== undefined && (
-                    <p className="text-[10px] text-[#4B5563] mt-1">
+                    <p className="text-[10px] text-slate-600 mt-1">
                       Role default: {levelLabel(defaultLevel)}
                     </p>
                   )}
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <div
-                    className="flex items-center gap-1 rounded-lg p-1"
-                    style={{ background: '#111827' }}
-                  >
+                  <div className="flex items-center gap-1 rounded-lg p-1 bg-gray-900">
                     {LEVELS.map((option) => {
                       const active = current === option.value;
                       return (
@@ -244,15 +217,12 @@ export function PermissionCatalogEditor({
                           type="button"
                           disabled={readOnly}
                           onClick={() => setLevel(page.moduleKey, option.value)}
-                          className="px-3 py-1.5 rounded-md text-xs transition-all duration-150 disabled:cursor-not-allowed"
-                          style={{
-                            background: active ? '#1E2B44' : 'transparent',
-                            color: active ? '#38BDF8' : '#64748B',
-                            fontWeight: active ? 600 : 400,
-                            border: active
-                              ? '1px solid rgba(56,189,248,0.2)'
-                              : '1px solid transparent',
-                          }}
+                          className={cn(
+                            'px-3 py-1.5 rounded-md text-xs transition-all duration-150 disabled:cursor-not-allowed border',
+                            active
+                              ? 'bg-muted text-primary border-primary/20 font-semibold'
+                              : 'bg-transparent text-muted-foreground border-transparent',
+                          )}
                         >
                           {option.label}
                         </button>
@@ -260,14 +230,16 @@ export function PermissionCatalogEditor({
                     })}
                   </div>
                   {isOverride && (
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       title="Reset to role default"
                       onClick={() => resetToDefault(page.moduleKey)}
-                      className="p-2 rounded-lg text-[#64748B] hover:text-[#94A3B8] hover:bg-white/5 transition-all"
+                      className="text-muted-foreground hover:text-slate-300 hover:bg-white/5"
                     >
                       <RotateCcw size={14} />
-                    </button>
+                    </Button>
                   )}
                 </div>
               </section>

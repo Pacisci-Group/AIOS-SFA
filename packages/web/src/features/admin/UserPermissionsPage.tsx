@@ -34,7 +34,7 @@ export default function UserPermissionsPage() {
 
   if (userQuery.isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0B0F19] text-[#64748B] text-sm">
+      <div className="min-h-screen flex items-center justify-center bg-background text-muted-foreground text-sm">
         Loading user…
       </div>
     );
@@ -42,9 +42,9 @@ export default function UserPermissionsPage() {
 
   if (userQuery.isError || !userQuery.data) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-[#0B0F19] text-[#94A3B8] text-sm">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-background text-slate-400 text-sm">
         <p>User not found.</p>
-        <Link to="/settings/users" className="text-[#38BDF8]">
+        <Link to="/settings/users" className="text-primary">
           Back to users
         </Link>
       </div>
