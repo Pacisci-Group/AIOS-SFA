@@ -29,8 +29,8 @@ npm workspaces (`workspaces: ["packages/*"]`, Node >= 20):
 
 | Package | Stack | State |
 |---|---|---|
-| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, **shadcn/ui (Radix UI primitives)**, React Router 7, TanStack Query, Recharts, lucide-react | Figma mockups render from **hard-coded mock data**; auth + api-client scaffolded but **no dashboard is wired to the API yet** |
-| `packages/api` | **NestJS 11**, **Mongoose 8 (MongoDB)**, JWT/passport, class-validator | Full **permission/multi-tenancy spine**; every domain module is an **empty stub** returning `{ status: 'ready' }` (no schemas/queries/data yet) |
+| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, **shadcn/ui (Radix UI primitives)**, React Router 7, TanStack Query, Recharts, lucide-react | Auth + **permission-management pages wired to the API**; the 7 mockup dashboards still render **hard-coded mock data** (Producer Dashboard data widgets being wired now) |
+| `packages/api` | **NestJS 11**, **Mongoose 8 (MongoDB)**, JWT/passport, class-validator | Full **permission/multi-tenancy spine** + **Mongoose schemas for all ~22 domain collections** + a **SmartSuite→Mongo migration**; the HTTP **feature controllers are still stubs** returning `{ status: 'ready' }` (real query services/DTOs not wired yet) |
 | `packages/shared` | Shared enums / permission constants / types / role templates | Source of truth for module keys & permissions |
 
 ---
@@ -54,6 +54,14 @@ Docker (see `Makefile` / `docker-compose.yml`): `make up` starts Mongo + API + w
 - Mongo: `mongodb://localhost:27017/sfa`
 
 Env: copy `.env.example` → `.env`. Deployment notes in `DEPLOYMENT.md`.
+
+> **Seed vs. migration:** `api:seed:dev` is an **auth/tenancy scaffold only** —
+> 1 agency, 1 branch, 5 role templates, 3 login users (super admin, agency owner,
+> producer); **no CRM data**. Real business data (leads, deals, households, etc.)
+> comes only from `api:migrate:dev`, which pulls from **SmartSuite** and needs
+> SmartSuite credentials (run the seed first). There is **no synthetic demo-data
+> seed yet**, so a fresh local DB has an empty-but-authenticated tenant. BigQuery
+> (legacy mailer prospect data) is **not migrated** — deferred (see arch doc O2).
 
 ---
 
@@ -84,8 +92,8 @@ each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 - **Module keys** (`shared/src/enums/module-key.enum.ts`): `dashboard, leads, quote_recaps, mailers, crm_service, clients, deal_audits, onboardings, management, owner_dashboard, command_center, performance, leaderboard`. Toggled per agency by Super Admin; disabled ⇒ hidden nav + API 403.
 - **Permissions** (`shared/src/permissions/permission.constants.ts`): `"<module>:<read|write>"` + `platform:*` / `agency:*`. Effective set resolved in `resolve-permissions.ts` (role perms + grants − revokes, filtered to agency-enabled modules).
 - **Default role templates** (`shared/src/permissions/default-role-templates.ts`): Agency Owner (agency) · Branch Manager (branch) · Producer (**own**: `dashboard:read, leads:r/w, quote_recaps:r/w, performance:read, leaderboard:read`) · CRM (branch) · Data Team (agency).
-- **Migration key:** `User`/`TenantRecord` carry `legacySmartSuiteId`. Seed (`src/seed/seed.ts`) creates agency "Smith Family Agency", a Main branch, super admin, and an agency owner.
-- **Domain modules are stubs** (`src/feature-modules/feature.controllers.ts`) — add real schemas/services/DTOs here as dashboards get wired.
+- **Migration key:** `User`/`TenantRecord` carry `legacySmartSuiteId`. Seed (`src/seed/seed.ts`) creates agency "Smith Family Agency", a Main branch, and three login users — **super admin, agency owner, and producer** (auth/tenancy scaffold only, no CRM data).
+- **Schemas exist; read path does not.** Mongoose schemas now exist for every domain collection (`src/<domain>/schemas/*.schema.ts`, most extending `src/common/schemas/tenant-record.schema.ts`) and are populated by the SmartSuite→Mongo migration (`src/migration/`). The HTTP **feature controllers are still stubs** (`src/feature-modules/feature.controllers.ts`) returning `{ status: 'ready' }` — add real query services/DTOs there as dashboards get wired.
 
 ---
 
@@ -114,23 +122,26 @@ Fillout** and is net-new scope.
 
 ## 8. Current focus — Producer Dashboard
 
-Wire `/dashboard/producer` to the new API (first fully-wired dashboard).
+Wire `/dashboard/producer` to the new API (first fully-wired dashboard). Schemas +
+migration are in place (PAC-18); what's left is the API read path + FE wiring per
+widget. Collections all exist:
 - Scorecards (Sold/Quoted) → `performance:read` → collections `quoteRecaps`, `deals`, `households`.
-- Leaderboard / Motivation Hub → `leaderboard:read` (**aggregates only**, never cross-producer rows). Needs **new** `producerGoals` collection for "% to goal".
-- Deals Pending Service Hand-off → `deal_audits:read/write` → `auditRecords` (from Sold pipeline).
+- Leaderboard / Motivation Hub → `leaderboard:read` (**aggregates only**, never cross-producer rows). Uses `producerGoals` collection (schema exists, derived during migration) for "% to goal".
+- Deals Pending Service Hand-off → `deal_audits:read/write` → `auditRecords` (from Sold pipeline). ← current sub-story (PAC-12, in progress).
 - Hot Leads / Priority Contact List → `leads:read/write` → `leads`, `activities`.
 
-**Open decisions:** grant Producer `deal_audits:read/write` (own) for the hand-off
-board? · derive deal "type" (Auto/Home/Bundle) and lead temperature/aging that
-aren't first-class in legacy payloads. See `docs/SESSION-HANDOFF.md` for full state.
+**Open decisions:** derive deal "type" (Auto/Home/Bundle) and lead
+temperature/aging that aren't first-class in legacy payloads. See
+`docs/SESSION-HANDOFF.md` for full state.
 
 ---
 
 ## 9. Project management — Linear
 
 - Team **Paciscigroup**, project **SFA**, issue prefix **`PAC-`** (Linear MCP available).
-- **PAC-6** — Platform Rebuild architecture & migration plan (mirrors `docs/SYSTEM_ARCHITECTURE.md`).
-- **PAC-7** — [Epic] Producer Dashboard (in progress).
+- **PAC-6** — Platform Rebuild architecture & migration plan (**Done**; mirrors `docs/SYSTEM_ARCHITECTURE.md`).
+- **PAC-7** — [Epic] Producer Dashboard (**in progress**). Done sub-stories: **PAC-8** (dashboard shell + page-level read/write permission model), **PAC-18** (SmartSuite→Mongo migration), **PAC-25** (authz resolved from backend store, not JWT). In progress: **PAC-12** (Deals Pending Service Hand-off board, read). Remaining: scorecards (PAC-10/11), time-range filter (PAC-9), leaderboard (PAC-13), hot leads + quick actions (PAC-15/16), add-lead + ⌘K omni-search (PAC-17), resolve hand-off item (PAC-14).
+- **PAC-19** — [Epic] CSR Role & Pages (backlog).
 
 ---
 
