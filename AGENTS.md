@@ -40,12 +40,13 @@ npm workspaces (`workspaces: ["packages/*"]`, Node >= 20):
 Workspace scripts (from repo root — see `package.json`):
 
 ```bash
-npm run api:dev        # NestJS API (watch)
-npm run web:dev        # Vite web app
-npm run shared:build   # build shared package
-npm run api:seed:dev   # seed dev data
-npm run api:migrate:dev# run SmartSuite -> Mongo migration (dev)
-npm run test:e2e       # API e2e tests
+npm run api:dev            # NestJS API (watch)
+npm run web:dev            # Vite web app
+npm run shared:build       # build shared package
+npm run api:seed:dev       # seed auth/tenancy scaffold (agency, branch, roles, 3 users)
+npm run api:seed:demo:dev  # seed a full synthetic demo tenant (CRM data for local testing)
+npm run api:migrate:dev    # run SmartSuite -> Mongo migration (dev)
+npm run test:e2e           # API e2e tests
 ```
 
 Docker (see `Makefile` / `docker-compose.yml`): `make up` starts Mongo + API + web.
@@ -55,13 +56,22 @@ Docker (see `Makefile` / `docker-compose.yml`): `make up` starts Mongo + API + w
 
 Env: copy `.env.example` → `.env`. Deployment notes in `DEPLOYMENT.md`.
 
-> **Seed vs. migration:** `api:seed:dev` is an **auth/tenancy scaffold only** —
-> 1 agency, 1 branch, 5 role templates, 3 login users (super admin, agency owner,
-> producer); **no CRM data**. Real business data (leads, deals, households, etc.)
-> comes only from `api:migrate:dev`, which pulls from **SmartSuite** and needs
-> SmartSuite credentials (run the seed first). There is **no synthetic demo-data
-> seed yet**, so a fresh local DB has an empty-but-authenticated tenant. BigQuery
-> (legacy mailer prospect data) is **not migrated** — deferred (see arch doc O2).
+> **Three ways to populate Mongo:**
+> - `api:seed:dev` — **auth/tenancy scaffold only**: 1 agency, 1 branch, 5 role
+>   templates, 3 login users (super admin, agency owner, producer); **no CRM data**.
+>   This is what Docker runs on API startup.
+> - `api:seed:demo:dev` — **full synthetic demo tenant** for local build/test
+>   (`src/seed/demo/`): the same "Smith Family Agency" + a 2nd branch, a complete
+>   role roster (owner, manager, 5 producers, 2 CRMs, data team — all
+>   `ChangeMe123!`), and ~500 realistic CRM records across **every** collection
+>   (households, contacts, leads, quotes, deals, policies, audit/hand-off items,
+>   service tickets, goals, activities, …). Deterministic (fixed RNG seed) and
+>   **idempotent** (upserts on stable `demo:*` keys); pass `--fresh` to purge and
+>   reseed. No SmartSuite/network needed. "Pat Producer"
+>   (`producer@smithfamily.local`) is the data-rich hero for the Producer Dashboard.
+> - `api:migrate:dev` — real **SmartSuite → Mongo** import; needs SmartSuite
+>   credentials (run `api:seed:dev` first). BigQuery (legacy mailer prospect data)
+>   is **not migrated** — deferred (see arch doc O2).
 
 ---
 

@@ -70,7 +70,9 @@ async function seed() {
     slug: 'producer',
   });
 
-  const existingSuperAdmin = await userModel.findOne({ email: superAdminEmail });
+  const existingSuperAdmin = await userModel.findOne({
+    email: superAdminEmail,
+  });
   if (!existingSuperAdmin) {
     await userModel.create({
       email: superAdminEmail,
@@ -119,8 +121,7 @@ async function seed() {
 
   const producerEmail =
     process.env.SEED_PRODUCER_EMAIL ?? 'producer@smithfamily.local';
-  const producerPassword =
-    process.env.SEED_PRODUCER_PASSWORD ?? 'ChangeMe123!';
+  const producerPassword = process.env.SEED_PRODUCER_PASSWORD ?? 'ChangeMe123!';
 
   const existingProducer = await userModel.findOne({ email: producerEmail });
   if (!existingProducer) {

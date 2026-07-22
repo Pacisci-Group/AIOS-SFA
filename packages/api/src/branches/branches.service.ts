@@ -29,7 +29,10 @@ export class BranchesService {
     return branch;
   }
 
-  create(agencyId: string, input: { name: string; slug: string; isDefault?: boolean }) {
+  create(
+    agencyId: string,
+    input: { name: string; slug: string; isDefault?: boolean },
+  ) {
     return this.branchModel.create({
       agencyId: new Types.ObjectId(agencyId),
       name: input.name,

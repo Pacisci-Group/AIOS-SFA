@@ -25,19 +25,19 @@ export class UsersController {
   @Get()
   @RequirePermissions(AgencyPermission.UsersRead)
   list(@AgencyId() agencyId: string) {
-    return this.usersService.findByAgency(agencyId!);
+    return this.usersService.findByAgency(agencyId);
   }
 
   @Get('assignable-permissions')
   @RequirePermissions(AgencyPermission.UsersPermissions)
   assignablePermissions(@AgencyId() agencyId: string) {
-    return this.usersService.listAssignablePermissions(agencyId!);
+    return this.usersService.listAssignablePermissions(agencyId);
   }
 
   @Get(':userId')
   @RequirePermissions(AgencyPermission.UsersRead)
   getOne(@AgencyId() agencyId: string, @Param('userId') userId: string) {
-    return this.usersService.findById(agencyId!, userId);
+    return this.usersService.findById(agencyId, userId);
   }
 
   @Post('invite')
@@ -53,7 +53,7 @@ export class UsersController {
       lastName?: string;
     },
   ) {
-    return this.usersService.inviteUser({ agencyId: agencyId!, ...body });
+    return this.usersService.inviteUser({ agencyId: agencyId, ...body });
   }
 
   @Patch(':userId/roles')
@@ -63,7 +63,7 @@ export class UsersController {
     @Param('userId') userId: string,
     @Body() body: { roleIds: string[] },
   ) {
-    return this.usersService.updateRoles(agencyId!, userId, body.roleIds);
+    return this.usersService.updateRoles(agencyId, userId, body.roleIds);
   }
 
   @Patch(':userId/permissions')
@@ -74,7 +74,7 @@ export class UsersController {
     @Body() body: { overrides: PageLevelOverride[] },
   ) {
     return this.usersService.updatePermissions(
-      agencyId!,
+      agencyId,
       userId,
       body.overrides ?? [],
     );

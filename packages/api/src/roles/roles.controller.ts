@@ -1,11 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
 import { AgencyPermission, PageLevelOverride } from '@sfa/shared';
 import { AgencyId } from '../common/decorators/user.decorators';
 import {
@@ -25,13 +18,13 @@ export class RolesController {
   @Get()
   @RequirePermissions(AgencyPermission.RolesRead)
   list(@AgencyId() agencyId: string) {
-    return this.rolesService.findByAgency(agencyId!);
+    return this.rolesService.findByAgency(agencyId);
   }
 
   @Get(':roleId')
   @RequirePermissions(AgencyPermission.RolesRead)
   getOne(@AgencyId() agencyId: string, @Param('roleId') roleId: string) {
-    return this.rolesService.findById(agencyId!, roleId);
+    return this.rolesService.findById(agencyId, roleId);
   }
 
   @Patch(':roleId')
@@ -41,6 +34,6 @@ export class RolesController {
     @Param('roleId') roleId: string,
     @Body() body: { levels: PageLevelOverride[] },
   ) {
-    return this.rolesService.updateLevels(agencyId!, roleId, body.levels ?? []);
+    return this.rolesService.updateLevels(agencyId, roleId, body.levels ?? []);
   }
 }
