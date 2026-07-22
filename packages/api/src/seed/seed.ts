@@ -4,7 +4,9 @@ import { Model } from 'mongoose';
 import { getModelToken } from '@nestjs/mongoose';
 import { ALL_MODULE_KEYS } from '@sfa/shared';
 import { AppModule } from '../app.module';
+import { AuditRecord } from '../audit-records/schemas/audit-record.schema';
 import { Branch } from '../branches/schemas/branch.schema';
+import { Deal, DealType } from '../deals/schemas/deal.schema';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency } from '../platform/schemas/agency.schema';
 import { AgencyRole } from '../roles/schemas/agency-role.schema';
@@ -17,6 +19,10 @@ async function seed() {
   const branchModel = app.get<Model<Branch>>(getModelToken(Branch.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
   const roleModel = app.get<Model<AgencyRole>>(getModelToken(AgencyRole.name));
+  const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+  const auditRecordModel = app.get<Model<AuditRecord>>(
+    getModelToken(AuditRecord.name),
+  );
   const permissionsService = app.get(PermissionsService);
 
   const superAdminEmail =
@@ -149,6 +155,102 @@ async function seed() {
       },
     );
     console.log('Producer updated with producer role');
+  }
+
+  // Sample "Deals Pending Service Hand-off" data for the dev producer, so the
+  // Producer Dashboard board isn't empty without a full SmartSuite migration.
+  const producer = await userModel.findOne({ email: producerEmail });
+  if (producer) {
+    const agencyId = agency._id.toString();
+    const branchId = branch._id.toString();
+    const SEED_TAG = 'seed-audit-';
+
+    const existingSeeded = await auditRecordModel.countDocuments({
+      producerId: producer._id,
+      legacySmartSuiteId: { $regex: `^${SEED_TAG}` },
+    });
+
+    if (existingSeeded === 0) {
+      const samples: Array<{
+        client: string;
+        type: DealType;
+        missing: string;
+        days: number;
+      }> = [
+        {
+          client: 'Nathan Rieck',
+          type: 'Bundle',
+          missing: 'Prior Insurance Proof',
+          days: 68,
+        },
+        {
+          client: 'Sandra Watkins',
+          type: 'Auto',
+          missing: 'Defensive Driver Certificate',
+          days: 41,
+        },
+        {
+          client: 'Omar Hassan',
+          type: 'Home',
+          missing: 'Home Inspection Report',
+          days: 29,
+        },
+        {
+          client: 'Priya Sharma',
+          type: 'Bundle',
+          missing: 'Prior Claims History',
+          days: 14,
+        },
+        {
+          client: 'Derek Collins',
+          type: 'Auto',
+          missing: "Driver's License Copy",
+          days: 7,
+        },
+        {
+          client: 'Maria Santos',
+          type: 'Home',
+          missing: 'Property Deed Verification',
+          days: 3,
+        },
+      ];
+
+      let index = 0;
+      for (const sample of samples) {
+        const firstCreatedAt = new Date(
+          Date.now() - sample.days * 24 * 60 * 60 * 1000,
+        );
+        const deal = await dealModel.create({
+          agencyId,
+          branchId,
+          clientName: sample.client,
+          dealType: sample.type,
+          isBundle: sample.type === 'Bundle',
+          producerId: producer._id,
+          soldDate: firstCreatedAt,
+          legacySmartSuiteId: `${SEED_TAG}deal-${index}`,
+        });
+        await auditRecordModel.create({
+          agencyId,
+          branchId,
+          dealId: deal._id,
+          clientName: sample.client,
+          producerName: 'Pat Producer',
+          producerId: producer._id,
+          itemName: sample.missing,
+          isFailed: true,
+          isResolved: false,
+          isTestRecord: false,
+          daysOpen: sample.days,
+          firstCreatedAt,
+          legacySmartSuiteId: `${SEED_TAG}${index}`,
+        });
+        index++;
+      }
+      console.log(`Seeded ${samples.length} pending hand-off audit records`);
+    } else {
+      console.log('Pending hand-off audit records already seeded, skipping');
+    }
   }
 
   console.log('\nSeed complete.');
