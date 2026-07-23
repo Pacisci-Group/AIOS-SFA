@@ -6,7 +6,7 @@ export type DealAuditDocument = HydratedDocument<DealAudit>;
 
 /**
  * Migrated from SmartSuite "The Deal Audits Table" (6941fdb2dc9a6d024fd8caef).
- * The parent audit summary for a deal (rolls up Deal Audit Items -> auditRecords).
+ * The parent audit summary for a deal (rolls up Deal Audit Items -> dealAuditItems).
  */
 @Schema({ timestamps: true, collection: 'dealAudits' })
 export class DealAudit extends TenantRecord {

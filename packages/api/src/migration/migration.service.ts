@@ -9,7 +9,7 @@ import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { QuoteRecap } from '../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../deals/schemas/deal.schema';
-import { AuditRecord } from '../audit-records/schemas/audit-record.schema';
+import { DealAuditItem } from '../deal-audit-items/schemas/deal-audit-item.schema';
 import { Activity } from '../activities/schemas/activity.schema';
 import { ProducerGoal } from '../producer-goals/schemas/producer-goal.schema';
 import { Contact } from '../contacts/schemas/contact.schema';
@@ -137,8 +137,8 @@ export class MigrationService {
     @InjectModel(QuoteRecap.name)
     private readonly quoteRecapModel: Model<QuoteRecap>,
     @InjectModel(Deal.name) private readonly dealModel: Model<Deal>,
-    @InjectModel(AuditRecord.name)
-    private readonly auditRecordModel: Model<AuditRecord>,
+    @InjectModel(DealAuditItem.name)
+    private readonly dealAuditItemModel: Model<DealAuditItem>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     @InjectModel(ProducerGoal.name)
     private readonly producerGoalModel: Model<ProducerGoal>,
@@ -772,7 +772,7 @@ export class MigrationService {
   }
 
   // ---------------------------------------------------------------------------
-  // Deal Audit Items -> auditRecords
+  // Deal Audit Items -> dealAuditItems
   // ---------------------------------------------------------------------------
 
   private async migrateAuditItems(
@@ -783,7 +783,7 @@ export class MigrationService {
     report: MigrationReport,
   ): Promise<void> {
     const stat = emptyStat();
-    report.collections.auditRecords = stat;
+    report.collections.dealAuditItems = stat;
 
     stat.source = await ss.count(SMARTSUITE_TABLE_IDS.dealAuditItems);
     const records = await ss.listAll(
@@ -819,7 +819,7 @@ export class MigrationService {
       if (test) stat.excludedTest++;
 
       await this.persist(
-        this.auditRecordModel,
+        this.dealAuditItemModel,
         ctx,
         legacyId,
         {

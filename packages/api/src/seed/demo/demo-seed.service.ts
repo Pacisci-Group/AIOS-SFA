@@ -13,7 +13,7 @@ import { Lead } from '../../leads/schemas/lead.schema';
 import { QuoteRecap } from '../../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../../deals/schemas/deal.schema';
 import { Policy } from '../../policies/schemas/policy.schema';
-import { AuditRecord } from '../../audit-records/schemas/audit-record.schema';
+import { DealAuditItem } from '../../deal-audit-items/schemas/deal-audit-item.schema';
 import { DealAudit } from '../../deal-audits/schemas/deal-audit.schema';
 import { AuditTemplate } from '../../audit-templates/schemas/audit-template.schema';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
@@ -158,8 +158,8 @@ export class DemoSeedService {
     private readonly quoteRecapModel: Model<QuoteRecap>,
     @InjectModel(Deal.name) private readonly dealModel: Model<Deal>,
     @InjectModel(Policy.name) private readonly policyModel: Model<Policy>,
-    @InjectModel(AuditRecord.name)
-    private readonly auditRecordModel: Model<AuditRecord>,
+    @InjectModel(DealAuditItem.name)
+    private readonly dealAuditItemModel: Model<DealAuditItem>,
     @InjectModel(DealAudit.name)
     private readonly dealAuditModel: Model<DealAudit>,
     @InjectModel(AuditTemplate.name)
@@ -205,7 +205,7 @@ export class DemoSeedService {
     const policies = await this.seedPolicies(ctx, deals, rng);
 
     await this.seedAuditTemplates(ctx);
-    await this.seedAuditRecords(ctx, deals, rng);
+    await this.seedDealAuditItems(ctx, deals, rng);
     await this.seedDealAudits(ctx, deals, rng);
     await this.seedInterestedParties(ctx, policies, rng);
     await this.seedPriorInsurance(ctx, deals, rng);
@@ -742,7 +742,7 @@ export class DemoSeedService {
     }
   }
 
-  private async seedAuditRecords(
+  private async seedDealAuditItems(
     ctx: Ctx,
     deals: DealRef[],
     rng: Rng,
@@ -770,7 +770,7 @@ export class DemoSeedService {
         const legacyId = `demo:audit:${n}`;
 
         await this.upsert(
-          this.auditRecordModel,
+          this.dealAuditItemModel,
           { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
           {
             agencyId: ctx.agencyId,
@@ -802,7 +802,7 @@ export class DemoSeedService {
             isTestRecord: false,
           },
         );
-        this.inc('auditRecords');
+        this.inc('dealAuditItems');
         n++;
       }
     }
@@ -1255,7 +1255,7 @@ export class DemoSeedService {
       this.quoteRecapModel,
       this.dealModel,
       this.policyModel,
-      this.auditRecordModel,
+      this.dealAuditItemModel,
       this.dealAuditModel,
       this.auditTemplateModel,
       this.interestedPartyModel,

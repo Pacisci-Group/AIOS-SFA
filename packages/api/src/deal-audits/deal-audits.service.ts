@@ -4,15 +4,15 @@ import { AccessContext, DataScope } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { Deal, DealDocument, DealType } from '../deals/schemas/deal.schema';
 import {
-  AuditRecord,
-  AuditRecordDocument,
-} from '../audit-records/schemas/audit-record.schema';
+  DealAuditItem,
+  DealAuditItemDocument,
+} from '../deal-audit-items/schemas/deal-audit-item.schema';
 import { ListDealAuditsDto } from './dto/list-deal-audits.dto';
 import { DealAuditListResponse, DealAuditRow } from './deal-audits.types';
 
 /** Lean projection of the fields the board reads (incl. timestamp). */
-type AuditRecordLean = Pick<
-  AuditRecord,
+type DealAuditItemLean = Pick<
+  DealAuditItem,
   'clientName' | 'itemName' | 'daysOpen' | 'firstCreatedAt'
 > & {
   _id: Types.ObjectId;
@@ -23,8 +23,8 @@ type AuditRecordLean = Pick<
 @Injectable()
 export class DealAuditsService {
   constructor(
-    @InjectModel(AuditRecord.name)
-    private auditRecordModel: Model<AuditRecordDocument>,
+    @InjectModel(DealAuditItem.name)
+    private dealAuditItemModel: Model<DealAuditItemDocument>,
     @InjectModel(Deal.name) private dealModel: Model<DealDocument>,
   ) {}
 
@@ -40,7 +40,7 @@ export class DealAuditsService {
   ): Promise<DealAuditListResponse> {
     const { page, pageSize } = query;
 
-    const filter: FilterQuery<AuditRecordDocument> = {
+    const filter: FilterQuery<DealAuditItemDocument> = {
       agencyId: access.agencyId,
       isFailed: true,
       isResolved: false,
@@ -55,15 +55,15 @@ export class DealAuditsService {
     }
     // Agency scope: no producer/branch narrowing beyond agencyId.
 
-    const total = await this.auditRecordModel.countDocuments(filter);
+    const total = await this.dealAuditItemModel.countDocuments(filter);
 
-    const records = await this.auditRecordModel
+    const records = await this.dealAuditItemModel
       .find(filter)
       // Oldest open first; `_id` tiebreaker keeps pagination stable.
       .sort({ daysOpen: -1, _id: 1 })
       .skip((page - 1) * pageSize)
       .limit(pageSize)
-      .lean<AuditRecordLean[]>();
+      .lean<DealAuditItemLean[]>();
 
     const dealType = await this.loadDealTypes(records);
 
