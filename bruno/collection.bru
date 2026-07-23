@@ -1,0 +1,42 @@
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  # AIOS-SFA API
+
+  Bruno collection for the AIOS-SFA NestJS API (`packages/api`).
+
+  - **Base URL:** `http://localhost:4000/api/v1` (see the `baseUrl` env var)
+  - **Auth:** JWT Bearer. Run **Auth › Login** first — it captures
+    `accessToken` / `refreshToken` (and `branchId`) into the active environment,
+    and every other request inherits the collection-level bearer auth.
+
+  ## Guard chain
+  Every non-public endpoint passes through:
+  `JwtAuthGuard → TenantGuard → BranchGuard → ModuleGuard → PermissionsGuard`.
+
+  A request therefore needs, in order:
+  1. A valid `Authorization: Bearer <accessToken>` header.
+  2. A tenant (`agencyId`) resolved from the token.
+  3. A branch — for branch/agency-scoped callers you may pass `X-Branch-Id`.
+     Producers (`own` scope) get their branch from their own record.
+  4. The module enabled for the agency (e.g. `deal_audits`).
+  5. The required permission (e.g. `deal_audits:read`).
+
+  Missing module/permission → **403**. Missing/expired token → **401**.
+
+  ## Getting started
+  1. Start Mongo + API: `npm run api:dev` (from repo root).
+  2. Seed a populated demo tenant: `npm run api:seed:demo:dev`.
+  3. Select the **Local** environment (top-right in Bruno).
+  4. Send **Auth › Login**, then any authenticated request.
+
+  ## Folders
+  - **Auth** — login / refresh (public, no bearer).
+  - **Deal Audits** — Deals Pending Service Hand-off board (PAC-12, read).
+}
