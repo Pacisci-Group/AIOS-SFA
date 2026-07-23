@@ -213,6 +213,7 @@ Chakra, etc.).
 
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
+- **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.cursor/rules/api-bruno-docs.mdc` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
 - Forms: prefer `react-hook-form` + `zod` resolvers.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
