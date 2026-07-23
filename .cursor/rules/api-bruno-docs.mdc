@@ -1,15 +1,25 @@
 ---
-description: When adding or changing an API endpoint, mirror it in the Bruno collection (bruno/)
-globs: packages/api/src/**/*.controller.ts,packages/api/src/**/dto/*.ts
+description: The Bruno collection (bruno/) is the API source-of-truth — read it for API context, and keep it in sync when adding/changing endpoints
+globs: packages/api/src/**/*.controller.ts,packages/api/src/**/dto/*.ts,packages/web/src/lib/*-api.ts
 alwaysApply: false
 ---
 
-# Keep the Bruno API collection in sync
+# Bruno API collection (`bruno/`) — read it, and keep it in sync
 
-Every new or changed HTTP endpoint in `packages/api` **must** be mirrored in the
-Bruno collection at the repo root (`bruno/`). It is our version-controlled,
-git-diffable API docs + test client for both humans and agents. Don't add an
-endpoint without a corresponding `.bru` request.
+The Bruno collection at the repo root (`bruno/`) is the **version-controlled
+API source-of-truth**: every implemented endpoint with its URL, params, headers,
+body, response shape, module + permission, and error codes (in each request's
+`docs` block).
+
+## Reading (getting API context)
+Before wiring a call to the API or reasoning about an endpoint, **read the
+relevant `.bru` in `bruno/`** (and its `docs` block) instead of only grepping
+controllers — it's faster and captures auth, params, and response shape in one
+place.
+
+## Writing (keeping it in sync)
+Every new or changed HTTP endpoint in `packages/api` **must** be mirrored here.
+Don't add or change an endpoint without a corresponding `.bru` update.
 
 ## When you touch a controller/DTO
 - **New endpoint** → add a `<Feature>/<Request Name>.bru` under `bruno/`

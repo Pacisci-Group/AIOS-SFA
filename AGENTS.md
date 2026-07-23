@@ -166,6 +166,13 @@ temperature/aging that aren't first-class in legacy payloads. See
 - `docs/form-pipeline/` — Lead→Quote→Sold→Audit spec (`Form Pipeline Technical Specification.md`) + architecture guide.
 - `docs/product/Figma Mockups.md` — design system + product direction (owner notes).
 - `docs/smartsuite-tables/` — legacy SmartSuite data model (migration source-of-record).
+- `bruno/` — **API surface source-of-truth**: a version-controlled Bruno
+  collection of every implemented endpoint (URL, params, headers, body,
+  response shape, module + permission, error codes) in each request's `docs`
+  block. **Read this first to understand what the API exposes / how to call it**
+  before grepping controllers. Run it with
+  `cd bruno && npx @usebruno/cli run --env Local` → see `bruno/README.md` and
+  `.cursor/rules/api-bruno-docs.mdc`.
 - `./agencyops_fe_mockups/` — **read-only symlink** to the Figma FE mockups repo
   (design screenshots, exported React components/CSS, per-dashboard `guidelines/`).
   UI design source-of-truth — see `.cursor/rules/figma-mockups-reference.mdc`.
