@@ -16,6 +16,7 @@ export interface TestSeedContext {
   branchId: string;
   ownerRoleId: string;
   producerRoleId: string;
+  csrRoleId: string;
   readOnlyRoleId: string;
   /**
    * A disposable role for tests that mutate a role's page levels. Kept separate
@@ -27,6 +28,7 @@ export interface TestSeedContext {
   superAdminEmail: string;
   ownerEmail: string;
   producerEmail: string;
+  csrEmail: string;
   readOnlyEmail: string;
 }
 
@@ -67,6 +69,10 @@ export async function seedTestData(
     agencyId: agency._id,
     slug: 'producer',
   });
+  const csrRole = await roleModel.findOne({
+    agencyId: agency._id,
+    slug: 'csr',
+  });
 
   // A role with read-only access to every page (no write anywhere). Used to
   // assert that mutating endpoints require `{module}:write` on every page.
@@ -93,6 +99,7 @@ export async function seedTestData(
   const superAdminEmail = 'test-super-admin@sfa.local';
   const ownerEmail = 'test-owner@sfa.local';
   const producerEmail = 'test-producer@sfa.local';
+  const csrEmail = 'test-csr@sfa.local';
   const readOnlyEmail = 'test-read-only@sfa.local';
   const passwordHash = await bcrypt.hash(TEST_PASSWORD, 12);
 
@@ -129,6 +136,17 @@ export async function seedTestData(
   await userModel.create({
     agencyId: agency._id,
     branchId: branch._id,
+    email: csrEmail,
+    passwordHash,
+    roleIds: csrRole ? [csrRole._id] : [],
+    firstName: 'Test',
+    lastName: 'Csr',
+    isActive: true,
+  });
+
+  await userModel.create({
+    agencyId: agency._id,
+    branchId: branch._id,
     email: readOnlyEmail,
     passwordHash,
     roleIds: [readOnlyRole._id],
@@ -142,11 +160,13 @@ export async function seedTestData(
     branchId: branch._id.toString(),
     ownerRoleId: ownerRole!._id.toString(),
     producerRoleId: producerRole!._id.toString(),
+    csrRoleId: csrRole!._id.toString(),
     readOnlyRoleId: readOnlyRole._id.toString(),
     editableRoleId: editableRole._id.toString(),
     superAdminEmail,
     ownerEmail,
     producerEmail,
+    csrEmail,
     readOnlyEmail,
   };
 }

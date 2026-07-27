@@ -4,6 +4,8 @@ import {
   Ticket,
   Building2,
   BarChart3,
+  Mail,
+  TrendingUp,
   LogOut,
   Shield,
   KeyRound,
@@ -48,6 +50,18 @@ const NAV_SECTIONS: NavSection[] = [
         icon: Users,
         module: ModuleKey.Leads,
       },
+      {
+        to: "/mailers",
+        label: "Mailer",
+        icon: Mail,
+        module: ModuleKey.Mailers,
+      },
+      {
+        to: "/performance",
+        label: "My Performance",
+        icon: TrendingUp,
+        module: ModuleKey.Performance,
+      },
     ],
   },
   {
@@ -73,12 +87,6 @@ const NAV_SECTIONS: NavSection[] = [
       {
         to: "/crm/service",
         label: "Service Dashboard",
-        icon: Ticket,
-        module: ModuleKey.CrmService,
-      },
-      {
-        to: "/crm/tickets",
-        label: "Ticket Workspace",
         icon: Ticket,
         module: ModuleKey.CrmService,
       },

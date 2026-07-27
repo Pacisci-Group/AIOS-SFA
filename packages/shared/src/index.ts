@@ -6,3 +6,4 @@ export * from './permissions/default-role-templates';
 export * from './permissions/resolve-permissions';
 export * from './types/jwt-payload.type';
 export * from './types/module-entitlement.type';
+export * from './service/service-ticket';

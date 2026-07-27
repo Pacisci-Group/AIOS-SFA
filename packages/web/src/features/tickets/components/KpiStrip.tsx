@@ -16,14 +16,14 @@ export function KpiStrip({ tickets }: KpiStripProps) {
         label="Total Open"
         value={total}
         colorClass="text-[var(--kpi-blue)]"
-        bgClass="bg-white"
+        bgClass="bg-card"
         subLabel="active tickets"
       />
       <KpiItem
         label="Needs Action"
         value={overdue}
         colorClass="text-[var(--kpi-amber)]"
-        bgClass="bg-white"
+        bgClass="bg-card"
         subLabel="overdue"
         pulse
       />
@@ -31,14 +31,14 @@ export function KpiStrip({ tickets }: KpiStripProps) {
         label="Waiting"
         value={waiting}
         colorClass="text-[var(--kpi-purple)]"
-        bgClass="bg-white"
+        bgClass="bg-card"
         subLabel="on client or underwriter"
       />
       <KpiItem
         label="Resolved Today"
         value={resolved}
         colorClass="text-[var(--kpi-green)]"
-        bgClass="bg-white"
+        bgClass="bg-card"
         subLabel="closed"
       />
     </div>

@@ -60,10 +60,8 @@ export const DealAuditsController = createFeatureController(
   'deal-audits',
   ModuleKey.DealAudits,
 );
-export const CrmServiceController = createFeatureController(
-  'crm/service-tickets',
-  ModuleKey.CrmService,
-);
+// NOTE: `crm/service-tickets` is now a real domain module (see `CrmModule`),
+// not a stub feature controller.
 export const PerformanceController = createFeatureController(
   'performance',
   ModuleKey.Performance,

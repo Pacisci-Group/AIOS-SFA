@@ -26,6 +26,9 @@ import { User, UserDocument } from '../users/schemas/user.schema';
  *  2. Users: convert legacy per-user snapshots (`hasCustomPermissions` +
  *     `permissions[]`) into `permissionGrants` / `permissionRevokes` computed
  *     as diffs against the user's role defaults, then drop the legacy fields.
+ *  3. Roles: re-seed the default role templates for every agency so newly
+ *     introduced system roles (e.g. `csr`) are inserted and template drift
+ *     (e.g. producers gaining the Mailer page) is reconciled.
  *
  * Idempotent: re-running on already-migrated data is a no-op.
  */
@@ -167,6 +170,16 @@ async function migrate() {
     { $unset: { hasCustomPermissions: '', permissions: '' } },
   );
   console.log(`Cleaned legacy fields on ${cleanup.modifiedCount} user(s).`);
+
+  // --- 3. Re-seed default role templates for every agency ----------------
+  // seedDefaultRoles() creates any missing system roles (e.g. `csr`) and
+  // reconciles drift on existing ones (e.g. `mailers` added to `producer`)
+  // without disturbing custom roles or per-user grants/revokes.
+  const agencies = await agencyModel.find().select('_id').lean();
+  for (const agency of agencies) {
+    await permissionsService.seedDefaultRoles(agency._id);
+  }
+  console.log(`Re-seeded default roles for ${agencies.length} agency(ies).`);
 
   console.log('\nPermission migration complete.');
   await app.close();

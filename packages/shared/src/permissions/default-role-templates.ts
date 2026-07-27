@@ -57,9 +57,24 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Dashboard, 'read'),
       ...permissionsForModule(ModuleKey.Leads),
       ...permissionsForModule(ModuleKey.QuoteRecaps),
+      ...permissionsForModule(ModuleKey.Mailers),
       ...permissionsForModule(ModuleKey.DealAudits),
       modulePermission(ModuleKey.Performance, 'read'),
       modulePermission(ModuleKey.Leaderboard, 'read'),
+    ],
+  },
+  {
+    name: 'CSR',
+    slug: 'csr',
+    description:
+      'Customer service representative — own producer pages plus CRM service.',
+    dataScope: DataScope.Own,
+    permissions: [
+      modulePermission(ModuleKey.Dashboard, 'read'),
+      ...permissionsForModule(ModuleKey.Leads),
+      ...permissionsForModule(ModuleKey.Mailers),
+      modulePermission(ModuleKey.Performance, 'read'),
+      ...permissionsForModule(ModuleKey.CrmService),
     ],
   },
   {

@@ -24,6 +24,7 @@ describe('SFA API (e2e)', () => {
   let superAdminToken: string;
   let ownerToken: string;
   let producerToken: string;
+  let csrToken: string;
   let readOnlyToken: string;
   let refreshToken: string;
 
@@ -41,6 +42,9 @@ describe('SFA API (e2e)', () => {
 
     const producer = await login(app, seed.producerEmail, TEST_PASSWORD);
     producerToken = producer.accessToken;
+
+    const csr = await login(app, seed.csrEmail, TEST_PASSWORD);
+    csrToken = csr.accessToken;
 
     const readOnly = await login(app, seed.readOnlyEmail, TEST_PASSWORD);
     readOnlyToken = readOnly.accessToken;
@@ -406,7 +410,6 @@ describe('SFA API (e2e)', () => {
       { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
       { path: 'deals', module: ModuleKey.Clients },
       { path: 'deal-audits', module: ModuleKey.DealAudits },
-      { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
       { path: 'mailers', module: ModuleKey.Mailers },
@@ -487,6 +490,102 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('CSR role access matrix', () => {
+    // CSR = dashboard:read, leads:write, mailers:write, performance:read,
+    // crm_service:write. Scoped to exactly these 5 pages.
+    const csrAllowedReads = [
+      { path: 'dashboard', module: ModuleKey.Dashboard },
+      { path: 'leads', module: ModuleKey.Leads },
+      { path: 'mailers', module: ModuleKey.Mailers },
+      { path: 'performance', module: ModuleKey.Performance },
+    ];
+
+    it.each(csrAllowedReads)(
+      'GET /api/v1/$path — CSR can read',
+      async ({ path, module }) => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        expect(res.body.module).toBe(module);
+      },
+    );
+
+    it('GET /api/v1/crm/service-tickets — CSR can read (real module)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .expect(200);
+
+      expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    const csrWritablePages = ['leads', 'mailers'];
+    it.each(csrWritablePages)(
+      'PATCH /api/v1/%s — CSR can write',
+      async (path) => {
+        await request(app.getHttpServer())
+          .patch(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(200);
+      },
+    );
+
+    it('POST /api/v1/crm/service-tickets — CSR can write (real module)', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({ clientName: 'CSR Write Check', category: 'Policy Change' })
+        .expect(201);
+    });
+
+    it('PATCH /api/v1/performance — CSR is read-only (no write)', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/performance')
+        .set(authHeader(csrToken))
+        .expect(403);
+    });
+
+    const csrDeniedFeatureRoutes = [
+      'quote-recaps',
+      'deal-audits',
+      'leaderboard',
+      'management',
+      'owner-dashboard',
+      'command-center',
+    ];
+    it.each(csrDeniedFeatureRoutes)(
+      'GET /api/v1/%s — forbidden for CSR',
+      async (path) => {
+        await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(403);
+      },
+    );
+
+    const csrDeniedAdminRoutes = ['roles', 'users', 'branches'];
+    it.each(csrDeniedAdminRoutes)(
+      'GET /api/v1/%s — owner-only admin forbidden for CSR',
+      async (path) => {
+        await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(403);
+      },
+    );
+
+    it('CSR access token carries own data scope (no permissions in JWT)', () => {
+      const [, payload] = csrToken.split('.');
+      const claims = JSON.parse(
+        Buffer.from(payload, 'base64').toString('utf8'),
+      );
+      expect(claims.scope).toBe('branch');
+      expect(claims.permissions).toBeUndefined();
+    });
+  });
+
   describe('Page-level permission guardrails', () => {
     // Every feature controller: GET requires `{module}:read`, and every mutating
     // handler (PATCH) requires `{module}:write`. `files` is read-only (no PATCH).
@@ -498,7 +597,6 @@ describe('SFA API (e2e)', () => {
       { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
       { path: 'deals', module: ModuleKey.Clients },
       { path: 'deal-audits', module: ModuleKey.DealAudits },
-      { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
       { path: 'mailers', module: ModuleKey.Mailers },
@@ -548,6 +646,165 @@ describe('SFA API (e2e)', () => {
         .get('/api/v1/files')
         .set(authHeader(readOnlyToken))
         .expect(200);
+    });
+  });
+
+  describe('CRM Service tickets', () => {
+    let ownerTicketId: string;
+    let csrTicketId: string;
+
+    it('POST /api/v1/crm/service-tickets — owner creates a ticket', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .send({
+          clientName: 'Acme Owner Client',
+          category: 'Renewal Review',
+          priority: 'high',
+          policyNumber: 'POL-1001',
+          policyType: 'Auto',
+        })
+        .expect(201);
+
+      expect(res.body.id).toBeDefined();
+      expect(res.body.ticketNumber).toMatch(/^RENEW-/);
+      expect(res.body.status).toBe('open');
+      expect(res.body.timeline.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.timeline[0].type).toBe('created');
+      ownerTicketId = res.body.id;
+    });
+
+    it('GET /api/v1/crm/service-tickets — owner lists tickets', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.some((t: { id: string }) => t.id === ownerTicketId)).toBe(
+        true,
+      );
+    });
+
+    it('GET /api/v1/crm/service-tickets/stats — returns ticket-derived stats', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets/stats')
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(typeof res.body.openTickets).toBe('number');
+      expect(res.body.openTickets).toBeGreaterThanOrEqual(1);
+    });
+
+    it('GET /api/v1/crm/service-tickets/:id — owner reads one', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ownerTicketId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(res.body.id).toBe(ownerTicketId);
+      expect(res.body.clientName).toBe('Acme Owner Client');
+    });
+
+    it('PATCH /api/v1/crm/service-tickets/:id/status — records a status change', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ownerTicketId}/status`)
+        .set(authHeader(ownerToken))
+        .send({ status: 'waiting' })
+        .expect(200);
+
+      expect(res.body.status).toBe('waiting');
+      expect(
+        res.body.timeline.some(
+          (e: { type: string }) => e.type === 'status',
+        ),
+      ).toBe(true);
+    });
+
+    it('POST /api/v1/crm/service-tickets/:id/notes — appends a note', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/crm/service-tickets/${ownerTicketId}/notes`)
+        .set(authHeader(ownerToken))
+        .send({ content: 'Called client, left voicemail.' })
+        .expect(201);
+
+      const notes = res.body.timeline.filter(
+        (e: { type: string }) => e.type === 'note',
+      );
+      expect(notes.length).toBeGreaterThanOrEqual(1);
+      expect(notes[notes.length - 1].content).toContain('voicemail');
+    });
+
+    it('validates the create payload', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .send({ clientName: '', category: 'Not A Category' })
+        .expect(400);
+    });
+
+    it('own-scope: CSR only sees their own tickets', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({ clientName: 'CSR Own Client', category: 'Billing Issue' })
+        .expect(201);
+      csrTicketId = created.body.id;
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .expect(200);
+
+      const ids = res.body.map((t: { id: string }) => t.id);
+      expect(ids).toContain(csrTicketId);
+      // The owner's ticket is assigned to the owner — out of the CSR's own scope.
+      expect(ids).not.toContain(ownerTicketId);
+    });
+
+    it('own-scope: CSR cannot read a ticket outside their scope', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ownerTicketId}`)
+        .set(authHeader(csrToken))
+        .expect(404);
+    });
+
+    it('agency-scope: owner sees tickets created by others', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      const ids = res.body.map((t: { id: string }) => t.id);
+      expect(ids).toContain(csrTicketId);
+      expect(ids).toContain(ownerTicketId);
+    });
+
+    it('read-only user cannot mutate tickets', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(readOnlyToken))
+        .send({ clientName: 'Nope', category: 'Policy Change' })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ownerTicketId}/status`)
+        .set(authHeader(readOnlyToken))
+        .send({ status: 'resolved' })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/crm/service-tickets/${ownerTicketId}/notes`)
+        .set(authHeader(readOnlyToken))
+        .send({ content: 'should fail' })
+        .expect(403);
+    });
+
+    it('producer (no crm_service) is denied entirely', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(producerToken))
+        .expect(403);
     });
   });
 

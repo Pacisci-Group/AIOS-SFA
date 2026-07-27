@@ -1,8 +1,7 @@
 import { useState } from "react";
 import {
   FileText, CheckCircle, Send, Phone, Mail, MapPin, Calendar,
-  Shield, Clock, ChevronRight, Bell, Search, LayoutDashboard,
-  Users, Settings, BarChart2, X
+  Clock, ChevronRight, Bell, Search, X
 } from "lucide-react";
 import { QuoteWorkspace } from "./components/QuoteWorkspace";
 import { ActivityTimeline } from "./components/ActivityTimeline";
@@ -32,51 +31,16 @@ const priorInsurance = {
   continuousCoverage: "6 years",
 };
 
-const navItems = [
-  { icon: LayoutDashboard, label: "Dashboard" },
-  { icon: Users, label: "Leads" },
-  { icon: BarChart2, label: "Reports" },
-  { icon: Settings, label: "Settings" },
-];
-
 export default function App() {
   const [soldModal, setSoldModal] = useState(false);
-  const [activeNav, setActiveNav] = useState("Leads");
 
   return (
-    <div className="flex size-full min-h-screen" style={{ background: "var(--background)", fontFamily: "'Inter', 'DM Sans', system-ui, sans-serif" }}>
-
-      {/* Sidebar */}
-      <aside className="flex flex-col w-14 shrink-0 items-center py-5 gap-6" style={{ background: "var(--sidebar)", borderRight: "1px solid var(--sidebar-border)" }}>
-        <div className="size-8 rounded-lg flex items-center justify-center" style={{ background: "var(--sky)" }}>
-          <Shield size={16} color="#fff" />
-        </div>
-        <div className="flex flex-col gap-1 flex-1">
-          {navItems.map(({ icon: Icon, label }) => (
-            <button
-              key={label}
-              onClick={() => setActiveNav(label)}
-              title={label}
-              className="size-9 rounded-lg flex items-center justify-center transition-colors"
-              style={{
-                background: activeNav === label ? "var(--sidebar-accent)" : "transparent",
-                color: activeNav === label ? "var(--sky)" : "rgba(232,237,245,0.5)",
-              }}
-            >
-              <Icon size={17} />
-            </button>
-          ))}
-        </div>
-        <div
-          className="size-8 rounded-full flex items-center justify-center text-white shrink-0"
-          style={{ background: "var(--sky)", fontSize: 11, fontWeight: 700 }}
-        >
-          MR
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+    // Navigation now lives in the shared AppLayout/AppSidebar shell; this page
+    // renders only its own content column.
+    <div
+      className="flex flex-col flex-1 min-w-0 min-h-screen overflow-hidden"
+      style={{ background: "var(--background)", fontFamily: "'Inter', 'DM Sans', system-ui, sans-serif" }}
+    >
 
         {/* Master Pipeline Header */}
         <header className="px-6 py-4 flex items-center justify-between shrink-0" style={{ background: "var(--card)", borderBottom: "1px solid var(--border)" }}>
@@ -215,7 +179,6 @@ export default function App() {
             </div>
           </aside>
         </div>
-      </div>
 
       {/* Mark as Sold modal */}
       {soldModal && (

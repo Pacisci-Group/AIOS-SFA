@@ -1,124 +1,61 @@
 import { useState } from "react";
-import {
-  LayoutDashboard, Ticket, Users, BarChart3, Settings, Bell,
-  Search, ChevronDown, Shield, TrendingUp, Phone, FileText,
-  LogOut, HelpCircle, Menu, X,
-} from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bell, Search, ChevronDown } from "lucide-react";
 import { ScorecardRow } from "./components/ScorecardRow";
 import { PriorityTicketQueue } from "./components/PriorityTicketQueue";
 import { RenewalOutreachDesk } from "./components/RenewalOutreachDesk";
+import {
+  addServiceTicketNote,
+  getServiceTicketStats,
+  listServiceTickets,
+  type ServiceTicketStats,
+} from "@/lib/service-tickets-api";
 
-const navItems = [
-  { icon: LayoutDashboard, label: "CRM Service" },
-  { icon: TrendingUp, label: "Sales Pipeline" },
-  { icon: Ticket, label: "All Tickets" },
-  { icon: Users, label: "My Book" },
-  { icon: Phone, label: "Outreach" },
-  { icon: FileText, label: "Reports" },
-  { icon: BarChart3, label: "Analytics" },
-];
-
-const scorecardStats = {
-  openTickets: 14,
-  needsActionToday: 4,
-  upcomingRenewals: 28,
-  premiumIncreases: 12,
-  resolvedToday: 9,
-  dailyTarget: 15,
-  totalHouseholds: 412,
-  avgLobDensity: 2.3,
+const FALLBACK_STATS: ServiceTicketStats = {
+  openTickets: 0,
+  needsActionToday: 0,
+  upcomingRenewals: 0,
+  premiumIncreases: 0,
+  resolvedToday: 0,
+  dailyTarget: 10,
+  totalHouseholds: 0,
+  avgLobDensity: 0,
 };
 
 export default function App() {
-  const [activeNav, setActiveNav] = useState("CRM Service");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const ticketsQuery = useQuery({
+    queryKey: ["service-tickets"],
+    queryFn: () => listServiceTickets(),
+  });
+  const statsQuery = useQuery({
+    queryKey: ["service-tickets", "stats"],
+    queryFn: getServiceTicketStats,
+  });
+
+  const noteMutation = useMutation({
+    mutationFn: ({ id, content }: { id: string; content: string }) =>
+      addServiceTicketNote(id, content),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["service-tickets"] });
+    },
+  });
+
+  const tickets = ticketsQuery.data ?? [];
+  const scorecardStats = statsQuery.data ?? FALLBACK_STATS;
+
+  const openTicket = (id: string) => navigate(`/crm/tickets?ticket=${id}`);
 
   return (
-    <div className="flex h-screen bg-background text-foreground overflow-hidden">
-      {/* Sidebar */}
-      <aside
-        className={`flex-shrink-0 flex flex-col bg-sidebar border-r border-sidebar-border transition-all duration-300 ${
-          sidebarOpen ? "w-56" : "w-16"
-        }`}
-      >
-        {/* Logo */}
-        <div className="flex items-center gap-3 px-4 py-5 border-b border-sidebar-border">
-          <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-[#0076A8] flex items-center justify-center">
-            <Shield size={16} className="text-white" />
-          </div>
-          {sidebarOpen && (
-            <div className="overflow-hidden">
-              <div className="text-sm font-bold text-foreground tracking-tight leading-tight">Allstate</div>
-              <div className="text-[10px] text-muted-foreground tracking-widest uppercase">Producer Hub</div>
-            </div>
-          )}
-        </div>
-
-        {/* Rep info */}
-        {sidebarOpen && (
-          <div className="mx-3 mt-4 mb-2 px-3 py-3 rounded-xl bg-secondary/40 border border-white/5">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#0076A8] to-[#10B981] flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                RL
-              </div>
-              <div className="min-w-0">
-                <div className="text-xs font-semibold text-foreground truncate">Ryan Lassiter</div>
-                <div className="text-[10px] text-muted-foreground truncate">Service Rep · Tier 3</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Nav */}
-        <nav className="flex-1 px-2 pt-2 pb-4 space-y-0.5 overflow-y-auto">
-          {navItems.map((item) => (
-            <button
-              key={item.label}
-              onClick={() => setActiveNav(item.label)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 ${
-                activeNav === item.label
-                  ? "bg-[#0076A8]/15 text-[#0076A8] border border-[#0076A8]/20"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-              }`}
-            >
-              <item.icon size={16} className="flex-shrink-0" />
-              {sidebarOpen && <span className="truncate font-medium">{item.label}</span>}
-              {sidebarOpen && activeNav === item.label && (
-                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-[#0076A8]" />
-              )}
-            </button>
-          ))}
-        </nav>
-
-        {/* Bottom */}
-        <div className="px-2 pb-4 space-y-0.5 border-t border-sidebar-border pt-3">
-          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors">
-            <HelpCircle size={16} />
-            {sidebarOpen && <span className="font-medium">Help</span>}
-          </button>
-          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors">
-            <Settings size={16} />
-            {sidebarOpen && <span className="font-medium">Settings</span>}
-          </button>
-          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-[#EF4444]/70 hover:bg-[#EF4444]/10 hover:text-[#EF4444] transition-colors">
-            <LogOut size={16} />
-            {sidebarOpen && <span className="font-medium">Sign Out</span>}
-          </button>
-        </div>
-      </aside>
-
+    <div className="flex-1 flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
         <header className="flex-shrink-0 flex items-center gap-4 px-6 py-3.5 border-b border-border bg-background/95 backdrop-blur-sm">
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
-            {sidebarOpen ? <X size={16} /> : <Menu size={16} />}
-          </button>
-
           <div className="flex items-center gap-1.5 text-sm">
             <span className="text-muted-foreground">Dashboard</span>
             <ChevronDown size={13} className="text-muted-foreground -rotate-90" />
@@ -198,7 +135,11 @@ export default function App() {
 
           {/* Row 2: 60/40 Workspace */}
           <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr", minHeight: "560px" }}>
-            <PriorityTicketQueue />
+            <PriorityTicketQueue
+              tickets={tickets}
+              onOpen={openTicket}
+              onAddNote={(id, content) => noteMutation.mutate({ id, content })}
+            />
             <RenewalOutreachDesk />
           </div>
         </main>

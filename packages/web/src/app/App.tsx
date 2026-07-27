@@ -5,6 +5,7 @@ import { ModuleKey } from '@sfa/shared';
 import { AuthProvider } from '@/contexts/auth-context';
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/layout/ProtectedRoute';
 import { RequirePermission } from '@/components/layout/RequirePermission';
+import { AppLayout } from '@/components/layout/AppLayout';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -99,20 +100,73 @@ export function App() {
               <Route path="/" element={<RoleLanding />} />
               <Route path="/nav" element={<DevNavPage />} />
 
-              {/* Feature pages gated by per-page read access */}
-              <Route
-                element={
-                  <RequirePermission permission={`${ModuleKey.Dashboard}:read`} />
-                }
-              >
+              {/*
+                Shared app shell: CSR-accessible pages (Producer Dashboard,
+                Leads, CRM Service, Mailer, My Performance) all render inside
+                AppLayout so they share the RBAC AppSidebar. Each page still
+                declares its own per-page `RequirePermission` gate.
+              */}
+              <Route element={<AppLayout />}>
                 <Route
-                  path="/dashboard/producer"
                   element={
-                    <LazyPage>
-                      <ProducerDashboardPage />
-                    </LazyPage>
+                    <RequirePermission permission={`${ModuleKey.Dashboard}:read`} />
                   }
-                />
+                >
+                  <Route
+                    path="/dashboard/producer"
+                    element={
+                      <LazyPage>
+                        <ProducerDashboardPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+
+                <Route
+                  element={
+                    <RequirePermission permission={`${ModuleKey.CrmService}:read`} />
+                  }
+                >
+                  <Route
+                    path="/crm/service"
+                    element={
+                      <LazyPage>
+                        <ServiceDashboardPage />
+                      </LazyPage>
+                    }
+                  />
+                  <Route
+                    path="/crm/tickets"
+                    element={
+                      <LazyPage>
+                        <TicketWorkspacePage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+
+                <Route
+                  element={
+                    <RequirePermission permission={`${ModuleKey.Leads}:read`} />
+                  }
+                >
+                  <Route
+                    path="/leads/:id"
+                    element={
+                      <LazyPage>
+                        <LeadDetailsPage />
+                      </LazyPage>
+                    }
+                  />
+                  <Route
+                    path="/leads/demo"
+                    element={
+                      <LazyPage>
+                        <LeadDetailsPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
               </Route>
 
               <Route
@@ -140,29 +194,6 @@ export function App() {
 
               <Route
                 element={
-                  <RequirePermission permission={`${ModuleKey.CrmService}:read`} />
-                }
-              >
-                <Route
-                  path="/crm/service"
-                  element={
-                    <LazyPage>
-                      <ServiceDashboardPage />
-                    </LazyPage>
-                  }
-                />
-                <Route
-                  path="/crm/tickets"
-                  element={
-                    <LazyPage>
-                      <TicketWorkspacePage />
-                    </LazyPage>
-                  }
-                />
-              </Route>
-
-              <Route
-                element={
                   <RequirePermission permission={`${ModuleKey.Clients}:read`} />
                 }
               >
@@ -179,29 +210,6 @@ export function App() {
                   element={
                     <LazyPage>
                       <HouseholdDetailsPage />
-                    </LazyPage>
-                  }
-                />
-              </Route>
-
-              <Route
-                element={
-                  <RequirePermission permission={`${ModuleKey.Leads}:read`} />
-                }
-              >
-                <Route
-                  path="/leads/:id"
-                  element={
-                    <LazyPage>
-                      <LeadDetailsPage />
-                    </LazyPage>
-                  }
-                />
-                <Route
-                  path="/leads/demo"
-                  element={
-                    <LazyPage>
-                      <LeadDetailsPage />
                     </LazyPage>
                   }
                 />

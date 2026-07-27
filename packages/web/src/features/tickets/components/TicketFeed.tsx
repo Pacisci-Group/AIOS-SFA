@@ -29,9 +29,9 @@ const CATEGORY_SHORT: Record<string, string> = {
 };
 
 const PRIORITY_COLOR: Record<string, string> = {
-  high: "bg-red-100 text-red-700",
-  medium: "bg-amber-100 text-amber-700",
-  low: "bg-slate-100 text-slate-600",
+  high: "bg-red-500/15 text-red-400",
+  medium: "bg-amber-500/15 text-amber-400",
+  low: "bg-slate-500/15 text-slate-300",
 };
 
 export function TicketFeed({ tickets, selectedId, onSelect }: TicketFeedProps) {
@@ -64,7 +64,7 @@ export function TicketFeed({ tickets, selectedId, onSelect }: TicketFeedProps) {
   ];
 
   return (
-    <div className="flex flex-col h-full bg-white border-r border-border overflow-hidden">
+    <div className="flex flex-col h-full bg-card border-r border-border overflow-hidden">
       {/* Search + filter */}
       <div className="px-3 pt-3 pb-2 border-b border-border space-y-2">
         <div className="relative">
@@ -84,7 +84,7 @@ export function TicketFeed({ tickets, selectedId, onSelect }: TicketFeedProps) {
               onClick={() => setFilter(tab.value)}
               className={`flex-1 text-xs py-1 rounded transition-all ${
                 filter === tab.value
-                  ? "bg-white text-foreground shadow-sm font-medium"
+                  ? "bg-secondary text-foreground shadow-sm font-medium"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >

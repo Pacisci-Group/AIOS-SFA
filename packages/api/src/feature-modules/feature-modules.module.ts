@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import {
   CommandCenterController,
   ContactsController,
-  CrmServiceController,
   DashboardController,
   DealAuditsController,
   DealsController,
@@ -26,7 +25,6 @@ const controllers = [
   QuoteRecapsController,
   DealsController,
   DealAuditsController,
-  CrmServiceController,
   PerformanceController,
   LeaderboardController,
   MailersController,
