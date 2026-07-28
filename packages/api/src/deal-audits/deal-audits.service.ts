@@ -1,6 +1,7 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -42,6 +43,8 @@ type DealAuditItemLean = Pick<
 
 @Injectable()
 export class DealAuditsService {
+  private readonly logger = new Logger(DealAuditsService.name);
+
   constructor(
     @InjectModel(DealAuditItem.name)
     private dealAuditItemModel: Model<DealAuditItemDocument>,
@@ -194,6 +197,17 @@ export class DealAuditsService {
   ): Promise<ResolveDealAuditResponse> {
     const item = await this.loadOwnedItem(access, branchId, itemId);
 
+    // Resolving is one-shot: the item leaves the board once it's done. Replaying
+    // the request (stale tab, client retry) must not append the attachment or
+    // move `resolvedAt` a second time.
+    if (item.isResolved) {
+      return {
+        id: item._id.toString(),
+        resolved: true,
+        resolvedAt: (item.resolvedAt ?? new Date()).toISOString(),
+      };
+    }
+
     // If an attachment was declared, confirm the upload actually landed.
     if (dto.attachment) {
       const exists = await this.storage.objectExists(dto.attachment.key);
@@ -224,7 +238,16 @@ export class DealAuditsService {
     }
     await item.save();
 
-    await this.recordResolveActivity(access, item, resolvedAt);
+    // Best-effort audit trail: the resolution is already committed, so a failure
+    // to write the timeline entry must not report the whole operation as failed.
+    try {
+      await this.recordResolveActivity(access, item, resolvedAt);
+    } catch (error) {
+      this.logger.error(
+        `Failed to record audit_resolved activity for item ${item._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
 
     return {
       id: item._id.toString(),

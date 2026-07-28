@@ -53,6 +53,15 @@ docs {
   Effect: sets `updateStatus = "complete"` (`Verified - Complete`),
   `isResolved = true`, `resolvedAt`, `resolvedById`, and appends any attachment.
 
+  **Idempotent.** Resolving is one-shot: if the item is already resolved the call
+  returns `200` with the *original* `resolvedAt` and changes nothing — a replay
+  (stale tab, client retry) will not append the attachment or overwrite the note
+  a second time.
+
+  The `audit_resolved` activity is written **best-effort** after the item is
+  committed: if the timeline write fails it is logged server-side, but the call
+  still reports success because the resolution itself has already been applied.
+
   ## Path params
   | param  | type   | notes                          |
   |--------|--------|--------------------------------|
