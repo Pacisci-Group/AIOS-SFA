@@ -8,9 +8,10 @@ imported below. Path-scoped and always-on rules live in `.claude/rules/`.
 ## Claude Code specifics
 
 - **Rules** (`.claude/rules/`) are the modular instruction files for this repo:
-  - `legacy-sfa-reference.md` + `figma-mockups-reference.md` — always loaded; how
-    to use the two read-only symlinked reference checkouts (`./SFA`,
-    `./agencyops_fe_mockups`).
+  - `legacy-sfa-reference.md` + `figma-mockups-reference.md` +
+    `sfaforms-reference.md` — always loaded; how to use the three read-only
+    symlinked reference checkouts (`./SFA`, `./agencyops_fe_mockups`,
+    `./sfaforms`).
   - `api-bruno-docs.md` — **path-scoped**, loads only when touching
     `packages/api/src/**/*.controller.ts`, `packages/api/src/**/dto/*.ts`, or
     `packages/web/src/lib/*-api.ts`. Keep the Bruno collection in sync there.

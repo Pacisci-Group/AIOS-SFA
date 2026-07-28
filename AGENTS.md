@@ -2,13 +2,16 @@
 
 > Auto-loaded by coding agents opened at the `AIOS-SFA/` repo root (Claude Code
 > reads it via the `@AGENTS.md` import in `CLAUDE.md`). This is the
-> **new, greenfield replacement** for the legacy SFA app. Two read-only reference
+> **new, greenfield replacement** for the legacy SFA app. Three read-only reference
 > checkouts are symlinked in (gitignored, never committed here):
 > - `./SFA` → legacy Next.js app, **source-of-truth for behaviour** being ported —
 >   see `.claude/rules/legacy-sfa-reference.md`.
 > - `./agencyops_fe_mockups` → Figma FE mockups (design screenshots + exported
 >   React components/CSS + agent-context docs), **source-of-truth for UI/design** —
 >   see `.claude/rules/figma-mockups-reference.md`.
+> - `./sfaforms` → standalone Next.js prototype of the Lead→Quote→Sold→Audit
+>   intake forms (localStorage mock API), **behavioural reference for the native
+>   forms** replacing Fillout — see `.claude/rules/sfaforms-reference.md`.
 
 ---
 
@@ -164,7 +167,7 @@ temperature/aging that aren't first-class in legacy payloads. See
 
 - `docs/SYSTEM_ARCHITECTURE.md` — new system architecture (v1.0) + `docs/diagrams/`.
 - `docs/SESSION-HANDOFF.md` — most up-to-date session state, mappings, open questions. **Start here for continuation.**
-- `docs/form-pipeline/` — Lead→Quote→Sold→Audit spec (`Form Pipeline Technical Specification.md`) + architecture guide.
+- `docs/form-pipeline/` — Lead→Quote→Sold→Audit spec (`Form Pipeline Technical Specification.md`) + architecture guide. Working prototype of the same flow lives in `./sfaforms` (read-only symlink — see `.claude/rules/sfaforms-reference.md`).
 - `docs/product/Figma Mockups.md` — design system + product direction (owner notes).
 - `docs/smartsuite-tables/` — legacy SmartSuite data model (migration source-of-record).
 - `bruno/` — **API surface source-of-truth**: a version-controlled Bruno
