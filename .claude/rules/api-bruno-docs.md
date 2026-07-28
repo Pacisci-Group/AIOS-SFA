@@ -1,7 +1,8 @@
 ---
-description: The Bruno collection (bruno/) is the API source-of-truth — read it for API context, and keep it in sync when adding/changing endpoints
-globs: packages/api/src/**/*.controller.ts,packages/api/src/**/dto/*.ts,packages/web/src/lib/*-api.ts
-alwaysApply: false
+paths:
+  - "packages/api/src/**/*.controller.ts"
+  - "packages/api/src/**/dto/*.ts"
+  - "packages/web/src/lib/*-api.ts"
 ---
 
 # Bruno API collection (`bruno/`) — read it, and keep it in sync

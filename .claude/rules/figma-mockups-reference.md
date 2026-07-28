@@ -1,8 +1,3 @@
----
-description: Where the Figma FE mockups (design source-of-truth) live and how to use them as read-only design reference
-alwaysApply: true
----
-
 # Figma FE mockups — read-only design reference
 
 The **`agencyops_fe_mockups`** repo (Figma design pictures + Figma-exported React
