@@ -14,6 +14,43 @@ services:
       retries: 10
       start_period: 10s
 
+  minio:
+    image: minio/minio:latest
+    container_name: sfa-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    # Host ports 9100/9101 (9000/9001 are commonly taken by another MinIO). The
+    # container still listens on 9000/9001 internally.
+    ports:
+      - "9100:9000" # S3 API
+      - "9101:9001" # web console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot: create the uploads bucket so presigned PUTs work out of the box.
+  minio-createbucket:
+    image: minio/mc:latest
+    container_name: sfa-minio-createbucket
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/sfa-uploads &&
+      echo 'Bucket sfa-uploads ready';
+      "
+    restart: "no"
+
   api:
     build:
       context: .
@@ -28,8 +65,21 @@ services:
       PORT: 4000
       MONGODB_URI: mongodb://mongo:27017/sfa
       CORS_ORIGIN: http://localhost:5173,http://localhost:4000
+      # Object storage (MinIO). The API talks to MinIO over the compose network
+      # (minio:9000) for server-side ops, but signs browser-facing presigned
+      # URLs against the host-reachable public URL (localhost:9100 — see the
+      # remapped host port above).
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_PUBLIC_URL: http://localhost:9100
+      STORAGE_REGION: us-east-1
+      STORAGE_BUCKET: sfa-uploads
+      STORAGE_ACCESS_KEY_ID: minioadmin
+      STORAGE_SECRET_ACCESS_KEY: minioadmin
+      STORAGE_FORCE_PATH_STYLE: "true"
     depends_on:
       mongo:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test:
@@ -60,3 +110,4 @@ services:
 
 volumes:
   mongo_data:
+  minio_data:

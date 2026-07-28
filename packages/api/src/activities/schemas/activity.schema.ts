@@ -5,9 +5,17 @@ import { TenantRecord } from '../../common/schemas/tenant-record.schema';
 export type ActivityDocument = HydratedDocument<Activity>;
 
 export type ActivityType =
-  'lead_created' | 'quoted' | 'sold' | 'call' | 'text' | 'email' | 'note';
+  | 'lead_created'
+  | 'quoted'
+  | 'sold'
+  | 'call'
+  | 'text'
+  | 'email'
+  | 'note'
+  | 'audit_resolved';
 
-export type ActivitySubjectType = 'lead' | 'deal' | 'quoteRecap';
+export type ActivitySubjectType =
+  'lead' | 'deal' | 'quoteRecap' | 'dealAuditItem';
 
 /**
  * Derived activity/timeline collection. Seeded from lead/quote/deal lifecycle events

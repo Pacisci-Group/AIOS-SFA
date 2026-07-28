@@ -35,3 +35,108 @@ export function listDealAudits(params: ListDealAuditsParams = {}) {
     `/deal-audits${qs ? `?${qs}` : ''}`,
   );
 }
+
+// --- Resolve (PAC-14) ------------------------------------------------------
+
+/** Content types accepted for resolution document uploads. */
+export const ALLOWED_UPLOAD_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+] as const;
+
+/** Max upload size (10 MB), matching the API + UI copy. */
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+export interface DealAuditAttachment {
+  key: string;
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
+interface PresignResponse {
+  key: string;
+  uploadUrl: string;
+  requiredHeaders: Record<string, string>;
+  expiresIn: number;
+}
+
+export interface ResolveDealAuditResponse {
+  id: string;
+  resolved: boolean;
+  resolvedAt: string;
+}
+
+/** Request a presigned URL to upload a resolution document. */
+export function presignAuditAttachment(
+  itemId: string,
+  meta: { filename: string; contentType: string; size: number },
+) {
+  return apiFetch<PresignResponse>(
+    `/deal-audits/${itemId}/attachments/presign`,
+    {
+      method: 'POST',
+      body: JSON.stringify(meta),
+    },
+  );
+}
+
+/** Upload the raw file bytes directly to object storage (no auth header). */
+export async function uploadToPresignedUrl(
+  uploadUrl: string,
+  headers: Record<string, string>,
+  file: File,
+) {
+  const res = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers,
+    body: file,
+  });
+  if (!res.ok) {
+    throw new Error(`Upload failed (${res.status})`);
+  }
+}
+
+/** Mark an audit item resolved, optionally with a note and/or document. */
+export function resolveDealAuditItem(
+  itemId: string,
+  payload: { note?: string; attachment?: DealAuditAttachment },
+) {
+  return apiFetch<ResolveDealAuditResponse>(
+    `/deal-audits/${itemId}/resolve`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+/**
+ * Full resolve flow: presign + upload (if a file is provided) then resolve.
+ * Returns the resolve response.
+ */
+export async function resolveWithOptionalUpload(
+  itemId: string,
+  input: { note?: string; file?: File | null },
+): Promise<ResolveDealAuditResponse> {
+  let attachment: DealAuditAttachment | undefined;
+  if (input.file) {
+    const meta = {
+      filename: input.file.name,
+      contentType: input.file.type,
+      size: input.file.size,
+    };
+    const presigned = await presignAuditAttachment(itemId, meta);
+    await uploadToPresignedUrl(
+      presigned.uploadUrl,
+      presigned.requiredHeaders,
+      input.file,
+    );
+    attachment = { key: presigned.key, ...meta };
+  }
+  return resolveDealAuditItem(itemId, {
+    note: input.note?.trim() ? input.note.trim() : undefined,
+    attachment,
+  });
+}

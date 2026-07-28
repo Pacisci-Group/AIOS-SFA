@@ -24,3 +24,22 @@ export interface DealAuditListResponse {
   totalPages: number;
   items: DealAuditRow[];
 }
+
+/** Returned by `POST /deal-audits/:itemId/attachments/presign`. */
+export interface PresignAttachmentResponse {
+  /** Object storage key to send back on resolve. */
+  key: string;
+  /** Short-lived URL the browser PUTs the file to. */
+  uploadUrl: string;
+  /** Headers the browser must set on the PUT. */
+  requiredHeaders: Record<string, string>;
+  /** Seconds until the upload URL expires. */
+  expiresIn: number;
+}
+
+/** Returned by `PATCH /deal-audits/:itemId/resolve`. */
+export interface ResolveDealAuditResponse {
+  id: string;
+  resolved: boolean;
+  resolvedAt: string;
+}

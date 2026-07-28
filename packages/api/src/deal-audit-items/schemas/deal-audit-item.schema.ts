@@ -4,6 +4,29 @@ import { TenantRecord } from '../../common/schemas/tenant-record.schema';
 
 export type DealAuditItemDocument = HydratedDocument<DealAuditItem>;
 
+/** A document uploaded when a producer resolves an audit item. */
+@Schema({ _id: false })
+export class DealAuditAttachment {
+  /** Object storage key (agency-namespaced, server-generated). */
+  @Prop({ required: true })
+  key: string;
+
+  @Prop({ required: true })
+  filename: string;
+
+  @Prop({ required: true })
+  contentType: string;
+
+  @Prop({ required: true })
+  size: number;
+
+  @Prop({ type: Date, default: Date.now })
+  uploadedAt: Date;
+}
+
+export const DealAuditAttachmentSchema =
+  SchemaFactory.createForClass(DealAuditAttachment);
+
 /**
  * Migrated from SmartSuite "The Deal Audit Items Table" (69533b022b0995e027431c02).
  * Individual checklist rows under a Deal Audit; backs the Deals Pending Service
@@ -70,6 +93,22 @@ export class DealAuditItem extends TenantRecord {
 
   @Prop({ type: Date })
   firstCreatedAt?: Date;
+
+  /** Free-text note captured when the producer resolves the item. */
+  @Prop({ trim: true })
+  notes?: string;
+
+  /** When the item was resolved (producer marked verified/received). */
+  @Prop({ type: Date })
+  resolvedAt?: Date;
+
+  /** The user (producer) who resolved the item. */
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  resolvedById?: Types.ObjectId;
+
+  /** Supporting documents uploaded on resolution. */
+  @Prop({ type: [DealAuditAttachmentSchema], default: [] })
+  attachments: DealAuditAttachment[];
 
   @Prop({ default: false, index: true })
   isTestRecord: boolean;

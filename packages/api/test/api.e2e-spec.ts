@@ -405,7 +405,8 @@ describe('SFA API (e2e)', () => {
       { path: 'leads', module: ModuleKey.Leads },
       { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
       { path: 'deals', module: ModuleKey.Clients },
-      { path: 'deal-audits', module: ModuleKey.DealAudits },
+      // NOTE: `deal-audits` is a real module (see DealAuditsModule / PAC-12/14),
+      // not a `{status:'ready'}` stub — covered by its own describe block below.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
@@ -497,7 +498,8 @@ describe('SFA API (e2e)', () => {
       { path: 'leads', module: ModuleKey.Leads },
       { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
       { path: 'deals', module: ModuleKey.Clients },
-      { path: 'deal-audits', module: ModuleKey.DealAudits },
+      // `deal-audits` write (resolve) is item-scoped, not a bare PATCH stub —
+      // covered by its own describe block below.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
@@ -548,6 +550,68 @@ describe('SFA API (e2e)', () => {
         .get('/api/v1/files')
         .set(authHeader(readOnlyToken))
         .expect(200);
+    });
+  });
+
+  describe('Deal Audits (PAC-12 read / PAC-14 resolve)', () => {
+    // A syntactically-valid ObjectId that does not exist — lets us exercise the
+    // guard chain + ownership without seeding audit items or object storage.
+    const missingItemId = '000000000000000000000000';
+
+    it('GET /api/v1/deal-audits — producer gets a paginated envelope', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/deal-audits')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as { page: number; items: unknown[] };
+      expect(body).toHaveProperty('page');
+      expect(body).toHaveProperty('pageSize');
+      expect(body).toHaveProperty('total');
+      expect(body).toHaveProperty('totalPages');
+      expect(Array.isArray(body.items)).toBe(true);
+    });
+
+    it('PATCH resolve — read-only user forbidden (no deal_audits:write)', async () => {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/deal-audits/${missingItemId}/resolve`)
+        .set(authHeader(readOnlyToken))
+        .send({ note: 'nope' })
+        .expect(403);
+    });
+
+    it('POST presign — read-only user forbidden (no deal_audits:write)', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/v1/deal-audits/${missingItemId}/attachments/presign`)
+        .set(authHeader(readOnlyToken))
+        .send({
+          filename: 'x.pdf',
+          contentType: 'application/pdf',
+          size: 1024,
+        })
+        .expect(403);
+    });
+
+    it('PATCH resolve — producer has write; 404 for a non-existent item', async () => {
+      // Write permission passes the guard chain; the service then 404s because
+      // no such item exists in the caller's agency.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/deal-audits/${missingItemId}/resolve`)
+        .set(authHeader(producerToken))
+        .send({ note: 'verified' })
+        .expect(404);
+    });
+
+    it('POST presign — invalid content type is rejected (400)', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/v1/deal-audits/${missingItemId}/attachments/presign`)
+        .set(authHeader(producerToken))
+        .send({
+          filename: 'x.exe',
+          contentType: 'application/x-msdownload',
+          size: 1024,
+        })
+        .expect(400);
     });
   });
 
