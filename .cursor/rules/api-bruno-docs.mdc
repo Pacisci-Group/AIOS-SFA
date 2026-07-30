@@ -1,0 +1,70 @@
+---
+description: The Bruno collection (bruno/) is the API source-of-truth — read it for API context, and keep it in sync when adding/changing endpoints
+globs: packages/api/src/**/*.controller.ts,packages/api/src/**/dto/*.ts,packages/web/src/lib/*-api.ts
+alwaysApply: false
+---
+
+# Bruno API collection (`bruno/`) — read it, and keep it in sync
+
+The Bruno collection at the repo root (`bruno/`) is the **version-controlled
+API source-of-truth**: every implemented endpoint with its URL, params, headers,
+body, response shape, module + permission, and error codes (in each request's
+`docs` block).
+
+## Reading (getting API context)
+Before wiring a call to the API or reasoning about an endpoint, **read the
+relevant `.bru` in `bruno/`** (and its `docs` block) instead of only grepping
+controllers — it's faster and captures auth, params, and response shape in one
+place.
+
+## Writing (keeping it in sync)
+Every new or changed HTTP endpoint in `packages/api` **must** be mirrored here.
+Don't add or change an endpoint without a corresponding `.bru` update.
+
+## When you touch a controller/DTO
+- **New endpoint** → add a `<Feature>/<Request Name>.bru` under `bruno/`
+  (create the feature folder if needed).
+- **Changed** route/params/body/response → update the matching `.bru`
+  (URL, `params:query`, `body:json`, `tests`, and the `docs` block).
+- **Removed** endpoint → delete its `.bru`.
+
+## Each request file follows this shape
+`meta → verb (get/post/…) → params/headers/body → script (if capturing) → tests → docs`
+
+```bru
+meta {
+  name: List Deal Audits
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/deal-audits?page=1&pageSize=8
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # GET /deal-audits — one-line purpose, module + permission, params, response, errors
+}
+```
+
+## Conventions
+- Auth is set once at the **collection level** (`bruno/collection.bru`, bearer
+  `{{accessToken}}`). Authenticated requests use `auth: inherit`; public
+  endpoints (e.g. `auth/*`) use `auth: none`.
+- Use `{{baseUrl}}` and other vars from `bruno/environments/Local.bru`.
+- Capture tokens with `bru.setVar(...)` (runtime-only; never `setEnvVar`, which
+  can persist secrets to disk in Bruno v4).
+- Write a real `docs` block: module key, required permission, data-scope
+  behavior, params, response shape, and error codes — this is the API context
+  agents read.
+- Verify before finishing: `cd bruno && npx @usebruno/cli run --env Local`
+  (requires the API running + `npm run api:seed:demo:dev`).
+
+See `bruno/README.md` for full usage.

@@ -7,68 +7,39 @@ import { AppModule } from '../app.module';
 import { Branch } from '../branches/schemas/branch.schema';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency } from '../platform/schemas/agency.schema';
-import { AgencyRole } from '../roles/schemas/agency-role.schema';
 import { User } from '../users/schemas/user.schema';
 
+/**
+ * Core seed — platform-required data only.
+ *
+ * This seed provisions the minimum needed for the app to *function* and is safe
+ * to run in every environment (including production) and on API startup:
+ *   1. The platform super admin (so the platform can be logged into and agencies
+ *      provisioned).
+ *   2. Global catalog / feature data (plans, feature definitions, constants) —
+ *      see the marked section below as these collections come online.
+ *   3. A single empty tenant scaffold (Smith Family Agency + Main branch +
+ *      default roles) that the SmartSuite -> Mongo migration imports into.
+ *
+ * It intentionally does NOT create demo users or any CRM data. For a fully
+ * populated agency to build/test against, use the demo seed instead
+ * (`npm run seed:demo:dev`, see `src/seed/demo`).
+ */
 async function seed() {
   const app = await NestFactory.createApplicationContext(AppModule);
 
   const agencyModel = app.get<Model<Agency>>(getModelToken(Agency.name));
   const branchModel = app.get<Model<Branch>>(getModelToken(Branch.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
-  const roleModel = app.get<Model<AgencyRole>>(getModelToken(AgencyRole.name));
   const permissionsService = app.get(PermissionsService);
 
+  // ---------------------------------------------------------------------------
+  // 1. Platform super admin (required for the app to function)
+  // ---------------------------------------------------------------------------
   const superAdminEmail =
     process.env.SEED_SUPER_ADMIN_EMAIL ?? 'admin@sfa.local';
   const superAdminPassword =
     process.env.SEED_SUPER_ADMIN_PASSWORD ?? 'ChangeMe123!';
-
-  const modules = Object.fromEntries(
-    ALL_MODULE_KEYS.map((key) => [key, { enabled: true }]),
-  );
-
-  let agency = await agencyModel.findOne({ slug: 'smith-family-agency' });
-  if (!agency) {
-    agency = await agencyModel.create({
-      name: 'Smith Family Agency',
-      slug: 'smith-family-agency',
-      status: 'active',
-      modules,
-    });
-    console.log('Created agency: Smith Family Agency');
-  } else {
-    console.log('Agency already exists, skipping create');
-  }
-
-  await permissionsService.seedDefaultRoles(agency._id);
-  console.log('Default agency roles seeded');
-
-  let branch = await branchModel.findOne({
-    agencyId: agency._id,
-    slug: 'main',
-  });
-  if (!branch) {
-    branch = await branchModel.create({
-      agencyId: agency._id,
-      name: 'Main',
-      slug: 'main',
-      isDefault: true,
-    });
-    console.log('Created branch: Main');
-  } else {
-    console.log('Branch already exists, skipping create');
-  }
-
-  const ownerRole = await roleModel.findOne({
-    agencyId: agency._id,
-    slug: 'agency_owner',
-  });
-
-  const producerRole = await roleModel.findOne({
-    agencyId: agency._id,
-    slug: 'producer',
-  });
 
   const existingSuperAdmin = await userModel.findOne({
     email: superAdminEmail,
@@ -91,70 +62,60 @@ async function seed() {
     console.log('Super admin updated');
   }
 
-  const ownerEmail =
-    process.env.SEED_AGENCY_OWNER_EMAIL ?? 'owner@smithfamily.local';
-  const ownerPassword =
-    process.env.SEED_AGENCY_OWNER_PASSWORD ?? 'ChangeMe123!';
+  // ---------------------------------------------------------------------------
+  // 2. Global catalog / feature data (plans, feature definitions, constants)
+  // ---------------------------------------------------------------------------
+  // Add platform-wide catalog seeding here as those collections come online.
+  // Anything seeded here must be part of a shipped feature and required for the
+  // app to function — never demo/tenant data (that belongs in the demo seed).
 
-  const existingOwner = await userModel.findOne({ email: ownerEmail });
-  if (!existingOwner) {
-    await userModel.create({
-      agencyId: agency._id,
-      email: ownerEmail,
-      passwordHash: await bcrypt.hash(ownerPassword, 12),
-      roleIds: ownerRole ? [ownerRole._id] : [],
-      firstName: 'Agency',
-      lastName: 'Owner',
-      isActive: true,
+  // ---------------------------------------------------------------------------
+  // 3. Empty tenant scaffold — migration target (no demo users, no CRM data)
+  // ---------------------------------------------------------------------------
+  const modules = Object.fromEntries(
+    ALL_MODULE_KEYS.map((key) => [key, { enabled: true }]),
+  );
+
+  let agency = await agencyModel.findOne({ slug: 'smith-family-agency' });
+  if (!agency) {
+    agency = await agencyModel.create({
+      name: 'Smith Family Agency',
+      slug: 'smith-family-agency',
+      status: 'active',
+      modules,
     });
-    console.log(`Created agency owner: ${ownerEmail}`);
-  } else if (ownerRole) {
-    await userModel.updateOne(
-      { _id: existingOwner._id },
-      {
-        $set: { roleIds: [ownerRole._id] },
-        $unset: { roles: 1 },
-      },
-    );
-    console.log('Agency owner updated with agency_owner role');
+    console.log('Created agency: Smith Family Agency');
+  } else {
+    console.log('Agency already exists, skipping create');
   }
 
-  const producerEmail =
-    process.env.SEED_PRODUCER_EMAIL ?? 'producer@smithfamily.local';
-  const producerPassword = process.env.SEED_PRODUCER_PASSWORD ?? 'ChangeMe123!';
+  await permissionsService.seedDefaultRoles(agency._id);
+  console.log('Default agency roles seeded');
 
-  const existingProducer = await userModel.findOne({ email: producerEmail });
-  if (!existingProducer) {
-    await userModel.create({
+  const branch = await branchModel.findOne({
+    agencyId: agency._id,
+    slug: 'main',
+  });
+  if (!branch) {
+    await branchModel.create({
       agencyId: agency._id,
-      branchId: branch._id,
-      email: producerEmail,
-      passwordHash: await bcrypt.hash(producerPassword, 12),
-      roleIds: producerRole ? [producerRole._id] : [],
-      firstName: 'Pat',
-      lastName: 'Producer',
-      isActive: true,
+      name: 'Main',
+      slug: 'main',
+      isDefault: true,
     });
-    console.log(`Created producer: ${producerEmail}`);
-  } else if (producerRole) {
-    await userModel.updateOne(
-      { _id: existingProducer._id },
-      {
-        $set: {
-          roleIds: [producerRole._id],
-          agencyId: agency._id,
-          branchId: branch._id,
-        },
-        $unset: { roles: 1 },
-      },
-    );
-    console.log('Producer updated with producer role');
+    console.log('Created branch: Main');
+  } else {
+    console.log('Branch already exists, skipping create');
   }
 
-  console.log('\nSeed complete.');
+  console.log('\nCore seed complete.');
   console.log(`Super Admin: ${superAdminEmail} / ${superAdminPassword}`);
-  console.log(`Agency Owner: ${ownerEmail} / ${ownerPassword}`);
-  console.log(`Producer: ${producerEmail} / ${producerPassword}`);
+  console.log(
+    'Tenant scaffold ready: Smith Family Agency / Main branch (empty).',
+  );
+  console.log(
+    'For a populated agency to test against, run: npm run seed:demo:dev',
+  );
 
   await app.close();
 }

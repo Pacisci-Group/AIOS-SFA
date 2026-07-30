@@ -17,19 +17,12 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-
-interface Deal {
-  id: number;
-  client: string;
-  type: "Auto" | "Home" | "Bundle";
-  missing: string;
-  days: number;
-}
+import type { DealAuditRow } from "@/lib/deal-audits-api";
 
 interface ResolvePanelProps {
-  deal: Deal | null;
+  deal: DealAuditRow | null;
   onClose: () => void;
-  onResolved: (id: number) => void;
+  onResolved: (id: string) => void;
 }
 
 const quickContact =
@@ -77,7 +70,7 @@ export function ResolvePanel({ deal, onClose, onResolved }: ResolvePanelProps) {
                     Missing: {deal.missing}
                   </p>
                   <p className="text-xs text-amber-500 mt-0.5">
-                    Open for {deal.days} day{deal.days !== 1 ? "s" : ""}
+                    Open for {deal.daysOpen} day{deal.daysOpen !== 1 ? "s" : ""}
                   </p>
                 </div>
               </div>

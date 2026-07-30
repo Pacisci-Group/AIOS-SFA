@@ -20,9 +20,9 @@ import {
 } from '../../quote-recaps/schemas/quote-recap.schema';
 import { Deal, DealSchema } from '../../deals/schemas/deal.schema';
 import {
-  AuditRecord,
-  AuditRecordSchema,
-} from '../../audit-records/schemas/audit-record.schema';
+  DealAuditItem,
+  DealAuditItemSchema,
+} from '../../deal-audit-items/schemas/deal-audit-item.schema';
 import {
   Activity,
   ActivitySchema,
@@ -98,7 +98,7 @@ import { DemoSeedService } from './demo-seed.service';
       { name: Lead.name, schema: LeadSchema },
       { name: QuoteRecap.name, schema: QuoteRecapSchema },
       { name: Deal.name, schema: DealSchema },
-      { name: AuditRecord.name, schema: AuditRecordSchema },
+      { name: DealAuditItem.name, schema: DealAuditItemSchema },
       { name: Activity.name, schema: ActivitySchema },
       { name: ProducerGoal.name, schema: ProducerGoalSchema },
       { name: Contact.name, schema: ContactSchema },

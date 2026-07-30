@@ -2,14 +2,15 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 import { TenantRecord } from '../../common/schemas/tenant-record.schema';
 
-export type AuditRecordDocument = HydratedDocument<AuditRecord>;
+export type DealAuditItemDocument = HydratedDocument<DealAuditItem>;
 
 /**
  * Migrated from SmartSuite "The Deal Audit Items Table" (69533b022b0995e027431c02).
- * Backs the Deals Pending Service Hand-off board (each open item is a row).
+ * Individual checklist rows under a Deal Audit; backs the Deals Pending Service
+ * Hand-off board (each open item is a row).
  */
-@Schema({ timestamps: true, collection: 'auditRecords' })
-export class AuditRecord extends TenantRecord {
+@Schema({ timestamps: true, collection: 'dealAuditItems' })
+export class DealAuditItem extends TenantRecord {
   @Prop({ trim: true })
   title?: string;
 
@@ -74,12 +75,12 @@ export class AuditRecord extends TenantRecord {
   isTestRecord: boolean;
 }
 
-export const AuditRecordSchema = SchemaFactory.createForClass(AuditRecord);
-AuditRecordSchema.index(
+export const DealAuditItemSchema = SchemaFactory.createForClass(DealAuditItem);
+DealAuditItemSchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
   { unique: true, sparse: true },
 );
-AuditRecordSchema.index({
+DealAuditItemSchema.index({
   agencyId: 1,
   producerId: 1,
   isFailed: 1,

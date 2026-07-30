@@ -43,7 +43,7 @@ Workspace scripts (from repo root — see `package.json`):
 npm run api:dev            # NestJS API (watch)
 npm run web:dev            # Vite web app
 npm run shared:build       # build shared package
-npm run api:seed:dev       # seed auth/tenancy scaffold (agency, branch, roles, 3 users)
+npm run api:seed:dev       # core seed: super admin + empty tenant scaffold (agency, branch, roles)
 npm run api:seed:demo:dev  # seed a full synthetic demo tenant (CRM data for local testing)
 npm run api:migrate:dev    # run SmartSuite -> Mongo migration (dev)
 npm run test:e2e           # API e2e tests
@@ -57,9 +57,13 @@ Docker (see `Makefile` / `docker-compose.yml`): `make up` starts Mongo + API + w
 Env: copy `.env.example` → `.env`. Deployment notes in `DEPLOYMENT.md`.
 
 > **Three ways to populate Mongo:**
-> - `api:seed:dev` — **auth/tenancy scaffold only**: 1 agency, 1 branch, 5 role
->   templates, 3 login users (super admin, agency owner, producer); **no CRM data**.
->   This is what Docker runs on API startup.
+> - `api:seed:dev` — **core / platform-required seed only**: the platform super
+>   admin (the one login), plus an **empty tenant scaffold** (1 agency, 1 branch,
+>   5 role templates) that the migration imports into. **No demo login users, no
+>   CRM data.** This is the minimum required for the app to function and is what
+>   Docker runs on API startup. Global catalog data (plans, feature definitions,
+>   constants) is seeded here too as those collections come online. For a
+>   populated agency to test against, use `api:seed:demo:dev` instead.
 > - `api:seed:demo:dev` — **full synthetic demo tenant** for local build/test
 >   (`src/seed/demo/`): the same "Smith Family Agency" + a 2nd branch, a complete
 >   role roster (owner, manager, 5 producers, 2 CRMs, data team — all
@@ -102,7 +106,7 @@ each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 - **Module keys** (`shared/src/enums/module-key.enum.ts`): `dashboard, leads, quote_recaps, mailers, crm_service, clients, deal_audits, onboardings, management, owner_dashboard, command_center, performance, leaderboard`. Toggled per agency by Super Admin; disabled ⇒ hidden nav + API 403.
 - **Permissions** (`shared/src/permissions/permission.constants.ts`): `"<module>:<read|write>"` + `platform:*` / `agency:*`. Effective set resolved in `resolve-permissions.ts` (role perms + grants − revokes, filtered to agency-enabled modules).
 - **Default role templates** (`shared/src/permissions/default-role-templates.ts`): Agency Owner (agency) · Branch Manager (branch) · Producer (**own**: `dashboard:read, leads:r/w, quote_recaps:r/w, performance:read, leaderboard:read`) · CRM (branch) · Data Team (agency).
-- **Migration key:** `User`/`TenantRecord` carry `legacySmartSuiteId`. Seed (`src/seed/seed.ts`) creates agency "Smith Family Agency", a Main branch, and three login users — **super admin, agency owner, and producer** (auth/tenancy scaffold only, no CRM data).
+- **Migration key:** `User`/`TenantRecord` carry `legacySmartSuiteId`. The core seed (`src/seed/seed.ts`) is **platform-required data only** — it creates the **platform super admin** plus an **empty tenant scaffold** (agency "Smith Family Agency" + Main branch + default roles) as the migration target. It creates **no demo login users and no CRM data**; a fully populated agency comes from the demo seed (`src/seed/demo/`).
 - **Schemas exist; read path does not.** Mongoose schemas now exist for every domain collection (`src/<domain>/schemas/*.schema.ts`, most extending `src/common/schemas/tenant-record.schema.ts`) and are populated by the SmartSuite→Mongo migration (`src/migration/`). The HTTP **feature controllers are still stubs** (`src/feature-modules/feature.controllers.ts`) returning `{ status: 'ready' }` — add real query services/DTOs there as dashboards get wired.
 
 ---
@@ -162,6 +166,13 @@ temperature/aging that aren't first-class in legacy payloads. See
 - `docs/form-pipeline/` — Lead→Quote→Sold→Audit spec (`Form Pipeline Technical Specification.md`) + architecture guide.
 - `docs/product/Figma Mockups.md` — design system + product direction (owner notes).
 - `docs/smartsuite-tables/` — legacy SmartSuite data model (migration source-of-record).
+- `bruno/` — **API surface source-of-truth**: a version-controlled Bruno
+  collection of every implemented endpoint (URL, params, headers, body,
+  response shape, module + permission, error codes) in each request's `docs`
+  block. **Read this first to understand what the API exposes / how to call it**
+  before grepping controllers. Run it with
+  `cd bruno && npx @usebruno/cli run --env Local` → see `bruno/README.md` and
+  `.cursor/rules/api-bruno-docs.mdc`.
 - `./agencyops_fe_mockups/` — **read-only symlink** to the Figma FE mockups repo
   (design screenshots, exported React components/CSS, per-dashboard `guidelines/`).
   UI design source-of-truth — see `.cursor/rules/figma-mockups-reference.mdc`.
@@ -209,6 +220,7 @@ Chakra, etc.).
 
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
+- **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.cursor/rules/api-bruno-docs.mdc` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
 - Forms: prefer `react-hook-form` + `zod` resolvers.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).

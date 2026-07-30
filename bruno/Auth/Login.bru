@@ -1,0 +1,93 @@
+meta {
+  name: Login
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{producerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Capture tokens as runtime variables so every other request inherits the
+  // collection-level bearer auth automatically. Runtime vars are in-memory
+  // only (never written to disk), so tokens are never committed to Git.
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    const body = res.getBody();
+    bru.setVar("accessToken", body.accessToken);
+    bru.setVar("refreshToken", body.refreshToken);
+    if (body.user && body.user.branchId) {
+      bru.setVar("branchId", body.user.branchId);
+    }
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns an access + refresh token", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("accessToken");
+    expect(body).to.have.property("refreshToken");
+    expect(body).to.have.property("user");
+  });
+}
+
+docs {
+  # POST /auth/login
+
+  Public. Exchange email + password for a JWT access/refresh token pair.
+
+  **Body**
+  | field    | type   | rules                     |
+  |----------|--------|---------------------------|
+  | email    | string | valid email               |
+  | password | string | non-empty, min length 8   |
+
+  **Response `201`**
+  ```json
+  {
+    "accessToken": "<jwt>",
+    "refreshToken": "<jwt>",
+    "user": {
+      "id": "...",
+      "email": "producer@smithfamily.local",
+      "name": "Pat Producer",
+      "roles": ["Producer"],
+      "agencyId": "...",
+      "branchId": "...",
+      "permissions": ["dashboard:read", "leads:read", "..."],
+      "scope": "user",
+      "dataScope": "own",
+      "isPlatformAdmin": false
+    }
+  }
+  ```
+
+  **Errors** — `401 Unauthorized` on invalid credentials or an inactive user.
+
+  > Access token TTL defaults to `15m`, refresh to `7d`
+  > (`JWT_ACCESS_EXPIRES` / `JWT_REFRESH_EXPIRES`). When the access token
+  > expires, use **Refresh Token**.
+
+  ## Demo logins (from `npm run api:seed:demo:dev`)
+  All use the password `ChangeMe123!` (`SEED_DEFAULT_PASSWORD`):
+  - `producer@smithfamily.local` — Producer, `own` scope (data-rich hero user)
+  - `manager@smithfamily.local` — Branch Manager, `branch` scope
+  - `owner@smithfamily.local` — Agency Owner, `agency` scope
+}

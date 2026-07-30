@@ -4,7 +4,6 @@ import {
   ContactsController,
   CrmServiceController,
   DashboardController,
-  DealAuditsController,
   DealsController,
   FilesController,
   HouseholdsController,
@@ -18,6 +17,8 @@ import {
   QuoteRecapsController,
 } from './feature.controllers';
 
+// NOTE: `deal-audits` is now served by the real `DealAuditsModule`
+// (see src/deal-audits), so its stub controller is intentionally omitted here.
 const controllers = [
   DashboardController,
   ContactsController,
@@ -25,7 +26,6 @@ const controllers = [
   LeadsController,
   QuoteRecapsController,
   DealsController,
-  DealAuditsController,
   CrmServiceController,
   PerformanceController,
   LeaderboardController,

@@ -10,6 +10,7 @@ import { ModuleGuard } from './common/guards/module.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { TenantGuard } from './common/guards/tenant.guard';
 import { BranchesModule } from './branches/branches.module';
+import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
 import { HealthController } from './health.controller';
 import { PermissionsModule } from './permissions/permissions.module';
@@ -34,6 +35,7 @@ import { ENV_FILE_PATH } from './config/env.config';
     BranchesModule,
     RolesModule,
     UsersModule,
+    DealAuditsModule,
     FeatureModulesModule,
   ],
   controllers: [HealthController],

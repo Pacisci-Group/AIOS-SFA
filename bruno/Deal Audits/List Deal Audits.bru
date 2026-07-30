@@ -1,0 +1,109 @@
+meta {
+  name: List Deal Audits
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/deal-audits?page=1&pageSize=8
+  body: none
+  auth: inherit
+}
+
+params:query {
+  page: 1
+  pageSize: 8
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("page");
+    expect(body).to.have.property("pageSize");
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body).to.have.property("items");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("rows are masked (no raw ObjectId in ref)", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      expect(items[0].ref).to.match(/^AUD-\d{4}-\d{4}$/);
+    }
+  });
+}
+
+docs {
+  # GET /deal-audits — Deals Pending Service Hand-off (PAC-12)
+
+  Producer Dashboard "Deals Pending Service Hand-off" board (**read only**).
+  Returns audit items that **failed** and are **not yet resolved**, scoped to
+  the caller and sorted oldest-open first.
+
+  - **Module:** `deal_audits` (must be enabled for the agency)
+  - **Permission:** `deal_audits:read`
+  - **Data scope** (enforced in the service layer):
+    - `own` → only the caller's own deals' items (`producerId = user`)
+    - `branch` → items in the caller's branch (or the `X-Branch-Id` branch)
+    - `agency` → all items in the agency
+
+  ## Query params
+  | param    | type | default | rules            |
+  |----------|------|---------|------------------|
+  | page     | int  | 1       | min 1 (1-based)  |
+  | pageSize | int  | 8       | min 1, max 50    |
+
+  ## Headers
+  - `Authorization: Bearer <accessToken>` — inherited from the collection.
+  - `X-Branch-Id` *(optional)* — disabled by default. Only relevant for
+    `branch`/`agency` callers who want to target a specific branch; ignored for
+    producers (`own` scope). Enable the header to send it.
+
+  ## Response `200`
+  ```json
+  {
+    "page": 1,
+    "pageSize": 8,
+    "total": 12,
+    "totalPages": 2,
+    "items": [
+      {
+        "id": "665f...ac1",
+        "ref": "AUD-2026-0042",
+        "client": "Jane Homeowner",
+        "type": "Home",
+        "missing": "Wind/Hail Inspection Report",
+        "daysOpen": 9
+      }
+    ]
+  }
+  ```
+
+  Row fields:
+  | field    | type   | notes                                                   |
+  |----------|--------|---------------------------------------------------------|
+  | id       | string | raw record id (opaque; UI shows `ref`)                  |
+  | ref      | string | masked, human-readable label `AUD-<year>-<seq>`         |
+  | client   | string | client name (`"Unknown Client"` fallback)              |
+  | type     | enum   | linked deal type: `Auto` \| `Home` \| `Bundle` \| `Other` |
+  | missing  | string | the failed/missing requirement (audit item name)        |
+  | daysOpen | number | days the item has been open (oldest first)              |
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `deal_audits` module disabled, or missing
+    `deal_audits:read`, or a branch mismatch for a branch-scoped caller.
+  - `400 Bad Request` — invalid query params (e.g. `pageSize` > 50, `page` < 1).
+
+  > **Tip:** the seeded producer (`producer@smithfamily.local`) is the
+  > data-rich user for this board. Log in as them to get non-empty results.
+}
