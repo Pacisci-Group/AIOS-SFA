@@ -1,13 +1,17 @@
 # AGENTS.md — AIOS-SFA (new platform)
 
-> Auto-loaded when Cursor is opened at the `AIOS-SFA/` repo root. This is the
-> **new, greenfield replacement** for the legacy SFA app. Two read-only reference
+> Auto-loaded by coding agents opened at the `AIOS-SFA/` repo root (Claude Code
+> reads it via the `@AGENTS.md` import in `CLAUDE.md`). This is the
+> **new, greenfield replacement** for the legacy SFA app. Three read-only reference
 > checkouts are symlinked in (gitignored, never committed here):
 > - `./SFA` → legacy Next.js app, **source-of-truth for behaviour** being ported —
->   see `.cursor/rules/legacy-sfa-reference.mdc`.
+>   see `.claude/rules/legacy-sfa-reference.md`.
 > - `./agencyops_fe_mockups` → Figma FE mockups (design screenshots + exported
 >   React components/CSS + agent-context docs), **source-of-truth for UI/design** —
->   see `.cursor/rules/figma-mockups-reference.mdc`.
+>   see `.claude/rules/figma-mockups-reference.md`.
+> - `./sfaforms` → standalone Next.js prototype of the Lead→Quote→Sold→Audit
+>   intake forms (localStorage mock API), **behavioural reference for the native
+>   forms** replacing Fillout — see `.claude/rules/sfaforms-reference.md`.
 
 ---
 
@@ -84,7 +88,7 @@ Env: copy `.env.example` → `.env`. Deployment notes in `DEPLOYMENT.md`.
 Dev "Screen Navigator" at `/` (`src/pages/DevNavPage.tsx`) links all 7; routes in
 `src/app/App.tsx`, all behind `ProtectedRoute`. The **design source-of-truth** for
 each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
-(read-only symlink — see `.cursor/rules/figma-mockups-reference.mdc`).
+(read-only symlink — see `.claude/rules/figma-mockups-reference.md`).
 
 | Screen | Route | Persona | Design mockup folder |
 |---|---|---|---|
@@ -163,7 +167,7 @@ temperature/aging that aren't first-class in legacy payloads. See
 
 - `docs/SYSTEM_ARCHITECTURE.md` — new system architecture (v1.0) + `docs/diagrams/`.
 - `docs/SESSION-HANDOFF.md` — most up-to-date session state, mappings, open questions. **Start here for continuation.**
-- `docs/form-pipeline/` — Lead→Quote→Sold→Audit spec (`Form Pipeline Technical Specification.md`) + architecture guide.
+- `docs/form-pipeline/` — Lead→Quote→Sold→Audit spec (`Form Pipeline Technical Specification.md`) + architecture guide. Working prototype of the same flow lives in `./sfaforms` (read-only symlink — see `.claude/rules/sfaforms-reference.md`).
 - `docs/product/Figma Mockups.md` — design system + product direction (owner notes).
 - `docs/smartsuite-tables/` — legacy SmartSuite data model (migration source-of-record).
 - `bruno/` — **API surface source-of-truth**: a version-controlled Bruno
@@ -172,10 +176,10 @@ temperature/aging that aren't first-class in legacy payloads. See
   block. **Read this first to understand what the API exposes / how to call it**
   before grepping controllers. Run it with
   `cd bruno && npx @usebruno/cli run --env Local` → see `bruno/README.md` and
-  `.cursor/rules/api-bruno-docs.mdc`.
+  `.claude/rules/api-bruno-docs.md`.
 - `./agencyops_fe_mockups/` — **read-only symlink** to the Figma FE mockups repo
   (design screenshots, exported React components/CSS, per-dashboard `guidelines/`).
-  UI design source-of-truth — see `.cursor/rules/figma-mockups-reference.mdc`.
+  UI design source-of-truth — see `.claude/rules/figma-mockups-reference.md`.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**
@@ -213,14 +217,14 @@ Chakra, etc.).
   `emerald-500` `#10B981`, `slate-{200,400,500}`). This keeps the designer's look
   intact **and** gives us light/dark theming for free.
 - **Match the mockups.** `./agencyops_fe_mockups` is still the visual
-  source-of-truth (see `.cursor/rules/figma-mockups-reference.mdc`); port layout
+  source-of-truth (see `.claude/rules/figma-mockups-reference.md`); port layout
   and spacing onto shadcn primitives + tokens.
 
 ### General
 
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
-- **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.cursor/rules/api-bruno-docs.mdc` and `bruno/README.md`.
+- **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.claude/rules/api-bruno-docs.md` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
 - Forms: prefer `react-hook-form` + `zod` resolvers.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).

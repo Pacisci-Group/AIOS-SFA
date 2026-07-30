@@ -16,6 +16,7 @@ import { HealthController } from './health.controller';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PlatformModule } from './platform/platform.module';
 import { RolesModule } from './roles/roles.module';
+import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
 import { ENV_FILE_PATH } from './config/env.config';
 
@@ -35,6 +36,7 @@ import { ENV_FILE_PATH } from './config/env.config';
     BranchesModule,
     RolesModule,
     UsersModule,
+    StorageModule,
     DealAuditsModule,
     FeatureModulesModule,
   ],

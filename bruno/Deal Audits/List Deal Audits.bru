@@ -19,6 +19,17 @@ headers {
   ~X-Branch-Id: {{branchId}}
 }
 
+script:post-response {
+  // Capture the first row's id so the Presign / Resolve requests have an item
+  // to act on. Runtime-only var (never persisted to disk).
+  if (res.getStatus() === 200) {
+    const items = res.getBody().items;
+    if (items && items.length > 0) {
+      bru.setVar("dealAuditItemId", items[0].id);
+    }
+  }
+}
+
 tests {
   test("returns 200 OK", function () {
     expect(res.getStatus()).to.equal(200);

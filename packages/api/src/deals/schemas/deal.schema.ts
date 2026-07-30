@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { TenantRecord } from '../../common/schemas/tenant-record.schema';
+import {
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+  TenantRecord,
+} from '../../common/schemas/tenant-record.schema';
 
 export type DealDocument = HydratedDocument<Deal>;
 
@@ -87,6 +90,6 @@ export class Deal extends TenantRecord {
 export const DealSchema = SchemaFactory.createForClass(Deal);
 DealSchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
-  { unique: true, sparse: true },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 DealSchema.index({ agencyId: 1, producerId: 1, soldDate: -1 });

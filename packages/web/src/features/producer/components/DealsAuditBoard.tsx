@@ -49,9 +49,9 @@ export function DealsAuditBoard() {
   const totalPages = data?.totalPages ?? 1;
 
   const handleResolved = (id: string) => {
-    // Read-only board: there is no resolve endpoint yet (a future write story
-    // will persist this). Optimistically drop the row so the panel feels
-    // responsive against the current page's cache.
+    // The item was persisted as resolved by the API and now drops off the board.
+    // Optimistically remove the row for instant feedback, then invalidate so the
+    // list (and pagination/counts) reconciles with the server.
     queryClient.setQueryData<DealAuditListResponse>(
       ["deal-audits", page],
       (prev) =>
@@ -63,6 +63,7 @@ export function DealsAuditBoard() {
             }
           : prev,
     );
+    void queryClient.invalidateQueries({ queryKey: ["deal-audits"] });
   };
 
   return (

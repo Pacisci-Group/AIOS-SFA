@@ -7,11 +7,17 @@ coverage
 .DS_Store
 
 # Local project folders / symlinks (not pushed)
-# Read-only reference to the legacy SFA app (see .cursor/rules/legacy-sfa-reference.mdc)
+# Read-only reference to the legacy SFA app (see .claude/rules/legacy-sfa-reference.md)
 /SFA
 SFA/
-# Read-only reference to the Figma FE mockups repo (see .cursor/rules/figma-mockups-reference.mdc)
+# Read-only reference to the Figma FE mockups repo (see .claude/rules/figma-mockups-reference.md)
 /agencyops_fe_mockups
 agencyops_fe_mockups/
 agencyops/
+# Read-only reference to the sfaforms prototype (see .claude/rules/sfaforms-reference.md)
+/sfaforms
 sfaforms/
+
+# Claude Code — personal, machine-local config (.claude/rules/ IS committed)
+.claude/settings.local.json
+CLAUDE.local.md

@@ -1,13 +1,24 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { TenantRecord } from '../../common/schemas/tenant-record.schema';
+import {
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+  TenantRecord,
+} from '../../common/schemas/tenant-record.schema';
 
 export type ActivityDocument = HydratedDocument<Activity>;
 
 export type ActivityType =
-  'lead_created' | 'quoted' | 'sold' | 'call' | 'text' | 'email' | 'note';
+  | 'lead_created'
+  | 'quoted'
+  | 'sold'
+  | 'call'
+  | 'text'
+  | 'email'
+  | 'note'
+  | 'audit_resolved';
 
-export type ActivitySubjectType = 'lead' | 'deal' | 'quoteRecap';
+export type ActivitySubjectType =
+  'lead' | 'deal' | 'quoteRecap' | 'dealAuditItem';
 
 /**
  * Derived activity/timeline collection. Seeded from lead/quote/deal lifecycle events
@@ -50,6 +61,6 @@ export class Activity extends TenantRecord {
 export const ActivitySchema = SchemaFactory.createForClass(Activity);
 ActivitySchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
-  { unique: true, sparse: true },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 ActivitySchema.index({ agencyId: 1, producerId: 1, occurredAt: -1 });

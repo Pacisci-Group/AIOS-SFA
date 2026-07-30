@@ -1,8 +1,3 @@
----
-description: Where the legacy SFA app lives and how to use it as read-only migration reference
-alwaysApply: true
----
-
 # Legacy SFA app — read-only reference
 
 The old **SFA** app (Next.js 14, being retired) is available inside this repo at
