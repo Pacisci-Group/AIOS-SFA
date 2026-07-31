@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import type { NormalizedLeadSource } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
@@ -9,11 +10,6 @@ export type DealDocument = HydratedDocument<Deal>;
 
 export type DealType = 'Auto' | 'Home' | 'Bundle' | 'Other';
 export type PremiumSource = 'rollup' | 'snapshot' | 'none';
-
-export interface NormalizedLeadSource {
-  code: string | null;
-  label: string;
-}
 
 /**
  * Migrated from SmartSuite "The Deals (Sold Log) Table" (6941fdb2dc9a6d024fd8c3a1).

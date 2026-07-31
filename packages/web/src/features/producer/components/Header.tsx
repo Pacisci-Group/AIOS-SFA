@@ -1,9 +1,8 @@
-import { Search, Plus, Bell } from "lucide-react";
+import { Search, Bell } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { usePermissions } from "@/hooks/usePermissions";
+import { AddLeadButton } from "@/components/leads/AddLeadButton";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const timeFilters = ["Today", "This Week", "This Month", "Last Month", "Custom"];
@@ -28,7 +27,6 @@ function deriveFirstName(
 export function Header({ activeFilter, onFilterChange }: HeaderProps) {
   const [search, setSearch] = useState("");
   const { user } = useAuth();
-  const { canWrite } = usePermissions();
 
   const firstName = deriveFirstName(user?.name, user?.email);
 
@@ -79,12 +77,7 @@ export function Header({ activeFilter, onFilterChange }: HeaderProps) {
             <Bell size={16} />
             <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
           </button>
-          {canWrite("leads") && (
-            <Button className="bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110 active:scale-95 shadow-[0_0_20px_rgba(56,189,248,0.25)]">
-              <Plus size={15} />
-              Add New Lead
-            </Button>
-          )}
+          <AddLeadButton />
         </div>
       </div>
 

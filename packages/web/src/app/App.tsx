@@ -27,6 +27,7 @@ const TicketWorkspacePage = lazy(
 const HouseholdDetailsPage = lazy(
   () => import('@/features/household/HouseholdDetailsPage'),
 );
+const LeadsPage = lazy(() => import('@/features/lead/LeadsPage'));
 const LeadDetailsPage = lazy(() => import('@/features/lead/LeadDetailsPage'));
 const RolePermissionsPage = lazy(
   () => import('@/features/admin/RolePermissionsPage'),
@@ -80,7 +81,7 @@ function RoleLanding() {
     return <Navigate to="/clients/demo" replace />;
   }
   if (canRead(ModuleKey.Leads)) {
-    return <Navigate to="/leads/demo" replace />;
+    return <Navigate to="/leads" replace />;
   }
   return <DevNavPage />;
 }
@@ -189,6 +190,14 @@ export function App() {
                   <RequirePermission permission={`${ModuleKey.Leads}:read`} />
                 }
               >
+                <Route
+                  path="/leads"
+                  element={
+                    <LazyPage>
+                      <LeadsPage />
+                    </LazyPage>
+                  }
+                />
                 <Route
                   path="/leads/:id"
                   element={

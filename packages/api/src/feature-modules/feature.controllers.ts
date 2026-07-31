@@ -44,10 +44,6 @@ export const HouseholdsController = createFeatureController(
   'households',
   ModuleKey.Clients,
 );
-export const LeadsController = createFeatureController(
-  'leads',
-  ModuleKey.Leads,
-);
 export const QuoteRecapsController = createFeatureController(
   'quote-recaps',
   ModuleKey.QuoteRecaps,

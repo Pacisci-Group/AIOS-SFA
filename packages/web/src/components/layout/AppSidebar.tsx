@@ -43,7 +43,7 @@ const NAV_SECTIONS: NavSection[] = [
         module: ModuleKey.Dashboard,
       },
       {
-        to: "/leads/demo",
+        to: "/leads",
         label: "Leads",
         icon: Users,
         module: ModuleKey.Leads,

@@ -16,6 +16,7 @@ the auth endpoints you need to call them.
 | Auth | Login | `POST /auth/login` | Public. Captures tokens into the env. |
 | Auth | Refresh Token | `POST /auth/refresh` | Public. Rotates the token pair. |
 | Deal Audits | List Deal Audits | `GET /deal-audits` | **PAC-12** — Deals Pending Service Hand-off (read). `deal_audits:read`. |
+| Leads | List Leads | `GET /leads` | **PAC-36** — Leads list: search, filters, pagination (read). `leads:read`. |
 
 ## Prerequisites
 

@@ -255,7 +255,7 @@ export const CARRIERS = [
   'Farmers',
 ] as const;
 
-/** Canonical lead-source choice codes (see migration/helpers/lead-sources.ts). */
+/** Canonical lead-source choice codes (see `CANONICAL_LEAD_SOURCES` in @sfa/shared). */
 export const LEAD_SOURCE_CODES = [
   'WCO7l', // Mailer
   'GVCgc', // Book of Business
@@ -269,12 +269,23 @@ export const LEAD_SOURCE_CODES = [
   'ymZHL', // JYA
 ] as const;
 
-export const LEAD_STATUSES = [
+/**
+ * Statuses the demo seed picks from — weighted toward the top of the pipeline so
+ * the Leads page has plenty of New/Contacted rows. Every value must be one of
+ * the canonical `LEAD_STATUSES` in @sfa/shared (PAC-36); the previous list used
+ * `Working`/`Won`, which are not real SmartSuite choices and so fell outside the
+ * status filter.
+ */
+export const DEMO_LEAD_STATUSES = [
+  'New',
   'New',
   'Contacted',
-  'Working',
+  'Contacted',
+  'Qualified',
   'Quoted',
-  'Won',
+  'Requote',
+  'Sold',
+  'Not Qualified',
   'Lost',
 ] as const;
 

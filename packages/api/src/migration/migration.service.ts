@@ -63,7 +63,7 @@ import {
   toText,
   toYmd,
 } from './helpers/value-utils';
-import { isTestRecord, normalizeLeadSource } from './helpers/lead-sources';
+import { isTestRecord, normalizeLeadSource } from '@sfa/shared';
 import {
   daysSince,
   deriveDealType,

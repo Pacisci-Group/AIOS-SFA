@@ -1,0 +1,177 @@
+meta {
+  name: List Leads
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/leads?page=1&pageSize=50
+  body: none
+  auth: inherit
+}
+
+params:query {
+  page: 1
+  pageSize: 50
+  ~search: rodriguez
+  ~status: New
+  ~temperature: Hot
+  ~leadSource: Mailer
+  ~producerId: {{producerId}}
+  ~dateFrom: 2026-01-01
+  ~dateTo: 2026-12-31
+  ~scope: own
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // Capture the first row's id for the Lead Detail requests (PAC-38).
+  // Runtime-only var (never persisted to disk).
+  if (res.getStatus() === 200) {
+    const items = res.getBody().items;
+    if (items && items.length > 0) {
+      bru.setVar("leadId", items[0].id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("page");
+    expect(body).to.have.property("pageSize");
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body).to.have.property("items");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("rows expose only display fields (no internals leak)", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      const row = items[0];
+      expect(row).to.have.property("name");
+      expect(row).to.have.property("status");
+      expect(row).to.have.property("temperature");
+      expect(row).to.not.have.property("legacySmartSuiteId");
+      expect(row).to.not.have.property("legacyProducerId");
+      expect(row).to.not.have.property("isTestRecord");
+      expect(row).to.not.have.property("agencyId");
+    }
+  });
+
+  test("status is a normalized label, never a raw SmartSuite code", function () {
+    const items = res.getBody().items;
+    const rawCodes = ["arW7O", "phjnb", "jp76g", "hfwda"];
+    items.forEach(function (row) {
+      expect(rawCodes).to.not.include(row.status);
+    });
+  });
+}
+
+docs {
+  # GET /leads — Leads list (PAC-36)
+
+  The read path behind the `/leads` page: the caller's leads, filtered and
+  searched **entirely server-side** and sorted by last activity (newest first).
+
+  Because nothing is post-filtered in memory, `total` and the page arithmetic
+  are exact for every filter/search combination — a deliberate behaviour change
+  from the legacy SmartSuite-backed endpoint, whose totals were window-local.
+
+  - **Module:** `leads` (must be enabled for the agency)
+  - **Permission:** `leads:read`
+  - **Data scope** (enforced in the service layer, never the controller):
+    - `own` → only the caller's own leads (`producerId = user`). A
+      `scope=agency` or foreign `producerId` in the query is **silently
+      ignored** — it never errors and never widens the result set.
+    - `branch` → leads in the caller's branch (or the `X-Branch-Id` branch);
+      a supplied `producerId` narrows *within* the branch.
+    - `agency` → all leads in the agency.
+  - Records flagged `isTestRecord` are always excluded.
+
+  ## Query params
+  | param       | type   | default | rules                                              |
+  |-------------|--------|---------|----------------------------------------------------|
+  | page        | int    | 1       | min 1 (1-based)                                    |
+  | pageSize    | int    | 50      | min 1, max 100                                     |
+  | search      | string | —       | max 120 chars; interpreted by shape (see below)    |
+  | status      | string | —       | canonical label, e.g. `New`, `Requote`             |
+  | temperature | enum   | —       | `Hot` \| `Warm` \| `Cold` \| `Unknown`             |
+  | leadSource  | string | —       | canonical label, e.g. `Mailer`                     |
+  | producerId  | string | —       | ObjectId; ignored for `own` scope                  |
+  | dateFrom    | date   | —       | filters `createdDate` (inclusive)                  |
+  | dateTo      | date   | —       | filters `createdDate` (inclusive, whole day)       |
+  | scope       | enum   | —       | `own` \| `agency`; clamped to the caller's scope   |
+
+  ### How `search` is interpreted
+  One branch is chosen by the shape of the query:
+
+  1. contains `@` → **email** match across the `emails` array
+  2. else ≥ 7 digits after stripping non-digits → **phone** (digit-tolerant, so
+     `5551234` matches `(555) 123-4xxx`) **or** quote control number
+  3. else → **name** (first, last, or the combined `first last`), **lead source
+     label**, or **quote control number**
+
+  Note `status` accepts the canonical label and matches migrated documents that
+  store the raw SmartSuite code — filtering `Requote` also finds `arW7O`.
+
+  ## Headers
+  - `Authorization: Bearer <accessToken>` — inherited from the collection.
+  - `X-Branch-Id` *(optional)* — disabled by default. Only relevant for
+    `branch`/`agency` callers targeting a specific branch; ignored for
+    producers (`own` scope).
+
+  ## Response `200`
+  ```json
+  {
+    "page": 1,
+    "pageSize": 50,
+    "total": 40,
+    "totalPages": 1,
+    "items": [
+      {
+        "id": "665f...ac1",
+        "name": "Maria Rodriguez",
+        "leadSource": "Mailer",
+        "status": "New",
+        "temperature": "Hot",
+        "phone": "5551234567",
+        "email": "maria.rodriguez@example.com",
+        "updatedAt": "2026-07-28T14:02:11.000Z"
+      }
+    ]
+  }
+  ```
+
+  Row fields:
+  | field       | type           | notes                                                    |
+  |-------------|----------------|----------------------------------------------------------|
+  | id          | string         | record id — the only identifier exposed                  |
+  | name        | string         | `first last`, or `"Unknown Lead"` when both are empty    |
+  | leadSource  | string         | normalized label, never a raw choice code                |
+  | status      | string         | canonical label — `arW7O` is normalized to `Requote`     |
+  | temperature | enum           | `Hot` \| `Warm` \| `Cold` \| `Unknown`                   |
+  | phone       | string \| null | first phone as stored; the client formats it             |
+  | email       | string \| null | first email                                              |
+  | updatedAt   | string \| null | ISO last-activity timestamp; drives the default sort     |
+
+  No `legacy*` ids, `isTestRecord`, `agencyId`/`branchId`, or raw documents are
+  ever returned.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, or missing `leads:read`.
+  - `400 Bad Request` — invalid query params (e.g. `pageSize` > 100, `page` < 1,
+    an unknown `temperature`, an unparseable `dateFrom`/`dateTo`).
+
+  > **Tip:** the seeded producer (`producer@smithfamily.local`) is the
+  > data-rich user for this list. Log in as them to get non-empty results.
+}

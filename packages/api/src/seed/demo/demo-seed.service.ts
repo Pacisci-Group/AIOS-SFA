@@ -27,7 +27,7 @@ import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema'
 import { Activity } from '../../activities/schemas/activity.schema';
 import { PermissionsService } from '../../permissions/permissions.service';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
-import { normalizeLeadSource } from '../../migration/helpers/lead-sources';
+import { normalizeLeadSource } from '@sfa/shared';
 import {
   AUDIT_TEMPLATES,
   BRANCHES,
@@ -39,7 +39,7 @@ import {
   FIRST_NAMES,
   LAST_NAMES,
   LEAD_SOURCE_CODES,
-  LEAD_STATUSES,
+  DEMO_LEAD_STATUSES,
   POLICY_TYPE_SETS,
   SERVICE_CATEGORIES,
   SERVICE_PRIORITIES,
@@ -497,7 +497,7 @@ export class DemoSeedService {
         'Cold',
         'Unknown',
       ]);
-      const status = rng.pick(LEAD_STATUSES);
+      const status = rng.pick(DEMO_LEAD_STATUSES);
       const createdDate = this.daysAgo(rng.int(0, 45));
       const lastActivityAt = this.daysAgo(rng.int(0, 6));
       const source = normalizeLeadSource(rng.pick(LEAD_SOURCE_CODES));
