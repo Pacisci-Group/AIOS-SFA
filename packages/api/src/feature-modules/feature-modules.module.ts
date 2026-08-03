@@ -5,7 +5,6 @@ import {
   CrmServiceController,
   DashboardController,
   DealsController,
-  FilesController,
   HouseholdsController,
   LeaderboardController,
   MailersController,
@@ -13,17 +12,21 @@ import {
   OnboardingsController,
   OwnerDashboardController,
   PerformanceController,
-  QuoteRecapsController,
 } from './feature.controllers';
 
 // NOTE: `deal-audits` is now served by the real `DealAuditsModule`
-// (see src/deal-audits) and `leads` by the real `LeadsModule` (see src/leads),
-// so their stub controllers are intentionally omitted here.
+// (see src/deal-audits), `leads` by the real `LeadsModule` (see src/leads), and
+// `quote-recaps` by the real `QuoteRecapsModule` (see src/quote-recaps), so
+// their stub controllers are intentionally omitted here.
+//
+// `files` is gone entirely: it was a `@Controller('files')` placeholder that
+// borrowed the `quote_recaps` module key for want of a better one. The real
+// file API for quote documents is `POST /quote-recaps/quote-document/presign`,
+// and leaving a second route on the same gate was only ever confusing.
 const controllers = [
   DashboardController,
   ContactsController,
   HouseholdsController,
-  QuoteRecapsController,
   DealsController,
   CrmServiceController,
   PerformanceController,
@@ -33,7 +36,6 @@ const controllers = [
   ManagementController,
   OwnerDashboardController,
   CommandCenterController,
-  FilesController,
 ];
 
 @Module({

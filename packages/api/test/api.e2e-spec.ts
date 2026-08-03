@@ -1,16 +1,19 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
+import { Activity } from '../src/activities/schemas/activity.schema';
 import { TransactionRunner } from '../src/common/mongo/transaction.runner';
 import { Contact } from '../src/contacts/schemas/contact.schema';
 import { Household } from '../src/households/schemas/household.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
+import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
+import { StorageService } from '../src/storage/storage.service';
 import { User } from '../src/users/schemas/user.schema';
 import { authHeader, login } from './helpers/auth.helper';
 import {
@@ -428,11 +431,13 @@ describe('SFA API (e2e)', () => {
       { path: 'dashboard', module: ModuleKey.Dashboard },
       { path: 'contacts', module: ModuleKey.Clients },
       { path: 'households', module: ModuleKey.Clients },
-      { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
       { path: 'deals', module: ModuleKey.Clients },
-      // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14) and `leads`
-      // (LeadsModule / PAC-36) are real modules, not `{status:'ready'}` stubs —
-      // each is covered by its own describe block below.
+      // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14), `leads`
+      // (LeadsModule / PAC-36) and `quote-recaps` (QuoteRecapsModule / PAC-39)
+      // are real modules, not `{status:'ready'}` stubs — each is covered by its
+      // own describe block below. The `files` stub was removed with PAC-39: it
+      // borrowed the `quote_recaps` gate and the real file API is now
+      // `POST /quote-recaps/quote-document/presign`.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
@@ -441,7 +446,6 @@ describe('SFA API (e2e)', () => {
       { path: 'management', module: ModuleKey.Management },
       { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
-      { path: 'files', module: ModuleKey.QuoteRecaps },
     ];
 
     it.each(featureRoutes)(
@@ -453,22 +457,18 @@ describe('SFA API (e2e)', () => {
           .expect(200);
 
         const body = res.body as { module?: string; status: string };
-        if (path !== 'files') {
-          expect(body.module).toBe(module);
-        }
+        expect(body.module).toBe(module);
         expect(body.status).toBe('ready');
       },
     );
 
-    it('GET /api/v1/quote-recaps — producer with branch scope', async () => {
+    it('GET /api/v1/dashboard — producer with branch scope', async () => {
       const res = await request(app.getHttpServer())
-        .get('/api/v1/quote-recaps')
+        .get('/api/v1/dashboard')
         .set(authHeader(producerToken))
         .expect(200);
 
-      expect((res.body as { module: string }).module).toBe(
-        ModuleKey.QuoteRecaps,
-      );
+      expect((res.body as { module: string }).module).toBe(ModuleKey.Dashboard);
     });
 
     it('GET /api/v1/command-center — forbidden for producer', async () => {
@@ -478,14 +478,10 @@ describe('SFA API (e2e)', () => {
         .expect(403);
     });
 
-    it('PATCH /api/v1/quote-recaps — producer has write access', async () => {
-      const res = await request(app.getHttpServer())
-        .patch('/api/v1/quote-recaps')
-        .set(authHeader(producerToken))
-        .expect(200);
-
-      expect((res.body as { status: string }).status).toBe('updated');
-    });
+    // NOTE: there is no longer a stub route a *producer* can write to — the
+    // Producer template grants write on `leads` and `quote_recaps` only, and
+    // both are real modules now. Producer write access through the full guard
+    // chain is covered by "Quote Recaps (PAC-39 create)" below.
 
     it('PATCH /api/v1/performance — forbidden without write (read-only page)', async () => {
       // Producer role grants performance:read but not performance:write.
@@ -517,12 +513,11 @@ describe('SFA API (e2e)', () => {
 
   describe('Page-level permission guardrails', () => {
     // Every feature controller: GET requires `{module}:read`, and every mutating
-    // handler (PATCH) requires `{module}:write`. `files` is read-only (no PATCH).
+    // handler (PATCH) requires `{module}:write`.
     const mutatingFeatureRoutes = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
       { path: 'contacts', module: ModuleKey.Clients },
       { path: 'households', module: ModuleKey.Clients },
-      { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
       { path: 'deals', module: ModuleKey.Clients },
       // `deal-audits` write (resolve) is item-scoped, not a bare PATCH stub —
       // covered by its own describe block below. `leads` is read-only for now
@@ -573,9 +568,11 @@ describe('SFA API (e2e)', () => {
       },
     );
 
-    it('GET /api/v1/files — read-only user can read (read-only page)', async () => {
+    it('GET /api/v1/leaderboard — read-only user can read (read-only page)', async () => {
+      // Was `/files` until PAC-39 removed that stub. Any read-only-for-everyone
+      // page proves the same thing: read access does not imply write.
       await request(app.getHttpServer())
-        .get('/api/v1/files')
+        .get('/api/v1/leaderboard')
         .set(authHeader(readOnlyToken))
         .expect(200);
     });
@@ -1141,6 +1138,463 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Quote Recaps (PAC-39 create)', () => {
+    interface CreatedRecapBody {
+      id: string;
+      leadId: string;
+      premium: number;
+      itemCount: number;
+      productsQuoted: string[];
+      quoteDate: string;
+      leadStatus: string;
+    }
+
+    let quoteRecapModel: Model<QuoteRecap>;
+    let leadModel: Model<Lead>;
+    let householdModel: Model<Household>;
+    let activityModel: Model<Activity>;
+    let userModel: Model<User>;
+    let statSpy: jest.SpyInstance;
+
+    /**
+     * Object storage isn't running under test, so `statObject` is stubbed to
+     * report only the keys a test has "uploaded". That keeps the real
+     * verification path exercised — including the 404 for a key that never
+     * landed — without a MinIO dependency.
+     */
+    const uploaded = new Map<string, { size: number; contentType: string }>();
+
+    const keyFor = (leadId: string) =>
+      `agencies/${seed.agencyId}/quote-recaps/${leadId}/2026/quote.pdf`;
+
+    const upload = (
+      leadId: string,
+      stat = { size: 2048, contentType: 'application/pdf' },
+    ) => {
+      const key = keyFor(leadId);
+      uploaded.set(key, stat);
+      return key;
+    };
+
+    const payload = (
+      leadId: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      leadId,
+      policies: [{ policyType: 'Auto', premium: 1200.1, itemCount: 2 }],
+      sameAsHousehold: true,
+      quoteDocument: {
+        key: keyFor(leadId),
+        filename: 'quote.pdf',
+        contentType: 'application/pdf',
+        size: 2048,
+      },
+      ...overrides,
+    });
+
+    const createAs = async (token: string, body: unknown, expected = 201) => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/quote-recaps')
+        .set(authHeader(token))
+        .send(body)
+        .expect(expected);
+      return res.body as CreatedRecapBody;
+    };
+
+    /** A lead owned by the given producer, with a real household attached. */
+    const seedLead = async (
+      producerId: Types.ObjectId | undefined,
+      overrides: Record<string, unknown> = {},
+    ) => {
+      const household = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Quotable Household',
+        propertyAddress: {
+          street: '9 Quote Way',
+          city: 'Tulsa',
+          state: 'OK',
+          zip: '74101',
+        },
+      });
+      const lead = await leadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Quinn',
+        lastName: 'Quoted',
+        status: 'New',
+        producerId,
+        householdId: household._id,
+        ...overrides,
+      });
+      return { lead, household };
+    };
+
+    beforeAll(() => {
+      quoteRecapModel = app.get<Model<QuoteRecap>>(
+        getModelToken(QuoteRecap.name),
+      );
+      leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      householdModel = app.get<Model<Household>>(getModelToken(Household.name));
+      activityModel = app.get<Model<Activity>>(getModelToken(Activity.name));
+      userModel = app.get<Model<User>>(getModelToken(User.name));
+
+      statSpy = jest
+        .spyOn(app.get(StorageService), 'statObject')
+        .mockImplementation((key: string) =>
+          Promise.resolve(uploaded.get(key) ?? null),
+        );
+    });
+
+    afterAll(() => statSpy.mockRestore());
+
+    it('persists real lead + household refs, per-policy rows and derived totals', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead, household } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            { policyType: 'Auto', premium: 1200.1, itemCount: 2 },
+            { policyType: 'Home', premium: 899.95, itemCount: 1 },
+            // A repeated type must not be double-counted in `productsQuoted`.
+            { policyType: 'Auto', premium: 100, itemCount: 1 },
+          ],
+        }),
+      );
+
+      expect(body.id).toMatch(/^[a-f0-9]{24}$/);
+
+      const recap = await quoteRecapModel.findById(body.id);
+      expect(recap!.leadId?.toString()).toBe(lead._id.toString());
+      expect(recap!.householdId?.toString()).toBe(household._id.toString());
+      expect(recap!.policies).toHaveLength(3);
+      expect(recap!.producerId?.toString()).toBe(producer!._id.toString());
+      expect(recap!.quoteDate).toBeInstanceOf(Date);
+
+      // Derived server-side. `1200.10 + 899.95 + 100` is 2200.0499999999997 in
+      // IEEE-754 — the rounding is what keeps the Quoted scorecard honest.
+      expect(recap!.premium).toBe(2200.05);
+      expect(recap!.itemCount).toBe(4);
+      expect(recap!.productsQuoted).toEqual(['Auto', 'Home']);
+
+      // Echoed back so the totals are observable without a DB read.
+      expect(body.premium).toBe(2200.05);
+      expect(body.itemCount).toBe(4);
+      expect(body.productsQuoted).toEqual(['Auto', 'Home']);
+    });
+
+    it('ignores client-supplied totals — they are always recomputed', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          premium: 999_999,
+          itemCount: 999,
+          productsQuoted: ['Life'],
+        }),
+      );
+
+      expect(body.premium).toBe(1200.1);
+      expect(body.itemCount).toBe(2);
+      expect(body.productsQuoted).toEqual(['Auto']);
+    });
+
+    it('copies the household address when sameAsHousehold is set, discarding the client’s', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [{ policyType: 'Home', premium: 800, itemCount: 1 }],
+          sameAsHousehold: true,
+          propertyAddress: {
+            street: 'Somewhere Else',
+            city: 'X',
+            state: 'Y',
+            zip: '00000',
+          },
+        }),
+      );
+
+      const recap = await quoteRecapModel.findById(body.id);
+      expect(recap!.propertyAddress?.street).toBe('9 Quote Way');
+    });
+
+    it('resolves a migrated lead’s household via legacyHouseholdId and backfills it', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      // The migration writes only `legacyHouseholdId` on leads — never
+      // `householdId` — so without the fallback every migrated lead would 409.
+      const household = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Legacy Household',
+        legacySmartSuiteId: 'legacy-hh-pac39',
+      });
+      const lead = await leadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Milo',
+        lastName: 'Migrated',
+        status: 'hfwda', // migrated "Qualified"
+        producerId: producer!._id,
+        legacyHouseholdId: 'legacy-hh-pac39',
+      });
+      upload(lead._id.toString());
+
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+
+      const recap = await quoteRecapModel.findById(body.id);
+      expect(recap!.householdId?.toString()).toBe(household._id.toString());
+
+      const healed = await leadModel.findById(lead._id);
+      expect(healed!.householdId?.toString()).toBe(household._id.toString());
+      // A raw migrated status code must still advance.
+      expect(healed!.status).toBe('Quoted');
+    });
+
+    it('409s when the lead has no household at all', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const lead = await leadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Hugh',
+        lastName: 'Homeless',
+        producerId: producer!._id,
+      });
+      upload(lead._id.toString());
+
+      await createAs(producerToken, payload(lead._id.toString()), 409);
+    });
+
+    it('advances the lead forward only', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+
+      const advances = await seedLead(producer!._id, { status: 'New' });
+      upload(advances.lead._id.toString());
+      const advanced = await createAs(
+        producerToken,
+        payload(advances.lead._id.toString()),
+      );
+      expect(advanced.leadStatus).toBe('Quoted');
+
+      // Terminal statuses must never be dragged backwards by a late recap.
+      for (const status of ['Sold', 'Lost']) {
+        const stuck = await seedLead(producer!._id, { status });
+        upload(stuck.lead._id.toString());
+        const res = await createAs(
+          producerToken,
+          payload(stuck.lead._id.toString()),
+        );
+        expect(res.leadStatus).toBe(status);
+        expect((await leadModel.findById(stuck.lead._id))!.status).toBe(status);
+      }
+    });
+
+    it('writes a quoted activity linked to both the recap and the lead', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+
+      // Queried with a real ObjectId, as every production read path does.
+      // A raw string does not match on this model's ObjectId paths — that is
+      // true of the pre-existing `leadId` too, not something specific here.
+      const activity = await activityModel.findOne({
+        quoteRecapId: new Types.ObjectId(body.id),
+      });
+      expect(activity).not.toBeNull();
+      expect(activity!.type).toBe('quoted');
+      expect(activity!.subjectType).toBe('quoteRecap');
+      expect(activity!.leadId?.toString()).toBe(lead._id.toString());
+      // Explicit, or it would be mislabelled as migrated (the schema default).
+      expect(activity!.source).toBe('internal');
+    });
+
+    it('creates ONE recap when the same submission token is sent twice', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      const body = payload(lead._id.toString(), {
+        submissionToken: 'pac39-replay-token',
+      });
+      const first = await createAs(producerToken, body);
+      const second = await createAs(producerToken, body);
+
+      expect(second.id).toBe(first.id);
+      expect(await quoteRecapModel.countDocuments({ leadId: lead._id })).toBe(
+        1,
+      );
+    });
+
+    it('404s for a lead outside the caller’s data scope', async () => {
+      // Owner-created leads are assigned to the owner, so the producer (`own`
+      // scope) must not be able to attach a recap by editing the leadId param.
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const { lead } = await seedLead(owner!._id);
+      upload(lead._id.toString());
+
+      // A 404, not a 403: whether another producer's lead exists is not the
+      // caller's business.
+      await createAs(producerToken, payload(lead._id.toString()), 404);
+      expect(await quoteRecapModel.countDocuments({ leadId: lead._id })).toBe(
+        0,
+      );
+    });
+
+    it('404s for an unassigned lead under own scope', async () => {
+      const { lead } = await seedLead(undefined);
+      upload(lead._id.toString());
+      await createAs(producerToken, payload(lead._id.toString()), 404);
+    });
+
+    it('404s for a malformed or unknown lead id', async () => {
+      await createAs(producerToken, payload('not-an-object-id'), 400);
+      await createAs(producerToken, payload('0'.repeat(24)), 404);
+    });
+
+    it('rejects a caller without quote_recaps:write (403)', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      await request(app.getHttpServer())
+        .post('/api/v1/quote-recaps')
+        .set(authHeader(readOnlyToken))
+        .send(payload(lead._id.toString()))
+        .expect(403);
+    });
+
+    it('rejects an invalid body (400)', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      const id = lead._id.toString();
+      upload(id);
+
+      await createAs(producerToken, payload(id, { policies: [] }), 400);
+      await createAs(
+        producerToken,
+        payload(id, {
+          policies: [{ policyType: 'Auto', premium: 100, itemCount: 0 }],
+        }),
+        400,
+      );
+      // Raw SmartSuite codes are for *reading* legacy data, not for input.
+      await createAs(
+        producerToken,
+        payload(id, {
+          policies: [{ policyType: 'PYgez', premium: 100, itemCount: 1 }],
+        }),
+        400,
+      );
+      // The quote document is required (PAC-39 decision 4).
+      await createAs(
+        producerToken,
+        payload(id, { quoteDocument: undefined }),
+        400,
+      );
+      // A property policy with no address and no "same as household".
+      await createAs(
+        producerToken,
+        payload(id, {
+          policies: [{ policyType: 'Home', premium: 900, itemCount: 1 }],
+          sameAsHousehold: false,
+        }),
+        400,
+      );
+    });
+
+    it('404s when the declared document never landed in storage', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      // Deliberately not uploaded.
+      await createAs(producerToken, payload(lead._id.toString()), 404);
+    });
+
+    it('enforces type and size from storage, not from the client’s claim', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+
+      const big = await seedLead(producer!._id);
+      upload(big.lead._id.toString(), {
+        size: 11 * 1024 * 1024,
+        contentType: 'application/pdf',
+      });
+      // The body still declares a legal 2048 bytes — only HeadObject knows.
+      await createAs(producerToken, payload(big.lead._id.toString()), 400);
+
+      const wrongType = await seedLead(producer!._id);
+      upload(wrongType.lead._id.toString(), {
+        size: 2048,
+        contentType: 'application/zip',
+      });
+      await createAs(
+        producerToken,
+        payload(wrongType.lead._id.toString()),
+        400,
+      );
+    });
+
+    it('rejects a document key belonging to another agency or lead (400)', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      const foreignKey = 'agencies/someone-else/quote-recaps/x/2026/quote.pdf';
+      uploaded.set(foreignKey, { size: 2048, contentType: 'application/pdf' });
+
+      await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          quoteDocument: {
+            key: foreignKey,
+            filename: 'quote.pdf',
+            contentType: 'application/pdf',
+            size: 2048,
+          },
+        }),
+        400,
+      );
+    });
+
+    it('GET /quote-recaps/context returns the lead + household header', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead, household } = await seedLead(producer!._id);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/quote-recaps/context?leadId=${lead._id.toString()}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const context = res.body as {
+        primaryContactName: string;
+        householdId: string | null;
+        householdAddress: { street: string } | null;
+        leadStatus: string;
+      };
+      expect(context.primaryContactName).toBe('Quinn Quoted');
+      expect(context.householdId).toBe(household._id.toString());
+      expect(context.householdAddress?.street).toBe('9 Quote Way');
+      expect(context.leadStatus).toBe('New');
+    });
+
+    it('GET /quote-recaps/context 404s outside the caller’s scope', async () => {
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const { lead } = await seedLead(owner!._id);
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/quote-recaps/context?leadId=${lead._id.toString()}`)
+        .set(authHeader(producerToken))
+        .expect(404);
+    });
+  });
+
   describe('Lead share links (PAC-37)', () => {
     interface ShareLinkBody {
       id: string;
@@ -1516,11 +1970,20 @@ describe('SFA API (e2e)', () => {
       expect(claims.dataScope).toBeUndefined();
     });
 
+    // `quote-recaps` is a real module now (PAC-39), so these probes hit real
+    // endpoints. Guards run *before* validation pipes in Nest, so an empty body
+    // / unknown lead cleanly separates the two outcomes we care about:
+    //   permission granted  -> 400 (write) / 404 (read)  — the guard let it through
+    //   permission revoked  -> 403                        — the guard stopped it
+    // That keeps this block about authorization and creates no data.
+    const MISSING_LEAD_ID = '0'.repeat(24);
+
     it('baseline: producer token can write quote recaps', async () => {
       await request(app.getHttpServer())
-        .patch('/api/v1/quote-recaps')
+        .post('/api/v1/quote-recaps')
         .set(authHeader(liveToken))
-        .expect(200);
+        .send({})
+        .expect(400);
     });
 
     it('owner downgrading the user takes effect on the next request (same token)', async () => {
@@ -1534,14 +1997,15 @@ describe('SFA API (e2e)', () => {
 
       // Same token as before — write is now revoked, read still works.
       await request(app.getHttpServer())
-        .patch('/api/v1/quote-recaps')
+        .post('/api/v1/quote-recaps')
         .set(authHeader(liveToken))
+        .send({})
         .expect(403);
 
       await request(app.getHttpServer())
-        .get('/api/v1/quote-recaps')
+        .get(`/api/v1/quote-recaps/context?leadId=${MISSING_LEAD_ID}`)
         .set(authHeader(liveToken))
-        .expect(200);
+        .expect(404);
     });
 
     it('deactivating the user blocks the next request even with a valid token', async () => {
@@ -1555,7 +2019,7 @@ describe('SFA API (e2e)', () => {
       await app.get(AccessResolverService).invalidateUser(liveUserId);
 
       await request(app.getHttpServer())
-        .get('/api/v1/quote-recaps')
+        .get(`/api/v1/quote-recaps/context?leadId=${MISSING_LEAD_ID}`)
         .set(authHeader(liveToken))
         .expect(401);
     });

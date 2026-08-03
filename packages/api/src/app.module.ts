@@ -22,6 +22,7 @@ import {
 import { BranchesModule } from './branches/branches.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { LeadsModule } from './leads/leads.module';
+import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
 import { HealthController } from './health.controller';
 import { PermissionsModule } from './permissions/permissions.module';
@@ -66,6 +67,7 @@ import { ENV_FILE_PATH } from './config/env.config';
     // future `/leads/:id` route, which would otherwise shadow it.
     ShareLinksModule,
     LeadsModule,
+    QuoteRecapsModule,
     FeatureModulesModule,
   ],
   controllers: [HealthController],

@@ -1,0 +1,67 @@
+meta {
+  name: Create Quote Recap (Foreign Lead)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/quote-recaps
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "000000000000000000000000",
+    "policies": [
+      { "policyType": "Auto", "premium": 1200.00, "itemCount": 1 }
+    ],
+    "sameAsHousehold": true,
+    "quoteDocument": {
+      "key": "{{quoteDocumentKey}}",
+      "filename": "carrier-quote.pdf",
+      "contentType": "application/pdf",
+      "size": 2048
+    }
+  }
+}
+
+tests {
+  test("returns 404 Not Found — not 403", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # POST /quote-recaps — lead outside the caller's scope (PAC-39)
+
+  Asserts that a producer cannot attach a recap to a lead they don't own by
+  editing the `leadId` in the request. A producer runs on `DataScope.own`, so
+  anything not assigned to them is unreachable.
+
+  - **Module:** `quote_recaps`
+  - **Permission:** `quote_recaps:write`
+  - **Expected:** `404 Not Found`
+
+  ## Why 404 and not 403
+  A 403 would confirm that the record exists. Whether another producer's lead
+  exists is not the caller's business, so an out-of-scope lead is indistinguishable
+  from a missing one — the same shape `ShareLinksService.loadOwnedLink` uses.
+
+  The all-zero id here stands in for "a lead you can't reach"; a real
+  out-of-scope lead (say, an owner-assigned one) returns exactly the same status
+  and message. **An unassigned lead — one with no `producerId` at all — also
+  404s** under `own` scope, which is deliberate: a recap needs an owner.
+
+  The clamp runs **before** any storage verification or household resolution, so
+  a probe can't be used to learn anything about the lead either.
+
+  ## Response `404`
+  ```json
+  { "message": "Lead not found.", "error": "Not Found", "statusCode": 404 }
+  ```
+}

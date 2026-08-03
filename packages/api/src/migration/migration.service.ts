@@ -63,7 +63,11 @@ import {
   toText,
   toYmd,
 } from './helpers/value-utils';
-import { isTestRecord, normalizeLeadSource } from '@sfa/shared';
+import {
+  isTestRecord,
+  normalizeLeadSource,
+  normalizePolicyType,
+} from '@sfa/shared';
 import {
   daysSince,
   deriveDealType,
@@ -646,9 +650,13 @@ export class MigrationService {
           quoteDate,
           premium: toNumber(rec[QUOTE_RECAP_FIELDS.premium]),
           itemCount: toNumber(rec[QUOTE_RECAP_FIELDS.items]),
+          // Normalized to canonical labels (PAC-39). This field historically
+          // stored raw SmartSuite choice codes while `deals.policyTypes` and
+          // the demo seed stored labels; because `persist` `$set`s the field, a
+          // re-run heals the code-holding documents already in Mongo.
           productsQuoted: this.selectCodes(
             rec[QUOTE_RECAP_FIELDS.productsQuoted],
-          ),
+          ).map(normalizePolicyType),
           recapStatus: selectCode(rec[QUOTE_RECAP_FIELDS.recapStatus]),
           producerId: producer?.userId,
           legacyProducerId: firstLinkedId(rec[QUOTE_RECAP_FIELDS.producer]),

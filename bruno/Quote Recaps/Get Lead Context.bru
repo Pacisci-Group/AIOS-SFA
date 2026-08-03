@@ -1,0 +1,105 @@
+meta {
+  name: Get Lead Context
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/quote-recaps/context?leadId={{createdLeadId}}
+  body: none
+  auth: inherit
+}
+
+params:query {
+  leadId: {{createdLeadId}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // The form needs a household before it can submit; capture it so the
+  // Create request below can assert the recap linked to the same one.
+  if (res.getStatus() === 200) {
+    bru.setVar("quoteContextHouseholdId", res.getBody().householdId);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a display-ready header", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("leadId");
+    expect(body).to.have.property("primaryContactName");
+    expect(body).to.have.property("householdId");
+    expect(body).to.have.property("leadStatus");
+  });
+}
+
+docs {
+  # GET /quote-recaps/context — lead + household header for the form (PAC-39)
+
+  The read-only context `/quote-recaps/new?leadId=` shows on mount, so a producer
+  can confirm they are recapping the right household before entering anything.
+
+  - **Module:** `quote_recaps`
+  - **Permission:** `quote_recaps:read`
+  - **Data scope:** `own` — a lead outside the caller's scope **404s**, not 403.
+
+  > **Depends on `Leads › Create Lead`.** That request captures `createdLeadId`
+  > via `bru.setVar`. The CLI walks folders alphabetically (`Auth` → `Deal
+  > Audits` → `Leads` → `Public Intake` → `Quote Recaps`), so by the time this
+  > folder runs the variable exists. Running this folder on its own will 404.
+
+  ## Query params
+  | param  | type   | required | rules                     |
+  |--------|--------|----------|---------------------------|
+  | leadId | string | yes      | 24-char Mongo ObjectId    |
+
+  ## Behaviour worth knowing
+  **Household resolution is self-healing.** It reads `lead.householdId` first,
+  then falls back to matching `lead.legacyHouseholdId` against
+  `households.legacySmartSuiteId` — and backfills `lead.householdId` on the way
+  through. The SmartSuite migration writes *only* the legacy string, so without
+  that fallback every migrated lead would be unable to record a recap.
+
+  **`householdId: null` is a real answer,** returned instead of an error when the
+  lead has no household at all. The form uses it to block up front rather than
+  letting the producer fill everything in and fail at submit; `POST
+  /quote-recaps` is the backstop and returns `409` in that case.
+
+  **`householdAddress` is normalized server-side.** Three writers have stored
+  three different key shapes (`street` from intake, `line1` from the demo seed,
+  `location_address` from SmartSuite); this collapses them. `null` means nothing
+  usable is on file, and the form then hides the "same as household" toggle.
+
+  ## Response `200`
+  ```json
+  {
+    "leadId": "665f0a1b2c3d4e5f60718293",
+    "primaryContactName": "Dana Whitfield",
+    "householdId": "665f0a1b2c3d4e5f60718294",
+    "householdName": "Whitfield Household",
+    "householdAddress": {
+      "street": "77 Oak Lane",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74101"
+    },
+    "leadStatus": "New"
+  }
+  ```
+  `leadStatus` is normalized — a migrated lead storing the raw code `hfwda`
+  reads back as `Qualified`.
+
+  ## Errors
+  - `400 Bad Request` — `leadId` missing or not a 24-char id.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `quote_recaps` module disabled, or missing
+    `quote_recaps:read`.
+  - `404 Not Found` — no such lead, or one outside the caller's data scope.
+}

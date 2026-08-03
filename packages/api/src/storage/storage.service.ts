@@ -29,6 +29,12 @@ export interface BuildObjectKeyInput {
   filename: string;
 }
 
+/** What storage reports about an object that was actually uploaded. */
+export interface StoredObjectStat {
+  size: number;
+  contentType: string | null;
+}
+
 /**
  * Reusable S3-compatible object storage wrapper. Backed by MinIO locally and
  * DigitalOcean Spaces (or any S3-compatible provider) in the cloud — the client
@@ -174,15 +180,30 @@ export class StorageService implements OnModuleInit {
     });
   }
 
-  /** Whether an object exists (used to confirm an upload completed). */
-  async objectExists(key: string): Promise<boolean> {
+  /**
+   * What actually landed in storage, or `null` if nothing did.
+   *
+   * A presigned PUT signs only `ContentType`, so a caller holding a valid URL
+   * can upload a file of any size. Validating a `size` field in a JSON body
+   * validates the client's claim, not the object — `HeadObject` is the only
+   * server-side evidence of what was really stored.
+   */
+  async statObject(key: string): Promise<StoredObjectStat | null> {
     try {
-      await this.client.send(
+      const res = await this.client.send(
         new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
       );
-      return true;
+      return {
+        size: res.ContentLength ?? 0,
+        contentType: res.ContentType ?? null,
+      };
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  /** Whether an object exists (used to confirm an upload completed). */
+  async objectExists(key: string): Promise<boolean> {
+    return (await this.statObject(key)) !== null;
   }
 }

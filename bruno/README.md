@@ -7,16 +7,32 @@ living API docs for devs and agents.
 
 ## Scope
 
-Covers the endpoints added on branch
-`asad/pac-12-deals-pending-service-hand-off-board-read` (**Linear PAC-12**), plus
-the auth endpoints you need to call them.
+Every implemented endpoint, plus the auth endpoints you need to call them.
 
 | Folder | Request | Endpoint | Notes |
 |---|---|---|---|
 | Auth | Login | `POST /auth/login` | Public. Captures tokens into the env. |
 | Auth | Refresh Token | `POST /auth/refresh` | Public. Rotates the token pair. |
 | Deal Audits | List Deal Audits | `GET /deal-audits` | **PAC-12** — Deals Pending Service Hand-off (read). `deal_audits:read`. |
+| Deal Audits | Presign Audit Attachment | `POST /deal-audits/:itemId/attachments/presign` | **PAC-14** — resolution document upload. `deal_audits:write`. |
+| Deal Audits | Resolve Deal Audit Item | `PATCH /deal-audits/:itemId/resolve` | **PAC-14** — resolve + optional note/document. `deal_audits:write`. |
 | Leads | List Leads | `GET /leads` | **PAC-36** — Leads list: search, filters, pagination (read). `leads:read`. |
+| Leads | Create Lead | `POST /leads` | **PAC-37** — New Lead intake pipeline. `leads:write`. |
+| Leads | Create Lead (Replay) | `POST /leads` | **PAC-37** — submission-token idempotency check. |
+| Leads › Share Links | Create / List / Revoke | `/leads/share-links…` | **PAC-37** — public intake links. `leads:write`. |
+| Public Intake | Get Form / Submit | `/public/lead-form/:token`, `/public/leads/:token` | **PAC-37** — unauthenticated share-link intake. |
+| Quote Recaps | Get Lead Context | `GET /quote-recaps/context` | **PAC-39** — lead + household header for the form. `quote_recaps:read`. |
+| Quote Recaps | Presign Quote Document | `POST /quote-recaps/quote-document/presign` | **PAC-39** — carrier-quote upload URL. `quote_recaps:write`. |
+| Quote Recaps | Upload Quote Document | `PUT <uploadUrl>` | **PAC-39** — raw PUT straight to storage. `auth: none` by design. |
+| Quote Recaps | Create Quote Recap | `POST /quote-recaps` | **PAC-39** — record the proposal. `quote_recaps:write`. |
+| Quote Recaps | Create Quote Recap (Replay) | `POST /quote-recaps` | **PAC-39** — submission-token idempotency check. |
+| Quote Recaps | Create Quote Recap (Foreign Lead) | `POST /quote-recaps` | **PAC-39** — asserts an out-of-scope lead 404s. |
+
+> **Folder order matters when running the whole collection.** The CLI walks
+> folders alphabetically (`Auth` → `Deal Audits` → `Leads` → `Public Intake` →
+> `Quote Recaps`), and the Quote Recaps chain reuses `createdLeadId` captured by
+> **Leads › Create Lead**. Running `Quote Recaps` on its own will 404 unless you
+> set `createdLeadId` yourself.
 
 ## Prerequisites
 

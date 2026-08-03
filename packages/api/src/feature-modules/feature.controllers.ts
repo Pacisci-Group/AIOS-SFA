@@ -44,6 +44,11 @@ export const HouseholdsController = createFeatureController(
   'households',
   ModuleKey.Clients,
 );
+/**
+ * @deprecated Superseded by the real `QuoteRecapsController` in
+ * `src/quote-recaps` (PAC-39) and no longer registered. Kept only for symmetry
+ * with `DealAuditsController` below; import the real one, not this.
+ */
 export const QuoteRecapsController = createFeatureController(
   'quote-recaps',
   ModuleKey.QuoteRecaps,
@@ -92,13 +97,3 @@ export const CommandCenterController = createFeatureController(
   'command-center',
   ModuleKey.CommandCenter,
 );
-
-@Controller('files')
-@RequireModule(ModuleKey.QuoteRecaps)
-@RequirePermissions(modulePermission(ModuleKey.QuoteRecaps, 'read'))
-export class FilesController {
-  @Get()
-  status() {
-    return { module: 'files', status: 'ready' };
-  }
-}

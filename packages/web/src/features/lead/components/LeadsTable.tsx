@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
+import { QuoteRecapAction } from "@/components/leads/QuoteRecapAction";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -11,7 +12,7 @@ import {
 } from "./lead-display";
 
 /** Name · Source · Status · Temperature · Phone · Email · Actions */
-const GRID_COLS = "1.4fr 1fr 100px 110px 130px 1.2fr 80px";
+const GRID_COLS = "1.4fr 1fr 100px 110px 130px 1.2fr 140px";
 
 const HEADERS = [
   "Name",
@@ -62,18 +63,27 @@ export function LeadsTable({ leads, isPending, pageSize }: LeadsTableProps) {
             </div>
           ))
         : leads.map((lead, i) => (
-            <Link
+            /*
+             * The row used to be one big `<Link>`. It can't be any more: a row
+             * action nested inside an anchor is invalid HTML (interactive
+             * content inside `<a>`) and breaks keyboard navigation. The
+             * stretched-link pattern keeps the whole row clickable while the
+             * action stays a real, separately focusable link.
+             */
+            <div
               key={lead.id}
-              to={`/leads/${lead.id}`}
               className={cn(
-                "grid px-5 py-3.5 gap-3 items-center transition-colors hover:bg-white/[0.03]",
+                "relative grid px-5 py-3.5 gap-3 items-center transition-colors hover:bg-white/[0.03]",
                 i < leads.length - 1 && "border-b border-border",
               )}
               style={{ gridTemplateColumns: GRID_COLS }}
             >
-              <span className="text-sm text-foreground font-medium truncate">
+              <Link
+                to={`/leads/${lead.id}`}
+                className="text-sm text-foreground font-medium truncate after:absolute after:inset-0 after:content-['']"
+              >
                 {lead.name}
-              </span>
+              </Link>
 
               <span className="text-xs text-muted-foreground truncate">
                 {lead.leadSource}
@@ -112,10 +122,10 @@ export function LeadsTable({ leads, isPending, pageSize }: LeadsTableProps) {
               </span>
 
               <span className="flex items-center gap-1 justify-self-end text-xs text-primary">
-                Open
+                <QuoteRecapAction leadId={lead.id} leadName={lead.name} />
                 <ChevronRight size={14} className="text-slate-600" />
               </span>
-            </Link>
+            </div>
           ))}
     </div>
   );

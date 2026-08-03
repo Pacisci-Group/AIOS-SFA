@@ -42,6 +42,13 @@ export class Activity extends TenantRecord {
   @Prop({ type: Types.ObjectId, ref: 'Deal' })
   dealId?: Types.ObjectId;
 
+  /**
+   * Set by `POST /quote-recaps` (PAC-39). Unset on migrated `quoted` rows,
+   * which identify their subject through `legacySubjectId` instead.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'QuoteRecap' })
+  quoteRecapId?: Types.ObjectId;
+
   @Prop({ type: Types.ObjectId, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
