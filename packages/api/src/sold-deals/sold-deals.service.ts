@@ -14,7 +14,10 @@ import type {
   SoldHouseholdContact,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { AuditGenerationService } from '../audit-generation/audit-generation.service';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import { CrmAssignmentService } from '../crm-rotations/crm-assignment.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { LeadAccessService } from '../leads/lead-access.service';
 import { StorageService } from '../storage/storage.service';
@@ -44,10 +47,14 @@ export class SoldDealsService {
   constructor(
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
     private readonly tenancy: TenantContextResolver,
     private readonly leadAccess: LeadAccessService,
     private readonly storage: StorageService,
     private readonly intake: SoldDealIntakeService,
+    private readonly auditGeneration: AuditGenerationService,
+    private readonly crmAssignment: CrmAssignmentService,
   ) {}
 
   /**
@@ -163,6 +170,34 @@ export class SoldDealsService {
     const outcome = await this.intake.process(ctx, dto, access, lead);
     const { leadStatus } = await this.intake.recordSideEffects(ctx, outcome);
 
+    /*
+     * The hand-off. Both run **post-commit and best-effort**: the deal is
+     * booked either way, and failing the request now would tell a producer
+     * their sale did not happen when it did.
+     *
+     * Deliberately run on the replay path too. Generation is idempotent (the
+     * partial-unique `dedupeKey` index) and CRM assignment is anchored on the
+     * household, so re-running them is how a request that committed the deal
+     * and then died self-heals on retry.
+     */
+    const audit = await this.auditGeneration.generateForDeal({
+      agencyId: ctx.agencyId,
+      branchId: ctx.branchId,
+      dealId: outcome.dealId,
+      producerId: ctx.producerId,
+      producerName: await this.producerName(ctx.producerId),
+      clientName: ctx.clientName,
+      submissionToken: ctx.submissionToken,
+    });
+
+    const crm = await this.crmAssignment.assignForDeal({
+      agencyId: ctx.agencyId,
+      branchId: ctx.branchId,
+      dealId: outcome.dealId,
+      householdId: ctx.householdId,
+      producerId: ctx.producerId,
+    });
+
     return {
       id: outcome.dealId.toString(),
       leadId: ctx.leadId.toString(),
@@ -174,10 +209,9 @@ export class SoldDealsService {
       isBundle: outcome.isBundle,
       soldDate: outcome.soldDate.toISOString(),
       leadStatus,
-      // Populated by audit generation in PR5; zero until then rather than
-      // absent, so the wire shape does not change under the web app later.
-      auditItemCount: 0,
-      crmAssigned: false,
+      auditItemCount: audit.itemCount,
+      crmAssigned:
+        crm.status === 'assigned' || crm.status === 'skipped_existing',
     };
   }
 
@@ -234,6 +268,26 @@ export class SoldDealsService {
   ): void {
     attachment.contentType = stored.contentType ?? attachment.contentType;
     attachment.size = stored.size;
+  }
+
+  /**
+   * The producer's display name, denormalised onto each generated audit item.
+   *
+   * Parity with what the migration writes — the board reads `clientName` to
+   * render a row, but `producerName` is what makes a migrated item and a
+   * generated one look the same in any other view.
+   */
+  private async producerName(
+    producerId: Types.ObjectId,
+  ): Promise<string | undefined> {
+    const user = await this.userModel
+      .findById(producerId)
+      .select('firstName lastName');
+    if (!user) return undefined;
+    return (
+      [user.firstName, user.lastName].filter(Boolean).join(' ').trim() ||
+      undefined
+    );
   }
 
   /** Household members the producer can name as defensive drivers. */

@@ -4,7 +4,9 @@ import {
   Activity,
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
+import { AuditGenerationModule } from '../audit-generation/audit-generation.module';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { CrmRotationsModule } from '../crm-rotations/crm-rotations.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 import {
   InterestedParty,
@@ -13,6 +15,7 @@ import {
 import { LeadsModule } from '../leads/leads.module';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
+import { User, UserSchema } from '../users/schemas/user.schema';
 import {
   PriorInsurance,
   PriorInsuranceSchema,
@@ -50,8 +53,13 @@ import { SoldDealsService } from './sold-deals.service';
       { name: Lead.name, schema: LeadSchema },
       { name: Contact.name, schema: ContactSchema },
       { name: Activity.name, schema: ActivitySchema },
+      { name: User.name, schema: UserSchema },
     ]),
     LeadsModule,
+    // The submission's server-side side-effects. Both run post-commit and
+    // best-effort, so neither can fail a sale that is already booked.
+    AuditGenerationModule,
+    CrmRotationsModule,
   ],
   controllers: [SoldDealsController],
   providers: [
