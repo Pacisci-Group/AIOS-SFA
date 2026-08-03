@@ -31,6 +31,7 @@ import { PermissionsModule } from './permissions/permissions.module';
 import { PlatformModule } from './platform/platform.module';
 import { RolesModule } from './roles/roles.module';
 import { ShareLinksModule } from './share-links/share-links.module';
+import { SoldDealsModule } from './sold-deals/sold-deals.module';
 import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
 import { ENV_FILE_PATH } from './config/env.config';
@@ -71,6 +72,7 @@ import { ENV_FILE_PATH } from './config/env.config';
     LeadsModule,
     QuoteRecapsModule,
     PoliciesModule,
+    SoldDealsModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,

@@ -4,7 +4,11 @@ import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
-import type { PolicyCheckResponse } from '@sfa/shared';
+import type {
+  CreateSoldDealResponse,
+  PolicyCheckResponse,
+  SoldDealLeadContext,
+} from '@sfa/shared';
 import { Activity } from '../src/activities/schemas/activity.schema';
 import { TransactionRunner } from '../src/common/mongo/transaction.runner';
 import { Contact } from '../src/contacts/schemas/contact.schema';
@@ -14,6 +18,8 @@ import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { Policy } from '../src/policies/schemas/policy.schema';
+import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
+import { PriorPolicy } from '../src/prior-policies/schemas/prior-policy.schema';
 import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
 import { StorageService } from '../src/storage/storage.service';
@@ -2300,6 +2306,581 @@ describe('SFA API (e2e)', () => {
         .get(CHECK)
         .query({ number: 'ABC123456' })
         .expect(401);
+    });
+  });
+
+  describe('Sold deals (PAC-40 create)', () => {
+    const SOLD = '/api/v1/sold-deals';
+
+    /**
+     * Query child collections by a real ObjectId, not the response's string.
+     *
+     * Every `@Prop({ type: Types.ObjectId })` in this repo compiles to a
+     * **Mixed** path — the token Mongoose recognises is
+     * `SchemaTypes.ObjectId`. Mixed paths do no casting, so a string filter
+     * silently matches nothing. Service code is unaffected because it always
+     * constructs ObjectIds explicitly; only a test reading back by id has to
+     * know. Tracked as its own follow-up.
+     */
+    const dealRef = (id: string) => new Types.ObjectId(id);
+
+    let soldDealModel: Model<Deal>;
+    let soldPolicyModel: Model<Policy>;
+    let soldLeadModel: Model<Lead>;
+    let soldHouseholdModel: Model<Household>;
+    let soldActivityModel: Model<Activity>;
+    let priorInsuranceModel: Model<PriorInsurance>;
+    let priorPolicyModel: Model<PriorPolicy>;
+    let producerId: Types.ObjectId;
+
+    let counter = 0;
+    /** Unique per call, so tests never collide on the policy-number index. */
+    const nextNumber = () =>
+      `SOLD-${(counter += 1).toString().padStart(6, '0')}`;
+
+    const soldPolicy = (overrides: Record<string, unknown> = {}) => ({
+      policyType: 'Auto',
+      effectiveDate: '2026-02-01',
+      carrier: 'Allstate',
+      policyNumber: nextNumber(),
+      premium: 1200.1,
+      itemCount: 2,
+      priorInsurance: { none: true },
+      cancellation: { cancelled: false },
+      ...overrides,
+    });
+
+    const payload = (
+      leadId: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      leadId,
+      soldDate: '2026-02-15',
+      policies: [soldPolicy()],
+      ...overrides,
+    });
+
+    const createAs = async (token: string, body: unknown, expected = 201) => {
+      const res = await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(token))
+        .send(body)
+        .expect(expected);
+      return res.body as CreateSoldDealResponse;
+    };
+
+    /** A lead owned by the given producer, with a real household attached. */
+    const seedSoldLead = async (
+      owner: Types.ObjectId | undefined,
+      overrides: Record<string, unknown> = {},
+      householdOverrides: Record<string, unknown> = {},
+    ) => {
+      const household = await soldHouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Sellable Household',
+        primaryContactName: 'Sam Sold',
+        ...householdOverrides,
+      });
+      const lead = await soldLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Sam',
+        lastName: 'Sold',
+        status: 'Quoted',
+        producerId: owner,
+        householdId: household._id,
+        ...overrides,
+      });
+      return { lead, household };
+    };
+
+    beforeAll(async () => {
+      soldDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      soldPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      soldLeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      soldHouseholdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      soldActivityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      priorInsuranceModel = app.get<Model<PriorInsurance>>(
+        getModelToken(PriorInsurance.name),
+      );
+      priorPolicyModel = app.get<Model<PriorPolicy>>(
+        getModelToken(PriorPolicy.name),
+      );
+
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      producerId = producer!._id;
+    });
+
+    it('books a deal with server-derived totals', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            soldPolicy({ premium: 1200.1, itemCount: 2 }),
+            soldPolicy({ policyType: 'Home', premium: 899.95, itemCount: 3 }),
+          ],
+        }),
+      );
+
+      // 1200.10 + 899.95 is 2100.0499999999997 in IEEE-754 — the rounding is
+      // what keeps that out of the Sold scorecard.
+      expect(body.premium).toBe(2100.05);
+      expect(body.itemCount).toBe(5);
+      expect(body.policyCount).toBe(2);
+      expect(body.policyTypes).toEqual(['Auto', 'Home']);
+      expect(body.isBundle).toBe(true);
+      expect(body.dealType).toBe('Bundle');
+
+      const deal = await soldDealModel.findById(body.id);
+      expect(deal).toBeTruthy();
+      expect(deal!.premium).toBe(2100.05);
+      // Honest provenance: submitted, not rolled up from linked rows.
+      expect(deal!.premiumSource).toBe('snapshot');
+      expect(deal!.soldDateYmd).toBe(20260215);
+      expect(deal!.producerId?.toString()).toBe(producerId.toString());
+      // The refs that did not exist before this story.
+      expect(deal!.leadId?.toString()).toBe(lead._id.toString());
+      expect(deal!.householdId).toBeTruthy();
+      // Backs the hand-off board's client column.
+      expect(deal!.clientName).toBe('Sam Sold');
+    });
+
+    it('ignores client-supplied totals', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          premium: 999_999,
+          itemCount: 999,
+          policyCount: 99,
+          policies: [soldPolicy({ premium: 500, itemCount: 1 })],
+        }),
+      );
+
+      expect(body.premium).toBe(500);
+      expect(body.itemCount).toBe(1);
+      expect(body.policyCount).toBe(1);
+    });
+
+    it('creates a policy per row, linked to the deal and household', async () => {
+      const { lead, household } = await seedSoldLead(producerId);
+      const first = nextNumber();
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            soldPolicy({ policyNumber: first }),
+            soldPolicy({ policyType: 'Home' }),
+          ],
+        }),
+      );
+
+      const policies = await soldPolicyModel.find({ dealId: dealRef(body.id) });
+      expect(policies).toHaveLength(2);
+      for (const policy of policies) {
+        expect(policy.householdId?.toString()).toBe(household._id.toString());
+        expect(policy.active).toBe(true);
+      }
+      // The normalized key is what makes GET /policies/check able to find it.
+      const stored = policies.find((p) => p.policyNumber === first);
+      expect(stored!.policyNumberKey).toBe(first.replace(/[^A-Z0-9]/g, ''));
+    });
+
+    it('writes prior-insurance summary and per-line rows only when declared', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            soldPolicy({
+              policyType: 'Auto',
+              priorInsurance: {
+                none: false,
+                carrier: 'Geico',
+                agentName: 'A. Agent',
+              },
+              cancellation: { cancelled: true, effectiveDate: '2026-01-31' },
+            }),
+            soldPolicy({
+              policyType: 'Home',
+              priorInsurance: { none: false, carrier: 'State Farm' },
+            }),
+          ],
+        }),
+      );
+
+      const summary = await priorInsuranceModel.findOne({
+        dealId: dealRef(body.id),
+      });
+      expect(summary).toBeTruthy();
+      // Legacy's shape: separate auto/home columns on one deal-level row.
+      expect(summary!.previousCarrierAuto).toBe('Geico');
+      expect(summary!.previousCarrierHome).toBe('State Farm');
+      expect(summary!.autoHomeSameCarrier).toBe('No');
+      expect(summary!.cancelledPreviousInsurance).toBe('Yes');
+
+      const lines = await priorPolicyModel.find({ dealId: dealRef(body.id) });
+      expect(lines).toHaveLength(2);
+      const auto = lines.find((l) => l.policyType === 'Auto');
+      // Already cancelled ⇒ nothing for the CRM to chase.
+      expect(auto!.needsCancellation).toBe('No');
+      const home = lines.find((l) => l.policyType === 'Home');
+      expect(home!.needsCancellation).toBe('Yes');
+    });
+
+    it('writes no prior-insurance records for a new-to-market client', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+
+      // An empty summary row would tell the service team there is prior
+      // coverage to chase when there is none.
+      expect(
+        await priorInsuranceModel.countDocuments({ dealId: dealRef(body.id) }),
+      ).toBe(0);
+      expect(
+        await priorPolicyModel.countDocuments({ dealId: dealRef(body.id) }),
+      ).toBe(0);
+    });
+
+    it('books ONE deal when the same submission token is replayed', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = payload(lead._id.toString(), {
+        submissionToken: 'sold-replay-token-1',
+      });
+
+      const first = await createAs(producerToken, body);
+      const second = await createAs(producerToken, body);
+
+      expect(second.id).toBe(first.id);
+      expect(
+        await soldDealModel.countDocuments({
+          submissionToken: 'SOLD|SOLD-REPLAY-TOKEN-1',
+        }),
+      ).toBe(1);
+      // The replay must not double the policies either.
+      expect(
+        await soldPolicyModel.countDocuments({ dealId: dealRef(first.id) }),
+      ).toBe(1);
+    });
+
+    it('404s a token replayed by a different producer', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = payload(lead._id.toString(), {
+        submissionToken: 'sold-replay-token-2',
+      });
+      await createAs(producerToken, body);
+
+      // Owner is agency-scoped so the clamp passes; a *different* producer must
+      // not be handed back someone else's deal id.
+      const otherProducer = await seedSoldLead(new Types.ObjectId());
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(payload(otherProducer.lead._id.toString()))
+        .expect(404);
+    });
+
+    it('advances the lead to Sold, forward only', async () => {
+      const { lead } = await seedSoldLead(producerId, { status: 'Quoted' });
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+      expect(body.leadStatus).toBe('Sold');
+
+      const reloaded = await soldLeadModel.findById(lead._id);
+      expect(reloaded!.status).toBe('Sold');
+      expect(reloaded!.lastActivityAt).toBeTruthy();
+    });
+
+    it('advances a migrated lead stored as a raw status code', async () => {
+      // `arW7O` is Requote. Without the code expansion in
+      // soldAdvanceableStatusValues() this lead would silently never advance.
+      const { lead } = await seedSoldLead(producerId, { status: 'arW7O' });
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+      expect(body.leadStatus).toBe('Sold');
+    });
+
+    it('never drags a terminal lead backwards', async () => {
+      const { lead } = await seedSoldLead(producerId, { status: 'Lost' });
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+
+      expect(body.leadStatus).toBe('Lost');
+      const reloaded = await soldLeadModel.findById(lead._id);
+      expect(reloaded!.status).toBe('Lost');
+    });
+
+    it('records a sold activity attributed to the app, not the migration', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+
+      const activity = await soldActivityModel.findOne({
+        dealId: dealRef(body.id),
+      });
+      expect(activity).toBeTruthy();
+      expect(activity!.type).toBe('sold');
+      expect(activity!.subjectType).toBe('deal');
+      expect(activity!.leadId?.toString()).toBe(lead._id.toString());
+      // `source` defaults to 'migration' in the schema.
+      expect(activity!.source).toBe('internal');
+    });
+
+    it('resolves the household from a migrated lead and self-heals the link', async () => {
+      const household = await soldHouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Migrated Household',
+        legacySmartSuiteId: 'legacy-hh-sold-1',
+      });
+      // The migration writes only `legacyHouseholdId` — never `householdId`.
+      const lead = await soldLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Mig',
+        lastName: 'Rated',
+        status: 'New',
+        producerId,
+        legacyHouseholdId: 'legacy-hh-sold-1',
+      });
+
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+      const deal = await soldDealModel.findById(body.id);
+      expect(deal!.householdId?.toString()).toBe(household._id.toString());
+
+      const reloaded = await soldLeadModel.findById(lead._id);
+      expect(reloaded!.householdId?.toString()).toBe(household._id.toString());
+    });
+
+    it('409s a lead with no resolvable household', async () => {
+      const lead = await soldLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'No',
+        lastName: 'Household',
+        status: 'New',
+        producerId,
+      });
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(payload(lead._id.toString()))
+        .expect(409);
+    });
+
+    it('404s (not 403) for a lead outside the caller data scope', async () => {
+      const { lead } = await seedSoldLead(new Types.ObjectId());
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(payload(lead._id.toString()))
+        .expect(404);
+    });
+
+    it('404s for an unassigned lead under own scope', async () => {
+      const { lead } = await seedSoldLead(undefined);
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(payload(lead._id.toString()))
+        .expect(404);
+    });
+
+    it('re-points an existing policy instead of duplicating it', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const number = nextNumber();
+      const first = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [soldPolicy({ policyNumber: number, premium: 100 })],
+        }),
+      );
+      const existing = await soldPolicyModel.findOne({
+        dealId: dealRef(first.id),
+      });
+
+      const { lead: second } = await seedSoldLead(producerId);
+      await createAs(
+        producerToken,
+        payload(second._id.toString(), {
+          policies: [
+            soldPolicy({
+              policyNumber: number,
+              premium: 250,
+              existingPolicyId: existing!._id.toString(),
+            }),
+          ],
+        }),
+      );
+
+      // One policy row, re-pointed — not a second one for the same number.
+      expect(
+        await soldPolicyModel.countDocuments({ policyNumber: number }),
+      ).toBe(1);
+      const reloaded = await soldPolicyModel.findById(existing!._id);
+      expect(reloaded!.premium).toBe(250);
+    });
+
+    it("403s an attempt to claim another producer's policy", async () => {
+      // GET /policies/check deliberately reports out-of-scope matches (masked),
+      // so this id is obtainable. The check informs; it must not authorize.
+      const foreignLead = await seedSoldLead(new Types.ObjectId());
+      const foreignDeal = await soldDealModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        producerId: new Types.ObjectId(),
+      });
+      const foreignPolicy = await soldPolicyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        policyNumber: nextNumber(),
+        dealId: foreignDeal._id,
+      });
+
+      const { lead } = await seedSoldLead(producerId);
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({ existingPolicyId: foreignPolicy._id.toString() }),
+            ],
+          }),
+        )
+        .expect(403);
+
+      expect(foreignLead.lead).toBeTruthy();
+    });
+
+    it('rejects a submission with two rows claiming one policy number', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const number = nextNumber();
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({ policyNumber: number }),
+              soldPolicy({ policyNumber: number.toLowerCase() }),
+            ],
+          }),
+        )
+        .expect(400);
+    });
+
+    it('rejects cross-branch discounts rather than stripping them', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({
+                policyType: 'Home',
+                // Silently stripping this would generate a Drivewise audit item
+                // for a deal with no auto line.
+                discounts: { drivewise: true },
+              }),
+            ],
+          }),
+        )
+        .expect(400);
+    });
+
+    it('rejects an incomplete card', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const bad = [
+        { policies: [] },
+        { policies: [soldPolicy({ premium: -1 })] },
+        { policies: [soldPolicy({ itemCount: 0 })] },
+        { policies: [soldPolicy({ policyType: 'Property' })] },
+        { soldDate: '15/02/2026' },
+        // Prior insurance declared but no carrier named.
+        {
+          policies: [soldPolicy({ priorInsurance: { none: false } })],
+        },
+        // Cancelled but no effective date.
+        {
+          policies: [soldPolicy({ cancellation: { cancelled: true } })],
+        },
+        // Escrow ticked without its required sub-card.
+        {
+          policies: [
+            soldPolicy({ policyType: 'Home', discounts: { escrow: true } }),
+          ],
+        },
+      ];
+
+      for (const overrides of bad) {
+        await request(app.getHttpServer())
+          .post(SOLD)
+          .set(authHeader(producerToken))
+          .send(payload(lead._id.toString(), overrides))
+          .expect(400);
+      }
+    });
+
+    it('403s a caller without deal_audits:write', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(readOnlyToken))
+        .send(payload(lead._id.toString()))
+        .expect(403);
+    });
+
+    it('returns the wizard context, including the driver picker contacts', async () => {
+      const { lead, household } = await seedSoldLead(producerId);
+      const contact = await app
+        .get<Model<Contact>>(getModelToken(Contact.name))
+        .create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Dana',
+          lastName: 'Driver',
+          roleInHousehold: 'Driver',
+        });
+      await soldHouseholdModel.updateOne(
+        { _id: household._id },
+        { $set: { memberContactIds: [contact._id] } },
+      );
+
+      const res = await request(app.getHttpServer())
+        .get(`${SOLD}/context`)
+        .query({ leadId: lead._id.toString() })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as SoldDealLeadContext;
+      expect(body.primaryContactName).toBe('Sam Sold');
+      expect(body.householdId).toBe(household._id.toString());
+      expect(body.contacts.map((c) => c.firstName)).toContain('Dana');
+    });
+
+    it('reports a missing household as null rather than failing the context', async () => {
+      // The page blocks up front instead of letting a producer fill eight cards
+      // and fail at submit.
+      const lead = await soldLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Ctx',
+        lastName: 'NoHousehold',
+        producerId,
+      });
+
+      const res = await request(app.getHttpServer())
+        .get(`${SOLD}/context`)
+        .query({ leadId: lead._id.toString() })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as SoldDealLeadContext).householdId).toBeNull();
     });
   });
 });
