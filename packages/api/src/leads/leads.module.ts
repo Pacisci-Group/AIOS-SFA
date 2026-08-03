@@ -14,6 +14,7 @@ import { LinkEntitiesStep } from './intake/link-entities.step';
 import { ResolveContactStep } from './intake/resolve-contact.step';
 import { ResolveHouseholdStep } from './intake/resolve-household.step';
 import { ResolveLeadStep } from './intake/resolve-lead.step';
+import { LeadAccessService } from './lead-access.service';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
 import { Lead, LeadSchema } from './schemas/lead.schema';
@@ -33,12 +34,15 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
   providers: [
     LeadsService,
     LeadIntakeService,
+    LeadAccessService,
     ResolveContactStep,
     ResolveHouseholdStep,
     ResolveLeadStep,
     LinkEntitiesStep,
   ],
-  // Exported so the public share-link controller can run the same pipeline.
-  exports: [LeadIntakeService],
+  // `LeadIntakeService` so the public share-link controller can run the same
+  // pipeline; `LeadAccessService` so every lead-scoped write path (quote
+  // recaps, sold deals) shares one scope clamp and one household resolver.
+  exports: [LeadIntakeService, LeadAccessService],
 })
 export class LeadsModule {}

@@ -1,7 +1,11 @@
-import type { DealType, PremiumSource } from '../../deals/schemas/deal.schema';
+import type { PremiumSource } from '../../deals/schemas/deal.schema';
 import type { LeadTemperature } from '@sfa/shared';
-import { POLICY_TYPE_LABELS } from '../smartsuite/field-ids';
+import { normalizePolicyType } from '@sfa/shared';
 import { selectCode, toNumber } from './value-utils';
+
+// Moved to `common/domain/` so the live Sold write path does not import the
+// migration module. Re-exported here so existing call sites keep working.
+export { daysSince, deriveDealType } from '../../common/domain/deal-derive';
 
 /**
  * Effective premium: prefer the rollup (s0675d21ce), fall back to the snapshot
@@ -20,7 +24,17 @@ export function resolvePremium(
 
 /**
  * Normalize the "Policy Type(s)" lookup (array of choice codes, possibly nested)
- * into readable line-of-business labels.
+ * into canonical line-of-business labels.
+ *
+ * Resolved through `normalizePolicyType` from `@sfa/shared` rather than the
+ * migration-local `POLICY_TYPE_LABELS` map (PAC-40). That map emitted
+ * "Landlords" for `mCt4m` while the shared vocabulary — and therefore every
+ * read path and the Sold form — says "Landlord". The Sold form's audit
+ * generator resolves template titles by **exact** name (`Landlord Inspection`,
+ * `Landlord Mortgagee`, …), so one stray plural silently produces a deal with
+ * no landlord audit items at all.
+ *
+ * Uncatalogued codes still pass through verbatim, so nothing is dropped.
  */
 export function policyTypeLabels(value: unknown): string[] {
   const codes = new Set<string>();
@@ -34,37 +48,9 @@ export function policyTypeLabels(value: unknown): string[] {
     if (code) codes.add(code);
   };
   walk(value);
-  return [...codes].map((c) => POLICY_TYPE_LABELS[c] ?? c);
-}
-
-/**
- * Deal type (Auto / Home / Bundle / Other) — not first-class in SmartSuite, so derived:
- *   - Bundle flag set OR both an auto-like and home-like line present -> Bundle
- *   - only auto-like -> Auto
- *   - only home-like -> Home
- *   - otherwise -> Other
- */
-export function deriveDealType(
-  isBundle: boolean,
-  policyLabels: string[],
-): DealType {
-  const labels = policyLabels.map((l) => l.toLowerCase());
-  const hasAuto = labels.some(
-    (l) => l.includes('auto') || l.includes('motorcycle'),
-  );
-  const hasHome = labels.some(
-    (l) =>
-      l.includes('home') ||
-      l.includes('renter') ||
-      l.includes('landlord') ||
-      l.includes('condo') ||
-      l.includes('dwelling'),
-  );
-
-  if (isBundle || (hasAuto && hasHome)) return 'Bundle';
-  if (hasAuto) return 'Auto';
-  if (hasHome) return 'Home';
-  return 'Other';
+  // Deduped again after normalizing: `mCt4m` and `AiFB5` both mean "Landlord",
+  // and a deal linking policies from both code sets would otherwise list it twice.
+  return [...new Set([...codes].map((c) => normalizePolicyType(c)))];
 }
 
 const TEMPERATURES: Record<string, LeadTemperature> = {
@@ -77,12 +63,4 @@ export function normalizeTemperature(value: unknown): LeadTemperature {
   const code = selectCode(value);
   if (!code) return 'Unknown';
   return TEMPERATURES[code.toLowerCase()] ?? 'Unknown';
-}
-
-/** Whole days between a start date and now (>= 0). */
-export function daysSince(date: Date | undefined, now = new Date()): number {
-  if (!date) return 0;
-  const diff = now.getTime() - date.getTime();
-  if (diff <= 0) return 0;
-  return Math.floor(diff / (1000 * 60 * 60 * 24));
 }

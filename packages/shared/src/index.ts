@@ -1,3 +1,4 @@
+export * from './domain/address';
 export * from './domain/household-role';
 export * from './domain/lead-intake';
 export * from './domain/lead-source';
@@ -5,6 +6,7 @@ export * from './domain/lead-status';
 export * from './domain/lead-temperature';
 export * from './domain/policy-type';
 export * from './domain/quote-recap';
+export * from './domain/sold-deal';
 export * from './enums/module-key.enum';
 export * from './enums/scope.enum';
 export * from './permissions/permission.constants';

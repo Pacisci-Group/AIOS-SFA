@@ -276,17 +276,14 @@ export const DEAL_AUDIT_CATEGORY_LABELS: Record<string, string> = {
   hQrq6: 'Common',
 };
 
-/** Deal "Policy Type(s)" lookup codes -> line-of-business labels. */
-export const POLICY_TYPE_LABELS: Record<string, string> = {
-  AiFB5: 'Landlord',
-  PYgez: 'Auto',
-  sNMRK: 'Home',
-  Hn155: 'Renters',
-  OMJjl: 'Motorcycle',
-  mCt4m: 'Landlords',
-  uBjtw: 'Valuable Item Protection',
-  NlLBc: 'Boat Owners',
-  fltex: 'Umbrella',
-  EGGWR: 'Life',
-  mrzQD: 'Condominium',
-};
+/*
+ * Deal "Policy Type(s)" lookup codes lived here as `POLICY_TYPE_LABELS` until
+ * PAC-40. They now live in `@sfa/shared` (`domain/policy-type.ts`), which
+ * reconciles all three SmartSuite code sets — Quote Recaps, Deals and Policies
+ * — into one canonical vocabulary via `normalizePolicyType`.
+ *
+ * Removed rather than deprecated on purpose: this map emitted "Landlords" for
+ * `mCt4m` while shared says "Landlord", and two divergent copies of a
+ * vocabulary the audit generator matches on **by exact name** is precisely the
+ * bug that motivated the unification.
+ */

@@ -52,6 +52,54 @@ export class DealAuditItem extends TenantRecord {
   @Prop()
   category?: string;
 
+  /*
+   * Generation provenance (PAC-40). All optional — migrated items have none of
+   * it, and the board never reads these.
+   */
+
+  /** The `auditTemplates` row this item was generated from. */
+  @Prop({ type: Types.ObjectId, ref: 'AuditTemplate' })
+  templateId?: Types.ObjectId;
+
+  /** The parent roll-up audit record. */
+  @Prop({ type: Types.ObjectId, ref: 'DealAudit' })
+  dealAuditId?: Types.ObjectId;
+
+  /**
+   * Which policy triggered this item. On a bundled Auto + Home sale the deal
+   * alone cannot say whether `Home Inspection` came from the home or the
+   * landlord line.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'Policy' })
+  policyId?: Types.ObjectId;
+
+  /**
+   * Who this item is about, when one template fans out into several items —
+   * today only Defensive Driver, which generates one certificate per selected
+   * driver. Also suffixed onto `itemName`, so the board's "missing" column
+   * distinguishes them.
+   */
+  @Prop({ trim: true })
+  subjectName?: string;
+
+  @Prop({ type: Types.ObjectId, ref: 'Contact' })
+  subjectContactId?: Types.ObjectId;
+
+  /** The generating deal's submission token; mirrors legacy's item field. */
+  @Prop({ trim: true })
+  submissionToken?: string;
+
+  /**
+   * `<dealId>|<normalized title>|<subjectName>` — the idempotency key.
+   *
+   * Legacy deduped by reading the deal's existing items and skipping matches,
+   * which races: two concurrent generations both read an empty set and both
+   * insert. A unique index makes "generating twice creates one item" true at
+   * the database level instead.
+   */
+  @Prop({ trim: true })
+  dedupeKey?: string;
+
   /** Raw SmartSuite status value (sdb5069dbd): backlog | in_progress (=Failed) | complete. */
   @Prop()
   status?: string;
@@ -122,9 +170,32 @@ DealAuditItemSchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
+
+/**
+ * The hand-off board's query (PAC-12): filters on agency + producer + the two
+ * status booleans, then sorts `daysOpen` descending with `_id` as tiebreak.
+ * Carrying the sort keys in the index keeps it a pure IXSCAN — without them
+ * Mongo would fetch the whole filtered set and sort it in memory.
+ */
 DealAuditItemSchema.index({
   agencyId: 1,
   producerId: 1,
   isFailed: 1,
   isResolved: 1,
+  daysOpen: -1,
+  _id: 1,
 });
+
+/**
+ * Makes audit generation idempotent (PAC-40): re-running it for a deal creates
+ * nothing new, so a retried submission cannot double the service team's
+ * hand-off. Partial, never `sparse` — every migrated item lacks a `dedupeKey`,
+ * and a compound sparse unique index would E11000 on the second one.
+ */
+DealAuditItemSchema.index(
+  { agencyId: 1, dedupeKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { dedupeKey: { $type: 'string' } },
+  },
+);

@@ -9,6 +9,8 @@
  * are what both agree the shape is.
  */
 
+import type { StructuredAddress } from './address';
+
 export interface QuoteRecapPolicyInput {
   /** A canonical label from `POLICY_TYPES` — raw SmartSuite codes are rejected. */
   policyType: string;
@@ -20,13 +22,11 @@ export interface QuoteRecapPolicyInput {
  * The **insured property** address — explicitly distinct from
  * `LeadIntakeAddress`, which is the household's *living* address. A producer
  * can quote a rental at one address while the client lives at another.
+ *
+ * An alias rather than its own interface: the shape is the shared
+ * {@link StructuredAddress}, and the name records what it means here.
  */
-export interface QuoteRecapPropertyAddress {
-  street: string;
-  city: string;
-  state: string;
-  zip: string;
-}
+export type QuoteRecapPropertyAddress = StructuredAddress;
 
 /**
  * A quote document that has already been uploaded to storage via presigned PUT.

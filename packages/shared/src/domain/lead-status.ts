@@ -119,3 +119,51 @@ export function quoteAdvanceableStatusValues(): (string | null)[] {
     null,
   ];
 }
+
+/** Where a submitted sold deal moves the lead (PAC-40). */
+export const SOLD_ADVANCE_TARGET: LeadStatus = 'Sold';
+
+/**
+ * Statuses a sold deal must **not** drag the lead back from.
+ *
+ * Note this is listed while {@link QUOTE_ADVANCEABLE_LEAD_STATUSES} lists the
+ * *advancing* side — the derivation runs in the opposite direction on purpose.
+ * A quote advance is narrow (only pre-quote states qualify), so its safe
+ * default for an unforeseen status is "don't advance". A sold advance is broad
+ * — anything not already terminal — so its safe default is "do advance": a
+ * status added to {@link LEAD_STATUSES} later should never silently block a
+ * producer from booking a sale they actually made.
+ */
+export const SOLD_NON_ADVANCING_LEAD_STATUSES: readonly LeadStatus[] = [
+  'Sold',
+  'Converted',
+  'Not Qualified',
+  'Lost',
+  'Closed',
+];
+
+/**
+ * Derived, so a new mid-pipeline status advances by default.
+ *
+ * Currently: New, Contacted, Qualified, Quoted, Requote.
+ */
+export const SOLD_ADVANCEABLE_LEAD_STATUSES: readonly LeadStatus[] =
+  LEAD_STATUSES.filter((s) => !SOLD_NON_ADVANCING_LEAD_STATUSES.includes(s));
+
+/**
+ * Every **stored** value that may advance to "Sold", for a Mongo
+ * `{ status: { $in: [...] } }` clause.
+ *
+ * Same code expansion as {@link quoteAdvanceableStatusValues}, and load-bearing
+ * for the same reason: migrated Qualified leads are stored as `hfwda` and
+ * Requote leads as `arW7O`. `''` and `null` cover a lead with no status at all
+ * (`$in: [null]` also matches a missing field). Uncatalogued values match
+ * nothing and stay put.
+ */
+export function soldAdvanceableStatusValues(): (string | null)[] {
+  return [
+    ...SOLD_ADVANCEABLE_LEAD_STATUSES.flatMap(leadStatusQueryValues),
+    '',
+    null,
+  ];
+}

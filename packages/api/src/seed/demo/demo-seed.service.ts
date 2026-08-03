@@ -28,6 +28,7 @@ import { Activity } from '../../activities/schemas/activity.schema';
 import { PermissionsService } from '../../permissions/permissions.service';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
 import { normalizeLeadSource } from '@sfa/shared';
+import { seedAuditTemplates } from '../audit-templates.seed';
 import {
   AUDIT_TEMPLATES,
   BRANCHES,
@@ -718,28 +719,35 @@ export class DemoSeedService {
   // Audit templates + records + parent audits (Deals Pending Service Hand-off)
   // ---------------------------------------------------------------------------
 
+  /**
+   * The audit-template catalog is **core seed data** as of PAC-40, so this
+   * delegates rather than owning its own copy.
+   *
+   * It used to upsert the same 21 templates keyed on
+   * `legacySmartSuiteId: 'demo:tmpl:<i>'` while the core seed keys on
+   * `{ agencyId, name }` — two different keys for one logical row, so running
+   * both seeds produced 42 templates and every generated deal would have
+   * matched a duplicate. The one-off cleanup below removes those phantoms from
+   * databases seeded before this change.
+   */
   private async seedAuditTemplates(ctx: Ctx): Promise<void> {
-    for (let i = 0; i < AUDIT_TEMPLATES.length; i++) {
-      const t = AUDIT_TEMPLATES[i];
-      const legacyId = `demo:tmpl:${i}`;
-      await this.upsert(
-        this.auditTemplateModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
-        {
-          agencyId: ctx.agencyId,
-          branchId: ctx.defaultBranchId,
-          legacySmartSuiteId: legacyId,
-          name: t.name,
-          category: t.category,
-          required: t.required,
-          blocking: t.blocking,
-          active: true,
-          alwaysInclude: t.alwaysInclude,
-          task: t.task,
-        },
+    const orphaned = await this.auditTemplateModel.deleteMany({
+      agencyId: ctx.agencyId,
+      legacySmartSuiteId: { $regex: '^demo:tmpl:' },
+    });
+    if (orphaned.deletedCount) {
+      this.logger.log(
+        `Removed ${orphaned.deletedCount} duplicate demo audit templates ` +
+          '(superseded by the core seed catalog).',
       );
-      this.inc('auditTemplates');
     }
+
+    const { created, refreshed } = await seedAuditTemplates(
+      this.auditTemplateModel,
+      ctx.agencyId,
+      ctx.defaultBranchId,
+    );
+    for (let i = 0; i < created + refreshed; i++) this.inc('auditTemplates');
   }
 
   private async seedDealAuditItems(
@@ -1319,20 +1327,35 @@ export class DemoSeedService {
     return pool.length ? rng.pick(pool) : undefined;
   }
 
+  /**
+   * A plausible checklist for a demo deal.
+   *
+   * Categories are the production vocabulary (`Common | Auto | Home |
+   * Landlord`, see `audit-templates.seed.ts`) — this used to branch on
+   * `Property` and `Prior Insurance`, which no longer exist. The gating mirrors
+   * the real generator's policy-type rules; the randomness on top is what makes
+   * the demo board look lived-in rather than uniformly complete.
+   */
   private applicableTemplates(deal: DealRef, rng: Rng) {
+    const isLandlord = deal.policyTypes.some((t) =>
+      t.toLowerCase().includes('landlord'),
+    );
     const isHome = deal.policyTypes.some((t) =>
-      ['home', 'condo', 'landlord', 'dwelling', 'renter'].some((k) =>
+      ['home', 'condo', 'dwelling', 'renter'].some((k) =>
         t.toLowerCase().includes(k),
       ),
     );
-    const isAuto = deal.policyTypes.some((t) =>
-      t.toLowerCase().includes('auto'),
+    const isAuto = deal.policyTypes.some(
+      (t) =>
+        t.toLowerCase().includes('auto') ||
+        t.toLowerCase().includes('motorcycle'),
     );
     return AUDIT_TEMPLATES.filter((t) => {
       if (t.alwaysInclude) return true;
-      if (t.category === 'Property') return isHome && rng.chance(0.6);
+      if (t.category === 'Common') return true;
       if (t.category === 'Auto') return isAuto && rng.chance(0.5);
-      if (t.category === 'Prior Insurance') return deal.isBundle || isHome;
+      if (t.category === 'Home') return isHome && rng.chance(0.6);
+      if (t.category === 'Landlord') return isLandlord && rng.chance(0.6);
       return rng.chance(0.5);
     });
   }

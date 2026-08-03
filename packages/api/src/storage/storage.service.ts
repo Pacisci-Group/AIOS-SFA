@@ -8,7 +8,12 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 export interface PresignedUpload {
@@ -149,6 +154,26 @@ export class StorageService implements OnModuleInit {
     return `agencies/${agencyId}/${purpose}/${year}/${randomUUID()}-${
       safeName || 'file'
     }`;
+  }
+
+  /**
+   * The inverse of {@link buildObjectKey}: reject a key this agency and purpose
+   * did not produce.
+   *
+   * A client hands back the key it was given, so without this check it could
+   * hand back *any* key it knew of — including another agency's object — and
+   * have it attached to its own record. `buildObjectKey` puts `agencyId` and
+   * `purpose` in fixed leading segments, so a prefix test is exact.
+   *
+   * Pass the same `purpose` string that was used to mint the key.
+   */
+  assertKeyOwnership(
+    key: string,
+    { agencyId, purpose }: Omit<BuildObjectKeyInput, 'filename'>,
+  ): void {
+    if (!key.startsWith(`agencies/${agencyId}/${purpose}/`)) {
+      throw new BadRequestException('Invalid document key.');
+    }
   }
 
   /** Presigned PUT URL the browser uploads directly to. */

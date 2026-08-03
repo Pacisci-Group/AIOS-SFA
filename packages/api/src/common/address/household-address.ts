@@ -16,12 +16,12 @@
  * migrated household and a blank street for every demo-seeded one.
  */
 
-export interface StructuredAddress {
-  street: string;
-  city: string;
-  state: string;
-  zip: string;
-}
+// The normalized shape lives in `@sfa/shared` so the wire contracts and this
+// coercion agree by construction. Re-exported because every caller of
+// `normalizeStoredAddress` wants the type alongside it.
+import type { StructuredAddress } from '@sfa/shared';
+
+export type { StructuredAddress };
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';

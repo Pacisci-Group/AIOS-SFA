@@ -4,10 +4,7 @@ import {
   Activity,
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
-import {
-  Household,
-  HouseholdSchema,
-} from '../households/schemas/household.schema';
+import { LeadsModule } from '../leads/leads.module';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { QuoteRecapsController } from './quote-recaps.controller';
 import { QuoteRecapsService } from './quote-recaps.service';
@@ -20,9 +17,11 @@ import { QuoteRecap, QuoteRecapSchema } from './schemas/quote-recap.schema';
     MongooseModule.forFeature([
       { name: QuoteRecap.name, schema: QuoteRecapSchema },
       { name: Lead.name, schema: LeadSchema },
-      { name: Household.name, schema: HouseholdSchema },
       { name: Activity.name, schema: ActivitySchema },
     ]),
+    // For `LeadAccessService` — the shared lead scope clamp and household
+    // resolver. It owns the Household model, so this module no longer needs it.
+    LeadsModule,
   ],
   controllers: [QuoteRecapsController],
   providers: [QuoteRecapsService],

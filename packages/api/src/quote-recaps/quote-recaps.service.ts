@@ -1,13 +1,11 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
-  DataScope,
   QUOTE_ADVANCE_TARGET,
   normalizeLeadStatus,
   quoteAdvanceableStatusValues,
@@ -25,14 +23,13 @@ import {
 } from '../activities/schemas/activity.schema';
 import { resolveHouseholdAddress } from '../common/address/household-address';
 import type { StructuredAddress } from '../common/address/household-address';
+import { roundCents } from '../common/domain/money';
 import {
   ResolvedTenantContext,
   TenantContextResolver,
 } from '../common/tenancy/tenant-context.resolver';
-import {
-  Household,
-  HouseholdDocument,
-} from '../households/schemas/household.schema';
+import { HouseholdDocument } from '../households/schemas/household.schema';
+import { LeadAccessService } from '../leads/lead-access.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { StorageService } from '../storage/storage.service';
 import { CreateQuoteRecapDto } from './dto/create-quote-recap.dto';
@@ -53,11 +50,6 @@ function isDuplicateKeyError(error: unknown): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === DUPLICATE_KEY
   );
-}
-
-/** Money is summed in cents, so `1200.10 + 899.95` cannot drift to `…0499999`. */
-function roundCents(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 const ALLOWED_CONTENT_TYPES = new Set<string>(
@@ -81,12 +73,11 @@ export class QuoteRecapsService {
     @InjectModel(QuoteRecap.name)
     private readonly quoteRecapModel: Model<QuoteRecapDocument>,
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
-    @InjectModel(Household.name)
-    private readonly householdModel: Model<HouseholdDocument>,
     @InjectModel(Activity.name)
     private readonly activityModel: Model<ActivityDocument>,
     private readonly tenancy: TenantContextResolver,
     private readonly storage: StorageService,
+    private readonly leadAccess: LeadAccessService,
   ) {}
 
   /**
@@ -98,8 +89,8 @@ export class QuoteRecapsService {
     branchId: string | null,
     leadId: string,
   ): Promise<QuoteRecapLeadContext> {
-    const lead = await this.loadOwnedLead(access, branchId, leadId);
-    const household = await this.findHousehold(lead, access);
+    const lead = await this.leadAccess.loadOwnedLead(access, branchId, leadId);
+    const household = await this.leadAccess.findHousehold(lead, access);
 
     return {
       leadId: lead._id.toString(),
@@ -129,7 +120,11 @@ export class QuoteRecapsService {
   ): Promise<QuoteDocumentPresignResponse> {
     // Ownership first — a presign is a write, and must not leak the existence
     // of another producer's lead.
-    const lead = await this.loadOwnedLead(access, branchId, dto.leadId);
+    const lead = await this.leadAccess.loadOwnedLead(
+      access,
+      branchId,
+      dto.leadId,
+    );
 
     const key = this.storage.buildObjectKey({
       // From the document, never the request.
@@ -168,20 +163,23 @@ export class QuoteRecapsService {
       if (replay) {
         // Clamp the *found* recap, so a token replayed by another producer 404s
         // rather than handing back someone else's id.
-        this.assertRecapInScope(replay, access, branchId);
+        this.leadAccess.assertOwned(replay, access, branchId);
         const leadStatus = await this.advanceLeadStatus(replay.leadId, tenant);
         return this.toResponse(replay, leadStatus);
       }
     }
 
-    const lead = await this.loadOwnedLead(access, branchId, dto.leadId);
-    const household = await this.resolveHousehold(lead, access);
-
-    this.assertKeyOwnership(
-      dto.quoteDocument.key,
-      tenant.agencyId,
-      lead._id.toString(),
+    const lead = await this.leadAccess.loadOwnedLead(
+      access,
+      branchId,
+      dto.leadId,
     );
+    const household = await this.leadAccess.resolveHousehold(lead, access);
+
+    this.storage.assertKeyOwnership(dto.quoteDocument.key, {
+      agencyId: tenant.agencyId,
+      purpose: `quote-recaps/${lead._id.toString()}`,
+    });
     const stored = await this.verifyQuoteDocument(dto.quoteDocument.key);
 
     const policies = dto.policies.map((p) => ({
@@ -250,124 +248,6 @@ export class QuoteRecapsService {
     }
   }
 
-  /**
-   * Load a lead inside the caller's agency and enforce data scope.
-   *
-   * 404 throughout — the same shape as `ShareLinksService.loadOwnedLink`, and
-   * for the same reason: whether another producer's lead exists is not the
-   * caller's business. Note `Lead.producerId` is optional, so an **unassigned**
-   * lead is also a 404 under `own` scope, which is correct.
-   */
-  private async loadOwnedLead(
-    access: AccessContext,
-    branchId: string | null,
-    leadId: string,
-  ): Promise<LeadDocument> {
-    // A malformed id is a miss, not a 500.
-    if (!Types.ObjectId.isValid(leadId)) {
-      throw new NotFoundException('Lead not found.');
-    }
-
-    const lead = await this.leadModel.findOne({
-      _id: new Types.ObjectId(leadId),
-      agencyId: access.agencyId,
-    });
-    if (!lead) throw new NotFoundException('Lead not found.');
-
-    if (
-      access.dataScope === DataScope.Own &&
-      lead.producerId?.toString() !== access.userId
-    ) {
-      throw new NotFoundException('Lead not found.');
-    }
-    if (
-      access.dataScope === DataScope.Branch &&
-      branchId &&
-      lead.branchId !== branchId
-    ) {
-      throw new NotFoundException('Lead not found.');
-    }
-
-    return lead;
-  }
-
-  /** The same clamp, applied to an already-loaded recap on the replay path. */
-  private assertRecapInScope(
-    recap: QuoteRecapDocument,
-    access: AccessContext,
-    branchId: string | null,
-  ): void {
-    if (
-      access.dataScope === DataScope.Own &&
-      recap.producerId?.toString() !== access.userId
-    ) {
-      throw new NotFoundException('Lead not found.');
-    }
-    if (
-      access.dataScope === DataScope.Branch &&
-      branchId &&
-      recap.branchId !== branchId
-    ) {
-      throw new NotFoundException('Lead not found.');
-    }
-  }
-
-  /**
-   * The lead's household, self-healing the missing link.
-   *
-   * The migration writes only `legacyHouseholdId` on leads — never
-   * `householdId` — so without the legacy fallback every migrated lead would be
-   * unable to record a recap. Mirrors `ResolveHouseholdStep.findExisting`:
-   * each record repairs itself the first time it is touched.
-   */
-  private async findHousehold(
-    lead: LeadDocument,
-    access: AccessContext,
-  ): Promise<HouseholdDocument | null> {
-    if (lead.householdId) {
-      const byId = await this.householdModel.findOne({
-        _id: lead.householdId,
-        agencyId: access.agencyId,
-      });
-      if (byId) return byId;
-    }
-
-    if (lead.legacyHouseholdId) {
-      const byLegacy = await this.householdModel.findOne({
-        agencyId: access.agencyId,
-        legacySmartSuiteId: lead.legacyHouseholdId,
-      });
-      if (byLegacy) {
-        // Fire-and-forget backfill: the next read takes the fast path.
-        await this.leadModel
-          .updateOne({ _id: lead._id }, { $set: { householdId: byLegacy._id } })
-          .catch((error: unknown) => {
-            this.logger.warn(
-              `Failed to backfill householdId on lead ${lead._id.toString()}: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          });
-        return byLegacy;
-      }
-    }
-
-    return null;
-  }
-
-  private async resolveHousehold(
-    lead: LeadDocument,
-    access: AccessContext,
-  ): Promise<HouseholdDocument> {
-    const household = await this.findHousehold(lead, access);
-    if (household) return household;
-
-    // Deliberately not auto-creating one: that would bypass the contact-first
-    // derivation in lead intake, which exists to stop a client acquiring
-    // duplicate households.
-    throw new ConflictException('This lead is not linked to a household yet.');
-  }
-
   private householdAddress(
     lead: LeadDocument,
     household: HouseholdDocument | null,
@@ -388,25 +268,6 @@ export class QuoteRecapsService {
     // The client's address is discarded when it claims "same as household", so
     // it cannot assert one thing and submit another.
     return this.householdAddress(lead, household) ?? undefined;
-  }
-
-  /**
-   * Reject a key that was not issued for this agency and lead.
-   *
-   * `buildObjectKey` produces `agencies/<agencyId>/quote-recaps/<leadId>/…`, so
-   * the prefix test is exact. Without it a caller could hand over any key they
-   * knew of — including another agency's object — and have it attached to their
-   * own record.
-   */
-  private assertKeyOwnership(
-    key: string,
-    agencyId: string,
-    leadId: string,
-  ): void {
-    const prefix = `agencies/${agencyId}/quote-recaps/${leadId}/`;
-    if (!key.startsWith(prefix)) {
-      throw new BadRequestException('Invalid document key.');
-    }
   }
 
   /**

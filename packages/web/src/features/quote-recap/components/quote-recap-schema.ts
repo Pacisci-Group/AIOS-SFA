@@ -3,41 +3,15 @@ import { POLICY_TYPES, isPropertyPolicyType } from "@sfa/shared";
 import type { DefaultValues } from "react-hook-form";
 import { z } from "zod";
 import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/quote-recaps-api";
+import { numericString } from "@/lib/zod-helpers";
 
 const ADDRESS_FIELDS = ["street", "city", "state", "zip"] as const;
 
 /**
- * Premium and item count stay **strings** in form state, which is what a number
- * input actually holds, and are converted at the submit boundary
- * ({@link toPolicyInputs}).
- *
- * The alternative — `z.coerce.number()` — turns an untouched `""` into `0`,
- * which passes `.min(0)`, so a producer who never filled the field silently
- * submits a $0 premium. `z.preprocess` fixes that but makes the schema's input
- * type `unknown`, which breaks react-hook-form's generic inference through
- * every child component. Validating the string is the honest version.
+ * Premium and item count stay **strings** in form state and are converted at
+ * the submit boundary ({@link toPolicyInputs}) — see {@link numericString} for
+ * why coercion in the schema is the wrong shape here.
  */
-function numericString(options: {
-  required: string;
-  min: number;
-  max: number;
-  tooSmall: string;
-  tooLarge: string;
-  integer?: string;
-}) {
-  return z
-    .string()
-    .trim()
-    .min(1, options.required)
-    .refine((v) => !Number.isNaN(Number(v)), "Enter a number")
-    .refine(
-      (v) => options.integer == null || Number.isInteger(Number(v)),
-      options.integer ?? "Whole numbers only",
-    )
-    .refine((v) => Number(v) >= options.min, options.tooSmall)
-    .refine((v) => Number(v) <= options.max, options.tooLarge);
-}
-
 const quotedPolicySchema = z.object({
   policyType: z.enum(POLICY_TYPES),
   premium: numericString({

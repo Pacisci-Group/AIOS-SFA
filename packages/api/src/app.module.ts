@@ -19,9 +19,11 @@ import {
   HOUR_MS,
   MINUTE_MS,
 } from './config/rate-limit.config';
+import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { LeadsModule } from './leads/leads.module';
+import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
 import { HealthController } from './health.controller';
@@ -68,6 +70,10 @@ import { ENV_FILE_PATH } from './config/env.config';
     ShareLinksModule,
     LeadsModule,
     QuoteRecapsModule,
+    PoliciesModule,
+    // Registers the `auditTemplates` model so its indexes build and the core
+    // seed / audit generation can inject it (PAC-40).
+    AuditTemplatesModule,
     FeatureModulesModule,
   ],
   controllers: [HealthController],

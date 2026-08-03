@@ -4,10 +4,12 @@ import { Model } from 'mongoose';
 import { getModelToken } from '@nestjs/mongoose';
 import { ALL_MODULE_KEYS } from '@sfa/shared';
 import { AppModule } from '../app.module';
+import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency } from '../platform/schemas/agency.schema';
 import { User } from '../users/schemas/user.schema';
+import { seedAuditTemplates } from './audit-templates.seed';
 
 /**
  * Core seed — platform-required data only.
@@ -31,6 +33,9 @@ async function seed() {
   const agencyModel = app.get<Model<Agency>>(getModelToken(Agency.name));
   const branchModel = app.get<Model<Branch>>(getModelToken(Branch.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
+  const auditTemplateModel = app.get<Model<AuditTemplate>>(
+    getModelToken(AuditTemplate.name),
+  );
   const permissionsService = app.get(PermissionsService);
 
   // ---------------------------------------------------------------------------
@@ -92,12 +97,12 @@ async function seed() {
   await permissionsService.seedDefaultRoles(agency._id);
   console.log('Default agency roles seeded');
 
-  const branch = await branchModel.findOne({
+  let branch = await branchModel.findOne({
     agencyId: agency._id,
     slug: 'main',
   });
   if (!branch) {
-    await branchModel.create({
+    branch = await branchModel.create({
       agencyId: agency._id,
       name: 'Main',
       slug: 'main',
@@ -107,6 +112,19 @@ async function seed() {
   } else {
     console.log('Branch already exists, skipping create');
   }
+
+  // Post-sale audit checklist (PAC-40). Platform-required, not demo data:
+  // `AuditGenerationService` resolves computed titles against this collection
+  // by exact name, so an agency without it books sold deals that generate no
+  // service hand-off at all — silently, because generation is best-effort.
+  const templates = await seedAuditTemplates(
+    auditTemplateModel,
+    agency._id.toString(),
+    branch._id.toString(),
+  );
+  console.log(
+    `Audit templates seeded (${templates.created} created, ${templates.refreshed} already present)`,
+  );
 
   console.log('\nCore seed complete.');
   console.log(`Super Admin: ${superAdminEmail} / ${superAdminPassword}`);
