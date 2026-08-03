@@ -14,8 +14,8 @@ params:query {
   page: 1
   pageSize: 50
   ~search: rodriguez
-  ~status: New
-  ~temperature: Hot
+  ~status: New,Requote
+  ~temperature: Hot,Warm
   ~leadSource: Mailer
   ~producerId: {{producerId}}
   ~dateFrom: 2026-01-01
@@ -98,18 +98,31 @@ docs {
   - Records flagged `isTestRecord` are always excluded.
 
   ## Query params
-  | param       | type   | default | rules                                              |
-  |-------------|--------|---------|----------------------------------------------------|
-  | page        | int    | 1       | min 1 (1-based)                                    |
-  | pageSize    | int    | 50      | min 1, max 100                                     |
-  | search      | string | —       | max 120 chars; interpreted by shape (see below)    |
-  | status      | string | —       | canonical label, e.g. `New`, `Requote`             |
-  | temperature | enum   | —       | `Hot` \| `Warm` \| `Cold` \| `Unknown`             |
-  | leadSource  | string | —       | canonical label, e.g. `Mailer`                     |
-  | producerId  | string | —       | ObjectId; ignored for `own` scope                  |
-  | dateFrom    | date   | —       | filters `createdDate` (inclusive)                  |
-  | dateTo      | date   | —       | filters `createdDate` (inclusive, whole day)       |
-  | scope       | enum   | —       | `own` \| `agency`; clamped to the caller's scope   |
+  | param       | type    | default | rules                                             |
+  |-------------|---------|---------|---------------------------------------------------|
+  | page        | int     | 1       | min 1 (1-based)                                   |
+  | pageSize    | int     | 50      | min 1, max 100                                    |
+  | search      | string  | —       | max 120 chars; interpreted by shape (see below)   |
+  | status      | multi   | —       | canonical labels, e.g. `New`, `Requote`; max 10   |
+  | temperature | multi   | —       | `Hot` \| `Warm` \| `Cold` \| `Unknown`; max 4     |
+  | leadSource  | string  | —       | canonical label, e.g. `Mailer`                    |
+  | producerId  | string  | —       | ObjectId; ignored for `own` scope                 |
+  | dateFrom    | date    | —       | filters `createdDate` (inclusive)                 |
+  | dateTo      | date    | —       | filters `createdDate` (inclusive, whole day)      |
+  | scope       | enum    | —       | `own` \| `agency`; clamped to the caller's scope  |
+
+  ### Multi-value params (`status`, `temperature`)
+  Both are **multi-select** — several values are ORed together. Three request
+  forms are accepted and normalized identically (trimmed + deduped):
+
+  - repeated: `?status=New&status=Requote`
+  - comma-separated: `?status=New,Requote`
+  - single: `?status=New`
+
+  An empty or whitespace-only value is treated as *no filter*, not as an
+  impossible one — clearing the UI filter never returns an empty list. Each
+  element of `temperature` must be a valid enum member; one bad value rejects
+  the whole request (`400`).
 
   ### How `search` is interpreted
   One branch is chosen by the shape of the query:
@@ -120,8 +133,9 @@ docs {
   3. else → **name** (first, last, or the combined `first last`), **lead source
      label**, or **quote control number**
 
-  Note `status` accepts the canonical label and matches migrated documents that
-  store the raw SmartSuite code — filtering `Requote` also finds `arW7O`.
+  Note `status` accepts canonical labels and matches migrated documents that
+  store the raw SmartSuite code — filtering `Requote` also finds `arW7O`. Each
+  selected label expands to its own code set before the values are ORed.
 
   ## Headers
   - `Authorization: Bearer <accessToken>` — inherited from the collection.
@@ -170,7 +184,8 @@ docs {
   - `401 Unauthorized` — missing/expired access token.
   - `403 Forbidden` — `leads` module disabled, or missing `leads:read`.
   - `400 Bad Request` — invalid query params (e.g. `pageSize` > 100, `page` < 1,
-    an unknown `temperature`, an unparseable `dateFrom`/`dateTo`).
+    an unknown `temperature`, more than 10 `status` values, an unparseable
+    `dateFrom`/`dateTo`).
 
   > **Tip:** the seeded producer (`producer@smithfamily.local`) is the
   > data-rich user for this list. Log in as them to get non-empty results.

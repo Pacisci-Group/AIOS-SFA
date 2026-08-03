@@ -29,8 +29,10 @@ export interface ListLeadsParams {
   page?: number;
   pageSize?: number;
   search?: string;
-  status?: string;
-  temperature?: string;
+  /** Canonical status labels; several are ORed together. */
+  status?: string[];
+  /** Several are ORed together. */
+  temperature?: string[];
   leadSource?: string;
   producerId?: string;
   /** `YYYY-MM-DD` */
@@ -47,9 +49,16 @@ export interface ListLeadsParams {
 export function listLeads(params: ListLeadsParams = {}) {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value != null && value !== '') {
-      search.set(key, String(value));
+    if (value == null || value === '') continue;
+    if (Array.isArray(value)) {
+      // Repeated params (`?status=New&status=Sold`) — Express parses these into
+      // an array, which is what the DTO expects for the multi-value filters.
+      for (const item of value) {
+        search.append(key, String(item));
+      }
+      continue;
     }
+    search.set(key, String(value));
   }
   const qs = search.toString();
   return apiFetch<LeadListResponse>(`/leads${qs ? `?${qs}` : ''}`);

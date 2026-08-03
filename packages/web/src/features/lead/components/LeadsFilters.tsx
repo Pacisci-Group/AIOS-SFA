@@ -1,21 +1,13 @@
-import { LEAD_STATUSES, LEAD_TEMPERATURE_OPTIONS } from "@sfa/shared";
 import { Search, SlidersHorizontal } from "lucide-react";
+import { MultiSelect } from "@/components/common/MultiSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
-  ANY_OPTION,
   countActiveFilters,
-  toFilterValue,
-  toSelectValue,
+  LEAD_STATUS_OPTIONS,
+  LEAD_TEMPERATURE_FILTER_OPTIONS,
   type LeadFilters,
 } from "./lead-filters";
 
@@ -81,39 +73,23 @@ export function LeadsFilters({
         </div>
 
         <div className="flex items-center gap-2">
-          <Select
-            value={toSelectValue(filters.status)}
-            onValueChange={(v) => onChange({ status: toFilterValue(v) })}
-          >
-            <SelectTrigger className="flex-1 md:w-[150px] md:flex-none bg-card border-border">
-              <SelectValue placeholder="All statuses" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ANY_OPTION}>All statuses</SelectItem>
-              {LEAD_STATUSES.map((status) => (
-                <SelectItem key={status} value={status}>
-                  {status}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <MultiSelect
+            options={LEAD_STATUS_OPTIONS}
+            value={filters.status}
+            onChange={(status) => onChange({ status })}
+            placeholder="All statuses"
+            summarize={(count) => `${count} statuses`}
+            className="flex-1 md:w-[150px] md:flex-none"
+          />
 
-          <Select
-            value={toSelectValue(filters.temperature)}
-            onValueChange={(v) => onChange({ temperature: toFilterValue(v) })}
-          >
-            <SelectTrigger className="flex-1 md:w-[150px] md:flex-none bg-card border-border">
-              <SelectValue placeholder="All temperatures" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ANY_OPTION}>All temperatures</SelectItem>
-              {LEAD_TEMPERATURE_OPTIONS.map((temperature) => (
-                <SelectItem key={temperature} value={temperature}>
-                  {temperature}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <MultiSelect
+            options={LEAD_TEMPERATURE_FILTER_OPTIONS}
+            value={filters.temperature}
+            onChange={(temperature) => onChange({ temperature })}
+            placeholder="All temperatures"
+            summarize={(count) => `${count} temperatures`}
+            className="flex-1 md:w-[150px] md:flex-none"
+          />
 
           <Button
             variant="outline"

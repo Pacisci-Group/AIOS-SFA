@@ -1,5 +1,6 @@
-import { LEAD_SOURCE_LABELS, LEAD_STATUSES } from "@sfa/shared";
+import { LEAD_SOURCE_LABELS } from "@sfa/shared";
 import { useQuery } from "@tanstack/react-query";
+import { MultiSelect } from "@/components/common/MultiSelect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,7 +23,8 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { listUsers } from "@/lib/users-api";
 import {
   ANY_OPTION,
-  EMPTY_LEAD_FILTERS,
+  countActiveFilters,
+  LEAD_STATUS_OPTIONS,
   toFilterValue,
   toSelectValue,
   type LeadFilters,
@@ -80,22 +82,14 @@ export function LeadsFilterSheet({
         <div className="flex flex-col gap-5 px-4 overflow-y-auto">
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">Status</Label>
-            <Select
-              value={toSelectValue(filters.status)}
-              onValueChange={(v) => onChange({ status: toFilterValue(v) })}
-            >
-              <SelectTrigger className="w-full bg-card border-border">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ANY_OPTION}>All statuses</SelectItem>
-                {LEAD_STATUSES.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {status}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <MultiSelect
+              options={LEAD_STATUS_OPTIONS}
+              value={filters.status}
+              onChange={(status) => onChange({ status })}
+              placeholder="All statuses"
+              summarize={(count) => `${count} statuses`}
+              className="w-full"
+            />
           </div>
 
           <div className="space-y-2">
@@ -173,9 +167,7 @@ export function LeadsFilterSheet({
           <Button
             variant="outline"
             onClick={onClear}
-            disabled={
-              JSON.stringify(filters) === JSON.stringify(EMPTY_LEAD_FILTERS)
-            }
+            disabled={countActiveFilters(filters) === 0}
           >
             Clear all
           </Button>
