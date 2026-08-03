@@ -4,13 +4,16 @@ import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
+import type { PolicyCheckResponse } from '@sfa/shared';
 import { Activity } from '../src/activities/schemas/activity.schema';
 import { TransactionRunner } from '../src/common/mongo/transaction.runner';
 import { Contact } from '../src/contacts/schemas/contact.schema';
+import { Deal } from '../src/deals/schemas/deal.schema';
 import { Household } from '../src/households/schemas/household.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
+import { Policy } from '../src/policies/schemas/policy.schema';
 import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
 import { StorageService } from '../src/storage/storage.service';
@@ -2060,6 +2063,242 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .get(`/api/v1/quote-recaps/context?leadId=${MISSING_LEAD_ID}`)
         .set(authHeader(liveToken))
+        .expect(401);
+    });
+  });
+
+  describe('Policies (PAC-40 duplicate check)', () => {
+    const CHECK = '/api/v1/policies/check';
+
+    /** Asserting against the shared wire type keeps the tests honest. */
+    const checkBody = (res: request.Response): PolicyCheckResponse =>
+      res.body as PolicyCheckResponse;
+
+    /** The producer's own policy, reachable via its deal. */
+    let ownPolicyId: string;
+    /** A colleague's policy in the same agency — must be reported but masked. */
+    let foreignPolicyId: string;
+
+    beforeAll(async () => {
+      const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      const householdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const otherProducerId = new Types.ObjectId();
+
+      const household = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Dedupe Household',
+        primaryContactName: 'Dana Dedupe',
+        isTestRecord: false,
+      });
+
+      const ownDeal = await dealModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        producerId: producer!._id,
+        householdId: household._id,
+        clientName: 'Dana Dedupe',
+        isTestRecord: false,
+      });
+
+      const foreignDeal = await dealModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        producerId: otherProducerId,
+        clientName: 'Someone Elses Client',
+        isTestRecord: false,
+      });
+
+      const own = await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        policyNumber: 'ABC-123-456',
+        policyNumberKey: 'ABC123456',
+        policyType: 'Auto',
+        carrier: 'Allstate',
+        effectiveDate: new Date('2026-01-15T00:00:00.000Z'),
+        householdId: household._id,
+        dealId: ownDeal._id,
+        isTestRecord: false,
+      });
+      ownPolicyId = own._id.toString();
+
+      const foreign = await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        policyNumber: 'ZZZ-999-000',
+        policyNumberKey: 'ZZZ999000',
+        policyType: 'Home',
+        carrier: 'Allstate',
+        effectiveDate: new Date('2026-02-01T00:00:00.000Z'),
+        dealId: foreignDeal._id,
+        isTestRecord: false,
+      });
+      foreignPolicyId = foreign._id.toString();
+
+      // Must never surface: test records are excluded from the check.
+      await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        policyNumber: 'TST-000-111',
+        policyNumberKey: 'TST000111',
+        policyType: 'Auto',
+        isTestRecord: true,
+      });
+    });
+
+    it('matches regardless of how the producer typed the number', async () => {
+      // The whole point of the normalized key: these are one policy.
+      for (const typed of ['abc123456', 'ABC-123-456', '  abc 123 456  ']) {
+        const res = await request(app.getHttpServer())
+          .get(CHECK)
+          .query({ number: typed })
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect(checkBody(res).normalized).toBe('ABC123456');
+        expect(checkBody(res).matches).toHaveLength(1);
+        expect(checkBody(res).matches[0].id).toBe(ownPolicyId);
+      }
+    });
+
+    it('echoes the query so a stale response can be discarded', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'abc-123-456' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).query).toBe('abc-123-456');
+    });
+
+    it('returns the identifying fields for a match the producer owns', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const match = checkBody(res).matches[0];
+      expect(match).toMatchObject({
+        isOwn: true,
+        policyNumber: 'ABC-123-456',
+        policyType: 'Auto',
+        carrier: 'Allstate',
+        clientName: 'Dana Dedupe',
+      });
+      expect(match.householdId).toEqual(expect.any(String));
+      expect(match.dealId).toEqual(expect.any(String));
+    });
+
+    it("reports a colleague's duplicate but withholds who it belongs to", async () => {
+      // The duplicate a producer most needs warning about is the one they
+      // cannot see — hiding it entirely would defeat the endpoint.
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'zzz-999-000' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).matches).toHaveLength(1);
+      const match = checkBody(res).matches[0];
+      expect(match.id).toBe(foreignPolicyId);
+      expect(match.isOwn).toBe(false);
+      // Enough to answer "is this the same policy, or did I mistype?"...
+      expect(match.policyType).toBe('Home');
+      expect(match.carrier).toBe('Allstate');
+      expect(match.effectiveDate).toEqual(expect.any(String));
+      // ...but not enough to read another producer's book.
+      expect(match.clientName).toBeNull();
+      expect(match.householdId).toBeNull();
+      expect(match.dealId).toBeNull();
+    });
+
+    it('sees everything unmasked at agency scope', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ZZZ999000' })
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(checkBody(res).matches[0].isOwn).toBe(true);
+      expect(checkBody(res).matches[0].clientName).toBe('Someone Elses Client');
+    });
+
+    it('treats input too short to be meaningful as "no opinion"', async () => {
+      // Not a 400: the wizard asks on every blur, including half-typed input.
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'A-1' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).normalized).toBeNull();
+      expect(checkBody(res).matches).toEqual([]);
+    });
+
+    it('returns no matches for an unknown number', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'NOPE-404-404' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).normalized).toBe('NOPE404404');
+      expect(checkBody(res).matches).toEqual([]);
+    });
+
+    it('excludes test records', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'TST-000-111' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).matches).toEqual([]);
+    });
+
+    it('narrows by policy type when the wizard supplies one', async () => {
+      const auto = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456', policyType: 'Auto' })
+        .set(authHeader(producerToken))
+        .expect(200);
+      expect(checkBody(auto).matches).toHaveLength(1);
+
+      // Same number, different line of business — cannot be the same policy.
+      const home = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456', policyType: 'Home' })
+        .set(authHeader(producerToken))
+        .expect(200);
+      expect(checkBody(home).matches).toEqual([]);
+    });
+
+    it('rejects a blank number and an uncatalogued policy type', async () => {
+      await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: '' })
+        .set(authHeader(producerToken))
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456', policyType: 'Property' })
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('requires authentication', async () => {
+      await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456' })
         .expect(401);
     });
   });

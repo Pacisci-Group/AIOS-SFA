@@ -1,0 +1,165 @@
+meta {
+  name: Check Policy Number
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/policies/check?number=ABC-123-456
+  body: none
+  auth: inherit
+}
+
+params:query {
+  number: ABC-123-456
+  ~policyType: Auto
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the check envelope", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("query");
+    expect(body).to.have.property("normalized");
+    expect(body).to.have.property("matches");
+    expect(body.matches).to.be.an("array");
+  });
+
+  test("echoes the query verbatim", function () {
+    expect(res.getBody().query).to.equal("ABC-123-456");
+  });
+
+  test("normalizes punctuation and case away", function () {
+    expect(res.getBody().normalized).to.equal("ABC123456");
+  });
+
+  test("every match carries the fields needed to recognise the policy", function () {
+    // Deliberately tolerant of an empty result: this request runs before any
+    // policy has been created (see the run-order note in the docs below), so
+    // "no matches" is the expected steady state for a clean database.
+    for (const match of res.getBody().matches) {
+      expect(match).to.have.property("id");
+      expect(match).to.have.property("policyNumber");
+      expect(match).to.have.property("policyType");
+      expect(match).to.have.property("carrier");
+      expect(match).to.have.property("effectiveDate");
+      expect(match).to.have.property("isOwn");
+
+      // Identifying fields are withheld for a match outside the caller's scope.
+      if (match.isOwn === false) {
+        expect(match.clientName).to.equal(null);
+        expect(match.householdId).to.equal(null);
+        expect(match.dealId).to.equal(null);
+      }
+    }
+  });
+}
+
+docs {
+  # GET /policies/check — policy-number duplicate check (PAC-40)
+
+  Backs **Card 3** of the Sold wizard. As the producer leaves the policy-number
+  field, the form asks whether a policy with that number already exists in the
+  agency, so it can offer to **link** rather than create a duplicate.
+
+  There is no legacy equivalent — this contract is net-new.
+
+  - **Module:** `deal_audits` (must be enabled for the agency)
+  - **Permission:** `deal_audits:read`
+  - **Data scope:** agency-wide lookup, with out-of-scope rows **masked** (see below)
+
+  > **Why `deal_audits` and not `clients`?** The Sold write path is gated on
+  > `deal_audits` because that is what a Producer's role template actually
+  > grants — it has no `clients:*`, which is where `DealsController` sits.
+  > Gating this on a permission producers lack would make the dedupe silently
+  > unavailable to the only people who use it. A future *general* Policies read
+  > API belongs under `clients` as its own controller.
+  >
+  > ⚠ Consequence: disabling the `deal_audits` module also disables this check.
+
+  ## Query params
+  | param      | type   | required | rules                                        |
+  |------------|--------|----------|----------------------------------------------|
+  | number     | string | yes      | 1–60 chars; normalized before matching       |
+  | policyType | enum   | no       | a canonical `POLICY_TYPES` label; narrows the search |
+
+  ## Matching
+  Both the stored key (`Policy.policyNumberKey`) and the query go through the
+  same normalizer: **uppercase, strip every non-alphanumeric**. So
+  `abc-123-456`, `ABC 123 456` and `abc123456` are one policy.
+
+  A value normalizing to fewer than **4** alphanumerics returns
+  `normalized: null` with an empty `matches` — that is "no opinion", not "no
+  duplicate". It is **not** a 400: the wizard fires this on every blur,
+  including half-typed input, and a validation error there would be noise.
+
+  Test records (`isTestRecord: true`) are never returned. At most **5** matches
+  come back — enough to recognise a policy, not to page through a book.
+
+  ## Masking — the one real design call
+  A match outside the caller's data scope is **reported, but stripped of
+  identifying fields**: `isOwn: false` and `clientName` / `householdId` /
+  `dealId` are `null`.
+
+  Hiding those rows entirely would defeat the endpoint. The duplicate a
+  producer most needs warning about is precisely the one they cannot see —
+  they are about to write a second record for a policy a colleague already
+  sold. `policyType`, `carrier` and `effectiveDate` are what make *"is this the
+  same policy, or did I mistype?"* answerable, so they are shown; who the
+  client is, is not.
+
+  This is deliberately softer than the blanket 404 clamp the write paths use
+  (`POST /quote-recaps`, `POST /sold-deals`): those protect a write **target**.
+
+  Ownership is resolved from the match's **deal**, because `Policy` carries no
+  `producerId`. A policy with no deal cannot be attributed and is therefore
+  masked under `own` scope — mostly migrated rows.
+
+  ## Response `200`
+  ```json
+  {
+    "query": "ABC-123-456",
+    "normalized": "ABC123456",
+    "matches": [
+      {
+        "id": "665f...ac1",
+        "policyNumber": "ABC-123-456",
+        "policyType": "Auto",
+        "carrier": "Allstate",
+        "effectiveDate": "2026-01-15T00:00:00.000Z",
+        "isOwn": true,
+        "clientName": "Dana Dedupe",
+        "householdId": "665f...b02",
+        "dealId": "665f...c73"
+      }
+    ]
+  }
+  ```
+
+  | field         | type           | notes                                              |
+  |---------------|----------------|----------------------------------------------------|
+  | query         | string         | echoed verbatim, so a stale response can be dropped |
+  | normalized    | string \| null | `null` ⇒ input too short; `matches` is then empty   |
+  | policyType    | string         | normalized, so migrated raw choice codes read cleanly |
+  | effectiveDate | string \| null | ISO-8601                                            |
+  | isOwn         | boolean        | `false` ⇒ the three fields below are `null`         |
+
+  ## Errors
+  - `400 Bad Request` — blank/too-long `number`, or a `policyType` outside `POLICY_TYPES`.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `deal_audits` module disabled, or missing `deal_audits:read`.
+
+  ## Run-order note
+  Bruno walks folders alphabetically: `Auth → Deal Audits → Leads → Policies →
+  Public Intake → Quote Recaps → Sold Deals`. This folder therefore runs
+  **before** any policy has been created, so the tests above assert a
+  well-formed envelope rather than a specific hit. The positive-match assertion
+  lives in `Sold Deals/`, after the create.
+}
