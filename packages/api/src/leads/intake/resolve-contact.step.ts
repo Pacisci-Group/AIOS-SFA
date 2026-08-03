@@ -3,7 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { PRIMARY_HOUSEHOLD_ROLE } from '@sfa/shared';
 import type { HouseholdMemberRole } from '@sfa/shared';
 import { Model } from 'mongoose';
-import { Contact, ContactDocument } from '../../contacts/schemas/contact.schema';
+import {
+  Contact,
+  ContactDocument,
+} from '../../contacts/schemas/contact.schema';
 import { pickBestContact } from './contact-match';
 import {
   normalizeEmail,
@@ -64,7 +67,11 @@ export class ResolveContactStep {
     const matched = pickBestContact(candidates, { dateOfBirth, email, phone });
 
     if (matched) {
-      await this.mergeIntoExisting(matched, { email, phone, dateOfBirth }, deps);
+      await this.mergeIntoExisting(
+        matched,
+        { email, phone, dateOfBirth },
+        deps,
+      );
       return {
         contactId: matched._id,
         isNew: false,
@@ -87,8 +94,7 @@ export class ResolveContactStep {
           // including household members, because members were routed through the
           // same function with no role parameter.
           isPrimary: role === 'primary',
-          roleInHousehold:
-            role === 'primary' ? PRIMARY_HOUSEHOLD_ROLE : role,
+          roleInHousehold: role === 'primary' ? PRIMARY_HOUSEHOLD_ROLE : role,
           isTestRecord: false,
         },
       ],
@@ -107,11 +113,12 @@ export class ResolveContactStep {
    * which would let a form demote a Named Insured to "Child".
    */
   private async mergeIntoExisting(
-    matched: Pick<
-      ContactDocument,
-      '_id' | 'emails' | 'phones' | 'dateOfBirth'
-    >,
-    values: { email: string | null; phone: string | null; dateOfBirth: Date | null },
+    matched: Pick<ContactDocument, '_id' | 'emails' | 'phones' | 'dateOfBirth'>,
+    values: {
+      email: string | null;
+      phone: string | null;
+      dateOfBirth: Date | null;
+    },
     deps: StepDeps,
   ): Promise<void> {
     const addToSet: Record<string, string> = {};

@@ -97,7 +97,6 @@ export class LeadsService {
     };
   }
 
-
   /**
    * The Leads list (PAC-36). Everything — search, filters, sort, pagination — is
    * resolved server-side, so `total` is exact for every combination. (Legacy did

@@ -87,7 +87,9 @@ describe('intake normalisation', () => {
 
   describe('toDateKey', () => {
     it('reduces a stored timestamp to its UTC calendar day', () => {
-      expect(toDateKey(new Date('1990-02-05T23:59:59.000Z'))).toBe('1990-02-05');
+      expect(toDateKey(new Date('1990-02-05T23:59:59.000Z'))).toBe(
+        '1990-02-05',
+      );
     });
 
     it('returns null for absent or invalid values', () => {

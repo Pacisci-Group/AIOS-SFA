@@ -41,7 +41,8 @@ export function normalizeName(raw?: string | null): string {
 export function phonesMatch(a: string | null, b: string | null): boolean {
   if (!a || !b) return false;
   if (a === b) return true;
-  const stripUs = (v: string) => (v.length === 11 && v.startsWith('1') ? v.slice(1) : v);
+  const stripUs = (v: string) =>
+    v.length === 11 && v.startsWith('1') ? v.slice(1) : v;
   return stripUs(a) === stripUs(b);
 }
 
@@ -118,6 +119,7 @@ export function buildSubmissionToken(
 ): string | null {
   const token = raw?.trim();
   if (!token) return null;
-  const prefix = channel === 'share_link' ? `SHARE|${shareLinkId ?? 'unknown'}` : 'WEB';
+  const prefix =
+    channel === 'share_link' ? `SHARE|${shareLinkId ?? 'unknown'}` : 'WEB';
   return `${prefix}|${token.toUpperCase()}`;
 }

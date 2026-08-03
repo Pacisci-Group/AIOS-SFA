@@ -38,7 +38,13 @@ const ADDRESS_DEDUPE_WINDOW_DAYS = 90;
  * SmartSuite choice codes: a "Lost" lead may be stored as `jp76g`, so matching
  * on the label alone would silently miss every migrated record.
  */
-const TERMINAL_STATUSES = ['Sold', 'Converted', 'Lost', 'Closed', 'Not Qualified'];
+const TERMINAL_STATUSES = [
+  'Sold',
+  'Converted',
+  'Lost',
+  'Closed',
+  'Not Qualified',
+];
 const TERMINAL_STATUS_VALUES = TERMINAL_STATUSES.flatMap(leadStatusQueryValues);
 
 interface LeadRefs {
@@ -84,7 +90,10 @@ export class ResolveLeadStep {
     }
 
     // --- Signal 3: address + zip ------------------------------------------
-    const addressKey = buildAddressKey(input.address?.street, input.address?.zip);
+    const addressKey = buildAddressKey(
+      input.address?.street,
+      input.address?.zip,
+    );
     if (addressKey) {
       const cutoff = new Date(
         Date.now() - ADDRESS_DEDUPE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
@@ -194,7 +203,9 @@ export class ResolveLeadStep {
     }
     if (
       phone &&
-      !(lead.phones ?? []).map(normalizePhone).some((p) => phonesMatch(p, phone))
+      !(lead.phones ?? [])
+        .map(normalizePhone)
+        .some((p) => phonesMatch(p, phone))
     ) {
       addToSet.phones = phone;
     }

@@ -156,7 +156,8 @@ export class ShareLinksService {
       isActive: link.isActive,
       submissionCount: link.submissionCount,
       lastSubmissionAt: link.lastSubmissionAt?.toISOString() ?? null,
-      createdAt: (link.get('createdAt') as Date | undefined)?.toISOString() ?? '',
+      createdAt:
+        (link.get('createdAt') as Date | undefined)?.toISOString() ?? '',
       revokedAt: link.revokedAt?.toISOString() ?? null,
     };
   }

@@ -7,12 +7,12 @@ import {
 import { Reflector } from '@nestjs/core';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { AccessContext } from '@sfa/shared';
 import { Agency, AgencyDocument } from '../../platform/schemas/agency.schema';
 import {
   SKIP_MODULE_KEY,
   REQUIRE_MODULE_KEY,
 } from '../decorators/access.decorators';
+import { AuthenticatedRequest } from '../types/authenticated-request';
 import { isPublicRoute } from './guard.utils';
 
 @Injectable()
@@ -43,8 +43,8 @@ export class ModuleGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest();
-    const access = request.access as AccessContext | undefined;
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const access = request.access;
     if (!access) {
       throw new ForbiddenException('Authentication required');
     }

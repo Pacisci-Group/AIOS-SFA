@@ -5,9 +5,10 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AccessContext, AccessScope } from '@sfa/shared';
+import { AccessScope } from '@sfa/shared';
 import { SKIP_TENANT_KEY } from '../decorators/access.decorators';
-import { isPublicRoute } from './guard.utils';
+import { AuthenticatedRequest } from '../types/authenticated-request';
+import { asIdString, isPublicRoute } from './guard.utils';
 
 @Injectable()
 export class TenantGuard implements CanActivate {
@@ -26,18 +27,19 @@ export class TenantGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest();
-    const access = request.access as AccessContext | undefined;
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const access = request.access;
     if (!access) {
       throw new ForbiddenException('Authentication required');
     }
 
     if (access.isPlatformAdmin || access.scope === AccessScope.Platform) {
-      const routeAgencyId =
+      const routeAgencyId: unknown =
         request.params?.agencyId ??
         request.query?.agencyId ??
         request.body?.agencyId;
-      request.resolvedAgencyId = routeAgencyId ?? access.agencyId ?? null;
+      request.resolvedAgencyId =
+        asIdString(routeAgencyId) ?? access.agencyId ?? null;
       return true;
     }
 
@@ -45,7 +47,7 @@ export class TenantGuard implements CanActivate {
       throw new ForbiddenException('Agency context required');
     }
 
-    const routeAgencyId =
+    const routeAgencyId: unknown =
       request.params?.agencyId ??
       request.query?.agencyId ??
       request.body?.agencyId;

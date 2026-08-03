@@ -11,7 +11,9 @@ import { parseDateOfBirth } from './intake.normalize';
 const idA = new Types.ObjectId('000000000000000000000001');
 const idB = new Types.ObjectId('000000000000000000000002');
 
-function candidate(overrides: Partial<ContactCandidate> = {}): ContactCandidate {
+function candidate(
+  overrides: Partial<ContactCandidate> = {},
+): ContactCandidate {
   return { _id: idA, emails: [], phones: [], dateOfBirth: null, ...overrides };
 }
 

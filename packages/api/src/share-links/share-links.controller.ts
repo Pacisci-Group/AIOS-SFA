@@ -30,7 +30,8 @@ export class ShareLinksController {
   create(
     @Access() access: AccessContext,
     @BranchId() branchId: string | null,
-    @Body(new ZodValidationPipe(createShareLinkSchema)) body: CreateShareLinkDto,
+    @Body(new ZodValidationPipe(createShareLinkSchema))
+    body: CreateShareLinkDto,
   ) {
     return this.shareLinksService.create(access, branchId, body);
   }

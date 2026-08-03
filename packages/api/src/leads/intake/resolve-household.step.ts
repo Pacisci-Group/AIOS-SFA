@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Contact, ContactDocument } from '../../contacts/schemas/contact.schema';
+import {
+  Contact,
+  ContactDocument,
+} from '../../contacts/schemas/contact.schema';
 import {
   Household,
   HouseholdDocument,
@@ -107,7 +110,10 @@ export class ResolveHouseholdStep {
     const firstName = normalizeName(input.primaryContact.firstName);
     const email = normalizeEmail(input.primaryContact.email);
     const phone = normalizePhone(input.primaryContact.phone);
-    const addressKey = buildAddressKey(input.address?.street, input.address?.zip);
+    const addressKey = buildAddressKey(
+      input.address?.street,
+      input.address?.zip,
+    );
 
     const [created] = await this.householdModel.create(
       [
@@ -155,7 +161,10 @@ export class ResolveHouseholdStep {
       Object.keys(household.propertyAddress).length > 0;
     if (hasAddress) return;
 
-    const addressKey = buildAddressKey(input.address?.street, input.address?.zip);
+    const addressKey = buildAddressKey(
+      input.address?.street,
+      input.address?.zip,
+    );
     await this.householdModel.updateOne(
       { _id: household._id },
       {

@@ -1,9 +1,10 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { AccessContext, JwtPayload } from '@sfa/shared';
+import { AuthenticatedRequest } from '../types/authenticated-request';
 
 export const CurrentUser = createParamDecorator(
-  (_data: unknown, ctx: ExecutionContext): JwtPayload => {
-    const request = ctx.switchToHttp().getRequest();
+  (_data: unknown, ctx: ExecutionContext): JwtPayload | undefined => {
+    const request = ctx.switchToHttp().getRequest<AuthenticatedRequest>();
     return request.user;
   },
 );
@@ -23,14 +24,14 @@ export const Access = createParamDecorator(
 
 export const AgencyId = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): string | null => {
-    const request = ctx.switchToHttp().getRequest();
+    const request = ctx.switchToHttp().getRequest<AuthenticatedRequest>();
     return request.resolvedAgencyId ?? request.user?.agencyId ?? null;
   },
 );
 
 export const BranchId = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): string | null => {
-    const request = ctx.switchToHttp().getRequest();
+    const request = ctx.switchToHttp().getRequest<AuthenticatedRequest>();
     return request.resolvedBranchId ?? request.user?.branchId ?? null;
   },
 );

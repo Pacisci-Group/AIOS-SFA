@@ -63,8 +63,9 @@ describe('SFA API (e2e)', () => {
         .get('/api/v1/health')
         .expect(200);
 
-      expect(res.body.status).toBe('ok');
-      expect(res.body.service).toBe('sfa-api');
+      const body = res.body as { status: string; service: string };
+      expect(body.status).toBe('ok');
+      expect(body.service).toBe('sfa-api');
     });
   });
 
@@ -75,10 +76,15 @@ describe('SFA API (e2e)', () => {
         .send({ email: seed.ownerEmail, password: TEST_PASSWORD })
         .expect(201);
 
-      expect(res.body.accessToken).toBeDefined();
-      expect(res.body.refreshToken).toBeDefined();
-      expect(res.body.user.email).toBe(seed.ownerEmail);
-      expect(res.body.user.permissions.length).toBeGreaterThan(0);
+      const body = res.body as {
+        accessToken: string;
+        refreshToken: string;
+        user: { email: string; permissions: string[] };
+      };
+      expect(body.accessToken).toBeDefined();
+      expect(body.refreshToken).toBeDefined();
+      expect(body.user.email).toBe(seed.ownerEmail);
+      expect(body.user.permissions.length).toBeGreaterThan(0);
     });
 
     it('POST /api/v1/auth/login — invalid credentials', async () => {
@@ -101,7 +107,7 @@ describe('SFA API (e2e)', () => {
         .send({ refreshToken })
         .expect(201);
 
-      expect(res.body.accessToken).toBeDefined();
+      expect((res.body as { accessToken: string }).accessToken).toBeDefined();
     });
 
     it('POST /api/v1/auth/refresh — invalid token', async () => {
@@ -127,13 +133,17 @@ describe('SFA API (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/auth/accept-invite')
         .send({
-          token: inviteRes.body.inviteToken,
+          token: (inviteRes.body as { inviteToken: string }).inviteToken,
           password: 'InvitePass123!',
         })
         .expect(201);
 
-      expect(res.body.accessToken).toBeDefined();
-      expect(res.body.user.email).toBe('invited-user@sfa.local');
+      const body = res.body as {
+        accessToken: string;
+        user: { email: string };
+      };
+      expect(body.accessToken).toBeDefined();
+      expect(body.user.email).toBe('invited-user@sfa.local');
     });
   });
 
@@ -145,7 +155,7 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBeGreaterThanOrEqual(1);
+      expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(1);
     });
 
     it('GET /api/v1/platform/agencies/:agencyId', async () => {
@@ -154,7 +164,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(superAdminToken))
         .expect(200);
 
-      expect(res.body.slug).toBe('test-agency');
+      expect((res.body as { slug: string }).slug).toBe('test-agency');
     });
 
     it('POST /api/v1/platform/agencies', async () => {
@@ -164,7 +174,7 @@ describe('SFA API (e2e)', () => {
         .send({ name: 'New Agency', slug: 'new-agency' })
         .expect(201);
 
-      expect(res.body.slug).toBe('new-agency');
+      expect((res.body as { slug: string }).slug).toBe('new-agency');
     });
 
     it('PATCH /api/v1/platform/agencies/:agencyId/modules', async () => {
@@ -174,7 +184,10 @@ describe('SFA API (e2e)', () => {
         .send({ modules: { mailers: { enabled: false } } })
         .expect(200);
 
-      expect(res.body.modules.mailers.enabled).toBe(false);
+      const body = res.body as {
+        modules: Record<string, { enabled: boolean }>;
+      };
+      expect(body.modules.mailers.enabled).toBe(false);
 
       // Re-enable for other tests
       await request(app.getHttpServer())
@@ -199,10 +212,9 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(res.body.length).toBeGreaterThanOrEqual(5);
-      expect(
-        res.body.some((r: { slug: string }) => r.slug === 'producer'),
-      ).toBe(true);
+      const roles = res.body as { slug: string }[];
+      expect(roles.length).toBeGreaterThanOrEqual(5);
+      expect(roles.some((r) => r.slug === 'producer')).toBe(true);
     });
 
     it('GET /api/v1/roles/:roleId', async () => {
@@ -211,8 +223,9 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(res.body.slug).toBe('producer');
-      expect(res.body.permissions).toContain('leads:read');
+      const body = res.body as { slug: string; permissions: string[] };
+      expect(body.slug).toBe('producer');
+      expect(body.permissions).toContain('leads:read');
     });
 
     it('GET /api/v1/roles — forbidden for producer', async () => {
@@ -234,13 +247,15 @@ describe('SFA API (e2e)', () => {
         })
         .expect(200);
 
+      const body = res.body as { permissions: string[] };
+
       // Write always carries read; a `none` level removes the page entirely.
-      expect(res.body.permissions).toContain('leads:read');
-      expect(res.body.permissions).toContain('leads:write');
-      expect(res.body.permissions).not.toContain('mailers:read');
+      expect(body.permissions).toContain('leads:read');
+      expect(body.permissions).toContain('leads:write');
+      expect(body.permissions).not.toContain('mailers:read');
 
       // Only page read/write or owner-only admin strings may be persisted.
-      for (const permission of res.body.permissions as string[]) {
+      for (const permission of body.permissions) {
         const isAdmin =
           permission.startsWith('agency:') ||
           permission.startsWith('platform:');
@@ -257,9 +272,10 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       // Page levels change, but agency-admin permissions are never dropped.
-      expect(res.body.permissions).toContain('agency:roles:read');
-      expect(res.body.permissions).toContain('agency:roles:write');
-      expect(res.body.permissions).toContain('leads:read');
+      const body = res.body as { permissions: string[] };
+      expect(body.permissions).toContain('agency:roles:read');
+      expect(body.permissions).toContain('agency:roles:write');
+      expect(body.permissions).toContain('leads:read');
     });
 
     it('PATCH /api/v1/roles/:roleId — forbidden for producer', async () => {
@@ -278,7 +294,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(res.body.length).toBeGreaterThanOrEqual(1);
+      expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(1);
     });
 
     it('GET /api/v1/branches/:branchId', async () => {
@@ -287,7 +303,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(res.body.slug).toBe('test-branch');
+      expect((res.body as { slug: string }).slug).toBe('test-branch');
     });
 
     it('POST /api/v1/branches', async () => {
@@ -297,7 +313,7 @@ describe('SFA API (e2e)', () => {
         .send({ name: 'Downtown', slug: 'downtown' })
         .expect(201);
 
-      expect(res.body.slug).toBe('downtown');
+      expect((res.body as { slug: string }).slug).toBe('downtown');
     });
 
     it('GET /api/v1/branches — forbidden for producer', async () => {
@@ -318,7 +334,7 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBeGreaterThanOrEqual(2);
+      expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(2);
     });
 
     it('GET /api/v1/users/assignable-permissions', async () => {
@@ -337,16 +353,18 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      invitedUserId = list.body.find(
-        (u: { email: string }) => u.email === seed.producerEmail,
-      )._id;
+      const users = list.body as { _id: string; email: string }[];
+      const producer = users.find((u) => u.email === seed.producerEmail);
+      expect(producer).toBeDefined();
+      invitedUserId = producer!._id;
 
       const res = await request(app.getHttpServer())
         .get(`/api/v1/users/${invitedUserId}`)
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(res.body.effectivePermissions).toContain('leads:read');
+      const body = res.body as { effectivePermissions: string[] };
+      expect(body.effectivePermissions).toContain('leads:read');
     });
 
     it('PATCH /api/v1/users/:userId/roles', async () => {
@@ -356,7 +374,7 @@ describe('SFA API (e2e)', () => {
         .send({ roleIds: [seed.producerRoleId] })
         .expect(200);
 
-      expect(res.body.roleIds.length).toBe(1);
+      expect((res.body as { roleIds: string[] }).roleIds.length).toBe(1);
     });
 
     it('PATCH /api/v1/users/:userId/permissions — per-page overrides', async () => {
@@ -373,9 +391,10 @@ describe('SFA API (e2e)', () => {
         })
         .expect(200);
 
-      expect(res.body.effectivePermissions).toContain('mailers:read');
-      expect(res.body.effectivePermissions).not.toContain('leads:write');
-      expect(res.body.effectivePermissions).toContain('leads:read');
+      const body = res.body as { effectivePermissions: string[] };
+      expect(body.effectivePermissions).toContain('mailers:read');
+      expect(body.effectivePermissions).not.toContain('leads:write');
+      expect(body.effectivePermissions).toContain('leads:read');
     });
 
     it('PATCH /api/v1/users/:userId/permissions — reset restores role defaults', async () => {
@@ -390,9 +409,10 @@ describe('SFA API (e2e)', () => {
         })
         .expect(200);
 
-      expect(res.body.effectivePermissions).not.toContain('mailers:read');
-      expect(res.body.effectivePermissions).toContain('leads:write');
-      expect(res.body.effectivePermissions).toContain('leads:read');
+      const body = res.body as { effectivePermissions: string[] };
+      expect(body.effectivePermissions).not.toContain('mailers:read');
+      expect(body.effectivePermissions).toContain('leads:write');
+      expect(body.effectivePermissions).toContain('leads:read');
     });
 
     it('GET /api/v1/users — forbidden for producer', async () => {
@@ -432,12 +452,11 @@ describe('SFA API (e2e)', () => {
           .set(authHeader(ownerToken))
           .expect(200);
 
+        const body = res.body as { module?: string; status: string };
         if (path !== 'files') {
-          expect(res.body.module).toBe(module);
-          expect(res.body.status).toBe('ready');
-        } else {
-          expect(res.body.status).toBe('ready');
+          expect(body.module).toBe(module);
         }
+        expect(body.status).toBe('ready');
       },
     );
 
@@ -447,7 +466,9 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(producerToken))
         .expect(200);
 
-      expect(res.body.module).toBe(ModuleKey.QuoteRecaps);
+      expect((res.body as { module: string }).module).toBe(
+        ModuleKey.QuoteRecaps,
+      );
     });
 
     it('GET /api/v1/command-center — forbidden for producer', async () => {
@@ -463,7 +484,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(producerToken))
         .expect(200);
 
-      expect(res.body.status).toBe('updated');
+      expect((res.body as { status: string }).status).toBe('updated');
     });
 
     it('PATCH /api/v1/performance — forbidden without write (read-only page)', async () => {
@@ -524,7 +545,7 @@ describe('SFA API (e2e)', () => {
           .set(authHeader(readOnlyToken))
           .expect(200);
 
-        expect(res.body.module).toBe(module);
+        expect((res.body as { module: string }).module).toBe(module);
       },
     );
 
@@ -546,8 +567,9 @@ describe('SFA API (e2e)', () => {
           .set(authHeader(ownerToken))
           .expect(200);
 
-        expect(res.body.module).toBe(module);
-        expect(res.body.status).toBe('updated');
+        const body = res.body as { module: string; status: string };
+        expect(body.module).toBe(module);
+        expect(body.status).toBe('updated');
       },
     );
 
@@ -866,10 +888,7 @@ describe('SFA API (e2e)', () => {
     });
 
     it('creates a lead, household and contact, and returns the lead id', async () => {
-      const body = await createAs(
-        producerToken,
-        payload('Alderton'),
-      );
+      const body = await createAs(producerToken, payload('Alderton'));
       expect(body.id).toMatch(/^[a-f0-9]{24}$/);
 
       const lead = await leadModel.findById(body.id);
@@ -888,10 +907,7 @@ describe('SFA API (e2e)', () => {
 
     it('assigns the lead to the creating producer and shows it in their list', async () => {
       const producer = await userModel.findOne({ email: seed.producerEmail });
-      const created = await createAs(
-        producerToken,
-        payload('Bexley'),
-      );
+      const created = await createAs(producerToken, payload('Bexley'));
 
       const lead = await leadModel.findById(created.id);
       expect(lead!.producerId?.toString()).toBe(producer!._id.toString());
@@ -912,10 +928,7 @@ describe('SFA API (e2e)', () => {
     // should change deliberately.
     it('assigns an owner-created lead to the owner', async () => {
       const owner = await userModel.findOne({ email: seed.ownerEmail });
-      const created = await createAs(
-        ownerToken,
-        payload('Corvain'),
-      );
+      const created = await createAs(ownerToken, payload('Corvain'));
 
       const lead = await leadModel.findById(created.id);
       expect(lead!.producerId?.toString()).toBe(owner!._id.toString());
@@ -977,7 +990,9 @@ describe('SFA API (e2e)', () => {
       );
 
       expect(second.id).not.toBe(first.id);
-      expect(await contactModel.countDocuments({ lastName: 'Fairholm' })).toBe(1);
+      expect(await contactModel.countDocuments({ lastName: 'Fairholm' })).toBe(
+        1,
+      );
 
       const leadOne = await leadModel.findById(first.id);
       const leadTwo = await leadModel.findById(second.id);
@@ -1018,7 +1033,9 @@ describe('SFA API (e2e)', () => {
         ),
       );
 
-      expect(await contactModel.countDocuments({ lastName: 'Grieves' })).toBe(2);
+      expect(await contactModel.countDocuments({ lastName: 'Grieves' })).toBe(
+        2,
+      );
     });
 
     it('creates member contacts with the right role and isPrimary=false', async () => {
@@ -1137,7 +1154,11 @@ describe('SFA API (e2e)', () => {
       revokedAt: string | null;
     }
 
-    const mintAs = async (token: string, body: unknown = {}, expected = 201) => {
+    const mintAs = async (
+      token: string,
+      body: unknown = {},
+      expected = 201,
+    ) => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/leads/share-links')
         .set(authHeader(token))
@@ -1147,7 +1168,9 @@ describe('SFA API (e2e)', () => {
     };
 
     it('mints a link with an opaque token and a public url', async () => {
-      const link = await mintAs(producerToken, { label: 'Dave at First National' });
+      const link = await mintAs(producerToken, {
+        label: 'Dave at First National',
+      });
 
       expect(link.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(link.url).toContain(`/f/lead/${link.token}`);
@@ -1469,18 +1492,25 @@ describe('SFA API (e2e)', () => {
 
       const accepted = await request(app.getHttpServer())
         .post('/api/v1/auth/accept-invite')
-        .send({ token: invite.body.inviteToken, password: 'LivePass123!' })
+        .send({
+          token: (invite.body as { inviteToken: string }).inviteToken,
+          password: 'LivePass123!',
+        })
         .expect(201);
 
-      liveToken = accepted.body.accessToken;
-      liveUserId = accepted.body.user.id;
+      const session = accepted.body as {
+        accessToken: string;
+        user: { id: string };
+      };
+      liveToken = session.accessToken;
+      liveUserId = session.user.id;
     });
 
     it('signed access token does not embed the permissions array', () => {
       const [, payload] = liveToken.split('.');
       const claims = JSON.parse(
         Buffer.from(payload, 'base64').toString('utf8'),
-      );
+      ) as Record<string, unknown>;
       expect(claims.sub).toBeDefined();
       expect(claims.permissions).toBeUndefined();
       expect(claims.dataScope).toBeUndefined();

@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Contact, ContactDocument } from '../../contacts/schemas/contact.schema';
+import {
+  Contact,
+  ContactDocument,
+} from '../../contacts/schemas/contact.schema';
 import {
   Household,
   HouseholdDocument,

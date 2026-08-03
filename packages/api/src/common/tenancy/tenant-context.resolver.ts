@@ -34,7 +34,9 @@ export class TenantContextResolver {
     // to file the record under. An explicit 403 beats writing a record with a
     // null agencyId that no read path would ever return.
     if (!access.agencyId) {
-      throw new ForbiddenException('This action requires an agency-scoped user.');
+      throw new ForbiddenException(
+        'This action requires an agency-scoped user.',
+      );
     }
 
     const branchId =
