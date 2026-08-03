@@ -783,6 +783,45 @@ describe('SFA API (e2e)', () => {
       expect(body.items[0].status).toBe('Requote');
     });
 
+    it('status accepts several values at once (repeated param)', async () => {
+      // Requote (stored as the raw `arW7O`) OR New — both of the producer's
+      // leads, proving the label/code expansion survives the multi-select.
+      const body = await listAs(producerToken, '?status=Requote&status=New');
+
+      expect(body.total).toBe(2);
+      expect(body.items.map((i) => i.name).sort()).toEqual([
+        'John Smith',
+        'Maria Rodriguez',
+      ]);
+    });
+
+    it('status also accepts the comma-separated form', async () => {
+      const repeated = await listAs(
+        producerToken,
+        '?status=Requote&status=New',
+      );
+      const commas = await listAs(producerToken, '?status=Requote,New');
+
+      expect(commas.total).toBe(repeated.total);
+    });
+
+    it('temperature accepts several values at once', async () => {
+      const hot = await listAs(producerToken, '?temperature=Hot');
+      const both = await listAs(producerToken, '?temperature=Hot,Cold');
+
+      expect(hot.total).toBe(1);
+      expect(hot.items[0].name).toBe('Maria Rodriguez');
+      // Maria (Hot) + John (Cold). The Warm lead belongs to another producer.
+      expect(both.total).toBe(2);
+    });
+
+    it('rejects an unknown temperature even alongside valid ones (400)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads?temperature=Hot&temperature=Tepid')
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
     it('rows expose only display fields', async () => {
       const body = await listAs(producerToken);
       const row = body.items[0] as unknown as Record<string, unknown>;
