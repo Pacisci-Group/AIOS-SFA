@@ -25,8 +25,14 @@ const ServiceDashboardPage = lazy(
 const TicketWorkspacePage = lazy(
   () => import('@/features/tickets/TicketWorkspacePage'),
 );
+const ArchivedTicketsPage = lazy(
+  () => import('@/features/tickets/ArchivedTicketsPage'),
+);
 const HouseholdDetailsPage = lazy(
   () => import('@/features/household/HouseholdDetailsPage'),
+);
+const PolicyDetailPage = lazy(
+  () => import('@/features/policy/PolicyDetailPage'),
 );
 const LeadDetailsPage = lazy(() => import('@/features/lead/LeadDetailsPage'));
 const RolePermissionsPage = lazy(
@@ -143,6 +149,14 @@ export function App() {
                       </LazyPage>
                     }
                   />
+                  <Route
+                    path="/crm/tickets/archived"
+                    element={
+                      <LazyPage>
+                        <ArchivedTicketsPage />
+                      </LazyPage>
+                    }
+                  />
                 </Route>
 
                 <Route
@@ -192,9 +206,34 @@ export function App() {
                 />
               </Route>
 
+              {/* The mock demo page stays behind the Clients page permission —
+                  it is what the (Clients-gated) Households nav item points at.
+                  Declared before `/clients/:id` so the literal segment wins. */}
               <Route
                 element={
                   <RequirePermission permission={`${ModuleKey.Clients}:read`} />
+                }
+              >
+                <Route
+                  path="/clients/demo"
+                  element={
+                    <LazyPage>
+                      <HouseholdDetailsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Household and policy records also render inside the CRM
+                  ticket detail, so either page permission grants access. */}
+              <Route
+                element={
+                  <RequirePermission
+                    anyOf={[
+                      `${ModuleKey.Clients}:read`,
+                      `${ModuleKey.CrmService}:read`,
+                    ]}
+                  />
                 }
               >
                 <Route
@@ -206,10 +245,10 @@ export function App() {
                   }
                 />
                 <Route
-                  path="/clients/demo"
+                  path="/policies/:id"
                   element={
                     <LazyPage>
-                      <HouseholdDetailsPage />
+                      <PolicyDetailPage />
                     </LazyPage>
                   }
                 />

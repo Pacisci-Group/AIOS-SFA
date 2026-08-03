@@ -64,3 +64,8 @@ PolicySchema.index(
   { unique: true, sparse: true },
 );
 PolicySchema.index({ agencyId: 1, householdId: 1 });
+
+// Renewal outreach scans the book by renewal window on every desk read.
+// Without this the scan is a full collection scan — `renewalDate` had no index
+// at all before proactive renewals existed.
+PolicySchema.index({ agencyId: 1, active: 1, renewalDate: 1 });

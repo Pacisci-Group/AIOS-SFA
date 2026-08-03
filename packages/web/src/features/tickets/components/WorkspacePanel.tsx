@@ -14,48 +14,54 @@ import {
   User,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
-import type { ServiceTicketNoteType } from "@sfa/shared";
-import { Ticket, TicketStatus, TimelineEntry } from "./ticket-data";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  SERVICE_TICKET_PICKER_STATUSES,
+  type OnboardingChecklistKey,
+  type OnboardingStepKey,
+  type RenewalOutcome,
+  type RenewalStepKey,
+  type ServiceTicketNoteType,
+} from "@sfa/shared";
+import { HouseholdDrawer } from "@/features/clients/components/HouseholdDrawer";
+import { PolicyDrawer } from "@/features/clients/components/PolicyDrawer";
+import { OnboardingPanel } from "./OnboardingPanel";
+import { RenewalPanel } from "./RenewalPanel";
+import {
+  TICKET_STATUS_CONFIG as STATUS_CONFIG,
+  Ticket,
+  TicketStatus,
+  TimelineEntry,
+} from "./ticket-data";
 
 interface WorkspacePanelProps {
   ticket: Ticket | null;
   onChangeStatus?: (id: string, status: TicketStatus) => void;
   onAddNote?: (id: string, content: string, type: ServiceTicketNoteType) => void;
   isMutating?: boolean;
+  /** Gates the onboarding controls; falls back to read-only when omitted. */
+  canWrite?: boolean;
+  onCompleteOnboardingStep?: (id: string, stepKey: OnboardingStepKey) => void;
+  onToggleOnboardingChecklist?: (
+    id: string,
+    key: OnboardingChecklistKey,
+    value: boolean,
+  ) => void;
+  /** Gates the renewal controls; falls back to read-only when omitted. */
+  onToggleRenewalPolicy?: (
+    id: string,
+    policyId: string,
+    discussed: boolean,
+  ) => void;
+  onCompleteRenewalStep?: (
+    id: string,
+    stepKey: RenewalStepKey,
+    outcome?: RenewalOutcome,
+  ) => void;
+  onChangeRenewalOutcome?: (id: string, outcome: RenewalOutcome) => void;
 }
 
 type DropStatus = TicketStatus;
-
-const STATUS_CONFIG: Record<
-  DropStatus,
-  { label: string; bg: string; text: string; dot: string }
-> = {
-  open: {
-    label: "Open",
-    bg: "bg-[var(--kpi-blue-bg)]",
-    text: "text-[var(--kpi-blue)]",
-    dot: "bg-[var(--kpi-blue)]",
-  },
-  waiting: {
-    label: "Waiting",
-    bg: "bg-[var(--kpi-purple-bg)]",
-    text: "text-[var(--kpi-purple)]",
-    dot: "bg-[var(--kpi-purple)]",
-  },
-  resolved: {
-    label: "Resolved",
-    bg: "bg-[var(--kpi-green-bg)]",
-    text: "text-[var(--kpi-green)]",
-    dot: "bg-[var(--kpi-green)]",
-  },
-  overdue: {
-    label: "Overdue",
-    bg: "bg-[var(--kpi-amber-bg)]",
-    text: "text-[var(--kpi-amber)]",
-    dot: "bg-[var(--kpi-amber)]",
-  },
-};
 
 const TIMELINE_ICONS: Record<TimelineEntry["type"], React.ReactNode> = {
   created: <Plus className="w-3.5 h-3.5" />,
@@ -106,12 +112,40 @@ export function WorkspacePanel({
   onChangeStatus,
   onAddNote,
   isMutating,
+  canWrite,
+  onCompleteOnboardingStep,
+  onToggleOnboardingChecklist,
+  onToggleRenewalPolicy,
+  onCompleteRenewalStep,
+  onChangeRenewalOutcome,
 }: WorkspacePanelProps) {
   const [note, setNote] = useState("");
   const [statusDropdown, setStatusDropdown] = useState(false);
   const [noteType, setNoteType] = useState<ServiceTicketNoteType>("note");
   const [noteTypeDropdown, setNoteTypeDropdown] = useState(false);
+  const [householdOpen, setHouseholdOpen] = useState(false);
+  const [policyOpen, setPolicyOpen] = useState(false);
   const noteCfg = NOTE_TYPE_CONFIG[noteType];
+
+  // This pane scrolls independently of the ticket feed, so its scroll position
+  // survives a ticket change — landing the reader midway down a ticket they
+  // just opened. Reset to the top whenever the selection changes.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [ticket?.id]);
+
+  // Newest activity first: what happened last is what the CSR needs, and the
+  // API returns the timeline in the order it was appended. Sorted by `at`
+  // rather than reversed, since entries are not guaranteed to be stored in
+  // chronological order — a backdated seed or fixture can interleave them.
+  const orderedTimeline = useMemo(
+    () =>
+      [...(ticket?.timeline ?? [])].sort(
+        (a, b) => Date.parse(b.at) - Date.parse(a.at),
+      ),
+    [ticket?.timeline],
+  );
 
   // The ticket's persisted status from the server is the source of truth.
   const status: DropStatus = ticket?.status ?? "open";
@@ -165,7 +199,7 @@ export function WorkspacePanel({
               </button>
               {statusDropdown && (
                 <div className="absolute right-0 top-full mt-1 bg-popover border border-border rounded-md shadow-lg z-20 min-w-[130px] py-0.5">
-                  {(Object.keys(STATUS_CONFIG) as DropStatus[]).map((s) => {
+                  {SERVICE_TICKET_PICKER_STATUSES.map((s) => {
                     const c = STATUS_CONFIG[s];
                     return (
                       <button
@@ -195,7 +229,10 @@ export function WorkspacePanel({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] px-5 py-4 space-y-4">
+      <div
+        ref={scrollRef}
+        className="flex-1 min-h-0 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] px-5 py-4 space-y-4"
+      >
         {/* Data grid */}
         <div className="bg-card rounded-lg border border-border p-4">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
@@ -220,10 +257,22 @@ export function WorkspacePanel({
             <DataRow
               label="Policy Linked"
               value={
-                <button className="flex items-center gap-1 text-[var(--kpi-blue)] hover:underline">
-                  {ticket.policyType} — {ticket.policyNumber}
-                  <ExternalLink className="w-3 h-3" />
-                </button>
+                // Only a ticket with a real linked record opens the drawer;
+                // otherwise show the denormalized display string as plain text.
+                ticket.policyId ? (
+                  <button
+                    type="button"
+                    onClick={() => setPolicyOpen(true)}
+                    className="flex items-center gap-1 text-[var(--kpi-blue)] hover:underline"
+                  >
+                    {ticket.policyType} — {ticket.policyNumber}
+                    <ExternalLink className="w-3 h-3" />
+                  </button>
+                ) : (
+                  <span>
+                    {ticket.policyType} — {ticket.policyNumber}
+                  </span>
+                )
               }
             />
             <DataRow
@@ -245,11 +294,22 @@ export function WorkspacePanel({
             <DataRow
               label="Household"
               value={
-                <button className="flex items-center gap-1 text-[var(--kpi-blue)] hover:underline">
-                  <Users className="w-3 h-3" />
-                  {ticket.household}
-                  <ExternalLink className="w-3 h-3" />
-                </button>
+                ticket.householdId ? (
+                  <button
+                    type="button"
+                    onClick={() => setHouseholdOpen(true)}
+                    className="flex items-center gap-1 text-[var(--kpi-blue)] hover:underline"
+                  >
+                    <Users className="w-3 h-3" />
+                    {ticket.household}
+                    <ExternalLink className="w-3 h-3" />
+                  </button>
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <Users className="w-3 h-3" />
+                    {ticket.household}
+                  </span>
+                )
               }
             />
             <DataRow
@@ -269,6 +329,41 @@ export function WorkspacePanel({
           </div>
         </div>
 
+        {/* Onboarding steps — the only category-specific panel. Absent for
+            every other category, so nothing shifts for a normal ticket. */}
+        {ticket.onboarding && onCompleteOnboardingStep ? (
+          <OnboardingPanel
+            step={ticket.onboarding}
+            canWrite={canWrite ?? false}
+            isMutating={isMutating}
+            onCompleteStep={(stepKey) =>
+              onCompleteOnboardingStep(ticket.id, stepKey)
+            }
+            onToggleChecklist={(key, value) =>
+              onToggleOnboardingChecklist?.(ticket.id, key, value)
+            }
+          />
+        ) : null}
+
+        {/* Renewal outreach — the sibling category panel. A ticket never
+            carries both payloads, but nothing here assumes that. */}
+        {ticket.renewal && onCompleteRenewalStep ? (
+          <RenewalPanel
+            step={ticket.renewal}
+            canWrite={canWrite ?? false}
+            isMutating={isMutating}
+            onTogglePolicy={(policyId, discussed) =>
+              onToggleRenewalPolicy?.(ticket.id, policyId, discussed)
+            }
+            onCompleteStep={(stepKey, outcome) =>
+              onCompleteRenewalStep(ticket.id, stepKey, outcome)
+            }
+            onChangeOutcome={(outcome) =>
+              onChangeRenewalOutcome?.(ticket.id, outcome)
+            }
+          />
+        ) : null}
+
         {/* Timeline */}
         <div className="bg-card rounded-lg border border-border p-4">
           <div className="flex items-center justify-between mb-3">
@@ -285,7 +380,7 @@ export function WorkspacePanel({
             <div className="absolute left-3.5 top-4 bottom-4 w-px bg-border" />
 
             <div className="space-y-4">
-              {ticket.timeline.map((entry) => (
+              {orderedTimeline.map((entry) => (
                 <div key={entry.id} className="flex gap-3 relative">
                   <div
                     className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 z-10 ${TIMELINE_ICON_BG[entry.type]}`}
@@ -383,6 +478,17 @@ export function WorkspacePanel({
           </div>
         </div>
       </div>
+
+      <HouseholdDrawer
+        householdId={ticket.householdId}
+        open={householdOpen}
+        onOpenChange={setHouseholdOpen}
+      />
+      <PolicyDrawer
+        policyId={ticket.policyId}
+        open={policyOpen}
+        onOpenChange={setPolicyOpen}
+      />
     </div>
   );
 }

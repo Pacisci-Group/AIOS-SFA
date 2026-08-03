@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Search, ChevronDown } from "lucide-react";
+import { Bell, Search, ChevronDown, Archive, Plus } from "lucide-react";
+import { CreateTicketDialog } from "./components/CreateTicketDialog";
 import { ScorecardRow } from "./components/ScorecardRow";
 import { PriorityTicketQueue } from "./components/PriorityTicketQueue";
 import { RenewalOutreachDesk } from "./components/RenewalOutreachDesk";
@@ -9,7 +10,9 @@ import {
   addServiceTicketNote,
   getServiceTicketStats,
   listServiceTickets,
+  updateServiceTicketStatus,
   type ServiceTicketStats,
+  type ServiceTicketStatus,
 } from "@/lib/service-tickets-api";
 
 const FALLBACK_STATS: ServiceTicketStats = {
@@ -25,6 +28,7 @@ const FALLBACK_STATS: ServiceTicketStats = {
 
 export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -42,6 +46,18 @@ export default function App() {
       addServiceTicketNote(id, content),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["service-tickets"] });
+      // Resolving a renewal ticket from the queue takes its row off the desk.
+      queryClient.invalidateQueries({ queryKey: ["renewal-desk"] });
+    },
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: ServiceTicketStatus }) =>
+      updateServiceTicketStatus(id, status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["service-tickets"] });
+      // Resolving a renewal ticket from the queue takes its row off the desk.
+      queryClient.invalidateQueries({ queryKey: ["renewal-desk"] });
     },
   });
 
@@ -55,7 +71,7 @@ export default function App() {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
-        <header className="flex-shrink-0 flex items-center gap-4 px-6 py-3.5 border-b border-border bg-background/95 backdrop-blur-sm">
+        <header className="relative z-50 flex-shrink-0 flex items-center gap-4 px-6 py-3.5 border-b border-border bg-background/95 backdrop-blur-sm">
           <div className="flex items-center gap-1.5 text-sm">
             <span className="text-muted-foreground">Dashboard</span>
             <ChevronDown size={13} className="text-muted-foreground -rotate-90" />
@@ -118,29 +134,56 @@ export default function App() {
         </header>
 
         {/* Dashboard body */}
-        <main className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-          <div className="flex items-center justify-between">
+        {/* The body itself does not scroll — the header and scorecard stay put and
+            the two workspace columns own their own scrollbars (see the grid below). */}
+        <main className="flex-1 flex flex-col min-h-0 overflow-hidden px-6 py-5 gap-5">
+          <div className="flex items-center justify-between flex-shrink-0">
             <div>
               <h1 className="text-xl font-bold text-foreground tracking-tight">Service Dashboard</h1>
               <p className="text-xs text-muted-foreground mt-0.5">Monday, June 9 · Week 23 · Q2 Sprint 6</p>
             </div>
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#10B981]/10 border border-[#10B981]/20">
-              <div className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
-              <span className="text-[11px] font-semibold text-[#10B981]">Service Rep View</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCreateOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0076A8] text-[11px] font-semibold text-white hover:bg-[#0076A8]/85 transition-colors"
+              >
+                <Plus size={13} />
+                New Ticket
+              </button>
+              <Link
+                to="/crm/tickets/archived"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-white/8 text-[11px] font-semibold text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
+              >
+                <Archive size={13} />
+                Go To Archived Tickets
+              </Link>
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#10B981]/10 border border-[#10B981]/20">
+                <div className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
+                <span className="text-[11px] font-semibold text-[#10B981]">Service Rep View</span>
+              </div>
             </div>
           </div>
 
           {/* Row 1: Scorecard */}
-          <ScorecardRow stats={scorecardStats} />
+          <div className="flex-shrink-0">
+            <ScorecardRow stats={scorecardStats} />
+          </div>
 
-          {/* Row 2: 60/40 Workspace */}
-          <div className="grid gap-5" style={{ gridTemplateColumns: "3fr 2fr", minHeight: "560px" }}>
+          {/* Row 2: 60/40 Workspace. `min-h-0` is what lets the row take a definite
+              height instead of growing to fit its content — without it the columns'
+              inner `overflow-y-auto` never clips and the whole page scrolls instead.
+              Both columns set `overflow-hidden`, so their grid auto-minimum is 0. */}
+          <div
+            className="grid gap-5 flex-1 min-h-0"
+            style={{ gridTemplateColumns: "3fr 2fr" }}
+          >
             <PriorityTicketQueue
               tickets={tickets}
               onOpen={openTicket}
               onAddNote={(id, content) => noteMutation.mutate({ id, content })}
+              onChangeStatus={(id, status) => statusMutation.mutate({ id, status })}
             />
-            <RenewalOutreachDesk />
+            <RenewalOutreachDesk onOpenTicket={openTicket} />
           </div>
         </main>
       </div>
@@ -148,6 +191,12 @@ export default function App() {
       {notificationsOpen && (
         <div className="fixed inset-0 z-40" onClick={() => setNotificationsOpen(false)} />
       )}
+
+      <CreateTicketDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={openTicket}
+      />
     </div>
   );
 }

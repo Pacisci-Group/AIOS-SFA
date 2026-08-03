@@ -13,6 +13,7 @@
     "seed:dev": "ts-node -r tsconfig-paths/register src/seed/seed.ts",
     "seed:demo": "node dist/seed/demo/demo-seed.js",
     "seed:demo:dev": "ts-node -r tsconfig-paths/register src/seed/demo/demo-seed.ts",
+    "seed:onboarding": "ts-node -r tsconfig-paths/register src/seed/onboarding-scenarios.ts",
     "migrate": "node dist/migration/migrate.js",
     "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
     "migrate:permissions": "node dist/seed/migrate-permissions.js",

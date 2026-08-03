@@ -4,8 +4,11 @@ import * as bcrypt from 'bcrypt';
 import { Model } from 'mongoose';
 import { ALL_MODULE_KEYS, DataScope } from '@sfa/shared';
 import { Branch } from '../../src/branches/schemas/branch.schema';
+import { Contact } from '../../src/contacts/schemas/contact.schema';
+import { Household } from '../../src/households/schemas/household.schema';
 import { PermissionsService } from '../../src/permissions/permissions.service';
 import { Agency } from '../../src/platform/schemas/agency.schema';
+import { Policy } from '../../src/policies/schemas/policy.schema';
 import { AgencyRole } from '../../src/roles/schemas/agency-role.schema';
 import { User } from '../../src/users/schemas/user.schema';
 
@@ -30,6 +33,13 @@ export interface TestSeedContext {
   producerEmail: string;
   csrEmail: string;
   readOnlyEmail: string;
+  /** Client records in the main test branch. */
+  householdId: string;
+  policyId: string;
+  /** In a second branch of the same agency — invisible to branch-scoped users. */
+  otherBranchHouseholdId: string;
+  /** In a different agency entirely. */
+  otherAgencyHouseholdId: string;
 }
 
 export async function seedTestData(
@@ -155,9 +165,97 @@ export async function seedTestData(
     isActive: true,
   });
 
+  // ── Client records ──────────────────────────────────────────────────────
+  // NOTE: these collections extend `TenantRecord`, whose agencyId/branchId are
+  // plain STRINGS (unlike ServiceTicket, which stores them as ObjectIds).
+  const householdModel = app.get<Model<Household>>(
+    getModelToken(Household.name),
+  );
+  const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+  const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+
+  const tenant = {
+    agencyId: agency._id.toString(),
+    branchId: branch._id.toString(),
+  };
+
+  // Every record needs a distinct `legacySmartSuiteId`: the schema's
+  // {agencyId, legacySmartSuiteId} index is unique+sparse, but a COMPOUND
+  // sparse index still indexes a doc when only one field is present — so two
+  // records in one agency with a null legacySmartSuiteId collide.
+  const household = await householdModel.create({
+    ...tenant,
+    legacySmartSuiteId: 'test:hh:main',
+    name: 'Test Household',
+    status: 'Active',
+    primaryContactName: 'Test Client',
+    primaryEmails: ['client@test.local'],
+    primaryPhones: ['(555) 010-0100'],
+    propertyAddress: { line1: '1 Test St', city: 'Austin', state: 'TX' },
+    totalActivePolicies: 1,
+  });
+
+  await contactModel.create({
+    ...tenant,
+    legacySmartSuiteId: 'test:ct:main',
+    firstName: 'Test',
+    lastName: 'Client',
+    emails: ['client@test.local'],
+    roleInHousehold: 'Named Insured',
+    isPrimary: true,
+    householdId: household._id,
+  });
+
+  const policy = await policyModel.create({
+    ...tenant,
+    legacySmartSuiteId: 'test:pol:main',
+    policyNumber: 'TEST-000-1',
+    policyType: 'Auto',
+    carrier: 'Test Carrier',
+    active: true,
+    policyStatus: 'Active',
+    premium: 1200,
+    items: 1,
+    householdId: household._id,
+  });
+
+  // A second branch, so branch-scoped users have something they must NOT see.
+  const otherBranch = await branchModel.create({
+    agencyId: agency._id,
+    name: 'Other Branch',
+    slug: 'other-branch',
+    isDefault: false,
+  });
+  const otherBranchHousehold = await householdModel.create({
+    agencyId: agency._id.toString(),
+    branchId: otherBranch._id.toString(),
+    legacySmartSuiteId: 'test:hh:other-branch',
+    name: 'Other Branch Household',
+    status: 'Active',
+  });
+
+  // A record belonging to a different agency entirely.
+  const otherAgency = await agencyModel.create({
+    name: 'Other Agency',
+    slug: 'other-agency',
+    status: 'active',
+    modules,
+  });
+  const otherAgencyHousehold = await householdModel.create({
+    agencyId: otherAgency._id.toString(),
+    branchId: otherBranch._id.toString(),
+    legacySmartSuiteId: 'test:hh:other-agency',
+    name: 'Other Agency Household',
+    status: 'Active',
+  });
+
   return {
     agencyId: agency._id.toString(),
     branchId: branch._id.toString(),
+    householdId: household._id.toString(),
+    policyId: policy._id.toString(),
+    otherBranchHouseholdId: otherBranchHousehold._id.toString(),
+    otherAgencyHouseholdId: otherAgencyHousehold._id.toString(),
     ownerRoleId: ownerRole!._id.toString(),
     producerRoleId: producerRole!._id.toString(),
     csrRoleId: csrRole!._id.toString(),

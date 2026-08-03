@@ -1,109 +1,109 @@
+import { useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { getHousehold } from "@/lib/households-api";
 import { QuickActionBar } from "./components/QuickActionBar";
 import { HouseholdProfile } from "./components/HouseholdProfile";
 import { PolicyPortfolio } from "./components/PolicyPortfolio";
 import { ActivityFeed } from "./components/ActivityFeed";
+import { HouseholdOnboarding } from "./components/HouseholdOnboarding";
 
-export default function App() {
+/**
+ * Household detail. `/clients/:id` renders a live record; the legacy
+ * `/clients/demo` route keeps rendering the original mock (the child
+ * components fall back to their mock data when given no props).
+ *
+ * The page renders inside the app shell, so it has no top nav of its own.
+ */
+export default function HouseholdDetailsPage() {
+  const { id } = useParams<{ id: string }>();
+  const isDemo = !id || id === "demo";
+
+  const query = useQuery({
+    queryKey: ["household", id],
+    queryFn: () => getHousehold(id as string),
+    enabled: !isDemo,
+  });
+
+  const household = isDemo ? undefined : query.data;
+
   return (
     <div
       className="flex flex-col"
       style={{
-        height: "100vh",
+        height: "100%",
         background: "var(--background)",
         color: "var(--foreground)",
         overflow: "hidden",
       }}
     >
-      {/* Top Nav Bar */}
-      <div
-        className="flex items-center justify-between px-6 py-2.5 shrink-0 border-b"
-        style={{ background: "#060c18", borderColor: "var(--border)" }}
-      >
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded flex items-center justify-center" style={{ background: "#1d4ed8" }}>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <rect x="1" y="1" width="5" height="5" rx="1" fill="white" fillOpacity="0.9" />
-                <rect x="8" y="1" width="5" height="5" rx="1" fill="white" fillOpacity="0.5" />
-                <rect x="1" y="8" width="5" height="5" rx="1" fill="white" fillOpacity="0.5" />
-                <rect x="8" y="8" width="5" height="5" rx="1" fill="white" fillOpacity="0.9" />
-              </svg>
-            </div>
-            <span className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>AgencyOS</span>
-            <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "#1d4ed820", color: "#3b82f6", border: "1px solid #1d4ed840" }}>
-              Producer
-            </span>
+      {!isDemo && query.isPending && (
+        <div className="px-6 py-4 text-sm" style={{ color: "var(--muted-foreground)" }}>
+          Loading household…
+        </div>
+      )}
+
+      {!isDemo && query.isError && (
+        <div className="px-6 py-4">
+          <p className="text-sm text-red-400">Household not found.</p>
+          <p className="text-xs mt-1" style={{ color: "var(--muted-foreground)" }}>
+            It may have been removed, or it is outside your branch.
+          </p>
+        </div>
+      )}
+
+      {(isDemo || household) && (
+        <>
+          {/* Quick Action Bar */}
+          <div className="shrink-0">
+            <QuickActionBar
+              householdName={household?.name ?? "The Cobb Household"}
+            />
           </div>
 
-          <div className="w-px h-4 mx-1" style={{ background: "var(--border)" }} />
-
-          {["Dashboard", "Households", "Policies", "Claims", "Reports"].map((item, i) => (
-            <button
-              key={item}
-              className="text-xs px-2 py-1 rounded transition-colors hover:bg-white/5"
-              style={{ color: i === 1 ? "#3b82f6" : "var(--muted-foreground)" }}
+          {/* 3-Column Layout */}
+          <div className="flex flex-1 min-h-0">
+            {/* Left Column — Household Profile (25%) */}
+            <div
+              className="flex flex-col border-r shrink-0"
+              style={{
+                width: "25%",
+                minWidth: "260px",
+                maxWidth: "320px",
+                borderColor: "var(--border)",
+                overflow: "hidden",
+              }}
             >
-              {item}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="w-px h-4" style={{ background: "var(--border)" }} />
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold" style={{ background: "#1e3a5f", color: "#3b82f6", border: "1px solid #3b82f640" }}>
-              MT
+              <HouseholdProfile household={household} />
             </div>
-            <div className="hidden sm:block">
-              <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>M. Torres</p>
-              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>Producer · ATL-07</p>
+
+            {/* Middle Column — Policy Portfolio (50%) */}
+            <div
+              className="flex flex-col flex-1 border-r"
+              style={{ borderColor: "var(--border)", overflow: "hidden" }}
+            >
+              <PolicyPortfolio policies={household?.policies} />
+            </div>
+
+            {/* Right Column — Activity Feed (25%) */}
+            {/* Static: the client-record schemas carry no activity history. */}
+            <div
+              className="flex flex-col shrink-0"
+              style={{
+                width: "25%",
+                minWidth: "260px",
+                maxWidth: "340px",
+                overflow: "hidden",
+              }}
+            >
+              {/* Onboarding is tracked per client, so its progress belongs on
+                  the client — and it is the only place a scheduled call is
+                  visible before it opens in the ticket queue. */}
+              <HouseholdOnboarding householdId={household?.id} />
+              <ActivityFeed />
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Quick Action Bar */}
-      <div className="shrink-0">
-        <QuickActionBar householdName="The Cobb Household" />
-      </div>
-
-      {/* 3-Column Layout */}
-      <div className="flex flex-1 min-h-0">
-        {/* Left Column — Household Profile (25%) */}
-        <div
-          className="flex flex-col border-r shrink-0"
-          style={{
-            width: "25%",
-            minWidth: "260px",
-            maxWidth: "320px",
-            borderColor: "var(--border)",
-            overflow: "hidden",
-          }}
-        >
-          <HouseholdProfile />
-        </div>
-
-        {/* Middle Column — Policy Portfolio (50%) */}
-        <div
-          className="flex flex-col flex-1 border-r"
-          style={{ borderColor: "var(--border)", overflow: "hidden" }}
-        >
-          <PolicyPortfolio />
-        </div>
-
-        {/* Right Column — Activity Feed (25%) */}
-        <div
-          className="flex flex-col shrink-0"
-          style={{
-            width: "25%",
-            minWidth: "260px",
-            maxWidth: "340px",
-            overflow: "hidden",
-          }}
-        >
-          <ActivityFeed />
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 }

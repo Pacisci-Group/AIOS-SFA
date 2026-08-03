@@ -7,15 +7,32 @@ import { WorkspacePanel } from "./components/WorkspacePanel";
 import type { TicketStatus } from "./components/ticket-data";
 import {
   addServiceTicketNote,
+  completeOnboardingStep,
+  completeRenewalStep,
   listServiceTickets,
+  setRenewalOutcome,
+  updateOnboardingChecklist,
+  updateRenewalPolicy,
   updateServiceTicketStatus,
+  type OnboardingChecklistKey,
+  type OnboardingStepKey,
+  type RenewalOutcome,
+  type RenewalStepKey,
   type ServiceTicketNoteType,
 } from "@/lib/service-tickets-api";
+import { ModuleKey } from "@sfa/shared";
+import { usePermissions } from "@/hooks/usePermissions";
 
 const TICKETS_KEY = ["service-tickets"];
+/** Prefixes — the panel and the household page key by id beneath these. */
+const ONBOARDING_KEY = ["onboarding"];
+const HOUSEHOLD_ONBOARDINGS_KEY = ["household-onboardings"];
+const RENEWAL_CYCLE_KEY = ["renewal-cycle"];
+const RENEWAL_DESK_KEY = ["renewal-desk"];
 
 export default function App() {
   const queryClient = useQueryClient();
+  const { canWrite } = usePermissions();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
 
@@ -63,6 +80,80 @@ export default function App() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: TICKETS_KEY }),
   });
 
+  /**
+   * Onboarding writes land on the per-client `Onboarding` record as well as
+   * the ticket, and the panel reads the record under its own query key. Both
+   * caches must be dropped — invalidating only the ticket list leaves the
+   * checklist rendering stale, which looks exactly like a dead checkbox.
+   */
+  const invalidateOnboarding = () => {
+    void queryClient.invalidateQueries({ queryKey: TICKETS_KEY });
+    void queryClient.invalidateQueries({ queryKey: ONBOARDING_KEY });
+    void queryClient.invalidateQueries({ queryKey: HOUSEHOLD_ONBOARDINGS_KEY });
+  };
+
+  const onboardingStepMutation = useMutation({
+    mutationFn: ({ id, stepKey }: { id: string; stepKey: OnboardingStepKey }) =>
+      completeOnboardingStep(id, stepKey),
+    onSuccess: invalidateOnboarding,
+  });
+
+  const onboardingChecklistMutation = useMutation({
+    mutationFn: ({
+      id,
+      key,
+      value,
+    }: {
+      id: string;
+      key: OnboardingChecklistKey;
+      value: boolean;
+    }) => updateOnboardingChecklist(id, { [key]: value }),
+    onSuccess: invalidateOnboarding,
+  });
+
+  /**
+   * Renewal writes land on the parent `RenewalCycle` as well as the ticket, and
+   * both the panel and the dashboard desk read it under their own keys — same
+   * reasoning as `invalidateOnboarding` above.
+   */
+  const invalidateRenewal = () => {
+    void queryClient.invalidateQueries({ queryKey: TICKETS_KEY });
+    void queryClient.invalidateQueries({ queryKey: RENEWAL_CYCLE_KEY });
+    void queryClient.invalidateQueries({ queryKey: RENEWAL_DESK_KEY });
+  };
+
+  const renewalPolicyMutation = useMutation({
+    mutationFn: ({
+      id,
+      policyId,
+      discussed,
+    }: {
+      id: string;
+      policyId: string;
+      discussed: boolean;
+    }) => updateRenewalPolicy(id, policyId, discussed),
+    onSuccess: invalidateRenewal,
+  });
+
+  const renewalStepMutation = useMutation({
+    mutationFn: ({
+      id,
+      stepKey,
+      outcome,
+    }: {
+      id: string;
+      stepKey: RenewalStepKey;
+      outcome?: RenewalOutcome;
+    }) => completeRenewalStep(id, stepKey, outcome ? { outcome } : {}),
+    onSuccess: invalidateRenewal,
+  });
+
+  const renewalOutcomeMutation = useMutation({
+    mutationFn: ({ id, outcome }: { id: string; outcome: RenewalOutcome }) =>
+      setRenewalOutcome(id, outcome),
+    onSuccess: invalidateRenewal,
+  });
+
   const handleSelect = (id: string) => {
     setSelectedTicketId(id);
     // Keep the deep link in sync without stacking history entries.
@@ -74,7 +165,10 @@ export default function App() {
   };
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden bg-background font-sans">
+    // `h-full`, not `h-screen`: the shell already pins itself to the viewport,
+    // so this fills the content column instead of asserting its own height
+    // inside it. Asserting 100vh here is what let the two columns drift.
+    <div className="flex-1 flex flex-col min-w-0 h-full min-h-0 overflow-hidden bg-background font-sans">
       {/* Main content area */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {/* Page header */}
@@ -113,12 +207,36 @@ export default function App() {
               <div className="flex-1 min-h-0 overflow-hidden">
                 <WorkspacePanel
                   ticket={selectedTicket}
-                  isMutating={statusMutation.isPending || noteMutation.isPending}
+                  isMutating={
+                    statusMutation.isPending ||
+                    noteMutation.isPending ||
+                    onboardingStepMutation.isPending ||
+                    onboardingChecklistMutation.isPending ||
+                    renewalPolicyMutation.isPending ||
+                    renewalStepMutation.isPending ||
+                    renewalOutcomeMutation.isPending
+                  }
+                  canWrite={canWrite(ModuleKey.CrmService)}
                   onChangeStatus={(id, status) =>
                     statusMutation.mutate({ id, status })
                   }
                   onAddNote={(id, content, type) =>
                     noteMutation.mutate({ id, content, type })
+                  }
+                  onCompleteOnboardingStep={(id, stepKey) =>
+                    onboardingStepMutation.mutate({ id, stepKey })
+                  }
+                  onToggleOnboardingChecklist={(id, key, value) =>
+                    onboardingChecklistMutation.mutate({ id, key, value })
+                  }
+                  onToggleRenewalPolicy={(id, policyId, discussed) =>
+                    renewalPolicyMutation.mutate({ id, policyId, discussed })
+                  }
+                  onCompleteRenewalStep={(id, stepKey, outcome) =>
+                    renewalStepMutation.mutate({ id, stepKey, outcome })
+                  }
+                  onChangeRenewalOutcome={(id, outcome) =>
+                    renewalOutcomeMutation.mutate({ id, outcome })
                   }
                 />
               </div>

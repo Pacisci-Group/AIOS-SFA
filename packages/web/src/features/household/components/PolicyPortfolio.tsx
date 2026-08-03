@@ -12,22 +12,12 @@ import {
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
-
-interface Policy {
-  id: string;
-  line: string;
-  policyNumber: string;
-  premium: string;
-  premiumFreq: string;
-  status: "Active" | "Pending" | "Lapsed";
-  effective: string;
-  expiration: string;
-  icon: LucideIcon;
-  iconColor: string;
-  iconBg: string;
-  carrier: string;
-  deductible?: string;
-}
+import type { PolicySummary } from "@sfa/shared";
+import {
+  statusColors,
+  toDisplayPolicy,
+  type DisplayPolicy as Policy,
+} from "./policy-display";
 
 interface CrossSell {
   line: string;
@@ -38,12 +28,13 @@ interface CrossSell {
   estimatedPremium: string;
 }
 
-const activePolicies: Policy[] = [
+const mockPolicies: Policy[] = [
   {
     id: "pol-1",
     line: "Auto",
     policyNumber: "AUT-847-663-21",
     premium: "$184",
+    premiumValue: 184,
     premiumFreq: "/mo",
     status: "Active",
     effective: "Mar 15, 2024",
@@ -59,6 +50,7 @@ const activePolicies: Policy[] = [
     line: "Home",
     policyNumber: "HOM-291-447-08",
     premium: "$312",
+    premiumValue: 312,
     premiumFreq: "/mo",
     status: "Active",
     effective: "Jun 1, 2024",
@@ -74,6 +66,7 @@ const activePolicies: Policy[] = [
     line: "Umbrella",
     policyNumber: "UMB-033-119-55",
     premium: "$28",
+    premiumValue: 28,
     premiumFreq: "/mo",
     status: "Active",
     effective: "Jun 1, 2024",
@@ -89,6 +82,7 @@ const activePolicies: Policy[] = [
     line: "Landlord",
     policyNumber: "LND-558-882-34",
     premium: "$96",
+    premiumValue: 96,
     premiumFreq: "/mo",
     status: "Active",
     effective: "Jan 10, 2024",
@@ -120,13 +114,7 @@ const crossSells: CrossSell[] = [
   },
 ];
 
-const statusColors: Record<Policy["status"], { bg: string; text: string; border: string }> = {
-  Active: { bg: "#052e16", text: "#4ade80", border: "#166534" },
-  Pending: { bg: "#1c1002", text: "#fbbf24", border: "#78350f" },
-  Lapsed: { bg: "#2d0a0a", text: "#f87171", border: "#7f1d1d" },
-};
-
-function PolicyCard({ policy, onClick, isSelected }: { policy: Policy; onClick: () => void; isSelected: boolean }) {
+export function PolicyCard({ policy, onClick, isSelected }: { policy: Policy; onClick: () => void; isSelected: boolean }) {
   const sc = statusColors[policy.status];
   const Icon = policy.icon;
   return (
@@ -233,13 +221,21 @@ function CrossSellCard({ item }: { item: CrossSell }) {
   );
 }
 
-export function PolicyPortfolio() {
+interface PolicyPortfolioProps {
+  /** Live policies. When omitted the component renders its original mock data. */
+  policies?: PolicySummary[];
+}
+
+export function PolicyPortfolio({ policies }: PolicyPortfolioProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const totalPremium = activePolicies.reduce((sum, p) => {
-    const val = parseInt(p.premium.replace("$", ""));
-    return sum + val;
-  }, 0);
+  const activePolicies = policies ? policies.map(toDisplayPolicy) : mockPolicies;
+  const premiumFreq = policies ? "/yr" : "/mo";
+
+  const totalPremium = activePolicies.reduce(
+    (sum, p) => sum + p.premiumValue,
+    0,
+  );
 
   return (
     <div className="flex flex-col h-full overflow-y-auto" style={{ scrollbarWidth: "none" }}>
@@ -254,9 +250,11 @@ export function PolicyPortfolio() {
           </p>
         </div>
         <div className="text-right">
-          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>Total Monthly Premium</p>
+          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+            {policies ? "Total Annual Premium" : "Total Monthly Premium"}
+          </p>
           <p className="text-xl font-semibold" style={{ color: "#4ade80", fontFamily: "'JetBrains Mono', monospace" }}>
-            ${totalPremium}<span className="text-xs font-normal" style={{ color: "var(--muted-foreground)" }}>/mo</span>
+            ${totalPremium.toLocaleString()}<span className="text-xs font-normal" style={{ color: "var(--muted-foreground)" }}>{premiumFreq}</span>
           </p>
         </div>
       </div>
@@ -267,6 +265,11 @@ export function PolicyPortfolio() {
           <p className="text-xs uppercase tracking-widest mb-3" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
             Active Policies
           </p>
+          {activePolicies.length === 0 && (
+            <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+              No policies on file.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3">
             {activePolicies.map((p) => (
               <PolicyCard
