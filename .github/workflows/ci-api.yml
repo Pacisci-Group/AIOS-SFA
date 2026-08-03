@@ -21,19 +21,21 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+    # NOTE: MongoDB is started as an explicit `docker run` step below rather than
+    # through `services:`. A service container cannot override the image's
+    # command, and mongod needs `--replSet` plus a follow-up `rs.initiate()`.
+    #
+    # It has to be a replica set: the lead-intake pipeline (PAC-37) writes
+    # leads + households + contacts in one transaction, and MongoDB only
+    # supports multi-document transactions on a replica set or a sharded
+    # cluster. On a standalone, `TransactionRunner` falls back to compensating
+    # deletes — which is strictly weaker, and would mean CI never exercised the
+    # transaction path at all.
 
     env:
-      TEST_MONGODB_URI: mongodb://localhost:27017/sfa_test
+      # `directConnection=true` and NEVER `replicaSet=` — the driver derives its
+      # topology from directConnection first and rejects the pair.
+      TEST_MONGODB_URI: mongodb://localhost:27017/sfa_test?directConnection=true
       JWT_ACCESS_SECRET: test-access-secret
       JWT_REFRESH_SECRET: test-refresh-secret
       NODE_ENV: test
@@ -46,6 +48,35 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      - name: Start MongoDB as a single-node replica set
+        run: |
+          docker run -d --name sfa-ci-mongo -p 27017:27017 mongo:7 \
+            mongod --replSet rs0 --bind_ip_all
+
+          echo "Waiting for mongod to accept connections…"
+          for _ in $(seq 1 30); do
+            if docker exec sfa-ci-mongo mongosh --quiet \
+              --eval 'db.adminCommand({ ping: 1 }).ok' >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          # Idempotent: rs.status() throws NotYetInitialized (94) only on a fresh
+          # set. Then wait for PRIMARY — rs.initiate() returns before the
+          # election completes, and the suite starts writing immediately.
+          docker exec sfa-ci-mongo mongosh --quiet --eval '
+            try { rs.status(); print("Replica set rs0 already initiated"); }
+            catch (e) {
+              if (e.code !== 94) throw e;
+              rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "localhost:27017" }] });
+              print("Replica set rs0 initiated");
+            }
+            for (let i = 0; i < 60 && !db.hello().isWritablePrimary; i++) { sleep(500); }
+            if (!db.hello().isWritablePrimary) { throw new Error("rs0 did not reach PRIMARY"); }
+            print("Replica set rs0 PRIMARY ready");
+          '
+
       - name: Install dependencies
         run: npm ci
 
@@ -54,6 +85,9 @@ jobs:
 
       - name: Build API
         run: npm run build -w @sfa/api
+
+      - name: Run API unit tests
+        run: npm run test:unit -w @sfa/api
 
       - name: Run API e2e tests
         run: npm run test:e2e -w @sfa/api
