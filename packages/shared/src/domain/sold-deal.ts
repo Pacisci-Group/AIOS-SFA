@@ -110,7 +110,13 @@ export interface SoldPolicyInput {
   existingPolicyId?: string;
   premium: number;
   itemCount: number;
-  discounts: SoldPolicyDiscounts;
+  /**
+   * Optional on the wire: the server defaults an omitted object to "nothing
+   * selected". Card 5 lands in PR4, so the wizard sends none today — and a
+   * policy that genuinely carries no discounts should not have to spell that
+   * out in eight false booleans.
+   */
+  discounts?: SoldPolicyDiscounts;
   escrow?: SoldEscrowDetails;
   priorInsurance: SoldPriorInsurance;
   cancellation: SoldCancellation;

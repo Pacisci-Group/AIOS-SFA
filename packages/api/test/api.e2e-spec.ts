@@ -2360,7 +2360,9 @@ describe('SFA API (e2e)', () => {
       ...overrides,
     });
 
-    const createAs = async (token: string, body: unknown, expected = 201) => {
+    // `object` rather than `unknown`: supertest's `.send` rejects `unknown`, and
+    // every payload here is an object anyway.
+    const createAs = async (token: string, body: object, expected = 201) => {
       const res = await request(app.getHttpServer())
         .post(SOLD)
         .set(authHeader(token))

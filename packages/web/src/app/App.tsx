@@ -33,6 +33,7 @@ const NewLeadPage = lazy(() => import('@/features/lead/NewLeadPage'));
 const NewQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/NewQuoteRecapPage'),
 );
+const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
 const PublicLeadFormPage = lazy(
   () => import('@/features/lead/PublicLeadFormPage'),
 );
@@ -262,6 +263,28 @@ export function App() {
                   element={
                     <LazyPage>
                       <NewQuoteRecapPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Sold form (PAC-40). Gated on `deal_audits:write` rather than
+                  `clients` — that is the permission a Producer's role template
+                  actually grants, and the same one POST /sold-deals requires,
+                  so the route and the API agree. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.DealAudits}:write`}
+                    redirectTo="/leads"
+                  />
+                }
+              >
+                <Route
+                  path="/sold/new"
+                  element={
+                    <LazyPage>
+                      <SoldDealPage />
                     </LazyPage>
                   }
                 />
