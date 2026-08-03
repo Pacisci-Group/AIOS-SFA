@@ -2,7 +2,7 @@ import {
   CANONICAL_LEAD_SOURCES,
   isTestRecord,
   normalizeLeadSource,
-} from './lead-sources';
+} from '@sfa/shared';
 import {
   daysSince,
   deriveDealType,

@@ -1,4 +1,15 @@
-import type { NormalizedLeadSource } from '../../deals/schemas/deal.schema';
+/**
+ * Canonical lead-source vocabulary.
+ *
+ * Shared (not API-local) because three consumers need the same list: the
+ * SmartSuite migration writes normalized sources, the demo seed generates them,
+ * and the Leads page renders the filter dropdown from it (PAC-36).
+ */
+
+export interface NormalizedLeadSource {
+  code: string | null;
+  label: string;
+}
 
 /**
  * The 14 canonical lead sources (authoritative list from SFA/lib/leadSources.ts).
@@ -55,6 +66,21 @@ const LABEL_ALIASES: Record<string, string> = {
 };
 
 const CANONICAL_LABELS = new Set(Object.values(CANONICAL_LEAD_SOURCES));
+
+/**
+ * The canonical sources as `{ code, label }`, sorted by label — what a filter
+ * dropdown renders. `Test` is included; callers that exclude test records
+ * (every dashboard read path) should filter it out of the options they show.
+ */
+export const LEAD_SOURCE_OPTIONS: ReadonlyArray<{ code: string; label: string }> =
+  Object.entries(CANONICAL_LEAD_SOURCES)
+    .map(([code, label]) => ({ code, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+/** Canonical labels only, sorted — for a filter that matches on `leadSource.label`. */
+export const LEAD_SOURCE_LABELS: readonly string[] = [
+  ...new Set(LEAD_SOURCE_OPTIONS.map((o) => o.label)),
+];
 
 export interface LeadSourceResult extends NormalizedLeadSource {
   isCanonical: boolean;

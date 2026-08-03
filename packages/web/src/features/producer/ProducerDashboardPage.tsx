@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Sidebar } from "./components/Sidebar";
+import { AppSidebar } from "@/components/layout/AppSidebar";
 import { Header } from "./components/Header";
 import { ScoreCards } from "./components/ScoreCards";
 import { DealsAuditBoard } from "./components/DealsAuditBoard";
@@ -10,7 +10,7 @@ export default function ProducerDashboardPage() {
 
   return (
     <div className="flex min-h-screen w-full bg-background text-foreground">
-      <Sidebar />
+      <AppSidebar />
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">

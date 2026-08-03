@@ -1,5 +1,5 @@
 import type { DealType, PremiumSource } from '../../deals/schemas/deal.schema';
-import type { LeadTemperature } from '../../leads/schemas/lead.schema';
+import type { LeadTemperature } from '@sfa/shared';
 import { POLICY_TYPE_LABELS } from '../smartsuite/field-ids';
 import { selectCode, toNumber } from './value-utils';
 

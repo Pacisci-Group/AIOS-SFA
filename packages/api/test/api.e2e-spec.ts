@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
+import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { User } from '../src/users/schemas/user.schema';
 import { authHeader, login } from './helpers/auth.helper';
@@ -402,11 +403,11 @@ describe('SFA API (e2e)', () => {
       { path: 'dashboard', module: ModuleKey.Dashboard },
       { path: 'contacts', module: ModuleKey.Clients },
       { path: 'households', module: ModuleKey.Clients },
-      { path: 'leads', module: ModuleKey.Leads },
       { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
       { path: 'deals', module: ModuleKey.Clients },
-      // NOTE: `deal-audits` is a real module (see DealAuditsModule / PAC-12/14),
-      // not a `{status:'ready'}` stub — covered by its own describe block below.
+      // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14) and `leads`
+      // (LeadsModule / PAC-36) are real modules, not `{status:'ready'}` stubs —
+      // each is covered by its own describe block below.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
@@ -435,13 +436,13 @@ describe('SFA API (e2e)', () => {
       },
     );
 
-    it('GET /api/v1/leads — producer with branch scope', async () => {
+    it('GET /api/v1/quote-recaps — producer with branch scope', async () => {
       const res = await request(app.getHttpServer())
-        .get('/api/v1/leads')
+        .get('/api/v1/quote-recaps')
         .set(authHeader(producerToken))
         .expect(200);
 
-      expect(res.body.module).toBe(ModuleKey.Leads);
+      expect(res.body.module).toBe(ModuleKey.QuoteRecaps);
     });
 
     it('GET /api/v1/command-center — forbidden for producer', async () => {
@@ -451,9 +452,9 @@ describe('SFA API (e2e)', () => {
         .expect(403);
     });
 
-    it('PATCH /api/v1/leads — producer has write access', async () => {
+    it('PATCH /api/v1/quote-recaps — producer has write access', async () => {
       const res = await request(app.getHttpServer())
-        .patch('/api/v1/leads')
+        .patch('/api/v1/quote-recaps')
         .set(authHeader(producerToken))
         .expect(200);
 
@@ -495,11 +496,11 @@ describe('SFA API (e2e)', () => {
       { path: 'dashboard', module: ModuleKey.Dashboard },
       { path: 'contacts', module: ModuleKey.Clients },
       { path: 'households', module: ModuleKey.Clients },
-      { path: 'leads', module: ModuleKey.Leads },
       { path: 'quote-recaps', module: ModuleKey.QuoteRecaps },
       { path: 'deals', module: ModuleKey.Clients },
       // `deal-audits` write (resolve) is item-scoped, not a bare PATCH stub —
-      // covered by its own describe block below.
+      // covered by its own describe block below. `leads` is read-only for now
+      // (LeadsModule / PAC-36 ships the list; the write path is a later story).
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
@@ -615,6 +616,232 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Leads (PAC-36 list)', () => {
+    interface LeadRowBody {
+      id: string;
+      name: string;
+      leadSource: string;
+      status: string;
+      temperature: string;
+      phone: string | null;
+      email: string | null;
+      updatedAt: string | null;
+    }
+    interface LeadListBody {
+      page: number;
+      pageSize: number;
+      total: number;
+      totalPages: number;
+      items: LeadRowBody[];
+    }
+
+    const listAs = async (token: string, query = '') => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/leads${query}`)
+        .set(authHeader(token))
+        .expect(200);
+      return res.body as LeadListBody;
+    };
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      await leadModel.create([
+        {
+          ...base,
+          firstName: 'Maria',
+          lastName: 'Rodriguez',
+          // Stored as the raw SmartSuite choice code, exactly as the migration
+          // writes it — the API must normalize this to `Requote`.
+          status: 'arW7O',
+          temperature: 'Hot',
+          leadSource: { code: 'WCO7l', label: 'Mailer' },
+          phones: ['(555) 123-4567'],
+          emails: ['maria.rodriguez@example.com'],
+          quoteControlNumber: 'QCN-100001',
+          producerId: producer!._id,
+          lastActivityAt: new Date(),
+          isTestRecord: false,
+        },
+        {
+          ...base,
+          firstName: 'John',
+          lastName: 'Smith',
+          status: 'New',
+          temperature: 'Cold',
+          leadSource: { code: 'X2Wrh', label: 'Facebook' },
+          phones: ['555-987-6543'],
+          emails: ['john.smith@example.com'],
+          producerId: producer!._id,
+          lastActivityAt: new Date(Date.now() - 86_400_000),
+          isTestRecord: false,
+        },
+        {
+          // Another producer's lead — must never reach the producer's list.
+          ...base,
+          firstName: 'Someone',
+          lastName: 'Else',
+          status: 'New',
+          temperature: 'Warm',
+          leadSource: { code: '30sDe', label: 'Google' },
+          producerId: owner!._id,
+          lastActivityAt: new Date(),
+          isTestRecord: false,
+        },
+        {
+          ...base,
+          firstName: 'Test',
+          lastName: 'Record',
+          status: 'New',
+          temperature: 'Hot',
+          leadSource: { code: 'ENEJP', label: 'Test' },
+          producerId: producer!._id,
+          isTestRecord: true,
+        },
+      ]);
+    });
+
+    it('GET /api/v1/leads — producer gets a paginated envelope of own leads', async () => {
+      const body = await listAs(producerToken);
+
+      expect(body).toHaveProperty('page');
+      expect(body).toHaveProperty('pageSize');
+      expect(body).toHaveProperty('totalPages');
+      expect(Array.isArray(body.items)).toBe(true);
+      // Two own, non-test leads. The other producer's lead and the test record
+      // are both excluded.
+      expect(body.total).toBe(2);
+      expect(body.items.map((i) => i.name).sort()).toEqual([
+        'John Smith',
+        'Maria Rodriguez',
+      ]);
+    });
+
+    it('scope=agency from a producer is clamped, not honoured or rejected', async () => {
+      const clamped = await listAs(producerToken, '?scope=agency');
+      const plain = await listAs(producerToken);
+
+      // 200 with the caller's own leads — never a 403, never a wider set.
+      expect(clamped.total).toBe(plain.total);
+      expect(clamped.items.map((i) => i.id).sort()).toEqual(
+        plain.items.map((i) => i.id).sort(),
+      );
+    });
+
+    it('producerId pointing at another user is ignored for `own` scope', async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+
+      const body = await listAs(
+        producerToken,
+        `?producerId=${owner!._id.toString()}`,
+      );
+
+      expect(body.total).toBe(2);
+      expect(body.items.every((i) => i.name !== 'Someone Else')).toBe(true);
+    });
+
+    it('status filter matches the canonical label against a stored raw code', async () => {
+      const body = await listAs(producerToken, '?status=Requote');
+
+      expect(body.total).toBe(1);
+      expect(body.items[0].name).toBe('Maria Rodriguez');
+      // Normalized on read — the raw `arW7O` never reaches the client.
+      expect(body.items[0].status).toBe('Requote');
+    });
+
+    it('status accepts several values at once (repeated param)', async () => {
+      // Requote (stored as the raw `arW7O`) OR New — both of the producer's
+      // leads, proving the label/code expansion survives the multi-select.
+      const body = await listAs(producerToken, '?status=Requote&status=New');
+
+      expect(body.total).toBe(2);
+      expect(body.items.map((i) => i.name).sort()).toEqual([
+        'John Smith',
+        'Maria Rodriguez',
+      ]);
+    });
+
+    it('status also accepts the comma-separated form', async () => {
+      const repeated = await listAs(
+        producerToken,
+        '?status=Requote&status=New',
+      );
+      const commas = await listAs(producerToken, '?status=Requote,New');
+
+      expect(commas.total).toBe(repeated.total);
+    });
+
+    it('temperature accepts several values at once', async () => {
+      const hot = await listAs(producerToken, '?temperature=Hot');
+      const both = await listAs(producerToken, '?temperature=Hot,Cold');
+
+      expect(hot.total).toBe(1);
+      expect(hot.items[0].name).toBe('Maria Rodriguez');
+      // Maria (Hot) + John (Cold). The Warm lead belongs to another producer.
+      expect(both.total).toBe(2);
+    });
+
+    it('rejects an unknown temperature even alongside valid ones (400)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads?temperature=Hot&temperature=Tepid')
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('rows expose only display fields', async () => {
+      const body = await listAs(producerToken);
+      const row = body.items[0] as unknown as Record<string, unknown>;
+
+      expect(Object.keys(row).sort()).toEqual([
+        'email',
+        'id',
+        'leadSource',
+        'name',
+        'phone',
+        'status',
+        'temperature',
+        'updatedAt',
+      ]);
+    });
+
+    it('phone search matches across stored formatting', async () => {
+      // The stored value is `(555) 123-4567`; the query is bare digits.
+      const body = await listAs(producerToken, '?search=5551234');
+
+      expect(body.total).toBe(1);
+      expect(body.items[0].name).toBe('Maria Rodriguez');
+    });
+
+    it('a long surname searches by name, not as a quote control number', async () => {
+      // Legacy treated any 8+ alphanumeric string as a QCN and would miss this.
+      const body = await listAs(producerToken, '?search=Rodriguez');
+
+      expect(body.total).toBe(1);
+      expect(body.items[0].name).toBe('Maria Rodriguez');
+    });
+
+    it('an agency-scoped caller sees every producer, still excluding test records', async () => {
+      const body = await listAs(ownerToken);
+
+      expect(body.total).toBe(3);
+      expect(body.items.every((i) => i.name !== 'Test Record')).toBe(true);
+    });
+
+    it('rejects an out-of-range pageSize (400)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads?pageSize=500')
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+  });
+
   describe('Guards', () => {
     it('returns 401 without token on protected route', async () => {
       await request(app.getHttpServer()).get('/api/v1/leads').expect(401);
@@ -668,9 +895,9 @@ describe('SFA API (e2e)', () => {
       expect(claims.dataScope).toBeUndefined();
     });
 
-    it('baseline: producer token can write leads', async () => {
+    it('baseline: producer token can write quote recaps', async () => {
       await request(app.getHttpServer())
-        .patch('/api/v1/leads')
+        .patch('/api/v1/quote-recaps')
         .set(authHeader(liveToken))
         .expect(200);
     });
@@ -679,17 +906,19 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .patch(`/api/v1/users/${liveUserId}/permissions`)
         .set(authHeader(ownerToken))
-        .send({ overrides: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
+        .send({
+          overrides: [{ moduleKey: ModuleKey.QuoteRecaps, level: 'read' }],
+        })
         .expect(200);
 
       // Same token as before — write is now revoked, read still works.
       await request(app.getHttpServer())
-        .patch('/api/v1/leads')
+        .patch('/api/v1/quote-recaps')
         .set(authHeader(liveToken))
         .expect(403);
 
       await request(app.getHttpServer())
-        .get('/api/v1/leads')
+        .get('/api/v1/quote-recaps')
         .set(authHeader(liveToken))
         .expect(200);
     });
@@ -705,7 +934,7 @@ describe('SFA API (e2e)', () => {
       await app.get(AccessResolverService).invalidateUser(liveUserId);
 
       await request(app.getHttpServer())
-        .get('/api/v1/leads')
+        .get('/api/v1/quote-recaps')
         .set(authHeader(liveToken))
         .expect(401);
     });

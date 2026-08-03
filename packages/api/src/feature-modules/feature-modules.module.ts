@@ -8,7 +8,6 @@ import {
   FilesController,
   HouseholdsController,
   LeaderboardController,
-  LeadsController,
   MailersController,
   ManagementController,
   OnboardingsController,
@@ -18,12 +17,12 @@ import {
 } from './feature.controllers';
 
 // NOTE: `deal-audits` is now served by the real `DealAuditsModule`
-// (see src/deal-audits), so its stub controller is intentionally omitted here.
+// (see src/deal-audits) and `leads` by the real `LeadsModule` (see src/leads),
+// so their stub controllers are intentionally omitted here.
 const controllers = [
   DashboardController,
   ContactsController,
   HouseholdsController,
-  LeadsController,
   QuoteRecapsController,
   DealsController,
   CrmServiceController,

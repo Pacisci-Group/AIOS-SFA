@@ -25,7 +25,7 @@ const navSections = [
         module: ModuleKey.Dashboard,
       },
       {
-        to: '/leads/demo',
+        to: '/leads',
         label: 'Lead Details',
         icon: Users,
         module: ModuleKey.Leads,

@@ -1,14 +1,12 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import type { LeadTemperature, NormalizedLeadSource } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
 } from '../../common/schemas/tenant-record.schema';
-import type { NormalizedLeadSource } from '../../deals/schemas/deal.schema';
 
 export type LeadDocument = HydratedDocument<Lead>;
-
-export type LeadTemperature = 'Hot' | 'Warm' | 'Cold' | 'Unknown';
 
 /**
  * Migrated from SmartSuite "The Leads Table" (6941fdb1dc9a6d024fd8b505).
@@ -31,7 +29,10 @@ export class Lead extends TenantRecord {
   @Prop({ index: true })
   status?: string;
 
-  @Prop({ default: 'Unknown', index: true })
+  // `type: String` is explicit because `LeadTemperature` is now an
+  // indexed-access type (`(typeof LEAD_TEMPERATURES)[number]`), which
+  // `emitDecoratorMetadata` reports as `Object` — Mongoose can't infer from it.
+  @Prop({ type: String, default: 'Unknown', index: true })
   temperature: LeadTemperature;
 
   @Prop({ type: Object, default: { code: null, label: '' } })
@@ -69,3 +70,5 @@ LeadSchema.index(
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 LeadSchema.index({ agencyId: 1, producerId: 1, temperature: 1, status: 1 });
+// Default Leads-list query (PAC-36): scope clamp + the `lastActivityAt` sort.
+LeadSchema.index({ agencyId: 1, producerId: 1, lastActivityAt: -1 });
