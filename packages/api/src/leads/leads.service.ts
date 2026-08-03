@@ -147,13 +147,16 @@ export class LeadsService {
 
     this.applyScope(filter, access, branchId, query);
 
-    if (query.status) {
-      // Match both the canonical label and any raw SmartSuite code that maps to
-      // it, so filtering "Requote" also finds documents storing `arW7O`.
-      filter.status = { $in: leadStatusQueryValues(query.status) };
+    if (query.status?.length) {
+      // Each selected label expands to itself plus any raw SmartSuite code that
+      // maps to it, so filtering "Requote" also finds documents storing `arW7O`.
+      // Multiple selections are ORed by the single `$in`.
+      filter.status = {
+        $in: [...new Set(query.status.flatMap(leadStatusQueryValues))],
+      };
     }
-    if (query.temperature) {
-      filter.temperature = query.temperature;
+    if (query.temperature?.length) {
+      filter.temperature = { $in: query.temperature };
     }
     if (query.leadSource === LEAD_SOURCE_NONE) {
       // Leads that arrived through a public share link carry no source — nobody
