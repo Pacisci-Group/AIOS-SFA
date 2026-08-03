@@ -16,9 +16,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Form } from "@/components/ui/form";
 import { PolicySummaryList } from "./PolicySummaryList";
+import { DiscountsCard } from "./DiscountsCard";
 import {
   CARD_FIELDS,
-  EMPTY_POLICY,
+  emptyPolicy,
   soldPolicySchema,
   type SoldPolicyFormValues,
 } from "./sold-deal-schema";
@@ -65,7 +66,7 @@ export function SoldDealWizard({
    */
   const draft = useForm<SoldPolicyFormValues>({
     resolver: zodResolver(soldPolicySchema),
-    defaultValues: EMPTY_POLICY,
+    defaultValues: emptyPolicy(),
     mode: "onBlur",
   });
 
@@ -121,7 +122,7 @@ export function SoldDealWizard({
   const addAnother = async () => {
     const next = await commitDraft();
     if (!next) return;
-    draft.reset(EMPTY_POLICY);
+    draft.reset(emptyPolicy());
     nav.restartLoop();
   };
 
@@ -162,6 +163,12 @@ export function SoldDealWizard({
             {nav.card === "policyType" && <PolicyTypeCard />}
             {nav.card === "policyDetails" && <PolicyDetailsCard />}
             {nav.card === "financials" && <PolicyFinancialsCard />}
+            {nav.card === "discounts" && (
+              <DiscountsCard
+                leadId={context.leadId}
+                contacts={context.contacts}
+              />
+            )}
             {nav.card === "priorInsurance" && <PriorInsuranceCard />}
             {nav.card === "cancellation" && <CancellationCard />}
             {nav.card === "loop" && (

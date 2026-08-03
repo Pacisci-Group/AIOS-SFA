@@ -26,6 +26,78 @@ const ymd = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
   .refine((value) => !Number.isNaN(Date.parse(value)), "Not a real date");
 
+/** An uploaded proof, as the API returns it from the presign flow. */
+const attachmentSchema = z.object({
+  key: z.string().min(1),
+  filename: z.string().min(1),
+  contentType: z.string().min(1),
+  size: z.number().nonnegative(),
+});
+
+/**
+ * A discount with the spec's "do you have proof?" fork.
+ *
+ * `hasProof: false` is a valid answer, not an omission — it routes the chase to
+ * the service team instead of cancelling the discount.
+ */
+const proofSchema = z
+  .object({
+    selected: z.boolean(),
+    hasProof: z.boolean(),
+    attachment: attachmentSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.selected && value.hasProof && !value.attachment) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Attach the document, or answer "no".',
+        path: ["attachment"],
+      });
+    }
+  });
+
+const discountsSchema = z.object({
+  escrow: z.boolean(),
+  fireSubscription: proofSchema,
+  roofReceipt: proofSchema,
+  acvPersonalProperty: z.boolean(),
+  acvDwellingProtection: z.boolean(),
+  drivewise: z.boolean(),
+  defensiveDriver: z
+    .object({
+      selected: z.boolean(),
+      drivers: z
+        .array(
+          z.object({
+            name: z.string().trim().min(1, "Name the driver").max(120),
+            contactId: z.string().optional(),
+          }),
+        )
+        .max(10, "At most 10 drivers"),
+    })
+    .superRefine((value, ctx) => {
+      if (value.selected && value.drivers.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Add at least one driver.",
+          path: ["drivers"],
+        });
+      }
+    }),
+  studentDiscount: proofSchema,
+});
+
+const escrowSchema = z.object({
+  loanNumber: z.string().trim().min(1, "Enter the loan number").max(60),
+  companyName: z.string().trim().min(1, "Enter the escrow company").max(160),
+  address: z.object({
+    street: z.string().trim().min(1, "Required").max(200),
+    city: z.string().trim().min(1, "Required").max(120),
+    state: z.string().trim().min(1, "Required").max(60),
+    zip: z.string().trim().min(1, "Required").max(20),
+  }),
+});
+
 export const soldPolicySchema = z
   .object({
     // Card 2
@@ -56,6 +128,9 @@ export const soldPolicySchema = z
       tooLarge: "Too many",
       integer: "Whole numbers only",
     }),
+    // Card 5
+    discounts: discountsSchema,
+    escrow: escrowSchema.optional(),
     // Card 6
     priorInsurance: z.object({
       none: z.boolean(),
@@ -83,6 +158,15 @@ export const soldPolicySchema = z
         path: ["cancellation", "effectiveDate"],
       });
     }
+    // Ticking escrow is what makes its sub-card required: the audit item it
+    // generates asks the service team to verify exactly these three things.
+    if (policy.discounts.escrow && !policy.escrow) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter the escrow details.",
+        path: ["escrow"],
+      });
+    }
   });
 
 export type SoldPolicyFormValues = z.infer<typeof soldPolicySchema>;
@@ -94,8 +178,29 @@ export const soldDealSchema = z.object({
 
 export type SoldDealFormValues = z.infer<typeof soldDealSchema>;
 
-export const EMPTY_POLICY: SoldPolicyFormValues = {
+export const EMPTY_DISCOUNTS: SoldPolicyFormValues["discounts"] = {
+  escrow: false,
+  fireSubscription: { selected: false, hasProof: false },
+  roofReceipt: { selected: false, hasProof: false },
+  acvPersonalProperty: false,
+  acvDwellingProtection: false,
+  drivewise: false,
+  defensiveDriver: { selected: false, drivers: [] },
+  studentDiscount: { selected: false, hasProof: false },
+};
+
+/**
+ * A factory, not a shared constant: the nested `drivers: []` would otherwise be
+ * one array instance handed to every policy, so adding a driver to policy 2
+ * would silently add it to policy 1 as well.
+ */
+export function emptyPolicy(): SoldPolicyFormValues {
+  return { ...EMPTY_POLICY, discounts: structuredClone(EMPTY_DISCOUNTS) };
+}
+
+const EMPTY_POLICY: SoldPolicyFormValues = {
   policyType: "Auto",
+  discounts: EMPTY_DISCOUNTS,
   effectiveDate: "",
   carrier: "",
   policyNumber: "",
@@ -109,16 +214,14 @@ export const EMPTY_POLICY: SoldPolicyFormValues = {
  * The wizard's cards, in order.
  *
  * Card 1 is outside the loop (one sold date per deal); Cards 2–7 are the loop
- * body; Card 8 decides whether to run it again. Card 5 lands in PR4 — the
- * conditional discount matrix and its uploads — and is deliberately absent
- * here rather than stubbed, so the step machine never advertises a card the
- * producer cannot fill in.
+ * body; Card 8 decides whether to run it again.
  */
 export const WIZARD_CARDS = [
   "soldDate",
   "policyType",
   "policyDetails",
   "financials",
+  "discounts",
   "priorInsurance",
   "cancellation",
   "loop",
@@ -131,6 +234,7 @@ export const CARD_TITLES: Record<WizardCard, string> = {
   policyType: "Policy type",
   policyDetails: "Policy details",
   financials: "Financials",
+  discounts: "Discounts & documentation",
   priorInsurance: "Prior insurance",
   cancellation: "Cancellation",
   loop: "Add another policy?",
@@ -150,16 +254,19 @@ export const CARD_FIELDS: Record<
   policyType: ["policyType"],
   policyDetails: ["effectiveDate", "carrier", "policyNumber"],
   financials: ["premium", "itemCount"],
+  discounts: ["discounts", "escrow"],
   priorInsurance: ["priorInsurance"],
   cancellation: ["cancellation"],
   loop: [],
 };
 
 /** Form strings → the numeric wire shape, once validation has passed. */
-export function toPolicyInput(
-  values: SoldPolicyFormValues,
-): Omit<SoldPolicyInput, "discounts"> {
+export function toPolicyInput(values: SoldPolicyFormValues): SoldPolicyInput {
   return {
+    discounts: values.discounts,
+    // Only sent when escrow was actually ticked — the server rejects details
+    // without the selection, and vice versa.
+    escrow: values.discounts.escrow ? values.escrow : undefined,
     policyType: values.policyType,
     effectiveDate: values.effectiveDate,
     carrier: values.carrier,

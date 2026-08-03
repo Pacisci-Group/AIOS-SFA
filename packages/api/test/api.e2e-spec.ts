@@ -14,6 +14,7 @@ import { TransactionRunner } from '../src/common/mongo/transaction.runner';
 import { Contact } from '../src/contacts/schemas/contact.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
 import { Household } from '../src/households/schemas/household.schema';
+import { InterestedParty } from '../src/interested-parties/schemas/interested-party.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
@@ -2070,6 +2071,420 @@ describe('SFA API (e2e)', () => {
         .get(`/api/v1/quote-recaps/context?leadId=${MISSING_LEAD_ID}`)
         .set(authHeader(liveToken))
         .expect(401);
+    });
+  });
+
+  describe('Sold deals (PAC-40 Card 5 — discounts & documents)', () => {
+    const SOLD = '/api/v1/sold-deals';
+    const PRESIGN = '/api/v1/sold-deals/documents/presign';
+
+    let card5DealModel: Model<Deal>;
+    let card5PolicyModel: Model<Policy>;
+    let card5LeadModel: Model<Lead>;
+    let card5HouseholdModel: Model<Household>;
+    let interestedPartyModel: Model<InterestedParty>;
+    let card5ProducerId: Types.ObjectId;
+    let card5StatSpy: jest.SpyInstance;
+
+    /**
+     * Object storage isn't running under test, so `statObject` reports only the
+     * keys a test has "uploaded". That keeps the real verification path
+     * exercised — including the 404 for a key that never landed — without a
+     * MinIO dependency. Same approach as the Quote Recap suite.
+     */
+    const uploaded = new Map<string, { size: number; contentType: string }>();
+
+    const keyFor = (leadId: string) =>
+      `agencies/${seed.agencyId}/sold-deals/${leadId}/2026/proof.pdf`;
+
+    const upload = (
+      leadId: string,
+      stat = { size: 2048, contentType: 'application/pdf' },
+    ) => {
+      const key = keyFor(leadId);
+      uploaded.set(key, stat);
+      return {
+        key,
+        filename: 'proof.pdf',
+        contentType: 'application/pdf',
+        size: stat.size,
+      };
+    };
+
+    let card5Counter = 0;
+    const nextCard5Number = () =>
+      `C5-${(card5Counter += 1).toString().padStart(6, '0')}`;
+
+    const EMPTY_DISCOUNTS = {
+      escrow: false,
+      fireSubscription: { selected: false, hasProof: false },
+      roofReceipt: { selected: false, hasProof: false },
+      acvPersonalProperty: false,
+      acvDwellingProtection: false,
+      drivewise: false,
+      defensiveDriver: { selected: false, drivers: [] },
+      studentDiscount: { selected: false, hasProof: false },
+    };
+
+    const policyWith = (overrides: Record<string, unknown> = {}) => ({
+      policyType: 'Auto',
+      effectiveDate: '2026-02-01',
+      carrier: 'Allstate',
+      policyNumber: nextCard5Number(),
+      premium: 500,
+      itemCount: 1,
+      priorInsurance: { none: true },
+      cancellation: { cancelled: false },
+      ...overrides,
+    });
+
+    const seedLead = async () => {
+      const household = await card5HouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Card5 Household',
+        primaryContactName: 'Casey Card',
+      });
+      const lead = await card5LeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Casey',
+        lastName: 'Card',
+        status: 'Quoted',
+        producerId: card5ProducerId,
+        householdId: household._id,
+      });
+      return lead;
+    };
+
+    const post = (body: object, expected = 201) =>
+      request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(body)
+        .expect(expected);
+
+    beforeAll(async () => {
+      card5DealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      card5PolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      card5LeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      card5HouseholdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      interestedPartyModel = app.get<Model<InterestedParty>>(
+        getModelToken(InterestedParty.name),
+      );
+
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      card5ProducerId = producer!._id;
+
+      card5StatSpy = jest
+        .spyOn(app.get(StorageService), 'statObject')
+        .mockImplementation((key: string) =>
+          Promise.resolve(uploaded.get(key) ?? null),
+        );
+    });
+
+    afterAll(() => card5StatSpy.mockRestore());
+
+    it('presigns a proof upload scoped to the agency and lead', async () => {
+      const lead = await seedLead();
+      const res = await request(app.getHttpServer())
+        .post(PRESIGN)
+        .set(authHeader(producerToken))
+        .send({
+          leadId: lead._id.toString(),
+          filename: 'roof.pdf',
+          contentType: 'application/pdf',
+          size: 2048,
+        })
+        .expect(201);
+
+      const body = res.body as { key: string; uploadUrl: string };
+      expect(body.key).toContain(
+        `agencies/${seed.agencyId}/sold-deals/${lead._id.toString()}/`,
+      );
+      expect(body.uploadUrl).toEqual(expect.any(String));
+    });
+
+    it("refuses to presign against another producer's lead", async () => {
+      const household = await card5HouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Someone Else',
+      });
+      const foreign = await card5LeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Not',
+        lastName: 'Yours',
+        producerId: new Types.ObjectId(),
+        householdId: household._id,
+      });
+
+      // 404, not 403 — a presign must not leak that the lead exists.
+      await request(app.getHttpServer())
+        .post(PRESIGN)
+        .set(authHeader(producerToken))
+        .send({
+          leadId: foreign._id.toString(),
+          filename: 'roof.pdf',
+          contentType: 'application/pdf',
+          size: 2048,
+        })
+        .expect(404);
+    });
+
+    it('rejects a cross-branch discount rather than stripping it', async () => {
+      const lead = await seedLead();
+      // A Home policy claiming Drivewise would otherwise generate an auto audit
+      // item for a deal with no auto line.
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              policyType: 'Home',
+              discounts: { ...EMPTY_DISCOUNTS, drivewise: true },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('requires the escrow sub-card when escrow is ticked', async () => {
+      const lead = await seedLead();
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              policyType: 'Home',
+              discounts: { ...EMPTY_DISCOUNTS, escrow: true },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('writes an interested party per escrow and flags the deal mortgagee', async () => {
+      const lead = await seedLead();
+      const res = await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith({
+            policyType: 'Home',
+            discounts: { ...EMPTY_DISCOUNTS, escrow: true },
+            escrow: {
+              loanNumber: 'LN-123',
+              companyName: 'First National Escrow',
+              address: {
+                street: '1 Lender Way',
+                city: 'Austin',
+                state: 'TX',
+                zip: '78745',
+              },
+            },
+          }),
+        ],
+      });
+
+      const dealId = new Types.ObjectId((res.body as { id: string }).id);
+      const deal = await card5DealModel.findById(dealId);
+      // The boolean gates the Home/Landlord Mortgagee audit items; the row
+      // carries the detail the service team verifies.
+      expect(deal!.mortgagee).toBe(true);
+
+      const parties = await interestedPartyModel.find({
+        householdId: lead.householdId,
+      });
+      expect(parties).toHaveLength(1);
+      expect(parties[0].loanNumber).toBe('LN-123');
+      expect(parties[0].mortgagee).toBe('First National Escrow');
+    });
+
+    it('unions Card 5 selections into the deal audit triggers', async () => {
+      const lead = await seedLead();
+      const res = await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith({
+            policyType: 'Auto',
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              drivewise: true,
+              defensiveDriver: {
+                selected: true,
+                // The same driver twice — one certificate, not two.
+                drivers: [
+                  { name: 'Dana Driver' },
+                  { name: 'Sam Second' },
+                  { name: 'Dana Driver' },
+                ],
+              },
+            },
+          }),
+          policyWith({
+            policyType: 'Home',
+            discounts: { ...EMPTY_DISCOUNTS, acvDwellingProtection: true },
+          }),
+        ],
+      });
+
+      const dealId = new Types.ObjectId((res.body as { id: string }).id);
+      const deal = await card5DealModel.findById(dealId);
+      const triggers = deal!.auditTriggers;
+
+      expect(triggers.drivewise).toBe(true);
+      expect(triggers.defensiveDriver).toBe(true);
+      // Either ACV option maps onto the one Actual Cash Value trigger.
+      expect(triggers.actualCashValue).toBe(true);
+      expect(triggers.goodStudent).toBe(false);
+      expect([...triggers.defensiveDriverNames].sort()).toEqual([
+        'Dana Driver',
+        'Sam Second',
+      ]);
+    });
+
+    it('accepts "no proof" as a real answer, not a validation failure', async () => {
+      const lead = await seedLead();
+      // The discount still applies — the chase moves to the service team.
+      const res = await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith({
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              studentDiscount: { selected: true, hasProof: false },
+            },
+          }),
+        ],
+      });
+
+      const dealId = new Types.ObjectId((res.body as { id: string }).id);
+      const deal = await card5DealModel.findById(dealId);
+      expect(deal!.auditTriggers.goodStudent).toBe(true);
+    });
+
+    it('demands the document when the producer said they had proof', async () => {
+      const lead = await seedLead();
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              discounts: {
+                ...EMPTY_DISCOUNTS,
+                studentDiscount: { selected: true, hasProof: true },
+              },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('stores the size storage reports, not the size the client claimed', async () => {
+      const lead = await seedLead();
+      const attachment = upload(lead._id.toString(), {
+        size: 4096,
+        contentType: 'application/pdf',
+      });
+
+      const res = await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith({
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              // The client lies about the size; HeadObject is the evidence.
+              studentDiscount: {
+                selected: true,
+                hasProof: true,
+                attachment: { ...attachment, size: 1 },
+              },
+            },
+          }),
+        ],
+      });
+
+      const dealId = new Types.ObjectId((res.body as { id: string }).id);
+      const policies = await card5PolicyModel.find({ dealId });
+      expect(policies[0].discounts?.studentDiscount.attachment?.size).toBe(
+        4096,
+      );
+    });
+
+    it('rejects a document key outside the agency and lead prefix', async () => {
+      const lead = await seedLead();
+      const foreignKey = `agencies/some-other-agency/sold-deals/${lead._id.toString()}/2026/proof.pdf`;
+      uploaded.set(foreignKey, { size: 2048, contentType: 'application/pdf' });
+
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              discounts: {
+                ...EMPTY_DISCOUNTS,
+                studentDiscount: {
+                  selected: true,
+                  hasProof: true,
+                  attachment: {
+                    key: foreignKey,
+                    filename: 'proof.pdf',
+                    contentType: 'application/pdf',
+                    size: 2048,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('404s when the declared document never landed in storage', async () => {
+      const lead = await seedLead();
+      const ghost = keyFor(lead._id.toString());
+      uploaded.delete(ghost);
+
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              discounts: {
+                ...EMPTY_DISCOUNTS,
+                studentDiscount: {
+                  selected: true,
+                  hasProof: true,
+                  attachment: {
+                    key: ghost,
+                    filename: 'proof.pdf',
+                    contentType: 'application/pdf',
+                    size: 2048,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+        404,
+      );
     });
   });
 

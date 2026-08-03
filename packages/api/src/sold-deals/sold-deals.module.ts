@@ -6,6 +6,10 @@ import {
 } from '../activities/schemas/activity.schema';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
+import {
+  InterestedParty,
+  InterestedPartySchema,
+} from '../interested-parties/schemas/interested-party.schema';
 import { LeadsModule } from '../leads/leads.module';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
@@ -18,6 +22,7 @@ import {
   PriorPolicySchema,
 } from '../prior-policies/schemas/prior-policy.schema';
 import { AdvanceLeadStep } from './intake/advance-lead.step';
+import { InterestedPartiesStep } from './intake/interested-parties.step';
 import { PriorInsuranceStep } from './intake/prior-insurance.step';
 import { ResolveDealStep } from './intake/resolve-deal.step';
 import { SoldDealIntakeService } from './intake/sold-deal-intake.service';
@@ -35,12 +40,13 @@ import { SoldDealsService } from './sold-deals.service';
  */
 @Module({
   imports: [
-    // The intake pipeline writes across five collections in one transaction.
+    // The intake pipeline writes across six collections in one transaction.
     MongooseModule.forFeature([
       { name: Deal.name, schema: DealSchema },
       { name: Policy.name, schema: PolicySchema },
       { name: PriorInsurance.name, schema: PriorInsuranceSchema },
       { name: PriorPolicy.name, schema: PriorPolicySchema },
+      { name: InterestedParty.name, schema: InterestedPartySchema },
       { name: Lead.name, schema: LeadSchema },
       { name: Contact.name, schema: ContactSchema },
       { name: Activity.name, schema: ActivitySchema },
@@ -54,6 +60,7 @@ import { SoldDealsService } from './sold-deals.service';
     ResolveDealStep,
     UpsertPoliciesStep,
     PriorInsuranceStep,
+    InterestedPartiesStep,
     AdvanceLeadStep,
   ],
   exports: [SoldDealIntakeService],

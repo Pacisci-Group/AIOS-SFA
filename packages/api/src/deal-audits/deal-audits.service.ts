@@ -208,8 +208,20 @@ export class DealAuditsService {
       };
     }
 
-    // If an attachment was declared, confirm the upload actually landed.
+    // If an attachment was declared, confirm this agency and item produced the
+    // key, then that the upload actually landed.
+    //
+    // The ownership check closes a hole flagged during PAC-39 and fixed in
+    // PAC-40: `key` comes straight from the client, so without it a caller
+    // could name **any** object they knew of — including another agency's — and
+    // have it attached to their own record. `presignAttachment` mints keys as
+    // `agencies/<agencyId>/deal-audits/<itemId>/…`, so the prefix test is exact.
     if (dto.attachment) {
+      this.storage.assertKeyOwnership(dto.attachment.key, {
+        agencyId: item.agencyId,
+        purpose: `deal-audits/${itemId}`,
+      });
+
       const exists = await this.storage.objectExists(dto.attachment.key);
       if (!exists) {
         throw new NotFoundException(

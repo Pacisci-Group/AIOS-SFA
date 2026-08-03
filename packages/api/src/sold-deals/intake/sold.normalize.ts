@@ -3,7 +3,11 @@ import {
   isPropertyPolicyType,
   normalizePolicyType,
 } from '@sfa/shared';
-import type { NormalizedLeadSource, SoldPolicyInput } from '@sfa/shared';
+import type {
+  NormalizedLeadSource,
+  SoldDocumentMeta,
+  SoldPolicyInput,
+} from '@sfa/shared';
 import { deriveDealType } from '../../common/domain/deal-derive';
 import { sumCents } from '../../common/domain/money';
 import type {
@@ -140,6 +144,35 @@ export function deriveAuditTriggers(
 /** Escrow on any policy implies a mortgagee on the deal. */
 export function deriveMortgagee(policies: SoldPolicyInput[]): boolean {
   return policies.some((p) => p.discounts?.escrow === true);
+}
+
+/**
+ * Every Card 5 proof document across the submission.
+ *
+ * Returns the **live objects**, not copies, so the caller can stamp each one
+ * with the size and content type storage actually reports. Only the three
+ * proof-backed discounts can carry a document; escrow's answer is data, not a
+ * file.
+ */
+export function collectAttachments(
+  policies: SoldPolicyInput[],
+): SoldDocumentMeta[] {
+  const found: SoldDocumentMeta[] = [];
+
+  for (const policy of policies) {
+    const d = policy.discounts;
+    if (!d) continue;
+
+    for (const discount of [
+      d.fireSubscription,
+      d.roofReceipt,
+      d.studentDiscount,
+    ]) {
+      if (discount?.attachment) found.push(discount.attachment);
+    }
+  }
+
+  return found;
 }
 
 /**

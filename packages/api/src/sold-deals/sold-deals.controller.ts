@@ -16,6 +16,8 @@ import type {
   CreateSoldDealDto,
   SoldDealContextDto,
 } from './dto/create-sold-deal.dto';
+import { presignSoldDocumentSchema } from './dto/presign-sold-document.dto';
+import type { PresignSoldDocumentDto } from './dto/presign-sold-document.dto';
 import { SoldDealsService } from './sold-deals.service';
 
 /**
@@ -58,6 +60,24 @@ export class SoldDealsController {
     query: SoldDealContextDto,
   ) {
     return this.soldDealsService.getLeadContext(access, branchId, query);
+  }
+
+  /**
+   * Issue a presigned URL for a Card 5 proof document (fire subscription, roof
+   * receipt, student transcript).
+   *
+   * Lead-scoped, not deal-scoped: the upload happens while the wizard is still
+   * being filled in, so no deal exists yet.
+   */
+  @Post('documents/presign')
+  @RequireWrite(ModuleKey.DealAudits)
+  presignDocument(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Body(new ZodValidationPipe(presignSoldDocumentSchema))
+    body: PresignSoldDocumentDto,
+  ) {
+    return this.soldDealsService.presignDocument(access, branchId, body);
   }
 
   /**

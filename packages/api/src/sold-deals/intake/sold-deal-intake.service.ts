@@ -11,6 +11,7 @@ import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
 import type { LeadDocument } from '../../leads/schemas/lead.schema';
 import type { CreateSoldDealDto } from '../dto/create-sold-deal.dto';
 import { AdvanceLeadStep } from './advance-lead.step';
+import { InterestedPartiesStep } from './interested-parties.step';
 import { PriorInsuranceStep } from './prior-insurance.step';
 import { ResolveDealStep } from './resolve-deal.step';
 import { SoldIntakeContext, SoldIntakeOutcome } from './sold-intake.types';
@@ -59,6 +60,7 @@ export class SoldDealIntakeService {
     private readonly deals: ResolveDealStep,
     private readonly policies: UpsertPoliciesStep,
     private readonly priorInsurance: PriorInsuranceStep,
+    private readonly interestedParties: InterestedPartiesStep,
     private readonly leads: AdvanceLeadStep,
   ) {}
 
@@ -84,8 +86,10 @@ export class SoldDealIntakeService {
           lead.leadSource,
           deps,
         );
-        await this.policies.run(dto, dealId, access, deps);
+        const policies = await this.policies.run(dto, dealId, access, deps);
         await this.priorInsurance.run(dto, dealId, deps);
+        // After the policies: an escrow row links to the policy it secures.
+        await this.interestedParties.run(dto, policies, deps);
 
         return {
           dealId,

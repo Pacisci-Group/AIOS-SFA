@@ -1,0 +1,82 @@
+meta {
+  name: Get Sold Context
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/sold-deals/context?leadId={{createdLeadId}}
+  body: none
+  auth: inherit
+}
+
+params:query {
+  leadId: {{createdLeadId}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the wizard header", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("leadId");
+    expect(body).to.have.property("primaryContactName");
+    expect(body).to.have.property("householdId");
+    expect(body).to.have.property("householdName");
+    expect(body).to.have.property("leadStatus");
+  });
+
+  test("returns the household contacts the driver picker offers", function () {
+    expect(res.getBody().contacts).to.be.an("array");
+  });
+}
+
+docs {
+  # GET /sold-deals/context — the wizard's header + driver picker (PAC-40)
+
+  What `/sold/new` needs on mount: who the sale is for, and which household
+  members can be named as defensive drivers on Card 5.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:read`
+  - **Data scope:** `own` producers only see their own lead; anyone else's is a 404
+
+  ## Why `householdId` can be `null`
+  A sale is recorded against a household, and `POST /sold-deals` returns `409`
+  for a lead with none. This endpoint reports the gap as `householdId: null`
+  **instead of erroring**, so the page can block up front rather than letting a
+  producer fill in seven cards and fail at submit.
+
+  The household is resolved with the same self-healing lookup the Quote Recap
+  form uses: the migration writes only `legacyHouseholdId` on leads, so the
+  fallback repairs `lead.householdId` the first time a migrated lead is touched.
+
+  ## Response `200`
+  ```json
+  {
+    "leadId": "665f…ac1",
+    "primaryContactName": "Robin Nakamura",
+    "householdId": "665f…b02",
+    "householdName": "Nakamura Household",
+    "contacts": [
+      { "id": "665f…c10", "firstName": "Robin", "lastName": "Nakamura", "roleInHousehold": "Primary" }
+    ],
+    "leadStatus": "Quoted"
+  }
+  ```
+
+  ## Errors
+  - `400 Bad Request` — malformed `leadId`.
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — `deal_audits` disabled, or missing `deal_audits:read`.
+  - `404 Not Found` — unknown lead, or one outside the caller's data scope.
+
+  ## Ordering
+  Run **Leads/Create Lead** first — it sets `createdLeadId`.
+}
