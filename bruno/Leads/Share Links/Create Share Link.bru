@@ -1,0 +1,106 @@
+meta {
+  name: Create Share Link
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/leads/share-links
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "label": "Referrals from Dave at First National"
+  }
+}
+
+script:post-response {
+  // Runtime-only vars for the public-intake requests. Never setEnvVar — the
+  // token is a working credential for an unauthenticated write endpoint.
+  if (res.getStatus() === 201) {
+    bru.setVar("shareLinkId", res.getBody().id);
+    bru.setVar("shareLinkToken", res.getBody().token);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("token is 43 URL-safe characters", function () {
+    expect(res.getBody().token).to.match(/^[A-Za-z0-9_-]{43}$/);
+  });
+
+  test("url embeds the token and no internal identifiers", function () {
+    const body = res.getBody();
+    expect(body.url).to.contain("/f/lead/" + body.token);
+    expect(body.url).to.not.contain("producerId");
+  });
+
+  test("starts active with a zero submission count", function () {
+    expect(res.getBody().isActive).to.equal(true);
+    expect(res.getBody().submissionCount).to.equal(0);
+  });
+}
+
+docs {
+  # POST /leads/share-links — generate a public intake link (PAC-37)
+
+  Mints an opaque token a producer can share. Anyone holding the resulting URL
+  can submit a lead, and it lands **pre-assigned to the producer who minted it**.
+
+  - **Module:** `leads`
+  - **Permission:** `leads:write`
+  - **Data scope:** `own` — a link is **always** minted for the caller.
+
+  ## Why a token, not a producer id in a query param
+  The original proposal was `?producerId=<ObjectId>`. That fails three ways: an
+  ObjectId is guessable and swappable, so anyone could reroute leads to a
+  different producer; it leaks internal identifiers; and a leaked link could
+  never be revoked. The indirection fixes all three, and lets us count
+  submissions per link.
+
+  ## Body
+  | field | type   | required | notes                                                    |
+  |-------|--------|----------|----------------------------------------------------------|
+  | label | string | no       | max 120 chars. **Display only** — a producer's own note so they can tell links apart. It never reaches the created lead. |
+
+  There is deliberately **no `producerId` field**. That is how "a producer cannot
+  generate a link on behalf of another producer" is satisfied — by construction,
+  with no scope-branching to get wrong. An injected `producerId` is silently
+  dropped by the validator. Delegation belongs with PAC-53.
+
+  This story also pins no lead source, partner attribution or branding on a link;
+  those are PAC-53. The collection is shaped so they can be added as optional
+  fields without reshaping it.
+
+  ## Response `201`
+  ```json
+  {
+    "id": "665f0a1b2c3d4e5f60718293",
+    "token": "8Kj2mQ7xR4tY9wZ1aB3cD5eF6gH8iJ0kL2mN4oP6qRs",
+    "url": "http://localhost:5173/f/lead/8Kj2mQ7xR4tY9wZ1aB3cD5eF6gH8iJ0kL2mN4oP6qRs",
+    "label": "Referrals from Dave at First National",
+    "isActive": true,
+    "submissionCount": 0,
+    "lastSubmissionAt": null,
+    "createdAt": "2026-08-03T10:14:22.000Z",
+    "revokedAt": null
+  }
+  ```
+  `url` is built from the `PUBLIC_FORM_BASE_URL` environment variable (defaults
+  to `http://localhost:5173`).
+
+  > The token is stored and returned in plaintext because this endpoint and the
+  > list endpoint must hand it back so a producer can re-copy their URL — which
+  > rules out hashing it. With no expiry in this story, a leaked link stays live
+  > until revoked; **revocation is the containment mechanism.**
+
+  ## Errors
+  - `400 Bad Request` — `label` longer than 120 characters.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, or missing `leads:write`.
+}

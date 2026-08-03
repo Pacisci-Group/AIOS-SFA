@@ -18,7 +18,12 @@ export const listLeadsSchema = z.object({
   /** Canonical status label, e.g. `Requote` — matched against raw codes too. */
   status: z.string().trim().max(60).optional(),
   temperature: z.enum(LEAD_TEMPERATURES).optional(),
-  /** Canonical lead-source label, e.g. `Mailer`. */
+  /**
+   * Canonical lead-source label, e.g. `Mailer` — or the `LEAD_SOURCE_NONE`
+   * sentinel (`__none__`) to isolate leads with no source recorded, which is
+   * how share-link submissions arrive (PAC-37). An empty string can't be a
+   * meaningful query-param value, hence the sentinel.
+   */
   leadSource: z.string().trim().max(80).optional(),
   /** Narrow to one producer. Ignored for `own` scope; clamped otherwise. */
   producerId: z.string().trim().optional(),

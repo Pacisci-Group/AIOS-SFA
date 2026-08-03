@@ -1,0 +1,80 @@
+meta {
+  name: List Share Links
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/leads/share-links
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a plain items array", function () {
+    expect(res.getBody()).to.have.property("items");
+    expect(res.getBody().items).to.be.an("array");
+  });
+
+  test("every row belongs to the caller and carries a usable url", function () {
+    res.getBody().items.forEach(function (row) {
+      expect(row).to.have.property("url");
+      expect(row).to.have.property("submissionCount");
+      expect(row).to.not.have.property("producerId");
+      expect(row).to.not.have.property("agencyId");
+    });
+  });
+}
+
+docs {
+  # GET /leads/share-links — the caller's own links (PAC-37)
+
+  Lists the links this user has minted, newest first, with their submission
+  counts — enough for a producer to see which link is producing business and to
+  revoke one that has leaked.
+
+  - **Module:** `leads`
+  - **Permission:** `leads:read`
+  - **Data scope:** always pinned to the caller, at every scope. Even an Agency
+    Owner sees only their own links here: each row contains a **working
+    credential** for an unauthenticated write endpoint, so listing other
+    people's is not something to do casually. A management view, if wanted, is a
+    separate deliberate feature.
+
+  Returns a plain `{ items: [...] }` array rather than the paginated envelope
+  used by `GET /leads` — links per producer are a handful, and pagination here
+  would be ceremony.
+
+  ## Response `200`
+  ```json
+  {
+    "items": [
+      {
+        "id": "665f0a1b2c3d4e5f60718293",
+        "token": "8Kj2mQ7xR4tY9wZ1aB3cD5eF6gH8iJ0kL2mN4oP6qRs",
+        "url": "http://localhost:5173/f/lead/8Kj2mQ7xR4tY9wZ1aB3cD5eF6gH8iJ0kL2mN4oP6qRs",
+        "label": "Referrals from Dave at First National",
+        "isActive": true,
+        "submissionCount": 4,
+        "lastSubmissionAt": "2026-08-02T18:31:05.000Z",
+        "createdAt": "2026-07-30T09:00:00.000Z",
+        "revokedAt": null
+      }
+    ]
+  }
+  ```
+
+  Revoked links are still listed, with `isActive: false` and a `revokedAt`
+  timestamp, so a producer can see what they have turned off.
+
+  `submissionCount` counts **new leads only** — a replayed submission (a flaky
+  mobile connection, a retry) does not inflate it.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, or missing `leads:read`.
+}

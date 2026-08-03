@@ -1,0 +1,74 @@
+meta {
+  name: Get Public Lead Form
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/public/lead-form/{{shareLinkToken}}
+  body: none
+  auth: none
+}
+
+tests {
+  test("returns 200 OK without any Authorization header", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("exposes EXACTLY agencyName and isActive — nothing else", function () {
+    const keys = Object.keys(res.getBody()).sort();
+    expect(keys).to.eql(["agencyName", "isActive"]);
+  });
+
+  test("leaks no producer identity or internal ids", function () {
+    const raw = JSON.stringify(res.getBody());
+    expect(raw).to.not.contain("producerId");
+    expect(raw).to.not.contain("agencyId");
+    expect(raw).to.not.contain("branchId");
+    expect(raw).to.not.contain("submissionCount");
+  });
+}
+
+docs {
+  # GET /public/lead-form/:token — render data for the public form (PAC-37)
+
+  **Public** (`@Public()`): no JWT, no `AccessContext`, and every one of the six
+  global guards is bypassed. Run **Create Share Link** first — it captures
+  `shareLinkToken`.
+
+  Returns only what is needed to render an agency-branded form to an outsider.
+
+  ## Response `200`
+  ```json
+  { "agencyName": "Smith Family Agency", "isActive": true }
+  ```
+
+  That is the **complete** payload. No producer name or id, no `agencyId` /
+  `branchId`, no link id, no submission count, no client data — and no lead
+  source, because a share-link lead deliberately has none. Every field added
+  here becomes visible to anyone on the internet holding the URL, so the e2e
+  suite asserts the key list by deep equality rather than spot-checking.
+
+  ## Tenancy without a guard chain
+  Because `@Public()` skips `TenantGuard` and `ModuleGuard`, the service resolves
+  everything from the **share-link record itself** and re-checks by hand:
+  the link exists and is active, the agency exists and is `active`, the `leads`
+  module is enabled for it, and the link's producer is still an active user.
+  Nothing is ever taken from the request body or query string.
+
+  ## Rate limiting
+  `10 requests / minute / IP` by default (`PUBLIC_FORM_RATE_LIMIT`).
+  Deliberately **looser** than the submit limit: this returns only an agency
+  name, and someone completing a form on a phone will reload the page. Locking
+  them out would cost a lead and protect nothing.
+
+  The client IP is taken from the first `X-Forwarded-For` entry, so the limit is
+  per real caller rather than per load balancer.
+
+  ## Errors
+  - `404 Not Found` — `{"message": "This form is no longer available.", ...}`.
+    Returned **identically** for an unknown token, a revoked link, a malformed
+    token, an inactive agency, a disabled `leads` module, and a deactivated
+    producer. The response cannot be used to learn whether a token ever existed.
+  - `429 Too Many Requests` — rate limit exceeded.
+}

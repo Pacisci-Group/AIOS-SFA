@@ -142,6 +142,49 @@ export async function apiFetch<T>(
   return res.json() as Promise<T>;
 }
 
+/**
+ * Fetch for `@Public()` API routes. No `Authorization`, no `X-Branch-Id`, and
+ * no 401-refresh — same `ApiError` contract otherwise.
+ *
+ * Deliberately not `apiFetch`. A producer previewing their own share link is a
+ * completely ordinary thing to do, and if their access token happens to be
+ * expired, `apiFetch` would attempt a refresh, fail it, and call
+ * `clearTokens()` — which wipes localStorage and **logs them out of the app for
+ * opening their own link**. Precedent: `uploadToPresignedUrl` in
+ * `deal-audits-api.ts` bypasses `apiFetch` for the same class of reason.
+ */
+export async function publicFetch<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const headers = new Headers(options.headers);
+  if (!headers.has('Content-Type') && options.body) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text || res.statusText;
+    try {
+      const json = JSON.parse(text) as { message?: string | string[] };
+      if (json.message) {
+        message = Array.isArray(json.message) ? json.message.join(', ') : json.message;
+      }
+    } catch {
+      // use raw text
+    }
+    throw new ApiError(message, res.status);
+  }
+
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
+  return res.json() as Promise<T>;
+}
+
 export async function login(email: string, password: string) {
   const data = await apiFetch<{
     accessToken: string;
