@@ -227,16 +227,12 @@ export function App() {
                     }
                   />
                 </Route>
+                {/* `/leads/demo` was removed with PAC-38: the page renders real
+                    data now, so a route that could only ever show the mockup was
+                    dead weight. It had no inbound links, and the `*` catch-all
+                    below handles a stale bookmark. */}
                 <Route
                   path="/leads/:id"
-                  element={
-                    <LazyPage>
-                      <LeadDetailsPage />
-                    </LazyPage>
-                  }
-                />
-                <Route
-                  path="/leads/demo"
                   element={
                     <LazyPage>
                       <LeadDetailsPage />
@@ -268,10 +264,15 @@ export function App() {
                 />
               </Route>
 
-              {/* Sold form (PAC-40). Gated on `deal_audits:write` rather than
-                  `clients` — that is the permission a Producer's role template
-                  actually grants, and the same one POST /sold-deals requires,
-                  so the route and the API agree. */}
+              {/* Sold form (PAC-40). Gated on `deal_audits:write` because that
+                  is what POST /sold-deals itself requires, so the route and the
+                  API agree.
+
+                  Note PAC-38 has since added `clients:write` to the Producer
+                  template (for editing a lead's contact), so the original
+                  reasoning — "producers hold no `clients:*`" — no longer holds.
+                  The gate stays where it is regardless: it matches the endpoint,
+                  which is the durable reason. */}
               <Route
                 element={
                   <RequirePermission

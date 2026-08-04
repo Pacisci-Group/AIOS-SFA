@@ -16,15 +16,18 @@ import { PoliciesService } from './policies.service';
  *
  * ## Why this is gated on `deal_audits`
  *
- * This route exists solely to serve Card 3 of the Sold form, and the Sold
- * write path is gated on `deal_audits` because that is the permission a
- * Producer actually holds — the role template grants no `clients:*`, which is
- * where `DealsController` sits. Gating the check on anything a producer lacks
- * would make the dedupe silently unavailable to the only people who use it.
+ * This route exists solely to serve Card 3 of the Sold form, so it carries the
+ * same gate as the Sold write path itself. Splitting them would let a producer
+ * pass the wizard's checks and fail at submit, or lose the dedupe entirely.
+ *
+ * (The original argument was that the Producer template granted no `clients:*`.
+ * PAC-38 changed that — producers now hold `clients:write` for contact editing
+ * — but matching the Sold form remains the reason this sits where it does.)
  *
  * A future *general* Policies read API (a household's policy portfolio, say)
  * belongs under `ModuleKey.Clients` and should be a separate controller rather
- * than an addition here.
+ * than an addition here. `ContactsModule` (PAC-38) is the precedent for how
+ * such a controller derives `own` scope for a record with no `producerId`.
  *
  * ⚠ Consequence worth knowing: disabling the `deal_audits` module for an
  * agency also disables the duplicate check and sold submission.

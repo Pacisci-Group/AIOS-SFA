@@ -4,21 +4,14 @@ import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
 } from '../../common/schemas/tenant-record.schema';
+import type { ActivitySubjectType, ActivityType } from '@sfa/shared';
 
 export type ActivityDocument = HydratedDocument<Activity>;
 
-export type ActivityType =
-  | 'lead_created'
-  | 'quoted'
-  | 'sold'
-  | 'call'
-  | 'text'
-  | 'email'
-  | 'note'
-  | 'audit_resolved';
-
-export type ActivitySubjectType =
-  'lead' | 'deal' | 'quoteRecap' | 'dealAuditItem';
+// The unions moved to `@sfa/shared` (PAC-38): the Lead Detail timeline renders
+// one icon and tone per type, and the web app cannot import from the API.
+// Re-exported so existing API-side importers keep working.
+export type { ActivitySubjectType, ActivityType };
 
 /**
  * Derived activity/timeline collection. Seeded from lead/quote/deal lifecycle events
@@ -27,10 +20,14 @@ export type ActivitySubjectType =
  */
 @Schema({ timestamps: true, collection: 'activities' })
 export class Activity extends TenantRecord {
-  @Prop({ required: true, index: true })
+  // `type: String` is explicit for both of these because the unions are now
+  // indexed-access types (`(typeof ACTIVITY_TYPES)[number]`), which
+  // `emitDecoratorMetadata` reports as `Object` — Mongoose can't infer from it.
+  // Same trap as `Lead.temperature`.
+  @Prop({ type: String, required: true, index: true })
   type: ActivityType;
 
-  @Prop({ required: true })
+  @Prop({ type: String, required: true })
   subjectType: ActivitySubjectType;
 
   @Prop({ index: true })
@@ -71,3 +68,6 @@ ActivitySchema.index(
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 ActivitySchema.index({ agencyId: 1, producerId: 1, occurredAt: -1 });
+// The Lead Detail timeline (PAC-38). The producer-scoped index above cannot
+// serve it: a lead's timeline spans whatever producer wrote each row.
+ActivitySchema.index({ agencyId: 1, leadId: 1, occurredAt: -1 });

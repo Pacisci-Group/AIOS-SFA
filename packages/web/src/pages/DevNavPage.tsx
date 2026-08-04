@@ -25,8 +25,11 @@ const navSections = [
         module: ModuleKey.Dashboard,
       },
       {
+        // Was mislabelled "Lead Details" while pointing at the list. The real
+        // detail page is `/leads/:id` (PAC-38) and needs an actual lead, so it
+        // is reached by clicking a row rather than from here.
         to: '/leads',
-        label: 'Lead Details',
+        label: 'Leads',
         icon: Users,
         module: ModuleKey.Leads,
       },

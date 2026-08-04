@@ -64,3 +64,10 @@ PriorInsuranceSchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
+/**
+ * The Lead Detail Prior Insurance block (PAC-38): lead → deal → prior
+ * insurance, with the household as the fallback for records the Sold form did
+ * not write.
+ */
+PriorInsuranceSchema.index({ agencyId: 1, dealId: 1 });
+PriorInsuranceSchema.index({ agencyId: 1, householdId: 1 });

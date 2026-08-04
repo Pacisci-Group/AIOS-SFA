@@ -294,6 +294,28 @@ export const DEMO_LEAD_STATUSES = [
   'Lost',
 ] as const;
 
+/**
+ * The statuses a lead can hold when it never reached a proposal.
+ *
+ * `Quoted`/`Requote`/`Sold` are deliberately absent: those are assigned by
+ * pipeline position in `seedLeads` and backed by a real recap or deal. Drawing
+ * them at random here is what previously produced leads marked `Sold` with no
+ * deal attached — the whole reason the Lead Detail page looked broken on demo
+ * data. Weighted to keep the top of the funnel busiest.
+ */
+export const DEMO_LEAD_UNQUOTED_STATUSES = [
+  'New',
+  'New',
+  'New',
+  'Contacted',
+  'Contacted',
+  'Contacted',
+  'Qualified',
+  'Qualified',
+  'Not Qualified',
+  'Lost',
+] as const;
+
 export const CONTACT_ROLES = [
   'Primary',
   'Spouse',
@@ -360,9 +382,17 @@ export const SERVICE_STATUSES = [
 export const DEMO_CONFIG = {
   seed: 20260722,
   households: 24,
-  leads: 40,
+  leads: 90,
   quotes: 32,
   deals: 24,
+  /**
+   * How many sold leads get a **second, older** recap.
+   *
+   * Without this the funnel divides exactly one recap per quoted-or-sold lead
+   * and the Lead Detail "N earlier recaps" expander can never be exercised —
+   * so `quotes` is deliberately more than the number of leads that carry one.
+   */
+  repeatQuoteLeads: 4,
   serviceTickets: 16,
   timeOffRequests: 6,
 } as const;

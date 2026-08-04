@@ -19,7 +19,14 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Leads | List Leads | `GET /leads` | **PAC-36** — Leads list: search, filters, pagination (read). `leads:read`. |
 | Leads | Create Lead | `POST /leads` | **PAC-37** — New Lead intake pipeline. `leads:write`. |
 | Leads | Create Lead (Replay) | `POST /leads` | **PAC-37** — submission-token idempotency check. |
+| Leads | Get Lead | `GET /leads/:id` | **PAC-38** — Lead Detail 360° view. `leads:read`. Captures `primaryContactId`. |
+| Leads | Get Lead (Foreign Lead) | `GET /leads/:id` | **PAC-38** — asserts an out-of-scope lead 404s, not 403s. |
+| Leads | Update Lead | `PATCH /leads/:id` | **PAC-38** — inline status / temperature / source. `leads:write`. |
+| Leads | Update Lead (Invalid) | `PATCH /leads/:id` | **PAC-38** — pins the write vocabulary (400). |
+| Leads | Update Primary Contact | `PATCH /contacts/:id` | **PAC-38** — edit a lead's contact. **`clients:write`** — see its docs. |
+| Leads | Update Primary Contact (Foreign Contact) | `PATCH /contacts/:id` | **PAC-38** — the derived-ownership clamp (404). |
 | Leads › Share Links | Create / List / Revoke | `/leads/share-links…` | **PAC-37** — public intake links. `leads:write`. |
+| Policies | Check Policy Number | `GET /policies/check` | **PAC-40** — Sold wizard Card 3 dedupe. `deal_audits:read`. |
 | Public Intake | Get Form / Submit | `/public/lead-form/:token`, `/public/leads/:token` | **PAC-37** — unauthenticated share-link intake. |
 | Quote Recaps | Get Lead Context | `GET /quote-recaps/context` | **PAC-39** — lead + household header for the form. `quote_recaps:read`. |
 | Quote Recaps | Presign Quote Document | `POST /quote-recaps/quote-document/presign` | **PAC-39** — carrier-quote upload URL. `quote_recaps:write`. |
@@ -27,12 +34,22 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Quote Recaps | Create Quote Recap | `POST /quote-recaps` | **PAC-39** — record the proposal. `quote_recaps:write`. |
 | Quote Recaps | Create Quote Recap (Replay) | `POST /quote-recaps` | **PAC-39** — submission-token idempotency check. |
 | Quote Recaps | Create Quote Recap (Foreign Lead) | `POST /quote-recaps` | **PAC-39** — asserts an out-of-scope lead 404s. |
+| Sold Deals | Get Sold Context | `GET /sold-deals/context` | **PAC-40** — lead + household + contacts for the wizard. `deal_audits:read`. |
+| Sold Deals | Presign Sold Document | `POST /sold-deals/documents/presign` | **PAC-40** — Card 5 proof upload URL. `deal_audits:write`. |
+| Sold Deals | Upload Sold Document | `PUT <uploadUrl>` | **PAC-40** — raw PUT straight to storage. `auth: none` by design. |
+| Sold Deals | Create Sold Deal | `POST /sold-deals` | **PAC-40** — record the sale; auto-generates the audit. `deal_audits:write`. |
+| Sold Deals | Create Sold Deal (Replay) | `POST /sold-deals` | **PAC-40** — submission-token idempotency check. |
+| Sold Deals | Create Sold Deal (Foreign Lead) | `POST /sold-deals` | **PAC-40** — asserts an out-of-scope lead 404s. |
+| Sold Deals | Check Policy Number (Match) | `GET /policies/check` | **PAC-40** — the duplicate-found branch. |
 
 > **Folder order matters when running the whole collection.** The CLI walks
-> folders alphabetically (`Auth` → `Deal Audits` → `Leads` → `Public Intake` →
-> `Quote Recaps`), and the Quote Recaps chain reuses `createdLeadId` captured by
-> **Leads › Create Lead**. Running `Quote Recaps` on its own will 404 unless you
-> set `createdLeadId` yourself.
+> folders alphabetically (`Auth` → `Deal Audits` → `Leads` → `Policies` →
+> `Public Intake` → `Quote Recaps` → `Sold Deals`), and the downstream chains
+> reuse ids captured earlier: Quote Recaps and Sold Deals both need
+> `createdLeadId` from **Leads › Create Lead**, and the PAC-38 contact requests
+> need `primaryContactId` from **Leads › Get Lead** (which in turn needs
+> `leadId` from **Leads › List Leads**). Running a folder on its own will 404
+> unless you set those vars yourself.
 
 ## Prerequisites
 

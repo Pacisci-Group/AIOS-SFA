@@ -21,6 +21,7 @@ import {
 } from './config/rate-limit.config';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
+import { ContactsModule } from './contacts/contacts.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { LeadsModule } from './leads/leads.module';
 import { PoliciesModule } from './policies/policies.module';
@@ -66,10 +67,12 @@ import { ENV_FILE_PATH } from './config/env.config';
     UsersModule,
     StorageModule,
     DealAuditsModule,
-    // Before LeadsModule so `/leads/share-links` is registered ahead of any
-    // future `/leads/:id` route, which would otherwise shadow it.
+    // Before LeadsModule so `/leads/share-links` is registered ahead of
+    // `/leads/:id` (PAC-38), which would otherwise shadow it. Pinned by an e2e
+    // assertion in "Leads (PAC-38 detail)".
     ShareLinksModule,
     LeadsModule,
+    ContactsModule,
     QuoteRecapsModule,
     PoliciesModule,
     SoldDealsModule,

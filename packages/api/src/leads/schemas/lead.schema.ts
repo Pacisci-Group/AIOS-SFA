@@ -162,3 +162,14 @@ LeadSchema.index(
 );
 
 LeadSchema.index({ agencyId: 1, householdId: 1 });
+
+/**
+ * The `ContactAccessService` reachability probe (PAC-38).
+ *
+ * `Contact` carries no `producerId`, so a producer's right to edit one is
+ * derived by asking "does this caller own a lead that reaches this contact?".
+ * These two serve that question; the household leg of it is served by the
+ * `{ agencyId, householdId }` index above.
+ */
+LeadSchema.index({ agencyId: 1, primaryContactId: 1 });
+LeadSchema.index({ agencyId: 1, memberContactIds: 1 });

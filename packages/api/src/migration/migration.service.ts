@@ -112,8 +112,11 @@ interface LeadRef {
 }
 
 interface QuoteRef {
+  id: Types.ObjectId;
   legacyId: string;
   producerId?: Types.ObjectId;
+  /** Resolved lead, so the derived `quoted` activity lands on the timeline. */
+  leadId?: Types.ObjectId;
   occurredAt?: Date;
   isTest: boolean;
 }
@@ -122,6 +125,8 @@ interface DealRef {
   dealId: Types.ObjectId;
   legacyId: string;
   producerId?: Types.ObjectId;
+  /** Resolved lead, so the derived `sold` activity lands on the timeline. */
+  leadId?: Types.ObjectId;
   occurredAt?: Date;
   clientName?: string;
   isTest: boolean;
@@ -187,14 +192,34 @@ export class MigrationService {
     );
     await this.migrateContacts(ss, ctx, households, options, report);
     const leads = await this.migrateLeads(ss, ctx, producers, options, report);
+
+    // Legacy id -> Mongo `_id`, so recaps and deals can be written with real
+    // `leadId` refs rather than only the `legacyLeadId` string. Leads are
+    // migrated before both, so this map is always complete by the time it is
+    // read; the same holds for `households` and, below, `quoteIds`.
+    const leadIds = new Map(leads.map((lead) => [lead.legacyId, lead.id]));
+
     const quotes = await this.migrateQuoteRecaps(
       ss,
       ctx,
       producers,
+      households,
+      leadIds,
       options,
       report,
     );
-    const deals = await this.migrateDeals(ss, ctx, producers, options, report);
+    const quoteIds = new Map(quotes.map((quote) => [quote.legacyId, quote.id]));
+
+    const deals = await this.migrateDeals(
+      ss,
+      ctx,
+      producers,
+      households,
+      leadIds,
+      quoteIds,
+      options,
+      report,
+    );
     const policies = await this.migratePolicies(
       ss,
       ctx,
@@ -607,16 +632,32 @@ export class MigrationService {
   // Quote Recaps
   // ---------------------------------------------------------------------------
 
+  /**
+   * Quote recaps.
+   *
+   * Writes the **resolved** `leadId`/`householdId` alongside the `legacy*`
+   * strings. Historically only the legacy ids were written, which left every
+   * migrated recap unreachable from `GET /leads/:id` — that query is
+   * `{ agencyId, leadId }` — and made `quoteRecaps.leadId` useless for
+   * reporting. `backfill-deal-refs` repaired deals but never these.
+   *
+   * An unresolved link stays `undefined` rather than being guessed at; Mongoose
+   * strips it from the `$set`, so the `legacy*` string remains the only record
+   * and the read-path fallback still covers it.
+   */
   private async migrateQuoteRecaps(
     ss: SmartSuiteClient,
     ctx: TenantCtx,
     producers: Map<string, ProducerEntry>,
+    households: Map<string, Types.ObjectId>,
+    leadIds: Map<string, Types.ObjectId>,
     options: MigrationOptions,
     report: MigrationReport,
   ): Promise<QuoteRef[]> {
     const stat = emptyStat();
     report.collections.quoteRecaps = stat;
     const refs: QuoteRef[] = [];
+    let unlinked = 0;
 
     stat.source = await ss.count(SMARTSUITE_TABLE_IDS.quoteRecaps);
     const records = await ss.listAll(
@@ -641,6 +682,13 @@ export class MigrationService {
       if (test) stat.excludedTest++;
       const quoteDate = toDate(rec[QUOTE_RECAP_FIELDS.quoteDate]);
 
+      const legacyLeadId = firstLinkedId(rec[QUOTE_RECAP_FIELDS.lead]);
+      const legacyHouseholdId = firstLinkedId(
+        rec[QUOTE_RECAP_FIELDS.household],
+      );
+      const leadId = this.ref(legacyLeadId, leadIds);
+      if (legacyLeadId && !leadId) unlinked++;
+
       const id = await this.persist(
         this.quoteRecapModel,
         ctx,
@@ -660,8 +708,10 @@ export class MigrationService {
           recapStatus: selectCode(rec[QUOTE_RECAP_FIELDS.recapStatus]),
           producerId: producer?.userId,
           legacyProducerId: firstLinkedId(rec[QUOTE_RECAP_FIELDS.producer]),
-          legacyLeadId: firstLinkedId(rec[QUOTE_RECAP_FIELDS.lead]),
-          legacyHouseholdId: firstLinkedId(rec[QUOTE_RECAP_FIELDS.household]),
+          leadId,
+          legacyLeadId,
+          householdId: this.ref(legacyHouseholdId, households),
+          legacyHouseholdId,
           isTestRecord: test,
         },
         stat,
@@ -670,14 +720,19 @@ export class MigrationService {
 
       if (id) {
         refs.push({
+          id,
           legacyId,
           producerId: producer?.userId,
+          leadId,
           occurredAt: quoteDate,
           isTest: test,
         });
       }
     }
-    this.logger.log(`Quote Recaps: fetched ${stat.fetched}`);
+    this.logger.log(
+      `Quote Recaps: fetched ${stat.fetched}` +
+        (unlinked ? ` (${unlinked} with an unresolvable lead link)` : ''),
+    );
     return refs;
   }
 
@@ -685,16 +740,28 @@ export class MigrationService {
   // Deals (Sold Log)
   // ---------------------------------------------------------------------------
 
+  /**
+   * Deals (Sold Log).
+   *
+   * Resolves the same refs `backfill-deal-refs` was written to repair
+   * (`leadId`, `householdId`, `quoteRecapId`) at import time instead. The
+   * backfill stays — it is the only remedy for databases migrated before this
+   * — but a fresh migration no longer needs it.
+   */
   private async migrateDeals(
     ss: SmartSuiteClient,
     ctx: TenantCtx,
     producers: Map<string, ProducerEntry>,
+    households: Map<string, Types.ObjectId>,
+    leadIds: Map<string, Types.ObjectId>,
+    quoteIds: Map<string, Types.ObjectId>,
     options: MigrationOptions,
     report: MigrationReport,
   ): Promise<Map<string, DealRef>> {
     const stat = emptyStat();
     report.collections.deals = stat;
     const map = new Map<string, DealRef>();
+    let unlinked = 0;
 
     stat.source = await ss.count(SMARTSUITE_TABLE_IDS.deals);
     const records = await ss.listAll(
@@ -732,6 +799,12 @@ export class MigrationService {
       const policyLabels = policyTypeLabels(rec[DEAL_FIELDS.policyTypes]);
       const isBundle = toBool(rec[DEAL_FIELDS.bundle]);
 
+      const legacyLeadId = firstLinkedId(rec[DEAL_FIELDS.lead]);
+      const legacyHouseholdId = firstLinkedId(rec[DEAL_FIELDS.household]);
+      const legacyQuoteRecapId = firstLinkedId(rec[DEAL_FIELDS.quoteRecap]);
+      const leadId = this.ref(legacyLeadId, leadIds);
+      if (legacyLeadId && !leadId) unlinked++;
+
       const id = await this.persist(
         this.dealModel,
         ctx,
@@ -753,9 +826,12 @@ export class MigrationService {
           clientName,
           producerId: producer?.userId,
           legacyProducerId: firstLinkedId(rec[DEAL_FIELDS.producer]),
-          legacyLeadId: firstLinkedId(rec[DEAL_FIELDS.lead]),
-          legacyHouseholdId: firstLinkedId(rec[DEAL_FIELDS.household]),
-          legacyQuoteRecapId: firstLinkedId(rec[DEAL_FIELDS.quoteRecap]),
+          leadId,
+          legacyLeadId,
+          householdId: this.ref(legacyHouseholdId, households),
+          legacyHouseholdId,
+          quoteRecapId: this.ref(legacyQuoteRecapId, quoteIds),
+          legacyQuoteRecapId,
           dealAuditStatus: selectCode(rec[DEAL_FIELDS.dealAuditStatus]),
           status: selectCode(rec[DEAL_FIELDS.status]),
           isTestRecord: test,
@@ -769,13 +845,17 @@ export class MigrationService {
           dealId: id,
           legacyId,
           producerId: producer?.userId,
+          leadId,
           occurredAt: soldDate,
           clientName,
           isTest: test,
         });
       }
     }
-    this.logger.log(`Deals: fetched ${stat.fetched}`);
+    this.logger.log(
+      `Deals: fetched ${stat.fetched}` +
+        (unlinked ? ` (${unlinked} with an unresolvable lead link)` : ''),
+    );
     return map;
   }
 
@@ -1593,6 +1673,10 @@ export class MigrationService {
         type: 'quoted',
         subjectType: 'quoteRecap',
         legacySubjectId: quote.legacyId,
+        // Without this the row exists but is invisible: the Lead Detail
+        // timeline reads `{ agencyId, leadId }`, so before recaps carried a
+        // resolved lead ref only `lead_created` ever appeared on migrated data.
+        leadId: quote.leadId,
         producerId: quote.producerId,
         occurredAt: quote.occurredAt,
         summary: 'Quote recap created',
@@ -1605,6 +1689,7 @@ export class MigrationService {
         subjectType: 'deal',
         legacySubjectId: deal.legacyId,
         dealId: deal.dealId,
+        leadId: deal.leadId,
         producerId: deal.producerId,
         occurredAt: deal.occurredAt,
         summary: deal.clientName
