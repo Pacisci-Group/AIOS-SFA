@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
@@ -8,11 +16,14 @@ import {
 } from '../common/decorators/access.decorators';
 import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import { LeadDetailService } from './lead-detail.service';
 import { LeadsService } from './leads.service';
 import { listLeadsSchema } from './dto/list-leads.dto';
 import type { ListLeadsDto } from './dto/list-leads.dto';
 import { createLeadSchema } from './dto/create-lead.dto';
 import type { CreateLeadDto } from './dto/create-lead.dto';
+import { updateLeadSchema } from './dto/update-lead.dto';
+import type { UpdateLeadDto } from './dto/update-lead.dto';
 
 /**
  * Leads list (PAC-36) — the read path behind the `/leads` page.
@@ -25,7 +36,10 @@ import type { CreateLeadDto } from './dto/create-lead.dto';
 @RequireModule(ModuleKey.Leads)
 @RequirePermissions(modulePermission(ModuleKey.Leads, 'read'))
 export class LeadsController {
-  constructor(private readonly leadsService: LeadsService) {}
+  constructor(
+    private readonly leadsService: LeadsService,
+    private readonly leadDetailService: LeadDetailService,
+  ) {}
 
   @Get()
   list(
@@ -57,5 +71,51 @@ export class LeadsController {
     @Body(new ZodValidationPipe(createLeadSchema)) body: CreateLeadDto,
   ) {
     return this.leadsService.create(access, branchId, body);
+  }
+
+  /*
+   * ─── Parameterized routes below this line ──────────────────────────────────
+   *
+   * `:id` matches anything, so both handlers must stay **after** the static
+   * `@Get()` / `@Post()` above — Nest resolves in declaration order.
+   *
+   * The same hazard exists one level up and is already handled: `ShareLinksModule`
+   * (`@Controller('leads/share-links')`) is registered *before* `LeadsModule` in
+   * `app.module.ts` so its routes win over `/leads/:id`. Do not reorder either.
+   */
+
+  /**
+   * The Lead Detail 360° view (PAC-38).
+   *
+   * Scope is clamped in the service through `LeadAccessService.loadOwnedLead`,
+   * which 404s rather than 403s for another producer's lead: whether it exists
+   * is not the caller's business.
+   */
+  @Get(':id')
+  detail(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+  ) {
+    return this.leadDetailService.get(access, branchId, id);
+  }
+
+  /**
+   * Inline edits from the Lead Detail page (PAC-38): status, temperature, lead
+   * source.
+   *
+   * Returns only the changed fields in their canonical form rather than a whole
+   * `LeadDetail` — re-running the ten-collection assembly on every dropdown
+   * change would make an inline edit cost more than the page load.
+   */
+  @Patch(':id')
+  @RequireWrite(ModuleKey.Leads)
+  update(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(updateLeadSchema)) body: UpdateLeadDto,
+  ) {
+    return this.leadDetailService.update(access, branchId, id, body);
   }
 }

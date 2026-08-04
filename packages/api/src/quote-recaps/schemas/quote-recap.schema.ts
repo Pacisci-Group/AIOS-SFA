@@ -175,6 +175,26 @@ QuoteRecapSchema.index({ agencyId: 1, leadId: 1, createdAt: -1 });
 QuoteRecapSchema.index({ agencyId: 1, householdId: 1, createdAt: -1 });
 
 /**
+ * The Lead Detail quote block (PAC-38), which orders by `quoteDate` — the date
+ * the producer says the quote was given — rather than by insertion time. The
+ * `createdAt` index above cannot serve that sort.
+ */
+QuoteRecapSchema.index({ agencyId: 1, leadId: 1, quoteDate: -1 });
+
+/**
+ * The lead-detail legacy fallback (PAC-38). The migration writes only
+ * `legacyLeadId` on recaps — `backfill-deal-refs` repairs deals, never these —
+ * so without this lookup the quote block is empty for every migrated lead.
+ *
+ * Partial, **never** `sparse`, for the reason spelled out on the
+ * `submissionToken` index below.
+ */
+QuoteRecapSchema.index(
+  { agencyId: 1, legacyLeadId: 1 },
+  { partialFilterExpression: { legacyLeadId: { $type: 'string' } } },
+);
+
+/**
  * Idempotency: a replayed submission resolves to the existing recap.
  *
  * Must be a partial filter, **never** `sparse: true`. MongoDB only omits a

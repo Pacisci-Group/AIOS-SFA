@@ -25,15 +25,17 @@ import { SoldDealsService } from './sold-deals.service';
  *
  * ## Why `deal_audits` and not `clients`
  *
- * The Producer role template grants `leads`, `quote_recaps` and `deal_audits`
- * — and no `clients:*`, which is where the generated `DealsController` stub
- * sits. Gating the sold write path there would mean **no producer could record
- * a sale**, which is the blocking problem this story opened with.
+ * The submission's entire purpose is generating the post-sale audit that feeds
+ * the hand-off board, so `deal_audits` describes what this endpoint actually
+ * does — and Branch Manager / CRM / Agency Owner all hold it too (unlike
+ * `quote_recaps`, which Branch Manager lacks).
  *
- * `deal_audits` is the honest choice of the permissions a producer already
- * holds: the submission's entire purpose is generating the post-sale audit that
- * feeds the hand-off board, and Branch Manager / CRM / Agency Owner all hold it
- * too (unlike `quote_recaps`, which Branch Manager lacks).
+ * The original reason was narrower: the Producer template granted no `clients:*`
+ * at all, so gating the sold write path where the generated `DealsController`
+ * stub sits would have meant no producer could record a sale. PAC-38 has since
+ * added `clients:write` to that template for contact editing, so that argument
+ * no longer holds — but the gate stays here regardless, because matching the
+ * endpoint's own purpose is the durable reason.
  *
  * ⚠ Consequence: disabling the `deal_audits` module for an agency also disables
  * sold submission.

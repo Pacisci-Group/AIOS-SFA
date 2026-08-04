@@ -36,10 +36,13 @@ function createFeatureController(path: string, moduleKey: ModuleKey) {
   return FeatureController;
 }
 
-export const ContactsController = createFeatureController(
-  'contacts',
-  ModuleKey.Clients,
-);
+/**
+ * NOTE: there is no `ContactsController` stub any more. PAC-38 replaced it with
+ * the real `ContactsModule` (`src/contacts`), which exposes an id-scoped
+ * `PATCH /contacts/:id` behind a derived-ownership clamp. Two classes on
+ * `@Controller('contacts')` would register silently, first-wins — so the stub
+ * had to go in the same commit, not later.
+ */
 export const HouseholdsController = createFeatureController(
   'households',
   ModuleKey.Clients,

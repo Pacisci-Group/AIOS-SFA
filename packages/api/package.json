@@ -19,6 +19,8 @@
     "backfill:deal-refs:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/backfill-deal-refs.ts",
     "migrate:permissions": "node dist/seed/migrate-permissions.js",
     "migrate:permissions:dev": "ts-node -r tsconfig-paths/register src/seed/migrate-permissions.ts",
+    "sync:roles": "node dist/seed/sync-role-templates.js",
+    "sync:roles:dev": "ts-node -r tsconfig-paths/register src/seed/sync-role-templates.ts",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:unit": "jest --config ./test/jest-unit.json",

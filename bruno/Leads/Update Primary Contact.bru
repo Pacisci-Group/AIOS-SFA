@@ -1,0 +1,156 @@
+meta {
+  name: Update Primary Contact
+  type: http
+  seq: 8
+}
+
+patch {
+  url: {{baseUrl}}/contacts/{{primaryContactId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "firstName": "Anurodh",
+    "lastName": "Vaidya",
+    "dateOfBirth": "1978-04-12",
+    "email": "anurodh.vaidya@example.com",
+    "phone": "(512) 884-3920"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the updated contact", function () {
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("primaryContactId"));
+    expect(body.name).to.equal("Anurodh Vaidya");
+    expect(body.isPrimary).to.equal(true);
+  });
+
+  test("date of birth is a calendar date, not a timestamp", function () {
+    expect(res.getBody().dateOfBirth).to.equal("1978-04-12");
+  });
+
+  test("phone is normalized to digits for contact matching", function () {
+    expect(res.getBody().phone).to.equal("5128843920");
+  });
+
+  test("leaks no internals", function () {
+    const body = res.getBody();
+    expect(body).to.not.have.property("agencyId");
+    expect(body).to.not.have.property("branchId");
+    expect(body).to.not.have.property("householdId");
+    expect(body).to.not.have.property("legacySmartSuiteId");
+    expect(body).to.not.have.property("isTestRecord");
+  });
+}
+
+docs {
+  # PATCH /contacts/:id — edit a lead's primary contact (PAC-38)
+
+  Backs the "Edit Primary Contact" modal on the Lead Detail page: first name,
+  last name, date of birth, email and phone.
+
+  - **Module:** `clients` (must be enabled for the agency)
+  - **Permission:** `clients:write`
+  - **Data scope:** `own` is **derived** — see below.
+
+  ## Why this lives under `clients`, not `leads`
+
+  A `Contact` is a CRM record shared across every lead and policy in a
+  household, so routing its writes through the `leads` module would misfile
+  them. PAC-38 accordingly added `clients:write` to the **Producer** role
+  template, which previously granted no `clients:*` at all.
+
+  Existing agencies do not pick that up automatically: `seedDefaultRoles` only
+  runs for agencies someone re-seeds, and `migrate:permissions` filters to
+  `agency:`/`platform:` strings. Run `npm run api:sync:roles:dev` — and note a
+  producer who is already signed in keeps their cached permission set until they
+  log in again.
+
+  ## The scope clamp is not the module gate
+
+  `Contact` carries **no `producerId`** and no lead reference, so the module
+  permission alone would hand a producer the entire agency's client book.
+  `ContactAccessService` therefore *derives* ownership: under `DataScope.own`
+  the caller must own a lead that reaches this contact, either directly
+  (`primaryContactId` / `memberContactIds`) or through the contact's household.
+  That is exactly the roster the Lead Detail page renders.
+
+  `branch` callers are clamped on `branchId` directly; `agency` callers reach
+  every contact. Failures are `404`, never `403` — see the companion
+  **(Foreign Contact)** request.
+
+  ## Path params
+  | param | type   | notes                                               |
+  |-------|--------|-----------------------------------------------------|
+  | id    | string | ObjectId. A malformed id is a `404`, never a `500`. |
+
+  ## Body
+  | field       | type            | rules                                       |
+  |-------------|-----------------|---------------------------------------------|
+  | firstName   | string          | 1–60 chars                                  |
+  | lastName    | string          | 1–60 chars                                  |
+  | dateOfBirth | string \| null  | `YYYY-MM-DD`; `null` clears                 |
+  | email       | string \| null  | valid email, max 160; `null` clears         |
+  | phone       | string \| null  | 10–20 chars; `null` clears                  |
+
+  At least one must be present; `{}` is a `400`.
+
+  Every field is optional **and** the last three are nullable — deliberately
+  laxer than `POST /leads`, which requires DOB, email and phone. A migrated
+  contact frequently has none of them, and demanding a date of birth in order to
+  fix a typo'd surname would force the producer to invent data.
+
+  ## Behaviour worth knowing
+
+  **Email and phone are normalized through the intake helpers** (lowercase;
+  digits-only) rather than a local re-implementation. Contact matching compares
+  stored values against those exact shapes, so a divergent rule here would
+  silently break dedupe on the next lead for the same person.
+
+  **Only the first email/phone is replaced.** Both are arrays and a contact may
+  hold several; the form shows one. A second number nobody asked to remove is
+  preserved.
+
+  **The change is mirrored onto the lead.** `Lead` duplicates `firstName`,
+  `lastName`, `emails` and `phones`, and the Leads list, its search and the
+  detail header all read the *lead's* copy — so without the mirror a corrected
+  surname would still show the old value on `/leads` forever. Scoped to leads
+  this contact is **primary** for: editing a spouse or child touches no lead.
+
+  ## Response `200`
+  ```json
+  {
+    "id": "665f...b02",
+    "firstName": "Anurodh",
+    "lastName": "Vaidya",
+    "name": "Anurodh Vaidya",
+    "dateOfBirth": "1978-04-12",
+    "email": "anurodh.vaidya@example.com",
+    "phone": "5128843920",
+    "role": "Primary",
+    "isPrimary": true
+  }
+  ```
+
+  ## Errors
+  - `400 Bad Request` — empty body, a malformed `dateOfBirth`, an invalid email.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `clients` module disabled, or missing `clients:write`.
+  - `404 Not Found` — no such contact, a malformed id, or a contact the caller
+    cannot reach from one of their own leads.
+
+  > **Tip:** run **Get Lead** first — it captures `primaryContactId` into a
+  > runtime var that this request consumes.
+}

@@ -1,5 +1,20 @@
-import type { LeadTemperature } from '@sfa/shared';
+import type {
+  LeadDetail,
+  LeadTemperature,
+  UpdateLeadInput,
+  UpdateLeadResult,
+} from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
+
+/**
+ * The detail contracts are **re-exported from `@sfa/shared`**, not redeclared.
+ *
+ * `LeadRow` below is a hand-kept copy of the API's own interface and has had to
+ * be reconciled by eye ever since; `LeadDetail` is ten nested interfaces, so a
+ * second copy would drift on the first change. PAC-38 put it in `shared` and
+ * both sides import it.
+ */
+export type { LeadDetail, UpdateLeadInput, UpdateLeadResult };
 
 /** One Leads-list row (mirrors the API `LeadRow`). */
 export interface LeadRow {
@@ -62,6 +77,24 @@ export function listLeads(params: ListLeadsParams = {}) {
   }
   const qs = search.toString();
   return apiFetch<LeadListResponse>(`/leads${qs ? `?${qs}` : ''}`);
+}
+
+/** `GET /leads/:id` — the whole 360° view in one request (PAC-38). */
+export function getLead(leadId: string) {
+  return apiFetch<LeadDetail>(`/leads/${encodeURIComponent(leadId)}`);
+}
+
+/**
+ * `PATCH /leads/:id` — the inline status / temperature / source edits.
+ *
+ * Returns only the fields the patch can change, so the caller writes those four
+ * values into its cached `LeadDetail` rather than refetching the whole thing.
+ */
+export function updateLead(leadId: string, input: UpdateLeadInput) {
+  return apiFetch<UpdateLeadResult>(`/leads/${encodeURIComponent(leadId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
 }
 
 /**

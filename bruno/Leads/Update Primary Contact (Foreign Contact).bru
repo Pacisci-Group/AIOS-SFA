@@ -1,0 +1,81 @@
+meta {
+  name: Update Primary Contact (Foreign Contact)
+  type: http
+  seq: 9
+}
+
+patch {
+  url: {{baseUrl}}/contacts/000000000000000000000000
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "lastName": "Hijacked"
+  }
+}
+
+tests {
+  test("returns 404 Not Found — not 403", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("the message discloses nothing about the contact", function () {
+    expect(res.getBody().message).to.equal("Contact not found.");
+  });
+}
+
+docs {
+  # PATCH /contacts/:id — contact outside the caller's reach (PAC-38)
+
+  The security case for the whole contacts module, kept as a permanent request
+  rather than only an e2e assertion.
+
+  - **Module:** `clients`
+  - **Permission:** `clients:write` — the caller *has* it; reach is what stops
+    them.
+
+  ## What this protects
+
+  PAC-38 grants every **Producer** `clients:write`, and `Contact` carries no
+  `producerId` and no lead reference. The module gate alone would therefore hand
+  a producer write access to **every client in the agency** — a materially
+  weaker guarantee than any other producer-facing write path.
+
+  `ContactAccessService` closes that by *deriving* ownership under
+  `DataScope.own`: the caller must own a lead that reaches the contact, either
+  directly (`primaryContactId` / `memberContactIds`) or through the contact's
+  household — including via `legacyHouseholdId`, so a migrated client is not
+  accidentally unreachable.
+
+  ## Why `404` and not `403`
+
+  Same reasoning as `GET /leads/:id`: a `403` would confirm that the id names a
+  real contact belonging to someone else. Every failure path — no such contact,
+  malformed id, out of reach — returns an identical `"Contact not found."`.
+
+  **The clamp runs before anything is written.** A `404` that had still applied
+  the patch would be the actual failure, so the e2e suite asserts both the
+  status *and* that the stored document is unchanged.
+
+  The all-zeros ObjectId used here is well-formed but cannot exist, so this
+  request also passes on a freshly-seeded database. To exercise the *reach*
+  branch specifically rather than the miss branch, substitute a real contact id
+  belonging to another producer's household.
+
+  ## Response `404`
+  ```json
+  { "statusCode": 404, "message": "Contact not found.", "error": "Not Found" }
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — only when the `clients` module is disabled for the agency
+    or the caller lacks `clients:write`. Never for reach.
+}

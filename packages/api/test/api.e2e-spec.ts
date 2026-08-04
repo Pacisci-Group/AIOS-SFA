@@ -5,9 +5,12 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
 import type {
+  ContactDetail,
   CreateSoldDealResponse,
+  LeadDetail,
   PolicyCheckResponse,
   SoldDealLeadContext,
+  UpdateLeadResult,
 } from '@sfa/shared';
 import { Activity } from '../src/activities/schemas/activity.schema';
 import { TransactionRunner } from '../src/common/mongo/transaction.runner';
@@ -382,6 +385,15 @@ describe('SFA API (e2e)', () => {
 
       const body = res.body as { effectivePermissions: string[] };
       expect(body.effectivePermissions).toContain('leads:read');
+
+      // PAC-38 added `clients:write` to the Producer template so a producer can
+      // correct their own lead's contact. Pinned here because the grant is
+      // additive-only — `seedDefaultRoles` unions, so it cannot be walked back
+      // by editing the template.
+      expect(body.effectivePermissions).toContain('clients:write');
+      // ...and `write` implies `read` at resolution time, which is why the
+      // template needs only the one line.
+      expect(body.effectivePermissions).toContain('clients:read');
     });
 
     it('PATCH /api/v1/users/:userId/roles', async () => {
@@ -443,14 +455,14 @@ describe('SFA API (e2e)', () => {
   describe('Feature modules', () => {
     const featureRoutes = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
-      { path: 'contacts', module: ModuleKey.Clients },
       { path: 'households', module: ModuleKey.Clients },
       { path: 'deals', module: ModuleKey.Clients },
       // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14), `leads`
-      // (LeadsModule / PAC-36) and `quote-recaps` (QuoteRecapsModule / PAC-39)
-      // are real modules, not `{status:'ready'}` stubs — each is covered by its
-      // own describe block below. The `files` stub was removed with PAC-39: it
-      // borrowed the `quote_recaps` gate and the real file API is now
+      // (LeadsModule / PAC-36), `quote-recaps` (QuoteRecapsModule / PAC-39) and
+      // `contacts` (ContactsModule / PAC-38) are real modules, not
+      // `{status:'ready'}` stubs — each is covered by its own describe block
+      // below. The `files` stub was removed with PAC-39: it borrowed the
+      // `quote_recaps` gate and the real file API is now
       // `POST /quote-recaps/quote-document/presign`.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
@@ -530,12 +542,13 @@ describe('SFA API (e2e)', () => {
     // handler (PATCH) requires `{module}:write`.
     const mutatingFeatureRoutes = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
-      { path: 'contacts', module: ModuleKey.Clients },
       { path: 'households', module: ModuleKey.Clients },
       { path: 'deals', module: ModuleKey.Clients },
-      // `deal-audits` write (resolve) is item-scoped, not a bare PATCH stub —
-      // covered by its own describe block below. `leads` is read-only for now
-      // (LeadsModule / PAC-36 ships the list; the write path is a later story).
+      // `deal-audits` write (resolve) is item-scoped, not a bare PATCH stub, and
+      // `contacts` write is now id-scoped too (ContactsModule / PAC-38) — both
+      // are covered by their own describe blocks below. `leads` writes are
+      // `POST /leads` (PAC-37) and `PATCH /leads/:id` (PAC-38), likewise
+      // id-scoped rather than a bare PATCH on the collection.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
@@ -1188,6 +1201,782 @@ describe('SFA API (e2e)', () => {
       expect(await householdModel.countDocuments()).toBe(householdsBefore);
       expect(await leadModel.countDocuments()).toBe(leadsBefore);
       expect(await leadModel.countDocuments({ lastName: 'Jarrow' })).toBe(0);
+    });
+  });
+
+  describe('Leads (PAC-38 detail)', () => {
+    let leadId: string;
+    let foreignLeadId: string;
+    let migratedLeadId: string;
+    let newerRecapId: string;
+    let olderRecapId: string;
+    let primaryContactId: string;
+
+    const getAs = async (token: string, id: string, expected = 200) => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/leads/${id}`)
+        .set(authHeader(token))
+        .expect(expected);
+      return res.body as LeadDetail;
+    };
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const householdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      const recapModel = app.get<Model<QuoteRecap>>(
+        getModelToken(QuoteRecap.name),
+      );
+      const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      const priorInsuranceModel = app.get<Model<PriorInsurance>>(
+        getModelToken(PriorInsurance.name),
+      );
+      const priorPolicyModel = app.get<Model<PriorPolicy>>(
+        getModelToken(PriorPolicy.name),
+      );
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      const household = await householdModel.create({
+        ...base,
+        name: 'Detail Household',
+        propertyAddress: {
+          street: '77 Detail Way',
+          city: 'Austin',
+          state: 'TX',
+          zip: '78745',
+        },
+        totalActivePolicies: 1,
+      });
+
+      // Deliberately created spouse-first, so "primary is listed first" is a
+      // real assertion rather than an accident of insertion order.
+      const [spouse, primary] = await contactModel.create([
+        {
+          ...base,
+          firstName: 'Dana',
+          lastName: 'Detail',
+          roleInHousehold: 'Spouse',
+          householdId: household._id,
+          dateOfBirth: new Date('1981-09-02T00:00:00.000Z'),
+        },
+        {
+          ...base,
+          firstName: 'Devon',
+          lastName: 'Detail',
+          roleInHousehold: 'Primary',
+          isPrimary: true,
+          householdId: household._id,
+          emails: ['devon.detail@example.com'],
+          phones: ['5551110000'],
+          dateOfBirth: new Date('1978-04-12T00:00:00.000Z'),
+        },
+      ]);
+      primaryContactId = primary._id.toString();
+
+      await householdModel.updateOne(
+        { _id: household._id },
+        {
+          $set: {
+            primaryContactId: primary._id,
+            memberContactIds: [spouse._id],
+          },
+        },
+      );
+
+      const lead = await leadModel.create({
+        ...base,
+        firstName: 'Devon',
+        lastName: 'Detail',
+        // Raw SmartSuite code — the detail read must normalize it to `Requote`.
+        status: 'arW7O',
+        temperature: 'Hot',
+        leadSource: { code: 'WCO7l', label: 'Mailer' },
+        emails: ['devon.detail@example.com'],
+        phones: ['5551110000'],
+        quoteControlNumber: 'QCN-380001',
+        producerId: producer!._id,
+        householdId: household._id,
+        primaryContactId: primary._id,
+        memberContactIds: [spouse._id],
+        createdDate: new Date('2026-07-01T00:00:00.000Z'),
+        lastActivityAt: new Date('2026-07-28T00:00:00.000Z'),
+        intakeSource: { channel: 'internal' },
+        isTestRecord: false,
+      });
+      leadId = lead._id.toString();
+
+      const foreign = await leadModel.create({
+        ...base,
+        firstName: 'Owner',
+        lastName: 'Only',
+        status: 'New',
+        temperature: 'Warm',
+        producerId: owner!._id,
+        isTestRecord: false,
+      });
+      foreignLeadId = foreign._id.toString();
+
+      // A lead the migration produced: its recap and deal carry only
+      // `legacyLeadId`, never a `leadId` ref.
+      const migrated = await leadModel.create({
+        ...base,
+        firstName: 'Morgan',
+        lastName: 'Migrated',
+        status: 'Quoted',
+        temperature: 'Warm',
+        producerId: producer!._id,
+        legacySmartSuiteId: 'ss-lead-38',
+        isTestRecord: false,
+      });
+      migratedLeadId = migrated._id.toString();
+
+      await policyModel.create({
+        ...base,
+        policyNumber: 'POL-38-001',
+        // Raw Policies-table code — must normalize to `Auto`.
+        policyType: 'Zgsh3',
+        carrier: 'Allstate',
+        active: true,
+        premium: 1200,
+        items: 1,
+        householdId: household._id,
+        expirationDate: new Date('2027-01-01T00:00:00.000Z'),
+      });
+
+      const older = await recapModel.create({
+        ...base,
+        quoteDate: new Date('2026-07-10T00:00:00.000Z'),
+        premium: 1500,
+        itemCount: 1,
+        productsQuoted: ['PYgez'],
+        recapStatus: 'Quoted',
+        leadId: lead._id,
+        householdId: household._id,
+        policies: [{ policyType: 'Auto', premium: 1500, itemCount: 1 }],
+      });
+      olderRecapId = older._id.toString();
+
+      const newer = await recapModel.create({
+        ...base,
+        quoteDate: new Date('2026-07-24T00:00:00.000Z'),
+        premium: 1872,
+        itemCount: 2,
+        // Raw SmartSuite codes, exactly as the migration writes them.
+        productsQuoted: ['PYgez', 'sNMRK'],
+        recapStatus: 'Requote',
+        leadId: lead._id,
+        householdId: household._id,
+        notes: 'Bundled for the multi-policy discount.',
+        policies: [
+          { policyType: 'Auto', premium: 1200, itemCount: 1 },
+          { policyType: 'Home', premium: 672, itemCount: 1 },
+        ],
+        quoteDocument: {
+          key: 'agency/quote-38.pdf',
+          filename: 'quote-38.pdf',
+          contentType: 'application/pdf',
+          size: 4096,
+          uploadedAt: new Date('2026-07-24T15:10:02.000Z'),
+        },
+      });
+      newerRecapId = newer._id.toString();
+
+      // Linked to the lead only by legacy id — the fallback's whole point.
+      await recapModel.create({
+        ...base,
+        quoteDate: new Date('2025-03-02T00:00:00.000Z'),
+        premium: 990,
+        itemCount: 1,
+        productsQuoted: ['sNMRK'],
+        legacyLeadId: 'ss-lead-38',
+      });
+
+      const deal = await dealModel.create({
+        ...base,
+        soldDate: new Date('2026-07-30T00:00:00.000Z'),
+        premium: 1872,
+        itemCount: 2,
+        policyCount: 2,
+        dealType: 'Bundle',
+        isBundle: true,
+        policyTypes: ['Auto', 'sNMRK'],
+        leadId: lead._id,
+        householdId: household._id,
+      });
+
+      await priorInsuranceModel.create({
+        ...base,
+        previousCarrierAuto: 'State Farm',
+        previousCarrierHome: 'State Farm',
+        previousAgentName: 'Dale Prior',
+        cancelledPreviousInsurance: 'Yes',
+        cancellationDate: new Date('2026-07-15T00:00:00.000Z'),
+        dealId: deal._id,
+        householdId: household._id,
+      });
+
+      await priorPolicyModel.create([
+        {
+          ...base,
+          policyType: 'Zgsh3',
+          previousCarrier: 'State Farm',
+          cancellationStatus: 'Pending',
+          dealId: deal._id,
+          householdId: household._id,
+        },
+        {
+          ...base,
+          policyType: 'eCEuV',
+          previousCarrier: 'State Farm',
+          cancellationStatus: 'Complete',
+          dealId: deal._id,
+          householdId: household._id,
+        },
+      ]);
+
+      await activityModel.create([
+        {
+          ...base,
+          type: 'lead_created',
+          subjectType: 'lead',
+          leadId: lead._id,
+          producerId: producer!._id,
+          occurredAt: new Date('2026-07-01T00:00:00.000Z'),
+          summary: 'Lead created',
+          source: 'internal',
+        },
+        {
+          ...base,
+          type: 'quoted',
+          subjectType: 'quoteRecap',
+          leadId: lead._id,
+          quoteRecapId: newer._id,
+          producerId: producer!._id,
+          occurredAt: new Date('2026-07-24T00:00:00.000Z'),
+          summary: 'Quote recap created',
+          source: 'internal',
+        },
+        {
+          ...base,
+          type: 'sold',
+          subjectType: 'deal',
+          leadId: lead._id,
+          dealId: deal._id,
+          producerId: producer!._id,
+          occurredAt: new Date('2026-07-30T00:00:00.000Z'),
+          summary: 'Deal marked as sold',
+          source: 'internal',
+        },
+      ]);
+    });
+
+    it('returns the lead with normalized labels, never raw select codes', async () => {
+      const body = await getAs(producerToken, leadId);
+
+      expect(body.id).toBe(leadId);
+      expect(body.name).toBe('Devon Detail');
+      // Stored as `arW7O`.
+      expect(body.status).toBe('Requote');
+      expect(body.temperature).toBe('Hot');
+      expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
+      expect(body.quoteControlNumber).toBe('QCN-380001');
+      expect(body.intakeChannel).toBe('internal');
+      // Recomputed from `createdDate`, not the stored `agingDays` (0).
+      expect(body.agingDays).toBeGreaterThan(0);
+    });
+
+    it('leaks no internals', async () => {
+      const body = (await getAs(producerToken, leadId)) as unknown as Record<
+        string,
+        unknown
+      >;
+
+      for (const key of [
+        'agencyId',
+        'branchId',
+        'producerId',
+        'legacySmartSuiteId',
+        'legacyProducerId',
+        'legacyHouseholdId',
+        'isTestRecord',
+        'submissionToken',
+      ]) {
+        expect(body).not.toHaveProperty(key);
+      }
+
+      // The storage key is the one field of the document that must not ship —
+      // downloading needs a presigned URL, not a client that knows the path.
+      const recap = body.latestQuoteRecap as LeadDetail['latestQuoteRecap'];
+      expect(recap?.document).not.toHaveProperty('key');
+      expect(recap?.document?.filename).toBe('quote-38.pdf');
+    });
+
+    it('shows the household address, primary contact and roster (primary first)', async () => {
+      const body = await getAs(producerToken, leadId);
+
+      expect(body.address).toEqual({
+        street: '77 Detail Way',
+        city: 'Austin',
+        state: 'TX',
+        zip: '78745',
+      });
+      expect(body.primaryContact?.name).toBe('Devon Detail');
+      // A calendar date, not an instant — a DOB shipped as an ISO timestamp
+      // renders as the previous day in a US timezone.
+      expect(body.primaryContact?.dateOfBirth).toBe('1978-04-12');
+      expect(body.primaryContact?.email).toBe('devon.detail@example.com');
+
+      expect(body.household?.members).toHaveLength(2);
+      expect(body.household?.members[0].name).toBe('Devon Detail');
+      expect(body.household?.members[0].isPrimary).toBe(true);
+      expect(body.household?.members[1].role).toBe('Spouse');
+
+      // Household-level, and normalized from the raw Policies-table code.
+      expect(body.household?.policies).toHaveLength(1);
+      expect(body.household?.policies[0].policyType).toBe('Auto');
+    });
+
+    it('returns the newest recap in full and the rest as summaries', async () => {
+      const body = await getAs(producerToken, leadId);
+
+      expect(body.latestQuoteRecap?.id).toBe(newerRecapId);
+      expect(body.latestQuoteRecap?.premium).toBe(1872);
+      // Stored as `['PYgez', 'sNMRK']`.
+      expect(body.latestQuoteRecap?.productsQuoted).toEqual(['Auto', 'Home']);
+      expect(body.latestQuoteRecap?.policies).toHaveLength(2);
+      expect(body.latestQuoteRecap?.notes).toContain('multi-policy');
+
+      expect(body.earlierQuoteRecaps).toHaveLength(1);
+      expect(body.earlierQuoteRecaps[0].id).toBe(olderRecapId);
+      // Summary-shaped: the heavy fields belong only to the latest.
+      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('policies');
+      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('notes');
+      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('document');
+    });
+
+    it('returns the deal and its prior insurance, with only stored fields', async () => {
+      const body = await getAs(producerToken, leadId);
+
+      expect(body.deal?.dealType).toBe('Bundle');
+      expect(body.deal?.isBundle).toBe(true);
+      expect(body.deal?.policyTypes).toEqual(['Auto', 'Home']);
+
+      expect(body.priorInsurance?.previousCarrierAuto).toBe('State Farm');
+      expect(body.priorInsurance?.previousAgentName).toBe('Dale Prior');
+      expect(body.priorInsurance?.cancellationDate).toBe('2026-07-15');
+      expect(body.priorInsurance?.policies).toHaveLength(2);
+      expect(
+        body.priorInsurance?.policies.map((p) => p.policyType).sort(),
+      ).toEqual(['Auto', 'Home']);
+      // The mockup's limits/deductibles/premium are not stored anywhere and
+      // must not be invented.
+      expect(body.priorInsurance).not.toHaveProperty('limits');
+      expect(body.priorInsurance).not.toHaveProperty('deductible');
+    });
+
+    it('returns the activity timeline newest-first with the producer resolved', async () => {
+      const body = await getAs(producerToken, leadId);
+
+      expect(body.activities.map((a) => a.type)).toEqual([
+        'sold',
+        'quoted',
+        'lead_created',
+      ]);
+      expect(body.activities[0].producerName).toBeTruthy();
+    });
+
+    it('finds a migrated recap linked only by legacyLeadId, then self-heals the ref', async () => {
+      const recapModel = app.get<Model<QuoteRecap>>(
+        getModelToken(QuoteRecap.name),
+      );
+
+      const body = await getAs(producerToken, migratedLeadId);
+
+      // Without the legacy fallback this block is empty for every migrated
+      // lead — the single most likely thing to regress here.
+      expect(body.latestQuoteRecap).not.toBeNull();
+      expect(body.latestQuoteRecap?.premium).toBe(990);
+      expect(body.latestQuoteRecap?.productsQuoted).toEqual(['Home']);
+
+      // The backfill is fire-and-forget, so poll briefly rather than assuming
+      // it completed before the response was written.
+      let healed = false;
+      for (let attempt = 0; attempt < 20 && !healed; attempt++) {
+        const stored = await recapModel.findOne({ legacyLeadId: 'ss-lead-38' });
+        healed = stored?.leadId?.toString() === migratedLeadId;
+        if (!healed) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(healed).toBe(true);
+    });
+
+    it("another producer's lead is a 404, not a 403", async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/leads/${foreignLeadId}`)
+        .set(authHeader(producerToken))
+        .expect(404);
+
+      // Identical to the missing-lead message: a distinguishable response would
+      // confirm the lead exists.
+      expect((res.body as { message: string }).message).toBe('Lead not found.');
+    });
+
+    it('a malformed id is a 404, not a 500', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads/not-an-objectid')
+        .set(authHeader(producerToken))
+        .expect(404);
+    });
+
+    it('GET /leads/share-links still resolves ahead of /leads/:id', async () => {
+      // Pins the route-ordering hazard: `ShareLinksModule` is registered before
+      // `LeadsModule` precisely so this path is not swallowed by `:id`. If a
+      // future reorder breaks it, this fails loudly instead of silently 404ing.
+      await request(app.getHttpServer())
+        .get('/api/v1/leads/share-links')
+        .set(authHeader(producerToken))
+        .expect(200);
+    });
+
+    it('exposes the primary contact id the edit modal needs', async () => {
+      const body = await getAs(producerToken, leadId);
+      expect(body.primaryContact?.id).toBe(primaryContactId);
+    });
+  });
+
+  describe('Leads (PAC-38 patch)', () => {
+    let leadId: string;
+    let foreignLeadId: string;
+
+    const patchAs = (
+      token: string,
+      id: string,
+      body: Record<string, unknown>,
+    ) =>
+      request(app.getHttpServer())
+        .patch(`/api/v1/leads/${id}`)
+        .set(authHeader(token))
+        .send(body);
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      // A share-link lead: no source at all. This is the case the whole
+      // endpoint exists for.
+      const lead = await leadModel.create({
+        ...base,
+        firstName: 'Parker',
+        lastName: 'Patch',
+        status: 'New',
+        temperature: 'Unknown',
+        leadSource: { code: null, label: '' },
+        producerId: producer!._id,
+        lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
+        intakeSource: { channel: 'share_link' },
+        isTestRecord: false,
+      });
+      leadId = lead._id.toString();
+
+      const foreign = await leadModel.create({
+        ...base,
+        firstName: 'Owner',
+        lastName: 'Patch',
+        status: 'New',
+        temperature: 'Warm',
+        producerId: owner!._id,
+        isTestRecord: false,
+      });
+      foreignLeadId = foreign._id.toString();
+    });
+
+    it('updates status, temperature and source, returning canonical values', async () => {
+      const res = await patchAs(producerToken, leadId, {
+        status: 'Contacted',
+        temperature: 'Warm',
+        leadSourceCode: 'WCO7l',
+      }).expect(200);
+
+      const body = res.body as UpdateLeadResult;
+      expect(body.status).toBe('Contacted');
+      expect(body.temperature).toBe('Warm');
+      expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
+
+      // Only the patchable fields — not a whole LeadDetail.
+      expect(body).not.toHaveProperty('household');
+      expect(body).not.toHaveProperty('activities');
+    });
+
+    it('bumps lastActivityAt so the row surfaces on the Leads list', async () => {
+      const before = new Date('2026-01-01T00:00:00.000Z').getTime();
+
+      const res = await patchAs(producerToken, leadId, {
+        status: 'Qualified',
+      }).expect(200);
+
+      const body = res.body as UpdateLeadResult;
+      expect(new Date(body.lastActivityAt).getTime()).toBeGreaterThan(before);
+    });
+
+    it('accepts a backwards status move — this is a correction, not a pipeline', async () => {
+      await patchAs(producerToken, leadId, { status: 'Sold' }).expect(200);
+
+      const res = await patchAs(producerToken, leadId, {
+        status: 'Requote',
+      }).expect(200);
+
+      expect((res.body as UpdateLeadResult).status).toBe('Requote');
+    });
+
+    it('clears the source with __none__, and the lead matches the no-source filter', async () => {
+      const res = await patchAs(producerToken, leadId, {
+        leadSourceCode: '__none__',
+      }).expect(200);
+
+      // The schema default shape, which is what the list filter matches.
+      expect((res.body as UpdateLeadResult).leadSource.code).toBeNull();
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/leads?leadSource=__none__')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const items = (list.body as { items: { id: string }[] }).items;
+      expect(items.map((item) => item.id)).toContain(leadId);
+    });
+
+    it('rejects an unknown status, a non-selectable temperature, and an empty body', async () => {
+      await patchAs(producerToken, leadId, { status: 'Warm Prospect' }).expect(
+        400,
+      );
+      // A valid `LEAD_TEMPERATURES` member, but not one a producer may choose.
+      await patchAs(producerToken, leadId, { temperature: 'Unknown' }).expect(
+        400,
+      );
+      await patchAs(producerToken, leadId, {}).expect(400);
+      // `Test` hides the record from every read path — never selectable.
+      await patchAs(producerToken, leadId, {
+        leadSourceCode: 'ENEJP',
+      }).expect(400);
+    });
+
+    it("another producer's lead is a 404, and is not modified", async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      await patchAs(producerToken, foreignLeadId, {
+        status: 'Sold',
+      }).expect(404);
+
+      const stored = await leadModel.findById(foreignLeadId);
+      expect(stored?.status).toBe('New');
+    });
+
+    it('a read-only user is forbidden (403)', async () => {
+      await patchAs(readOnlyToken, leadId, { status: 'Contacted' }).expect(403);
+    });
+  });
+
+  describe('Contacts (PAC-38 primary contact edit)', () => {
+    let contactModel: Model<Contact>;
+    let leadModel: Model<Lead>;
+
+    /** Reachable from a lead the producer owns. */
+    let ownContactId: string;
+    let ownLeadId: string;
+    /** Reachable only from the *owner's* lead — the clamp's headline case. */
+    let foreignContactId: string;
+    /** No household, no lead reference at all. */
+    let orphanContactId: string;
+
+    const patchAs = (
+      token: string,
+      id: string,
+      body: Record<string, unknown>,
+    ) =>
+      request(app.getHttpServer())
+        .patch(`/api/v1/contacts/${id}`)
+        .set(authHeader(token))
+        .send(body);
+
+    beforeAll(async () => {
+      contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const householdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      const ownHousehold = await householdModel.create({
+        ...base,
+        name: 'Contact Edit Household',
+      });
+      const foreignHousehold = await householdModel.create({
+        ...base,
+        name: 'Owner Only Household',
+      });
+
+      const ownContact = await contactModel.create({
+        ...base,
+        firstName: 'Corin',
+        lastName: 'Contact',
+        isPrimary: true,
+        householdId: ownHousehold._id,
+        emails: ['corin.contact@example.com', 'corin.alt@example.com'],
+        phones: ['5554440000', '5554441111'],
+      });
+      ownContactId = ownContact._id.toString();
+
+      const foreignContact = await contactModel.create({
+        ...base,
+        firstName: 'Fenna',
+        lastName: 'Foreign',
+        isPrimary: true,
+        householdId: foreignHousehold._id,
+        emails: ['fenna.foreign@example.com'],
+      });
+      foreignContactId = foreignContact._id.toString();
+
+      const orphan = await contactModel.create({
+        ...base,
+        firstName: 'Orla',
+        lastName: 'Orphan',
+      });
+      orphanContactId = orphan._id.toString();
+
+      const ownLead = await leadModel.create({
+        ...base,
+        firstName: 'Corin',
+        lastName: 'Contact',
+        status: 'New',
+        temperature: 'Warm',
+        producerId: producer!._id,
+        householdId: ownHousehold._id,
+        primaryContactId: ownContact._id,
+        emails: ['corin.contact@example.com'],
+        phones: ['5554440000'],
+        isTestRecord: false,
+      });
+      ownLeadId = ownLead._id.toString();
+
+      await leadModel.create({
+        ...base,
+        firstName: 'Fenna',
+        lastName: 'Foreign',
+        status: 'New',
+        temperature: 'Warm',
+        producerId: owner!._id,
+        householdId: foreignHousehold._id,
+        primaryContactId: foreignContact._id,
+        isTestRecord: false,
+      });
+    });
+
+    it('updates a contact reachable from the caller’s own lead', async () => {
+      const res = await patchAs(producerToken, ownContactId, {
+        lastName: 'Corrected',
+        dateOfBirth: '1985-06-30',
+        phone: '(555) 999-8888',
+      }).expect(200);
+
+      const body = res.body as ContactDetail;
+      expect(body.name).toBe('Corin Corrected');
+      // A calendar date, echoed back exactly as sent.
+      expect(body.dateOfBirth).toBe('1985-06-30');
+      // Normalized through the intake helpers, so contact matching still works.
+      expect(body.phone).toBe('5559998888');
+    });
+
+    it('preserves the additional emails and phones the form does not show', async () => {
+      const stored = await contactModel.findById(ownContactId);
+      // Only element 0 is replaced — a second number nobody asked to remove
+      // must not silently disappear.
+      expect(stored?.phones).toEqual(['5559998888', '5554441111']);
+      expect(stored?.emails).toHaveLength(2);
+      expect(stored?.emails[1]).toBe('corin.alt@example.com');
+    });
+
+    it('mirrors the correction onto leads this contact is primary for', async () => {
+      // Without this the Leads list would keep showing the old surname forever
+      // and the producer would conclude the edit failed.
+      const lead = await leadModel.findById(ownLeadId);
+      expect(lead?.lastName).toBe('Corrected');
+      expect(lead?.phones?.[0]).toBe('5559998888');
+    });
+
+    it("another producer's contact is a 404 AND is not modified", async () => {
+      await patchAs(producerToken, foreignContactId, {
+        lastName: 'Hijacked',
+      }).expect(404);
+
+      // The assertion that actually matters: a 404 that still wrote would be
+      // the real failure. `Contact` has no `producerId`, so `ContactAccessService`
+      // is the only thing standing between a producer and every client in the
+      // agency.
+      const stored = await contactModel.findById(foreignContactId);
+      expect(stored?.lastName).toBe('Foreign');
+    });
+
+    it('a contact with no household and no lead reference is unreachable (404)', async () => {
+      await patchAs(producerToken, orphanContactId, {
+        lastName: 'Adopted',
+      }).expect(404);
+
+      const stored = await contactModel.findById(orphanContactId);
+      expect(stored?.lastName).toBe('Orphan');
+    });
+
+    it('the same contact is editable by the agency-scoped owner (200)', async () => {
+      // Proves the clamp is scope-dependent rather than a blanket deny — an
+      // owner runs on `DataScope.agency` and legitimately reaches every client.
+      const res = await patchAs(ownerToken, foreignContactId, {
+        lastName: 'Foreign-Updated',
+      }).expect(200);
+
+      expect((res.body as ContactDetail).lastName).toBe('Foreign-Updated');
+    });
+
+    it('clears a field with null rather than demanding a value', async () => {
+      const res = await patchAs(producerToken, ownContactId, {
+        dateOfBirth: null,
+      }).expect(200);
+
+      expect((res.body as ContactDetail).dateOfBirth).toBeNull();
+    });
+
+    it('rejects an empty body and a malformed date (400)', async () => {
+      await patchAs(producerToken, ownContactId, {}).expect(400);
+      await patchAs(producerToken, ownContactId, {
+        dateOfBirth: '30/06/1985',
+      }).expect(400);
+    });
+
+    it('a malformed id is a 404, not a 500', async () => {
+      await patchAs(producerToken, 'not-an-objectid', {
+        lastName: 'Nope',
+      }).expect(404);
+    });
+
+    it('a read-only user is forbidden (403)', async () => {
+      await patchAs(readOnlyToken, ownContactId, {
+        lastName: 'Nope',
+      }).expect(403);
     });
   });
 

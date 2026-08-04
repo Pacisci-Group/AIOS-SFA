@@ -86,7 +86,21 @@ const NAV_SECTIONS: NavSection[] = [
         to: "/clients/demo",
         label: "Households",
         icon: Building2,
-        module: ModuleKey.Clients,
+        /*
+         * Gated on `crm_service`, not `clients` (PAC-38).
+         *
+         * `/clients/demo` is still the unwired Household Details mockup. PAC-38
+         * added `clients:write` to the Producer template so a producer can edit
+         * their own lead's contact — which, under the original `clients` gate,
+         * would have put a fake "Cobb Household" page in every producer's
+         * sidebar as a side effect of an unrelated grant.
+         *
+         * `crm_service` preserves exactly today's audience: Agency Owner (via
+         * `grantsAllEnabledModules`), Branch Manager and CRM all hold it, and no
+         * producer does. Move this back to `ModuleKey.Clients` once the page is
+         * real (PAC-19).
+         */
+        module: ModuleKey.CrmService,
       },
     ],
   },

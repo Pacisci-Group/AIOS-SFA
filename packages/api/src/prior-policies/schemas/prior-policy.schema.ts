@@ -63,3 +63,6 @@ PriorPolicySchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
+/** The per-line rows under the Lead Detail Prior Insurance block (PAC-38). */
+PriorPolicySchema.index({ agencyId: 1, dealId: 1 });
+PriorPolicySchema.index({ agencyId: 1, householdId: 1 });

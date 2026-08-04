@@ -215,6 +215,24 @@ DealSchema.index({ agencyId: 1, producerId: 1, soldDate: -1 });
 DealSchema.index({ agencyId: 1, householdId: 1, soldDate: -1 });
 
 /**
+ * The Lead Detail deal lookup (PAC-38) — "the sale this lead became". Only a
+ * single-field `leadId` index existed, which cannot order the result.
+ */
+DealSchema.index({ agencyId: 1, leadId: 1, soldDate: -1 });
+
+/**
+ * Its legacy fallback. `backfill-deal-refs` populates `leadId` on migrated
+ * deals, but only for agencies where it has actually been run, so the read path
+ * must still be able to find a deal by the lead's SmartSuite id.
+ *
+ * Partial, never `sparse` — see the `submissionToken` index below.
+ */
+DealSchema.index(
+  { agencyId: 1, legacyLeadId: 1 },
+  { partialFilterExpression: { legacyLeadId: { $type: 'string' } } },
+);
+
+/**
  * Idempotency for `POST /sold-deals`.
  *
  * `partialFilterExpression`, **never `sparse: true`**: on a compound index
