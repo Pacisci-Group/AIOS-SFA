@@ -297,14 +297,20 @@ export const CONTACT_ROLES = [
   'Additional Named Insured',
 ] as const;
 
-/** Policy-type label sets a deal/quote can cover. Feeds `deriveDealType`. */
+/**
+ * Policy-type label sets a deal/quote can cover. Feeds `deriveDealType`.
+ *
+ * Values must be canonical `POLICY_TYPES` labels (`@sfa/shared`) — seeding a
+ * non-canonical spelling puts a third vocabulary into the same field the
+ * migration and the app both write.
+ */
 export const POLICY_TYPE_SETS: string[][] = [
   ['Auto'],
   ['Home'],
   ['Auto', 'Home'],
   ['Renters'],
   ['Auto', 'Renters'],
-  ['Condo'],
+  ['Condominium'],
   ['Auto', 'Home', 'Umbrella'],
   ['Motorcycle'],
   ['Landlord'],

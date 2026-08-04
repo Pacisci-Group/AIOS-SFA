@@ -73,3 +73,49 @@ export function leadStatusQueryValues(label: string): string[] {
     .map(([code]) => code);
   return [canonical, ...codes];
 }
+
+/** Where a submitted quote recap moves the lead (PAC-39). */
+export const QUOTE_ADVANCE_TARGET: LeadStatus = 'Quoted';
+
+/**
+ * Statuses that a new quote recap advances to "Quoted". Forward only — a recap
+ * recorded against a Sold or Lost lead must never drag it backwards.
+ *
+ * `Requote` is included deliberately. It sits *after* `Quoted` in
+ * {@link LEAD_STATUSES}, but that array is pipeline **display** order, not a
+ * rank: Requote is a re-entry state meaning "needs quoting again", so
+ * delivering that requote is an advance, not a regression.
+ */
+export const QUOTE_ADVANCEABLE_LEAD_STATUSES: readonly LeadStatus[] = [
+  'New',
+  'Contacted',
+  'Qualified',
+  'Requote',
+];
+
+/**
+ * Derived rather than listed, so a status added to {@link LEAD_STATUSES} later
+ * defaults to *not* advancing — the safe direction.
+ *
+ * Currently: Quoted, Sold, Converted, Not Qualified, Lost, Closed.
+ */
+export const QUOTE_NON_ADVANCING_LEAD_STATUSES: readonly LeadStatus[] =
+  LEAD_STATUSES.filter((s) => !QUOTE_ADVANCEABLE_LEAD_STATUSES.includes(s));
+
+/**
+ * Every **stored** value that may advance, for a Mongo
+ * `{ status: { $in: [...] } }` clause.
+ *
+ * The code expansion is load-bearing: migrated Qualified leads are stored as
+ * `hfwda` and Requote leads as `arW7O`, so without it neither would ever
+ * advance. `''` and `null` are included because a lead with no status at all
+ * should advance too — and `$in: [null]` also matches a missing field.
+ * Uncatalogued values match nothing and stay put.
+ */
+export function quoteAdvanceableStatusValues(): (string | null)[] {
+  return [
+    ...QUOTE_ADVANCEABLE_LEAD_STATUSES.flatMap(leadStatusQueryValues),
+    '',
+    null,
+  ];
+}

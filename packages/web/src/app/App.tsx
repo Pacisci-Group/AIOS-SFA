@@ -30,6 +30,9 @@ const HouseholdDetailsPage = lazy(
 );
 const LeadsPage = lazy(() => import('@/features/lead/LeadsPage'));
 const NewLeadPage = lazy(() => import('@/features/lead/NewLeadPage'));
+const NewQuoteRecapPage = lazy(
+  () => import('@/features/quote-recap/NewQuoteRecapPage'),
+);
 const PublicLeadFormPage = lazy(
   () => import('@/features/lead/PublicLeadFormPage'),
 );
@@ -236,6 +239,29 @@ export function App() {
                   element={
                     <LazyPage>
                       <LeadDetailsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Quote Recap form (PAC-39). Deliberately NOT nested under the
+                  `leads:read` gate: every endpoint this page calls (context,
+                  presign, create) sits behind `quote_recaps`, so one gate covers
+                  the whole flow rather than letting a user pass the outer check
+                  and fail mid-form. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.QuoteRecaps}:write`}
+                    redirectTo="/leads"
+                  />
+                }
+              >
+                <Route
+                  path="/quote-recaps/new"
+                  element={
+                    <LazyPage>
+                      <NewQuoteRecapPage />
                     </LazyPage>
                   }
                 />

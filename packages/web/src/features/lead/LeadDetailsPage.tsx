@@ -4,6 +4,8 @@ import {
   Shield, Clock, ChevronRight, Bell, Search, LayoutDashboard,
   Users, Settings, BarChart2, X
 } from "lucide-react";
+import { Link, useParams } from "react-router-dom";
+import { newQuoteRecapRoute } from "@/components/leads/QuoteRecapAction";
 import { QuoteWorkspace } from "./components/QuoteWorkspace";
 import { ActivityTimeline } from "./components/ActivityTimeline";
 import { HouseholdCard } from "./components/HouseholdCard";
@@ -42,6 +44,8 @@ const navItems = [
 export default function App() {
   const [soldModal, setSoldModal] = useState(false);
   const [activeNav, setActiveNav] = useState("Leads");
+  // Only real on `/leads/:id`; `/leads/demo` renders the same mockup with none.
+  const { id } = useParams<{ id: string }>();
 
   return (
     <div className="flex size-full min-h-screen" style={{ background: "var(--background)", fontFamily: "'Inter', 'DM Sans', system-ui, sans-serif" }}>
@@ -107,14 +111,21 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {/* Quote Recap */}
-            <button
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-white text-xs transition-opacity hover:opacity-90"
-              style={{ background: "var(--sky)", fontWeight: 600 }}
-            >
-              <FileText size={13} />
-              Quote Recap
-            </button>
+            {/*
+              Quote Recap (PAC-39). Wired only when the route carries a real
+              lead id — this page is still the unwired mockup, and `/leads/demo`
+              has no lead to recap.
+            */}
+            {id && (
+              <Link
+                to={newQuoteRecapRoute(id)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-white text-xs transition-opacity hover:opacity-90"
+                style={{ background: "var(--sky)", fontWeight: 600 }}
+              >
+                <FileText size={13} />
+                Quote Recap
+              </Link>
+            )}
             {/* Mark as Sold */}
             <button
               onClick={() => setSoldModal(true)}

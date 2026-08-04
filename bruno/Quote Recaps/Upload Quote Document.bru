@@ -1,0 +1,60 @@
+meta {
+  name: Upload Quote Document
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{quoteDocumentUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/pdf
+}
+
+body:text {
+  %PDF-1.4
+  1 0 obj<</Type/Catalog>>endobj
+  trailer<</Root 1 0 R>>
+  %%EOF
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw upload (step 2 of 3, PAC-39)
+
+  Not an API endpoint: this goes **straight to object storage** (MinIO locally)
+  using the URL from `Presign Quote Document`. It exists in the collection so the
+  chain is runnable end-to-end and so the flow is documented where people look
+  for it.
+
+  - **Auth:** `none` — deliberately. The collection-level bearer would be sent on
+    this request and **break the S3 signature**; a presigned URL carries its own
+    credentials. This is the single easiest thing to get wrong in the flow, and
+    the web client uses a bare `fetch` here rather than `apiFetch` for exactly
+    this reason.
+
+  ## Headers
+  `Content-Type` **must** match the value that was signed (the
+  `requiredHeaders` from the presign response), or storage rejects the PUT.
+
+  ## Body
+  A minimal valid PDF stub. The bytes are irrelevant to the API — only the
+  object's **type and size**, which `POST /quote-recaps` reads back from storage
+  via `HeadObject`. Because the server derives the size rather than trusting the
+  declared one, this stub can be far smaller than the `size` sent at presign time
+  and the chain still works.
+
+  ## Response
+  - `200 OK` — object stored; the key is now attachable.
+  - `403 Forbidden` — signature mismatch. Almost always either an
+    `Authorization` header being sent, a `Content-Type` that differs from the
+    signed one, or an expired URL (the default TTL is 300s).
+}
