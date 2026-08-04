@@ -17,18 +17,30 @@ docs {
     and every other request inherits the collection-level bearer auth.
 
   ## Guard chain
-  Every non-public endpoint passes through:
-  `JwtAuthGuard → TenantGuard → BranchGuard → ModuleGuard → PermissionsGuard`.
+  Global guards run in registration order:
+  `ThrottlerGuard → JwtAuthGuard → AccessContextGuard → TenantGuard →
+  BranchGuard → ModuleGuard → PermissionsGuard`.
 
   A request therefore needs, in order:
-  1. A valid `Authorization: Bearer <accessToken>` header.
-  2. A tenant (`agencyId`) resolved from the token.
-  3. A branch — for branch/agency-scoped callers you may pass `X-Branch-Id`.
+  1. To be within the per-IP rate limit (throttling comes **first**, so a flood
+     is rejected before JWT verification and before any database work).
+  2. A valid `Authorization: Bearer <accessToken>` header.
+  3. An `AccessContext` resolved from the **database**, not the token — so a
+     revoked role or permission takes effect immediately.
+  4. A tenant (`agencyId`) resolved from the token.
+  5. A branch — for branch/agency-scoped callers you may pass `X-Branch-Id`.
      Producers (`own` scope) get their branch from their own record.
-  4. The module enabled for the agency (e.g. `deal_audits`).
-  5. The required permission (e.g. `deal_audits:read`).
+  6. The module enabled for the agency (e.g. `deal_audits`).
+  7. The required permission (e.g. `deal_audits:read`).
 
   Missing module/permission → **403**. Missing/expired token → **401**.
+  Rate limit exceeded → **429**.
+
+  ### Public routes
+  Handlers marked `@Public()` bypass **all** of the guards above except the
+  throttler — there is no JWT and no `AccessContext`, so they resolve tenancy
+  themselves and re-check module entitlement by hand. Today that is `auth/*`,
+  `health`, and the two **Public Intake** routes.
 
   ## Getting started
   1. Start Mongo + API: `npm run api:dev` (from repo root).
@@ -41,5 +53,24 @@ docs {
   - **Deal Audits** — Deals Pending Service Hand-off board (PAC-12, read) +
     resolve item / presign attachment (PAC-14, write).
   - **Leads** — Leads list with search, facet filters and pagination
-    (PAC-36, read).
+    (PAC-36, read); create a lead + the idempotency replay (PAC-37, write).
+    - **Share Links** — generate / list / revoke a producer's public intake
+      links (PAC-37).
+  - **Public Intake** — the unauthenticated share-link form: render + submit,
+    plus the unknown-token negative case that documents the non-disclosure
+    contract (PAC-37). These use `auth: none`.
+
+  ## Run order
+  A full `npx @usebruno/cli run --env Local` passes as-is — the collection is
+  order-independent. Worth knowing why, since it is not obvious:
+
+  The CLI walks folders alphabetically, so `Leads › Share Links › Revoke Share
+  Link` always runs *before* `Public Intake`. If Revoke destroyed the shared
+  `shareLinkToken`, the public requests would then correctly return the generic
+  404 and the collection could never go green. So Revoke targets a throwaway link
+  minted by **Create Disposable Share Link**, leaving `shareLinkToken` live.
+
+  Running requests by hand, the natural order is `Auth › Login` → `Leads ›
+  Create Lead` → `Create Lead (Replay)` → `Share Links › Create Share Link` →
+  `Public Intake › *`.
 }

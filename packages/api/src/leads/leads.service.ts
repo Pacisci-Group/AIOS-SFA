@@ -2,14 +2,20 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
+  CreateLeadResponse,
   DataScope,
+  LEAD_SOURCE_NONE,
   NormalizedLeadSource,
   leadStatusQueryValues,
   normalizeLeadSource,
   normalizeLeadStatus,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
+import { CreateLeadDto } from './dto/create-lead.dto';
 import { ListLeadsDto } from './dto/list-leads.dto';
+import { LeadIntakeService } from './intake/lead-intake.service';
+import { IntakeContext } from './intake/intake.types';
 import { LeadListResponse, LeadRow } from './leads.types';
 import { Lead, LeadDocument } from './schemas/lead.schema';
 
@@ -38,7 +44,58 @@ function escapeRegex(value: string): string {
 export class LeadsService {
   constructor(
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
+    private readonly tenancy: TenantContextResolver,
+    private readonly intake: LeadIntakeService,
   ) {}
+
+  /**
+   * Create a lead from the authenticated New Lead form (PAC-37).
+   *
+   * Builds the internal {@link IntakeContext} and hands off — all matching,
+   * dedupe, linking and assignment live in {@link LeadIntakeService}, which is
+   * shared verbatim with the public share-link route.
+   */
+  async create(
+    access: AccessContext,
+    branchId: string | null,
+    dto: CreateLeadDto,
+  ): Promise<CreateLeadResponse> {
+    const ctx = await this.buildInternalContext(access, branchId, dto);
+    const outcome = await this.intake.process(ctx, {
+      primaryContact: dto.primaryContact,
+      address: dto.address,
+      members: dto.members,
+      quoteControlNumber: dto.quoteControlNumber,
+      submissionToken: dto.submissionToken,
+    });
+    return { id: outcome.leadId.toString() };
+  }
+
+  /**
+   * Tenancy for a lead typed in by a signed-in user.
+   *
+   * The caller is always the producer, with no role check — `leads:write` is
+   * held by Agency Owner and Branch Manager too, so either can end up owning a
+   * lead. That mirrors legacy and is an accepted trade-off (PAC-53), not an
+   * oversight.
+   */
+  private async buildInternalContext(
+    access: AccessContext,
+    branchId: string | null,
+    dto: CreateLeadDto,
+  ): Promise<IntakeContext> {
+    const tenant = await this.tenancy.resolve(access, branchId);
+    const source = normalizeLeadSource(dto.leadSourceCode);
+
+    return {
+      agencyId: tenant.agencyId,
+      branchId: tenant.branchId,
+      producerId: new Types.ObjectId(access.userId),
+      channel: 'internal',
+      leadSource: { code: source.code, label: source.label },
+      actorUserId: new Types.ObjectId(access.userId),
+    };
+  }
 
   /**
    * The Leads list (PAC-36). Everything — search, filters, sort, pagination — is
@@ -101,7 +158,24 @@ export class LeadsService {
     if (query.temperature?.length) {
       filter.temperature = { $in: query.temperature };
     }
-    if (query.leadSource) {
+    if (query.leadSource === LEAD_SOURCE_NONE) {
+      // Leads that arrived through a public share link carry no source — nobody
+      // has said where they came from yet. Producers need to isolate them to
+      // correct them, so "no source" is a first-class filter value rather than
+      // something you hunt for by eye. Both shapes are matched: the schema
+      // default `{ code: null, label: '' }`, and migrated records where the
+      // field is absent entirely.
+      filter.$and = [
+        ...(filter.$and ?? []),
+        {
+          $or: [
+            { 'leadSource.label': '' },
+            { 'leadSource.label': { $exists: false } },
+            { leadSource: null },
+          ],
+        },
+      ];
+    } else if (query.leadSource) {
       filter['leadSource.label'] = query.leadSource;
     }
 

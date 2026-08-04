@@ -1,0 +1,105 @@
+meta {
+  name: Submit Public Lead
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/public/leads/{{shareLinkToken}}
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "primaryContact": {
+      "firstName": "Robin",
+      "lastName": "Nakamura",
+      "dateOfBirth": "1985-03-21",
+      "phone": "(555) 777-8888",
+      "email": "robin.nakamura@example.com"
+    },
+    "address": {
+      "street": "5 Bridge Street",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74110"
+    },
+    "members": [],
+    "submissionToken": "{{$guid}}"
+  }
+}
+
+tests {
+  test("returns 201 Created without any Authorization header", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a plain confirmation — no ids, no record details", function () {
+    expect(res.getBody()).to.eql({ submitted: true });
+  });
+}
+
+docs {
+  # POST /public/leads/:token — submit a lead through a share link (PAC-37)
+
+  **Public** (`@Public()`): no JWT, no `AccessContext`. Runs the *identical*
+  intake pipeline as `POST /leads`, so a returning client resolves onto their
+  existing contact and household instead of creating duplicates.
+
+  Run **Create Share Link** first — it captures `shareLinkToken`.
+
+  ## Body
+  Same shape as `POST /leads`, **minus `leadSourceCode`**. Lead source is
+  internal vocabulary (Quotewizard, Soleo, Data Lot, JYA) and is never shown to
+  an outside submitter.
+
+  ## Tenancy comes only from the link
+  `agencyId`, `branchId` and `producerId` are read from the stored share-link
+  record. Injecting them into the body does nothing — twice over: the zod schema
+  strips unknown keys, and `LeadIntakeService` takes tenancy exclusively from an
+  `IntakeContext` built by the caller, never from the payload. Two independent
+  layers, so neither alone is load-bearing.
+
+  ## Lead source is left unset
+  The created lead stores `{ "code": null, "label": "" }`, which the list
+  endpoint normalizes to the label **"Unknown"**, and a producer sets the real
+  source by hand later. Guessing a default would record an
+  assumption as fact, and once written nothing could distinguish it from a
+  genuine answer. Producers find these with `GET /leads?leadSource=__none__`.
+
+  ## Provenance
+  Every lead records `intakeSource.channel` (`share_link`) and
+  `intakeSource.shareLinkId`, so a producer can tell an externally-submitted
+  record from one they typed in, and a misbehaving link is traceable to the
+  records it produced before being revoked.
+
+  > **Accepted risk:** someone who knows a real client's name and date of birth
+  > can, through a public link, write into that client's household. This was a
+  > deliberate call — duplicate-free matching was judged more valuable than
+  > closing that vector. Provenance stamping is the mitigation.
+
+  ## Rate limiting
+  `5 / minute` **and** `30 / hour` per IP by default
+  (`PUBLIC_INTAKE_RATE_LIMIT`, `PUBLIC_INTAKE_HOURLY_LIMIT`). Two windows: the
+  per-minute limit stops a burst, the hourly one catches a slow drip that would
+  sit under it all day. The throttler guard runs *first* in the global chain, so
+  a flood is rejected before any database work.
+
+  ## Response `201`
+  ```json
+  { "submitted": true }
+  ```
+  No lead id, no household id, no record details — the submitter is an outsider.
+
+  `submissionCount` on the link increments for **new** leads only, so a retry
+  over a flaky mobile connection doesn't inflate it.
+
+  ## Errors
+  - `400 Bad Request` — validation failure.
+  - `404 Not Found` — the same generic "This form is no longer available." as
+    the GET, for an unknown/revoked/malformed token, an inactive agency, a
+    disabled module, or a deactivated producer. Nothing is written.
+  - `429 Too Many Requests` — rate limit exceeded; rejected before the pipeline
+    runs, so nothing is written.
+}

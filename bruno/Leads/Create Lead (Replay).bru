@@ -1,0 +1,76 @@
+meta {
+  name: Create Lead (Replay)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/leads
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "primaryContact": {
+      "firstName": "Dana",
+      "lastName": "Whitfield",
+      "dateOfBirth": "1988-04-12",
+      "phone": "(555) 222-3333",
+      "email": "Dana.Whitfield@Example.com"
+    },
+    "address": {
+      "street": "77 Oak Lane",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74101"
+    },
+    "members": [],
+    "leadSourceCode": "WCO7l",
+    "submissionToken": "{{createdLeadToken}}"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns the SAME lead id — no second lead was created", function () {
+    expect(res.getBody().id).to.equal(bru.getVar("createdLeadId"));
+  });
+}
+
+docs {
+  # POST /leads — replay (idempotency contract)
+
+  Run **Create Lead** first; this re-sends its `submissionToken` and asserts the
+  response carries the *same* lead id.
+
+  This is the living documentation of the idempotency guarantee: a double-click,
+  a flaky connection, or a client retry must never produce a second lead.
+
+  ## How it works
+  The client generates one token per form session. The server namespaces it by
+  channel (`WEB|<uuid>`, or `SHARE|<linkId>|<uuid>` for a share link) and stores
+  it on the lead under a **unique per-agency partial index**.
+
+  Two mechanisms back the guarantee:
+  1. A lookup *before* any write returns the existing lead immediately, so a
+     replay never re-runs contact resolution.
+  2. If two requests genuinely race, the loser hits a duplicate-key error on the
+     index, re-reads, and returns the winner's lead. That is why the guarantee
+     holds under concurrency and not merely for sequential retries.
+
+  Note the payload here is otherwise identical, but it does not need to be — the
+  token alone decides. A replay is a pure no-op: nothing on the existing lead is
+  updated, because the request has already been fully processed once.
+
+  ## Response `201`
+  ```json
+  { "id": "<the same id Create Lead returned>" }
+  ```
+
+  ## Errors
+  Same as **Create Lead**.
+}

@@ -82,6 +82,29 @@ export const LEAD_SOURCE_LABELS: readonly string[] = [
   ...new Set(LEAD_SOURCE_OPTIONS.map((o) => o.label)),
 ];
 
+/**
+ * The sources a human may pick on an intake form — `Test` (ENEJP) removed.
+ *
+ * This is what lets the intake pipeline write `isTestRecord: false`
+ * unconditionally instead of calling `isTestRecord()`: that helper flags any
+ * label containing test/sample/demo, so a real prospect named Demopoulos would
+ * be created invisible (every read path filters `isTestRecord: { $ne: true }`)
+ * with no feedback to the producer.
+ */
+export const SELECTABLE_LEAD_SOURCE_OPTIONS: ReadonlyArray<{
+  code: string;
+  label: string;
+}> = LEAD_SOURCE_OPTIONS.filter((o) => o.code !== 'ENEJP');
+
+/**
+ * Sentinel for "no lead source recorded" in the Leads-page filter (PAC-37).
+ *
+ * Leads created through a public share link store `{ code: null, label: '' }` —
+ * nobody has said where they came from yet. Producers need to isolate them to
+ * correct them, and an empty string can't be a query param value.
+ */
+export const LEAD_SOURCE_NONE = '__none__';
+
 export interface LeadSourceResult extends NormalizedLeadSource {
   isCanonical: boolean;
 }

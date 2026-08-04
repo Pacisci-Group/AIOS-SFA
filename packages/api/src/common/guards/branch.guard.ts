@@ -5,10 +5,11 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AccessContext, AccessScope, DataScope } from '@sfa/shared';
+import { AccessScope, DataScope } from '@sfa/shared';
 import { BRANCH_HEADER } from '../constants/permissions.constants';
 import { SKIP_BRANCH_KEY } from '../decorators/access.decorators';
-import { isPublicRoute } from './guard.utils';
+import { AuthenticatedRequest } from '../types/authenticated-request';
+import { asIdString, isPublicRoute } from './guard.utils';
 
 @Injectable()
 export class BranchGuard implements CanActivate {
@@ -27,23 +28,23 @@ export class BranchGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest();
-    const access = request.access as AccessContext | undefined;
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const access = request.access;
     if (!access) {
       throw new ForbiddenException('Authentication required');
     }
 
     if (access.isPlatformAdmin || access.scope === AccessScope.Platform) {
       request.resolvedBranchId =
-        request.headers[BRANCH_HEADER] ??
-        request.params?.branchId ??
-        request.query?.branchId ??
+        asIdString(request.headers[BRANCH_HEADER]) ??
+        asIdString(request.params?.branchId) ??
+        asIdString(request.query?.branchId) ??
         null;
       return true;
     }
 
-    const headerBranchId = request.headers[BRANCH_HEADER] as string | undefined;
-    const routeBranchId =
+    const headerBranchId = asIdString(request.headers[BRANCH_HEADER]);
+    const routeBranchId: unknown =
       request.params?.branchId ??
       request.query?.branchId ??
       request.body?.branchId;
@@ -51,7 +52,8 @@ export class BranchGuard implements CanActivate {
     const isAgencyWide = access.dataScope === DataScope.Agency;
 
     if (isAgencyWide) {
-      request.resolvedBranchId = headerBranchId ?? routeBranchId ?? null;
+      request.resolvedBranchId =
+        headerBranchId ?? asIdString(routeBranchId) ?? null;
       return true;
     }
 

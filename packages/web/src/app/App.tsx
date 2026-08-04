@@ -8,6 +8,7 @@ import { RequirePermission } from '@/components/layout/RequirePermission';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
+import { Toaster } from '@/components/ui/sonner';
 
 const ProducerDashboardPage = lazy(
   () => import('@/features/producer/ProducerDashboardPage'),
@@ -28,6 +29,10 @@ const HouseholdDetailsPage = lazy(
   () => import('@/features/household/HouseholdDetailsPage'),
 );
 const LeadsPage = lazy(() => import('@/features/lead/LeadsPage'));
+const NewLeadPage = lazy(() => import('@/features/lead/NewLeadPage'));
+const PublicLeadFormPage = lazy(
+  () => import('@/features/lead/PublicLeadFormPage'),
+);
 const LeadDetailsPage = lazy(() => import('@/features/lead/LeadDetailsPage'));
 const RolePermissionsPage = lazy(
   () => import('@/features/admin/RolePermissionsPage'),
@@ -198,6 +203,26 @@ export function App() {
                     </LazyPage>
                   }
                 />
+                {/* Static segment, so it wins over `/leads/:id` regardless of
+                    order — declared first for readability. Needs `leads:write`,
+                    which is stricter than the surrounding read gate. */}
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={`${ModuleKey.Leads}:write`}
+                      redirectTo="/leads"
+                    />
+                  }
+                >
+                  <Route
+                    path="/leads/new"
+                    element={
+                      <LazyPage>
+                        <NewLeadPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
                 <Route
                   path="/leads/:id"
                   element={
@@ -253,9 +278,25 @@ export function App() {
               </Route>
             </Route>
 
+            {/* Public share-link intake. Outside BOTH route guards on purpose:
+                `ProtectedRoute` would bounce an anonymous prospect to /login,
+                and `PublicOnlyRoute` would redirect a signed-in producer away
+                from previewing their own link. Must sit above the catch-all. */}
+            <Route
+              path="/f/lead/:token"
+              element={
+                <LazyPage>
+                  <PublicLeadFormPage />
+                </LazyPage>
+              }
+            />
+
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
+        {/* `sonner` was installed but never mounted, so `toast()` silently
+            no-opped. Used by the share-link dialog's copy action. */}
+        <Toaster richColors position="top-right" />
       </AuthProvider>
     </QueryClientProvider>
   );

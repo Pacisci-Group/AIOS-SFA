@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AddLeadButton } from "@/components/leads/AddLeadButton";
+import { ShareLinkButton } from "@/components/leads/ShareLinkButton";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
@@ -108,7 +109,10 @@ export default function LeadsPage() {
               {isPending || isError ? " " : `${total} total`}
             </p>
           </div>
-          <AddLeadButton />
+          <div className="flex items-center gap-2">
+            <ShareLinkButton />
+            <AddLeadButton />
+          </div>
         </header>
 
         <main className="px-4 md:px-6 py-6">

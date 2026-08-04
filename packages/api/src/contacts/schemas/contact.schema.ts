@@ -53,3 +53,20 @@ ContactSchema.index(
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 ContactSchema.index({ agencyId: 1, householdId: 1 });
+
+/**
+ * Person-first contact matching (PAC-37): the first+last name candidate query.
+ *
+ * The collation makes it case-insensitive (`strength: 2` also ignores accents)
+ * without adding lowercase key columns and backfilling every migrated contact —
+ * legacy's equivalent query was a case-sensitive exact match, which quietly
+ * created a duplicate for "mcdonald" vs "McDonald".
+ *
+ * ⚠ Every `find()` that means to use this index **must repeat the same
+ * `.collation()`**. Omit it and the query silently reverts to case-sensitive
+ * matching *and* falls back to a collection scan.
+ */
+ContactSchema.index(
+  { agencyId: 1, lastName: 1, firstName: 1 },
+  { collation: { locale: 'en', strength: 2 } },
+);

@@ -2,14 +2,15 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getConnectionToken } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
+import { App } from 'supertest/types';
 import { AppModule } from '../../src/app.module';
 
-export async function createTestApp(): Promise<INestApplication> {
+export async function createTestApp(): Promise<INestApplication<App>> {
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();
 
-  const app = moduleFixture.createNestApplication();
+  const app = moduleFixture.createNestApplication<INestApplication<App>>();
   app.setGlobalPrefix('api/v1');
   app.useGlobalPipes(
     new ValidationPipe({

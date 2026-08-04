@@ -1,4 +1,8 @@
-import { LEAD_SOURCE_LABELS } from "@sfa/shared";
+import {
+  LEAD_SOURCE_LABELS,
+  LEAD_SOURCE_NONE,
+  LEAD_STATUSES,
+} from "@sfa/shared";
 import { useQuery } from "@tanstack/react-query";
 import { MultiSelect } from "@/components/common/MultiSelect";
 import { Button } from "@/components/ui/button";
@@ -103,6 +107,10 @@ export function LeadsFilterSheet({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ANY_OPTION}>All sources</SelectItem>
+                {/* Leads submitted through a public share link carry no source
+                    until a producer sets one, so isolating them has to be a
+                    first-class choice rather than something you scan for. */}
+                <SelectItem value={LEAD_SOURCE_NONE}>No source</SelectItem>
                 {LEAD_SOURCE_LABELS.filter((label) => label !== "Test").map(
                   (label) => (
                     <SelectItem key={label} value={label}>

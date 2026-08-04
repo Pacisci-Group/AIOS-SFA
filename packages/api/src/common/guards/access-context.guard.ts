@@ -5,8 +5,8 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { JwtPayload } from '@sfa/shared';
 import { AccessResolverService } from '../../permissions/access-resolver.service';
+import { AuthenticatedRequest } from '../types/authenticated-request';
 import { isPublicRoute } from './guard.utils';
 
 /**
@@ -30,8 +30,8 @@ export class AccessContextGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest();
-    const jwt = request.user as JwtPayload | undefined;
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const jwt = request.user;
     if (!jwt?.sub) {
       throw new UnauthorizedException('Authentication required');
     }
