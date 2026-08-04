@@ -1,11 +1,12 @@
 import { useState } from "react";
 import {
-  FileText, CheckCircle, Send, Phone, Mail, MapPin, Calendar,
+  FileText, Send, Phone, Mail, MapPin, Calendar,
   Shield, Clock, ChevronRight, Bell, Search, LayoutDashboard,
-  Users, Settings, BarChart2, X
+  Users, Settings, BarChart2
 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { newQuoteRecapRoute } from "@/components/leads/QuoteRecapAction";
+import { SoldDealAction } from "@/components/leads/SoldDealAction";
 import { QuoteWorkspace } from "./components/QuoteWorkspace";
 import { ActivityTimeline } from "./components/ActivityTimeline";
 import { HouseholdCard } from "./components/HouseholdCard";
@@ -42,7 +43,6 @@ const navItems = [
 ];
 
 export default function App() {
-  const [soldModal, setSoldModal] = useState(false);
   const [activeNav, setActiveNav] = useState("Leads");
   // Only real on `/leads/:id`; `/leads/demo` renders the same mockup with none.
   const { id } = useParams<{ id: string }>();
@@ -126,15 +126,9 @@ export default function App() {
                 Quote Recap
               </Link>
             )}
-            {/* Mark as Sold */}
-            <button
-              onClick={() => setSoldModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-white text-xs transition-opacity hover:opacity-90"
-              style={{ background: "var(--emerald)", fontWeight: 600 }}
-            >
-              <CheckCircle size={13} />
-              Mark as Sold
-            </button>
+            {/* Mark as Sold (PAC-40). Same `id` guard as Quote Recap above:
+                `/leads/demo` renders this mockup with no real lead. */}
+            {id && <SoldDealAction leadId={id} />}
             {/* Send to Independent */}
             <button
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-colors hover:bg-muted/70 border border-border"
@@ -228,66 +222,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Mark as Sold modal */}
-      {soldModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.4)" }}>
-          <div className="bg-card rounded-xl border border-border w-96 shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-              <div className="flex items-center gap-2">
-                <CheckCircle size={16} style={{ color: "var(--emerald)" }} />
-                <h2 className="text-sm text-card-foreground" style={{ fontWeight: 600 }}>Confirm — Mark as Sold</h2>
-              </div>
-              <button onClick={() => setSoldModal(false)} className="text-muted-foreground hover:text-card-foreground transition-colors">
-                <X size={16} />
-              </button>
-            </div>
-            <div className="px-5 py-5 space-y-4">
-              <p className="text-sm text-muted-foreground">
-                You're marking <span className="text-card-foreground" style={{ fontWeight: 500 }}>Anurodh Vaidya</span> as a closed sale. This will:
-              </p>
-              <ul className="space-y-2">
-                {["Move lead to Sold pipeline", "Trigger welcome email to client", "Notify underwriting team", "Log close date & agent commission"].map((item) => (
-                  <li key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <div className="size-1.5 rounded-full shrink-0" style={{ background: "var(--emerald)" }} />
-                    {item}
-                  </li>
-                ))}
-              </ul>
-              <div className="space-y-2 pt-1">
-                <label className="text-xs text-muted-foreground" style={{ fontWeight: 500 }}>Bound carrier</label>
-                <input
-                  defaultValue="Progressive"
-                  className="w-full text-sm px-3 py-2 rounded-md border border-border bg-muted/40 outline-none focus:border-ring"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs text-muted-foreground" style={{ fontWeight: 500 }}>Effective date</label>
-                <input
-                  type="date"
-                  defaultValue="2026-06-15"
-                  className="w-full text-sm px-3 py-2 rounded-md border border-border bg-muted/40 outline-none focus:border-ring"
-                />
-              </div>
-            </div>
-            <div className="flex gap-3 px-5 py-4 border-t border-border">
-              <button
-                onClick={() => setSoldModal(false)}
-                className="flex-1 py-2 rounded-md text-sm border border-border hover:bg-muted/50 transition-colors"
-                style={{ fontWeight: 500 }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => setSoldModal(false)}
-                className="flex-1 py-2 rounded-md text-sm text-white transition-opacity hover:opacity-90"
-                style={{ background: "var(--emerald)", fontWeight: 600 }}
-              >
-                Confirm Sale
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

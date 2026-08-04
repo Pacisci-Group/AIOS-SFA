@@ -14,6 +14,8 @@
     "api:seed:demo:dev": "npm run seed:demo:dev -w @sfa/api",
     "api:migrate": "npm run migrate -w @sfa/api",
     "api:migrate:dev": "npm run migrate:dev -w @sfa/api",
+    "api:backfill:deal-refs": "npm run backfill:deal-refs -w @sfa/api",
+    "api:backfill:deal-refs:dev": "npm run backfill:deal-refs:dev -w @sfa/api",
     "web:dev": "npm run dev -w @sfa/web",
     "web:build": "npm run build -w @sfa/web",
     "web:preview": "npm run preview -w @sfa/web",

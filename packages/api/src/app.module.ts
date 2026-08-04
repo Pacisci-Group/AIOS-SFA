@@ -19,9 +19,11 @@ import {
   HOUR_MS,
   MINUTE_MS,
 } from './config/rate-limit.config';
+import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { LeadsModule } from './leads/leads.module';
+import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
 import { HealthController } from './health.controller';
@@ -29,6 +31,7 @@ import { PermissionsModule } from './permissions/permissions.module';
 import { PlatformModule } from './platform/platform.module';
 import { RolesModule } from './roles/roles.module';
 import { ShareLinksModule } from './share-links/share-links.module';
+import { SoldDealsModule } from './sold-deals/sold-deals.module';
 import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
 import { ENV_FILE_PATH } from './config/env.config';
@@ -68,6 +71,11 @@ import { ENV_FILE_PATH } from './config/env.config';
     ShareLinksModule,
     LeadsModule,
     QuoteRecapsModule,
+    PoliciesModule,
+    SoldDealsModule,
+    // Registers the `auditTemplates` model so its indexes build and the core
+    // seed / audit generation can inject it (PAC-40).
+    AuditTemplatesModule,
     FeatureModulesModule,
   ],
   controllers: [HealthController],

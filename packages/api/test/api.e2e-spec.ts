@@ -4,13 +4,27 @@ import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
+import type {
+  CreateSoldDealResponse,
+  PolicyCheckResponse,
+  SoldDealLeadContext,
+} from '@sfa/shared';
 import { Activity } from '../src/activities/schemas/activity.schema';
 import { TransactionRunner } from '../src/common/mongo/transaction.runner';
 import { Contact } from '../src/contacts/schemas/contact.schema';
+import { AuditTemplate } from '../src/audit-templates/schemas/audit-template.schema';
+import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
+import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
+import { DealAuditItem } from '../src/deal-audit-items/schemas/deal-audit-item.schema';
+import { Deal } from '../src/deals/schemas/deal.schema';
 import { Household } from '../src/households/schemas/household.schema';
+import { InterestedParty } from '../src/interested-parties/schemas/interested-party.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
+import { Policy } from '../src/policies/schemas/policy.schema';
+import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
+import { PriorPolicy } from '../src/prior-policies/schemas/prior-policy.schema';
 import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
 import { StorageService } from '../src/storage/storage.service';
@@ -2061,6 +2075,1678 @@ describe('SFA API (e2e)', () => {
         .get(`/api/v1/quote-recaps/context?leadId=${MISSING_LEAD_ID}`)
         .set(authHeader(liveToken))
         .expect(401);
+    });
+  });
+
+  describe('Sold deals (PAC-40 Card 5 — discounts & documents)', () => {
+    const SOLD = '/api/v1/sold-deals';
+    const PRESIGN = '/api/v1/sold-deals/documents/presign';
+
+    let card5DealModel: Model<Deal>;
+    let card5PolicyModel: Model<Policy>;
+    let card5LeadModel: Model<Lead>;
+    let card5HouseholdModel: Model<Household>;
+    let interestedPartyModel: Model<InterestedParty>;
+    let card5ProducerId: Types.ObjectId;
+    let card5StatSpy: jest.SpyInstance;
+    let presignSpy: jest.SpyInstance;
+    /** The key the service asked storage to sign, captured per call. */
+    let lastSignedKey: string | undefined;
+
+    /**
+     * Object storage isn't running under test, so `statObject` reports only the
+     * keys a test has "uploaded". That keeps the real verification path
+     * exercised — including the 404 for a key that never landed — without a
+     * MinIO dependency. Same approach as the Quote Recap suite.
+     */
+    const uploaded = new Map<string, { size: number; contentType: string }>();
+
+    const keyFor = (leadId: string) =>
+      `agencies/${seed.agencyId}/sold-deals/${leadId}/2026/proof.pdf`;
+
+    const upload = (
+      leadId: string,
+      stat = { size: 2048, contentType: 'application/pdf' },
+    ) => {
+      const key = keyFor(leadId);
+      uploaded.set(key, stat);
+      return {
+        key,
+        filename: 'proof.pdf',
+        contentType: 'application/pdf',
+        size: stat.size,
+      };
+    };
+
+    let card5Counter = 0;
+    const nextCard5Number = () =>
+      `C5-${(card5Counter += 1).toString().padStart(6, '0')}`;
+
+    const EMPTY_DISCOUNTS = {
+      escrow: false,
+      fireSubscription: { selected: false, hasProof: false },
+      roofReceipt: { selected: false, hasProof: false },
+      acvPersonalProperty: false,
+      acvDwellingProtection: false,
+      drivewise: false,
+      defensiveDriver: { selected: false, drivers: [] },
+      studentDiscount: { selected: false, hasProof: false },
+    };
+
+    const policyWith = (overrides: Record<string, unknown> = {}) => ({
+      policyType: 'Auto',
+      effectiveDate: '2026-02-01',
+      carrier: 'Allstate',
+      policyNumber: nextCard5Number(),
+      premium: 500,
+      itemCount: 1,
+      priorInsurance: { none: true },
+      cancellation: { cancelled: false },
+      ...overrides,
+    });
+
+    const seedLead = async () => {
+      const household = await card5HouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Card5 Household',
+        primaryContactName: 'Casey Card',
+      });
+      const lead = await card5LeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Casey',
+        lastName: 'Card',
+        status: 'Quoted',
+        producerId: card5ProducerId,
+        householdId: household._id,
+      });
+      return lead;
+    };
+
+    const post = (body: object, expected = 201) =>
+      request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(body)
+        .expect(expected);
+
+    beforeAll(async () => {
+      card5DealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      card5PolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      card5LeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      card5HouseholdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      interestedPartyModel = app.get<Model<InterestedParty>>(
+        getModelToken(InterestedParty.name),
+      );
+
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      card5ProducerId = producer!._id;
+
+      card5StatSpy = jest
+        .spyOn(app.get(StorageService), 'statObject')
+        .mockImplementation((key: string) =>
+          Promise.resolve(uploaded.get(key) ?? null),
+        );
+
+      /*
+       * Signing is stubbed, not exercised.
+       *
+       * `createPresignedUpload` calls the AWS signer, which needs real
+       * credentials — present locally via the MinIO `STORAGE_*` vars, absent in
+       * CI, so a test that really signs passes on a laptop and 500s on a
+       * runner. Nothing about SigV4 is under test here anyway: what matters is
+       * the **key** the service builds, and capturing the argument asserts that
+       * directly rather than through a signed URL.
+       *
+       * The real signer is covered by the Bruno collection, which runs against
+       * a live MinIO.
+       */
+      presignSpy = jest
+        .spyOn(app.get(StorageService), 'createPresignedUpload')
+        .mockImplementation((key: string, contentType: string) => {
+          lastSignedKey = key;
+          return Promise.resolve({
+            key,
+            uploadUrl: `https://storage.test/${key}`,
+            requiredHeaders: { 'Content-Type': contentType },
+            expiresIn: 900,
+          });
+        });
+    });
+
+    afterAll(() => {
+      card5StatSpy.mockRestore();
+      presignSpy.mockRestore();
+    });
+
+    it('presigns a proof upload scoped to the agency and lead', async () => {
+      const lead = await seedLead();
+      lastSignedKey = undefined;
+
+      const res = await request(app.getHttpServer())
+        .post(PRESIGN)
+        .set(authHeader(producerToken))
+        .send({
+          leadId: lead._id.toString(),
+          filename: 'roof.pdf',
+          contentType: 'application/pdf',
+          size: 2048,
+        })
+        .expect(201);
+
+      const prefix = `agencies/${seed.agencyId}/sold-deals/${lead._id.toString()}/`;
+      // The key the service actually asked storage to sign — built from the
+      // loaded lead's agencyId, never from the request body. This prefix is
+      // what `POST /sold-deals` verifies before accepting an attachment.
+      expect(lastSignedKey).toContain(prefix);
+
+      const body = res.body as { key: string; uploadUrl: string };
+      expect(body.key).toBe(lastSignedKey);
+      expect(body.uploadUrl).toEqual(expect.any(String));
+    });
+
+    it("refuses to presign against another producer's lead", async () => {
+      const household = await card5HouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Someone Else',
+      });
+      const foreign = await card5LeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Not',
+        lastName: 'Yours',
+        producerId: new Types.ObjectId(),
+        householdId: household._id,
+      });
+
+      lastSignedKey = undefined;
+
+      // 404, not 403 — a presign must not leak that the lead exists.
+      await request(app.getHttpServer())
+        .post(PRESIGN)
+        .set(authHeader(producerToken))
+        .send({
+          leadId: foreign._id.toString(),
+          filename: 'roof.pdf',
+          contentType: 'application/pdf',
+          size: 2048,
+        })
+        .expect(404);
+
+      // Ownership is checked BEFORE signing, so storage was never touched.
+      expect(lastSignedKey).toBeUndefined();
+    });
+
+    it('rejects a cross-branch discount rather than stripping it', async () => {
+      const lead = await seedLead();
+      // A Home policy claiming Drivewise would otherwise generate an auto audit
+      // item for a deal with no auto line.
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              policyType: 'Home',
+              discounts: { ...EMPTY_DISCOUNTS, drivewise: true },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('requires the escrow sub-card when escrow is ticked', async () => {
+      const lead = await seedLead();
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              policyType: 'Home',
+              discounts: { ...EMPTY_DISCOUNTS, escrow: true },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('writes an interested party per escrow and flags the deal mortgagee', async () => {
+      const lead = await seedLead();
+      const res = await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith({
+            policyType: 'Home',
+            discounts: { ...EMPTY_DISCOUNTS, escrow: true },
+            escrow: {
+              loanNumber: 'LN-123',
+              companyName: 'First National Escrow',
+              address: {
+                street: '1 Lender Way',
+                city: 'Austin',
+                state: 'TX',
+                zip: '78745',
+              },
+            },
+          }),
+        ],
+      });
+
+      const dealId = new Types.ObjectId((res.body as { id: string }).id);
+      const deal = await card5DealModel.findById(dealId);
+      // The boolean gates the Home/Landlord Mortgagee audit items; the row
+      // carries the detail the service team verifies.
+      expect(deal!.mortgagee).toBe(true);
+
+      const parties = await interestedPartyModel.find({
+        householdId: lead.householdId,
+      });
+      expect(parties).toHaveLength(1);
+      expect(parties[0].loanNumber).toBe('LN-123');
+      expect(parties[0].mortgagee).toBe('First National Escrow');
+    });
+
+    it('unions Card 5 selections into the deal audit triggers', async () => {
+      const lead = await seedLead();
+      const res = await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith({
+            policyType: 'Auto',
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              drivewise: true,
+              defensiveDriver: {
+                selected: true,
+                // The same driver twice — one certificate, not two.
+                drivers: [
+                  { name: 'Dana Driver' },
+                  { name: 'Sam Second' },
+                  { name: 'Dana Driver' },
+                ],
+              },
+            },
+          }),
+          policyWith({
+            policyType: 'Home',
+            discounts: { ...EMPTY_DISCOUNTS, acvDwellingProtection: true },
+          }),
+        ],
+      });
+
+      const dealId = new Types.ObjectId((res.body as { id: string }).id);
+      const deal = await card5DealModel.findById(dealId);
+      const triggers = deal!.auditTriggers;
+
+      expect(triggers.drivewise).toBe(true);
+      expect(triggers.defensiveDriver).toBe(true);
+      // Either ACV option maps onto the one Actual Cash Value trigger.
+      expect(triggers.actualCashValue).toBe(true);
+      expect(triggers.goodStudent).toBe(false);
+      expect([...triggers.defensiveDriverNames].sort()).toEqual([
+        'Dana Driver',
+        'Sam Second',
+      ]);
+    });
+
+    it('accepts "no proof" as a real answer, not a validation failure', async () => {
+      const lead = await seedLead();
+      // The discount still applies — the chase moves to the service team.
+      const res = await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith({
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              studentDiscount: { selected: true, hasProof: false },
+            },
+          }),
+        ],
+      });
+
+      const dealId = new Types.ObjectId((res.body as { id: string }).id);
+      const deal = await card5DealModel.findById(dealId);
+      expect(deal!.auditTriggers.goodStudent).toBe(true);
+    });
+
+    it('demands the document when the producer said they had proof', async () => {
+      const lead = await seedLead();
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              discounts: {
+                ...EMPTY_DISCOUNTS,
+                studentDiscount: { selected: true, hasProof: true },
+              },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('stores the size storage reports, not the size the client claimed', async () => {
+      const lead = await seedLead();
+      const attachment = upload(lead._id.toString(), {
+        size: 4096,
+        contentType: 'application/pdf',
+      });
+
+      const res = await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith({
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              // The client lies about the size; HeadObject is the evidence.
+              studentDiscount: {
+                selected: true,
+                hasProof: true,
+                attachment: { ...attachment, size: 1 },
+              },
+            },
+          }),
+        ],
+      });
+
+      const dealId = new Types.ObjectId((res.body as { id: string }).id);
+      const policies = await card5PolicyModel.find({ dealId });
+      expect(policies[0].discounts?.studentDiscount.attachment?.size).toBe(
+        4096,
+      );
+    });
+
+    it('rejects a document key outside the agency and lead prefix', async () => {
+      const lead = await seedLead();
+      const foreignKey = `agencies/some-other-agency/sold-deals/${lead._id.toString()}/2026/proof.pdf`;
+      uploaded.set(foreignKey, { size: 2048, contentType: 'application/pdf' });
+
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              discounts: {
+                ...EMPTY_DISCOUNTS,
+                studentDiscount: {
+                  selected: true,
+                  hasProof: true,
+                  attachment: {
+                    key: foreignKey,
+                    filename: 'proof.pdf',
+                    contentType: 'application/pdf',
+                    size: 2048,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('404s when the declared document never landed in storage', async () => {
+      const lead = await seedLead();
+      const ghost = keyFor(lead._id.toString());
+      uploaded.delete(ghost);
+
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith({
+              discounts: {
+                ...EMPTY_DISCOUNTS,
+                studentDiscount: {
+                  selected: true,
+                  hasProof: true,
+                  attachment: {
+                    key: ghost,
+                    filename: 'proof.pdf',
+                    contentType: 'application/pdf',
+                    size: 2048,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+        404,
+      );
+    });
+  });
+
+  describe('Sold deals (PAC-40 audit generation + CRM hand-off)', () => {
+    const SOLD = '/api/v1/sold-deals';
+    const BOARD = '/api/v1/deal-audits';
+
+    let genDealModel: Model<Deal>;
+    let genLeadModel: Model<Lead>;
+    let genHouseholdModel: Model<Household>;
+    let genItemModel: Model<DealAuditItem>;
+    let genAuditModel: Model<DealAudit>;
+    let genTemplateModel: Model<AuditTemplate>;
+    let genRotationModel: Model<CrmRotation>;
+    let genProducerId: Types.ObjectId;
+
+    let genCounter = 0;
+    const nextNum = () =>
+      `GEN-${(genCounter += 1).toString().padStart(6, '0')}`;
+
+    /** The production vocabulary the generator resolves titles against. */
+    const TEMPLATES = [
+      { name: 'Correct Sold Date', category: 'Common', alwaysInclude: true },
+      { name: 'Prior Insurance', category: 'Common', alwaysInclude: true },
+      { name: 'Drivers Verified', category: 'Auto' },
+      { name: 'Defensive Driver', category: 'Auto' },
+      { name: 'Drivewise', category: 'Auto' },
+      { name: 'Home Inspection', category: 'Home' },
+      { name: 'Home Mortgagee', category: 'Home' },
+      { name: 'Home Hail Resistant Roof', category: 'Home' },
+      { name: 'Landlord Inspection', category: 'Landlord' },
+    ];
+
+    /**
+     * A unique client name per call.
+     *
+     * The board is agency-wide and every test here books a sale, so a shared
+     * name makes "my row" ambiguous — the board sorts oldest-first, so the
+     * first match would be an earlier test's deal.
+     */
+    const seedLead = async () => {
+      const who = `Handoff ${(genCounter += 1).toString().padStart(3, '0')}`;
+      const household = await genHouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: `${who} Household`,
+        primaryContactName: who,
+      });
+      const lead = await genLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Harriet',
+        lastName: who,
+        status: 'Quoted',
+        producerId: genProducerId,
+        householdId: household._id,
+      });
+      return { lead, household, clientName: who };
+    };
+
+    const sell = async (
+      leadId: string,
+      policies: Array<Record<string, unknown>>,
+    ) => {
+      const res = await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send({ leadId, soldDate: '2026-02-15', policies })
+        .expect(201);
+      return res.body as CreateSoldDealResponse;
+    };
+
+    const autoPolicy = (overrides: Record<string, unknown> = {}) => ({
+      policyType: 'Auto',
+      effectiveDate: '2026-02-01',
+      carrier: 'Allstate',
+      policyNumber: nextNum(),
+      premium: 500,
+      itemCount: 1,
+      priorInsurance: { none: true },
+      cancellation: { cancelled: false },
+      ...overrides,
+    });
+
+    beforeAll(async () => {
+      genDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      genLeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      genHouseholdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      genItemModel = app.get<Model<DealAuditItem>>(
+        getModelToken(DealAuditItem.name),
+      );
+      genAuditModel = app.get<Model<DealAudit>>(getModelToken(DealAudit.name));
+      genTemplateModel = app.get<Model<AuditTemplate>>(
+        getModelToken(AuditTemplate.name),
+      );
+      genRotationModel = app.get<Model<CrmRotation>>(
+        getModelToken(CrmRotation.name),
+      );
+
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      genProducerId = producer!._id;
+
+      await genTemplateModel.create(
+        TEMPLATES.map((t) => ({
+          ...t,
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          active: true,
+          required: true,
+        })),
+      );
+    });
+
+    it('generates the baseline plus policy-type items for a simple sale', async () => {
+      const { lead } = await seedLead();
+      const deal = await sell(lead._id.toString(), [autoPolicy()]);
+
+      expect(deal.auditItemCount).toBeGreaterThan(0);
+
+      const items = await genItemModel.find({
+        dealId: new Types.ObjectId(deal.id),
+      });
+      const names = items.map((i) => i.itemName);
+      expect(names).toEqual(
+        expect.arrayContaining([
+          'Correct Sold Date',
+          'Prior Insurance',
+          'Drivers Verified',
+        ]),
+      );
+      // No discounts were taken, so nothing discount-driven should appear.
+      expect(names).not.toContain('Drivewise');
+    });
+
+    it('creates the parent roll-up audit record', async () => {
+      const { lead } = await seedLead();
+      const deal = await sell(lead._id.toString(), [autoPolicy()]);
+
+      const parent = await genAuditModel.findOne({
+        dealId: new Types.ObjectId(deal.id),
+      });
+      expect(parent).not.toBeNull();
+      expect(parent!.result).toBe('Pending');
+
+      const items = await genItemModel.find({
+        dealId: new Types.ObjectId(deal.id),
+      });
+      // Every item points back at it.
+      for (const item of items) {
+        expect(item.dealAuditId?.toString()).toBe(parent!._id.toString());
+      }
+    });
+
+    /**
+     * THE acceptance criterion: "generated items appear on the PAC-12 board for
+     * the submitting producer — verified end-to-end, not just by inspecting the
+     * documents."
+     *
+     * Every field the board filters or renders on is a silent failure if
+     * omitted: the row simply does not appear, or reads "Unknown Client".
+     */
+    it('surfaces the generated items on the hand-off board', async () => {
+      const { lead, clientName } = await seedLead();
+      const deal = await sell(lead._id.toString(), [autoPolicy()]);
+
+      const res = await request(app.getHttpServer())
+        .get(`${BOARD}?page=1&pageSize=50`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as {
+        items: Array<{
+          id: string;
+          ref: string;
+          client: string;
+          type: string;
+          missing: string;
+          daysOpen: number;
+        }>;
+      };
+
+      const mine = body.items.filter((row) => row.client === clientName);
+      expect(mine.length).toBeGreaterThan(0);
+
+      const row = mine[0];
+      // Not "Unknown Client" — proves `clientName` was stamped.
+      expect(row.client).toBe(clientName);
+      // Proves `dealId` resolved, so the badge is real.
+      expect(row.type).toBe('Auto');
+      expect(row.missing).toEqual(expect.any(String));
+      expect(row.ref).toMatch(/^AUD-\d{4}-\d{4}$/);
+      // Freshly generated: recomputed from `firstCreatedAt`, so exactly 0.
+      expect(row.daysOpen).toBe(0);
+
+      // And it really is the deal we just booked.
+      const items = await genItemModel.find({
+        dealId: new Types.ObjectId(deal.id),
+      });
+      expect(items.map((i) => i._id.toString())).toContain(row.id);
+    });
+
+    it("hides another producer's generated items from the board", async () => {
+      const { lead, clientName } = await seedLead();
+      await sell(lead._id.toString(), [autoPolicy()]);
+
+      // The read-only user has agency scope but a different id; the producer
+      // filter is what must keep these rows out of a *producer's* board.
+      const res = await request(app.getHttpServer())
+        .get(`${BOARD}?page=1&pageSize=50`)
+        .set(authHeader(readOnlyToken))
+        .expect(200);
+
+      // Agency scope sees everything, which is the contrast that proves the
+      // `own` filter above was doing real work.
+      const body = res.body as { items: Array<{ client: string }> };
+      expect(body.items.some((r) => r.client === clientName)).toBe(true);
+    });
+
+    it('creates one certificate item per named defensive driver', async () => {
+      const { lead } = await seedLead();
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy({
+          discounts: {
+            escrow: false,
+            fireSubscription: { selected: false, hasProof: false },
+            roofReceipt: { selected: false, hasProof: false },
+            acvPersonalProperty: false,
+            acvDwellingProtection: false,
+            drivewise: false,
+            defensiveDriver: {
+              selected: true,
+              drivers: [{ name: 'Dana Driver' }, { name: 'Sam Second' }],
+            },
+            studentDiscount: { selected: false, hasProof: false },
+          },
+        }),
+      ]);
+
+      const items = await genItemModel.find({
+        dealId: new Types.ObjectId(deal.id),
+        title: { $regex: '^Defensive Driver' },
+      });
+
+      expect(items).toHaveLength(2);
+      // Distinct on the board, so a producer can tell which is outstanding.
+      expect(items.map((i) => i.itemName).sort()).toEqual([
+        'Defensive Driver — Dana Driver',
+        'Defensive Driver — Sam Second',
+      ]);
+      expect(items.map((i) => i.subjectName).sort()).toEqual([
+        'Dana Driver',
+        'Sam Second',
+      ]);
+    });
+
+    it('generates the mortgagee item only when escrow was taken', async () => {
+      const { lead } = await seedLead();
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy({
+          policyType: 'Home',
+          discounts: {
+            escrow: true,
+            fireSubscription: { selected: false, hasProof: false },
+            roofReceipt: { selected: false, hasProof: false },
+            acvPersonalProperty: false,
+            acvDwellingProtection: false,
+            drivewise: false,
+            defensiveDriver: { selected: false, drivers: [] },
+            studentDiscount: { selected: false, hasProof: false },
+          },
+          escrow: {
+            loanNumber: 'LN-1',
+            companyName: 'Escrow Co',
+            address: {
+              street: '1 Way',
+              city: 'Austin',
+              state: 'TX',
+              zip: '78745',
+            },
+          },
+        }),
+      ]);
+
+      const names = (
+        await genItemModel.find({ dealId: new Types.ObjectId(deal.id) })
+      ).map((i) => i.itemName);
+      expect(names).toContain('Home Mortgagee');
+      expect(names).toContain('Home Inspection');
+    });
+
+    it('does not double-generate when the submission is replayed', async () => {
+      const { lead } = await seedLead();
+      const token = `replay-${Date.now()}`;
+      const policies = [autoPolicy()];
+
+      const first = await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send({
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          submissionToken: token,
+          policies,
+        })
+        .expect(201);
+
+      const before = await genItemModel.countDocuments({
+        dealId: new Types.ObjectId((first.body as { id: string }).id),
+      });
+
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send({
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          submissionToken: token,
+          policies,
+        })
+        .expect(201);
+
+      const after = await genItemModel.countDocuments({
+        dealId: new Types.ObjectId((first.body as { id: string }).id),
+      });
+      // The `dedupeKey` partial-unique index is what makes this true — a retry
+      // must not double the service team's workload.
+      expect(after).toBe(before);
+    });
+
+    it('books the sale even when the agency has no templates at all', async () => {
+      // A tenant whose catalog was never seeded still gets a working sale —
+      // generation is best-effort by design.
+      await genTemplateModel.updateMany(
+        { agencyId: seed.agencyId },
+        { $set: { active: false } },
+      );
+
+      const { lead } = await seedLead();
+      const deal = await sell(lead._id.toString(), [autoPolicy()]);
+      expect(deal.auditItemCount).toBe(0);
+
+      const stored = await genDealModel.findById(new Types.ObjectId(deal.id));
+      // ...but the failure is recorded rather than silent.
+      expect(stored!.auditGenerationStatus).toBe('no_templates');
+
+      await genTemplateModel.updateMany(
+        { agencyId: seed.agencyId },
+        { $set: { active: true } },
+      );
+    });
+
+    it('assigns a CRM from the producer rotation, then keeps it for the household', async () => {
+      const crmA = new Types.ObjectId();
+      const crmB = new Types.ObjectId();
+      await genRotationModel.create([
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: genProducerId,
+          crmId: crmA,
+          order: 1,
+          activeForProducer: true,
+        },
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: genProducerId,
+          crmId: crmB,
+          order: 2,
+          activeForProducer: true,
+        },
+      ]);
+
+      const first = await seedLead();
+      const dealOne = await sell(first.lead._id.toString(), [autoPolicy()]);
+      expect(dealOne.crmAssigned).toBe(true);
+
+      const second = await seedLead();
+      await sell(second.lead._id.toString(), [autoPolicy()]);
+
+      const householdOne = await genHouseholdModel.findById(
+        first.household._id,
+      );
+      const householdTwo = await genHouseholdModel.findById(
+        second.household._id,
+      );
+
+      // Round-robin: two households, two different CRMs.
+      expect(householdOne!.assignedCrmId).toBeDefined();
+      expect(householdTwo!.assignedCrmId).toBeDefined();
+      expect(householdOne!.assignedCrmId!.toString()).not.toBe(
+        householdTwo!.assignedCrmId!.toString(),
+      );
+
+      // A second sale to the SAME household keeps its CRM — the relationship
+      // is with the client, not the transaction.
+      const already = householdOne!.assignedCrmId!.toString();
+      await sell(first.lead._id.toString(), [autoPolicy()]);
+      const reread = await genHouseholdModel.findById(first.household._id);
+      expect(reread!.assignedCrmId!.toString()).toBe(already);
+    });
+  });
+
+  describe('Policies (PAC-40 duplicate check)', () => {
+    const CHECK = '/api/v1/policies/check';
+
+    /** Asserting against the shared wire type keeps the tests honest. */
+    const checkBody = (res: request.Response): PolicyCheckResponse =>
+      res.body as PolicyCheckResponse;
+
+    /** The producer's own policy, reachable via its deal. */
+    let ownPolicyId: string;
+    /** A colleague's policy in the same agency — must be reported but masked. */
+    let foreignPolicyId: string;
+
+    beforeAll(async () => {
+      const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      const householdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const otherProducerId = new Types.ObjectId();
+
+      const household = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Dedupe Household',
+        primaryContactName: 'Dana Dedupe',
+        isTestRecord: false,
+      });
+
+      const ownDeal = await dealModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        producerId: producer!._id,
+        householdId: household._id,
+        clientName: 'Dana Dedupe',
+        isTestRecord: false,
+      });
+
+      const foreignDeal = await dealModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        producerId: otherProducerId,
+        clientName: 'Someone Elses Client',
+        isTestRecord: false,
+      });
+
+      const own = await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        policyNumber: 'ABC-123-456',
+        policyNumberKey: 'ABC123456',
+        policyType: 'Auto',
+        carrier: 'Allstate',
+        effectiveDate: new Date('2026-01-15T00:00:00.000Z'),
+        householdId: household._id,
+        dealId: ownDeal._id,
+        isTestRecord: false,
+      });
+      ownPolicyId = own._id.toString();
+
+      const foreign = await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        policyNumber: 'ZZZ-999-000',
+        policyNumberKey: 'ZZZ999000',
+        policyType: 'Home',
+        carrier: 'Allstate',
+        effectiveDate: new Date('2026-02-01T00:00:00.000Z'),
+        dealId: foreignDeal._id,
+        isTestRecord: false,
+      });
+      foreignPolicyId = foreign._id.toString();
+
+      // Must never surface: test records are excluded from the check.
+      await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        policyNumber: 'TST-000-111',
+        policyNumberKey: 'TST000111',
+        policyType: 'Auto',
+        isTestRecord: true,
+      });
+    });
+
+    it('matches regardless of how the producer typed the number', async () => {
+      // The whole point of the normalized key: these are one policy.
+      for (const typed of ['abc123456', 'ABC-123-456', '  abc 123 456  ']) {
+        const res = await request(app.getHttpServer())
+          .get(CHECK)
+          .query({ number: typed })
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect(checkBody(res).normalized).toBe('ABC123456');
+        expect(checkBody(res).matches).toHaveLength(1);
+        expect(checkBody(res).matches[0].id).toBe(ownPolicyId);
+      }
+    });
+
+    it('echoes the query so a stale response can be discarded', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'abc-123-456' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).query).toBe('abc-123-456');
+    });
+
+    it('returns the identifying fields for a match the producer owns', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const match = checkBody(res).matches[0];
+      expect(match).toMatchObject({
+        isOwn: true,
+        policyNumber: 'ABC-123-456',
+        policyType: 'Auto',
+        carrier: 'Allstate',
+        clientName: 'Dana Dedupe',
+      });
+      expect(match.householdId).toEqual(expect.any(String));
+      expect(match.dealId).toEqual(expect.any(String));
+    });
+
+    it("reports a colleague's duplicate but withholds who it belongs to", async () => {
+      // The duplicate a producer most needs warning about is the one they
+      // cannot see — hiding it entirely would defeat the endpoint.
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'zzz-999-000' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).matches).toHaveLength(1);
+      const match = checkBody(res).matches[0];
+      expect(match.id).toBe(foreignPolicyId);
+      expect(match.isOwn).toBe(false);
+      // Enough to answer "is this the same policy, or did I mistype?"...
+      expect(match.policyType).toBe('Home');
+      expect(match.carrier).toBe('Allstate');
+      expect(match.effectiveDate).toEqual(expect.any(String));
+      // ...but not enough to read another producer's book.
+      expect(match.clientName).toBeNull();
+      expect(match.householdId).toBeNull();
+      expect(match.dealId).toBeNull();
+    });
+
+    it('sees everything unmasked at agency scope', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ZZZ999000' })
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(checkBody(res).matches[0].isOwn).toBe(true);
+      expect(checkBody(res).matches[0].clientName).toBe('Someone Elses Client');
+    });
+
+    it('treats input too short to be meaningful as "no opinion"', async () => {
+      // Not a 400: the wizard asks on every blur, including half-typed input.
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'A-1' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).normalized).toBeNull();
+      expect(checkBody(res).matches).toEqual([]);
+    });
+
+    it('returns no matches for an unknown number', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'NOPE-404-404' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).normalized).toBe('NOPE404404');
+      expect(checkBody(res).matches).toEqual([]);
+    });
+
+    it('excludes test records', async () => {
+      const res = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'TST-000-111' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect(checkBody(res).matches).toEqual([]);
+    });
+
+    it('narrows by policy type when the wizard supplies one', async () => {
+      const auto = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456', policyType: 'Auto' })
+        .set(authHeader(producerToken))
+        .expect(200);
+      expect(checkBody(auto).matches).toHaveLength(1);
+
+      // Same number, different line of business — cannot be the same policy.
+      const home = await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456', policyType: 'Home' })
+        .set(authHeader(producerToken))
+        .expect(200);
+      expect(checkBody(home).matches).toEqual([]);
+    });
+
+    it('rejects a blank number and an uncatalogued policy type', async () => {
+      await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: '' })
+        .set(authHeader(producerToken))
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456', policyType: 'Property' })
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('requires authentication', async () => {
+      await request(app.getHttpServer())
+        .get(CHECK)
+        .query({ number: 'ABC123456' })
+        .expect(401);
+    });
+  });
+
+  describe('Sold deals (PAC-40 create)', () => {
+    const SOLD = '/api/v1/sold-deals';
+
+    /**
+     * Query child collections by a real ObjectId, not the response's string.
+     *
+     * Every `@Prop({ type: Types.ObjectId })` in this repo compiles to a
+     * **Mixed** path — the token Mongoose recognises is
+     * `SchemaTypes.ObjectId`. Mixed paths do no casting, so a string filter
+     * silently matches nothing. Service code is unaffected because it always
+     * constructs ObjectIds explicitly; only a test reading back by id has to
+     * know. Tracked as its own follow-up.
+     */
+    const dealRef = (id: string) => new Types.ObjectId(id);
+
+    let soldDealModel: Model<Deal>;
+    let soldPolicyModel: Model<Policy>;
+    let soldLeadModel: Model<Lead>;
+    let soldHouseholdModel: Model<Household>;
+    let soldActivityModel: Model<Activity>;
+    let priorInsuranceModel: Model<PriorInsurance>;
+    let priorPolicyModel: Model<PriorPolicy>;
+    let producerId: Types.ObjectId;
+
+    let counter = 0;
+    /** Unique per call, so tests never collide on the policy-number index. */
+    const nextNumber = () =>
+      `SOLD-${(counter += 1).toString().padStart(6, '0')}`;
+
+    const soldPolicy = (overrides: Record<string, unknown> = {}) => ({
+      policyType: 'Auto',
+      effectiveDate: '2026-02-01',
+      carrier: 'Allstate',
+      policyNumber: nextNumber(),
+      premium: 1200.1,
+      itemCount: 2,
+      priorInsurance: { none: true },
+      cancellation: { cancelled: false },
+      ...overrides,
+    });
+
+    const payload = (
+      leadId: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      leadId,
+      soldDate: '2026-02-15',
+      policies: [soldPolicy()],
+      ...overrides,
+    });
+
+    // `object` rather than `unknown`: supertest's `.send` rejects `unknown`, and
+    // every payload here is an object anyway.
+    const createAs = async (token: string, body: object, expected = 201) => {
+      const res = await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(token))
+        .send(body)
+        .expect(expected);
+      return res.body as CreateSoldDealResponse;
+    };
+
+    /** A lead owned by the given producer, with a real household attached. */
+    const seedSoldLead = async (
+      owner: Types.ObjectId | undefined,
+      overrides: Record<string, unknown> = {},
+      householdOverrides: Record<string, unknown> = {},
+    ) => {
+      const household = await soldHouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Sellable Household',
+        primaryContactName: 'Sam Sold',
+        ...householdOverrides,
+      });
+      const lead = await soldLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Sam',
+        lastName: 'Sold',
+        status: 'Quoted',
+        producerId: owner,
+        householdId: household._id,
+        ...overrides,
+      });
+      return { lead, household };
+    };
+
+    beforeAll(async () => {
+      soldDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      soldPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      soldLeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      soldHouseholdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      soldActivityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      priorInsuranceModel = app.get<Model<PriorInsurance>>(
+        getModelToken(PriorInsurance.name),
+      );
+      priorPolicyModel = app.get<Model<PriorPolicy>>(
+        getModelToken(PriorPolicy.name),
+      );
+
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      producerId = producer!._id;
+    });
+
+    it('books a deal with server-derived totals', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            soldPolicy({ premium: 1200.1, itemCount: 2 }),
+            soldPolicy({ policyType: 'Home', premium: 899.95, itemCount: 3 }),
+          ],
+        }),
+      );
+
+      // 1200.10 + 899.95 is 2100.0499999999997 in IEEE-754 — the rounding is
+      // what keeps that out of the Sold scorecard.
+      expect(body.premium).toBe(2100.05);
+      expect(body.itemCount).toBe(5);
+      expect(body.policyCount).toBe(2);
+      expect(body.policyTypes).toEqual(['Auto', 'Home']);
+      expect(body.isBundle).toBe(true);
+      expect(body.dealType).toBe('Bundle');
+
+      const deal = await soldDealModel.findById(body.id);
+      expect(deal).toBeTruthy();
+      expect(deal!.premium).toBe(2100.05);
+      // Honest provenance: submitted, not rolled up from linked rows.
+      expect(deal!.premiumSource).toBe('snapshot');
+      expect(deal!.soldDateYmd).toBe(20260215);
+      expect(deal!.producerId?.toString()).toBe(producerId.toString());
+      // The refs that did not exist before this story.
+      expect(deal!.leadId?.toString()).toBe(lead._id.toString());
+      expect(deal!.householdId).toBeTruthy();
+      // Backs the hand-off board's client column.
+      expect(deal!.clientName).toBe('Sam Sold');
+    });
+
+    it('ignores client-supplied totals', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          premium: 999_999,
+          itemCount: 999,
+          policyCount: 99,
+          policies: [soldPolicy({ premium: 500, itemCount: 1 })],
+        }),
+      );
+
+      expect(body.premium).toBe(500);
+      expect(body.itemCount).toBe(1);
+      expect(body.policyCount).toBe(1);
+    });
+
+    it('creates a policy per row, linked to the deal and household', async () => {
+      const { lead, household } = await seedSoldLead(producerId);
+      const first = nextNumber();
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            soldPolicy({ policyNumber: first }),
+            soldPolicy({ policyType: 'Home' }),
+          ],
+        }),
+      );
+
+      const policies = await soldPolicyModel.find({ dealId: dealRef(body.id) });
+      expect(policies).toHaveLength(2);
+      for (const policy of policies) {
+        expect(policy.householdId?.toString()).toBe(household._id.toString());
+        expect(policy.active).toBe(true);
+      }
+      // The normalized key is what makes GET /policies/check able to find it.
+      const stored = policies.find((p) => p.policyNumber === first);
+      expect(stored!.policyNumberKey).toBe(first.replace(/[^A-Z0-9]/g, ''));
+    });
+
+    it('writes prior-insurance summary and per-line rows only when declared', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            soldPolicy({
+              policyType: 'Auto',
+              priorInsurance: {
+                none: false,
+                carrier: 'Geico',
+                agentName: 'A. Agent',
+              },
+              cancellation: { cancelled: true, effectiveDate: '2026-01-31' },
+            }),
+            soldPolicy({
+              policyType: 'Home',
+              priorInsurance: { none: false, carrier: 'State Farm' },
+            }),
+          ],
+        }),
+      );
+
+      const summary = await priorInsuranceModel.findOne({
+        dealId: dealRef(body.id),
+      });
+      expect(summary).toBeTruthy();
+      // Legacy's shape: separate auto/home columns on one deal-level row.
+      expect(summary!.previousCarrierAuto).toBe('Geico');
+      expect(summary!.previousCarrierHome).toBe('State Farm');
+      expect(summary!.autoHomeSameCarrier).toBe('No');
+      expect(summary!.cancelledPreviousInsurance).toBe('Yes');
+
+      const lines = await priorPolicyModel.find({ dealId: dealRef(body.id) });
+      expect(lines).toHaveLength(2);
+      const auto = lines.find((l) => l.policyType === 'Auto');
+      // Already cancelled ⇒ nothing for the CRM to chase.
+      expect(auto!.needsCancellation).toBe('No');
+      const home = lines.find((l) => l.policyType === 'Home');
+      expect(home!.needsCancellation).toBe('Yes');
+    });
+
+    it('writes no prior-insurance records for a new-to-market client', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+
+      // An empty summary row would tell the service team there is prior
+      // coverage to chase when there is none.
+      expect(
+        await priorInsuranceModel.countDocuments({ dealId: dealRef(body.id) }),
+      ).toBe(0);
+      expect(
+        await priorPolicyModel.countDocuments({ dealId: dealRef(body.id) }),
+      ).toBe(0);
+    });
+
+    it('books ONE deal when the same submission token is replayed', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = payload(lead._id.toString(), {
+        submissionToken: 'sold-replay-token-1',
+      });
+
+      const first = await createAs(producerToken, body);
+      const second = await createAs(producerToken, body);
+
+      expect(second.id).toBe(first.id);
+      expect(
+        await soldDealModel.countDocuments({
+          submissionToken: 'SOLD|SOLD-REPLAY-TOKEN-1',
+        }),
+      ).toBe(1);
+      // The replay must not double the policies either.
+      expect(
+        await soldPolicyModel.countDocuments({ dealId: dealRef(first.id) }),
+      ).toBe(1);
+    });
+
+    it('404s a token replayed by a different producer', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = payload(lead._id.toString(), {
+        submissionToken: 'sold-replay-token-2',
+      });
+      await createAs(producerToken, body);
+
+      // Owner is agency-scoped so the clamp passes; a *different* producer must
+      // not be handed back someone else's deal id.
+      const otherProducer = await seedSoldLead(new Types.ObjectId());
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(payload(otherProducer.lead._id.toString()))
+        .expect(404);
+    });
+
+    it('advances the lead to Sold, forward only', async () => {
+      const { lead } = await seedSoldLead(producerId, { status: 'Quoted' });
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+      expect(body.leadStatus).toBe('Sold');
+
+      const reloaded = await soldLeadModel.findById(lead._id);
+      expect(reloaded!.status).toBe('Sold');
+      expect(reloaded!.lastActivityAt).toBeTruthy();
+    });
+
+    it('advances a migrated lead stored as a raw status code', async () => {
+      // `arW7O` is Requote. Without the code expansion in
+      // soldAdvanceableStatusValues() this lead would silently never advance.
+      const { lead } = await seedSoldLead(producerId, { status: 'arW7O' });
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+      expect(body.leadStatus).toBe('Sold');
+    });
+
+    it('never drags a terminal lead backwards', async () => {
+      const { lead } = await seedSoldLead(producerId, { status: 'Lost' });
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+
+      expect(body.leadStatus).toBe('Lost');
+      const reloaded = await soldLeadModel.findById(lead._id);
+      expect(reloaded!.status).toBe('Lost');
+    });
+
+    it('records a sold activity attributed to the app, not the migration', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+
+      const activity = await soldActivityModel.findOne({
+        dealId: dealRef(body.id),
+      });
+      expect(activity).toBeTruthy();
+      expect(activity!.type).toBe('sold');
+      expect(activity!.subjectType).toBe('deal');
+      expect(activity!.leadId?.toString()).toBe(lead._id.toString());
+      // `source` defaults to 'migration' in the schema.
+      expect(activity!.source).toBe('internal');
+    });
+
+    it('resolves the household from a migrated lead and self-heals the link', async () => {
+      const household = await soldHouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Migrated Household',
+        legacySmartSuiteId: 'legacy-hh-sold-1',
+      });
+      // The migration writes only `legacyHouseholdId` — never `householdId`.
+      const lead = await soldLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Mig',
+        lastName: 'Rated',
+        status: 'New',
+        producerId,
+        legacyHouseholdId: 'legacy-hh-sold-1',
+      });
+
+      const body = await createAs(producerToken, payload(lead._id.toString()));
+      const deal = await soldDealModel.findById(body.id);
+      expect(deal!.householdId?.toString()).toBe(household._id.toString());
+
+      const reloaded = await soldLeadModel.findById(lead._id);
+      expect(reloaded!.householdId?.toString()).toBe(household._id.toString());
+    });
+
+    it('409s a lead with no resolvable household', async () => {
+      const lead = await soldLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'No',
+        lastName: 'Household',
+        status: 'New',
+        producerId,
+      });
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(payload(lead._id.toString()))
+        .expect(409);
+    });
+
+    it('404s (not 403) for a lead outside the caller data scope', async () => {
+      const { lead } = await seedSoldLead(new Types.ObjectId());
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(payload(lead._id.toString()))
+        .expect(404);
+    });
+
+    it('404s for an unassigned lead under own scope', async () => {
+      const { lead } = await seedSoldLead(undefined);
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(payload(lead._id.toString()))
+        .expect(404);
+    });
+
+    it('re-points an existing policy instead of duplicating it', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const number = nextNumber();
+      const first = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [soldPolicy({ policyNumber: number, premium: 100 })],
+        }),
+      );
+      const existing = await soldPolicyModel.findOne({
+        dealId: dealRef(first.id),
+      });
+
+      const { lead: second } = await seedSoldLead(producerId);
+      await createAs(
+        producerToken,
+        payload(second._id.toString(), {
+          policies: [
+            soldPolicy({
+              policyNumber: number,
+              premium: 250,
+              existingPolicyId: existing!._id.toString(),
+            }),
+          ],
+        }),
+      );
+
+      // One policy row, re-pointed — not a second one for the same number.
+      expect(
+        await soldPolicyModel.countDocuments({ policyNumber: number }),
+      ).toBe(1);
+      const reloaded = await soldPolicyModel.findById(existing!._id);
+      expect(reloaded!.premium).toBe(250);
+    });
+
+    it("403s an attempt to claim another producer's policy", async () => {
+      // GET /policies/check deliberately reports out-of-scope matches (masked),
+      // so this id is obtainable. The check informs; it must not authorize.
+      const foreignLead = await seedSoldLead(new Types.ObjectId());
+      const foreignDeal = await soldDealModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        producerId: new Types.ObjectId(),
+      });
+      const foreignPolicy = await soldPolicyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        policyNumber: nextNumber(),
+        dealId: foreignDeal._id,
+      });
+
+      const { lead } = await seedSoldLead(producerId);
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({ existingPolicyId: foreignPolicy._id.toString() }),
+            ],
+          }),
+        )
+        .expect(403);
+
+      expect(foreignLead.lead).toBeTruthy();
+    });
+
+    it('rejects a submission with two rows claiming one policy number', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const number = nextNumber();
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({ policyNumber: number }),
+              soldPolicy({ policyNumber: number.toLowerCase() }),
+            ],
+          }),
+        )
+        .expect(400);
+    });
+
+    it('rejects cross-branch discounts rather than stripping them', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(producerToken))
+        .send(
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({
+                policyType: 'Home',
+                // Silently stripping this would generate a Drivewise audit item
+                // for a deal with no auto line.
+                discounts: { drivewise: true },
+              }),
+            ],
+          }),
+        )
+        .expect(400);
+    });
+
+    it('rejects an incomplete card', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const bad = [
+        { policies: [] },
+        { policies: [soldPolicy({ premium: -1 })] },
+        { policies: [soldPolicy({ itemCount: 0 })] },
+        { policies: [soldPolicy({ policyType: 'Property' })] },
+        { soldDate: '15/02/2026' },
+        // Prior insurance declared but no carrier named.
+        {
+          policies: [soldPolicy({ priorInsurance: { none: false } })],
+        },
+        // Cancelled but no effective date.
+        {
+          policies: [soldPolicy({ cancellation: { cancelled: true } })],
+        },
+        // Escrow ticked without its required sub-card.
+        {
+          policies: [
+            soldPolicy({ policyType: 'Home', discounts: { escrow: true } }),
+          ],
+        },
+      ];
+
+      for (const overrides of bad) {
+        await request(app.getHttpServer())
+          .post(SOLD)
+          .set(authHeader(producerToken))
+          .send(payload(lead._id.toString(), overrides))
+          .expect(400);
+      }
+    });
+
+    it('403s a caller without deal_audits:write', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      await request(app.getHttpServer())
+        .post(SOLD)
+        .set(authHeader(readOnlyToken))
+        .send(payload(lead._id.toString()))
+        .expect(403);
+    });
+
+    it('returns the wizard context, including the driver picker contacts', async () => {
+      const { lead, household } = await seedSoldLead(producerId);
+      const contact = await app
+        .get<Model<Contact>>(getModelToken(Contact.name))
+        .create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Dana',
+          lastName: 'Driver',
+          roleInHousehold: 'Driver',
+        });
+      await soldHouseholdModel.updateOne(
+        { _id: household._id },
+        { $set: { memberContactIds: [contact._id] } },
+      );
+
+      const res = await request(app.getHttpServer())
+        .get(`${SOLD}/context`)
+        .query({ leadId: lead._id.toString() })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as SoldDealLeadContext;
+      expect(body.primaryContactName).toBe('Sam Sold');
+      expect(body.householdId).toBe(household._id.toString());
+      expect(body.contacts.map((c) => c.firstName)).toContain('Dana');
+    });
+
+    it('reports a missing household as null rather than failing the context', async () => {
+      // The page blocks up front instead of letting a producer fill eight cards
+      // and fail at submit.
+      const lead = await soldLeadModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Ctx',
+        lastName: 'NoHousehold',
+        producerId,
+      });
+
+      const res = await request(app.getHttpServer())
+        .get(`${SOLD}/context`)
+        .query({ leadId: lead._id.toString() })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as SoldDealLeadContext).householdId).toBeNull();
     });
   });
 });

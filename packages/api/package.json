@@ -15,6 +15,8 @@
     "seed:demo:dev": "ts-node -r tsconfig-paths/register src/seed/demo/demo-seed.ts",
     "migrate": "node dist/migration/migrate.js",
     "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
+    "backfill:deal-refs": "node dist/migration/backfill/backfill-deal-refs.js",
+    "backfill:deal-refs:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/backfill-deal-refs.ts",
     "migrate:permissions": "node dist/seed/migrate-permissions.js",
     "migrate:permissions:dev": "ts-node -r tsconfig-paths/register src/seed/migrate-permissions.ts",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",

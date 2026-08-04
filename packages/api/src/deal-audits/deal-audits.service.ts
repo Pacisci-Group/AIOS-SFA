@@ -11,6 +11,7 @@ import {
   Activity,
   ActivityDocument,
 } from '../activities/schemas/activity.schema';
+import { daysSince } from '../common/domain/deal-derive';
 import { Deal, DealDocument, DealType } from '../deals/schemas/deal.schema';
 import {
   DealAuditItem,
@@ -104,7 +105,19 @@ export class DealAuditsService {
         client: record.clientName ?? 'Unknown Client',
         type,
         missing: record.itemName ?? 'Missing requirement',
-        daysOpen: record.daysOpen ?? 0,
+        // Recomputed on read rather than served from the stored value (PAC-40).
+        //
+        // `daysOpen` is written once, at creation, so a stored number is only
+        // ever right on the day it was written — migrated rows show a
+        // migration-time figure, and app-created rows would sit at 0 forever.
+        //
+        // The stored field is kept and still drives the **sort** (which is
+        // index-backed, and correct: app-created items all tie at 0 and fall
+        // back to `_id` ascending = oldest first, while migrated items carry
+        // real values and sort above them, which they genuinely are). Only the
+        // displayed figure is derived. A nightly recompute to fix cross-cohort
+        // drift is a follow-up.
+        daysOpen: daysSince(record.firstCreatedAt ?? record.createdAt),
       };
     });
 
@@ -208,8 +221,20 @@ export class DealAuditsService {
       };
     }
 
-    // If an attachment was declared, confirm the upload actually landed.
+    // If an attachment was declared, confirm this agency and item produced the
+    // key, then that the upload actually landed.
+    //
+    // The ownership check closes a hole flagged during PAC-39 and fixed in
+    // PAC-40: `key` comes straight from the client, so without it a caller
+    // could name **any** object they knew of — including another agency's — and
+    // have it attached to their own record. `presignAttachment` mints keys as
+    // `agencies/<agencyId>/deal-audits/<itemId>/…`, so the prefix test is exact.
     if (dto.attachment) {
+      this.storage.assertKeyOwnership(dto.attachment.key, {
+        agencyId: item.agencyId,
+        purpose: `deal-audits/${itemId}`,
+      });
+
       const exists = await this.storage.objectExists(dto.attachment.key);
       if (!exists) {
         throw new NotFoundException(

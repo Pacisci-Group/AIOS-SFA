@@ -1,7 +1,9 @@
 import {
+  AUTO_POLICY_TYPES,
   POLICY_TYPES,
   POLICY_TYPE_CODE_ALIASES,
   PROPERTY_POLICY_TYPES,
+  isAutoPolicyType,
   isPropertyPolicyType,
   normalizePolicyType,
   policyTypeQueryValues,
@@ -87,5 +89,35 @@ describe('policy-type vocabulary', () => {
     // The prototype's invented type is not part of this vocabulary.
     expect(isPropertyPolicyType('Property')).toBe(false);
     expect(isPropertyPolicyType(undefined)).toBe(false);
+  });
+
+  it('answers the auto question for codes as well as labels', () => {
+    for (const label of AUTO_POLICY_TYPES) {
+      expect(isAutoPolicyType(label)).toBe(true);
+    }
+    // Raw codes: Auto (Quote Recaps), Auto (Policies), Auto - Special,
+    // Motorcycle (Quote Recaps), Motorcycle (Policies).
+    expect(isAutoPolicyType('PYgez')).toBe(true);
+    expect(isAutoPolicyType('Zgsh3')).toBe(true);
+    expect(isAutoPolicyType('UAOk8')).toBe(true);
+    expect(isAutoPolicyType('OMJjl')).toBe(true);
+    expect(isAutoPolicyType('gGKei')).toBe(true);
+
+    expect(isAutoPolicyType('Home')).toBe(false);
+    expect(isAutoPolicyType('Landlord')).toBe(false);
+    expect(isAutoPolicyType('Umbrella')).toBe(false);
+    expect(isAutoPolicyType(undefined)).toBe(false);
+  });
+
+  it('keeps the auto and property sets disjoint', () => {
+    // The Sold form's Card 5 branches on these two predicates, and a type
+    // answering `true` to both would render the Home and Auto discount blocks
+    // together — the one combination the conditional matrix cannot mean.
+    for (const label of AUTO_POLICY_TYPES) {
+      expect(isPropertyPolicyType(label)).toBe(false);
+    }
+    for (const label of PROPERTY_POLICY_TYPES) {
+      expect(isAutoPolicyType(label)).toBe(false);
+    }
   });
 });

@@ -148,3 +148,25 @@ const PROPERTY_SET = new Set<string>(PROPERTY_POLICY_TYPES);
 export function isPropertyPolicyType(value?: string | null): boolean {
   return PROPERTY_SET.has(normalizePolicyType(value));
 }
+
+/**
+ * Types that describe a motor vehicle (PAC-40).
+ *
+ * Drives the Sold form's Card 5 "Auto" discount branch (Drivewise, Defensive
+ * Driver, Student) and the `Drivers Verified` audit item. `Motorcycle` is
+ * included because legacy's audit generator tests `includes('motorcycle')`
+ * alongside `includes('auto')` when deciding whether a deal has an auto line —
+ * see `deriveDealType`.
+ */
+export const AUTO_POLICY_TYPES: readonly PolicyType[] = [
+  'Auto',
+  'Auto - Special',
+  'Motorcycle',
+];
+
+const AUTO_SET = new Set<string>(AUTO_POLICY_TYPES);
+
+/** Normalizes first, so this answers correctly for a raw code too. */
+export function isAutoPolicyType(value?: string | null): boolean {
+  return AUTO_SET.has(normalizePolicyType(value));
+}

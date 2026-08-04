@@ -9,6 +9,11 @@
  * `isTestRecord: false` so they surface on the real dashboards.
  */
 
+import {
+  CORE_AUDIT_TEMPLATES,
+  type CoreAuditTemplateSpec,
+} from '../audit-templates.seed';
+
 export type RoleSlug =
   'agency_owner' | 'branch_manager' | 'producer' | 'crm' | 'data_team';
 
@@ -316,90 +321,22 @@ export const POLICY_TYPE_SETS: string[][] = [
   ['Landlord'],
 ];
 
-export interface AuditTemplateSpec {
-  name: string;
-  category: string;
-  required: boolean;
-  blocking: boolean;
-  alwaysInclude: boolean;
-  task: string;
-}
+export type AuditTemplateSpec = CoreAuditTemplateSpec;
 
-/** The catalog of audit-item definitions used to generate hand-off items. */
-export const AUDIT_TEMPLATES: AuditTemplateSpec[] = [
-  {
-    name: 'Signed Application',
-    category: 'Documentation',
-    required: true,
-    blocking: true,
-    alwaysInclude: true,
-    task: 'Collect the client-signed application for the new policy.',
-  },
-  {
-    name: 'EFT / Payment Authorization',
-    category: 'Financial',
-    required: true,
-    blocking: true,
-    alwaysInclude: true,
-    task: 'Confirm payment method and signed EFT authorization.',
-  },
-  {
-    name: 'Proof of Prior Insurance',
-    category: 'Prior Insurance',
-    required: true,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Obtain declarations page proving continuous prior coverage.',
-  },
-  {
-    name: 'Escrow / Mortgagee Info',
-    category: 'Property',
-    required: true,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Verify mortgagee clause and escrow billing details.',
-  },
-  {
-    name: 'Home Inspection Photos',
-    category: 'Property',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Upload 4-corner exterior inspection photos.',
-  },
-  {
-    name: 'Fire Receipt',
-    category: 'Property',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Attach proof of fire-extinguisher / alarm for discount.',
-  },
-  {
-    name: 'Roof Receipt',
-    category: 'Property',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Attach roof-replacement receipt to validate roof age.',
-  },
-  {
-    name: 'Drivewise Enrollment',
-    category: 'Auto',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Confirm Drivewise telematics enrollment for the discount.',
-  },
-  {
-    name: 'Defensive Driver Certificate',
-    category: 'Auto',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Collect defensive-driver course completion certificate.',
-  },
-];
+/**
+ * The catalog of audit-item definitions used to generate hand-off items.
+ *
+ * Re-exported from the **core** seed (PAC-40) rather than defined here. It used
+ * to be its own list — "Signed Application", "EFT / Payment Authorization",
+ * "Fire Receipt", … — which shared **zero** names with the production
+ * vocabulary that `AuditGenerationService` resolves against. Demo data
+ * therefore exercised a checklist no real agency has, and a sold deal seeded
+ * locally would have generated a completely different set of items than one
+ * booked against migrated data.
+ *
+ * Keeping one list means the demo tenant is a faithful rehearsal of production.
+ */
+export const AUDIT_TEMPLATES: AuditTemplateSpec[] = CORE_AUDIT_TEMPLATES;
 
 export const SERVICE_CATEGORIES = [
   'Billing',
