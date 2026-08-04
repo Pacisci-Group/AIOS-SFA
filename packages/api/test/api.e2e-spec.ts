@@ -2089,6 +2089,9 @@ describe('SFA API (e2e)', () => {
     let interestedPartyModel: Model<InterestedParty>;
     let card5ProducerId: Types.ObjectId;
     let card5StatSpy: jest.SpyInstance;
+    let presignSpy: jest.SpyInstance;
+    /** The key the service asked storage to sign, captured per call. */
+    let lastSignedKey: string | undefined;
 
     /**
      * Object storage isn't running under test, so `statObject` reports only the
@@ -2188,12 +2191,42 @@ describe('SFA API (e2e)', () => {
         .mockImplementation((key: string) =>
           Promise.resolve(uploaded.get(key) ?? null),
         );
+
+      /*
+       * Signing is stubbed, not exercised.
+       *
+       * `createPresignedUpload` calls the AWS signer, which needs real
+       * credentials — present locally via the MinIO `STORAGE_*` vars, absent in
+       * CI, so a test that really signs passes on a laptop and 500s on a
+       * runner. Nothing about SigV4 is under test here anyway: what matters is
+       * the **key** the service builds, and capturing the argument asserts that
+       * directly rather than through a signed URL.
+       *
+       * The real signer is covered by the Bruno collection, which runs against
+       * a live MinIO.
+       */
+      presignSpy = jest
+        .spyOn(app.get(StorageService), 'createPresignedUpload')
+        .mockImplementation((key: string, contentType: string) => {
+          lastSignedKey = key;
+          return Promise.resolve({
+            key,
+            uploadUrl: `https://storage.test/${key}`,
+            requiredHeaders: { 'Content-Type': contentType },
+            expiresIn: 900,
+          });
+        });
     });
 
-    afterAll(() => card5StatSpy.mockRestore());
+    afterAll(() => {
+      card5StatSpy.mockRestore();
+      presignSpy.mockRestore();
+    });
 
     it('presigns a proof upload scoped to the agency and lead', async () => {
       const lead = await seedLead();
+      lastSignedKey = undefined;
+
       const res = await request(app.getHttpServer())
         .post(PRESIGN)
         .set(authHeader(producerToken))
@@ -2205,10 +2238,14 @@ describe('SFA API (e2e)', () => {
         })
         .expect(201);
 
+      const prefix = `agencies/${seed.agencyId}/sold-deals/${lead._id.toString()}/`;
+      // The key the service actually asked storage to sign — built from the
+      // loaded lead's agencyId, never from the request body. This prefix is
+      // what `POST /sold-deals` verifies before accepting an attachment.
+      expect(lastSignedKey).toContain(prefix);
+
       const body = res.body as { key: string; uploadUrl: string };
-      expect(body.key).toContain(
-        `agencies/${seed.agencyId}/sold-deals/${lead._id.toString()}/`,
-      );
+      expect(body.key).toBe(lastSignedKey);
       expect(body.uploadUrl).toEqual(expect.any(String));
     });
 
@@ -2227,6 +2264,8 @@ describe('SFA API (e2e)', () => {
         householdId: household._id,
       });
 
+      lastSignedKey = undefined;
+
       // 404, not 403 — a presign must not leak that the lead exists.
       await request(app.getHttpServer())
         .post(PRESIGN)
@@ -2238,6 +2277,9 @@ describe('SFA API (e2e)', () => {
           size: 2048,
         })
         .expect(404);
+
+      // Ownership is checked BEFORE signing, so storage was never touched.
+      expect(lastSignedKey).toBeUndefined();
     });
 
     it('rejects a cross-branch discount rather than stripping it', async () => {
