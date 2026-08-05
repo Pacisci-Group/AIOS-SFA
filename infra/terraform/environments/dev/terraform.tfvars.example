@@ -15,9 +15,17 @@ ssh_allowed_ips = ["203.0.113.10/32"]  # Your public IP — never use 0.0.0.0/0 
 enable_dns         = true
 create_domain_zone = false
 enable_reserved_ip = false
-enable_spaces      = false
-enable_backups     = false
-prevent_destroy    = false
-project_id         = ""
+
+# Object storage for document uploads. Applying this also needs
+# SPACES_ACCESS_KEY_ID / SPACES_SECRET_ACCESS_KEY exported.
+enable_spaces  = true
+enable_backups = false
+
+# Origins allowed to run presigned browser uploads. Empty derives them from
+# `domain`/`enable_tls` plus the droplet's public IP.
+spaces_cors_origins = []
+
+prevent_destroy = false
+project_id      = ""
 
 tags = ["sfa", "dev"]

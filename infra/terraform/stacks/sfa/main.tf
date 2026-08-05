@@ -1,6 +1,19 @@
 locals {
   name_prefix = "sfa-${var.environment}"
   all_tags    = concat(["sfa", var.environment], var.tags)
+
+  # Origin the web app is served from — this is what the browser puts in the
+  # `Origin` header when it PUTs a file to Spaces, so it has to match a CORS
+  # rule on the bucket exactly (scheme included).
+  web_origin = "${var.enable_tls ? "https" : "http"}://${var.domain}"
+
+  # Derived from variables only — deliberately never from `module.droplet`.
+  # Terraform builds dependency edges from every reference in an expression,
+  # including the branch a conditional does not take, so naming the droplet here
+  # would make `module.spaces` depend on the droplet and drag it into any
+  # `-target`ed apply. Keeping this variable-only lets the bucket be applied on
+  # its own. Every environment is reached by hostname, so the IP adds nothing.
+  spaces_cors_origins = length(var.spaces_cors_origins) > 0 ? var.spaces_cors_origins : [local.web_origin]
 }
 
 resource "digitalocean_ssh_key" "deploy" {
@@ -69,8 +82,10 @@ module "spaces" {
   count  = var.enable_spaces ? 1 : 0
   source = "../../modules/spaces"
 
-  name   = "${local.name_prefix}-files"
-  region = var.spaces_region
+  name                 = "${local.name_prefix}-files"
+  region               = var.spaces_region
+  cors_allowed_origins = local.spaces_cors_origins
+  create_access_key    = var.create_spaces_access_key
 }
 
 resource "digitalocean_project_resources" "sfa" {

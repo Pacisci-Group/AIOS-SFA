@@ -23,6 +23,14 @@ jobs:
       # Spaces credentials for the S3-compatible remote state backend
       AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+      # Spaces credentials for the *provider*. Distinct from the pair above:
+      # those configure the state backend, these let the digitalocean provider
+      # read/manage the uploads bucket and its CORS rules, which go over the S3
+      # API rather than the DO API. Without them the plan fails on
+      # digitalocean_spaces_bucket as soon as enable_spaces = true. Same
+      # account-level Spaces key, so it reuses the TF_STATE_* secrets.
+      SPACES_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY }}
+      SPACES_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
       # Non-secret vars supplied via TF_VAR_ (secrets/IPs come from tfvars/secrets)
       TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 

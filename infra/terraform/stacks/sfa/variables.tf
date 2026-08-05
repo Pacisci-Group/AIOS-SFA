@@ -87,9 +87,25 @@ variable "enable_reserved_ip" {
 }
 
 variable "enable_spaces" {
-  description = "Create Spaces bucket for this environment"
+  description = "Create Spaces bucket for this environment (required for document uploads)"
   type        = bool
   default     = false
+}
+
+variable "spaces_cors_origins" {
+  description = <<-EOT
+    Web origins allowed to run presigned uploads/downloads against the bucket
+    (scheme + host, no trailing slash). Leave empty to derive a single origin
+    from `domain` and `enable_tls`.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "create_spaces_access_key" {
+  description = "Create a bucket-scoped Spaces access key for the app (STORAGE_ACCESS_KEY_ID/SECRET)"
+  type        = bool
+  default     = true
 }
 
 variable "enable_backups" {

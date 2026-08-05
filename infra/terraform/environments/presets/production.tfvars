@@ -21,9 +21,18 @@ ssh_allowed_ips = ["0.0.0.0/0"]
 enable_dns         = true
 create_domain_zone = false
 enable_reserved_ip = true
-enable_spaces      = true
-enable_backups     = true
-prevent_destroy    = true
-project_id         = ""
+
+# ⚠ enable_backups is NOT implemented by the managed_mongo module — DigitalOcean
+# ties MongoDB backup retention to the cluster tier, so this flag is documentation
+# only. Confirm retention in the DO console before this holds real client data.
+enable_spaces  = true
+enable_backups = true
+
+# Fixed HTTPS hostname, so pin the exact origin rather than letting the stack
+# also allow the bare droplet IP.
+spaces_cors_origins = ["https://app.example.com"]
+
+prevent_destroy = true
+project_id      = ""
 
 tags = ["sfa", "production"]

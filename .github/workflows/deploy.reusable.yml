@@ -83,6 +83,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fail here rather than mid-rollout. Object storage in particular degrades
+      # *silently*: with STORAGE_ENDPOINT unset, StorageService logs a warning,
+      # disables itself, and the health check still passes — so a deploy missing
+      # that secret looks completely green while every document upload fails.
+      # PUBLIC_FORM_BASE_URL has the same shape of failure: unset, share links
+      # are generated pointing at http://localhost:5173.
+      - name: Preflight — required Environment secrets are set
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+          JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+          CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
+          GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          STORAGE_ENDPOINT: ${{ secrets.STORAGE_ENDPOINT }}
+          STORAGE_REGION: ${{ secrets.STORAGE_REGION }}
+          STORAGE_BUCKET: ${{ secrets.STORAGE_BUCKET }}
+          STORAGE_ACCESS_KEY_ID: ${{ secrets.STORAGE_ACCESS_KEY_ID }}
+          STORAGE_SECRET_ACCESS_KEY: ${{ secrets.STORAGE_SECRET_ACCESS_KEY }}
+          PUBLIC_FORM_BASE_URL: ${{ secrets.PUBLIC_FORM_BASE_URL }}
+        run: |
+          set -uo pipefail
+          missing=""
+          for name in SSH_HOST SSH_KEY MONGODB_URI JWT_ACCESS_SECRET \
+                      JWT_REFRESH_SECRET CORS_ORIGIN GHCR_PULL_USER \
+                      GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION \
+                      STORAGE_BUCKET STORAGE_ACCESS_KEY_ID \
+                      STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL; do
+            if [ -z "${!name}" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing secrets in the '${{ inputs.environment }}' GitHub Environment:${missing}"
+            echo "See DEPLOYMENT.md → 'Environment secrets'. Storage values come from"
+            echo "'terraform output' in infra/terraform/environments/${{ inputs.environment }}."
+            exit 1
+          fi
+          echo "All required secrets are present."
+
       - name: Copy compose file to droplet
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -110,6 +152,10 @@ jobs:
             echo "${{ secrets.GHCR_PULL_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_PULL_USER }}" --password-stdin
 
             # Write/refresh runtime env. App secrets come from the GitHub Environment.
+            #
+            # This file is REWRITTEN IN FULL on every deploy — anything hand-edited
+            # on the droplet is lost. Every runtime variable the app needs has to
+            # be listed here and backed by an Environment secret.
             umask 077
             cat > /opt/sfa/.env <<EOF
             API_IMAGE=${API_IMAGE}
@@ -123,6 +169,37 @@ jobs:
             JWT_ACCESS_EXPIRES=15m
             JWT_REFRESH_EXPIRES=7d
             CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
+
+            # Object storage (DigitalOcean Spaces) — document uploads.
+            # Values come from the environment's terraform outputs:
+            #   spaces_endpoint / spaces_region / spaces_bucket /
+            #   spaces_access_key_id / spaces_secret_access_key
+            STORAGE_ENDPOINT=${{ secrets.STORAGE_ENDPOINT }}
+            STORAGE_REGION=${{ secrets.STORAGE_REGION }}
+            STORAGE_BUCKET=${{ secrets.STORAGE_BUCKET }}
+            STORAGE_ACCESS_KEY_ID=${{ secrets.STORAGE_ACCESS_KEY_ID }}
+            STORAGE_SECRET_ACCESS_KEY=${{ secrets.STORAGE_SECRET_ACCESS_KEY }}
+            # Spaces uses virtual-host addressing (bucket.region.digitaloceanspaces.com).
+            # Only MinIO needs path-style, so this is false everywhere but local dev.
+            STORAGE_FORCE_PATH_STYLE=false
+            # STORAGE_PUBLIC_URL is intentionally unset: the API and the browser
+            # reach Spaces at the same endpoint, unlike the local MinIO split.
+
+            # Base URL used to build shareable public intake links. Unset, the API
+            # falls back to http://localhost:5173 and every shared link is dead.
+            PUBLIC_FORM_BASE_URL=${{ secrets.PUBLIC_FORM_BASE_URL }}
+
+            # Rate limits for the public (unauthenticated) intake routes. Optional —
+            # unset resolves to the defaults in config/rate-limit.config.ts, which
+            # parses an empty value back to the default. These must be real
+            # environment variables, and env_file makes them exactly that: the
+            # @Throttle decorators are evaluated at class-definition time, before
+            # ConfigModule has loaded any dotenv file.
+            RATE_LIMIT_SHORT=${{ secrets.RATE_LIMIT_SHORT }}
+            RATE_LIMIT_LONG=${{ secrets.RATE_LIMIT_LONG }}
+            PUBLIC_FORM_RATE_LIMIT=${{ secrets.PUBLIC_FORM_RATE_LIMIT }}
+            PUBLIC_INTAKE_RATE_LIMIT=${{ secrets.PUBLIC_INTAKE_RATE_LIMIT }}
+            PUBLIC_INTAKE_HOURLY_LIMIT=${{ secrets.PUBLIC_INTAKE_HOURLY_LIMIT }}
             EOF
 
             docker compose -f docker-compose.prod.yml pull

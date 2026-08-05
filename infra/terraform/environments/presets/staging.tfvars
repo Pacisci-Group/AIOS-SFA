@@ -21,9 +21,20 @@ ssh_allowed_ips = ["0.0.0.0/0"]
 enable_dns         = true
 create_domain_zone = false
 enable_reserved_ip = false
-enable_spaces      = false
-enable_backups     = false
-prevent_destroy    = false
-project_id         = ""
+
+# Object storage is required, not optional: the deal-audit and lead-intake flows
+# upload documents through presigned URLs. Applying this needs
+# SPACES_ACCESS_KEY_ID / SPACES_SECRET_ACCESS_KEY exported alongside
+# DIGITALOCEAN_TOKEN — buckets are managed over the S3 API, not the DO API.
+enable_spaces  = true
+enable_backups = false
+
+# Empty = derive a single origin from `domain` + `enable_tls`. The derived value
+# follows enable_tls, so flipping TLS on rewrites the rule correctly — but pin
+# the real origin here once the hostname is final.
+spaces_cors_origins = []
+
+prevent_destroy = false
+project_id      = ""
 
 tags = ["sfa", "staging"]

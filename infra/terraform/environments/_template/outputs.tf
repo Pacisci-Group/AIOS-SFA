@@ -23,6 +23,27 @@ output "spaces_bucket" {
   value = module.sfa.spaces_bucket
 }
 
+output "spaces_endpoint" {
+  value = module.sfa.spaces_endpoint
+}
+
+output "spaces_region" {
+  value = module.sfa.spaces_region
+}
+
+output "spaces_access_key_id" {
+  value = module.sfa.spaces_access_key_id
+}
+
+output "spaces_secret_access_key" {
+  value     = module.sfa.spaces_secret_access_key
+  sensitive = true
+}
+
+output "spaces_cors_origins" {
+  value = module.sfa.spaces_cors_origins
+}
+
 output "ssh_command" {
   value = module.sfa.ssh_command
 }

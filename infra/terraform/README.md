@@ -10,7 +10,8 @@ and production are one command away (`make create ENV=staging`).
 - Cloud Firewall (SSH from allowlist, 80/443 public)
 - Managed MongoDB (app DB + user + DB-level firewall to the droplet)
 - DNS A record
-- Spaces bucket (optional; off in dev)
+- Spaces bucket for document uploads, with browser CORS rules and a
+  bucket-scoped access key (`enable_spaces`; on for dev, staging and production)
 
 The app itself runs as Docker Compose on the droplet (`docker-compose.prod.yml`)
 and is deployed by CI, not by Terraform.
@@ -34,7 +35,10 @@ infra/terraform/
 
 - Terraform >= 1.5
 - A DigitalOcean API token
-- A Spaces access key + secret (for remote state and, later, uploads)
+- A Spaces access key + secret. Needed for two distinct things: the remote state
+  backend, and the `digitalocean` provider itself — Spaces buckets are managed
+  over the S3 API, not the DO API, so `DIGITALOCEAN_TOKEN` alone cannot create
+  the uploads bucket or its CORS rules
 - An SSH keypair for the `deploy` user
 - A domain zone in DigitalOcean DNS (or set `create_domain_zone = true`)
 
@@ -74,7 +78,11 @@ make apply ENV=dev
 
 # 4. Read outputs
 make output ENV=dev
-terraform -chdir=environments/dev output -raw mongodb_uri   # for the app .env
+terraform -chdir=environments/dev output -raw mongodb_uri              # app .env
+terraform -chdir=environments/dev output -raw spaces_bucket            # STORAGE_BUCKET
+terraform -chdir=environments/dev output -raw spaces_endpoint          # STORAGE_ENDPOINT
+terraform -chdir=environments/dev output -raw spaces_access_key_id     # STORAGE_ACCESS_KEY_ID
+terraform -chdir=environments/dev output -raw spaces_secret_access_key # STORAGE_SECRET_ACCESS_KEY
 ```
 
 ## Creating staging or production later (one command)
@@ -111,8 +119,17 @@ Every environment inherits it; enable per env via tfvars.
 
 ## Notes
 
-- MongoDB user passwords are only available at creation time; they live in state
-  (sensitive). Keep the state bucket private + versioned.
+- MongoDB user passwords and the Spaces access key/secret are only available at
+  creation time; they live in state (sensitive). Keep the state bucket private +
+  versioned.
+- Uploads are presigned PUTs sent by the browser straight to Spaces, so the
+  bucket's CORS rules must name the site's origin. `spaces_cors_origins` is
+  derived from `domain`/`enable_tls` plus the droplet IP when left empty — after
+  a DNS cutover or a TLS switch, re-apply so the rule follows the new origin.
+  Getting this wrong fails only in the browser; the API stays healthy.
+- `enable_backups` is a documentation flag: `modules/managed_mongo` does not
+  implement it, because DO ties MongoDB backup retention to the cluster tier.
+  Verify retention in the DO console for any environment holding real data.
 - Destroy protection: `scripts/destroy-env.sh` refuses to destroy `production`.
   The `prevent_destroy` preset flag is a documentation marker — Terraform does not
   allow a variable in a `lifecycle { prevent_destroy }` block, so to hard-lock a

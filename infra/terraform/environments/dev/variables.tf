@@ -76,6 +76,16 @@ variable "enable_spaces" {
   default = false
 }
 
+variable "spaces_cors_origins" {
+  type    = list(string)
+  default = []
+}
+
+variable "create_spaces_access_key" {
+  type    = bool
+  default = true
+}
+
 variable "enable_backups" {
   type    = bool
   default = false
