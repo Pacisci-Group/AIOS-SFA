@@ -37,6 +37,7 @@ export function PropertyAddressSection({
   householdAddress,
 }: PropertyAddressSectionProps) {
   const form = useFormContext<QuoteRecapFormValues>();
+  const { setValue } = form;
   const sameAsHousehold = useWatch({
     control: form.control,
     name: "sameAsHousehold",
@@ -45,13 +46,18 @@ export function PropertyAddressSection({
   useEffect(() => {
     if (!sameAsHousehold || !householdAddress) return;
     for (const { name } of FIELDS) {
-      form.setValue(`propertyAddress.${name}`, householdAddress[name] ?? "", {
+      setValue(`propertyAddress.${name}`, householdAddress[name] ?? "", {
         shouldValidate: true,
       });
     }
+    // Depends on `setValue` (a stable method off the form control), NEVER on the
+    // whole `form` object: `useFormContext()` hands back a new identity on every
+    // render of the provider, so `form` in these deps + `shouldValidate` is an
+    // infinite render loop (validate -> re-render -> new `form` -> validate).
+    //
     // Also re-runs when `householdAddress` resolves, so an async fetch backfills
     // the address even though the toggle itself never changed.
-  }, [sameAsHousehold, householdAddress, form]);
+  }, [sameAsHousehold, householdAddress, setValue]);
 
   return (
     <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
