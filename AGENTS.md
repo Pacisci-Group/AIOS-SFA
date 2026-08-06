@@ -233,13 +233,12 @@ Chakra, etc.).
   **Field components take a field-path prop and must never hardcode a path** —
   that is what makes a schema rename a compile error instead of a runtime break.
   Layout comes from `src/components/form/` (`FormSection`, `FormGrid`, …), which
-  is deliberately library-agnostic.
-  > ⚠ **Migration in progress.** The four existing forms (`LeadIntakeForm`,
-  > `QuoteRecapForm`, `SoldDealWizard`, `EditContactDialog`) are still on
-  > `react-hook-form` + `@hookform/resolvers` via the legacy
-  > `components/ui/form.tsx`. Write **new** forms on TanStack Form; don't add to
-  > the react-hook-form surface. Remove this note once the migration lands and
-  > `components/ui/form.tsx` is deleted.
+  is deliberately library-agnostic. Reusable fragments shared by more than one
+  form are `withFieldGroup`/`withForm` components taking a `fields`/`form` prop
+  — never a component that reaches for the form off context and names its own
+  paths. react-hook-form is fully removed; there is no second forms idiom.
+  Two API traps are written up in `docs/tanstack-form-spike-findings.md` —
+  read it before touching the Sold wizard's per-card validation.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
 - Run each package's `lint` (`npm run lint -w @sfa/api` / `-w @sfa/web`) before finishing.
 - Prefer real Mongoose schemas + services over extending the mock data / stubs when wiring a dashboard.

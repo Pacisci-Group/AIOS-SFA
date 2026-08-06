@@ -1,5 +1,6 @@
 import type { SoldPolicyInput } from "@sfa/shared";
 import { POLICY_TYPES } from "@sfa/shared";
+import type { DeepKeys } from "@tanstack/react-form";
 import { z } from "zod";
 import { numericString } from "@/lib/zod-helpers";
 
@@ -244,11 +245,21 @@ export const CARD_TITLES: Record<WizardCard, string> = {
  * Which draft fields each card owns.
  *
  * Data rather than scattered logic: "can I advance?" is
- * `trigger(CARD_FIELDS[card])`, so adding a card cannot forget to validate it.
+ * `validateCard(CARD_FIELDS[card])`, so adding a card cannot forget to validate
+ * it.
+ *
+ * Entries are path **roots**, not necessarily leaves. The wizard validates every
+ * path at or under each one, which is how errors zod reports deeper down get
+ * caught — `discounts.defensiveDriver.drivers` from a `superRefine`, or an array
+ * item like `…drivers[0].name` that no static list could name.
+ *
+ * Typed `DeepKeys` rather than `keyof`: `form.validateField` takes these
+ * directly (the old `keyof` list needed a cast at the call site), and a nested
+ * path such as `priorInsurance.carrier` is now nameable if a card ever needs one.
  */
 export const CARD_FIELDS: Record<
   WizardCard,
-  Array<keyof SoldPolicyFormValues>
+  Array<DeepKeys<SoldPolicyFormValues>>
 > = {
   soldDate: [],
   policyType: ["policyType"],

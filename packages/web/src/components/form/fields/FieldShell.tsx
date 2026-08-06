@@ -13,6 +13,11 @@ export interface FieldShellRenderProps {
 interface FieldShellProps {
   label?: React.ReactNode;
   description?: React.ReactNode;
+  /**
+   * On the `<label>`. Only for labels that are captions rather than field names
+   * — the Sold wizard's `Driver 1` array-row headings.
+   */
+  labelClassName?: string;
   /** First validation message, or undefined. See {@link useFieldError}. */
   error?: string;
   /** Applied to the wrapper — this is where `sm:col-span-2` goes. */
@@ -33,6 +38,7 @@ interface FieldShellProps {
 export function FieldShell({
   label,
   description,
+  labelClassName,
   error,
   className,
   children,
@@ -50,7 +56,7 @@ export function FieldShell({
         <Label
           data-slot="form-label"
           data-error={!!error}
-          className="data-[error=true]:text-destructive"
+          className={cn("data-[error=true]:text-destructive", labelClassName)}
           htmlFor={id}
         >
           {label}

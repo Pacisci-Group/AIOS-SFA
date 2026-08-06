@@ -108,7 +108,7 @@ export function QuoteRecapForm({
         <form.Subscribe selector={(s) => s.values.policies}>
           {(policies) =>
             (policies ?? []).some((p) => isPropertyPolicyType(p?.policyType)) ? (
-              <PropertyAddressSection householdAddress={context.householdAddress}>
+              <PropertyAddressSection>
                 <PropertyAddressFields
                   form={form}
                   fields={{

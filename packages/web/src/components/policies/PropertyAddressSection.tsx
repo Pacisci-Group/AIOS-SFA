@@ -1,4 +1,5 @@
 import type { QuoteRecapPropertyAddress } from "@sfa/shared";
+import { useStore } from "@tanstack/react-form";
 import { useEffect } from "react";
 import { FormGrid, FormSection } from "@/components/form";
 import { withFieldGroup } from "@/hooks/form";
@@ -44,7 +45,17 @@ export const PropertyAddressFields = withFieldGroup({
     householdAddress: null as QuoteRecapPropertyAddress | null,
   },
   render: function Render({ group, householdAddress }) {
-    const sameAsHousehold = group.state.values.sameAsHousehold;
+    /*
+     * Subscribed, not read off `group.state`. `useFieldGroup` never subscribes
+     * its host component to the store — `state` is a live getter, so a plain
+     * read returns the right value but never re-renders. Reading it directly
+     * left the toggle unable to re-enable the fields and stopped the effect
+     * below from ever re-running.
+     */
+    const sameAsHousehold = useStore(
+      group.store,
+      (state) => state.values.sameAsHousehold,
+    );
 
     useEffect(() => {
       if (!sameAsHousehold || !householdAddress) return;
@@ -64,40 +75,63 @@ export const PropertyAddressFields = withFieldGroup({
     }, [sameAsHousehold, householdAddress]);
 
     return (
-      <FormGrid>
-        {FIELDS.map(({ name, label }) => (
-          <group.AppField key={name} name={`propertyAddress.${name}`}>
-            {(f) => (
-              <f.TextField
-                label={label}
-                className={name === "street" ? "sm:col-span-2" : undefined}
-                inputClassName="bg-card border-border"
-                /*
-                 * `disabled` on the DOM input only. These fields were written by
-                 * the effect above, so they stay in form state and are
-                 * submitted; that is fine, because the server discards them
-                 * whenever `sameAsHousehold` is true and copies the household's
-                 * own.
-                 */
-                disabled={sameAsHousehold}
-              />
-            )}
-          </group.AppField>
-        ))}
-      </FormGrid>
+      <>
+        <group.AppField name="sameAsHousehold">
+          {(f) => (
+            <f.CheckboxField
+              label="Same as household address"
+              // Nothing to copy, so the toggle would strand the fields blank
+              // *and* disabled.
+              disabled={!householdAddress}
+            />
+          )}
+        </group.AppField>
+
+        {!householdAddress && (
+          <p className="text-xs text-muted-foreground">
+            No household address on file — enter the property address below.
+          </p>
+        )}
+
+        <FormGrid>
+          {FIELDS.map(({ name, label }) => (
+            <group.AppField key={name} name={`propertyAddress.${name}`}>
+              {(f) => (
+                <f.TextField
+                  label={label}
+                  className={name === "street" ? "sm:col-span-2" : undefined}
+                  inputClassName="bg-card border-border"
+                  /*
+                   * `disabled` on the DOM input only. These fields were written
+                   * by the effect above, so they stay in form state and are
+                   * submitted; that is fine, because the server discards them
+                   * whenever `sameAsHousehold` is true and copies the
+                   * household's own.
+                   */
+                  disabled={sameAsHousehold}
+                />
+              )}
+            </group.AppField>
+          ))}
+        </FormGrid>
+      </>
     );
   },
 });
 
 interface PropertyAddressSectionProps {
   children: React.ReactNode;
-  householdAddress: QuoteRecapPropertyAddress | null;
 }
 
-/** The panel wrapper both forms put around {@link PropertyAddressFields}. */
+/**
+ * The panel wrapper both forms put around {@link PropertyAddressFields}.
+ *
+ * The "no household address on file" note lives in the field group rather than
+ * here: it sits between the toggle it explains and the fields it points at, and
+ * a wrapper that only renders `children` cannot put anything in that gap.
+ */
 export function PropertyAddressSection({
   children,
-  householdAddress,
 }: PropertyAddressSectionProps) {
   return (
     <FormSection
@@ -105,11 +139,6 @@ export function PropertyAddressSection({
       description="The address being insured — not necessarily where the client lives."
     >
       {children}
-      {!householdAddress && (
-        <p className="text-xs text-muted-foreground">
-          No household address on file — enter the property address below.
-        </p>
-      )}
     </FormSection>
   );
 }

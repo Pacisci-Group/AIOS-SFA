@@ -38,7 +38,14 @@ export function CheckboxField({
   const error = useFieldError(field.state.meta);
 
   return (
-    <div className={cn("space-y-1", className)}>
+    // `grid gap-2 space-y-1` reproduces the class string `DiscountToggle`
+    // produced (a `FormItem` given `space-y-1`), gap and margin included. The
+    // doubled spacing is odd but it is what ships today, and this tier is not
+    // allowed to move anything on screen.
+    <div
+      data-slot="form-item"
+      className={cn("grid gap-2 space-y-1", className)}
+    >
       <div className="flex flex-row items-center gap-2">
         <Checkbox
           id={field.name}
@@ -55,8 +62,16 @@ export function CheckboxField({
           {label}
         </Label>
       </div>
-      {hint ? <p className="text-sm text-muted-foreground">{hint}</p> : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {hint ? (
+        <p data-slot="form-description" className="text-sm text-muted-foreground">
+          {hint}
+        </p>
+      ) : null}
+      {error ? (
+        <p data-slot="form-message" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

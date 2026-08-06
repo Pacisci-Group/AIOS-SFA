@@ -1,8 +1,7 @@
-import { zodResolver } from "@hookform/resolvers/zod";
 import type { SoldDealLeadContext } from "@sfa/shared";
+import { useStore } from "@tanstack/react-form";
 import { ArrowLeft, ArrowRight, Loader2, Plus, Send } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,7 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { FormError, FormSection } from "@/components/form";
 import { Button } from "@/components/ui/button";
-import { Form } from "@/components/ui/form";
+import { useAppForm } from "@/hooks/form";
 import { PolicySummaryList } from "./PolicySummaryList";
 import { DiscountsCard } from "./DiscountsCard";
 import {
@@ -23,6 +22,7 @@ import {
   emptyPolicy,
   soldPolicySchema,
   type SoldPolicyFormValues,
+  type WizardCard,
 } from "./sold-deal-schema";
 import { useWizardNavigation } from "./useWizardNavigation";
 import {
@@ -45,6 +45,18 @@ interface SoldDealWizardProps {
   }) => void;
 }
 
+/**
+ * The field paths the form has registered, with their key type recovered.
+ *
+ * `Object.keys` is typed `string[]` even over a `Partial<Record<DeepKeys<T>, …>>`
+ * — a TypeScript soundness gap, not a modelling one. Unlike the hardcoded paths
+ * this refactor removed, every key here came from the form itself, so there is
+ * no path here for the compiler to be wrong about.
+ */
+function fieldPaths<T extends object>(fieldMeta: T): Array<keyof T> {
+  return Object.keys(fieldMeta) as Array<keyof T>;
+}
+
 export function SoldDealWizard({
   context,
   submitting,
@@ -64,14 +76,18 @@ export function SoldDealWizard({
    * a single array-backed form would revalidate finished policies on every
    * keystroke and leak `onBlur` touched-state, so entering policy 2 would light
    * up policy 1's errors.
+   *
+   * `onBlur` is the only validator key that both surfaces errors on blur — which
+   * is the behaviour these cards were built with — and answers the
+   * `"submit"`-cause `validateField` that per-card validation runs on.
    */
-  const draft = useForm<SoldPolicyFormValues>({
-    resolver: zodResolver(soldPolicySchema),
+  const draft = useAppForm({
     defaultValues: emptyPolicy(),
-    mode: "onBlur",
+    validators: { onBlur: soldPolicySchema },
   });
 
-  const dirty = Boolean(soldDate) || policies.length > 0 || draft.formState.isDirty;
+  const draftDirty = useStore(draft.store, (s) => s.isDirty);
+  const dirty = Boolean(soldDate) || policies.length > 0 || draftDirty;
 
   /**
    * Guard a hard reload / tab close.
@@ -92,6 +108,54 @@ export function SoldDealWizard({
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty, submitting]);
 
+  /**
+   * Is this card's slice of the draft valid?
+   *
+   * Two traps, both found by the spike (`docs/tanstack-form-spike-findings.md`)
+   * and both silent if you get them wrong:
+   *
+   * 1. **`validateField`'s return value is unreliable.** On a *mounted* field it
+   *    reports `[]` even when the field is invalid. The validation does run; the
+   *    verdict has to be read back out of field meta, which is what the final
+   *    scan below does.
+   * 2. **`validateAllFields` only walks mounted fields**, so it can never stand
+   *    in for a whole-form check in a wizard that mounts one card at a time.
+   */
+  const validateCard = async (card: WizardCard) => {
+    const roots = CARD_FIELDS[card];
+    if (roots.length === 0) return true;
+
+    const owns = (path: string) =>
+      roots.some(
+        (root) =>
+          path === root ||
+          path.startsWith(`${root}.`) ||
+          path.startsWith(`${root}[`),
+      );
+
+    /*
+     * `CARD_FIELDS` entries are prefixes, and touching only those would leave a
+     * blank driver row blocking Continue with no message against it: zod reports
+     * that at `…drivers[0].name`, which no static list can name. So the declared
+     * roots are joined by every path the form has actually registered beneath
+     * them. `validateField` marks each one touched, which is what lets a blocked
+     * step show its errors at all.
+     */
+    const paths = new Set([
+      ...roots,
+      ...fieldPaths(draft.state.fieldMeta).filter(owns),
+    ]);
+    await Promise.all([...paths].map((path) => draft.validateField(path, "submit")));
+
+    // One authoritative form-level run, so a path that errors without a mounted
+    // field still lands in meta before the scan.
+    await draft.validate("submit");
+
+    return !Object.entries(draft.state.fieldMeta).some(
+      ([path, meta]) => owns(path) && (meta?.errors.length ?? 0) > 0,
+    );
+  };
+
   const advanceFromCard = async () => {
     if (nav.card === "soldDate") {
       if (!soldDate) {
@@ -104,18 +168,16 @@ export function SoldDealWizard({
     }
 
     // The card→field map means adding a card cannot forget to validate it.
-    const fields = CARD_FIELDS[nav.card];
-    const valid = await draft.trigger(
-      fields as Parameters<typeof draft.trigger>[0],
-    );
-    if (valid) nav.advance();
+    if (await validateCard(nav.card)) nav.advance();
   };
 
   /** Card 8 — commit the draft, then either loop or submit. */
   const commitDraft = async (): Promise<SoldPolicyFormValues[] | null> => {
-    const valid = await draft.trigger();
-    if (!valid) return null;
-    const next = [...policies, draft.getValues()];
+    await draft.validate("submit");
+    if (!draft.state.isValid) return null;
+    // Cloned, not referenced: `draft.reset` below hands the next policy a fresh
+    // values object, and a committed policy must not be able to follow it.
+    const next = [...policies, structuredClone(draft.state.values)];
     setPolicies(next);
     return next;
   };
@@ -144,7 +206,7 @@ export function SoldDealWizard({
           {context.householdName && <> · {context.householdName}</>}
         </p>
 
-        <Form {...draft}>
+        <draft.AppForm>
           {/*
             * `key` remounts the draft form for each policy, which resets both
             * values and touched-state — the mechanism behind the isolation
@@ -161,17 +223,18 @@ export function SoldDealWizard({
                 }}
               />
             )}
-            {nav.card === "policyType" && <PolicyTypeCard />}
-            {nav.card === "policyDetails" && <PolicyDetailsCard />}
-            {nav.card === "financials" && <PolicyFinancialsCard />}
+            {nav.card === "policyType" && <PolicyTypeCard form={draft} />}
+            {nav.card === "policyDetails" && <PolicyDetailsCard form={draft} />}
+            {nav.card === "financials" && <PolicyFinancialsCard form={draft} />}
             {nav.card === "discounts" && (
               <DiscountsCard
+                form={draft}
                 leadId={context.leadId}
                 contacts={context.contacts}
               />
             )}
-            {nav.card === "priorInsurance" && <PriorInsuranceCard />}
-            {nav.card === "cancellation" && <CancellationCard />}
+            {nav.card === "priorInsurance" && <PriorInsuranceCard form={draft} />}
+            {nav.card === "cancellation" && <CancellationCard form={draft} />}
             {nav.card === "loop" && (
               <div className="space-y-2">
                 <p className="text-sm text-foreground">
@@ -183,7 +246,7 @@ export function SoldDealWizard({
               </div>
             )}
           </div>
-        </Form>
+        </draft.AppForm>
 
         <FormError icon>{errorMessage}</FormError>
 

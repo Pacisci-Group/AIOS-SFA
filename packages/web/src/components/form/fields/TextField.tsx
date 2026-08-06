@@ -14,6 +14,8 @@ interface TextFieldProps {
   disabled?: boolean;
   /** On the wrapper, e.g. `sm:col-span-2`. */
   className?: string;
+  /** On the `<label>` — the wizard's `Driver 1` caption headings. */
+  labelClassName?: string;
   /** On the `<input>`. Sites differ: the lead/quote forms use `bg-card border-border`, the wizard doesn't. */
   inputClassName?: string;
   /** Runs after the field's own blur — the Sold wizard's policy-number dedupe check. */
@@ -38,6 +40,7 @@ export function TextField({
   placeholder,
   disabled,
   className,
+  labelClassName,
   inputClassName,
   onBlur,
   inputRef,
@@ -49,6 +52,7 @@ export function TextField({
     <FieldShell
       label={label}
       description={description}
+      labelClassName={labelClassName}
       error={error}
       className={className}
     >

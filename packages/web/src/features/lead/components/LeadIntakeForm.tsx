@@ -264,7 +264,7 @@ export function LeadIntakeForm({
           {({ policies, address }) => (
             <PropertyAddressGate policies={policies} address={address}>
               {(householdAddress) => (
-                <PropertyAddressSection householdAddress={householdAddress}>
+                <PropertyAddressSection>
                   <PropertyAddressFields
                     form={form}
                     fields={{

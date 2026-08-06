@@ -9,6 +9,7 @@ interface NumberFieldProps {
   step?: string;
   min?: string;
   max?: string;
+  placeholder?: string;
   disabled?: boolean;
   className?: string;
   inputClassName?: string;
@@ -31,6 +32,7 @@ export function NumberField({
   step,
   min,
   max,
+  placeholder,
   disabled,
   className,
   inputClassName,
@@ -53,6 +55,7 @@ export function NumberField({
           step={step}
           min={min}
           max={max}
+          placeholder={placeholder}
           disabled={disabled}
           className={inputClassName}
           aria-describedby={describedBy}
