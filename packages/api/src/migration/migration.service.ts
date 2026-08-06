@@ -7,6 +7,7 @@ import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
+import { quoteDateYmd } from '../quote-recaps/quote.normalize';
 import { QuoteRecap } from '../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../deals/schemas/deal.schema';
 import { DealAuditItem } from '../deal-audit-items/schemas/deal-audit-item.schema';
@@ -696,6 +697,10 @@ export class MigrationService {
         {
           title: toText(rec.title),
           quoteDate,
+          // The Quoted scorecard's bucket key (PAC-10). Written on import so a
+          // freshly migrated agency needs no backfill pass; `backfill:deal-refs`
+          // exists for agencies migrated before PAC-9.
+          quoteDateYmd: quoteDate ? quoteDateYmd(quoteDate) : undefined,
           premium: toNumber(rec[QUOTE_RECAP_FIELDS.premium]),
           itemCount: toNumber(rec[QUOTE_RECAP_FIELDS.items]),
           // Normalized to canonical labels (PAC-39). This field historically

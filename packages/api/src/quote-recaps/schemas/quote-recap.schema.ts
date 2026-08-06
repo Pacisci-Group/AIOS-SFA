@@ -154,6 +154,21 @@ export class QuoteRecap extends TenantRecord {
   @Prop()
   legacyHouseholdId?: string;
 
+  /**
+   * `YYYYMMDD` calendar-day label, the counterpart to `Deal.soldDateYmd`.
+   *
+   * Lets the Quoted scorecard (PAC-10) run the same indexed integer range
+   * comparison the Sold scorecard uses, rather than a second `Date`-bounded
+   * code path with its own timezone edge cases. Derived by `quoteDateYmd` in
+   * `../quote.normalize`, which reads Chicago or UTC parts depending on the
+   * recap's provenance — see that docblock.
+   *
+   * Optional: every recap written before PAC-9 lacks it until
+   * `backfill:deal-refs` has run.
+   */
+  @Prop({ index: true })
+  quoteDateYmd?: number;
+
   @Prop({ default: false, index: true })
   isTestRecord: boolean;
 }
@@ -165,6 +180,17 @@ QuoteRecapSchema.index(
 );
 /** Exactly the Quoted-scorecard query. Do not reorder. */
 QuoteRecapSchema.index({ agencyId: 1, producerId: 1, quoteDate: -1 });
+
+/**
+ * The Quoted scorecard's own-scope aggregation (PAC-10). The `quoteDate` index
+ * above is on the **Date**; it cannot serve a range over the `YYYYMMDD`
+ * integer, so this is a separate index rather than a reordering. Mirrors
+ * `{ agencyId, producerId, soldDateYmd }` on `deals` exactly. Do not reorder.
+ */
+QuoteRecapSchema.index({ agencyId: 1, producerId: 1, quoteDateYmd: -1 });
+
+/** Its agency-scope counterpart, for a caller reading beyond their own rows. */
+QuoteRecapSchema.index({ agencyId: 1, quoteDateYmd: -1 });
 
 /**
  * `{ agencyId, leadId }` is a prefix of this, so lead-detail lookups are served

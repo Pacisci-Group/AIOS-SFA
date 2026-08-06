@@ -10,6 +10,7 @@ import { AgencyRole } from '../../roles/schemas/agency-role.schema';
 import { Household } from '../../households/schemas/household.schema';
 import { Contact } from '../../contacts/schemas/contact.schema';
 import { Lead } from '../../leads/schemas/lead.schema';
+import { quoteDateYmd } from '../../quote-recaps/quote.normalize';
 import { QuoteRecap } from '../../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../../deals/schemas/deal.schema';
 import { Policy } from '../../policies/schemas/policy.schema';
@@ -702,6 +703,9 @@ export class DemoSeedService {
             title: hh ? `${hh.name} — Quote` : `Quote ${i}`,
             quoteRecapAutoNumber: 1000 + i,
             quoteDate,
+            // Written here so a fresh demo tenant drives the Quoted scorecard
+            // (PAC-10) without anyone having to run the backfill first.
+            quoteDateYmd: quoteDateYmd(quoteDate),
             premium,
             itemCount: products.length + rng.int(0, 2),
             productsQuoted: products,
