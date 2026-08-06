@@ -11,6 +11,7 @@ import {
   Activity,
   ActivityDocument,
 } from '../activities/schemas/activity.schema';
+import { buildScopeFilter } from '../common/access/scope-filter';
 import { daysSince } from '../common/domain/deal-derive';
 import { Deal, DealDocument, DealType } from '../deals/schemas/deal.schema';
 import {
@@ -68,19 +69,10 @@ export class DealAuditsService {
     const { page, pageSize } = query;
 
     const filter: FilterQuery<DealAuditItemDocument> = {
-      agencyId: access.agencyId,
+      ...buildScopeFilter<DealAuditItemDocument>(access, branchId),
       isFailed: true,
       isResolved: false,
-      isTestRecord: { $ne: true },
     };
-
-    if (access.dataScope === DataScope.Own) {
-      // `own` scope is only meaningful with a concrete user id.
-      filter.producerId = new Types.ObjectId(access.userId);
-    } else if (access.dataScope === DataScope.Branch && branchId) {
-      filter.branchId = branchId;
-    }
-    // Agency scope: no producer/branch narrowing beyond agencyId.
 
     const total = await this.dealAuditItemModel.countDocuments(filter);
 
