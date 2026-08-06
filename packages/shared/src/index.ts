@@ -2,6 +2,7 @@ export * from './domain/activity';
 export * from './domain/address';
 export * from './domain/contact';
 export * from './domain/household-role';
+export * from './domain/leaderboard';
 export * from './domain/lead-detail';
 export * from './domain/lead-intake';
 export * from './domain/lead-source';

@@ -5,7 +5,6 @@ import {
   DashboardController,
   DealsController,
   HouseholdsController,
-  LeaderboardController,
   MailersController,
   ManagementController,
   OnboardingsController,
@@ -15,9 +14,10 @@ import {
 // NOTE: `deal-audits` is now served by the real `DealAuditsModule`
 // (see src/deal-audits), `leads` by the real `LeadsModule` (see src/leads),
 // `quote-recaps` by the real `QuoteRecapsModule` (see src/quote-recaps),
-// `contacts` by the real `ContactsModule` (see src/contacts), and `performance`
-// by the real `PerformanceModule` (see src/performance), so their stub
-// controllers are intentionally omitted here.
+// `contacts` by the real `ContactsModule` (see src/contacts), `performance` by
+// the real `PerformanceModule` (see src/performance) and `leaderboard` by the
+// real `LeaderboardModule` (see src/leaderboard), so their stub controllers are
+// intentionally omitted here.
 //
 // `files` is gone entirely: it was a `@Controller('files')` placeholder that
 // borrowed the `quote_recaps` module key for want of a better one. The real
@@ -28,7 +28,6 @@ const controllers = [
   HouseholdsController,
   DealsController,
   CrmServiceController,
-  LeaderboardController,
   MailersController,
   OnboardingsController,
   ManagementController,

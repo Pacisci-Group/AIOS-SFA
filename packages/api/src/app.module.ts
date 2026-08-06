@@ -23,6 +23,7 @@ import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
+import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { LeadsModule } from './leads/leads.module';
 import { PerformanceModule } from './performance/performance.module';
 import { PoliciesModule } from './policies/policies.module';
@@ -78,6 +79,7 @@ import { ENV_FILE_PATH } from './config/env.config';
     PoliciesModule,
     SoldDealsModule,
     PerformanceModule,
+    LeaderboardModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,

@@ -7,6 +7,7 @@ import { ModuleKey } from '@sfa/shared';
 import type {
   ContactDetail,
   CreateSoldDealResponse,
+  LeaderboardResponse,
   LeadDetail,
   PerformanceMetric,
   PerformanceResponse,
@@ -29,6 +30,7 @@ import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { Policy } from '../src/policies/schemas/policy.schema';
 import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
+import { ProducerGoal } from '../src/producer-goals/schemas/producer-goal.schema';
 import { PriorPolicy } from '../src/prior-policies/schemas/prior-policy.schema';
 import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
@@ -468,7 +470,6 @@ describe('SFA API (e2e)', () => {
       // `quote_recaps` gate and the real file API is now
       // `POST /quote-recaps/quote-document/presign`.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
-      { path: 'leaderboard', module: ModuleKey.Leaderboard },
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
@@ -555,10 +556,10 @@ describe('SFA API (e2e)', () => {
       // are covered by their own describe blocks below. `leads` writes are
       // `POST /leads` (PAC-37) and `PATCH /leads/:id` (PAC-38), likewise
       // id-scoped rather than a bare PATCH on the collection.
-      // `performance` is a real read-only module now (PAC-10/11) with no
-      // mutating handler at all, so it cannot appear in this list.
+      // `performance` (PAC-10/11) and `leaderboard` (PAC-13) are real read-only
+      // modules now, with no mutating handler at all, so neither can appear in
+      // this list.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
-      { path: 'leaderboard', module: ModuleKey.Leaderboard },
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
@@ -602,14 +603,9 @@ describe('SFA API (e2e)', () => {
       },
     );
 
-    it('GET /api/v1/leaderboard — read-only user can read (read-only page)', async () => {
-      // Was `/files` until PAC-39 removed that stub. Any read-only-for-everyone
-      // page proves the same thing: read access does not imply write.
-      await request(app.getHttpServer())
-        .get('/api/v1/leaderboard')
-        .set(authHeader(readOnlyToken))
-        .expect(200);
-    });
+    // NOTE: the "read-only user can read a read-only page" test that lived here
+    // moved into `Leaderboard / Motivation Hub (PAC-13)` below, where it now
+    // asserts a real payload rather than a stub's `{status:'ready'}`.
   });
 
   describe('Performance scorecards (PAC-10 quoted / PAC-11 sold)', () => {
@@ -881,6 +877,184 @@ describe('SFA API (e2e)', () => {
         expect(body.sold.premium).toBe(2000 + 77_777);
         expect(body.sold.recordCount).toBe(5);
       });
+    });
+  });
+
+  describe('Leaderboard / Motivation Hub (PAC-13)', () => {
+    /*
+     * April 2026 — this block seeds its own deals rather than leaning on the
+     * performance block's May fixtures. Sharing them would make these tests
+     * pass only when both describes run, so any filtered run (`-t`) would
+     * report failures that say nothing about the code.
+     */
+    const MONTH = '2026-04';
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      const goalModel = app.get<Model<ProducerGoal>>(
+        getModelToken(ProducerGoal.name),
+      );
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      await dealModel.create([
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260410,
+          premium: 2000,
+          itemCount: 2,
+        },
+        {
+          ...base,
+          producerId: owner!._id,
+          soldDateYmd: 20260415,
+          premium: 77_777,
+          itemCount: 9,
+        },
+        // Must not reach the office total.
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260420,
+          premium: 500_000,
+          itemCount: 1,
+          isTestRecord: true,
+        },
+        // Outside the month.
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260331,
+          premium: 400_000,
+          itemCount: 1,
+        },
+      ]);
+
+      await goalModel.create([
+        // Producer sold 2,000 against 4,000 -> 50%.
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: producer!._id,
+          month: MONTH,
+          goalPremium: 4000,
+        },
+        // Owner sold 77,777 against 100,000 -> 77.8%, so they outrank the
+        // producer on attainment despite a far larger goal.
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: owner!._id,
+          month: MONTH,
+          goalPremium: 100_000,
+        },
+      ]);
+    });
+
+    it('returns the office total, ranked entries, and the caller row', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.month).toBe(MONTH);
+      expect(body.officeTotalPremium).toBe(2000 + 77_777);
+      expect(body.entries.length).toBeGreaterThan(0);
+      expect(body.self).not.toBeNull();
+      expect(body.self!.premium).toBe(2000);
+      expect(body.self!.attainmentPct).toBe(50);
+    });
+
+    it('a producer sees the whole board — the DataScope bypass is the feature', async () => {
+      // `own` scope everywhere else means "your rows only". Here it must not:
+      // a motivation panel showing a producer only themselves is pointless.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.entries.some((entry) => !entry.isSelf)).toBe(true);
+      expect(body.producerCount).toBeGreaterThanOrEqual(2);
+    });
+
+    // The privacy contract, as an executable assertion. This is the reason the
+    // bypass above is acceptable, so it must fail loudly if anyone widens the
+    // response type.
+    it('never exposes another producer’s dollars', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      for (const entry of body.entries) {
+        expect(entry).not.toHaveProperty('premium');
+        expect(entry).not.toHaveProperty('goalPremium');
+      }
+    });
+
+    it('ranks by attainment, not by premium', async () => {
+      // The owner sold ~39x the producer's premium but hit 77.8% of a much
+      // larger goal; the producer hit 50%. Ranking by premium would invert this.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.entries[0].attainmentPct).toBe(77.8);
+      expect(body.entries[0].rank).toBe(1);
+      expect(body.entries[1].attainmentPct).toBe(50);
+    });
+
+    it('defaults to the current month when none is given', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as LeaderboardResponse).month).toMatch(
+        /^\d{4}-(0[1-9]|1[0-2])$/,
+      );
+    });
+
+    it('read-only user can read (read access does not imply write)', async () => {
+      // Re-homed from the feature-stub block, which no longer has a leaderboard
+      // route to point at.
+      await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .set(authHeader(readOnlyToken))
+        .expect(200);
+    });
+
+    it.each([
+      ['a malformed month', { month: '2026-5' }],
+      ['a month out of range', { month: '2026-13' }],
+      ['a limit above the cap', { limit: 99 }],
+      ['a zero limit', { limit: 0 }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('has no mutating handler', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/leaderboard')
+        .set(authHeader(ownerToken))
+        .expect(404);
     });
   });
 

@@ -75,11 +75,10 @@ export const CrmServiceController = createFeatureController(
  * the stub had to go in the same commit as the real controller: two classes on
  * `@Controller('performance')` both register, first-wins, and which one answers
  * depends on module import order.
+ *
+ * Likewise no `LeaderboardController` stub: PAC-13 replaced it with the real
+ * `LeaderboardModule` (`src/leaderboard`).
  */
-export const LeaderboardController = createFeatureController(
-  'leaderboard',
-  ModuleKey.Leaderboard,
-);
 export const MailersController = createFeatureController(
   'mailers',
   ModuleKey.Mailers,
