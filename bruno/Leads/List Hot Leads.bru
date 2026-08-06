@@ -1,0 +1,138 @@
+meta {
+  name: List Hot Leads
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/leads/hot?limit=5
+  body: none
+  auth: inherit
+}
+
+params:query {
+  limit: 5
+  ~temperature: Hot
+  ~scope: own
+}
+
+script:post-response {
+  // Captured as `hotLeadId`, deliberately NOT `leadId`: `List Leads` captures
+  // that one and the Quote Recap / Sold Deal chains depend on it. Clobbering it
+  // here would silently retarget those requests at a different lead.
+  if (res.getStatus() === 200) {
+    const items = res.getBody().items;
+    if (items && items.length > 0) {
+      bru.setVar("hotLeadId", items[0].id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("resolves as its own route, not as GET /leads/:id", function () {
+    // `@Get(':id')` matches the literal string `hot` just as happily as an
+    // ObjectId. If the controller's declaration order is ever changed, this
+    // request starts returning a lead detail (or a 404) instead.
+    const body = res.getBody();
+    expect(body).to.have.property("items");
+    expect(body).to.not.have.property("contact");
+  });
+
+  test("is NOT the paginated envelope", function () {
+    const body = res.getBody();
+    for (const key of ["page", "pageSize", "total", "totalPages"]) {
+      expect(body).to.not.have.property(key);
+    }
+  });
+
+  test("rows carry the narrative line", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      expect(items[0]).to.have.property("lastActivitySummary");
+      expect(items[0]).to.have.property("initials");
+    }
+  });
+
+  test("ordered stalest first", function () {
+    const items = res.getBody().items.filter((i) => i.lastActivityAt);
+    for (let i = 1; i < items.length; i++) {
+      expect(items[i].lastActivityAt >= items[i - 1].lastActivityAt).to.equal(true);
+    }
+  });
+}
+
+docs {
+  # GET /leads/hot — Priority Contact List (PAC-15)
+
+  The Producer Dashboard's Hot Leads panel.
+
+  - **Module:** `leads` — same gate as the list, because this is a different
+    *view* of the caller's leads, not a different resource.
+  - **Permission:** `leads:read`
+  - **Data scope:** `own` for producers; `scope` is a request that can only narrow.
+
+  ## Why this is not `GET /leads?temperature=Hot`
+
+  1. **The sort is inverted.** `GET /leads` orders `lastActivityAt` *descending*
+     — most recently touched first. A priority contact list wants the opposite:
+     the lead you last spoke to is the one who least needs a call. It is not the
+     same query with a filter on it.
+  2. The narrative line needs an `activities` join that the 50-row Leads table
+     would pay for on every keystroke of its search box and never render.
+
+  ## Ordering
+  Hot leads first, then Warm, and **stalest first within each** — the panel tops
+  up with Warm only when the producer has fewer than `limit` Hot leads. That is
+  two index-served queries rather than one `$in` plus an in-memory sort, so
+  "Hot always outranks Warm" holds by construction.
+
+  Leads in a **terminal status** (Sold, Converted, Not Qualified, Lost, Closed)
+  are excluded however hot they were left — expanded through the raw SmartSuite
+  choice codes, so a migrated `Lost` lead stored as `jp76g` is caught too.
+
+  ## Query params
+  | param | type | default | rules |
+  |-------|------|---------|-------|
+  | limit | int | 5 | 1–25 |
+  | temperature | string[] | `Hot,Warm` | `Hot` \| `Warm` \| `Cold` \| `Unknown`; repeated or comma-separated; **order is priority order** |
+  | scope | enum | — | `own` \| `agency`, clamped to the caller's `DataScope` |
+
+  ## Response `200`
+  Deliberately **not** the `{page, pageSize, total, totalPages, items}` envelope
+  every other list uses — this is a fixed-size card with no page controls, and
+  shipping page arithmetic would advertise pagination that does not exist.
+
+  ```json
+  {
+    "items": [
+      {
+        "id": "6a71...b87",
+        "name": "David Gonzalez",
+        "initials": "DG",
+        "temperature": "Hot",
+        "leadSource": "Mail Referral",
+        "status": "Contacted",
+        "phone": "(312) 555-8136",
+        "email": "david.gonzalez@example.com",
+        "lastActivitySummary": "Spouse handles renewals — call back Tuesday AM",
+        "lastActivityType": "note",
+        "lastActivityAt": "2026-08-06T09:56:53.463Z"
+      }
+    ]
+  }
+  ```
+
+  | field | notes |
+  |-------|-------|
+  | lastActivitySummary | the most recent `activities` row — a mix of system events (`lead_created`, `quoted`, `sold`) and producer-written notes and call logs. `null` when the lead has no activity; the UI falls back to `status` rather than inventing copy |
+  | lastActivityAt | the **lead's** `lastActivityAt`, i.e. the field this list is sorted by — not the activity row's timestamp. Showing one while sorting by the other made a correctly-ordered panel look broken |
+  | leadSource | normalized label, never a raw choice code |
+
+  ## Errors
+  - `400` — `limit` outside 1–25, or an unknown `temperature`.
+  - `401` / `403` — as for `GET /leads`.
+}

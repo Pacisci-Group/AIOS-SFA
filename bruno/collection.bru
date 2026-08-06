@@ -52,13 +52,23 @@ docs {
   - **Auth** — login / refresh (public, no bearer).
   - **Deal Audits** — Deals Pending Service Hand-off board (PAC-12, read) +
     resolve item / presign attachment (PAC-14, write).
+  - **Leaderboard** — Motivation Hub: office total, ranked standings, % to goal
+    (PAC-13, read). Its tests assert the privacy contract.
   - **Leads** — Leads list with search, facet filters and pagination
-    (PAC-36, read); create a lead + the idempotency replay (PAC-37, write).
+    (PAC-36, read); create a lead + the idempotency replay (PAC-37, write);
+    the dashboard's Hot Leads panel (PAC-15) and activity logging (PAC-16).
     - **Share Links** — generate / list / revoke a producer's public intake
       links (PAC-37).
+  - **Performance** — Sold + Quoted scorecards for a time range
+    (PAC-10 / PAC-11, read).
   - **Public Intake** — the unauthenticated share-link form: render + submit,
     plus the unknown-token negative case that documents the non-disclosure
     contract (PAC-37). These use `auth: none`.
+
+  > Activity logging lives under **Leads**, not in a folder of its own. Two
+  > reasons: it is gated by the `leads` module and depends on a lead id captured
+  > earlier in that chain, and a top-level `Activities` folder would sort
+  > **before `Auth`** and run with no `accessToken`.
 
   ## Run order
   A full `npx @usebruno/cli run --env Local` passes as-is — the collection is
