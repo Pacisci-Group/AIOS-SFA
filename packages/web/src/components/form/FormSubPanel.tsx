@@ -49,7 +49,11 @@ export function FormSubPanel({
   return (
     <div
       className={cn(
-        "rounded-lg border border-border bg-background/40 p-3 space-y-3",
+        // `bg-sunken`, not `bg-background/40`: on a light surface the page
+        // background at 40% over a white card is imperceptible, so the inset
+        // well disappears. The token is `rgba(11,15,25,0.4)` in dark — i.e.
+        // exactly what this used to be — and slate-100 in light.
+        "rounded-lg border border-border bg-sunken p-3 space-y-3",
         className,
       )}
     >

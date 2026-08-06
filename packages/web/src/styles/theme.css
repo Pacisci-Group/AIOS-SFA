@@ -1,7 +1,73 @@
 @custom-variant dark (&:is(.dark *));
 
+/**
+ * `:root` is the LIGHT theme; `.dark` is the navy brand theme.
+ *
+ * This was inverted deliberately. Before, `:root` held the navy palette and
+ * `.dark` held leftover stock-shadcn neutral-oklch that nothing ever applied —
+ * there was no provider and no `.dark` class, so the app only ever rendered
+ * `:root`. Now `<html>` always carries an explicit `light`/`dark` class,
+ * written before first paint by the inline script in `index.html` and owned
+ * thereafter by next-themes (see `app/ThemeProvider.tsx`).
+ *
+ * `.dark` must stay byte-identical to the palette that shipped before the
+ * inversion — that is the acceptance test for this change. `:root` is new.
+ *
+ * Both selectors have specificity (0,1,0) and both match `<html>`, so `.dark`
+ * wins only because it comes second. Do not reorder these blocks.
+ *
+ * Theme-independent values (`--font-size`, `--font-weight-*`, `--radius`) are
+ * declared once in `:root` and inherited by both.
+ */
 :root {
   --font-size: 15px;
+  --background: #F8FAFC;
+  --foreground: #0F172A;
+  --card: #FFFFFF;
+  --card-foreground: #0F172A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F172A;
+  /* Allstate blue rather than the dark theme's sky-400: #38BDF8 on white is
+     ~1.8:1, nowhere near readable as a button or link colour. */
+  --primary: #0076A8;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F1F5F9;
+  --secondary-foreground: #0F172A;
+  --muted: #F1F5F9;
+  /* The one token that needs no light variant — slate-500 clears 4.5:1 on both
+     #0B0F19 and #F8FAFC. */
+  --muted-foreground: #64748B;
+  --accent: #059669;
+  --accent-foreground: #FFFFFF;
+  /* Still amber — the brand's error colour — but amber-700, because amber-500
+     on white is ~2:1. See `components/form/FormError.tsx`. */
+  --destructive: #B45309;
+  --destructive-foreground: #FFFFFF;
+  --border: #E2E8F0;
+  --input: #FFFFFF;
+  --input-background: #FFFFFF;
+  --switch-background: #CBD5E1;
+  --sunken: #F1F5F9;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #0076A8;
+  --chart-1: #059669;
+  --chart-2: #0284C7;
+  --chart-3: #D97706;
+  --chart-4: #4F46E5;
+  --chart-5: #DB2777;
+  --radius: 0.5rem;
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #334155;
+  --sidebar-primary: #0076A8;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #F1F5F9;
+  --sidebar-accent-foreground: #0F172A;
+  --sidebar-border: #E2E8F0;
+  --sidebar-ring: #0076A8;
+}
+
+.dark {
   --background: #0B0F19;
   --foreground: #E2E8F0;
   --card: #161F30;
@@ -22,15 +88,16 @@
   --input: #1E2B44;
   --input-background: #1E2B44;
   --switch-background: #334155;
-  --font-weight-medium: 500;
-  --font-weight-normal: 400;
+  /* Exactly the `bg-background/40` this replaces, so the composite over
+     `bg-card` is unchanged. Kept as alpha rather than the flattened #121927 so
+     it still reads correctly on any parent surface. */
+  --sunken: rgba(11, 15, 25, 0.4);
   --ring: #38BDF8;
   --chart-1: #10B981;
   --chart-2: #38BDF8;
   --chart-3: #F59E0B;
   --chart-4: #6366F1;
   --chart-5: #EC4899;
-  --radius: 0.5rem;
   --sidebar: #0D1B3E;
   --sidebar-foreground: #CBD5E1;
   --sidebar-primary: #38BDF8;
@@ -39,43 +106,6 @@
   --sidebar-accent-foreground: #E2E8F0;
   --sidebar-border: rgba(255, 255, 255, 0.06);
   --sidebar-ring: #38BDF8;
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.145 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.145 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.396 0.141 25.723);
-  --destructive-foreground: oklch(0.637 0.237 25.331);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
-  --ring: oklch(0.439 0 0);
-  --font-weight-medium: 500;
-  --font-weight-normal: 400;
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
 }
 
 @theme inline {
@@ -99,6 +129,7 @@
   --color-input: var(--input);
   --color-input-background: var(--input-background);
   --color-switch-background: var(--switch-background);
+  --color-sunken: var(--sunken);
   --color-ring: var(--ring);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
