@@ -9,6 +9,7 @@ import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { Toaster } from '@/components/ui/sonner';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 const ProducerDashboardPage = lazy(
   () => import('@/features/producer/ProducerDashboardPage'),
@@ -98,8 +99,14 @@ function RoleLanding() {
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
+      {/* Radix tooltips need a provider ancestor or `Tooltip.Root` throws at
+          render — and `components/ui/tooltip` deliberately does not self-wrap,
+          because the open/close delays are a global concern. Mounted once here
+          rather than per call site (first needed by the dashboard's lead quick
+          actions, PAC-16). */}
+      <TooltipProvider delayDuration={200}>
+        <AuthProvider>
+          <BrowserRouter>
           <Routes>
             <Route element={<PublicOnlyRoute />}>
               <Route path="/login" element={<LoginPage />} />
@@ -343,11 +350,12 @@ export function App() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </BrowserRouter>
-        {/* `sonner` was installed but never mounted, so `toast()` silently
-            no-opped. Used by the share-link dialog's copy action. */}
-        <Toaster richColors position="top-right" />
-      </AuthProvider>
+          </BrowserRouter>
+          {/* `sonner` was installed but never mounted, so `toast()` silently
+              no-opped. Used by the share-link dialog's copy action. */}
+          <Toaster richColors position="top-right" />
+        </AuthProvider>
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }
