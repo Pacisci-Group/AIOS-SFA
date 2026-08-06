@@ -1,6 +1,7 @@
 export * from './domain/activity';
 export * from './domain/address';
 export * from './domain/contact';
+export * from './domain/hot-lead';
 export * from './domain/household-role';
 export * from './domain/leaderboard';
 export * from './domain/lead-detail';

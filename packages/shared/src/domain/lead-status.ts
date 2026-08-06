@@ -120,6 +120,36 @@ export function quoteAdvanceableStatusValues(): (string | null)[] {
   ];
 }
 
+/**
+ * Statuses where the lead is finished — nobody should be chasing it (PAC-15).
+ *
+ * Membership currently coincides exactly with
+ * {@link SOLD_NON_ADVANCING_LEAD_STATUSES}, and that is not a coincidence: both
+ * answer "is this lead done?". They are kept separate because they answer it
+ * for different purposes — one guards a write (don't drag a closed lead back to
+ * Sold), this one filters a read (don't put a closed lead on a contact list) —
+ * and a future status could plausibly belong to one and not the other.
+ */
+export const TERMINAL_LEAD_STATUSES: readonly LeadStatus[] = [
+  'Sold',
+  'Converted',
+  'Not Qualified',
+  'Lost',
+  'Closed',
+];
+
+/**
+ * Every **stored** form of a terminal status, for a Mongo
+ * `{ status: { $nin: [...] } }` clause.
+ *
+ * The code expansion is load-bearing in the exclusion direction too: without
+ * it, a migrated Lost lead stored as `jp76g` would not match the `Lost` label
+ * and would sit on the producer's priority contact list forever.
+ */
+export function terminalLeadStatusValues(): string[] {
+  return [...new Set(TERMINAL_LEAD_STATUSES.flatMap(leadStatusQueryValues))];
+}
+
 /** Where a submitted sold deal moves the lead (PAC-40). */
 export const SOLD_ADVANCE_TARGET: LeadStatus = 'Sold';
 

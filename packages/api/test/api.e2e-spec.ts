@@ -7,6 +7,7 @@ import { ModuleKey } from '@sfa/shared';
 import type {
   ContactDetail,
   CreateSoldDealResponse,
+  HotLeadListResponse,
   LeaderboardResponse,
   LeadDetail,
   PerformanceMetric,
@@ -877,6 +878,228 @@ describe('SFA API (e2e)', () => {
         expect(body.sold.premium).toBe(2000 + 77_777);
         expect(body.sold.recordCount).toBe(5);
       });
+    });
+  });
+
+  describe('Hot Leads (PAC-15)', () => {
+    let staleHotLeadId: string;
+    /*
+     * Tracked so `afterAll` can remove exactly what this block created.
+     *
+     * Cleanup is mandatory here, not tidiness: `Leads (PAC-36 list)` asserts
+     * exact agency-wide totals (`body.total).toBe(2)`), and this block declares
+     * earlier, so leaving five extra leads behind fails five of its tests with
+     * numbers that say nothing about the code.
+     */
+    let createdLeadIds: Types.ObjectId[] = [];
+
+    afterAll(async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      await activityModel.deleteMany({ leadId: { $in: createdLeadIds } });
+      await leadModel.deleteMany({ _id: { $in: createdLeadIds } });
+      createdLeadIds = [];
+    });
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+      const own = { ...base, producerId: producer!._id };
+
+      const [stale, recent, warm, lost, foreign] = await leadModel.create([
+        {
+          ...own,
+          firstName: 'Stale',
+          lastName: 'Hotlead',
+          status: 'Contacted',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
+          phones: ['5550001111'],
+          emails: ['stale@example.test'],
+        },
+        {
+          ...own,
+          firstName: 'Recent',
+          lastName: 'Hotlead',
+          status: 'Quoted',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2026-07-01T00:00:00.000Z'),
+        },
+        {
+          ...own,
+          firstName: 'Warm',
+          lastName: 'Topup',
+          status: 'New',
+          temperature: 'Warm',
+          lastActivityAt: new Date('2025-01-01T00:00:00.000Z'),
+        },
+        // Terminal: must never appear, however hot it was left. Stored as the
+        // raw SmartSuite code for `Lost` so the code expansion is exercised.
+        {
+          ...own,
+          firstName: 'Lost',
+          lastName: 'Cause',
+          status: 'jp76g',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2020-01-01T00:00:00.000Z'),
+        },
+        // Another producer's hot lead: invisible under `own` scope.
+        {
+          ...base,
+          firstName: 'Someone',
+          lastName: 'Elses',
+          status: 'New',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2019-01-01T00:00:00.000Z'),
+        },
+      ]);
+      staleHotLeadId = stale._id.toString();
+      createdLeadIds = [stale, recent, warm, lost, foreign].map((l) => l._id);
+
+      await activityModel.create([
+        {
+          ...base,
+          leadId: stale._id,
+          producerId: producer!._id,
+          type: 'note',
+          subjectType: 'lead',
+          summary: 'Waiting on premium approval',
+          occurredAt: new Date('2026-01-01T00:00:00.000Z'),
+          source: 'internal',
+        },
+        // Older, so it must lose to the note above.
+        {
+          ...base,
+          leadId: stale._id,
+          producerId: producer!._id,
+          type: 'lead_created',
+          subjectType: 'lead',
+          summary: 'Lead created',
+          occurredAt: new Date('2025-12-01T00:00:00.000Z'),
+          source: 'internal',
+        },
+      ]);
+    });
+
+    /*
+     * The regression guard for the most likely way this route breaks.
+     * `@Get(':id')` matches the literal string `hot` just as happily as an
+     * ObjectId, so a reordering in the controller would turn this endpoint into
+     * a lead-detail lookup for a lead that does not exist.
+     */
+    it('resolves as its own route, not as GET /leads/:id', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as HotLeadListResponse;
+      expect(Array.isArray(body.items)).toBe(true);
+      // A detail response would have `id`/`contact` at the top level instead.
+      expect(body).not.toHaveProperty('id');
+    });
+
+    it('orders stalest first — the inverse of the Leads list', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names.indexOf('Stale Hotlead')).toBeLessThan(
+        names.indexOf('Recent Hotlead'),
+      );
+    });
+
+    it('ranks every Hot lead above any Warm one', async () => {
+      // The Warm lead is staler than both Hot leads, so a single sort across
+      // temperatures would float it to the top.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const items = (res.body as HotLeadListResponse).items;
+      const firstWarm = items.findIndex((i) => i.temperature === 'Warm');
+      const lastHot = items.map((i) => i.temperature).lastIndexOf('Hot');
+      if (firstWarm !== -1) expect(lastHot).toBeLessThan(firstWarm);
+    });
+
+    it('carries the narrative line from the most recent activity', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const stale = (res.body as HotLeadListResponse).items.find(
+        (i) => i.id === staleHotLeadId,
+      );
+      expect(stale?.lastActivitySummary).toBe('Waiting on premium approval');
+      expect(stale?.lastActivityType).toBe('note');
+      expect(stale?.initials).toBe('SH');
+    });
+
+    it('excludes terminal statuses, including migrated raw codes', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 25 })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names).not.toContain('Lost Cause');
+    });
+
+    it('clamps a producer to their own leads even when asking for agency', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 25, scope: 'agency' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names).not.toContain('Someone Elses');
+    });
+
+    it('honours the limit', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 1 })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as HotLeadListResponse).items).toHaveLength(1);
+    });
+
+    it('is not the paginated envelope — this panel has no page controls', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      for (const key of ['page', 'pageSize', 'total', 'totalPages']) {
+        expect(res.body).not.toHaveProperty(key);
+      }
+    });
+
+    it.each([
+      ['a limit above the cap', { limit: 99 }],
+      ['a zero limit', { limit: 0 }],
+      ['an unknown temperature', { temperature: 'Lukewarm' }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
     });
   });
 

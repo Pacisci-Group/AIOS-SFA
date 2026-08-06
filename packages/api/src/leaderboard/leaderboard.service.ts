@@ -19,12 +19,8 @@ import {
   resolveRange,
 } from '../performance/performance.range';
 import { GetLeaderboardDto } from './dto/get-leaderboard.dto';
-import {
-  LeaderboardRow,
-  attainment,
-  initialsFrom,
-  rankRows,
-} from './leaderboard.normalize';
+import { initialsFrom } from '../common/domain/initials';
+import { LeaderboardRow, attainment, rankRows } from './leaderboard.normalize';
 
 /** `$facet` output: one rollup per producer, plus the office-wide total. */
 interface LeaderboardFacet {

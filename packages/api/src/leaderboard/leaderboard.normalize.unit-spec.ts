@@ -1,9 +1,4 @@
-import {
-  LeaderboardRow,
-  attainment,
-  initialsFrom,
-  rankRows,
-} from './leaderboard.normalize';
+import { LeaderboardRow, attainment, rankRows } from './leaderboard.normalize';
 
 function row(overrides: Partial<LeaderboardRow>): LeaderboardRow {
   return {
@@ -39,29 +34,6 @@ describe('attainment', () => {
 
   it('is 0 for a real goal and no sales — that attainment IS known', () => {
     expect(attainment(0, 45_000)).toBe(0);
-  });
-});
-
-describe('initialsFrom', () => {
-  it('takes first and last initial', () => {
-    expect(initialsFrom('Pat Producer')).toBe('PP');
-  });
-
-  it('skips middle names', () => {
-    expect(initialsFrom('Ada Marie Lovelace')).toBe('AL');
-  });
-
-  it('handles a single name', () => {
-    expect(initialsFrom('Cher')).toBe('C');
-  });
-
-  it('tolerates extra whitespace', () => {
-    expect(initialsFrom('  Pat   Producer  ')).toBe('PP');
-  });
-
-  it('falls back rather than throwing on an empty name', () => {
-    expect(initialsFrom('')).toBe('?');
-    expect(initialsFrom('   ')).toBe('?');
   });
 });
 
