@@ -185,10 +185,17 @@ export class HotLeadsService {
       // Null rather than invented copy — the UI falls back to the status.
       lastActivitySummary: latest?.summary ?? null,
       lastActivityType: latest?.type ?? null,
-      lastActivityAt:
-        latest?.occurredAt?.toISOString() ??
-        record.lastActivityAt?.toISOString() ??
-        null,
+      /*
+       * The lead's own `lastActivityAt`, deliberately — **not** the activity
+       * row's `occurredAt`.
+       *
+       * This is the field the list is sorted by, and it is what the row's
+       * "2h ago" means: how long since anyone touched this lead. Showing the
+       * activity's timestamp instead lets the visible column disagree with the
+       * ordering whenever the two drift, which makes a correctly-sorted panel
+       * look broken.
+       */
+      lastActivityAt: record.lastActivityAt?.toISOString() ?? null,
     };
   }
 }

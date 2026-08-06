@@ -4,12 +4,13 @@ import { useAuth } from "@/contexts/auth-context";
 import { AddLeadButton } from "@/components/leads/AddLeadButton";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-
-const timeFilters = ["Today", "This Week", "This Month", "Last Month", "Custom"];
+import { RANGE_CHIPS } from "../dashboard-range";
+import type { DashboardRange } from "../useDashboardRange";
+import { DateRangePicker } from "./DateRangePicker";
 
 interface HeaderProps {
-  activeFilter: string;
-  onFilterChange: (f: string) => void;
+  range: DashboardRange;
+  onRangeChange: (next: DashboardRange) => void;
 }
 
 function deriveFirstName(
@@ -24,7 +25,7 @@ function deriveFirstName(
   return first ? first.charAt(0).toUpperCase() + first.slice(1) : "there";
 }
 
-export function Header({ activeFilter, onFilterChange }: HeaderProps) {
+export function Header({ range, onRangeChange }: HeaderProps) {
   const [search, setSearch] = useState("");
   const { user } = useAuth();
 
@@ -66,14 +67,14 @@ export function Header({ activeFilter, onFilterChange }: HeaderProps) {
             placeholder="Search leads, clients, or policy types..."
             className="pl-9 pr-12 bg-input border-border"
           />
-          <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-600 hidden sm:block">
+          <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground hidden sm:block">
             ⌘K
           </kbd>
         </div>
 
         {/* Actions */}
         <div className="flex items-center gap-2 shrink-0">
-          <button className="relative p-2 rounded-lg text-muted-foreground hover:text-slate-300 hover:bg-white/5 transition-all">
+          <button className="relative p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-all">
             <Bell size={16} />
             <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
           </button>
@@ -81,25 +82,33 @@ export function Header({ activeFilter, onFilterChange }: HeaderProps) {
         </div>
       </div>
 
-      {/* Row 2 — Temporal filter */}
-      <div className="flex items-center gap-1 w-fit rounded-lg p-1 bg-gray-900">
-        {timeFilters.map((f) => {
-          const isActive = activeFilter === f;
-          return (
+      {/* Row 2 — Temporal filter. Selection lives in the URL (PAC-9). */}
+      <div className="flex items-center gap-1 w-fit rounded-lg p-1 bg-muted">
+        {RANGE_CHIPS.map((chip) =>
+          chip.key === "custom" ? (
+            <DateRangePicker
+              key={chip.key}
+              range={range}
+              isActive={range.key === "custom"}
+              onApply={(from, to) =>
+                onRangeChange({ key: "custom", from, to })
+              }
+            />
+          ) : (
             <button
-              key={f}
-              onClick={() => onFilterChange(f)}
+              key={chip.key}
+              onClick={() => onRangeChange({ key: chip.key })}
               className={cn(
                 "px-3 py-1.5 rounded-md text-xs transition-all duration-150 border",
-                isActive
-                  ? "bg-muted text-primary border-primary/20 font-semibold"
-                  : "bg-transparent text-muted-foreground border-transparent",
+                range.key === chip.key
+                  ? "bg-background text-primary border-primary/20 font-semibold"
+                  : "bg-transparent text-muted-foreground border-transparent hover:text-foreground",
               )}
             >
-              {f === "Custom" ? "📅 Custom Date" : f}
+              {chip.label}
             </button>
-          );
-        })}
+          ),
+        )}
       </div>
     </div>
   );
