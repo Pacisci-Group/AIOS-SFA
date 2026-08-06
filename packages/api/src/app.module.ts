@@ -19,6 +19,7 @@ import {
   HOUR_MS,
   MINUTE_MS,
 } from './config/rate-limit.config';
+import { ActivitiesModule } from './activities/activities.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { ContactsModule } from './contacts/contacts.module';
@@ -80,6 +81,7 @@ import { ENV_FILE_PATH } from './config/env.config';
     SoldDealsModule,
     PerformanceModule,
     LeaderboardModule,
+    ActivitiesModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,

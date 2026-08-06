@@ -6,6 +6,7 @@ import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
 import type {
   ContactDetail,
+  CreateActivityResponse,
   CreateSoldDealResponse,
   HotLeadListResponse,
   LeaderboardResponse,
@@ -878,6 +879,193 @@ describe('SFA API (e2e)', () => {
         expect(body.sold.premium).toBe(2000 + 77_777);
         expect(body.sold.recordCount).toBe(5);
       });
+    });
+  });
+
+  describe('Activity log (PAC-16)', () => {
+    let ownLeadId: string;
+    let foreignLeadId: string;
+    let createdLeadIds: Types.ObjectId[] = [];
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      const [own, foreign] = await leadModel.create([
+        {
+          ...base,
+          firstName: 'Touchable',
+          lastName: 'Lead',
+          status: 'Contacted',
+          temperature: 'Warm',
+          producerId: producer!._id,
+          lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+        {
+          ...base,
+          firstName: 'Not',
+          lastName: 'Yours',
+          status: 'New',
+          temperature: 'Warm',
+          producerId: owner!._id,
+        },
+      ]);
+      ownLeadId = own._id.toString();
+      foreignLeadId = foreign._id.toString();
+      createdLeadIds = [own._id, foreign._id];
+    });
+
+    // Same reason as the Hot Leads block: `Leads (PAC-36 list)` asserts exact
+    // agency-wide totals and declares later.
+    afterAll(async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      await activityModel.deleteMany({ leadId: { $in: createdLeadIds } });
+      await leadModel.deleteMany({ _id: { $in: createdLeadIds } });
+      createdLeadIds = [];
+    });
+
+    it('a producer logs a call on their own lead', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'call' })
+        .expect(201);
+
+      const body = res.body as CreateActivityResponse;
+      expect(body.activity.type).toBe('call');
+      // Defaulted, because a call is an event that stands on its own.
+      expect(body.activity.summary).toBe('Call logged');
+      expect(body.leadLastActivityAt).toBeTruthy();
+    });
+
+    it('bumps the lead’s lastActivityAt', async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'text' })
+        .expect(201);
+
+      const lead = await leadModel.findById(ownLeadId);
+      expect(lead?.lastActivityAt?.getTime()).toBeGreaterThan(
+        new Date('2026-01-01T00:00:00.000Z').getTime(),
+      );
+    });
+
+    it('a backdated touch does not drag lastActivityAt backwards', async () => {
+      // `$max`, not `$set`. Otherwise logging a call you made last week would
+      // float the lead to the top of a stalest-first panel.
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const before = (await leadModel.findById(ownLeadId))?.lastActivityAt;
+
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({
+          leadId: ownLeadId,
+          type: 'note',
+          summary: 'Backdated note',
+          occurredAt: '2020-01-01T00:00:00.000Z',
+        })
+        .expect(201);
+
+      const after = (await leadModel.findById(ownLeadId))?.lastActivityAt;
+      expect(after?.getTime()).toBe(before?.getTime());
+    });
+
+    it('marks the row as app-written, not migrated', async () => {
+      // The schema default for `source` is `'migration'`, so an omission here
+      // would label a producer's note as imported data.
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'email' })
+        .expect(201);
+
+      const { activity } = res.body as CreateActivityResponse;
+      const row = await activityModel
+        .findById(activity.id)
+        .lean<{ source?: string; isTestRecord?: boolean } | null>();
+      expect(row).not.toBeNull();
+      expect(row?.source).toBe('internal');
+      expect(row?.isTestRecord).toBe(false);
+    });
+
+    it('surfaces the logged activity on the lead timeline', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'note', summary: 'Spoke to spouse' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/leads/${ownLeadId}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const summaries = (res.body as LeadDetail).activities.map(
+        (a) => a.summary,
+      );
+      expect(summaries).toContain('Spoke to spouse');
+    });
+
+    /*
+     * The security-relevant one. `ACTIVITY_TYPES` is the read vocabulary and
+     * includes `sold`; the write vocabulary must not. A client able to post a
+     * `sold` row could invent a sale on the Sold scorecard and the Leaderboard.
+     */
+    it('refuses a system-generated type', async () => {
+      for (const type of ['sold', 'quoted', 'lead_created', 'audit_resolved']) {
+        await request(app.getHttpServer())
+          .post('/api/v1/activities')
+          .set(authHeader(producerToken))
+          .send({ leadId: ownLeadId, type })
+          .expect(400);
+      }
+    });
+
+    it('refuses a note with no text — a note IS its text', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'note' })
+        .expect(400);
+    });
+
+    it('404s on another producer’s lead, never 403', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: foreignLeadId, type: 'call' })
+        .expect(404);
+    });
+
+    it('404s on a malformed lead id rather than 500', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: 'not-an-object-id', type: 'call' })
+        .expect(404);
+    });
+
+    it('403s for a role without leads:write', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(readOnlyToken))
+        .send({ leadId: ownLeadId, type: 'call' })
+        .expect(403);
     });
   });
 
