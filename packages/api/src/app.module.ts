@@ -24,6 +24,7 @@ import { BranchesModule } from './branches/branches.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { LeadsModule } from './leads/leads.module';
+import { PerformanceModule } from './performance/performance.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -76,6 +77,7 @@ import { ENV_FILE_PATH } from './config/env.config';
     QuoteRecapsModule,
     PoliciesModule,
     SoldDealsModule,
+    PerformanceModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,

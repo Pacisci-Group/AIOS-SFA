@@ -10,13 +10,13 @@ import {
   ManagementController,
   OnboardingsController,
   OwnerDashboardController,
-  PerformanceController,
 } from './feature.controllers';
 
 // NOTE: `deal-audits` is now served by the real `DealAuditsModule`
 // (see src/deal-audits), `leads` by the real `LeadsModule` (see src/leads),
-// `quote-recaps` by the real `QuoteRecapsModule` (see src/quote-recaps), and
-// `contacts` by the real `ContactsModule` (see src/contacts), so their stub
+// `quote-recaps` by the real `QuoteRecapsModule` (see src/quote-recaps),
+// `contacts` by the real `ContactsModule` (see src/contacts), and `performance`
+// by the real `PerformanceModule` (see src/performance), so their stub
 // controllers are intentionally omitted here.
 //
 // `files` is gone entirely: it was a `@Controller('files')` placeholder that
@@ -28,7 +28,6 @@ const controllers = [
   HouseholdsController,
   DealsController,
   CrmServiceController,
-  PerformanceController,
   LeaderboardController,
   MailersController,
   OnboardingsController,

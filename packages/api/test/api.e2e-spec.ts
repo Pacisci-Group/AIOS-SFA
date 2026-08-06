@@ -8,6 +8,8 @@ import type {
   ContactDetail,
   CreateSoldDealResponse,
   LeadDetail,
+  PerformanceMetric,
+  PerformanceResponse,
   PolicyCheckResponse,
   SoldDealLeadContext,
   UpdateLeadResult,
@@ -458,14 +460,14 @@ describe('SFA API (e2e)', () => {
       { path: 'households', module: ModuleKey.Clients },
       { path: 'deals', module: ModuleKey.Clients },
       // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14), `leads`
-      // (LeadsModule / PAC-36), `quote-recaps` (QuoteRecapsModule / PAC-39) and
-      // `contacts` (ContactsModule / PAC-38) are real modules, not
+      // (LeadsModule / PAC-36), `quote-recaps` (QuoteRecapsModule / PAC-39),
+      // `contacts` (ContactsModule / PAC-38) and `performance`
+      // (PerformanceModule / PAC-10+11) are real modules, not
       // `{status:'ready'}` stubs — each is covered by its own describe block
       // below. The `files` stub was removed with PAC-39: it borrowed the
       // `quote_recaps` gate and the real file API is now
       // `POST /quote-recaps/quote-document/presign`.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
-      { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
@@ -509,10 +511,14 @@ describe('SFA API (e2e)', () => {
     // both are real modules now. Producer write access through the full guard
     // chain is covered by "Quote Recaps (PAC-39 create)" below.
 
-    it('PATCH /api/v1/performance — forbidden without write (read-only page)', async () => {
-      // Producer role grants performance:read but not performance:write.
+    it('PATCH /api/v1/dashboard — forbidden without write (read-only page)', async () => {
+      // Was `/performance` until PAC-10/11 replaced that stub with a real,
+      // read-only module. `dashboard` proves the same thing and for the same
+      // reason: the Producer template grants `dashboard:read` and not
+      // `dashboard:write`, so reading a page you may read does not imply
+      // writing to it.
       await request(app.getHttpServer())
-        .patch('/api/v1/performance')
+        .patch('/api/v1/dashboard')
         .set(authHeader(producerToken))
         .expect(403);
     });
@@ -549,8 +555,9 @@ describe('SFA API (e2e)', () => {
       // are covered by their own describe blocks below. `leads` writes are
       // `POST /leads` (PAC-37) and `PATCH /leads/:id` (PAC-38), likewise
       // id-scoped rather than a bare PATCH on the collection.
+      // `performance` is a real read-only module now (PAC-10/11) with no
+      // mutating handler at all, so it cannot appear in this list.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
-      { path: 'performance', module: ModuleKey.Performance },
       { path: 'leaderboard', module: ModuleKey.Leaderboard },
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
@@ -602,6 +609,278 @@ describe('SFA API (e2e)', () => {
         .get('/api/v1/leaderboard')
         .set(authHeader(readOnlyToken))
         .expect(200);
+    });
+  });
+
+  describe('Performance scorecards (PAC-10 quoted / PAC-11 sold)', () => {
+    /** Asserted field-by-field: `expect.any` inside a typed `toMatchObject` is
+     *  an `any` the lint rules reject, and this reads no worse. */
+    function expectMetricShape(metric: PerformanceMetric): void {
+      expect(typeof metric.premium).toBe('number');
+      expect(typeof metric.itemCount).toBe('number');
+      expect(typeof metric.recordCount).toBe('number');
+      expect(typeof metric.householdCount).toBe('number');
+      // Nullable by contract, so `typeof` alone would not pin them down.
+      for (const avg of [
+        metric.avgPremiumPerHousehold,
+        metric.avgItemsPerHousehold,
+      ]) {
+        expect(avg === null || typeof avg === 'number').toBe(true);
+        expect(Number.isNaN(avg)).toBe(false);
+      }
+    }
+
+    it('GET /api/v1/performance — producer gets both cards', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      expect(body.range.key).toBe('mtd');
+      expectMetricShape(body.sold);
+      expectMetricShape(body.quoted);
+    });
+
+    it('defaults to mtd and echoes the resolved window back', async () => {
+      // The client sends a key and gets dates: that echo is what lets a preset
+      // and a custom window render through one code path on the web.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      expect(body.range.from).toMatch(/^\d{4}-\d{2}-01$/);
+      expect(body.range.to >= body.range.from).toBe(true);
+    });
+
+    it('echoes back exactly the custom window requested', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query({ range: 'custom', from: '2026-01-01', to: '2026-01-31' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as PerformanceResponse).range).toEqual({
+        key: 'custom',
+        from: '2026-01-01',
+        to: '2026-01-31',
+      });
+    });
+
+    it('reports null averages, never 0 or NaN, on an empty range', async () => {
+      // A far-past window matches nothing. `$group` on `_id: null` emits zero
+      // documents rather than a row of zeroes, and "nothing to average" must
+      // not serialize as "averages zero per household".
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query({ range: 'custom', from: '1990-01-01', to: '1990-01-02' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      for (const card of [body.sold, body.quoted]) {
+        expect(card.recordCount).toBe(0);
+        expect(card.avgPremiumPerHousehold).toBeNull();
+        expect(card.avgItemsPerHousehold).toBeNull();
+      }
+    });
+
+    it.each([
+      ['custom without bounds', { range: 'custom' }],
+      ['custom missing `to`', { range: 'custom', from: '2026-01-01' }],
+      [
+        'from after to',
+        { range: 'custom', from: '2026-02-01', to: '2026-01-01' },
+      ],
+      [
+        'a date that does not exist',
+        { range: 'custom', from: '2026-02-31', to: '2026-03-01' },
+      ],
+      [
+        'a span beyond the cap',
+        { range: 'custom', from: '2020-01-01', to: '2026-01-01' },
+      ],
+      ['an unknown range key', { range: 'fortnight' }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('is readable by any role holding performance:read', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(readOnlyToken))
+        .expect(200);
+    });
+
+    it('has no mutating handler — the scorecard is a projection', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/performance')
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    describe('the arithmetic, over seeded rows', () => {
+      // An isolated window far from `mtd`, so these fixtures can never be
+      // counted by — or collide with — any other block's data.
+      const WINDOW = { range: 'custom', from: '2026-05-01', to: '2026-05-31' };
+
+      beforeAll(async () => {
+        const userModel = app.get<Model<User>>(getModelToken(User.name));
+        const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+        const recapModel = app.get<Model<QuoteRecap>>(
+          getModelToken(QuoteRecap.name),
+        );
+
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const owner = await userModel.findOne({ email: seed.ownerEmail });
+        const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+        const householdOne = new Types.ObjectId();
+
+        await dealModel.create([
+          // Two deals, one household — the household must be counted once.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            soldDateYmd: 20260504,
+            premium: 1000,
+            itemCount: 2,
+          },
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            soldDateYmd: 20260511,
+            premium: 500,
+            itemCount: 1,
+          },
+          // Rung 2 of the identity ladder: no ref, but a legacy string id.
+          {
+            ...base,
+            producerId: producer!._id,
+            legacyHouseholdId: 'legacy-hh-1',
+            soldDateYmd: 20260518,
+            premium: 300,
+            itemCount: 1,
+          },
+          // Rung 3: no household at all — counts as its own.
+          {
+            ...base,
+            producerId: producer!._id,
+            soldDateYmd: 20260525,
+            premium: 200,
+            itemCount: 1,
+          },
+          // Excluded: test record.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260505,
+            premium: 99_999,
+            itemCount: 99,
+            isTestRecord: true,
+          },
+          // Excluded under `own` scope: another producer's deal.
+          {
+            ...base,
+            producerId: owner!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260506,
+            premium: 77_777,
+            itemCount: 77,
+          },
+          // Excluded: inside the agency but outside the window.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260601,
+            premium: 55_555,
+            itemCount: 55,
+          },
+        ]);
+
+        await recapModel.create([
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            quoteDate: new Date('2026-05-04T00:00:00.000Z'),
+            quoteDateYmd: 20260504,
+            premium: 800,
+            itemCount: 2,
+          },
+        ]);
+      });
+
+      it('sums premium and items, and counts each household once', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).sold).toEqual({
+          premium: 2000,
+          itemCount: 5,
+          recordCount: 4,
+          // Two deals share a household; the legacy-id row and the
+          // household-less row each count as one. 2 shared + 1 + 1 = 3.
+          householdCount: 3,
+          avgPremiumPerHousehold: 666.67,
+          avgItemsPerHousehold: 1.67,
+        });
+      });
+
+      it('rolls quoted recaps up independently of sold deals', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).quoted).toMatchObject({
+          premium: 800,
+          itemCount: 2,
+          recordCount: 1,
+          householdCount: 1,
+          avgPremiumPerHousehold: 800,
+          avgItemsPerHousehold: 2,
+        });
+      });
+
+      it('clamps a producer to their own rows even when asking for agency', async () => {
+        // The owner's 77,777 deal sits in the same agency and window. A
+        // client-supplied scope may only ever narrow.
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query({ ...WINDOW, scope: 'agency' })
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).sold.premium).toBe(2000);
+      });
+
+      it('includes every producer for an agency-scoped caller', async () => {
+        // Same window, agency data scope: the owner's own deal is now in range
+        // alongside the producer's four. Test records stay excluded.
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        const body = res.body as PerformanceResponse;
+        expect(body.sold.premium).toBe(2000 + 77_777);
+        expect(body.sold.recordCount).toBe(5);
+      });
     });
   });
 
