@@ -7,6 +7,7 @@ import { getPublicLeadForm, submitPublicLead } from "@/lib/lead-intake-api";
 import { LeadIntakeForm } from "./components/LeadIntakeForm";
 import {
   newSubmissionToken,
+  toPolicyOfInterestInputs,
   type LeadIntakeFormValues,
 } from "./components/lead-intake-schema";
 
@@ -40,6 +41,9 @@ export default function PublicLeadFormPage() {
         primaryContact: values.primaryContact,
         address: values.address,
         members: values.members,
+        policiesOfInterest: toPolicyOfInterestInputs(values.policies),
+        sameAsHousehold: values.sameAsHousehold,
+        propertyAddress: values.propertyAddress,
         submissionToken: submissionToken.current,
       }),
     onSuccess: () => setSubmitted(true),

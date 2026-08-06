@@ -68,6 +68,9 @@ export class PublicLeadsService {
       primaryContact: dto.primaryContact,
       address: dto.address,
       members: dto.members,
+      policiesOfInterest: dto.policiesOfInterest,
+      sameAsHousehold: dto.sameAsHousehold,
+      propertyAddress: dto.propertyAddress,
       quoteControlNumber: dto.quoteControlNumber,
       submissionToken: dto.submissionToken,
     });

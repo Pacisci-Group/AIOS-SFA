@@ -2003,6 +2003,151 @@ describe('SFA API (e2e)', () => {
         created.id,
       );
     });
+    it('stores the policies of interest with their item counts (PAC-56 #2)', async () => {
+      const created = await createAs(
+        producerToken,
+        payload('Kelbrook', {
+          policiesOfInterest: [
+            { policyType: 'Auto', itemCount: 2 },
+            { policyType: 'Umbrella', itemCount: 1 },
+          ],
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(
+        lead!.policiesOfInterest.map((p) => [p.policyType, p.itemCount]),
+      ).toEqual([
+        ['Auto', 2],
+        ['Umbrella', 1],
+      ]);
+    });
+
+    it('defaults the policies of interest to an empty array when omitted', async () => {
+      // The web form requires a selection; the endpoint must not, or a partial
+      // submission would 400 and the lead would be lost outright.
+      const created = await createAs(producerToken, payload('Lanyon'));
+
+      const lead = await leadModel.findById(created.id);
+      expect(lead!.policiesOfInterest).toEqual([]);
+    });
+
+    it('rejects a policy type outside the canonical vocabulary', async () => {
+      await createAs(
+        producerToken,
+        payload('Marlow', {
+          policiesOfInterest: [{ policyType: 'Pet', itemCount: 1 }],
+        }),
+        400,
+      );
+    });
+
+    it('unions the policies of interest when deduping onto an existing lead', async () => {
+      const first = await createAs(
+        producerToken,
+        payload('Norbury', {
+          quoteControlNumber: 'QCN-PAC56-1',
+          policiesOfInterest: [{ policyType: 'Auto', itemCount: 1 }],
+        }),
+      );
+
+      // Same QCN — signal 2 merges the second submission onto the first lead.
+      const second = await createAs(
+        producerToken,
+        payload('Norbury', {
+          quoteControlNumber: 'QCN-PAC56-1',
+          policiesOfInterest: [
+            // Restating Auto with a different count must NOT add a second row.
+            { policyType: 'Auto', itemCount: 3 },
+            { policyType: 'Umbrella', itemCount: 1 },
+          ],
+          address: {
+            street: '9 Norbury Rise',
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74109',
+          },
+        }),
+      );
+
+      expect(second.id).toBe(first.id);
+      const lead = await leadModel.findById(first.id);
+      // Additive: someone re-enquiring about a second line wants both quoted,
+      // and the count already on file wins over the restatement.
+      expect(
+        lead!.policiesOfInterest.map((p) => [p.policyType, p.itemCount]),
+      ).toEqual([
+        ['Auto', 1],
+        ['Umbrella', 1],
+      ]);
+    });
+
+    it('stores the household address as the property address when same-as is set (PAC-56 #6)', async () => {
+      const created = await createAs(
+        producerToken,
+        payload('Oakridge', {
+          policiesOfInterest: [{ policyType: 'Home', itemCount: 1 }],
+          sameAsHousehold: true,
+          // Discarded: a submission cannot claim "same as household" and store
+          // something else.
+          propertyAddress: {
+            street: '999 Elsewhere Ave',
+            city: 'Broken Arrow',
+            state: 'OK',
+            zip: '74011',
+          },
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(lead!.propertyAddress?.street).toBe('77 Oakridge Lane');
+    });
+
+    it('stores a separate property address when same-as is cleared', async () => {
+      const created = await createAs(
+        producerToken,
+        payload('Pinehurst', {
+          policiesOfInterest: [{ policyType: 'Landlord', itemCount: 2 }],
+          sameAsHousehold: false,
+          propertyAddress: {
+            street: '4 Rental Row',
+            city: 'Bixby',
+            state: 'OK',
+            zip: '74008',
+          },
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(lead!.propertyAddress?.street).toBe('4 Rental Row');
+      // The living address is untouched — they are different places.
+      expect(lead!.address?.street).toBe('77 Pinehurst Lane');
+    });
+
+    it('rejects a property policy with no address once same-as is cleared', async () => {
+      await createAs(
+        producerToken,
+        payload('Quarry', {
+          policiesOfInterest: [{ policyType: 'Home', itemCount: 1 }],
+          sameAsHousehold: false,
+          propertyAddress: { street: '', city: '', state: '', zip: '' },
+        }),
+        400,
+      );
+    });
+
+    it('needs no property address for a non-property policy', async () => {
+      const created = await createAs(
+        producerToken,
+        payload('Ravenswood', {
+          policiesOfInterest: [{ policyType: 'Auto', itemCount: 1 }],
+          sameAsHousehold: false,
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(lead!.propertyAddress).toBeUndefined();
+    });
 
     it('does not reassign the producer when deduping onto an existing lead', async () => {
       const owner = await userModel.findOne({ email: seed.ownerEmail });
@@ -2168,6 +2313,18 @@ describe('SFA API (e2e)', () => {
         emails: ['devon.detail@example.com'],
         phones: ['5551110000'],
         quoteControlNumber: 'QCN-380001',
+        // `PYgez` is stored as the raw Quote Recaps choice code, to prove the
+        // read path normalizes this field like every other policy type here.
+        policiesOfInterest: [
+          { policyType: 'PYgez', itemCount: 2 },
+          { policyType: 'Home', itemCount: 1 },
+        ],
+        propertyAddress: {
+          street: '11 Insured Way',
+          city: 'Jenks',
+          state: 'OK',
+          zip: '74037',
+        },
         producerId: producer!._id,
         householdId: household._id,
         primaryContactId: primary._id,
@@ -2354,6 +2511,17 @@ describe('SFA API (e2e)', () => {
       expect(body.temperature).toBe('Hot');
       expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
       expect(body.quoteControlNumber).toBe('QCN-380001');
+      // `PYgez` is the SmartSuite code for Auto — normalized on read.
+      expect(body.policiesOfInterest).toEqual([
+        { policyType: 'Auto', itemCount: 2 },
+        { policyType: 'Home', itemCount: 1 },
+      ]);
+      expect(body.propertyAddress).toEqual({
+        street: '11 Insured Way',
+        city: 'Jenks',
+        state: 'OK',
+        zip: '74037',
+      });
       expect(body.intakeChannel).toBe('internal');
       // Recomputed from `createdDate`, not the stored `agingDays` (0).
       expect(body.agingDays).toBeGreaterThan(0);
@@ -3520,6 +3688,45 @@ describe('SFA API (e2e)', () => {
       // Left empty on purpose: nobody has said where this came from yet.
       expect(lead!.leadSource?.code ?? null).toBeNull();
       expect(lead!.leadSource?.label ?? '').toBe('');
+    });
+
+    it('records the policies of interest submitted publicly (PAC-56 #2)', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/v1/public/leads/${activeToken}`)
+        .send({
+          ...submission('Oyelaran'),
+          policiesOfInterest: [
+            { policyType: 'Home', itemCount: 1 },
+            { policyType: 'Auto', itemCount: 2 },
+          ],
+          sameAsHousehold: true,
+        })
+        .expect(201);
+
+      const lead = await leadModel.findOne({ lastName: 'Oyelaran' });
+      expect(
+        lead!.policiesOfInterest.map((p) => [p.policyType, p.itemCount]),
+      ).toEqual([
+        ['Home', 1],
+        ['Auto', 2],
+      ]);
+      // A Home policy with "same as household" ticked resolves server-side.
+      expect(lead!.propertyAddress?.street).toBe('5 Oyelaran Street');
+    });
+
+    it('rejects a public property policy with no address once same-as is cleared', async () => {
+      // The public path runs the identical refinement — it is on the shared
+      // base schema, not bolted onto the authenticated one.
+      await request(app.getHttpServer())
+        .post(`/api/v1/public/leads/${activeToken}`)
+        .send({
+          ...submission('Osei'),
+          policiesOfInterest: [{ policyType: 'Renters', itemCount: 1 }],
+          sameAsHousehold: false,
+        })
+        .expect(400);
+
+      expect(await leadModel.countDocuments({ lastName: 'Osei' })).toBe(0);
     });
 
     it('surfaces a share-link lead under the no-source filter', async () => {

@@ -26,6 +26,11 @@ body:json {
       "zip": "74110"
     },
     "members": [],
+    "policiesOfInterest": [
+      { "policyType": "Home", "itemCount": 1 },
+      { "policyType": "Auto", "itemCount": 2 }
+    ],
+    "sameAsHousehold": true,
     "submissionToken": "{{$guid}}"
   }
 }
@@ -53,6 +58,15 @@ docs {
   Same shape as `POST /leads`, **minus `leadSourceCode`**. Lead source is
   internal vocabulary (Quotewizard, Soleo, Data Lot, JYA) and is never shown to
   an outside submitter.
+
+  That includes `policiesOfInterest` (PAC-56 #2) — `{ policyType, itemCount }`
+  rows in the canonical vocabulary — and the conditional `sameAsHousehold` /
+  `propertyAddress` pair (PAC-56 #6). These are the only fields on the public
+  form the submitter answers about the *product* rather than about themselves;
+  the producer reads them back on `GET /leads/:id` before starting the Quote
+  Recap. The property-address rule is enforced on this route too — it sits on
+  the shared base schema, not on the authenticated one — so a `Home` request
+  with `sameAsHousehold: false` and a blank address is a `400` here as well.
 
   ## Tenancy comes only from the link
   `agencyId`, `branchId` and `producerId` are read from the stored share-link

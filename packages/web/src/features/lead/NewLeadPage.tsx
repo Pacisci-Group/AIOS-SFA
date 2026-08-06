@@ -8,6 +8,7 @@ import { createLead } from "@/lib/lead-intake-api";
 import { LeadIntakeForm } from "./components/LeadIntakeForm";
 import {
   newSubmissionToken,
+  toPolicyOfInterestInputs,
   type LeadIntakeFormValues,
 } from "./components/lead-intake-schema";
 
@@ -31,6 +32,9 @@ export default function NewLeadPage() {
         primaryContact: values.primaryContact,
         address: values.address,
         members: values.members,
+        policiesOfInterest: toPolicyOfInterestInputs(values.policies),
+        sameAsHousehold: values.sameAsHousehold,
+        propertyAddress: values.propertyAddress,
         leadSourceCode: values.leadSourceCode ?? "",
         submissionToken: submissionToken.current,
       }),

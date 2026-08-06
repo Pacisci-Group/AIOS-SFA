@@ -1,5 +1,6 @@
 import type {
   CreateLeadResponse,
+  LeadPolicyOfInterestInput,
   PublicLeadFormInfo,
   PublicLeadSubmitResponse,
   ShareLinkRow,
@@ -28,6 +29,16 @@ interface LeadIntakePayload {
     dateOfBirth?: string;
     role: string;
   }[];
+  /** What the submitter wants quoted — canonical labels + item counts. */
+  policiesOfInterest: LeadPolicyOfInterestInput[];
+  /** When true the server stores `address` as the property address. */
+  sameAsHousehold: boolean;
+  propertyAddress?: {
+    street: string;
+    city: string;
+    state: string;
+    zip: string;
+  };
   submissionToken?: string;
 }
 

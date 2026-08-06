@@ -155,6 +155,17 @@ export interface LeadDetailPriorInsurance {
   policies: LeadDetailPriorPolicy[];
 }
 
+/**
+ * One row of "what they asked us to quote", as captured at intake (PAC-56 #2).
+ *
+ * Read-side twin of `LeadPolicyOfInterestInput`: `policyType` is a canonical
+ * label here even if a raw code somehow reached the collection.
+ */
+export interface LeadDetailPolicyOfInterest {
+  policyType: string;
+  itemCount: number;
+}
+
 export interface LeadDetailActivity {
   id: string;
   type: ActivityType;
@@ -188,6 +199,21 @@ export interface LeadDetail {
   /** The household's living address, resolved from lead → household. */
   address: StructuredAddress | null;
   quoteControlNumber: string | null;
+  /**
+   * What the submitter asked to be quoted (PAC-56 #2), canonical labels.
+   *
+   * Always an array — empty on every migrated lead and on any submitted before
+   * the field existed. It is an intent signal captured at intake, **not** a
+   * record of what was actually quoted; that is `latestQuoteRecap.policies`.
+   */
+  policiesOfInterest: LeadDetailPolicyOfInterest[];
+  /**
+   * The insured dwelling captured at intake (PAC-56 #6), already resolved: when
+   * the submitter ticked "same as household" this holds the household address
+   * itself, not a flag the client has to interpret. `null` when no property-type
+   * policy was asked for — and on every migrated lead.
+   */
+  propertyAddress: StructuredAddress | null;
   /** Recomputed live from `createdDate`, not the value migration froze in. */
   agingDays: number;
   createdDate: string | null;

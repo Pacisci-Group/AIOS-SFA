@@ -1,6 +1,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { SELECTABLE_LEAD_SOURCE_OPTIONS } from "@sfa/shared";
-import { useForm, FormProvider } from "react-hook-form";
+import {
+  SELECTABLE_LEAD_SOURCE_OPTIONS,
+  isPropertyPolicyType,
+} from "@sfa/shared";
+import { useMemo } from "react";
+import { useForm, useWatch, FormProvider } from "react-hook-form";
+import { PolicyRowsField } from "@/components/policies/PolicyRowsField";
+import { PropertyAddressSection } from "@/components/policies/PropertyAddressSection";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -67,6 +73,30 @@ export function LeadIntakeForm({
     defaultValues: EMPTY_LEAD_INTAKE,
     mode: "onBlur",
   });
+
+  const policies = useWatch({ control: form.control, name: "policies" });
+  const hasPropertyPolicy = (policies ?? []).some((p) =>
+    isPropertyPolicyType(p?.policyType),
+  );
+
+  // Watched field-by-field and rebuilt only when a part actually changes.
+  // `PropertyAddressSection` copies this into the property fields inside an
+  // effect keyed on its identity, so watching the `address` object wholesale —
+  // a fresh reference on every render — would loop.
+  const street = useWatch({ control: form.control, name: "address.street" });
+  const city = useWatch({ control: form.control, name: "address.city" });
+  const state = useWatch({ control: form.control, name: "address.state" });
+  const zip = useWatch({ control: form.control, name: "address.zip" });
+  const householdAddress = useMemo(
+    () =>
+      // `null` disables the "same as household" toggle. The one thing worth
+      // gating on is the street: copying a city with no street would produce a
+      // property address nobody can find.
+      street?.trim()
+        ? { street, city: city ?? "", state: state ?? "", zip: zip ?? "" }
+        : null,
+    [street, city, state, zip],
+  );
 
   return (
     <FormProvider {...form}>
@@ -297,6 +327,31 @@ export function LeadIntakeForm({
             </div>
             <HouseholdMembersField />
           </section>
+
+          {/*
+            * Last on the form, and the same rows the Quote Recap uses — minus
+            * premium, which nobody can answer before a quote exists (PAC-56 #2).
+            */}
+          <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
+            <div>
+              <SectionHeading>Policies of interest</SectionHeading>
+              <p className="mt-1 text-xs text-muted-foreground">
+                What would you like quoted? One row per policy.
+              </p>
+            </div>
+            <PolicyRowsField showPremium={false} />
+            {form.formState.errors.policies?.root && (
+              <p className="text-sm text-destructive">
+                {form.formState.errors.policies.root.message}
+              </p>
+            )}
+          </section>
+
+          {/* Same trigger as the Quote Recap: Home, Renters, Condominium or
+              Landlord means there is a dwelling whose address we don't have. */}
+          {hasPropertyPolicy && (
+            <PropertyAddressSection householdAddress={householdAddress} />
+          )}
 
           {errorMessage ? (
             <div

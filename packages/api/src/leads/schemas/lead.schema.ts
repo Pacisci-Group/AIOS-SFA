@@ -25,6 +25,25 @@ export interface LeadAddress {
 }
 
 /**
+ * One policy the submitter asked to have quoted (PAC-56 #2).
+ *
+ * A real sub-schema rather than `type: Object`, so the item count is stored as a
+ * number and a malformed row fails on write instead of surfacing as `NaN` on a
+ * dashboard later.
+ */
+@Schema({ _id: false })
+export class LeadPolicyOfInterest {
+  @Prop({ required: true, trim: true })
+  policyType: string;
+
+  @Prop({ required: true, min: 1, max: 99 })
+  itemCount: number;
+}
+
+const LeadPolicyOfInterestSchema =
+  SchemaFactory.createForClass(LeadPolicyOfInterest);
+
+/**
  * Provenance — how this lead entered the platform (PAC-37). A producer needs to
  * tell an externally-submitted record from one they typed in themselves, and a
  * misbehaving share link has to be traceable back to the leads it produced.
@@ -74,6 +93,29 @@ export class Lead extends TenantRecord {
 
   @Prop({ type: Date, index: true })
   lastActivityAt?: Date;
+
+  /**
+   * What the submitter asked to be quoted, captured at intake (PAC-56 #2).
+   * Canonical `POLICY_TYPES` labels plus an item count, mirroring the Quote
+   * Recap's policy rows minus premium.
+   *
+   * Empty on every migrated lead: SmartSuite's Leads table has no equivalent
+   * field, and the legacy Fillout intake forms never asked. Treat it as a
+   * hint for the producer, never as a precondition for anything downstream.
+   */
+  @Prop({ type: [LeadPolicyOfInterestSchema], default: [] })
+  policiesOfInterest: LeadPolicyOfInterest[];
+
+  /**
+   * The insured dwelling as captured at intake (PAC-56 #6) — **already
+   * resolved**: when the submitter ticked "same as household" this holds a copy
+   * of the living address, so nothing downstream has to re-apply the flag.
+   *
+   * Legacy stored the same thing on the lead (`Property Address`,
+   * `sfd5ba053e`); it is the quote stage that inherits it, not the reverse.
+   */
+  @Prop({ type: Object })
+  propertyAddress?: LeadAddress;
 
   @Prop()
   quoteControlNumber?: string;

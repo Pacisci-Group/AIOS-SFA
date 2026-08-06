@@ -66,6 +66,18 @@ tests {
     expect(rawCodes).to.not.include(res.getBody().status);
   });
 
+  test("policies of interest are canonical labels, never raw policy codes", function () {
+    const body = res.getBody();
+    const rawCodes = ["PYgez", "sNMRK", "Hn155", "mrzQD", "mCt4m", "UAOk8"];
+    // Always an array — `[]` on migrated leads and on anything created before
+    // PAC-56 #2, never absent, so the client needs no null check.
+    expect(body.policiesOfInterest).to.be.an("array");
+    body.policiesOfInterest.forEach(function (policy) {
+      expect(rawCodes).to.not.include(policy.policyType);
+      expect(policy.itemCount).to.be.a("number");
+    });
+  });
+
   test("quoted products are canonical labels, never raw policy codes", function () {
     const recap = res.getBody().latestQuoteRecap;
     const rawCodes = ["PYgez", "sNMRK", "Hn155", "mrzQD", "mCt4m", "UAOk8"];
@@ -164,6 +176,11 @@ docs {
     "phones": ["5551234567"],
     "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
     "quoteControlNumber": "QCN-11741",
+    "policiesOfInterest": [
+      { "policyType": "Auto", "itemCount": 2 },
+      { "policyType": "Home", "itemCount": 1 }
+    ],
+    "propertyAddress": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
     "agingDays": 12,
     "createdDate": "2026-07-16T00:00:00.000Z",
     "lastActivityAt": "2026-07-28T14:02:11.000Z",
@@ -229,6 +246,8 @@ docs {
   | temperature        | enum            | `Hot` \| `Warm` \| `Cold` \| `Unknown`                    |
   | leadSource         | object          | `{ code, label }` — `code` is what `PATCH` accepts back   |
   | address            | object \| null  | household living address, coerced from three stored shapes |
+  | policiesOfInterest | array           | `{ policyType, itemCount }` captured at intake (PAC-56 #2); `[]` on migrated leads |
+  | propertyAddress    | object \| null  | insured dwelling from intake (PAC-56 #6), "same as household" already applied |
   | agingDays          | int             | recomputed live, **not** the stale migrated value          |
   | intakeChannel      | enum \| null    | `internal` \| `share_link`; `null` on migrated leads       |
   | primaryContact     | object \| null  | DOB is `YYYY-MM-DD`, never a timestamp                    |

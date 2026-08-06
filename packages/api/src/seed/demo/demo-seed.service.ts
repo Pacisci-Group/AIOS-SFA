@@ -28,7 +28,7 @@ import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema'
 import { Activity } from '../../activities/schemas/activity.schema';
 import { PermissionsService } from '../../permissions/permissions.service';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
-import { normalizeLeadSource } from '@sfa/shared';
+import { normalizeLeadSource, POLICY_TYPES } from '@sfa/shared';
 import { seedAuditTemplates } from '../audit-templates.seed';
 import {
   AUDIT_TEMPLATES,
@@ -613,6 +613,14 @@ export class DemoSeedService {
           createdDate,
           lastActivityAt,
           quoteControlNumber: `QCN-${100000 + i}`,
+          // A quarter are left empty on purpose: every migrated lead, and every
+          // one submitted before PAC-56 #2 shipped, has none — so the Lead
+          // Detail card's "omit when empty" path has data to exercise locally.
+          policiesOfInterest: rng.chance(0.75)
+            ? rng
+                .sample(POLICY_TYPES, rng.int(1, 3))
+                .map((policyType) => ({ policyType, itemCount: rng.int(1, 3) }))
+            : [],
           producerId: producer.userId,
           householdId: hh?.id,
           legacyHouseholdId: hh?.legacyId,

@@ -1,6 +1,7 @@
 import type {
   HouseholdMemberRole,
   IntakeChannel,
+  LeadPolicyOfInterestInput,
   NormalizedLeadSource,
 } from '@sfa/shared';
 import { ClientSession, Types } from 'mongoose';
@@ -63,6 +64,15 @@ export interface IntakeInput {
   primaryContact: IntakePerson;
   address?: IntakeAddress;
   members: IntakeMember[];
+  /** Canonical labels; empty when the submitter selected nothing. */
+  policiesOfInterest?: LeadPolicyOfInterestInput[];
+  /**
+   * When true the pipeline stores `address` as the property address and ignores
+   * `propertyAddress` entirely — a submission cannot claim "same as household"
+   * and store something else.
+   */
+  sameAsHousehold?: boolean;
+  propertyAddress?: IntakeAddress;
   quoteControlNumber?: string;
   /** Raw client token; the orchestrator namespaces it before use. */
   submissionToken?: string;

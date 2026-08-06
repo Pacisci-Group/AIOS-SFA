@@ -1,7 +1,16 @@
 import type { LeadDetail } from "@sfa/shared";
-import { Calendar, Hash, Mail, MapPin, Phone } from "lucide-react";
+import {
+  Calendar,
+  Hash,
+  Home,
+  Mail,
+  MapPin,
+  Phone,
+  ShieldCheck,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { formatPhone } from "@/lib/leads-api";
+import { cn } from "@/lib/utils";
 import { EditContactDialog } from "./EditContactDialog";
 import { LeadSourceSelect } from "./lead-inline-selects";
 import { formatAddress, formatDate } from "./lead-display";
@@ -16,13 +25,15 @@ function Field({
   icon: Icon,
   label,
   value,
+  className,
 }: {
   icon: LucideIcon;
   label: string;
   value: string;
+  className?: string;
 }) {
   return (
-    <div className="flex items-start gap-2.5">
+    <div className={cn("flex items-start gap-2.5", className)}>
       <Icon size={13} className="mt-0.5 shrink-0 text-muted-foreground" />
       <div className="min-w-0">
         <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
@@ -92,6 +103,37 @@ export function LeadContactCard({
             icon={Hash}
             label="Quote Control #"
             value={lead.quoteControlNumber}
+          />
+        )}
+        {/*
+          * Omitted rather than shown empty — every migrated lead and every one
+          * submitted before PAC-56 #2 has none, and a permanent "—" would read
+          * as "they wanted nothing" instead of "we never asked".
+          */}
+        {lead.policiesOfInterest.length > 0 && (
+          <Field
+            icon={ShieldCheck}
+            label="Policies of Interest"
+            // The count is only worth showing when it isn't the default 1 —
+            // "Auto ×1, Home ×1" is noise around the part that matters.
+            value={lead.policiesOfInterest
+              .map((policy) =>
+                policy.itemCount > 1
+                  ? `${policy.policyType} ×${policy.itemCount}`
+                  : policy.policyType,
+              )
+              .join(", ")}
+            className="sm:col-span-2"
+          />
+        )}
+        {/* Only ever set when a property policy was asked for, and already
+            resolved server-side if it matched the household address. */}
+        {lead.propertyAddress && (
+          <Field
+            icon={Home}
+            label="Property Address"
+            value={formatAddress(lead.propertyAddress)}
+            className="sm:col-span-2"
           />
         )}
       </div>

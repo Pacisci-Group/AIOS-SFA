@@ -1,4 +1,4 @@
-import { POLICY_TYPE_OPTIONS } from "@sfa/shared";
+import { POLICY_TYPE_OPTIONS, type PolicyType } from "@sfa/shared";
 import { Plus, X } from "lucide-react";
 import { useFieldArray, useFormContext } from "react-hook-form";
 import { Button } from "@/components/ui/button";
@@ -17,18 +17,47 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { QuoteRecapFormValues } from "./quote-recap-schema";
 
 const MAX_POLICIES = 12;
 
 /**
- * The quoted-policy rows. One row is always present: the remove button is
- * hidden at a single row, which enforces "at least one policy" as an
- * affordance rather than an error the producer has to read. The zod `.min(1)`
- * remains the actual guarantee.
+ * The slice of form state these rows own, under the field name `policies`.
+ *
+ * Declared here rather than imported from either feature so the component can
+ * be shared: `useFormContext<PolicyRowsFormValues>()` is an independent
+ * instantiation, and both the Quote Recap form and the New Lead form register
+ * these exact paths. Premium is optional because the New Lead form omits it.
+ *
+ * Premium and item count stay **strings** in form state and are converted at
+ * each form's submit boundary.
  */
-export function PolicyRowsField() {
-  const form = useFormContext<QuoteRecapFormValues>();
+export interface PolicyRowsFormValues {
+  policies: {
+    policyType: PolicyType;
+    premium?: string;
+    itemCount: string;
+  }[];
+}
+
+interface PolicyRowsFieldProps {
+  /**
+   * The Quote Recap records what a policy costs; the New Lead form (PAC-56 #2)
+   * asks the same question *before* a quote exists, where nobody — least of all
+   * a prospect — can answer it. Type and item count are common to both.
+   */
+  showPremium?: boolean;
+}
+
+/**
+ * The policy rows, shared by the Quote Recap form (PAC-39) and the New Lead
+ * form's policies of interest (PAC-56 #2).
+ *
+ * One row is always present: the remove button is hidden at a single row, which
+ * enforces "at least one policy" as an affordance rather than an error the user
+ * has to read. Each form's zod `.min(1)` remains the actual guarantee.
+ */
+export function PolicyRowsField({ showPremium = true }: PolicyRowsFieldProps) {
+  const form = useFormContext<PolicyRowsFormValues>();
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: "policies",
@@ -59,7 +88,13 @@ export function PolicyRowsField() {
             )}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div
+            className={
+              showPremium
+                ? "grid gap-3 sm:grid-cols-3"
+                : "grid gap-3 sm:grid-cols-2"
+            }
+          >
             <FormField
               control={form.control}
               name={`policies.${index}.policyType`}
@@ -84,27 +119,29 @@ export function PolicyRowsField() {
                 </FormItem>
               )}
             />
-            <FormField
-              control={form.control}
-              name={`policies.${index}.premium`}
-              render={({ field: f }) => (
-                <FormItem>
-                  <FormLabel>Premium ($)</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="number"
-                      inputMode="decimal"
-                      step="0.01"
-                      min="0"
-                      className="bg-card border-border"
-                      {...f}
-                      value={f.value ?? ""}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {showPremium && (
+              <FormField
+                control={form.control}
+                name={`policies.${index}.premium`}
+                render={({ field: f }) => (
+                  <FormItem>
+                    <FormLabel>Premium ($)</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.01"
+                        min="0"
+                        className="bg-card border-border"
+                        {...f}
+                        value={f.value ?? ""}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
             <FormField
               control={form.control}
               name={`policies.${index}.itemCount`}
@@ -135,7 +172,11 @@ export function PolicyRowsField() {
         size="sm"
         disabled={fields.length >= MAX_POLICIES}
         onClick={() =>
-          append({ policyType: "Auto", premium: "", itemCount: "1" })
+          append(
+            showPremium
+              ? { policyType: "Auto", premium: "", itemCount: "1" }
+              : { policyType: "Auto", itemCount: "1" },
+          )
         }
       >
         <Plus size={14} />

@@ -11,6 +11,7 @@ import {
   phonesMatch,
 } from './intake.normalize';
 import {
+  IntakeAddress,
   IntakeInput,
   ResolvedLead,
   sessionOptions,
@@ -46,6 +47,29 @@ const TERMINAL_STATUSES = [
   'Not Qualified',
 ];
 const TERMINAL_STATUS_VALUES = TERMINAL_STATUSES.flatMap(leadStatusQueryValues);
+
+/**
+ * The insured dwelling to store, with "same as household" already applied.
+ *
+ * Resolving it here rather than persisting the flag means nothing downstream has
+ * to remember the rule — and, as on the Quote Recap, a submission that claims
+ * "same as household" cannot smuggle in a different address: its own
+ * `propertyAddress` is discarded, not merged.
+ */
+function resolvePropertyAddress(input: IntakeInput): IntakeAddress | undefined {
+  const address = input.sameAsHousehold ? input.address : input.propertyAddress;
+  if (!address) return undefined;
+  // An address whose every part is blank is noise, not data — the form sends
+  // empty strings for a section the submitter never saw. Fields listed rather
+  // than `Object.values`, whose `{}` overload widens to `any[]`.
+  const hasAny = [
+    address.street,
+    address.city,
+    address.state,
+    address.zip,
+  ].some((value) => value?.trim());
+  return hasAny ? address : undefined;
+}
 
 interface LeadRefs {
   contactId: Types.ObjectId;
@@ -154,6 +178,8 @@ export class ResolveLeadStep {
           // unusable — the migration stamped every record with the import time).
           // Without this the lead sinks to the bottom of its own list.
           lastActivityAt: now,
+          policiesOfInterest: input.policiesOfInterest ?? [],
+          propertyAddress: resolvePropertyAddress(input),
           quoteControlNumber: input.quoteControlNumber?.trim() || undefined,
           producerId: deps.ctx.producerId,
           householdId: refs.householdId,
@@ -216,6 +242,28 @@ export class ResolveLeadStep {
     if (!lead.primaryContactId) set.primaryContactId = refs.contactId;
     if (!lead.quoteControlNumber && input.quoteControlNumber?.trim()) {
       set.quoteControlNumber = input.quoteControlNumber.trim();
+    }
+
+    // Additive, like the contact details above: someone re-enquiring about a
+    // second line wants both quoted, so the union is the honest answer. Merged
+    // in code rather than with `$addToSet`, which compares whole sub-documents
+    // — "Auto x1" and "Auto x2" are not two interests, they are one restated.
+    const incoming = input.policiesOfInterest ?? [];
+    if (incoming.length > 0) {
+      const merged = [...(lead.policiesOfInterest ?? [])];
+      for (const policy of incoming) {
+        if (
+          !merged.some((existing) => existing.policyType === policy.policyType)
+        ) {
+          merged.push(policy);
+        }
+      }
+      set.policiesOfInterest = merged;
+    }
+
+    const propertyAddress = resolvePropertyAddress(input);
+    if (!lead.propertyAddress && propertyAddress) {
+      set.propertyAddress = propertyAddress;
     }
 
     await this.leadModel.updateOne(

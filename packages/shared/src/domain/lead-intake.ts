@@ -9,6 +9,7 @@
  * interfaces are what both agree the shape is.
  */
 import type { HouseholdMemberRole } from './household-role';
+import type { PolicyType } from './policy-type';
 
 /** How a lead entered the platform. Stored on `leads.intakeSource.channel`. */
 export type IntakeChannel = 'internal' | 'share_link';
@@ -41,10 +42,34 @@ export interface LeadIntakeMember {
   role: HouseholdMemberRole;
 }
 
+/**
+ * One policy the submitter wants quoted (PAC-56 #2).
+ *
+ * The Quote Recap's policy row minus premium — this is asked before a quote
+ * exists, so there is no figure to give. Same vocabulary on purpose: the
+ * prospect naming "Landlord" here and the producer recording a Landlord policy
+ * later must be saying the same word.
+ */
+export interface LeadPolicyOfInterestInput {
+  policyType: PolicyType;
+  /** Vehicles, dwellings, items — whatever the type counts. 1–99. */
+  itemCount: number;
+}
+
 export interface LeadIntakeInput {
   primaryContact: LeadIntakePerson;
   address?: LeadIntakeAddress;
   members: LeadIntakeMember[];
+  /** What to quote. Empty is accepted by the API; the forms require one. */
+  policiesOfInterest?: LeadPolicyOfInterestInput[];
+  /**
+   * The insured dwelling, asked only when a property-type policy is selected
+   * (PAC-56 #6). When `sameAsHousehold` is true the server copies `address` and
+   * **discards** whatever was sent here, so a submission cannot claim one thing
+   * and store another.
+   */
+  sameAsHousehold?: boolean;
+  propertyAddress?: LeadIntakeAddress;
   /**
    * Canonical lead-source code. Required on the authenticated form; **absent on
    * public submissions**, which store no source until a producer sets one

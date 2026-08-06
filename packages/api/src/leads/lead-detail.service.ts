@@ -23,7 +23,10 @@ import {
   Activity,
   ActivityDocument,
 } from '../activities/schemas/activity.schema';
-import { resolveHouseholdAddress } from '../common/address/household-address';
+import {
+  normalizeStoredAddress,
+  resolveHouseholdAddress,
+} from '../common/address/household-address';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import { HouseholdDocument } from '../households/schemas/household.schema';
@@ -175,6 +178,19 @@ export class LeadDetailService {
         household?.mailingAddress,
       ),
       quoteControlNumber: lead.quoteControlNumber ?? null,
+      // Normalized on read like every other policy-type field on this page,
+      // even though intake only ever writes canonical labels — one rule for
+      // the whole surface is cheaper to keep true than an exception.
+      policiesOfInterest: (lead.policiesOfInterest ?? [])
+        .map((policy) => ({
+          policyType: normalizePolicyType(policy.policyType),
+          itemCount: policy.itemCount,
+        }))
+        .filter((policy) => policy.policyType.length > 0),
+      // Through the same coercion as every other address on this page: the
+      // stored shape is `Record<string, unknown>` and three writers disagree
+      // about its keys.
+      propertyAddress: normalizeStoredAddress(lead.propertyAddress),
       agingDays: this.agingDays(lead),
       createdDate: iso(lead.createdDate),
       lastActivityAt: iso(lead.lastActivityAt),

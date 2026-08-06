@@ -2,6 +2,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import type { QuoteRecapLeadContext } from "@sfa/shared";
 import { isPropertyPolicyType } from "@sfa/shared";
 import { useForm, useWatch } from "react-hook-form";
+import { PolicyRowsField } from "@/components/policies/PolicyRowsField";
+import { PropertyAddressSection } from "@/components/policies/PropertyAddressSection";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -15,8 +17,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { FileDropzone } from "@/components/upload/FileDropzone";
 import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/quote-recaps-api";
 import { LeadContextHeader } from "./LeadContextHeader";
-import { PolicyRowsField } from "./PolicyRowsField";
-import { PropertyAddressSection } from "./PropertyAddressSection";
 import {
   emptyQuoteRecap,
   quoteRecapSchema,

@@ -42,6 +42,11 @@ body:json {
         "role": "Child"
       }
     ],
+    "policiesOfInterest": [
+      { "policyType": "Auto", "itemCount": 2 },
+      { "policyType": "Home", "itemCount": 1 }
+    ],
+    "sameAsHousehold": true,
     "leadSourceCode": "WCO7l",
     "submissionToken": "{{$guid}}"
   }
@@ -93,6 +98,9 @@ docs {
   | primaryContact.email    | string | yes      | valid email; lowercased on write             |
   | address                 | object | no       | street / city / state / zip, the **living** address |
   | members[]               | array  | no       | max 10; role ∈ Spouse, Child, Driver, Additional Named Insured |
+  | policiesOfInterest[]    | array  | no       | max 12 of `{ policyType, itemCount }`; canonical labels, count 1–99; defaults to `[]` |
+  | sameAsHousehold         | bool   | no       | defaults `true`; when set, `address` is stored as the property address |
+  | propertyAddress         | object | cond.    | required when `sameAsHousehold` is false **and** a property-type policy is requested |
   | leadSourceCode          | string | yes      | canonical code; `ENEJP` (Test) is rejected   |
   | quoteControlNumber      | string | no       | dedupe signal 2                              |
   | submissionToken         | string | no       | 8–200 chars; per-form-session idempotency key |
@@ -114,6 +122,28 @@ docs {
   (`street|zip`, both lowercased) restricted to non-terminal leads created in the
   last 90 days. Signals 2 and 3 merge additively and never change `producerId`,
   `status` or `temperature`.
+
+  **Policies of interest (PAC-56 #2).** What the submitter wants quoted — the
+  Quote Recap's policy rows **minus premium**, since no quote exists yet. Same
+  vocabulary (`Auto`, `Home`, `Renters`, `Condominium`, `Landlord`,
+  `Motorcycle`, `Boat Owners`, `Umbrella`, `Life`, `Valuable Item Protection`,
+  `Auto - Special`); an unrecognised value is a `400`, it is a fixed vocabulary
+  and not free text. Optional here while the web form requires at least one,
+  exactly as `address` is: the endpoint would rather store an incomplete lead
+  than reject one. On a dedupe merge (signals 2 and 3) the rows are **unioned by
+  policy type** into the existing lead — a restated type keeps the count already
+  on file rather than adding a second row. Legacy captured no equivalent at
+  intake; every migrated lead has `[]`.
+
+  **Property address (PAC-56 #6).** Asked only when a property-type policy
+  (`Home`, `Renters`, `Condominium`, `Landlord`) is requested, and stored
+  **already resolved**: with `sameAsHousehold: true` the server copies `address`
+  and **discards** any `propertyAddress` in the body, so a submission cannot
+  claim one thing and store another. With it false and a property policy
+  requested, a blank address is a `400`. Nothing is stored when no property
+  policy is requested. Legacy kept this on the lead too (`Property Address`,
+  `sfd5ba053e`) — it is the quote stage that inherits it, not the reverse. Read
+  both back on `GET /leads/:id`.
 
   **Atomicity.** Lead, household and contacts are written in one MongoDB
   transaction; a failure part-way leaves no partial records.

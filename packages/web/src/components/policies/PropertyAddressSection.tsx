@@ -10,10 +10,30 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import type { QuoteRecapFormValues } from "./quote-recap-schema";
+
+/**
+ * The slice of form state this section owns. Declared locally for the same
+ * reason as {@link PolicyRowsFormValues} — both the Quote Recap form and the
+ * New Lead form register exactly these paths.
+ */
+export interface PropertyAddressFormValues {
+  sameAsHousehold: boolean;
+  propertyAddress: {
+    street: string;
+    city: string;
+    state: string;
+    zip: string;
+  };
+}
 
 interface PropertyAddressSectionProps {
-  /** `null` when the household has nothing usable on file. */
+  /**
+   * `null` when there is nothing usable to copy — which disables the toggle.
+   *
+   * The Quote Recap passes the household's stored address; the New Lead form
+   * passes what the submitter is typing into the household-address section of
+   * the same form, so the copy tracks their edits live.
+   */
   householdAddress: QuoteRecapPropertyAddress | null;
 }
 
@@ -26,7 +46,8 @@ const FIELDS = [
 
 /**
  * The insured-property address, shown only when a property-type policy is
- * quoted (Home, Renters, Condominium, Landlord).
+ * selected (Home, Renters, Condominium, Landlord). Shared by the Quote Recap
+ * form (PAC-39) and the New Lead form (PAC-56 #2/#6).
  *
  * The "Same as Household Address" interaction is ported from the `sfaforms`
  * prototype, deliberately including its **one-way copy** semantics: checking
@@ -36,7 +57,7 @@ const FIELDS = [
 export function PropertyAddressSection({
   householdAddress,
 }: PropertyAddressSectionProps) {
-  const form = useFormContext<QuoteRecapFormValues>();
+  const form = useFormContext<PropertyAddressFormValues>();
   const { setValue } = form;
   const sameAsHousehold = useWatch({
     control: form.control,
@@ -56,7 +77,10 @@ export function PropertyAddressSection({
     // infinite render loop (validate -> re-render -> new `form` -> validate).
     //
     // Also re-runs when `householdAddress` resolves, so an async fetch backfills
-    // the address even though the toggle itself never changed.
+    // the address even though the toggle itself never changed. The same applies
+    // to the New Lead form, where the source address is being typed live — so
+    // callers watching their own form MUST pass a referentially stable object
+    // (memoized on the four strings), or this loops for the same reason.
   }, [sameAsHousehold, householdAddress, setValue]);
 
   return (
