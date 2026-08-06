@@ -33,7 +33,7 @@ npm workspaces (`workspaces: ["packages/*"]`, Node >= 20):
 
 | Package | Stack | State |
 |---|---|---|
-| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, **shadcn/ui (Radix UI primitives)**, React Router 7, TanStack Query, Recharts, lucide-react | Auth + **permission-management pages wired to the API**; the 7 mockup dashboards still render **hard-coded mock data** (Producer Dashboard data widgets being wired now) |
+| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, **shadcn/ui (Radix UI primitives)**, React Router 7, TanStack Query, **TanStack Form + zod**, Recharts, lucide-react | Auth + **permission-management pages wired to the API**; the 7 mockup dashboards still render **hard-coded mock data** (Producer Dashboard data widgets being wired now) |
 | `packages/api` | **NestJS 11**, **Mongoose 8 (MongoDB)**, JWT/passport, class-validator | Full **permission/multi-tenancy spine** + **Mongoose schemas for all ~22 domain collections** + a **SmartSuite→Mongo migration**; the HTTP **feature controllers are still stubs** returning `{ status: 'ready' }` (real query services/DTOs not wired yet) |
 | `packages/shared` | Shared enums / permission constants / types / role templates | Source of truth for module keys & permissions |
 
@@ -226,7 +226,20 @@ Chakra, etc.).
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
 - **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.claude/rules/api-bruno-docs.md` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
-- Forms: prefer `react-hook-form` + `zod` resolvers.
+- Forms: prefer **TanStack Form** + `zod` (wired via Standard Schema — pass the
+  zod schema straight to `validators`, no resolver package). Build forms from the
+  shared `useAppForm` hook in `src/hooks/form.ts` and the field components in
+  `src/components/form/fields/`; never bind an input to the library by hand.
+  **Field components take a field-path prop and must never hardcode a path** —
+  that is what makes a schema rename a compile error instead of a runtime break.
+  Layout comes from `src/components/form/` (`FormSection`, `FormGrid`, …), which
+  is deliberately library-agnostic.
+  > ⚠ **Migration in progress.** The four existing forms (`LeadIntakeForm`,
+  > `QuoteRecapForm`, `SoldDealWizard`, `EditContactDialog`) are still on
+  > `react-hook-form` + `@hookform/resolvers` via the legacy
+  > `components/ui/form.tsx`. Write **new** forms on TanStack Form; don't add to
+  > the react-hook-form surface. Remove this note once the migration lands and
+  > `components/ui/form.tsx` is deleted.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
 - Run each package's `lint` (`npm run lint -w @sfa/api` / `-w @sfa/web`) before finishing.
 - Prefer real Mongoose schemas + services over extending the mock data / stubs when wiring a dashboard.
