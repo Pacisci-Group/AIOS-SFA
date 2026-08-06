@@ -212,10 +212,28 @@ Chakra, etc.).
   palette is encoded as CSS-variable tokens in `src/styles/theme.css`
   (`bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`,
   `border-border`, `text-primary` = Allstate sky, `text-accent` = emerald,
-  `text-destructive` = amber). For status accents use Tailwind's default palette,
-  which matches the mockups exactly (`amber-500` `#F59E0B`, `sky-400` `#38BDF8`,
-  `emerald-500` `#10B981`, `slate-{200,400,500}`). This keeps the designer's look
-  intact **and** gives us light/dark theming for free.
+  `text-destructive` = amber). **Tokens theme automatically; raw palette values
+  do not.** `theme.css` defines the light theme on `:root` and the navy brand
+  theme on `.dark`, so anything written as `amber-500`, `slate-400`,
+  `white/[0.04]` or a hex literal is a *dark-only* value that will be wrong —
+  often invisible — on the light theme. Reach for the token
+  (`text-destructive`, `text-muted-foreground`, `border-border`, `bg-sunken`)
+  first. Note the two are not interchangeable even where they look it: Tailwind
+  v4's `amber-500` is `oklch(0.769 0.188 70.08)`, which is *not* quite
+  `--destructive`'s `#F59E0B`.
+- **Theme mechanics.** `app/ThemeProvider.tsx` (next-themes) owns the
+  `light`/`dark` class on `<html>`; an inline script in `index.html` writes it
+  before first paint to avoid a flash. It defaults to **dark** with system
+  detection **off** on purpose — the navy theme is what the app shipped as, and
+  enabling system detection would silently repaint every existing user whose OS
+  is light. When a light fix would shift the dark rendering, pin the original
+  with a `dark:` override rather than accepting the drift (see
+  `components/form/FormError.tsx`).
+- The 5 prototype dashboards (management, management-alt, service, tickets,
+  household) are **not** light-theme clean and are not meant to be — they are
+  slated for replacement. They also reference ~9 CSS variables (`--kpi-*`,
+  `--navy-900`, `--emerald`, `--red`, `--amber`) that are defined nowhere and
+  render transparent. Don't copy those patterns into new work.
 - **Match the mockups.** `./agencyops_fe_mockups` is still the visual
   source-of-truth (see `.claude/rules/figma-mockups-reference.md`); port layout
   and spacing onto shadcn primitives + tokens.
