@@ -7,6 +7,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { FormError } from '@/components/form';
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -49,14 +50,10 @@ export function LoginPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <h2 className="text-foreground font-semibold text-base">Sign in</h2>
 
-            {error && (
-              <p className="text-sm text-red-400 bg-red-400/10 px-3 py-2 rounded-lg">
-                {error}
-              </p>
-            )}
+            <FormError>{error}</FormError>
 
             <div className="space-y-1.5">
-              <Label htmlFor="email" className="text-xs text-slate-400">
+              <Label htmlFor="email" className="text-xs text-muted-foreground">
                 Email
               </Label>
               <Input
@@ -71,7 +68,7 @@ export function LoginPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="password" className="text-xs text-slate-400">
+              <Label htmlFor="password" className="text-xs text-muted-foreground">
                 Password
               </Label>
               <Input
