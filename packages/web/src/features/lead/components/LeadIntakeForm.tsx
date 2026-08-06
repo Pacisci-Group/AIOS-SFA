@@ -5,6 +5,7 @@ import {
 } from "@sfa/shared";
 import { useMemo } from "react";
 import { useForm, useWatch, FormProvider } from "react-hook-form";
+import { FormError, FormGrid, FormSection } from "@/components/form";
 import { PolicyRowsField } from "@/components/policies/PolicyRowsField";
 import { PropertyAddressSection } from "@/components/policies/PropertyAddressSection";
 import { Button } from "@/components/ui/button";
@@ -43,14 +44,6 @@ interface LeadIntakeFormProps {
   errorMessage: string | null;
   submitLabel?: string;
   onSubmit: (values: LeadIntakeFormValues) => void;
-}
-
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-      {children}
-    </h2>
-  );
 }
 
 /**
@@ -106,9 +99,8 @@ export function LeadIntakeForm({
           className="space-y-6"
           noValidate
         >
-          <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-            <SectionHeading>Primary contact</SectionHeading>
-            <div className="grid gap-4 sm:grid-cols-2">
+          <FormSection title="Primary contact">
+            <FormGrid>
               <FormField
                 control={form.control}
                 name="primaryContact.firstName"
@@ -199,18 +191,14 @@ export function LeadIntakeForm({
                   </FormItem>
                 )}
               />
-            </div>
-          </section>
+            </FormGrid>
+          </FormSection>
 
-          <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-            <div>
-              <SectionHeading>Household address</SectionHeading>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Where the household lives — not the insured property address,
-                which is captured on the quote.
-              </p>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
+          <FormSection
+            title="Household address"
+            description="Where the household lives — not the insured property address, which is captured on the quote."
+          >
+            <FormGrid>
               <FormField
                 control={form.control}
                 name="address.street"
@@ -280,12 +268,11 @@ export function LeadIntakeForm({
                   </FormItem>
                 )}
               />
-            </div>
-          </section>
+            </FormGrid>
+          </FormSection>
 
           {showLeadSource ? (
-            <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-              <SectionHeading>Lead source</SectionHeading>
+            <FormSection title="Lead source">
               <FormField
                 control={form.control}
                 name="leadSourceCode"
@@ -315,37 +302,31 @@ export function LeadIntakeForm({
                   </FormItem>
                 )}
               />
-            </section>
+            </FormSection>
           ) : null}
 
-          <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-            <div>
-              <SectionHeading>Additional household members</SectionHeading>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Spouse, children, and any other drivers on the policy.
-              </p>
-            </div>
+          <FormSection
+            title="Additional household members"
+            description="Spouse, children, and any other drivers on the policy."
+          >
             <HouseholdMembersField />
-          </section>
+          </FormSection>
 
           {/*
             * Last on the form, and the same rows the Quote Recap uses — minus
             * premium, which nobody can answer before a quote exists (PAC-56 #2).
             */}
-          <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-            <div>
-              <SectionHeading>Policies of interest</SectionHeading>
-              <p className="mt-1 text-xs text-muted-foreground">
-                What would you like quoted? One row per policy.
-              </p>
-            </div>
+          <FormSection
+            title="Policies of interest"
+            description="What would you like quoted? One row per policy."
+          >
             <PolicyRowsField showPremium={false} />
             {form.formState.errors.policies?.root && (
               <p className="text-sm text-destructive">
                 {form.formState.errors.policies.root.message}
               </p>
             )}
-          </section>
+          </FormSection>
 
           {/* Same trigger as the Quote Recap: Home, Renters, Condominium or
               Landlord means there is a dwelling whose address we don't have. */}
@@ -353,19 +334,13 @@ export function LeadIntakeForm({
             <PropertyAddressSection householdAddress={householdAddress} />
           )}
 
-          {errorMessage ? (
-            <div
-              role="alert"
-              className="px-4 py-3 rounded-lg text-sm bg-amber-500/10 border border-amber-500/25 text-amber-500"
-            >
-              {errorMessage}
-            </div>
-          ) : null}
+          <FormError>{errorMessage}</FormError>
 
           <Button
             type="submit"
+            variant="brand"
             disabled={submitting}
-            className="w-full sm:w-auto bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110 active:scale-95"
+            className="w-full sm:w-auto active:scale-95"
           >
             {submitting ? "Submitting…" : submitLabel}
           </Button>

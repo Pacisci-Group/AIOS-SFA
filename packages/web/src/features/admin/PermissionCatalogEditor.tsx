@@ -136,9 +136,9 @@ export function PermissionCatalogEditor({
           )}
           <Button
             type="button"
+            variant="brand"
             disabled={saving || readOnly}
             onClick={handleSave}
-            className="bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110"
           >
             {saving ? 'Saving…' : 'Save Changes'}
           </Button>

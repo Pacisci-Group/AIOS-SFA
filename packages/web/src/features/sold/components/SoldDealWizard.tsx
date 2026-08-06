@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { SoldDealLeadContext } from "@sfa/shared";
-import { AlertCircle, ArrowLeft, ArrowRight, Loader2, Plus, Send } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, Plus, Send } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import {
@@ -13,6 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { FormError, FormSection } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Form } from "@/components/ui/form";
 import { PolicySummaryList } from "./PolicySummaryList";
@@ -134,7 +135,7 @@ export function SoldDealWizard({
 
   return (
     <div className="space-y-4">
-      <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
+      <FormSection>
         <WizardProgress card={nav.card} policyCount={policies.length} />
 
         <p className="text-xs text-muted-foreground">
@@ -184,15 +185,7 @@ export function SoldDealWizard({
           </div>
         </Form>
 
-        {errorMessage && (
-          <p
-            role="alert"
-            className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground"
-          >
-            <AlertCircle size={16} className="mt-0.5 shrink-0 text-amber-500" />
-            {errorMessage}
-          </p>
-        )}
+        <FormError icon>{errorMessage}</FormError>
 
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border">
           <Button
@@ -244,7 +237,7 @@ export function SoldDealWizard({
             </Button>
           )}
         </div>
-      </section>
+      </FormSection>
 
       <PolicySummaryList
         policies={policies}

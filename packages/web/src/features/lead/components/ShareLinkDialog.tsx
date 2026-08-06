@@ -140,9 +140,9 @@ export function ShareLinkDialog({ open, onOpenChange }: ShareLinkDialogProps) {
             />
             <Button
               type="button"
+              variant="brand"
               disabled={create.isPending}
               onClick={() => create.mutate()}
-              className="bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110"
             >
               {create.isPending ? "Creating…" : "Create"}
             </Button>

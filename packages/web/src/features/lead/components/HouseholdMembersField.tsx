@@ -1,6 +1,7 @@
 import { HOUSEHOLD_MEMBER_ROLES } from "@sfa/shared";
 import { Plus, X } from "lucide-react";
 import { useFieldArray, useFormContext } from "react-hook-form";
+import { FormGrid, FormSubPanel } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import {
   FormControl,
@@ -44,14 +45,10 @@ export function HouseholdMembersField() {
       ) : null}
 
       {fields.map((field, index) => (
-        <div
+        <FormSubPanel
           key={field.id}
-          className="rounded-lg border border-border bg-background/40 p-3 space-y-3"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-              Member {index + 1}
-            </span>
+          title={`Member ${index + 1}`}
+          action={
             <Button
               type="button"
               variant="ghost"
@@ -62,9 +59,9 @@ export function HouseholdMembersField() {
             >
               <X size={14} />
             </Button>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
+          }
+        >
+          <FormGrid gap={3}>
             <FormField
               control={form.control}
               name={`members.${index}.firstName`}
@@ -133,8 +130,8 @@ export function HouseholdMembersField() {
                 </FormItem>
               )}
             />
-          </div>
-        </div>
+          </FormGrid>
+        </FormSubPanel>
       ))}
 
       <Button

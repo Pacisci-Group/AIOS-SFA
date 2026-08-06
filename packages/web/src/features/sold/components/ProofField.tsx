@@ -1,6 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
+import { FormSubPanel } from "@/components/form";
 import { FileDropzone } from "@/components/upload/FileDropzone";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -104,7 +105,7 @@ export function ProofField({
       </div>
 
       {selected && (
-        <div className="rounded-lg border border-border bg-background/40 p-3 space-y-3">
+        <FormSubPanel>
           <p className="text-sm text-foreground">{proofPrompt}</p>
 
           <RadioGroup
@@ -160,7 +161,7 @@ export function ProofField({
               The service team will chase this during onboarding.
             </FormDescription>
           )}
-        </div>
+        </FormSubPanel>
       )}
     </FormItem>
   );

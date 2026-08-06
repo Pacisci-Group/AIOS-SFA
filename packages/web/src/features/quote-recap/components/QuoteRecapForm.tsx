@@ -2,6 +2,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import type { QuoteRecapLeadContext } from "@sfa/shared";
 import { isPropertyPolicyType } from "@sfa/shared";
 import { useForm, useWatch } from "react-hook-form";
+import { FormError, FormSection } from "@/components/form";
 import { PolicyRowsField } from "@/components/policies/PolicyRowsField";
 import { PropertyAddressSection } from "@/components/policies/PropertyAddressSection";
 import { Button } from "@/components/ui/button";
@@ -28,14 +29,6 @@ interface QuoteRecapFormProps {
   submitting: boolean;
   errorMessage: string | null;
   onSubmit: (values: QuoteRecapFormValues) => void;
-}
-
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-      {children}
-    </h2>
-  );
 }
 
 export function QuoteRecapForm({
@@ -70,20 +63,17 @@ export function QuoteRecapForm({
       >
         <LeadContextHeader context={context} />
 
-        <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-          <div>
-            <SectionHeading>Quoted policies</SectionHeading>
-            <p className="mt-1 text-xs text-muted-foreground">
-              One row per policy. The totals are calculated for you.
-            </p>
-          </div>
+        <FormSection
+          title="Quoted policies"
+          description="One row per policy. The totals are calculated for you."
+        >
           <PolicyRowsField />
           {form.formState.errors.policies?.root && (
             <p className="text-sm text-destructive">
               {form.formState.errors.policies.root.message}
             </p>
           )}
-        </section>
+        </FormSection>
 
         {hasPropertyPolicy && (
           <PropertyAddressSection
@@ -91,13 +81,7 @@ export function QuoteRecapForm({
           />
         )}
 
-        <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-          <div>
-            <SectionHeading>Quote document</SectionHeading>
-            <p className="mt-1 text-xs text-muted-foreground">
-              The carrier quote. Required.
-            </p>
-          </div>
+        <FormSection title="Quote document" description="The carrier quote. Required.">
           <FormField
             control={form.control}
             name="quoteDocument"
@@ -118,10 +102,9 @@ export function QuoteRecapForm({
               </FormItem>
             )}
           />
-        </section>
+        </FormSection>
 
-        <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-          <SectionHeading>Notes</SectionHeading>
+        <FormSection title="Notes">
           <FormField
             control={form.control}
             name="notes"
@@ -141,21 +124,15 @@ export function QuoteRecapForm({
               </FormItem>
             )}
           />
-        </section>
+        </FormSection>
 
-        {errorMessage && (
-          <div
-            role="alert"
-            className="px-4 py-3 rounded-lg text-sm bg-amber-500/10 border border-amber-500/25 text-amber-500"
-          >
-            {errorMessage}
-          </div>
-        )}
+        <FormError>{errorMessage}</FormError>
 
         <Button
           type="submit"
+          variant="brand"
           disabled={submitting || blocked}
-          className="w-full sm:w-auto bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110 active:scale-95"
+          className="w-full sm:w-auto active:scale-95"
         >
           {submitting ? "Saving…" : "Record quote recap"}
         </Button>

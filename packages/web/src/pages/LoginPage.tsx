@@ -87,8 +87,9 @@ export function LoginPage() {
 
             <Button
               type="submit"
+              variant="brand"
               disabled={loading}
-              className="w-full bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110"
+              className="w-full"
             >
               {loading ? 'Signing in…' : 'Sign in'}
             </Button>

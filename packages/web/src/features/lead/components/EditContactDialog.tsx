@@ -4,6 +4,7 @@ import { ModuleKey } from "@sfa/shared";
 import { Loader2, Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
+import { FormGrid } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -117,7 +118,7 @@ export function EditContactDialog({ leadId, contact }: EditContactDialogProps) {
             className="space-y-4"
             noValidate
           >
-            <div className="grid gap-4 sm:grid-cols-2">
+            <FormGrid>
               <FormField
                 control={form.control}
                 name="firstName"
@@ -144,7 +145,7 @@ export function EditContactDialog({ leadId, contact }: EditContactDialogProps) {
                   </FormItem>
                 )}
               />
-            </div>
+            </FormGrid>
 
             <FormField
               control={form.control}

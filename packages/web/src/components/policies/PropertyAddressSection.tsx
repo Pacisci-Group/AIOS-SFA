@@ -1,6 +1,7 @@
 import type { QuoteRecapPropertyAddress } from "@sfa/shared";
 import { useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
+import { FormGrid, FormSection } from "@/components/form";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   FormControl,
@@ -84,16 +85,14 @@ export function PropertyAddressSection({
   }, [sameAsHousehold, householdAddress, setValue]);
 
   return (
-    <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-      <div>
-        <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-          Property address
-        </h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          The address being insured — not necessarily where the client lives.
-        </p>
-      </div>
-
+    // TODO(Phase 3): this component owns its own `<section>`, which makes it a
+    // page section rather than a field group and is why it can't be embedded in
+    // another layout. Splitting the fields out from the wrapper is part of the
+    // field-binding tier work.
+    <FormSection
+      title="Property address"
+      description="The address being insured — not necessarily where the client lives."
+    >
       <FormField
         control={form.control}
         name="sameAsHousehold"
@@ -119,7 +118,7 @@ export function PropertyAddressSection({
         </p>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <FormGrid>
         {FIELDS.map(({ name, label }) => (
           <FormField
             key={name}
@@ -147,7 +146,7 @@ export function PropertyAddressSection({
             )}
           />
         ))}
-      </div>
-    </section>
+      </FormGrid>
+    </FormSection>
   );
 }

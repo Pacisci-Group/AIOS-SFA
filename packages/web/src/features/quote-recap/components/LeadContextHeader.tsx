@@ -1,5 +1,6 @@
 import type { QuoteRecapLeadContext } from "@sfa/shared";
 import { AlertTriangle } from "lucide-react";
+import { FormGrid, FormSection } from "@/components/form";
 import { statusBadgeClass } from "@/features/lead/components/lead-display";
 import { cn } from "@/lib/utils";
 
@@ -37,11 +38,9 @@ function Field({ label, value }: { label: string; value: string }) {
  */
 export function LeadContextHeader({ context }: LeadContextHeaderProps) {
   return (
-    <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-          Quoting for
-        </h2>
+    <FormSection
+      title="Quoting for"
+      action={
         <span
           className={cn(
             "rounded-full px-2 py-0.5 text-[10px] font-medium",
@@ -50,9 +49,9 @@ export function LeadContextHeader({ context }: LeadContextHeaderProps) {
         >
           {context.leadStatus}
         </span>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
+      }
+    >
+      <FormGrid>
         <Field label="Primary contact" value={context.primaryContactName} />
         <Field label="Household" value={context.householdName ?? "—"} />
         <div className="sm:col-span-2">
@@ -61,7 +60,7 @@ export function LeadContextHeader({ context }: LeadContextHeaderProps) {
             value={formatAddress(context.householdAddress)}
           />
         </div>
-      </div>
+      </FormGrid>
 
       {!context.householdId && (
         <div
@@ -75,6 +74,6 @@ export function LeadContextHeader({ context }: LeadContextHeaderProps) {
           </span>
         </div>
       )}
-    </section>
+    </FormSection>
   );
 }

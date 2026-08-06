@@ -2,6 +2,7 @@ import type { SoldHouseholdContact } from "@sfa/shared";
 import { isAutoPolicyType, isPropertyPolicyType } from "@sfa/shared";
 import { Plus, X } from "lucide-react";
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
+import { FormGrid, FormSubPanel } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -76,10 +77,7 @@ function PropertyDiscounts({ leadId }: { leadId: string }) {
         * is unanswerable without them.
         */}
       {escrow && (
-        <div className="rounded-lg border border-border bg-background/40 p-3 space-y-3">
-          <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-            Escrow details
-          </h4>
+        <FormSubPanel title="Escrow details" titleAs="h4">
           <FormField
             control={form.control}
             name="escrow.loanNumber"
@@ -106,7 +104,7 @@ function PropertyDiscounts({ leadId }: { leadId: string }) {
               </FormItem>
             )}
           />
-          <div className="grid gap-3 sm:grid-cols-2">
+          <FormGrid gap={3}>
             {(
               [
                 ["escrow.address.street", "Street"],
@@ -130,8 +128,8 @@ function PropertyDiscounts({ leadId }: { leadId: string }) {
                 )}
               />
             ))}
-          </div>
-        </div>
+          </FormGrid>
+        </FormSubPanel>
       )}
 
       <ProofField
@@ -197,11 +195,7 @@ function AutoDiscounts({
       />
 
       {defensiveDriver && (
-        <div className="rounded-lg border border-border bg-background/40 p-3 space-y-3">
-          <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-            Which drivers?
-          </h4>
-
+        <FormSubPanel title="Which drivers?" titleAs="h4">
           {contacts.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {contacts.map((contact) => {
@@ -279,7 +273,7 @@ function AutoDiscounts({
               {form.formState.errors.discounts.defensiveDriver.drivers.message}
             </p>
           )}
-        </div>
+        </FormSubPanel>
       )}
 
       <ProofField
