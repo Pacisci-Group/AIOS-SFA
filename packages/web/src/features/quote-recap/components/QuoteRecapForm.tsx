@@ -1,25 +1,23 @@
-import { zodResolver } from "@hookform/resolvers/zod";
 import type { QuoteRecapLeadContext } from "@sfa/shared";
 import { isPropertyPolicyType } from "@sfa/shared";
-import { useForm, useWatch } from "react-hook-form";
 import { FormError, FormSection } from "@/components/form";
-import { PolicyRowsField } from "@/components/policies/PolicyRowsField";
-import { PropertyAddressSection } from "@/components/policies/PropertyAddressSection";
-import { Button } from "@/components/ui/button";
+import { FieldShell, useFieldError } from "@/components/form/fields";
 import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Textarea } from "@/components/ui/textarea";
+  PolicyRowGroup,
+  PolicyRowsShell,
+} from "@/components/policies/PolicyRowsField";
+import {
+  PropertyAddressFields,
+  PropertyAddressSection,
+} from "@/components/policies/PropertyAddressSection";
+import { Button } from "@/components/ui/button";
 import { FileDropzone } from "@/components/upload/FileDropzone";
+import { useAppForm } from "@/hooks/form";
 import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/quote-recaps-api";
 import { LeadContextHeader } from "./LeadContextHeader";
 import {
   emptyQuoteRecap,
+  parseQuoteRecap,
   quoteRecapSchema,
   type QuoteRecapFormValues,
 } from "./quote-recap-schema";
@@ -31,33 +29,34 @@ interface QuoteRecapFormProps {
   onSubmit: (values: QuoteRecapFormValues) => void;
 }
 
+const emptyRow = () => ({ policyType: "Auto" as const, premium: "", itemCount: "1" });
+
 export function QuoteRecapForm({
   context,
   submitting,
   errorMessage,
   onSubmit,
 }: QuoteRecapFormProps) {
-  const form = useForm<QuoteRecapFormValues>({
-    resolver: zodResolver(quoteRecapSchema),
+  const form = useAppForm({
     // Default the toggle on only when there is actually an address to copy.
     // Otherwise the fields would be blank *and* disabled, the conditional
     // required rule would fire, and the producer would be stuck.
     defaultValues: emptyQuoteRecap(Boolean(context.householdAddress)),
-    mode: "onBlur",
+    validators: { onBlur: quoteRecapSchema },
+    // Validation has already passed here; the parse narrows the optional
+    // `quoteDocument` of form state to the required one of the wire shape.
+    onSubmit: ({ value }) => onSubmit(parseQuoteRecap(value)),
   });
 
-  const policies = useWatch({ control: form.control, name: "policies" });
-  const hasPropertyPolicy = (policies ?? []).some((p) =>
-    isPropertyPolicyType(p?.policyType),
-  );
   const blocked = !context.householdId;
 
   return (
-    // `Form` *is* `FormProvider` — one wrapper is enough. (`LeadIntakeForm`
-    // wraps in both; that is redundant and not repeated here.)
-    <Form {...form}>
+    <form.AppForm>
       <form
-        onSubmit={form.handleSubmit(onSubmit)}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void form.handleSubmit();
+        }}
         className="space-y-6"
         noValidate
       >
@@ -67,63 +66,97 @@ export function QuoteRecapForm({
           title="Quoted policies"
           description="One row per policy. The totals are calculated for you."
         >
-          <PolicyRowsField />
-          {form.formState.errors.policies?.root && (
-            <p className="text-sm text-destructive">
-              {form.formState.errors.policies.root.message}
-            </p>
-          )}
+          <form.Field name="policies" mode="array">
+            {(field) => (
+              <PolicyRowsShell
+                count={field.state.value.length}
+                onAdd={() => field.pushValue(emptyRow())}
+              >
+                {field.state.value.map((_, i) => (
+                  <PolicyRowGroup
+                    key={i}
+                    form={form}
+                    fields={`policies[${i}]`}
+                    index={i}
+                    columns={3}
+                    onRemove={
+                      field.state.value.length > 1
+                        ? () => field.removeValue(i)
+                        : undefined
+                    }
+                  >
+                    {/* Quote-Recap-only: the New Lead form asks for policies of
+                        interest before any quote exists, so it has no premium
+                        to record. Composed in rather than flag-gated. */}
+                    <form.AppField name={`policies[${i}].premium`}>
+                      {(f) => (
+                        <f.NumberField
+                          label="Premium ($)"
+                          step="0.01"
+                          min="0"
+                          inputClassName="bg-card border-border"
+                        />
+                      )}
+                    </form.AppField>
+                  </PolicyRowGroup>
+                ))}
+              </PolicyRowsShell>
+            )}
+          </form.Field>
         </FormSection>
 
-        {hasPropertyPolicy && (
-          <PropertyAddressSection
-            householdAddress={context.householdAddress}
-          />
-        )}
+        <form.Subscribe selector={(s) => s.values.policies}>
+          {(policies) =>
+            (policies ?? []).some((p) => isPropertyPolicyType(p?.policyType)) ? (
+              <PropertyAddressSection householdAddress={context.householdAddress}>
+                <PropertyAddressFields
+                  form={form}
+                  fields={{
+                    sameAsHousehold: "sameAsHousehold",
+                    propertyAddress: "propertyAddress",
+                  }}
+                  householdAddress={context.householdAddress}
+                />
+              </PropertyAddressSection>
+            ) : null
+          }
+        </form.Subscribe>
 
         <FormSection title="Quote document" description="The carrier quote. Required.">
-          <FormField
-            control={form.control}
-            name="quoteDocument"
-            render={({ field }) => (
-              <FormItem>
-                <FormControl>
+          <form.Field name="quoteDocument">
+            {(field) => (
+              <FieldShell error={useFieldError(field.state.meta)}>
+                {() => (
                   <FileDropzone
                     accept={ALLOWED_UPLOAD_TYPES}
                     maxBytes={MAX_UPLOAD_BYTES}
-                    file={field.value ?? null}
-                    onSelect={field.onChange}
+                    file={field.state.value ?? null}
+                    onSelect={(file) => {
+                      field.handleChange(file ?? undefined);
+                      field.handleBlur();
+                    }}
                     hint="PDF, JPG, PNG up to 10MB"
                     disabled={submitting}
                     aria-label="Upload the quote document"
                   />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
+                )}
+              </FieldShell>
             )}
-          />
+          </form.Field>
         </FormSection>
 
         <FormSection title="Notes">
-          <FormField
-            control={form.control}
-            name="notes"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel className="sr-only">Notes</FormLabel>
-                <FormControl>
-                  <Textarea
-                    rows={4}
-                    className="bg-card border-border"
-                    placeholder="Anything the next person needs to know about this proposal."
-                    {...field}
-                    value={field.value ?? ""}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
+          <form.AppField name="notes">
+            {(f) => (
+              <f.TextareaField
+                label="Notes"
+                srOnlyLabel
+                rows={4}
+                placeholder="Anything the next person needs to know about this proposal."
+                textareaClassName="bg-card border-border"
+              />
             )}
-          />
+          </form.AppField>
         </FormSection>
 
         <FormError>{errorMessage}</FormError>
@@ -137,6 +170,6 @@ export function QuoteRecapForm({
           {submitting ? "Saving…" : "Record quote recap"}
         </Button>
       </form>
-    </Form>
+    </form.AppForm>
   );
 }

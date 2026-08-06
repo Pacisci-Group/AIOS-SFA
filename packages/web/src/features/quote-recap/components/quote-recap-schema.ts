@@ -1,6 +1,5 @@
 import type { QuoteRecapPolicyInput } from "@sfa/shared";
 import { POLICY_TYPES, isPropertyPolicyType } from "@sfa/shared";
-import type { DefaultValues } from "react-hook-form";
 import { z } from "zod";
 import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/quote-recaps-api";
 import { numericString } from "@/lib/zod-helpers";
@@ -89,13 +88,32 @@ export function toPolicyInputs(
 }
 
 /**
- * `DefaultValues<T>` rather than the value type: `quoteDocument` legitimately
- * starts unset. Premium starts blank so the field reads empty rather than
- * pre-seeded with a misleading 0.
+ * What the form **holds while being filled**, as distinct from what is valid on
+ * submit: `quoteDocument` legitimately starts unset, while the schema requires
+ * it. Only that one field differs, so the gap is stated here rather than
+ * loosening every field (which is what react-hook-form's `DefaultValues<T>`
+ * did, and why nothing downstream was properly typed).
+ *
+ * {@link parseQuoteRecap} closes the gap at the submit boundary.
  */
-export function emptyQuoteRecap(
-  sameAsHousehold: boolean,
-): DefaultValues<QuoteRecapFormValues> {
+export type QuoteRecapFormState = Omit<QuoteRecapFormValues, "quoteDocument"> & {
+  quoteDocument?: File;
+};
+
+/**
+ * Form state → validated values. Validation has already run by the time this is
+ * called, so this is a real check that also narrows `quoteDocument` to present —
+ * not a cast pretending it is.
+ */
+export function parseQuoteRecap(state: QuoteRecapFormState): QuoteRecapFormValues {
+  return quoteRecapSchema.parse(state);
+}
+
+/**
+ * Premium starts blank so the field reads empty rather than pre-seeded with a
+ * misleading 0.
+ */
+export function emptyQuoteRecap(sameAsHousehold: boolean): QuoteRecapFormState {
   return {
     policies: [{ policyType: "Auto", premium: "", itemCount: "1" }],
     sameAsHousehold,

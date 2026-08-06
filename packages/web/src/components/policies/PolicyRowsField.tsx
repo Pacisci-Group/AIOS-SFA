@@ -1,174 +1,115 @@
 import { POLICY_TYPE_OPTIONS, type PolicyType } from "@sfa/shared";
 import { Plus, X } from "lucide-react";
-import { useFieldArray, useFormContext } from "react-hook-form";
 import { FormGrid, FormSubPanel } from "@/components/form";
 import { Button } from "@/components/ui/button";
-import {
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { withFieldGroup } from "@/hooks/form";
 
 const MAX_POLICIES = 12;
 
 /**
- * The slice of form state these rows own, under the field name `policies`.
+ * The fields one policy row owns — and **only** the ones both forms share.
  *
- * Declared here rather than imported from either feature so the component can
- * be shared: `useFormContext<PolicyRowsFormValues>()` is an independent
- * instantiation, and both the Quote Recap form and the New Lead form register
- * these exact paths. Premium is optional because the New Lead form omits it.
- *
- * Premium and item count stay **strings** in form state and are converted at
- * each form's submit boundary.
+ * Premium is deliberately absent. The Quote Recap records what a policy costs;
+ * the New Lead form asks the same question *before* a quote exists, where nobody
+ * — least of all a prospect — can answer it. The previous version modelled that
+ * with an optional `premium` plus a `showPremium` boolean, which does not
+ * typecheck here: a field group requires every key it declares to exist on the
+ * parent, and the New Lead schema has no premium at all. The compiler was right
+ * — `showPremium` was a flag making one component behave as two. Quote Recap now
+ * composes its premium field in through `children`.
  */
-export interface PolicyRowsFormValues {
-  policies: {
-    policyType: PolicyType;
-    premium?: string;
-    itemCount: string;
-  }[];
-}
+/**
+ * `policyType` is annotated rather than left to inference: a bare `"Auto"`
+ * widens to `string`, which then fails to line up with either parent's
+ * `z.enum(POLICY_TYPES)` and makes the `fields` path unresolvable.
+ */
+const policyRowDefaults = {
+  policyType: "Auto" as PolicyType,
+  itemCount: "1",
+};
 
-interface PolicyRowsFieldProps {
-  /**
-   * The Quote Recap records what a policy costs; the New Lead form (PAC-56 #2)
-   * asks the same question *before* a quote exists, where nobody — least of all
-   * a prospect — can answer it. Type and item count are common to both.
-   */
-  showPremium?: boolean;
+/**
+ * One policy row. Paths are relative to the group, so nothing here names the
+ * parent's array — that lives entirely at the call site, which is what makes
+ * renaming it a compile error instead of the silent runtime break it used to be.
+ */
+const PolicyRowGroup = withFieldGroup({
+  defaultValues: policyRowDefaults,
+  props: { index: 0, columns: 2 as 2 | 3, onRemove: undefined as (() => void) | undefined },
+  render: function Render({ group, index, columns, onRemove, children }) {
+    return (
+      <FormSubPanel
+        title={`Policy ${index + 1}`}
+        action={
+          onRemove ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-muted-foreground hover:text-foreground"
+              onClick={onRemove}
+              aria-label={`Remove policy ${index + 1}`}
+            >
+              <X size={14} />
+            </Button>
+          ) : null
+        }
+      >
+        <FormGrid gap={3} columns={columns}>
+          <group.AppField name="policyType">
+            {(f) => (
+              <f.SelectField
+                label="Policy type"
+                options={POLICY_TYPE_OPTIONS}
+                triggerClassName="w-full bg-card border-border"
+              />
+            )}
+          </group.AppField>
+          {/* Slot between type and count — where Quote Recap puts premium. */}
+          {children}
+          <group.AppField name="itemCount">
+            {(f) => (
+              <f.NumberField
+                label="Item count"
+                inputMode="numeric"
+                min="1"
+                inputClassName="bg-card border-border"
+              />
+            )}
+          </group.AppField>
+        </FormGrid>
+      </FormSubPanel>
+    );
+  },
+});
+
+interface PolicyRowsShellProps {
+  onAdd: () => void;
+  count: number;
+  children: React.ReactNode;
 }
 
 /**
- * The policy rows, shared by the Quote Recap form (PAC-39) and the New Lead
- * form's policies of interest (PAC-56 #2).
+ * The add button and spacing around a set of policy rows.
  *
  * One row is always present: the remove button is hidden at a single row, which
  * enforces "at least one policy" as an affordance rather than an error the user
  * has to read. Each form's zod `.min(1)` remains the actual guarantee.
  */
-export function PolicyRowsField({ showPremium = true }: PolicyRowsFieldProps) {
-  const form = useFormContext<PolicyRowsFormValues>();
-  const { fields, append, remove } = useFieldArray({
-    control: form.control,
-    name: "policies",
-  });
-
+export function PolicyRowsShell({
+  onAdd,
+  count,
+  children,
+}: PolicyRowsShellProps) {
   return (
     <div className="space-y-3">
-      {fields.map((field, index) => (
-        <FormSubPanel
-          key={field.id}
-          title={`Policy ${index + 1}`}
-          action={
-            fields.length > 1 ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-muted-foreground hover:text-foreground"
-                onClick={() => remove(index)}
-                aria-label={`Remove policy ${index + 1}`}
-              >
-                <X size={14} />
-              </Button>
-            ) : null
-          }
-        >
-          <FormGrid gap={3} columns={showPremium ? 3 : 2}>
-            <FormField
-              control={form.control}
-              name={`policies.${index}.policyType`}
-              render={({ field: f }) => (
-                <FormItem>
-                  <FormLabel>Policy type</FormLabel>
-                  <Select value={f.value} onValueChange={f.onChange}>
-                    <FormControl>
-                      <SelectTrigger className="w-full bg-card border-border">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {POLICY_TYPE_OPTIONS.map((type) => (
-                        <SelectItem key={type} value={type}>
-                          {type}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            {showPremium && (
-              <FormField
-                control={form.control}
-                name={`policies.${index}.premium`}
-                render={({ field: f }) => (
-                  <FormItem>
-                    <FormLabel>Premium ($)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        inputMode="decimal"
-                        step="0.01"
-                        min="0"
-                        className="bg-card border-border"
-                        {...f}
-                        value={f.value ?? ""}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            )}
-            <FormField
-              control={form.control}
-              name={`policies.${index}.itemCount`}
-              render={({ field: f }) => (
-                <FormItem>
-                  <FormLabel>Item count</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      min="1"
-                      className="bg-card border-border"
-                      {...f}
-                      value={f.value ?? ""}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </FormGrid>
-        </FormSubPanel>
-      ))}
-
+      {children}
       <Button
         type="button"
         variant="outline"
         size="sm"
-        disabled={fields.length >= MAX_POLICIES}
-        onClick={() =>
-          append(
-            showPremium
-              ? { policyType: "Auto", premium: "", itemCount: "1" }
-              : { policyType: "Auto", itemCount: "1" },
-          )
-        }
+        disabled={count >= MAX_POLICIES}
+        onClick={onAdd}
       >
         <Plus size={14} />
         Add policy
@@ -176,3 +117,5 @@ export function PolicyRowsField({ showPremium = true }: PolicyRowsFieldProps) {
     </div>
   );
 }
+
+export { PolicyRowGroup, MAX_POLICIES };

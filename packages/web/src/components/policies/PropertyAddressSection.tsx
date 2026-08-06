@@ -1,42 +1,13 @@
 import type { QuoteRecapPropertyAddress } from "@sfa/shared";
 import { useEffect } from "react";
-import { useFormContext, useWatch } from "react-hook-form";
 import { FormGrid, FormSection } from "@/components/form";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
+import { withFieldGroup } from "@/hooks/form";
 
-/**
- * The slice of form state this section owns. Declared locally for the same
- * reason as {@link PolicyRowsFormValues} — both the Quote Recap form and the
- * New Lead form register exactly these paths.
- */
-export interface PropertyAddressFormValues {
-  sameAsHousehold: boolean;
-  propertyAddress: {
-    street: string;
-    city: string;
-    state: string;
-    zip: string;
-  };
-}
-
-interface PropertyAddressSectionProps {
-  /**
-   * `null` when there is nothing usable to copy — which disables the toggle.
-   *
-   * The Quote Recap passes the household's stored address; the New Lead form
-   * passes what the submitter is typing into the household-address section of
-   * the same form, so the copy tracks their edits live.
-   */
-  householdAddress: QuoteRecapPropertyAddress | null;
-}
+/** The slice of form state this group owns. */
+const propertyAddressDefaults = {
+  sameAsHousehold: true,
+  propertyAddress: { street: "", city: "", state: "", zip: "" },
+};
 
 const FIELDS = [
   { name: "street", label: "Street" },
@@ -54,99 +25,91 @@ const FIELDS = [
  * prototype, deliberately including its **one-way copy** semantics: checking
  * the box fills the fields, unchecking leaves them as an editable starting
  * point rather than clearing them.
+ *
+ * The caller owns the surrounding `FormSection` — this is a field group, not a
+ * page section, which is what lets it sit anywhere in either form's layout.
  */
+export const PropertyAddressFields = withFieldGroup({
+  defaultValues: propertyAddressDefaults,
+  props: {
+    /**
+     * `null` when there is nothing usable to copy, which disables the toggle.
+     *
+     * MUST be referentially stable — it is an effect dependency below. The Quote
+     * Recap passes the household's stored address; the New Lead form passes what
+     * the submitter is typing into the household-address section of the same
+     * form, memoized on the four strings so the copy tracks their edits live
+     * without the object identity changing every render.
+     */
+    householdAddress: null as QuoteRecapPropertyAddress | null,
+  },
+  render: function Render({ group, householdAddress }) {
+    const sameAsHousehold = group.state.values.sameAsHousehold;
+
+    useEffect(() => {
+      if (!sameAsHousehold || !householdAddress) return;
+      for (const { name } of FIELDS) {
+        group.setFieldValue(`propertyAddress.${name}`, householdAddress[name] ?? "");
+      }
+      // Re-runs when `householdAddress` resolves, so an async fetch backfills the
+      // address even though the toggle itself never changed.
+      //
+      // Unlike the react-hook-form version this replaced, `group`/`setFieldValue`
+      // are referentially stable (the form instance is held in `useState`), so
+      // the infinite-loop hazard that version carried — new context identity each
+      // render feeding a validating `setValue` — does not exist here. The
+      // stability requirement on `householdAddress` still stands, because that
+      // object is the caller's.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sameAsHousehold, householdAddress]);
+
+    return (
+      <FormGrid>
+        {FIELDS.map(({ name, label }) => (
+          <group.AppField key={name} name={`propertyAddress.${name}`}>
+            {(f) => (
+              <f.TextField
+                label={label}
+                className={name === "street" ? "sm:col-span-2" : undefined}
+                inputClassName="bg-card border-border"
+                /*
+                 * `disabled` on the DOM input only. These fields were written by
+                 * the effect above, so they stay in form state and are
+                 * submitted; that is fine, because the server discards them
+                 * whenever `sameAsHousehold` is true and copies the household's
+                 * own.
+                 */
+                disabled={sameAsHousehold}
+              />
+            )}
+          </group.AppField>
+        ))}
+      </FormGrid>
+    );
+  },
+});
+
+interface PropertyAddressSectionProps {
+  children: React.ReactNode;
+  householdAddress: QuoteRecapPropertyAddress | null;
+}
+
+/** The panel wrapper both forms put around {@link PropertyAddressFields}. */
 export function PropertyAddressSection({
+  children,
   householdAddress,
 }: PropertyAddressSectionProps) {
-  const form = useFormContext<PropertyAddressFormValues>();
-  const { setValue } = form;
-  const sameAsHousehold = useWatch({
-    control: form.control,
-    name: "sameAsHousehold",
-  });
-
-  useEffect(() => {
-    if (!sameAsHousehold || !householdAddress) return;
-    for (const { name } of FIELDS) {
-      setValue(`propertyAddress.${name}`, householdAddress[name] ?? "", {
-        shouldValidate: true,
-      });
-    }
-    // Depends on `setValue` (a stable method off the form control), NEVER on the
-    // whole `form` object: `useFormContext()` hands back a new identity on every
-    // render of the provider, so `form` in these deps + `shouldValidate` is an
-    // infinite render loop (validate -> re-render -> new `form` -> validate).
-    //
-    // Also re-runs when `householdAddress` resolves, so an async fetch backfills
-    // the address even though the toggle itself never changed. The same applies
-    // to the New Lead form, where the source address is being typed live — so
-    // callers watching their own form MUST pass a referentially stable object
-    // (memoized on the four strings), or this loops for the same reason.
-  }, [sameAsHousehold, householdAddress, setValue]);
-
   return (
-    // TODO(Phase 3): this component owns its own `<section>`, which makes it a
-    // page section rather than a field group and is why it can't be embedded in
-    // another layout. Splitting the fields out from the wrapper is part of the
-    // field-binding tier work.
     <FormSection
       title="Property address"
       description="The address being insured — not necessarily where the client lives."
     >
-      <FormField
-        control={form.control}
-        name="sameAsHousehold"
-        render={({ field }) => (
-          <FormItem className="flex flex-row items-center gap-2 space-y-0">
-            <FormControl>
-              <Checkbox
-                checked={field.value}
-                onCheckedChange={field.onChange}
-                disabled={!householdAddress}
-              />
-            </FormControl>
-            <FormLabel className="font-normal">
-              Same as household address
-            </FormLabel>
-          </FormItem>
-        )}
-      />
-
+      {children}
       {!householdAddress && (
         <p className="text-xs text-muted-foreground">
           No household address on file — enter the property address below.
         </p>
       )}
-
-      <FormGrid>
-        {FIELDS.map(({ name, label }) => (
-          <FormField
-            key={name}
-            control={form.control}
-            name={`propertyAddress.${name}`}
-            render={({ field }) => (
-              <FormItem className={name === "street" ? "sm:col-span-2" : ""}>
-                <FormLabel>{label}</FormLabel>
-                <FormControl>
-                  {/*
-                   * `disabled` on the DOM input, never RHF's `disabled` option
-                   * — the latter nulls the value. These fields were written by
-                   * `setValue`, so they stay in form state and are submitted;
-                   * that is fine, because the server discards them whenever
-                   * `sameAsHousehold` is true and copies the household's own.
-                   */}
-                  <Input
-                    className="bg-card border-border"
-                    disabled={sameAsHousehold}
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        ))}
-      </FormGrid>
     </FormSection>
   );
 }
