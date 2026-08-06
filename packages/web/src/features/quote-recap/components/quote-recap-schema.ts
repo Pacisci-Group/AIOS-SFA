@@ -1,10 +1,9 @@
 import type { QuoteRecapPolicyInput } from "@sfa/shared";
-import { POLICY_TYPES, isPropertyPolicyType } from "@sfa/shared";
+import { POLICY_TYPES } from "@sfa/shared";
 import { z } from "zod";
+import { requirePropertyAddress } from "@/lib/property-address-rule";
 import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/quote-recaps-api";
 import { numericString } from "@/lib/zod-helpers";
-
-const ADDRESS_FIELDS = ["street", "city", "state", "zip"] as const;
 
 /**
  * Premium and item count stay **strings** in form state and are converted at
@@ -56,23 +55,11 @@ export const quoteRecapSchema = z
         "File must be under 10MB",
       ),
   })
-  .superRefine((value, ctx) => {
-    // Mirrors the API rule. The prototype's address fields are bare
-    // `z.string()`, so a Property policy with a completely blank address
-    // validates there — that bug is not ported.
-    if (value.sameAsHousehold) return;
-    if (!value.policies.some((p) => isPropertyPolicyType(p.policyType))) return;
-
-    for (const field of ADDRESS_FIELDS) {
-      if (!value.propertyAddress[field]?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["propertyAddress", field],
-          message: "Required",
-        });
-      }
-    }
-  });
+  // The prototype's address fields are bare `z.string()`, so a Property policy
+  // with a completely blank address validates there — that bug is not ported.
+  .superRefine(
+    requirePropertyAddress((value) => value.policies.map((p) => p.policyType)),
+  );
 
 export type QuoteRecapFormValues = z.infer<typeof quoteRecapSchema>;
 

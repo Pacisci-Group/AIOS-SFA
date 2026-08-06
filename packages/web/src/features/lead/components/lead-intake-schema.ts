@@ -1,13 +1,8 @@
 import type { LeadPolicyOfInterestInput } from "@sfa/shared";
-import {
-  HOUSEHOLD_MEMBER_ROLES,
-  POLICY_TYPES,
-  isPropertyPolicyType,
-} from "@sfa/shared";
+import { HOUSEHOLD_MEMBER_ROLES, POLICY_TYPES } from "@sfa/shared";
 import { z } from "zod";
+import { requirePropertyAddress } from "@/lib/property-address-rule";
 import { numericString } from "@/lib/zod-helpers";
-
-const ADDRESS_FIELDS = ["street", "city", "state", "zip"] as const;
 
 /**
  * One policy the submitter wants quoted (PAC-56 #2).
@@ -85,15 +80,11 @@ export function makeLeadIntakeSchema(requireLeadSource: boolean) {
           )
           .max(10, "At most 10 additional members"),
         /**
-         * Named `policies` rather than `policiesOfInterest` because the shared
-         * `PolicyRowsField` registers that path — the wire field keeps the
-         * longer name, and {@link toPolicyOfInterestInputs} bridges the two.
-         *
          * Required here while the API defaults it to `[]`, the same split
          * `address` uses: the form is where we can ask, so we insist; the
          * endpoint would rather store an incomplete lead than 400 and lose it.
          */
-        policies: z
+        policiesOfInterest: z
           .array(policyOfInterestSchema)
           .min(1, "Add at least one policy")
           .max(12, "At most 12 policies"),
@@ -108,26 +99,11 @@ export function makeLeadIntakeSchema(requireLeadSource: boolean) {
           ? z.string().min(1, "Select a lead source")
           : z.string().optional(),
       })
-      // Identical rule to the Quote Recap form's, because it is the same
-      // question: a property policy quoted against a blank address is useless.
-      // Nothing to require while `sameAsHousehold` is set — the server copies
-      // the household address and discards whatever was sent.
-      .superRefine((value, ctx) => {
-        if (value.sameAsHousehold) return;
-        if (!value.policies.some((p) => isPropertyPolicyType(p.policyType))) {
-          return;
-        }
-
-        for (const field of ADDRESS_FIELDS) {
-          if (!value.propertyAddress[field]?.trim()) {
-            ctx.addIssue({
-              code: "custom",
-              path: ["propertyAddress", field],
-              message: "Required",
-            });
-          }
-        }
-      })
+      .superRefine(
+        requirePropertyAddress((value) =>
+          value.policiesOfInterest.map((p) => p.policyType),
+        ),
+      )
   );
 }
 
@@ -137,7 +113,7 @@ export type LeadIntakeFormValues = z.infer<
 
 /** Form strings → the numeric wire shape, once validation has passed. */
 export function toPolicyOfInterestInputs(
-  policies: LeadIntakeFormValues["policies"],
+  policies: LeadIntakeFormValues["policiesOfInterest"],
 ): LeadPolicyOfInterestInput[] {
   return policies.map((p) => ({
     policyType: p.policyType,
@@ -155,7 +131,7 @@ export const EMPTY_LEAD_INTAKE: LeadIntakeFormValues = {
   },
   address: { street: "", city: "", state: "", zip: "" },
   members: [],
-  policies: [{ policyType: "Auto", itemCount: "1" }],
+  policiesOfInterest: [{ policyType: "Auto", itemCount: "1" }],
   // On by default, unlike the Quote Recap: the household address is being typed
   // into this very form, so there is always something to copy — and most people
   // insure the home they live in.

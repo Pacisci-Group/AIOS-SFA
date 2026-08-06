@@ -228,7 +228,7 @@ export function LeadIntakeForm({
           title="Policies of interest"
           description="What would you like quoted? One row per policy."
         >
-          <form.Field name="policies" mode="array">
+          <form.Field name="policiesOfInterest" mode="array">
             {(field) => (
               <PolicyRowsShell
                 count={field.state.value.length}
@@ -238,7 +238,7 @@ export function LeadIntakeForm({
                   <PolicyRowGroup
                     key={i}
                     form={form}
-                    fields={`policies[${i}]`}
+                    fields={`policiesOfInterest[${i}]`}
                     index={i}
                     columns={2}
                     onRemove={
@@ -257,7 +257,7 @@ export function LeadIntakeForm({
             Landlord means there is a dwelling whose address we don't have. */}
         <form.Subscribe
           selector={(s) => ({
-            policies: s.values.policies,
+            policies: s.values.policiesOfInterest,
             address: s.values.address,
           })}
         >
@@ -295,7 +295,7 @@ export function LeadIntakeForm({
 }
 
 interface PropertyAddressGateProps {
-  policies: LeadIntakeFormValues["policies"];
+  policies: LeadIntakeFormValues["policiesOfInterest"];
   address: LeadIntakeFormValues["address"];
   children: (
     householdAddress: LeadIntakeFormValues["address"] | null,

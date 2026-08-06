@@ -41,7 +41,7 @@ export default function PublicLeadFormPage() {
         primaryContact: values.primaryContact,
         address: values.address,
         members: values.members,
-        policiesOfInterest: toPolicyOfInterestInputs(values.policies),
+        policiesOfInterest: toPolicyOfInterestInputs(values.policiesOfInterest),
         sameAsHousehold: values.sameAsHousehold,
         propertyAddress: values.propertyAddress,
         submissionToken: submissionToken.current,
