@@ -6,7 +6,11 @@ interface FormSectionProps {
    * shell has its own progress header instead.
    */
   title?: React.ReactNode;
-  /** Sub-line under the heading. Ignored without a `title`. */
+  /**
+   * Sub-line under the heading. Stands on its own without a `title` — the
+   * paginated intake form names each card in its progress header, so the card
+   * itself is a bare panel that still has something to explain.
+   */
   description?: React.ReactNode;
   /**
    * Rendered to the right of the heading, on the same row. `LeadContextHeader`
@@ -51,7 +55,7 @@ export function FormSection({
         className,
       )}
     >
-      {title ? (
+      {title || description || action ? (
         // The heading block is always one child of `space-y-4`, so the vertical
         // rhythm is the same whether or not there is a description — the sites
         // that render a bare heading and the sites that wrap it in a `<div>`
@@ -62,11 +66,22 @@ export function FormSection({
             action ? "flex items-center justify-between gap-3" : undefined
           }
         >
-          <Title className="text-[10px] uppercase tracking-widest text-muted-foreground">
-            {title}
-          </Title>
+          {title ? (
+            <Title className="text-[10px] uppercase tracking-widest text-muted-foreground">
+              {title}
+            </Title>
+          ) : null}
           {description ? (
-            <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+            // `mt-1` only when it is sitting under a heading; on its own it is
+            // the first thing in the panel and needs no lead-in.
+            <p
+              className={cn(
+                "text-xs text-muted-foreground",
+                title && "mt-1",
+              )}
+            >
+              {description}
+            </p>
           ) : null}
           {action}
         </div>

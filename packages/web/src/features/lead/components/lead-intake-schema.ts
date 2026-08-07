@@ -1,5 +1,9 @@
 import type { LeadPolicyOfInterestInput } from "@sfa/shared";
-import { HOUSEHOLD_MEMBER_ROLES, POLICY_TYPES } from "@sfa/shared";
+import {
+  DEFAULT_ADDRESS_STATE,
+  HOUSEHOLD_MEMBER_ROLES,
+  POLICY_TYPES,
+} from "@sfa/shared";
 import { z } from "zod";
 import {
   emptyPolicyAddress,
@@ -177,7 +181,10 @@ export function emptyLeadIntake(): LeadIntakeFormValues {
       phone: "",
       email: "",
     },
-    address: { street: "", city: "", state: "", zip: "" },
+    // State pre-filled (PAC-56 #3) — see `DEFAULT_ADDRESS_STATE`. It is a real
+    // answer, not a placeholder: the field validates and counts as complete on
+    // the progress bar without being touched, which is the point.
+    address: { street: "", city: "", state: DEFAULT_ADDRESS_STATE, zip: "" },
     members: [],
     // Always empty now, on both variants. Policies are added through the drawer
     // (PAC-56 #15), so a seeded row would be one the submitter never opened,

@@ -1,4 +1,8 @@
-import { isPropertyPolicyType, type PolicyType } from "@sfa/shared";
+import {
+  DEFAULT_ADDRESS_STATE,
+  isPropertyPolicyType,
+  type PolicyType,
+} from "@sfa/shared";
 import { z } from "zod";
 import { ADDRESS_FIELDS, type AddressField } from "@/lib/format-address";
 
@@ -76,7 +80,15 @@ export function policyAddressInput<T extends PolicyAddressRow>(
   return row.propertyAddress;
 }
 
-/** A blank address, for a freshly opened policy drawer. */
+/**
+ * A blank address, for a freshly opened policy drawer.
+ *
+ * Blank apart from the state, which is pre-filled (PAC-56 #3). Seen rarely —
+ * "same as household" starts on, so these fields are hidden until a submitter
+ * says the dwelling is somewhere else — but a policy address is an address, and
+ * having it default differently from the household block above it would be the
+ * odd thing.
+ */
 export function emptyPolicyAddress(): Record<AddressField, string> {
-  return { street: "", city: "", state: "", zip: "" };
+  return { street: "", city: "", state: DEFAULT_ADDRESS_STATE, zip: "" };
 }
