@@ -2,19 +2,81 @@ import type {
   LeadDetailQuoteRecap,
   LeadDetailQuoteRecapSummary,
 } from "@sfa/shared";
-import { ChevronDown, FileText } from "lucide-react";
+import { ChevronDown, ExternalLink, FileText, Loader2 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { openDocumentInNewTab } from "@/lib/open-document";
+import { getQuoteDocumentDownload } from "@/lib/quote-recaps-api";
 import { cn } from "@/lib/utils";
 import { formatCurrency, formatDate, statusBadgeClass } from "./lead-display";
 
 interface QuoteRecapCardProps {
   latest: LeadDetailQuoteRecap;
   earlier: LeadDetailQuoteRecapSummary[];
+}
+
+/**
+ * The uploaded quote document, openable (PAC-56 #10 + #30).
+ *
+ * Was a filename in plain text — the file was on the page but there was no way
+ * to look at it. Clicking now opens it in a new tab in the browser's own PDF
+ * viewer, and the user downloads from there; we build neither a viewer nor a
+ * download button.
+ *
+ * The URL is fetched per click rather than rendered into an `href`, because it
+ * is a short-lived presigned GET: baking one into the DOM on page load would
+ * hand out a link that expires while the producer is still reading the page,
+ * and would leak a live document URL into anything that scrapes the markup.
+ */
+function DocumentLink({
+  recapId,
+  filename,
+}: {
+  recapId: string;
+  filename: string;
+}) {
+  const [opening, setOpening] = useState(false);
+
+  const open = async () => {
+    setOpening(true);
+    try {
+      await openDocumentInNewTab(async () => {
+        const { downloadUrl } = await getQuoteDocumentDownload(recapId);
+        return downloadUrl;
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Couldn’t open the document",
+      );
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void open()}
+      disabled={opening}
+      className="mt-3 flex max-w-full items-center gap-2 rounded text-xs text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+    >
+      {opening ? (
+        <Loader2 size={13} className="shrink-0 animate-spin" />
+      ) : (
+        <FileText size={13} className="shrink-0" />
+      )}
+      <span className="truncate underline-offset-2 hover:underline">
+        {filename}
+      </span>
+      <ExternalLink size={11} className="shrink-0" aria-hidden />
+      <span className="sr-only">Opens in a new tab</span>
+    </button>
+  );
 }
 
 /**
@@ -110,15 +172,10 @@ export function QuoteRecapCard({ latest, earlier }: QuoteRecapCardProps) {
         )}
 
         {latest.document && (
-          <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <FileText size={13} className="shrink-0" />
-            {/*
-              Filename only, not a link: the API returns document metadata
-              without the storage key, and downloading needs its own presigned
-              -URL endpoint rather than a client that knows the path.
-            */}
-            <span className="truncate">{latest.document.filename}</span>
-          </p>
+          <DocumentLink
+            recapId={latest.id}
+            filename={latest.document.filename}
+          />
         )}
       </div>
 

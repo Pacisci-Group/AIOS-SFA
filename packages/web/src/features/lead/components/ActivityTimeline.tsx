@@ -1,4 +1,5 @@
-import type { LeadDetailActivity } from "@sfa/shared";
+import type { ActivityOrigin, LeadDetailActivity } from "@sfa/shared";
+import { ACTIVITY_ORIGIN_LABELS } from "@sfa/shared";
 import { cn } from "@/lib/utils";
 import { ActivityComposer } from "./ActivityComposer";
 import { activityDisplay, activityLabel } from "./lead-display";
@@ -49,6 +50,21 @@ function formatWhen(value: string | null): string {
  * Renders whatever types exist rather than assuming a set. `lead_created`,
  * `quoted`, `sold` and `audit_resolved` come from their own pipelines; `call`,
  * `text`, `email` and `note` are client-written.
+ *
+ * ## Notes read as notes (PAC-56 #29)
+ *
+ * A note used to render exactly like a logged call — one line of text in a
+ * timeline row — so it was neither identifiable as a note nor traceable to where
+ * it was written. Two changes fix that:
+ *
+ * - **Notes get their own treatment**: the text sits in a sunken quote block
+ *   with an accent rule, so a written thought is visibly different from an event
+ *   the system recorded.
+ * - **Every row carries its provenance**: who wrote it, when, and which surface
+ *   it came from. The origin chip is shown only when it is *not* the lead
+ *   itself — on a page about this lead, "Lead" on every row is noise, and the
+ *   rows worth spotting are the ones that arrived from the quote recap or the
+ *   sold flow.
  */
 export function ActivityTimeline({
   activities,
@@ -74,6 +90,14 @@ export function ActivityTimeline({
           {activities.map((activity, index) => {
             const { icon: Icon, tone, tint } = activityDisplay[activity.type];
             const isLast = index === activities.length - 1;
+            const isNote = activity.type === "note";
+            // `POST /activities` defaults an untyped touch's summary to the
+            // type's own label, so a bare "Call logged" would otherwise render
+            // twice — once as the heading, once as the body.
+            const body =
+              activity.summary && activity.summary !== activityLabel[activity.type]
+                ? activity.summary
+                : null;
 
             return (
               <li key={activity.id} className="relative flex gap-3">
@@ -97,18 +121,42 @@ export function ActivityTimeline({
 
                 <div className="min-w-0 flex-1 pb-4">
                   <div className="flex items-baseline justify-between gap-2">
-                    <p className="text-sm font-medium text-card-foreground">
-                      {activity.summary ?? activityLabel[activity.type]}
+                    <p
+                      className={cn(
+                        "text-sm font-medium",
+                        isNote ? "text-muted-foreground" : "text-card-foreground",
+                      )}
+                    >
+                      {isNote ? "Note" : activityLabel[activity.type]}
                     </p>
                     <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
                       {formatWhen(activity.occurredAt)}
                     </span>
                   </div>
-                  {activity.producerName && (
-                    <p className={cn("mt-1 text-xs", tone)}>
-                      {activity.producerName}
-                    </p>
-                  )}
+
+                  {isNote
+                    ? /*
+                       * The note's own words, set apart from the surrounding
+                       * event rows. `whitespace-pre-line` because the composer
+                       * is a textarea and a producer's line breaks are
+                       * meaningful.
+                       */
+                      body && (
+                        <p className="mt-1.5 whitespace-pre-line rounded-r border-l-2 border-amber-500/50 bg-sunken py-2 pl-3 pr-2 text-sm text-card-foreground">
+                          {body}
+                        </p>
+                      )
+                    : body && (
+                        <p className="mt-0.5 text-sm text-card-foreground">
+                          {body}
+                        </p>
+                      )}
+
+                  <Provenance
+                    producerName={activity.producerName}
+                    origin={activity.origin}
+                    tone={tone}
+                  />
                 </div>
               </li>
             );
@@ -120,5 +168,40 @@ export function ActivityTimeline({
           a long history. */}
       <ActivityComposer leadId={leadId} />
     </section>
+  );
+}
+
+/**
+ * Who wrote it and where (#29).
+ *
+ * The origin chip is suppressed for `lead`, which is where the overwhelming
+ * majority of rows come from — labelling every row on a lead page "Lead" is
+ * noise that hides the two or three rows whose origin actually matters.
+ *
+ * `system` covers migrated rows and anything the platform generated with no
+ * human author; it is shown, because "this came from the old system" is exactly
+ * the kind of thing a producer needs to know before trusting a summary.
+ */
+function Provenance({
+  producerName,
+  origin,
+  tone,
+}: {
+  producerName: string | null;
+  origin: ActivityOrigin;
+  tone: string;
+}) {
+  const showOrigin = origin !== "lead";
+  if (!producerName && !showOrigin) return null;
+
+  return (
+    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      {producerName && <span className={tone}>{producerName}</span>}
+      {showOrigin && (
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+          {ACTIVITY_ORIGIN_LABELS[origin]}
+        </span>
+      )}
+    </p>
   );
 }
