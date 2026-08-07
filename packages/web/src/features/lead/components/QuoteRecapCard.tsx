@@ -2,7 +2,7 @@ import type {
   LeadDetailQuoteRecap,
   LeadDetailQuoteRecapSummary,
 } from "@sfa/shared";
-import { ChevronDown, FileText } from "lucide-react";
+import { ChevronDown, FileText, Home } from "lucide-react";
 import { useState } from "react";
 import {
   Collapsible,
@@ -10,7 +10,12 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { formatCurrency, formatDate, statusBadgeClass } from "./lead-display";
+import {
+  formatAddress,
+  formatCurrency,
+  formatDate,
+  statusBadgeClass,
+} from "./lead-display";
 
 interface QuoteRecapCardProps {
   latest: LeadDetailQuoteRecap;
@@ -71,12 +76,27 @@ export function QuoteRecapCard({ latest, earlier }: QuoteRecapCardProps) {
             {latest.policies.map((policy, index) => (
               <li
                 key={`${policy.policyType}-${index}`}
-                className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
+                className="flex items-start justify-between gap-3 py-2 first:pt-0 last:pb-0"
               >
-                <span className="text-sm text-card-foreground">
-                  {policy.policyType}
+                <span className="min-w-0">
+                  <span className="block text-sm text-card-foreground">
+                    {policy.policyType}
+                  </span>
+                  {/*
+                    Each property policy names the building it insures
+                    (PAC-56 #14). Recaps written before that carry one address
+                    for the whole proposal — rendered below the list instead.
+                  */}
+                  {policy.propertyAddress && (
+                    <span className="mt-0.5 flex items-start gap-1.5 text-xs text-muted-foreground">
+                      <Home size={12} className="mt-0.5 shrink-0" />
+                      <span className="break-words">
+                        {formatAddress(policy.propertyAddress)}
+                      </span>
+                    </span>
+                  )}
                 </span>
-                <span className="flex items-center gap-3 text-sm">
+                <span className="flex shrink-0 items-center gap-3 text-sm">
                   <span className="text-xs text-muted-foreground">
                     {policy.itemCount} item{policy.itemCount === 1 ? "" : "s"}
                   </span>
@@ -91,6 +111,20 @@ export function QuoteRecapCard({ latest, earlier }: QuoteRecapCardProps) {
           // Migrated recaps carry the totals but not the per-policy rows.
           <p className="text-sm text-muted-foreground">
             {latest.productsQuoted.join(", ") || "No policy detail recorded."}
+          </p>
+        )}
+
+        {/*
+          Pre-PAC-56-#14 recaps only: one address for the whole proposal, which
+          is exactly what could not describe a home plus a landlord policy.
+          Newer recaps put it on the row above and leave this null.
+        */}
+        {latest.propertyAddress && (
+          <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
+            <Home size={13} className="mt-0.5 shrink-0" />
+            <span className="break-words">
+              Property · {formatAddress(latest.propertyAddress)}
+            </span>
           </p>
         )}
 

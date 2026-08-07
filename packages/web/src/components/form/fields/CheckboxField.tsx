@@ -19,7 +19,7 @@ interface CheckboxFieldProps {
  *
  * Normalises Radix's tri-state `onCheckedChange` to a strict boolean. That guard
  * was written by hand at three of the four previous call sites and **missing at
- * the fourth** (`PropertyAddressSection`'s "same as household" toggle), where an
+ * the fourth** (the "same as household" toggle, now in `PolicyFields`), where an
  * `"indeterminate"` could be written into a `z.boolean()` field. Centralising it
  * fixes that for free.
  *

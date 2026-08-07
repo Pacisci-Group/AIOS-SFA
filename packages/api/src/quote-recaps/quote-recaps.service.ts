@@ -23,6 +23,7 @@ import {
 } from '../activities/schemas/activity.schema';
 import { resolveHouseholdAddress } from '../common/address/household-address';
 import type { StructuredAddress } from '../common/address/household-address';
+import { resolvePolicyPropertyAddress } from '../common/address/policy-property-address';
 import { roundCents } from '../common/domain/money';
 import {
   ResolvedTenantContext,
@@ -183,11 +184,21 @@ export class QuoteRecapsService {
     });
     const stored = await this.verifyQuoteDocument(dto.quoteDocument.key);
 
-    const policies = dto.policies.map((p) => ({
-      policyType: p.policyType,
-      premium: roundCents(p.premium),
-      itemCount: p.itemCount,
-    }));
+    // Resolved once: every row that says "same as household" copies this, so a
+    // recap covering a home and a landlord policy ends up with two rows whose
+    // addresses are independently correct (PAC-56 #14).
+    const householdAddress = this.householdAddress(lead, household);
+    const policies = dto.policies.map((p) => {
+      const propertyAddress = resolvePolicyPropertyAddress(p, householdAddress);
+      return {
+        policyType: p.policyType,
+        premium: roundCents(p.premium),
+        itemCount: p.itemCount,
+        propertyAddress,
+        sameAsHousehold:
+          Boolean(propertyAddress) && p.sameAsHousehold !== false,
+      };
+    });
     const quoteDate = new Date();
 
     try {
@@ -210,8 +221,9 @@ export class QuoteRecapsService {
         leadId: lead._id,
         householdId: household._id,
         policies,
-        propertyAddress: this.resolvePropertyAddress(dto, lead, household),
-        sameAsHousehold: dto.sameAsHousehold,
+        // No recap-level `propertyAddress`/`sameAsHousehold`: since PAC-56 #14
+        // the dwelling belongs to the policy row, and those two fields exist
+        // only for the recaps written before that.
         notes: dto.notes,
         quoteDocument: {
           key: dto.quoteDocument.key,
@@ -262,17 +274,6 @@ export class QuoteRecapsService {
       household?.propertyAddress,
       household?.mailingAddress,
     );
-  }
-
-  private resolvePropertyAddress(
-    dto: CreateQuoteRecapDto,
-    lead: LeadDocument,
-    household: HouseholdDocument,
-  ): StructuredAddress | undefined {
-    if (!dto.sameAsHousehold) return dto.propertyAddress;
-    // The client's address is discarded when it claims "same as household", so
-    // it cannot assert one thing and submit another.
-    return this.householdAddress(lead, household) ?? undefined;
   }
 
   /**

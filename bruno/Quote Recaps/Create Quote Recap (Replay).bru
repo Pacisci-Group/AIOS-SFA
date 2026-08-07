@@ -19,9 +19,13 @@ body:json {
     "leadId": "{{createdLeadId}}",
     "policies": [
       { "policyType": "Auto", "premium": 1200.10, "itemCount": 2 },
-      { "policyType": "Home", "premium": 899.95, "itemCount": 1 }
+      {
+        "policyType": "Home",
+        "premium": 899.95,
+        "itemCount": 1,
+        "sameAsHousehold": true
+      }
     ],
-    "sameAsHousehold": true,
     "notes": "Bundled auto + home. Client wants to review the deductible.",
     "quoteDocument": {
       "key": "{{quoteDocumentKey}}",

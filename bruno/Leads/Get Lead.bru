@@ -75,6 +75,9 @@ tests {
     body.policiesOfInterest.forEach(function (policy) {
       expect(rawCodes).to.not.include(policy.policyType);
       expect(policy.itemCount).to.be.a("number");
+      // Per-row since PAC-56 #14 — always present, `null` on a non-property row
+      // and on anything captured before the address moved onto the policy.
+      expect(policy).to.have.property("propertyAddress");
     });
   });
 
@@ -177,10 +180,14 @@ docs {
     "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
     "quoteControlNumber": "QCN-11741",
     "policiesOfInterest": [
-      { "policyType": "Auto", "itemCount": 2 },
-      { "policyType": "Home", "itemCount": 1 }
+      { "policyType": "Auto", "itemCount": 2, "propertyAddress": null },
+      {
+        "policyType": "Home",
+        "itemCount": 1,
+        "propertyAddress": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" }
+      }
     ],
-    "propertyAddress": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
+    "propertyAddress": null,
     "agingDays": 12,
     "createdDate": "2026-07-16T00:00:00.000Z",
     "lastActivityAt": "2026-07-28T14:02:11.000Z",
@@ -212,7 +219,9 @@ docs {
       "itemCount": 2,
       "productsQuoted": ["Auto", "Home"],
       "status": "Quoted",
-      "policies": [{ "policyType": "Auto", "premium": 1200, "itemCount": 1 }],
+      "policies": [
+        { "policyType": "Auto", "premium": 1200, "itemCount": 1, "propertyAddress": null }
+      ],
       "propertyAddress": null,
       "notes": "Bundling for the multi-policy discount.",
       "document": {
@@ -246,8 +255,8 @@ docs {
   | temperature        | enum            | `Hot` \| `Warm` \| `Cold` \| `Unknown`                    |
   | leadSource         | object          | `{ code, label }` — `code` is what `PATCH` accepts back   |
   | address            | object \| null  | household living address, coerced from three stored shapes |
-  | policiesOfInterest | array           | `{ policyType, itemCount }` captured at intake (PAC-56 #2); `[]` on migrated leads |
-  | propertyAddress    | object \| null  | insured dwelling from intake (PAC-56 #6), "same as household" already applied |
+  | policiesOfInterest | array           | `{ policyType, itemCount, propertyAddress }` captured at intake (PAC-56 #2); `[]` on migrated leads |
+  | propertyAddress    | object \| null  | **lead-level** dwelling — migrated records and pre-PAC-56-#14 leads only; read the per-row one first |
   | agingDays          | int             | recomputed live, **not** the stale migrated value          |
   | intakeChannel      | enum \| null    | `internal` \| `share_link`; `null` on migrated leads       |
   | primaryContact     | object \| null  | DOB is `YYYY-MM-DD`, never a timestamp                    |

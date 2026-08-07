@@ -82,6 +82,16 @@ export interface LeadDetailQuoteRecapPolicy {
   policyType: string;
   premium: number;
   itemCount: number;
+  /**
+   * The dwelling this row insures (PAC-56 #14), already resolved: a row the
+   * producer marked "same as household" holds the household address itself, not
+   * a flag to re-interpret.
+   *
+   * `null` on non-property rows, and on every recap written before the address
+   * moved onto the row — those carry {@link LeadDetailQuoteRecap.propertyAddress}
+   * instead.
+   */
+  propertyAddress: StructuredAddress | null;
 }
 
 /**
@@ -96,6 +106,11 @@ export interface LeadDetailQuoteRecapPolicy {
  */
 export interface LeadDetailQuoteRecap extends LeadDetailQuoteRecapSummary {
   policies: LeadDetailQuoteRecapPolicy[];
+  /**
+   * The **recap-level** property address, which only pre-PAC-56-#14 recaps have.
+   * Newer ones put the address on each policy row; render this only as the
+   * fallback for a recap whose rows carry none.
+   */
   propertyAddress: StructuredAddress | null;
   notes: string | null;
   /**
@@ -164,6 +179,12 @@ export interface LeadDetailPriorInsurance {
 export interface LeadDetailPolicyOfInterest {
   policyType: string;
   itemCount: number;
+  /**
+   * The dwelling this row is about (PAC-56 #14), already resolved server-side.
+   * `null` on non-property rows and on every lead captured before the address
+   * moved onto the row — those carry {@link LeadDetail.propertyAddress}.
+   */
+  propertyAddress: StructuredAddress | null;
 }
 
 export interface LeadDetailActivity {
@@ -208,10 +229,11 @@ export interface LeadDetail {
    */
   policiesOfInterest: LeadDetailPolicyOfInterest[];
   /**
-   * The insured dwelling captured at intake (PAC-56 #6), already resolved: when
-   * the submitter ticked "same as household" this holds the household address
-   * itself, not a flag the client has to interpret. `null` when no property-type
-   * policy was asked for — and on every migrated lead.
+   * The **lead-level** insured dwelling. Only leads captured before PAC-56 #14
+   * moved the address onto each policy row have one, plus whatever the
+   * migration carried over from SmartSuite's `Property Address` (`sfd5ba053e`).
+   * `null` otherwise — read `policiesOfInterest[].propertyAddress` first and
+   * fall back to this.
    */
   propertyAddress: StructuredAddress | null;
   /** Recomputed live from `createdDate`, not the value migration froze in. */

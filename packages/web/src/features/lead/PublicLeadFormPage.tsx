@@ -41,9 +41,8 @@ export default function PublicLeadFormPage() {
         primaryContact: values.primaryContact,
         address: values.address,
         members: values.members,
+        // Each row carries its own dwelling address (PAC-56 #14).
         policiesOfInterest: toPolicyOfInterestInputs(values.policiesOfInterest),
-        sameAsHousehold: values.sameAsHousehold,
-        propertyAddress: values.propertyAddress,
         submissionToken: submissionToken.current,
       }),
     onSuccess: () => setSubmitted(true),
@@ -106,7 +105,7 @@ export default function PublicLeadFormPage() {
 
             <LeadIntakeForm
               key={formKey}
-              showLeadSource={false}
+              variant="public"
               submitting={mutation.isPending}
               errorMessage={error}
               submitLabel="Submit"

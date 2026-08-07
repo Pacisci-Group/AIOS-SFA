@@ -49,9 +49,8 @@ export default function NewQuoteRecapPage() {
     mutationFn: (values: QuoteRecapFormValues) =>
       createQuoteRecapWithDocument({
         leadId,
+        // Each row carries its own property address (PAC-56 #14).
         policies: toPolicyInputs(values.policies),
-        sameAsHousehold: values.sameAsHousehold,
-        propertyAddress: values.propertyAddress,
         notes: values.notes?.trim() ? values.notes.trim() : undefined,
         file: values.quoteDocument,
         submissionToken: submissionToken.current,

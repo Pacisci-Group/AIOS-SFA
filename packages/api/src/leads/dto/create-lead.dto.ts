@@ -2,11 +2,12 @@ import {
   HOUSEHOLD_MEMBER_ROLES,
   POLICY_TYPES,
   SELECTABLE_LEAD_SOURCE_OPTIONS,
-  isPropertyPolicyType,
 } from '@sfa/shared';
 import { z } from 'zod';
-
-const ADDRESS_FIELDS = ['street', 'city', 'state', 'zip'] as const;
+import {
+  policyAddressFields,
+  requirePolicyPropertyAddress,
+} from '../../common/address/policy-property-address';
 
 /** `Test` (ENEJP) is excluded — it must never be selectable at intake. */
 const SELECTABLE_LEAD_SOURCE_CODES = SELECTABLE_LEAD_SOURCE_OPTIONS.map(
@@ -54,18 +55,18 @@ const address = z.object({
  * One requested policy. Canonical labels only — a raw SmartSuite code is a 400,
  * the same rule the Quote Recap DTO applies: `normalizePolicyType` exists to
  * *read* legacy data, not to launder input.
+ *
+ * Carries its own insured-property address (PAC-56 #14): one address per
+ * submission could not describe a prospect asking about their home *and* a
+ * rental they let out.
  */
-const policyOfInterestSchema = z.object({
-  policyType: z.enum(POLICY_TYPES),
-  itemCount: z.coerce.number().int().min(1).max(99),
-});
-
-const propertyAddressSchema = z.object({
-  street: z.string().trim().max(200),
-  city: z.string().trim().max(120),
-  state: z.string().trim().max(60),
-  zip: z.string().trim().max(20),
-});
+const policyOfInterestSchema = z
+  .object({
+    policyType: z.enum(POLICY_TYPES),
+    itemCount: z.coerce.number().int().min(1).max(99),
+    ...policyAddressFields,
+  })
+  .superRefine(requirePolicyPropertyAddress);
 
 /** Fields shared by the authenticated and public intake forms. */
 export const leadIntakeBaseSchema = z.object({
@@ -82,15 +83,11 @@ export const leadIntakeBaseSchema = z.object({
    * Optional here while the web form requires at least one, for the same reason
    * `address` is: a partial submission that still identifies a person beats a
    * 400 that loses the lead outright.
+   *
+   * The insured dwelling (PAC-56 #6) rides on the rows rather than beside them
+   * — see `policyOfInterestSchema`.
    */
   policiesOfInterest: z.array(policyOfInterestSchema).max(12).default([]),
-  /**
-   * The insured dwelling (PAC-56 #6). Defaults to "same as household" so a
-   * client that sends neither field gets the sane answer rather than a lead
-   * with a property policy and no address at all.
-   */
-  sameAsHousehold: z.boolean().default(true),
-  propertyAddress: propertyAddressSchema.optional(),
   quoteControlNumber: z.string().trim().max(60).optional(),
   /**
    * Client-generated, stable for the lifetime of one form session — that is
@@ -100,43 +97,15 @@ export const leadIntakeBaseSchema = z.object({
 });
 
 /**
- * A property-type policy needs a dwelling address — the same rule, and the same
- * wording, as `createQuoteRecapSchema`. Applied to each final schema rather than
- * to the base, because `.superRefine` returns a `ZodEffects` and `.extend` is
- * gone after that.
+ * `POST /leads` — the authenticated form, where lead source is required.
  *
- * Nothing to require while `sameAsHousehold` is set: the server copies the
- * household's own address and discards whatever the client sent.
+ * The property-address rule now lives on the policy row
+ * (`requirePolicyPropertyAddress`), so neither final schema needs a
+ * `.superRefine` of its own — which also means `.extend` still works here.
  */
-function requirePropertyAddress(
-  value: {
-    sameAsHousehold: boolean;
-    policiesOfInterest: { policyType: string }[];
-    propertyAddress?: Record<string, string | undefined>;
-  },
-  ctx: z.RefinementCtx,
-): void {
-  if (value.sameAsHousehold) return;
-  if (!value.policiesOfInterest.some((p) => isPropertyPolicyType(p.policyType)))
-    return;
-
-  for (const field of ADDRESS_FIELDS) {
-    if (!value.propertyAddress?.[field]?.trim()) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['propertyAddress', field],
-        message: 'Required when a property policy is requested',
-      });
-    }
-  }
-}
-
-/** `POST /leads` — the authenticated form, where lead source is required. */
-export const createLeadSchema = leadIntakeBaseSchema
-  .extend({
-    leadSourceCode: z.enum(SELECTABLE_LEAD_SOURCE_CODES),
-  })
-  .superRefine(requirePropertyAddress);
+export const createLeadSchema = leadIntakeBaseSchema.extend({
+  leadSourceCode: z.enum(SELECTABLE_LEAD_SOURCE_CODES),
+});
 
 export type CreateLeadDto = z.infer<typeof createLeadSchema>;
 
@@ -149,8 +118,6 @@ export type CreateLeadDto = z.infer<typeof createLeadSchema>;
  * `producerId`, `branchId` — is silently discarded here, and `LeadIntakeService`
  * reads none of them anyway. Two independent layers.
  */
-export const publicCreateLeadSchema = leadIntakeBaseSchema.superRefine(
-  requirePropertyAddress,
-);
+export const publicCreateLeadSchema = leadIntakeBaseSchema;
 
 export type PublicCreateLeadDto = z.infer<typeof publicCreateLeadSchema>;
