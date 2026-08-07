@@ -18,6 +18,14 @@ headers {
   ~X-Branch-Id: {{branchId}}
 }
 
+script:post-response {
+  // The only place a policy id surfaces before `Update Policy` needs one.
+  // Runtime-only var (never persisted to disk).
+  if (res.getStatus() === 200 && res.getBody().matches.length > 0) {
+    bru.setVar("soldPolicyId", res.getBody().matches[0].id);
+  }
+}
+
 tests {
   test("returns 200 OK", function () {
     expect(res.getStatus()).to.equal(200);

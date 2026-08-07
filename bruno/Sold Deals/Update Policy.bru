@@ -1,0 +1,177 @@
+meta {
+  name: Update Policy
+  type: http
+  seq: 8
+}
+
+patch {
+  url: {{baseUrl}}/policies/{{soldPolicyId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "carrier": "Allstate Northbrook",
+    "premium": 1275.50,
+    "items": 3,
+    "expirationDate": "2027-02-01",
+    "status": "Active"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the saved policy in the Lead Detail shape", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(body).to.have.property("policyType");
+    expect(body).to.have.property("carrier");
+    expect(body).to.have.property("policyNumber");
+    expect(body).to.have.property("active");
+    expect(body).to.have.property("status");
+    expect(body).to.have.property("premium");
+    expect(body).to.have.property("items");
+    expect(body).to.have.property("effectiveDate");
+    expect(body).to.have.property("expirationDate");
+  });
+
+  test("applies exactly what was sent", function () {
+    const body = res.getBody();
+    expect(body.carrier).to.equal("Allstate Northbrook");
+    expect(body.premium).to.equal(1275.5);
+    expect(body.items).to.equal(3);
+    expect(body.status).to.equal("Active");
+  });
+
+  test("leaves omitted fields alone", function () {
+    // `policyNumber` and `policyType` were not in the body; the sale's values
+    // must survive. This is what makes it a patch rather than a replace.
+    const body = res.getBody();
+    expect(body.policyNumber).to.equal(bru.getVar("soldPolicyNumber"));
+    expect(body.policyType).to.equal("Auto");
+  });
+
+  test("returns calendar dates, not instants", function () {
+    // A full ISO timestamp is how an effective date becomes the previous day
+    // for a client west of Greenwich.
+    expect(res.getBody().expirationDate).to.equal("2027-02-01");
+    expect(res.getBody().effectiveDate).to.equal("2026-02-01");
+  });
+
+  test("exposes only display fields (no internals leak)", function () {
+    const body = res.getBody();
+    expect(body).to.not.have.property("agencyId");
+    expect(body).to.not.have.property("branchId");
+    expect(body).to.not.have.property("policyNumberKey");
+    expect(body).to.not.have.property("legacySmartSuiteId");
+    expect(body).to.not.have.property("isTestRecord");
+  });
+}
+
+docs {
+  # PATCH /policies/:id — sold-policy quick edit (PAC-56 #27)
+
+  Backs the **Sold card** on the Lead Detail page. David asked for that card to
+  allow "quick edits to sold policies"; legacy had this as a whole second
+  Fillout form (the Deals `Edit Sold` formula → form `782Dc42qhSus`).
+
+  This is a **field correction, not a re-submission**. `POST /sold-deals`
+  remains the only thing that creates deals, policies and the audit items a sale
+  generates — re-running the wizard to fix a transposed policy number would
+  duplicate the service hand-off.
+
+  - **Module:** `deal_audits` (must be enabled for the agency)
+  - **Permission:** `deal_audits:write`
+  - **Data scope:** clamped on the policy's **deal**, 404 (never 403) outside it
+
+  > **Why `deal_audits`?** It inherits the Sold write path's gate: correcting
+  > what that form wrote is the same act as writing it, and the roles that can
+  > record a sale (Producer, Branch Manager, CRM, Agency Owner) are exactly the
+  > ones that should be able to fix a typo in it.
+  >
+  > ⚠ Consequence: disabling the `deal_audits` module also disables this edit.
+
+  ## Body — every field optional, object must not be empty
+  | field          | type            | rules                                            |
+  |----------------|-----------------|--------------------------------------------------|
+  | policyNumber   | string \| null  | ≤ 60 chars; re-normalized into `policyNumberKey`  |
+  | policyType     | enum            | a canonical `POLICY_TYPES` label                  |
+  | carrier        | string \| null  | ≤ 120 chars                                       |
+  | premium        | number          | 0 – 1,000,000                                     |
+  | items          | integer         | 0 – 100                                           |
+  | effectiveDate  | string \| null  | `YYYY-MM-DD` — a calendar date, not an instant     |
+  | expirationDate | string \| null  | `YYYY-MM-DD`                                      |
+  | status         | string \| null  | free text; there is no canonical status vocabulary |
+
+  `null` **clears** an optional field; omitting it leaves the stored value
+  alone. The two are different requests — a producer blanking a mistyped carrier
+  is not one who only touched the premium.
+
+  ## Deliberately not editable
+  - **`active`** — `Household.totalActivePolicies` is a stored roll-up nothing
+    recomputes on write, so flipping `active` here would drift a household's own
+    count away from its policies. Retiring a policy is a lifecycle event, not a
+    typo fix.
+  - **`householdId` / `dealId`** — re-parenting a policy is a merge, and would
+    move a record between producers' books.
+
+  ## No duplicate check
+  `PolicySchema` is **non-unique on purpose**: migrated data already holds
+  duplicate numbers, and different carriers legitimately reuse them. Warn-and
+  -link (`GET /policies/check` + `DuplicatePolicyNotice`) belongs on the create
+  path, where the producer is choosing between "link" and "correct". Blocking a
+  typo fix because the corrected number already exists would strand the record.
+
+  ⚠ **Do not add a unique index** — it would fail to build on migrated data.
+
+  ## Deal roll-ups are not recomputed
+  `Deal.premium` / `itemCount` / `policyCount` were derived at submission and
+  are untouched here, so a corrected premium can disagree with the deal total
+  until the deal is recomputed. Deliberate: silently rewriting a deal's premium
+  from the Lead Detail page would move the producer's Sold scorecard and the
+  leaderboard. Tracked with the wider sold-edit work (PAC-56 #25).
+
+  ## Response `200`
+  The saved policy, in the same shape `GET /leads/:id` returns for
+  `household.policies[]` and `deal.policies[]` — one mapper
+  (`policies/policy-view.ts`) serves both, so the client swaps the row in place
+  rather than refetching the whole 360° assembly.
+
+  ```json
+  {
+    "id": "665f...ac1",
+    "policyType": "Auto",
+    "carrier": "Allstate Northbrook",
+    "policyNumber": "BRU-1770000000000",
+    "active": true,
+    "status": "Active",
+    "premium": 1275.5,
+    "items": 3,
+    "effectiveDate": "2026-02-01",
+    "expirationDate": "2027-02-01"
+  }
+  ```
+
+  ## Errors
+  - `400 Bad Request` — empty body, an unknown `policyType`, a malformed date,
+    or a number out of range.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `deal_audits` module disabled, or missing `deal_audits:write`.
+  - `404 Not Found` — unknown/malformed id, **or** a policy outside the caller's
+    data scope. Both are the same answer on purpose. A policy with no deal
+    cannot be attributed and is therefore a 404 under `own` scope.
+
+  ## Why this lives in `Sold Deals/` and not `Policies/`
+  Same reason as `Check Policy Number (Match)`: Bruno walks folders
+  alphabetically, so `Policies/` runs **before** any sale exists and there is no
+  policy to patch. The endpoint itself is on `PoliciesController`.
+}

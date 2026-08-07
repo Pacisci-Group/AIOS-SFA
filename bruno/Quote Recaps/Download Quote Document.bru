@@ -1,0 +1,103 @@
+meta {
+  name: Download Quote Document
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/quote-recaps/{{createdQuoteRecapId}}/document/download
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a presigned URL plus the display metadata", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("downloadUrl");
+    expect(body).to.have.property("filename");
+    expect(body).to.have.property("contentType");
+    expect(body).to.have.property("expiresIn");
+    expect(body.filename).to.equal("carrier-quote.pdf");
+    expect(body.contentType).to.equal("application/pdf");
+    expect(body.expiresIn).to.be.a("number");
+  });
+
+  test("signs the URL for inline display, not download", function () {
+    // The whole point of the endpoint: an attachment disposition would hand the
+    // user a file in their downloads folder instead of a rendered PDF.
+    const url = decodeURIComponent(res.getBody().downloadUrl);
+    expect(url).to.contain("response-content-disposition=inline");
+  });
+
+  test("never leaks the storage key", function () {
+    const body = res.getBody();
+    expect(body).to.not.have.property("key");
+  });
+}
+
+docs {
+  # GET /quote-recaps/:id/document/download — open the quote document (PAC-56 #10, #30)
+
+  Returns a **short-lived presigned GET** for the document uploaded with the
+  recap. The client opens it in a new tab, where the browser's own PDF viewer
+  renders it; the user downloads from there.
+
+  Replaces legacy's SmartSuite native file viewer, which was lost in the move
+  off SmartSuite. David asked for view/download on the quote document (#10);
+  #30 generalises it to every file on the Lead Detail page.
+
+  - **Module:** `quote_recaps` (must be enabled for the agency)
+  - **Permission:** `quote_recaps:read` — viewing a document whose metadata you
+    can already see is a read, not a write
+  - **Data scope:** clamped to the caller's scope on the **recap**, 404 (never
+    403) for another producer's — `LeadAccessService.assertOwned`
+
+  ## Path params
+  | param | type     | notes                        |
+  |-------|----------|------------------------------|
+  | id    | ObjectId | the quote recap, not the lead |
+
+  ## Why inline, and why signed per request
+  The URL carries `response-content-disposition=inline` and an explicit
+  `response-content-type`, both fixed at signing time so whoever holds the link
+  cannot change them. The content type is overridden rather than trusted from
+  storage: an object stored as `application/octet-stream` downloads instead of
+  rendering however the disposition is set.
+
+  The client fetches this **per click** rather than baking a URL into an
+  `href`. The URL expires (`STORAGE_DOWNLOAD_URL_TTL_SECONDS`, default 300s), so
+  one rendered at page load would be dead by the time a producer clicked it —
+  and would put a live document URL into the page markup.
+
+  The storage key is never returned. It is an internal path, and a client that
+  knows where the bytes live is a client that can be pointed at someone else's.
+
+  ## Response `200`
+  ```json
+  {
+    "downloadUrl": "http://localhost:9100/sfa-uploads/agencies/.../carrier-quote.pdf?X-Amz-Signature=...",
+    "filename": "carrier-quote.pdf",
+    "contentType": "application/pdf",
+    "expiresIn": 300
+  }
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `quote_recaps` module disabled, or missing `quote_recaps:read`.
+  - `404 Not Found` — unknown/malformed id, a recap outside the caller's data
+    scope, **or** a recap that carries no document. All three are deliberately
+    the same answer.
+
+  ## Run-order note
+  Depends on `createdQuoteRecapId` from `Create Quote Recap` (seq 4), which
+  attaches `carrier-quote.pdf`. Running this request on its own will 404.
+}
