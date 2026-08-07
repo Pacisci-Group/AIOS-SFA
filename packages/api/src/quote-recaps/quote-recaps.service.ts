@@ -13,6 +13,7 @@ import {
 import type {
   AccessContext,
   CreateQuoteRecapResponse,
+  DocumentDownloadResponse,
   QuoteDocumentPresignResponse,
   QuoteRecapLeadContext,
 } from '@sfa/shared';
@@ -143,6 +144,60 @@ export class QuoteRecapsService {
       uploadUrl: presigned.uploadUrl,
       requiredHeaders: presigned.requiredHeaders,
       expiresIn: presigned.expiresIn,
+    };
+  }
+
+  /**
+   * A short-lived URL that opens the uploaded quote document (PAC-56 #10, #30).
+   *
+   * Signed **inline**, so following it renders the PDF in the browser's own
+   * viewer in a new tab rather than downloading it — the user downloads from
+   * there. That is the whole feature: no bespoke viewer, no download button.
+   *
+   * Gated on `quote_recaps:read` and clamped to the caller's data scope by
+   * `assertOwned`, so a producer cannot open a colleague's document by guessing
+   * a recap id. The storage key never crosses the wire in either direction.
+   */
+  async getDocumentDownload(
+    access: AccessContext,
+    branchId: string | null,
+    recapId: string,
+  ): Promise<DocumentDownloadResponse> {
+    if (!Types.ObjectId.isValid(recapId)) {
+      throw new NotFoundException('Quote recap not found.');
+    }
+
+    const recap = await this.quoteRecapModel.findOne({
+      _id: new Types.ObjectId(recapId),
+      agencyId: access.agencyId,
+    });
+    if (!recap) throw new NotFoundException('Quote recap not found.');
+
+    // Same clamp the replay path uses — 404, never 403.
+    this.leadAccess.assertOwned(recap, access, branchId);
+
+    const document = recap.quoteDocument;
+    if (!document) {
+      throw new NotFoundException('This quote recap has no document.');
+    }
+
+    const downloadUrl = await this.storage.createPresignedDownload(
+      document.key,
+      {
+        disposition: 'inline',
+        filename: document.filename,
+        // Overridden explicitly: the object was stored with whatever the
+        // browser claimed on upload, and a PDF served as octet-stream
+        // downloads instead of rendering however the disposition is set.
+        contentType: document.contentType,
+      },
+    );
+
+    return {
+      downloadUrl,
+      filename: document.filename,
+      contentType: document.contentType,
+      expiresIn: this.storage.downloadUrlTtlSeconds,
     };
   }
 
