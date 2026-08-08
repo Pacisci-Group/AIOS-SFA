@@ -134,6 +134,24 @@ LeadSchema.index({ agencyId: 1, producerId: 1, temperature: 1, status: 1 });
 // Default Leads-list query (PAC-36): scope clamp + the `lastActivityAt` sort.
 LeadSchema.index({ agencyId: 1, producerId: 1, lastActivityAt: -1 });
 
+/**
+ * The Hot Leads / Priority Contact List (PAC-15): equality on `temperature`,
+ * then **ascending** `lastActivityAt` — stalest first, which is the inverse of
+ * the Leads-list sort above and the actual definition of "needs a touch".
+ *
+ * Neither existing index serves it. The first can equality-match `temperature`
+ * but has no ordering field after it; the second orders correctly but cannot
+ * filter by temperature without a scan. A single index whose leading fields are
+ * equality predicates and whose last field is the sort key is what makes the
+ * panel an index-only read.
+ */
+LeadSchema.index({
+  agencyId: 1,
+  producerId: 1,
+  temperature: 1,
+  lastActivityAt: 1,
+});
+
 // Every one of these is a PARTIAL filter, never `sparse: true` — the same trap
 // documented on LEGACY_DEDUPE_INDEX_OPTIONS. On a compound index MongoDB only
 // omits a document when *every* indexed field is missing, and `agencyId` is

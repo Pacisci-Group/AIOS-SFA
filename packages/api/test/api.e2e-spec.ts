@@ -6,8 +6,13 @@ import { App } from 'supertest/types';
 import { ModuleKey } from '@sfa/shared';
 import type {
   ContactDetail,
+  CreateActivityResponse,
   CreateSoldDealResponse,
+  HotLeadListResponse,
+  LeaderboardResponse,
   LeadDetail,
+  PerformanceMetric,
+  PerformanceResponse,
   PolicyCheckResponse,
   SoldDealLeadContext,
   UpdateLeadResult,
@@ -27,6 +32,7 @@ import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { Policy } from '../src/policies/schemas/policy.schema';
 import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
+import { ProducerGoal } from '../src/producer-goals/schemas/producer-goal.schema';
 import { PriorPolicy } from '../src/prior-policies/schemas/prior-policy.schema';
 import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
@@ -458,15 +464,14 @@ describe('SFA API (e2e)', () => {
       { path: 'households', module: ModuleKey.Clients },
       { path: 'deals', module: ModuleKey.Clients },
       // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14), `leads`
-      // (LeadsModule / PAC-36), `quote-recaps` (QuoteRecapsModule / PAC-39) and
-      // `contacts` (ContactsModule / PAC-38) are real modules, not
+      // (LeadsModule / PAC-36), `quote-recaps` (QuoteRecapsModule / PAC-39),
+      // `contacts` (ContactsModule / PAC-38) and `performance`
+      // (PerformanceModule / PAC-10+11) are real modules, not
       // `{status:'ready'}` stubs — each is covered by its own describe block
       // below. The `files` stub was removed with PAC-39: it borrowed the
       // `quote_recaps` gate and the real file API is now
       // `POST /quote-recaps/quote-document/presign`.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
-      { path: 'performance', module: ModuleKey.Performance },
-      { path: 'leaderboard', module: ModuleKey.Leaderboard },
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
@@ -509,10 +514,14 @@ describe('SFA API (e2e)', () => {
     // both are real modules now. Producer write access through the full guard
     // chain is covered by "Quote Recaps (PAC-39 create)" below.
 
-    it('PATCH /api/v1/performance — forbidden without write (read-only page)', async () => {
-      // Producer role grants performance:read but not performance:write.
+    it('PATCH /api/v1/dashboard — forbidden without write (read-only page)', async () => {
+      // Was `/performance` until PAC-10/11 replaced that stub with a real,
+      // read-only module. `dashboard` proves the same thing and for the same
+      // reason: the Producer template grants `dashboard:read` and not
+      // `dashboard:write`, so reading a page you may read does not imply
+      // writing to it.
       await request(app.getHttpServer())
-        .patch('/api/v1/performance')
+        .patch('/api/v1/dashboard')
         .set(authHeader(producerToken))
         .expect(403);
     });
@@ -549,9 +558,10 @@ describe('SFA API (e2e)', () => {
       // are covered by their own describe blocks below. `leads` writes are
       // `POST /leads` (PAC-37) and `PATCH /leads/:id` (PAC-38), likewise
       // id-scoped rather than a bare PATCH on the collection.
+      // `performance` (PAC-10/11) and `leaderboard` (PAC-13) are real read-only
+      // modules now, with no mutating handler at all, so neither can appear in
+      // this list.
       { path: 'crm/service-tickets', module: ModuleKey.CrmService },
-      { path: 'performance', module: ModuleKey.Performance },
-      { path: 'leaderboard', module: ModuleKey.Leaderboard },
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
@@ -595,13 +605,867 @@ describe('SFA API (e2e)', () => {
       },
     );
 
-    it('GET /api/v1/leaderboard — read-only user can read (read-only page)', async () => {
-      // Was `/files` until PAC-39 removed that stub. Any read-only-for-everyone
-      // page proves the same thing: read access does not imply write.
+    // NOTE: the "read-only user can read a read-only page" test that lived here
+    // moved into `Leaderboard / Motivation Hub (PAC-13)` below, where it now
+    // asserts a real payload rather than a stub's `{status:'ready'}`.
+  });
+
+  describe('Performance scorecards (PAC-10 quoted / PAC-11 sold)', () => {
+    /** Asserted field-by-field: `expect.any` inside a typed `toMatchObject` is
+     *  an `any` the lint rules reject, and this reads no worse. */
+    function expectMetricShape(metric: PerformanceMetric): void {
+      expect(typeof metric.premium).toBe('number');
+      expect(typeof metric.itemCount).toBe('number');
+      expect(typeof metric.recordCount).toBe('number');
+      expect(typeof metric.householdCount).toBe('number');
+      // Nullable by contract, so `typeof` alone would not pin them down.
+      for (const avg of [
+        metric.avgPremiumPerHousehold,
+        metric.avgItemsPerHousehold,
+      ]) {
+        expect(avg === null || typeof avg === 'number').toBe(true);
+        expect(Number.isNaN(avg)).toBe(false);
+      }
+    }
+
+    it('GET /api/v1/performance — producer gets both cards', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      expect(body.range.key).toBe('mtd');
+      expectMetricShape(body.sold);
+      expectMetricShape(body.quoted);
+    });
+
+    it('defaults to mtd and echoes the resolved window back', async () => {
+      // The client sends a key and gets dates: that echo is what lets a preset
+      // and a custom window render through one code path on the web.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      expect(body.range.from).toMatch(/^\d{4}-\d{2}-01$/);
+      expect(body.range.to >= body.range.from).toBe(true);
+    });
+
+    it('echoes back exactly the custom window requested', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query({ range: 'custom', from: '2026-01-01', to: '2026-01-31' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as PerformanceResponse).range).toEqual({
+        key: 'custom',
+        from: '2026-01-01',
+        to: '2026-01-31',
+      });
+    });
+
+    it('reports null averages, never 0 or NaN, on an empty range', async () => {
+      // A far-past window matches nothing. `$group` on `_id: null` emits zero
+      // documents rather than a row of zeroes, and "nothing to average" must
+      // not serialize as "averages zero per household".
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query({ range: 'custom', from: '1990-01-01', to: '1990-01-02' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      for (const card of [body.sold, body.quoted]) {
+        expect(card.recordCount).toBe(0);
+        expect(card.avgPremiumPerHousehold).toBeNull();
+        expect(card.avgItemsPerHousehold).toBeNull();
+      }
+    });
+
+    it.each([
+      ['custom without bounds', { range: 'custom' }],
+      ['custom missing `to`', { range: 'custom', from: '2026-01-01' }],
+      [
+        'from after to',
+        { range: 'custom', from: '2026-02-01', to: '2026-01-01' },
+      ],
+      [
+        'a date that does not exist',
+        { range: 'custom', from: '2026-02-31', to: '2026-03-01' },
+      ],
+      [
+        'a span beyond the cap',
+        { range: 'custom', from: '2020-01-01', to: '2026-01-01' },
+      ],
+      ['an unknown range key', { range: 'fortnight' }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('is readable by any role holding performance:read', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(readOnlyToken))
+        .expect(200);
+    });
+
+    it('has no mutating handler — the scorecard is a projection', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/performance')
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    describe('the arithmetic, over seeded rows', () => {
+      // An isolated window far from `mtd`, so these fixtures can never be
+      // counted by — or collide with — any other block's data.
+      const WINDOW = { range: 'custom', from: '2026-05-01', to: '2026-05-31' };
+
+      beforeAll(async () => {
+        const userModel = app.get<Model<User>>(getModelToken(User.name));
+        const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+        const recapModel = app.get<Model<QuoteRecap>>(
+          getModelToken(QuoteRecap.name),
+        );
+
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const owner = await userModel.findOne({ email: seed.ownerEmail });
+        const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+        const householdOne = new Types.ObjectId();
+
+        await dealModel.create([
+          // Two deals, one household — the household must be counted once.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            soldDateYmd: 20260504,
+            premium: 1000,
+            itemCount: 2,
+          },
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            soldDateYmd: 20260511,
+            premium: 500,
+            itemCount: 1,
+          },
+          // Rung 2 of the identity ladder: no ref, but a legacy string id.
+          {
+            ...base,
+            producerId: producer!._id,
+            legacyHouseholdId: 'legacy-hh-1',
+            soldDateYmd: 20260518,
+            premium: 300,
+            itemCount: 1,
+          },
+          // Rung 3: no household at all — counts as its own.
+          {
+            ...base,
+            producerId: producer!._id,
+            soldDateYmd: 20260525,
+            premium: 200,
+            itemCount: 1,
+          },
+          // Excluded: test record.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260505,
+            premium: 99_999,
+            itemCount: 99,
+            isTestRecord: true,
+          },
+          // Excluded under `own` scope: another producer's deal.
+          {
+            ...base,
+            producerId: owner!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260506,
+            premium: 77_777,
+            itemCount: 77,
+          },
+          // Excluded: inside the agency but outside the window.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260601,
+            premium: 55_555,
+            itemCount: 55,
+          },
+        ]);
+
+        await recapModel.create([
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            quoteDate: new Date('2026-05-04T00:00:00.000Z'),
+            quoteDateYmd: 20260504,
+            premium: 800,
+            itemCount: 2,
+          },
+        ]);
+      });
+
+      it('sums premium and items, and counts each household once', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).sold).toEqual({
+          premium: 2000,
+          itemCount: 5,
+          recordCount: 4,
+          // Two deals share a household; the legacy-id row and the
+          // household-less row each count as one. 2 shared + 1 + 1 = 3.
+          householdCount: 3,
+          avgPremiumPerHousehold: 666.67,
+          avgItemsPerHousehold: 1.67,
+        });
+      });
+
+      it('rolls quoted recaps up independently of sold deals', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).quoted).toMatchObject({
+          premium: 800,
+          itemCount: 2,
+          recordCount: 1,
+          householdCount: 1,
+          avgPremiumPerHousehold: 800,
+          avgItemsPerHousehold: 2,
+        });
+      });
+
+      it('clamps a producer to their own rows even when asking for agency', async () => {
+        // The owner's 77,777 deal sits in the same agency and window. A
+        // client-supplied scope may only ever narrow.
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query({ ...WINDOW, scope: 'agency' })
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).sold.premium).toBe(2000);
+      });
+
+      it('includes every producer for an agency-scoped caller', async () => {
+        // Same window, agency data scope: the owner's own deal is now in range
+        // alongside the producer's four. Test records stay excluded.
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        const body = res.body as PerformanceResponse;
+        expect(body.sold.premium).toBe(2000 + 77_777);
+        expect(body.sold.recordCount).toBe(5);
+      });
+    });
+  });
+
+  describe('Activity log (PAC-16)', () => {
+    let ownLeadId: string;
+    let foreignLeadId: string;
+    let createdLeadIds: Types.ObjectId[] = [];
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      const [own, foreign] = await leadModel.create([
+        {
+          ...base,
+          firstName: 'Touchable',
+          lastName: 'Lead',
+          status: 'Contacted',
+          temperature: 'Warm',
+          producerId: producer!._id,
+          lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+        {
+          ...base,
+          firstName: 'Not',
+          lastName: 'Yours',
+          status: 'New',
+          temperature: 'Warm',
+          producerId: owner!._id,
+        },
+      ]);
+      ownLeadId = own._id.toString();
+      foreignLeadId = foreign._id.toString();
+      createdLeadIds = [own._id, foreign._id];
+    });
+
+    // Same reason as the Hot Leads block: `Leads (PAC-36 list)` asserts exact
+    // agency-wide totals and declares later.
+    afterAll(async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      await activityModel.deleteMany({ leadId: { $in: createdLeadIds } });
+      await leadModel.deleteMany({ _id: { $in: createdLeadIds } });
+      createdLeadIds = [];
+    });
+
+    it('a producer logs a call on their own lead', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'call' })
+        .expect(201);
+
+      const body = res.body as CreateActivityResponse;
+      expect(body.activity.type).toBe('call');
+      // Defaulted, because a call is an event that stands on its own.
+      expect(body.activity.summary).toBe('Call logged');
+      expect(body.leadLastActivityAt).toBeTruthy();
+    });
+
+    it('bumps the lead’s lastActivityAt', async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'text' })
+        .expect(201);
+
+      const lead = await leadModel.findById(ownLeadId);
+      expect(lead?.lastActivityAt?.getTime()).toBeGreaterThan(
+        new Date('2026-01-01T00:00:00.000Z').getTime(),
+      );
+    });
+
+    it('a backdated touch does not drag lastActivityAt backwards', async () => {
+      // `$max`, not `$set`. Otherwise logging a call you made last week would
+      // float the lead to the top of a stalest-first panel.
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const before = (await leadModel.findById(ownLeadId))?.lastActivityAt;
+
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({
+          leadId: ownLeadId,
+          type: 'note',
+          summary: 'Backdated note',
+          occurredAt: '2020-01-01T00:00:00.000Z',
+        })
+        .expect(201);
+
+      const after = (await leadModel.findById(ownLeadId))?.lastActivityAt;
+      expect(after?.getTime()).toBe(before?.getTime());
+    });
+
+    it('marks the row as app-written, not migrated', async () => {
+      // The schema default for `source` is `'migration'`, so an omission here
+      // would label a producer's note as imported data.
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'email' })
+        .expect(201);
+
+      const { activity } = res.body as CreateActivityResponse;
+      const row = await activityModel
+        .findById(activity.id)
+        .lean<{ source?: string; isTestRecord?: boolean } | null>();
+      expect(row).not.toBeNull();
+      expect(row?.source).toBe('internal');
+      expect(row?.isTestRecord).toBe(false);
+    });
+
+    it('surfaces the logged activity on the lead timeline', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'note', summary: 'Spoke to spouse' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/leads/${ownLeadId}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const summaries = (res.body as LeadDetail).activities.map(
+        (a) => a.summary,
+      );
+      expect(summaries).toContain('Spoke to spouse');
+    });
+
+    /*
+     * The security-relevant one. `ACTIVITY_TYPES` is the read vocabulary and
+     * includes `sold`; the write vocabulary must not. A client able to post a
+     * `sold` row could invent a sale on the Sold scorecard and the Leaderboard.
+     */
+    it('refuses a system-generated type', async () => {
+      for (const type of ['sold', 'quoted', 'lead_created', 'audit_resolved']) {
+        await request(app.getHttpServer())
+          .post('/api/v1/activities')
+          .set(authHeader(producerToken))
+          .send({ leadId: ownLeadId, type })
+          .expect(400);
+      }
+    });
+
+    it('refuses a note with no text — a note IS its text', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'note' })
+        .expect(400);
+    });
+
+    it('404s on another producer’s lead, never 403', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: foreignLeadId, type: 'call' })
+        .expect(404);
+    });
+
+    it('404s on a malformed lead id rather than 500', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: 'not-an-object-id', type: 'call' })
+        .expect(404);
+    });
+
+    it('403s for a role without leads:write', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(readOnlyToken))
+        .send({ leadId: ownLeadId, type: 'call' })
+        .expect(403);
+    });
+  });
+
+  describe('Hot Leads (PAC-15)', () => {
+    let staleHotLeadId: string;
+    /*
+     * Tracked so `afterAll` can remove exactly what this block created.
+     *
+     * Cleanup is mandatory here, not tidiness: `Leads (PAC-36 list)` asserts
+     * exact agency-wide totals (`body.total).toBe(2)`), and this block declares
+     * earlier, so leaving five extra leads behind fails five of its tests with
+     * numbers that say nothing about the code.
+     */
+    let createdLeadIds: Types.ObjectId[] = [];
+
+    afterAll(async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      await activityModel.deleteMany({ leadId: { $in: createdLeadIds } });
+      await leadModel.deleteMany({ _id: { $in: createdLeadIds } });
+      createdLeadIds = [];
+    });
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+      const own = { ...base, producerId: producer!._id };
+
+      const [stale, recent, warm, lost, foreign] = await leadModel.create([
+        {
+          ...own,
+          firstName: 'Stale',
+          lastName: 'Hotlead',
+          status: 'Contacted',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
+          phones: ['5550001111'],
+          emails: ['stale@example.test'],
+        },
+        {
+          ...own,
+          firstName: 'Recent',
+          lastName: 'Hotlead',
+          status: 'Quoted',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2026-07-01T00:00:00.000Z'),
+        },
+        {
+          ...own,
+          firstName: 'Warm',
+          lastName: 'Topup',
+          status: 'New',
+          temperature: 'Warm',
+          lastActivityAt: new Date('2025-01-01T00:00:00.000Z'),
+        },
+        // Terminal: must never appear, however hot it was left. Stored as the
+        // raw SmartSuite code for `Lost` so the code expansion is exercised.
+        {
+          ...own,
+          firstName: 'Lost',
+          lastName: 'Cause',
+          status: 'jp76g',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2020-01-01T00:00:00.000Z'),
+        },
+        // Another producer's hot lead: invisible under `own` scope.
+        {
+          ...base,
+          firstName: 'Someone',
+          lastName: 'Elses',
+          status: 'New',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2019-01-01T00:00:00.000Z'),
+        },
+      ]);
+      staleHotLeadId = stale._id.toString();
+      createdLeadIds = [stale, recent, warm, lost, foreign].map((l) => l._id);
+
+      await activityModel.create([
+        {
+          ...base,
+          leadId: stale._id,
+          producerId: producer!._id,
+          type: 'note',
+          subjectType: 'lead',
+          summary: 'Waiting on premium approval',
+          occurredAt: new Date('2026-01-01T00:00:00.000Z'),
+          source: 'internal',
+        },
+        // Older, so it must lose to the note above.
+        {
+          ...base,
+          leadId: stale._id,
+          producerId: producer!._id,
+          type: 'lead_created',
+          subjectType: 'lead',
+          summary: 'Lead created',
+          occurredAt: new Date('2025-12-01T00:00:00.000Z'),
+          source: 'internal',
+        },
+      ]);
+    });
+
+    /*
+     * The regression guard for the most likely way this route breaks.
+     * `@Get(':id')` matches the literal string `hot` just as happily as an
+     * ObjectId, so a reordering in the controller would turn this endpoint into
+     * a lead-detail lookup for a lead that does not exist.
+     */
+    it('resolves as its own route, not as GET /leads/:id', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as HotLeadListResponse;
+      expect(Array.isArray(body.items)).toBe(true);
+      // A detail response would have `id`/`contact` at the top level instead.
+      expect(body).not.toHaveProperty('id');
+    });
+
+    it('orders stalest first — the inverse of the Leads list', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names.indexOf('Stale Hotlead')).toBeLessThan(
+        names.indexOf('Recent Hotlead'),
+      );
+    });
+
+    it('ranks every Hot lead above any Warm one', async () => {
+      // The Warm lead is staler than both Hot leads, so a single sort across
+      // temperatures would float it to the top.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const items = (res.body as HotLeadListResponse).items;
+      const firstWarm = items.findIndex((i) => i.temperature === 'Warm');
+      const lastHot = items.map((i) => i.temperature).lastIndexOf('Hot');
+      if (firstWarm !== -1) expect(lastHot).toBeLessThan(firstWarm);
+    });
+
+    it('carries the narrative line from the most recent activity', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const stale = (res.body as HotLeadListResponse).items.find(
+        (i) => i.id === staleHotLeadId,
+      );
+      expect(stale?.lastActivitySummary).toBe('Waiting on premium approval');
+      expect(stale?.lastActivityType).toBe('note');
+      expect(stale?.initials).toBe('SH');
+    });
+
+    it('excludes terminal statuses, including migrated raw codes', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 25 })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names).not.toContain('Lost Cause');
+    });
+
+    it('clamps a producer to their own leads even when asking for agency', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 25, scope: 'agency' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names).not.toContain('Someone Elses');
+    });
+
+    it('honours the limit', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 1 })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as HotLeadListResponse).items).toHaveLength(1);
+    });
+
+    it('is not the paginated envelope — this panel has no page controls', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      for (const key of ['page', 'pageSize', 'total', 'totalPages']) {
+        expect(res.body).not.toHaveProperty(key);
+      }
+    });
+
+    it.each([
+      ['a limit above the cap', { limit: 99 }],
+      ['a zero limit', { limit: 0 }],
+      ['an unknown temperature', { temperature: 'Lukewarm' }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+  });
+
+  describe('Leaderboard / Motivation Hub (PAC-13)', () => {
+    /*
+     * April 2026 — this block seeds its own deals rather than leaning on the
+     * performance block's May fixtures. Sharing them would make these tests
+     * pass only when both describes run, so any filtered run (`-t`) would
+     * report failures that say nothing about the code.
+     */
+    const MONTH = '2026-04';
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      const goalModel = app.get<Model<ProducerGoal>>(
+        getModelToken(ProducerGoal.name),
+      );
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      await dealModel.create([
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260410,
+          premium: 2000,
+          itemCount: 2,
+        },
+        {
+          ...base,
+          producerId: owner!._id,
+          soldDateYmd: 20260415,
+          premium: 77_777,
+          itemCount: 9,
+        },
+        // Must not reach the office total.
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260420,
+          premium: 500_000,
+          itemCount: 1,
+          isTestRecord: true,
+        },
+        // Outside the month.
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260331,
+          premium: 400_000,
+          itemCount: 1,
+        },
+      ]);
+
+      await goalModel.create([
+        // Producer sold 2,000 against 4,000 -> 50%.
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: producer!._id,
+          month: MONTH,
+          goalPremium: 4000,
+        },
+        // Owner sold 77,777 against 100,000 -> 77.8%, so they outrank the
+        // producer on attainment despite a far larger goal.
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: owner!._id,
+          month: MONTH,
+          goalPremium: 100_000,
+        },
+      ]);
+    });
+
+    it('returns the office total, ranked entries, and the caller row', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.month).toBe(MONTH);
+      expect(body.officeTotalPremium).toBe(2000 + 77_777);
+      expect(body.entries.length).toBeGreaterThan(0);
+      expect(body.self).not.toBeNull();
+      expect(body.self!.premium).toBe(2000);
+      expect(body.self!.attainmentPct).toBe(50);
+    });
+
+    it('a producer sees the whole board — the DataScope bypass is the feature', async () => {
+      // `own` scope everywhere else means "your rows only". Here it must not:
+      // a motivation panel showing a producer only themselves is pointless.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.entries.some((entry) => !entry.isSelf)).toBe(true);
+      expect(body.producerCount).toBeGreaterThanOrEqual(2);
+    });
+
+    // The privacy contract, as an executable assertion. This is the reason the
+    // bypass above is acceptable, so it must fail loudly if anyone widens the
+    // response type.
+    it('never exposes another producer’s dollars', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      for (const entry of body.entries) {
+        expect(entry).not.toHaveProperty('premium');
+        expect(entry).not.toHaveProperty('goalPremium');
+      }
+    });
+
+    it('ranks by attainment, not by premium', async () => {
+      // The owner sold ~39x the producer's premium but hit 77.8% of a much
+      // larger goal; the producer hit 50%. Ranking by premium would invert this.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.entries[0].attainmentPct).toBe(77.8);
+      expect(body.entries[0].rank).toBe(1);
+      expect(body.entries[1].attainmentPct).toBe(50);
+    });
+
+    it('defaults to the current month when none is given', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as LeaderboardResponse).month).toMatch(
+        /^\d{4}-(0[1-9]|1[0-2])$/,
+      );
+    });
+
+    it('read-only user can read (read access does not imply write)', async () => {
+      // Re-homed from the feature-stub block, which no longer has a leaderboard
+      // route to point at.
       await request(app.getHttpServer())
         .get('/api/v1/leaderboard')
         .set(authHeader(readOnlyToken))
         .expect(200);
+    });
+
+    it.each([
+      ['a malformed month', { month: '2026-5' }],
+      ['a month out of range', { month: '2026-13' }],
+      ['a limit above the cap', { limit: 99 }],
+      ['a zero limit', { limit: 0 }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('has no mutating handler', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/leaderboard')
+        .set(authHeader(ownerToken))
+        .expect(404);
     });
   });
 

@@ -1,9 +1,12 @@
 import type { LeadDetailActivity } from "@sfa/shared";
 import { cn } from "@/lib/utils";
+import { ActivityComposer } from "./ActivityComposer";
 import { activityDisplay, activityLabel } from "./lead-display";
 
 interface ActivityTimelineProps {
   activities: LeadDetailActivity[];
+  /** Needed by the composer, which logs against this lead. */
+  leadId: string;
 }
 
 /** `Today, 10:42 AM` / `Yesterday, 4:30 PM` / `Jun 5, 8:00 AM`. */
@@ -35,19 +38,22 @@ function formatWhen(value: string | null): string {
 }
 
 /**
- * Notes & Activity — this lead's history, newest first.
+ * Notes & Activity — this lead's history, newest first, with a composer.
  *
- * Read-only. The mockup has a "Log a note or call…" composer, and the version
- * of this file it came from implemented it against local state: notes appeared,
- * then vanished on the next render. There is no `POST /activities` yet, so the
- * control is removed rather than left looking functional — the quick actions
- * that will fill it are PAC-16.
+ * The composer was removed in PAC-38: the version inherited from the Figma
+ * export wrote to local state, so notes appeared and then vanished on the next
+ * render, and there was no endpoint to point it at. PAC-16 added
+ * `POST /activities` and it is back, as `ActivityComposer` — the same endpoint
+ * the dashboard's Call/Text/Email quick actions use.
  *
- * Renders whatever types exist rather than assuming a set: only `lead_created`,
- * `quoted`, `sold` and `audit_resolved` are written today, and `call` / `text` /
- * `email` / `note` arrive with those quick actions.
+ * Renders whatever types exist rather than assuming a set. `lead_created`,
+ * `quoted`, `sold` and `audit_resolved` come from their own pipelines; `call`,
+ * `text`, `email` and `note` are client-written.
  */
-export function ActivityTimeline({ activities }: ActivityTimelineProps) {
+export function ActivityTimeline({
+  activities,
+  leadId,
+}: ActivityTimelineProps) {
   return (
     <section className="flex h-full flex-col rounded-lg border border-border bg-card">
       <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3">
@@ -60,7 +66,7 @@ export function ActivityTimeline({ activities }: ActivityTimelineProps) {
       </div>
 
       {activities.length === 0 ? (
-        <p className="px-5 py-4 text-sm text-muted-foreground">
+        <p className="flex-1 px-5 py-4 text-sm text-muted-foreground">
           Nothing has been logged against this lead yet.
         </p>
       ) : (
@@ -109,6 +115,10 @@ export function ActivityTimeline({ activities }: ActivityTimelineProps) {
           })}
         </ol>
       )}
+
+      {/* Pinned below the scrolling list, so it stays reachable on a lead with
+          a long history. */}
+      <ActivityComposer leadId={leadId} />
     </section>
   );
 }

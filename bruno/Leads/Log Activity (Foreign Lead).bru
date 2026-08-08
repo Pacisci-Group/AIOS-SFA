@@ -1,0 +1,41 @@
+meta {
+  name: Log Activity (Foreign Lead)
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{baseUrl}}/activities
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "leadId": "000000000000000000000000",
+    "type": "call"
+  }
+}
+
+tests {
+  test("404s rather than 403s", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # POST /activities against an unreachable lead — `404`
+
+  A syntactically valid ObjectId that does not exist. Exercises the full guard
+  chain plus the ownership clamp without needing a second producer's data.
+
+  **404, never 403** — the same shape `GET /leads/:id` uses, and for the same
+  reason: whether another producer's lead exists is not the caller's business,
+  and a 403 would confirm it does.
+
+  A **malformed** id (`"not-an-object-id"`) is also a `404`, not a `500`.
+
+  Ownership is enforced by `LeadAccessService`, the one scope clamp shared by
+  every lead-scoped write path — quote recaps, sold deals, and now activity
+  logging.
+}

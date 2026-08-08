@@ -1,10 +1,14 @@
 import type {
+  HotLeadListResponse,
+  HotLeadRow,
   LeadDetail,
   LeadTemperature,
   UpdateLeadInput,
   UpdateLeadResult,
 } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
+
+export type { HotLeadListResponse, HotLeadRow };
 
 /**
  * The detail contracts are **re-exported from `@sfa/shared`**, not redeclared.
@@ -95,6 +99,33 @@ export function updateLead(leadId: string, input: UpdateLeadInput) {
     method: 'PATCH',
     body: JSON.stringify(input),
   });
+}
+
+export interface ListHotLeadsParams {
+  limit?: number;
+  /** Temperatures to draw from, in priority order. Defaults to Hot then Warm. */
+  temperature?: LeadTemperature[];
+  scope?: 'own' | 'agency';
+}
+
+/**
+ * `GET /leads/hot` — the Priority Contact List (PAC-15).
+ *
+ * Its own route rather than a filter on `GET /leads`: the ordering is inverted
+ * (stalest first, not most-recently-touched), and each row carries the latest
+ * activity summary that the Leads table has no use for. Not paginated — the
+ * panel is a fixed-size card.
+ */
+export function listHotLeads(params: ListHotLeadsParams = {}) {
+  const search = new URLSearchParams();
+  if (params.limit != null) search.set('limit', String(params.limit));
+  if (params.scope) search.set('scope', params.scope);
+  for (const value of params.temperature ?? []) {
+    search.append('temperature', value);
+  }
+  const qs = search.toString();
+
+  return apiFetch<HotLeadListResponse>(`/leads/hot${qs ? `?${qs}` : ''}`);
 }
 
 /**

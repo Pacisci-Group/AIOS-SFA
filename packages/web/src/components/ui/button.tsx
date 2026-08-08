@@ -38,27 +38,43 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
-  className,
-  variant = "default",
-  size = "default",
-  asChild = false,
-  ...props
-}: React.ComponentProps<"button"> &
+type ButtonProps = React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
-  }) {
-  const Comp = asChild ? Slot.Root : "button"
+  }
 
-  return (
-    <Comp
-      data-slot="button"
-      data-variant={variant}
-      data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
-      {...props}
-    />
-  )
-}
+/**
+ * `forwardRef` is load-bearing on React 18, not ceremony.
+ *
+ * `React.ComponentProps<"button">` includes `ref` in its type, so passing one
+ * to a plain function component **typechecks and then silently does nothing** —
+ * React 18 drops it and logs "Function components cannot be given refs" only at
+ * runtime. `CalendarDayButton` in `ui/calendar.tsx` relies on the ref to move
+ * focus as you arrow through days, so without this the calendar is unusable by
+ * keyboard while looking perfectly fine to the compiler.
+ *
+ * (The shadcn registry now generates React 19 components, where `ref` is an
+ * ordinary prop and this wrapper is unnecessary. This codebase is on React 18.)
+ */
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  (
+    { className, variant = "default", size = "default", asChild = false, ...props },
+    ref,
+  ) => {
+    const Comp = asChild ? Slot.Root : "button"
+
+    return (
+      <Comp
+        ref={ref}
+        data-slot="button"
+        data-variant={variant}
+        data-size={size}
+        className={cn(buttonVariants({ variant, size, className }))}
+        {...props}
+      />
+    )
+  },
+)
+Button.displayName = "Button"
 
 export { Button, buttonVariants }

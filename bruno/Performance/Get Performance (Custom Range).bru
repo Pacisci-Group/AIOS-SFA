@@ -1,0 +1,59 @@
+meta {
+  name: Get Performance (Custom Range)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/performance?range=custom&from=2026-07-01&to=2026-07-31
+  body: none
+  auth: inherit
+}
+
+params:query {
+  range: custom
+  from: 2026-07-01
+  to: 2026-07-31
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes back exactly the window requested", function () {
+    expect(res.getBody().range).to.eql({
+      key: "custom",
+      from: "2026-07-01",
+      to: "2026-07-31",
+    });
+  });
+}
+
+docs {
+  # GET /performance?range=custom — an arbitrary window (PAC-9)
+
+  Backs the dashboard's **📅 Custom Date** chip. Same endpoint and same response
+  shape as the presets — one contract serves both, which is why the client can
+  render a preset and a custom window through a single code path.
+
+  - **Module / permission:** `performance` / `performance:read`
+
+  `to` is **inclusive**: `from=2026-07-01&to=2026-07-31` covers all 31 days of
+  July. The server converts that to a half-open `[20260701, 20260801)` range
+  internally.
+
+  The window is capped at **366 days**. That cap is load-bearing rather than
+  cosmetic: the aggregation accumulates distinct households with `$addToSet`,
+  and the span is what bounds that set.
+
+  Dates are **America/Chicago calendar days**, not instants — no timezone
+  conversion is applied to what you send.
+
+  ## Response `200`
+  Identical to `Get Performance (This Month)`; only `range.key` differs.
+
+  ## Errors
+  - `400` — missing `from` or `to`, `from` after `to`, a non-existent date, or a
+    span over 366 days. See `Get Performance (Invalid Custom)`.
+}

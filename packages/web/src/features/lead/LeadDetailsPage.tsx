@@ -114,7 +114,10 @@ export default function LeadDetailsPage() {
             <aside className="flex flex-col gap-4 p-4 md:p-5 lg:w-2/5 lg:border-l lg:border-border">
               <HouseholdCard household={lead.household} />
               <div className="min-h-[24rem] flex-1">
-                <ActivityTimeline activities={lead.activities} />
+                <ActivityTimeline
+                  activities={lead.activities}
+                  leadId={lead.id}
+                />
               </div>
             </aside>
           </div>

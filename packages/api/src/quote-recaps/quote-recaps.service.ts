@@ -28,6 +28,7 @@ import {
   ResolvedTenantContext,
   TenantContextResolver,
 } from '../common/tenancy/tenant-context.resolver';
+import { quoteDateYmd } from './quote.normalize';
 import { HouseholdDocument } from '../households/schemas/household.schema';
 import { LeadAccessService } from '../leads/lead-access.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
@@ -195,6 +196,10 @@ export class QuoteRecapsService {
         branchId: tenant.branchId,
         title: household.name ? `${household.name} — Quote` : 'Quote',
         quoteDate,
+        // The indexed calendar-day label the Quoted scorecard buckets by
+        // (PAC-10). Derived here rather than at read time so the scorecard is a
+        // plain integer range — the same reason `Deal.soldDateYmd` is persisted.
+        quoteDateYmd: quoteDateYmd(quoteDate),
         // Derived server-side and never taken from the client: these three back
         // the Quoted scorecard, so a client-supplied total would corrupt it.
         premium: roundCents(policies.reduce((sum, p) => sum + p.premium, 0)),

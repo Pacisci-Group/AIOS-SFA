@@ -1,0 +1,136 @@
+meta {
+  name: Get Performance (This Month)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/performance?range=mtd
+  body: none
+  auth: inherit
+}
+
+params:query {
+  range: mtd
+  ~from: 2026-01-01
+  ~to: 2026-01-31
+  ~scope: own
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes the resolved window back", function () {
+    const range = res.getBody().range;
+    expect(range.key).to.equal("mtd");
+    expect(range.from).to.match(/^\d{4}-\d{2}-01$/);
+    expect(range.to).to.match(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  test("returns both cards", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("sold");
+    expect(body).to.have.property("quoted");
+  });
+
+  test("averages are a number or null, never NaN", function () {
+    // The contract the UI depends on: `null` means "no households to divide
+    // by", which renders as an em dash rather than as $0.
+    const body = res.getBody();
+    for (const card of [body.sold, body.quoted]) {
+      for (const key of ["avgPremiumPerHousehold", "avgItemsPerHousehold"]) {
+        const value = card[key];
+        expect(value === null || typeof value === "number").to.equal(true);
+        if (value !== null) expect(Number.isNaN(value)).to.equal(false);
+      }
+    }
+  });
+}
+
+docs {
+  # GET /performance — Sold + Quoted scorecards (PAC-10 / PAC-11)
+
+  Both Producer Dashboard scorecards in one request. They always show the same
+  window, so splitting them would let the two halves of a single visual row
+  disagree mid-refresh.
+
+  - **Module:** `performance` (must be enabled for the agency)
+  - **Permission:** `performance:read`
+  - **Read-only** — there is no mutating handler. A scorecard is a projection of
+    `deals` and `quoteRecaps`, so `PATCH /performance` is a `404`.
+  - **Data scope** (enforced in the service layer):
+    - `own` → only the caller's own rows (`producerId = user`)
+    - `branch` → rows in the caller's branch (or the `X-Branch-Id` branch)
+    - `agency` → all rows in the agency
+
+  ## Query params
+  | param | type | default | rules |
+  |-------|------|---------|-------|
+  | range | enum | `mtd`   | `today` \| `week` \| `mtd` \| `lastMonth` \| `custom` |
+  | from  | date | —       | `YYYY-MM-DD`. **Required** when `range=custom` |
+  | to    | date | —       | `YYYY-MM-DD`, **inclusive**. Required when `range=custom` |
+  | scope | enum | —       | `own` \| `agency`. A *request*, clamped to the caller's `DataScope` — it can only ever narrow |
+
+  ### Windows
+  All boundaries are **America/Chicago calendar days**, compared as `YYYYMMDD`
+  integers against the indexed `deals.soldDateYmd` / `quoteRecaps.quoteDateYmd`.
+
+  | range | window |
+  |-------|--------|
+  | `today` | today |
+  | `week` | the trailing **7 days including today** — not a calendar week |
+  | `mtd` | 1st of this month → **today** (not month end: a producer can type a future sold date) |
+  | `lastMonth` | the whole previous calendar month |
+  | `custom` | `from` → `to`, both inclusive, max **366 days** |
+
+  ## Response `200`
+  ```json
+  {
+    "range": { "key": "mtd", "from": "2026-08-01", "to": "2026-08-06" },
+    "sold": {
+      "premium": 31662,
+      "itemCount": 27,
+      "recordCount": 11,
+      "householdCount": 8,
+      "avgPremiumPerHousehold": 3957.75,
+      "avgItemsPerHousehold": 3.38
+    },
+    "quoted": { "…": "same shape" }
+  }
+  ```
+
+  | field | type | notes |
+  |-------|------|-------|
+  | premium | number | summed, rounded to cents |
+  | itemCount | number | **items**, not records — a deal with three policies counts three |
+  | recordCount | number | matching documents; exposed so the averages are auditable |
+  | householdCount | number | **distinct** households across those documents |
+  | avgPremiumPerHousehold | number \| null | `null` — never `0` — when `householdCount` is 0 |
+  | avgItemsPerHousehold | number \| null | same |
+
+  ### The household denominator
+  Net-new: legacy had no per-household metric at all. A row's household identity
+  is resolved through a fallback ladder — `householdId`, else
+  `legacyHouseholdId`, else **the row's own id**, meaning an unattributed row
+  counts as its own household. That can only *understate* the average, and it
+  converges on the true value as `npm run backfill:deal-refs:dev` fills the refs
+  in. Collapsing null-household rows into one bucket would inflate it without
+  bound on migrated data.
+
+  ## Errors
+  - `400 Bad Request` — `range=custom` without both bounds, `from` after `to`, a
+    date that does not exist (`2026-02-31`), a span over 366 days, or an unknown
+    `range` value.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `performance` module disabled, or missing
+    `performance:read`.
+
+  > **Tip:** log in as `producer@smithfamily.local` — the demo seed makes them
+  > the data-rich producer for this dashboard.
+}

@@ -65,10 +65,11 @@ export function statusBadgeClass(status: string): string {
 /**
  * Timeline icon + tint per activity type.
  *
- * All eight `ACTIVITY_TYPES` are mapped even though only `lead_created`,
- * `quoted`, `sold` and `audit_resolved` are written today — `call`, `text`,
- * `email` and `note` arrive with the quick actions (PAC-16), and an unmapped
- * type would render as a blank circle rather than fail loudly.
+ * All eight `ACTIVITY_TYPES` are mapped. `lead_created`, `quoted`, `sold` and
+ * `audit_resolved` are written by their own pipelines; `call`, `text`, `email`
+ * and `note` are written by clients through `POST /activities` (PAC-16). The
+ * map stays exhaustive because an unmapped type would render as a blank circle
+ * rather than fail loudly.
  */
 export const activityDisplay: Record<
   ActivityType,

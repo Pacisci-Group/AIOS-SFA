@@ -33,3 +33,11 @@ ProducerGoalSchema.index(
   { agencyId: 1, producerId: 1, month: 1 },
   { unique: true },
 );
+
+/**
+ * The Leaderboard (PAC-13) reads *every* goal in an agency for one month. The
+ * unique index above cannot serve that: `producerId` sits between the two
+ * fields being queried, so a `{ agencyId, month }` filter degenerates to an
+ * `agencyId`-only scan.
+ */
+ProducerGoalSchema.index({ agencyId: 1, month: 1 });

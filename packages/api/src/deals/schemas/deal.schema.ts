@@ -215,6 +215,23 @@ DealSchema.index({ agencyId: 1, producerId: 1, soldDate: -1 });
 DealSchema.index({ agencyId: 1, householdId: 1, soldDate: -1 });
 
 /**
+ * The Sold scorecard's own-scope aggregation (PAC-11). The `soldDate` index
+ * above is on the **Date**; it cannot serve a range over the `YYYYMMDD`
+ * integer the dashboard buckets by, so this is a separate index rather than a
+ * reordering. Do not reorder.
+ */
+DealSchema.index({ agencyId: 1, producerId: 1, soldDateYmd: -1 });
+
+/**
+ * The Leaderboard (PAC-13), which groups by producer across the whole agency
+ * and so cannot use the producer-prefixed index above. Also serves the Sold
+ * scorecard for an agency-scoped caller. `soldDateYmd` carries only a
+ * single-field index on its own, which leaves `agencyId` unindexed for this
+ * query shape.
+ */
+DealSchema.index({ agencyId: 1, soldDateYmd: -1 });
+
+/**
  * The Lead Detail deal lookup (PAC-38) — "the sale this lead became". Only a
  * single-field `leadId` index existed, which cannot order the result.
  */

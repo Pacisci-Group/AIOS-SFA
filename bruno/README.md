@@ -25,7 +25,17 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Leads | Update Lead (Invalid) | `PATCH /leads/:id` | **PAC-38** — pins the write vocabulary (400). |
 | Leads | Update Primary Contact | `PATCH /contacts/:id` | **PAC-38** — edit a lead's contact. **`clients:write`** — see its docs. |
 | Leads | Update Primary Contact (Foreign Contact) | `PATCH /contacts/:id` | **PAC-38** — the derived-ownership clamp (404). |
+| Leads | List Hot Leads | `GET /leads/hot` | **PAC-15** — Priority Contact List, stalest first. `leads:read`. Captures `hotLeadId`. |
+| Leads | Log Activity (Call) | `POST /activities` | **PAC-16** — quick-action touch log. `leads:write`. |
+| Leads | Log Activity (Note) | `POST /activities` | **PAC-16** — the Lead Detail note composer. `leads:write`. |
+| Leads | Log Activity (Invalid Type) | `POST /activities` | **PAC-16** — pins the write vocabulary; a forged `sold` must 400. |
+| Leads | Log Activity (Foreign Lead) | `POST /activities` | **PAC-16** — asserts an out-of-scope lead 404s, not 403s. |
 | Leads › Share Links | Create / List / Revoke | `/leads/share-links…` | **PAC-37** — public intake links. `leads:write`. |
+| Leaderboard | Get Leaderboard | `GET /leaderboard` | **PAC-13** — Motivation Hub. `leaderboard:read`. Asserts no entry leaks another producer's dollars. |
+| Leaderboard | Get Leaderboard (Explicit Month) | `GET /leaderboard` | **PAC-13** — a past month; month-scoped, never range-scoped. |
+| Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |
+| Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
+| Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
 | Policies | Check Policy Number | `GET /policies/check` | **PAC-40** — Sold wizard Card 3 dedupe. `deal_audits:read`. |
 | Public Intake | Get Form / Submit | `/public/lead-form/:token`, `/public/leads/:token` | **PAC-37** — unauthenticated share-link intake. |
 | Quote Recaps | Get Lead Context | `GET /quote-recaps/context` | **PAC-39** — lead + household header for the form. `quote_recaps:read`. |
