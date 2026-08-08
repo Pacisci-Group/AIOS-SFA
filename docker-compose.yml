@@ -1,3 +1,20 @@
+# Local development stack, split by COMPOSE PROFILE so the same file serves both
+# ways of running the app:
+#
+#   docker compose up -d                  -> backing services ONLY (mongo, minio,
+#                                            redis). Run the API + web on the host
+#                                            with `npm run api:dev` / `web:dev`.
+#   docker compose --profile app up -d    -> everything, app included.
+#
+# Services with no `profiles:` key are always enabled, so the backing services
+# start in both modes and also start as dependencies of the app services. Only
+# `api` and `web` carry `profiles: [app]`.
+#
+# Use the Makefile rather than remembering the flags: `make infra` (backing
+# services only) / `make up` (full stack) / `make dev` (infra + host commands).
+#
+# The two modes cannot both own port 4000/5173 — `make infra` stops the app
+# containers first for exactly that reason.
 services:
   # Runs as a SINGLE-NODE REPLICA SET, not a standalone. Mongo only supports
   # multi-document transactions on a replica set or a sharded cluster, and the
@@ -51,11 +68,9 @@ services:
     container_name: sfa-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
-    # Host ports 9100/9101 (9000/9001 are commonly taken by another MinIO). The
-    # container still listens on 9000/9001 internally.
     ports:
-      - "9100:9000" # S3 API
-      - "9101:9001" # web console
+      - "9000:9000" # S3 API
+      - "9001:9001" # web console
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -83,7 +98,29 @@ services:
       "
     restart: "no"
 
+  # Permission cache (OPTIONAL at runtime). The API only uses Redis when
+  # REDIS_URL is set — unset, it resolves permissions from MongoDB on every
+  # request (see permissions/cache/permission-cache.provider.ts). The container
+  # runs regardless so the cached path is one uncommented line away in .env.
+  #
+  # Deliberately no volume: this is a pure cache, and persisting it across
+  # `docker compose down` would resurrect stale permission sets after a role
+  # change made while the stack was down.
+  redis:
+    image: redis:7-alpine
+    container_name: sfa-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
   api:
+    profiles: ["app"]
     build:
       context: .
       dockerfile: packages/api/Dockerfile
@@ -102,16 +139,23 @@ services:
       MONGODB_URI: mongodb://mongo:27017/sfa?directConnection=true
       CORS_ORIGIN: http://localhost:5173,http://localhost:4000
       # Object storage (MinIO). The API talks to MinIO over the compose network
-      # (minio:9000) for server-side ops, but signs browser-facing presigned
-      # URLs against the host-reachable public URL (localhost:9100 — see the
-      # remapped host port above).
+      # (minio:9000) for server-side ops, but signs browser-facing presigned URLs
+      # against localhost:9000 — same port, different host: `minio` does not
+      # resolve in the browser.
       STORAGE_ENDPOINT: http://minio:9000
-      STORAGE_PUBLIC_URL: http://localhost:9100
+      STORAGE_PUBLIC_URL: http://localhost:9000
       STORAGE_REGION: us-east-1
       STORAGE_BUCKET: sfa-uploads
       STORAGE_ACCESS_KEY_ID: minioadmin
       STORAGE_SECRET_ACCESS_KEY: minioadmin
       STORAGE_FORCE_PATH_STYLE: "true"
+      # Mirrors whatever .env decided, translated to the compose network: expands
+      # to the redis:6379 address only when REDIS_URL is set and non-empty in
+      # .env, and to nothing when it is commented out. The rewrite is required —
+      # .env holds the host-mode value (localhost:6379), and `localhost` inside
+      # this container is the API itself. Keeps both run modes on the same
+      # caching behaviour from a single switch.
+      REDIS_URL: ${REDIS_URL:+redis://redis:6379}
     depends_on:
       mongo:
         condition: service_healthy
@@ -120,6 +164,8 @@ services:
       mongo-init:
         condition: service_completed_successfully
       minio:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test:
@@ -137,6 +183,7 @@ services:
       sh -c "node packages/api/dist/seed/seed.js && node packages/api/dist/main.js"
 
   web:
+    profiles: ["app"]
     build:
       context: .
       dockerfile: packages/web/Dockerfile

@@ -1,5 +1,6 @@
 import type {
   CreateLeadResponse,
+  LeadPolicyOfInterestInput,
   PublicLeadFormInfo,
   PublicLeadSubmitResponse,
   ShareLinkRow,
@@ -28,6 +29,15 @@ interface LeadIntakePayload {
     dateOfBirth?: string;
     role: string;
   }[];
+  /**
+   * What the submitter wants quoted — canonical labels, item counts, and each
+   * property row's own dwelling address (PAC-56 #14).
+   *
+   * Optional because only the public form asks (PAC-56 #2); the API defaults it
+   * to `[]`. Omitted rather than sent empty, so "not asked" and "asked, none
+   * chosen" stay distinguishable at the call site.
+   */
+  policiesOfInterest?: LeadPolicyOfInterestInput[];
   submissionToken?: string;
 }
 

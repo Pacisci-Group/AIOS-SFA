@@ -41,6 +41,55 @@ export interface StoredObjectStat {
 }
 
 /**
+ * How a presigned GET should present the object to the browser (PAC-56 #30).
+ *
+ * Both fields are signed into the URL as S3 response-header overrides, so the
+ * value the browser sees is fixed at signing time and cannot be tampered with
+ * by whoever holds the link.
+ */
+export interface PresignedDownloadOptions {
+  /**
+   * `inline` hands the file to the browser's own PDF or image viewer;
+   * `attachment` forces a download.
+   *
+   * Defaults to `inline` because that is what the Lead Detail file rows want,
+   * and an attachment disposition defeats the native viewer entirely — the user
+   * gets a file in their downloads folder instead of a document on screen. They
+   * can still download from the viewer.
+   */
+  disposition?: 'inline' | 'attachment';
+  /**
+   * The name the browser shows/saves.
+   *
+   * Worth passing: object keys are UUID-prefixed and agency-namespaced, so
+   * without it the user sees `a1b2…-quote.pdf` rather than `quote.pdf`.
+   */
+  filename?: string;
+  /**
+   * Overrides the stored `Content-Type`.
+   *
+   * Load-bearing for anything uploaded before the content type was recorded
+   * correctly: a PDF served as `application/octet-stream` downloads instead of
+   * rendering, whatever the disposition says.
+   */
+  contentType?: string;
+}
+
+/**
+ * Make a stored filename safe to interpolate into a `Content-Disposition`
+ * header value.
+ *
+ * A raw `"` would terminate the quoted string and a newline would let the
+ * filename inject a second header — both reachable from a user-supplied upload
+ * name. Stripped rather than escaped: these characters have no business in a
+ * document name, and a mangled display name is a better failure than a broken
+ * header.
+ */
+function sanitizeFilename(filename: string): string {
+  return filename.replace(/[\r\n"\\]/g, '').slice(0, 200) || 'document';
+}
+
+/**
  * Reusable S3-compatible object storage wrapper. Backed by MinIO locally and
  * DigitalOcean Spaces (or any S3-compatible provider) in the cloud — the client
  * is configured entirely from `STORAGE_*` env vars.
@@ -55,7 +104,7 @@ export class StorageService implements OnModuleInit {
   /**
    * Client used to sign browser-facing URLs. Same as {@link client} unless
    * `STORAGE_PUBLIC_URL` differs from the internal endpoint (e.g. Docker, where
-   * the API reaches MinIO at `minio:9000` but the browser uses `localhost:9100`).
+   * the API reaches MinIO at `minio:9000` but the browser uses `localhost:9000`).
    */
   private readonly signingClient: S3Client;
   private readonly bucket: string;
@@ -197,12 +246,35 @@ export class StorageService implements OnModuleInit {
     };
   }
 
-  /** Presigned GET URL for viewing/downloading a stored object. */
-  async createPresignedDownload(key: string): Promise<string> {
-    const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
+  /**
+   * Presigned GET URL for viewing a stored object.
+   *
+   * Defaults to an **inline** disposition — following the URL opens the file in
+   * the browser's native viewer rather than downloading it. See
+   * {@link PresignedDownloadOptions}.
+   */
+  async createPresignedDownload(
+    key: string,
+    options: PresignedDownloadOptions = {},
+  ): Promise<string> {
+    const { disposition = 'inline', filename, contentType } = options;
+
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ResponseContentDisposition: filename
+        ? `${disposition}; filename="${sanitizeFilename(filename)}"`
+        : disposition,
+      ...(contentType ? { ResponseContentType: contentType } : {}),
+    });
     return getSignedUrl(this.signingClient, command, {
       expiresIn: this.downloadExpiry,
     });
+  }
+
+  /** Seconds a presigned download stays valid — echoed to clients. */
+  get downloadUrlTtlSeconds(): number {
+    return this.downloadExpiry;
   }
 
   /**

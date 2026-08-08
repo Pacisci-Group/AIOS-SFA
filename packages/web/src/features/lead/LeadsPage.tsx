@@ -12,10 +12,7 @@ import { LeadCard } from "./components/LeadCard";
 import { LeadsFilters } from "./components/LeadsFilters";
 import { LeadsFilterSheet } from "./components/LeadsFilterSheet";
 import { LeadsTable } from "./components/LeadsTable";
-import {
-  EMPTY_LEAD_FILTERS,
-  type LeadFilters,
-} from "./components/lead-filters";
+import { useLeadsUrlState } from "./useLeadsUrlState";
 
 /** Legacy Leads page size. */
 const PAGE_SIZE = 50;
@@ -23,13 +20,23 @@ const PAGE_SIZE = 50;
 /**
  * Leads list (PAC-36). Search, filters, sorting and pagination are all resolved
  * server-side by `GET /leads`, so the counts shown here are exact.
+ *
+ * The whole query lives in the URL (`useLeadsUrlState`), so the view survives
+ * opening a lead and coming back, a refresh, and being shared.
  */
 export default function LeadsPage() {
   const { user } = useAuth();
-  const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState<LeadFilters>(EMPTY_LEAD_FILTERS);
-  const [scope, setScope] = useState<"own" | "agency">("agency");
-  const [page, setPage] = useState(1);
+  const {
+    search,
+    filters,
+    scope,
+    page,
+    setSearch,
+    patchFilters,
+    setScope,
+    setPage,
+    clearFilters,
+  } = useLeadsUrlState();
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const debouncedSearch = useDebouncedValue(search, 300);
@@ -68,30 +75,6 @@ export default function LeadsPage() {
   const firstRow = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const lastRow = Math.min(page * PAGE_SIZE, total);
 
-  // Every change to *what* is being asked for restarts at page 1 — otherwise a
-  // narrower result set leaves the user stranded on a page that no longer
-  // exists. Done at the setter rather than in an effect so the old page number
-  // never reaches the query.
-  const patchFilters = (patch: Partial<LeadFilters>) => {
-    setFilters((prev) => ({ ...prev, ...patch }));
-    setPage(1);
-  };
-
-  const changeSearch = (value: string) => {
-    setSearch(value);
-    setPage(1);
-  };
-
-  const changeScope = (value: "own" | "agency") => {
-    setScope(value);
-    setPage(1);
-  };
-
-  const clearFilters = () => {
-    setFilters(EMPTY_LEAD_FILTERS);
-    setPage(1);
-  };
-
   return (
     <div className="flex min-h-screen bg-background text-foreground">
       {/* `AppSidebar` is a fixed 260px and the app shell is not responsive yet,
@@ -118,13 +101,13 @@ export default function LeadsPage() {
         <main className="px-4 md:px-6 py-6">
           <LeadsFilters
             search={search}
-            onSearchChange={changeSearch}
+            onSearchChange={setSearch}
             filters={filters}
             onChange={patchFilters}
             onOpenAdvanced={() => setAdvancedOpen(true)}
             showScopeToggle={showScopeToggle}
             scope={scope}
-            onScopeChange={changeScope}
+            onScopeChange={setScope}
           />
 
           {isError ? (
@@ -170,7 +153,7 @@ export default function LeadsPage() {
                         variant="outline"
                         size="sm"
                         disabled={page <= 1 || isFetching}
-                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        onClick={() => setPage(Math.max(1, page - 1))}
                       >
                         Previous
                       </Button>
@@ -178,9 +161,7 @@ export default function LeadsPage() {
                         variant="outline"
                         size="sm"
                         disabled={page >= totalPages || isFetching}
-                        onClick={() =>
-                          setPage((p) => Math.min(totalPages, p + 1))
-                        }
+                        onClick={() => setPage(Math.min(totalPages, page + 1))}
                       >
                         Next
                       </Button>

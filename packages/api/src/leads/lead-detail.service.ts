@@ -2,12 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
+  ActivityOrigin,
   LeadDetail,
   LeadDetailActivity,
   LeadDetailContact,
   LeadDetailDeal,
   LeadDetailHousehold,
-  LeadDetailPolicy,
   LeadDetailPriorInsurance,
   LeadDetailPriorPolicy,
   LeadDetailQuoteRecap,
@@ -23,10 +23,14 @@ import {
   Activity,
   ActivityDocument,
 } from '../activities/schemas/activity.schema';
-import { resolveHouseholdAddress } from '../common/address/household-address';
+import {
+  normalizeStoredAddress,
+  resolveHouseholdAddress,
+} from '../common/address/household-address';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import { HouseholdDocument } from '../households/schemas/household.schema';
+import { toLeadDetailPolicy } from '../policies/policy-view';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import {
   PriorInsurance,
@@ -175,6 +179,22 @@ export class LeadDetailService {
         household?.mailingAddress,
       ),
       quoteControlNumber: lead.quoteControlNumber ?? null,
+      // Normalized on read like every other policy-type field on this page,
+      // even though intake only ever writes canonical labels — one rule for
+      // the whole surface is cheaper to keep true than an exception.
+      policiesOfInterest: (lead.policiesOfInterest ?? [])
+        .map((policy) => ({
+          policyType: normalizePolicyType(policy.policyType),
+          itemCount: policy.itemCount,
+          // Per-row since PAC-56 #14, and through the same coercion as every
+          // other address on this page: the stored shape is
+          // `Record<string, unknown>` and three writers disagree about its keys.
+          propertyAddress: normalizeStoredAddress(policy.propertyAddress),
+        }))
+        .filter((policy) => policy.policyType.length > 0),
+      // The lead-level dwelling, which only migrated records and pre-#14 leads
+      // carry. Clients render it as the fallback when no row has its own.
+      propertyAddress: normalizeStoredAddress(lead.propertyAddress),
       agingDays: this.agingDays(lead),
       createdDate: iso(lead.createdDate),
       lastActivityAt: iso(lead.lastActivityAt),
@@ -188,7 +208,7 @@ export class LeadDetailService {
       earlierQuoteRecaps: earlierRecaps.map((recap) =>
         this.toQuoteRecapSummary(recap),
       ),
-      deal: deal ? this.toDeal(deal) : null,
+      deal: deal ? this.toDeal(deal, policies) : null,
       priorInsurance,
       activities: activities.map((activity) =>
         this.toActivity(activity, producerNames),
@@ -559,6 +579,10 @@ export class LeadDetailService {
 
     return {
       id: household._id.toString(),
+      // Stored, not derived. Empty only for a household migrated before
+      // `householdRef` existed and not yet backfilled — the card hides the chip
+      // rather than showing a number that would be wrong.
+      reference: household.householdRef ?? '',
       name: household.name ?? null,
       address: resolveHouseholdAddress(
         lead.address,
@@ -568,23 +592,8 @@ export class LeadDetailService {
       members: members.map((contact) =>
         this.toContact(contact, contact._id.toString() === primaryId),
       ),
-      policies: policies.map((policy) => this.toPolicy(policy)),
+      policies: policies.map((policy) => toLeadDetailPolicy(policy)),
       totalActivePolicies: household.totalActivePolicies ?? 0,
-    };
-  }
-
-  private toPolicy(policy: PolicyDocument): LeadDetailPolicy {
-    return {
-      id: policy._id.toString(),
-      policyType: normalizePolicyType(policy.policyType),
-      carrier: policy.carrier ?? null,
-      policyNumber: policy.policyNumber ?? null,
-      active: policy.active ?? false,
-      status: policy.policyStatus ?? null,
-      premium: policy.premium ?? 0,
-      items: policy.items ?? 0,
-      effectiveDate: dateOnly(policy.effectiveDate),
-      expirationDate: dateOnly(policy.expirationDate),
     };
   }
 
@@ -611,15 +620,11 @@ export class LeadDetailService {
         policyType: normalizePolicyType(policy.policyType),
         premium: policy.premium ?? 0,
         itemCount: policy.itemCount ?? 0,
+        /** Per-row since PAC-56 #14; `null` on non-property and older rows. */
+        propertyAddress: normalizeStoredAddress(policy.propertyAddress),
       })),
-      propertyAddress: recap.propertyAddress
-        ? {
-            street: recap.propertyAddress.street ?? '',
-            city: recap.propertyAddress.city ?? '',
-            state: recap.propertyAddress.state ?? '',
-            zip: recap.propertyAddress.zip ?? '',
-          }
-        : null,
+      // The recap-level dwelling — only recaps written before #14 have one.
+      propertyAddress: normalizeStoredAddress(recap.propertyAddress),
       notes: recap.notes ?? null,
       // Metadata only — the storage `key` stays server-side. Downloading the
       // document needs its own presigned-URL endpoint, not a client that knows
@@ -635,9 +640,26 @@ export class LeadDetailService {
     };
   }
 
-  private toDeal(deal: DealDocument): LeadDetailDeal {
+  /**
+   * The sale, with the policies it bound (PAC-56 #27).
+   *
+   * `policies` is the household set filtered to this deal rather than a second
+   * query: `loadPolicies` has already read every policy on the household, and
+   * the deal's are a subset of them. A household legitimately holds policies
+   * from earlier deals and from the migration, so the filter is what keeps the
+   * Sold card honest about what *this* sale wrote.
+   *
+   * Empty on a migrated deal whose policies carry only `legacyDealId` — the
+   * card says so rather than implying the sale bound nothing.
+   */
+  private toDeal(
+    deal: DealDocument,
+    policies: PolicyDocument[],
+  ): LeadDetailDeal {
+    const dealId = deal._id.toString();
+
     return {
-      id: deal._id.toString(),
+      id: dealId,
       soldDate: iso(deal.soldDate),
       premium: deal.premium ?? 0,
       itemCount: deal.itemCount ?? 0,
@@ -647,6 +669,9 @@ export class LeadDetailService {
       policyTypes: (deal.policyTypes ?? [])
         .map((value) => normalizePolicyType(value))
         .filter(Boolean),
+      policies: policies
+        .filter((policy) => policy.dealId?.toString() === dealId)
+        .map((policy) => toLeadDetailPolicy(policy)),
     };
   }
 
@@ -679,6 +704,32 @@ export class LeadDetailService {
       summary: activity.summary ?? null,
       occurredAt: iso(activity.occurredAt),
       producerName: producerName || null,
+      origin: this.toActivityOrigin(activity),
     };
+  }
+
+  /**
+   * Where the row was written from (PAC-56 #29).
+   *
+   * Derived rather than stored: no writer has ever set a provenance field, so a
+   * stored one would be `null` on every row already in the collection. The refs
+   * the activity does carry answer the question well enough.
+   *
+   * `source === 'migration'` wins over everything: those rows are the legacy
+   * system's reconstruction of history, not something anyone wrote on a surface
+   * this app has — and they carry no refs to reason from anyway.
+   *
+   * The ref check precedes `subjectType` because `POST /activities` writes
+   * `subjectType: 'lead'` for every client-logged row; a note left while filing
+   * a quote recap is distinguishable only by its `quoteRecapId`.
+   */
+  private toActivityOrigin(activity: ActivityDocument): ActivityOrigin {
+    if (activity.source === 'migration') return 'system';
+    if (activity.quoteRecapId || activity.subjectType === 'quoteRecap') {
+      return 'quote_recap';
+    }
+    if (activity.dealId || activity.subjectType === 'deal') return 'sold_deal';
+    if (activity.subjectType === 'dealAuditItem') return 'audit';
+    return 'lead';
   }
 }

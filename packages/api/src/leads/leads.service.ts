@@ -65,6 +65,7 @@ export class LeadsService {
       primaryContact: dto.primaryContact,
       address: dto.address,
       members: dto.members,
+      policiesOfInterest: dto.policiesOfInterest,
       quoteControlNumber: dto.quoteControlNumber,
       submissionToken: dto.submissionToken,
     });

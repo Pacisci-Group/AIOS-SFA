@@ -66,6 +66,21 @@ tests {
     expect(rawCodes).to.not.include(res.getBody().status);
   });
 
+  test("policies of interest are canonical labels, never raw policy codes", function () {
+    const body = res.getBody();
+    const rawCodes = ["PYgez", "sNMRK", "Hn155", "mrzQD", "mCt4m", "UAOk8"];
+    // Always an array — `[]` on migrated leads and on anything created before
+    // PAC-56 #2, never absent, so the client needs no null check.
+    expect(body.policiesOfInterest).to.be.an("array");
+    body.policiesOfInterest.forEach(function (policy) {
+      expect(rawCodes).to.not.include(policy.policyType);
+      expect(policy.itemCount).to.be.a("number");
+      // Per-row since PAC-56 #14 — always present, `null` on a non-property row
+      // and on anything captured before the address moved onto the policy.
+      expect(policy).to.have.property("propertyAddress");
+    });
+  });
+
   test("quoted products are canonical labels, never raw policy codes", function () {
     const recap = res.getBody().latestQuoteRecap;
     const rawCodes = ["PYgez", "sNMRK", "Hn155", "mrzQD", "mCt4m", "UAOk8"];
@@ -82,6 +97,49 @@ tests {
       expect(recap.document).to.not.have.property("key");
       expect(recap.document).to.have.property("filename");
     }
+  });
+
+  test("the household carries its agency-unique reference alongside its id", function () {
+    // PAC-56 #7 — David asked for the household's identifier to be visible for
+    // support/lookup. `Household.householdRef`, a per-agency sequence continuing
+    // the numbers legacy SmartSuite assigned (`#HH2614` -> `HH-2614`).
+    const household = res.getBody().household;
+    if (household) {
+      expect(household).to.have.property("reference");
+      // Empty only on a household written before the field existed, until the
+      // next migration or demo-seed run reconciles the agency's numbering.
+      if (household.reference) {
+        expect(household.reference).to.match(/^HH-[1-9][0-9]*$/);
+      }
+      expect(household.id).to.be.a("string");
+    }
+  });
+
+  test("the deal carries the policies that sale bound", function () {
+    // PAC-56 #27 — the Sold card renders these. A subset of
+    // `household.policies`, filtered to this deal.
+    const body = res.getBody();
+    if (body.deal) {
+      expect(body.deal.policies).to.be.an("array");
+      const householdPolicyIds = (body.household ? body.household.policies : [])
+        .map(function (policy) { return policy.id; });
+      body.deal.policies.forEach(function (policy) {
+        expect(policy).to.have.property("policyNumber");
+        expect(policy).to.have.property("carrier");
+        expect(policy).to.have.property("status");
+        expect(householdPolicyIds).to.include(policy.id);
+      });
+    }
+  });
+
+  test("every activity says where it was written", function () {
+    // PAC-56 #29 — a note on the lead, on a quote recap and in the sold flow
+    // are otherwise indistinguishable once they are rows in one list.
+    const origins = ["lead", "quote_recap", "sold_deal", "audit", "system"];
+    res.getBody().activities.forEach(function (activity) {
+      expect(activity).to.have.property("origin");
+      expect(origins).to.include(activity.origin);
+    });
   });
 
   test("activities are newest first", function () {
@@ -148,7 +206,44 @@ docs {
     Recap form captures, and no "current coverage" source exists.
   - `household.policies` is **household-level**. `Policy` links to `Household`
     and `Deal` and never to a contact, so per-member policy icons are not
-    derivable.
+    derivable. (Tracked as PAC-55.)
+
+  ### Added by PAC-56, section D
+
+  **`household.reference`** — the household's identifier, `HH-2614`, read from
+  `Household.householdRef`. David asked for it to be visible for support/lookup
+  (#7).
+
+  Legacy had this: SmartSuite titled every household `#HH2614` and the old app
+  passed it through as `householdTitle`. Our migration originally dropped the
+  field, and the first version of this contract derived a label from the
+  household ObjectId instead — which was **not** safe to treat as an identifier,
+  since the trailing hex is a per-process counter and collides on a birthday
+  curve. It is now a real stored value: a per-agency sequence, seeded from the
+  highest number imported from SmartSuite so an agency keeps the IDs it already
+  uses, and allocated from the `counters` collection for anything created since.
+
+  Unique per agency, so unlike its predecessor it **is** safe to quote and to
+  resolve back to a record — the UI's copy button now puts this on the clipboard
+  rather than the ObjectId. Empty string for a household written before the
+  field existed, until the next migration or demo-seed run reconciles the
+  agency's numbering; clients hide the affordance rather than render a bare
+  prefix.
+
+  **`deal.policies`** — the policies that sale bound, for the Sold card (#27).
+  The same `LeadDetailPolicy` shape as `household.policies`, filtered to
+  `Policy.dealId`. Repeated rather than referenced by id because a household
+  legitimately holds policies from earlier deals and from the migration that
+  this sale did not write. Empty on a migrated deal whose policies carry only
+  `legacyDealId`.
+
+  **`activities[].origin`** — which surface the row was written from (#29):
+  `lead` | `quote_recap` | `sold_deal` | `audit` | `system`. Derived on read from
+  the activity's own refs, not stored: no writer has ever set a provenance
+  field, so a stored one would be `null` on every row already in the collection.
+  `source: 'migration'` wins over everything and maps to `system`. The ref check
+  precedes `subjectType` because `POST /activities` writes `subjectType: 'lead'`
+  for every client-logged row.
 
   ## Response `200`
   ```json
@@ -164,6 +259,15 @@ docs {
     "phones": ["5551234567"],
     "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
     "quoteControlNumber": "QCN-11741",
+    "policiesOfInterest": [
+      { "policyType": "Auto", "itemCount": 2, "propertyAddress": null },
+      {
+        "policyType": "Home",
+        "itemCount": 1,
+        "propertyAddress": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" }
+      }
+    ],
+    "propertyAddress": null,
     "agingDays": 12,
     "createdDate": "2026-07-16T00:00:00.000Z",
     "lastActivityAt": "2026-07-28T14:02:11.000Z",
@@ -182,10 +286,24 @@ docs {
     },
     "household": {
       "id": "665f...c33",
+      "reference": "HH-5F0C33",
       "name": "Rodriguez Household",
       "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
       "members": [],
-      "policies": [],
+      "policies": [
+        {
+          "id": "665f...f66",
+          "policyType": "Auto",
+          "carrier": "Allstate",
+          "policyNumber": "AUT-4821993",
+          "active": true,
+          "status": "Active",
+          "premium": 1200,
+          "items": 2,
+          "effectiveDate": "2026-02-01",
+          "expirationDate": "2027-02-01"
+        }
+      ],
       "totalActivePolicies": 2
     },
     "latestQuoteRecap": {
@@ -195,7 +313,9 @@ docs {
       "itemCount": 2,
       "productsQuoted": ["Auto", "Home"],
       "status": "Quoted",
-      "policies": [{ "policyType": "Auto", "premium": 1200, "itemCount": 1 }],
+      "policies": [
+        { "policyType": "Auto", "premium": 1200, "itemCount": 1, "propertyAddress": null }
+      ],
       "propertyAddress": null,
       "notes": "Bundling for the multi-policy discount.",
       "document": {
@@ -214,7 +334,8 @@ docs {
         "type": "quoted",
         "summary": "Quote recap created",
         "occurredAt": "2026-07-24T00:00:00.000Z",
-        "producerName": "Pat Producer"
+        "producerName": "Pat Producer",
+        "origin": "quote_recap"
       }
     ]
   }
@@ -229,6 +350,8 @@ docs {
   | temperature        | enum            | `Hot` \| `Warm` \| `Cold` \| `Unknown`                    |
   | leadSource         | object          | `{ code, label }` — `code` is what `PATCH` accepts back   |
   | address            | object \| null  | household living address, coerced from three stored shapes |
+  | policiesOfInterest | array           | `{ policyType, itemCount, propertyAddress }` captured at intake (PAC-56 #2); `[]` on migrated leads |
+  | propertyAddress    | object \| null  | **lead-level** dwelling — migrated records and pre-PAC-56-#14 leads only; read the per-row one first |
   | agingDays          | int             | recomputed live, **not** the stale migrated value          |
   | intakeChannel      | enum \| null    | `internal` \| `share_link`; `null` on migrated leads       |
   | primaryContact     | object \| null  | DOB is `YYYY-MM-DD`, never a timestamp                    |

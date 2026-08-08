@@ -19,6 +19,21 @@ const buttonVariants = cva(
         ghost:
           "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
+        /**
+         * The Allstate-sky gradient on primary submit buttons — the New Lead
+         * form, the Quote Recap form, and Sign in.
+         *
+         * A `cva` variant rather than a wrapper component, per AGENTS.md §11
+         * ("Add variants via `cva` inside the primitive rather than one-off
+         * wrappers"). Note the tension with the neighbouring rule that `ui/` is
+         * shadcn-CLI-managed: **re-running `npx shadcn@latest add button` will
+         * drop this variant.** Re-add it if that happens.
+         *
+         * `active:scale-95` is intentionally *not* here — two of the three call
+         * sites have it and Sign in does not, so it stays at the call site.
+         */
+        brand:
+          "bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110",
       },
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",

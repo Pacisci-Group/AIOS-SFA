@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ModuleKey } from '@sfa/shared';
 import { AuthProvider } from '@/contexts/auth-context';
+import { ThemeProvider } from '@/app/ThemeProvider';
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/layout/ProtectedRoute';
 import { RequirePermission } from '@/components/layout/RequirePermission';
 import { LoginPage } from '@/pages/LoginPage';
@@ -98,6 +99,7 @@ function RoleLanding() {
 
 export function App() {
   return (
+    <ThemeProvider>
     <QueryClientProvider client={queryClient}>
       {/* Radix tooltips need a provider ancestor or `Tooltip.Root` throws at
           render — and `components/ui/tooltip` deliberately does not self-wrap,
@@ -357,5 +359,6 @@ export function App() {
         </AuthProvider>
       </TooltipProvider>
     </QueryClientProvider>
+    </ThemeProvider>
   );
 }

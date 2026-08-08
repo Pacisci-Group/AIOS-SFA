@@ -2,9 +2,23 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+/**
+ * Wrapped in `forwardRef`, which the stock shadcn source does not do.
+ *
+ * Stock targets React 19, where `ref` is an ordinary prop. This app is on React
+ * 18, where it is not: without this, a `ref` passed to `Input` is swallowed and
+ * React warns "Function components cannot be given refs". The Sold wizard needs
+ * it — `DuplicatePolicyNotice`'s "correct the number" action focuses the
+ * policy-number input via `TextField`'s `inputRef`.
+ *
+ * Re-running `npx shadcn@latest add input` will overwrite this. Re-apply it
+ * until the app is on React 19.
+ */
+const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
+  function Input({ className, type, ...props }, ref) {
   return (
     <input
+      ref={ref}
       type={type}
       data-slot="input"
       className={cn(
@@ -16,6 +30,6 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
       {...props}
     />
   )
-}
+})
 
 export { Input }

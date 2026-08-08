@@ -8,6 +8,14 @@ import {
 
 export type QuoteRecapDocument = HydratedDocument<QuoteRecap>;
 
+/** The insured property address. Free-form for the `Lead.address` reason. */
+export interface QuoteRecapAddress {
+  street?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+}
+
 /**
  * One row of the quoted proposal. Legacy stored only the aggregates (Fillout
  * pre-computed them); keeping the rows preserves what the producer actually
@@ -28,6 +36,25 @@ export class QuotedPolicy {
 
   @Prop({ required: true, min: 1 })
   itemCount: number;
+
+  /**
+   * The dwelling **this row** insures (PAC-56 #14) — **already resolved**: a
+   * row the producer marked "same as household" holds a copy of the household
+   * address, so nothing downstream has to re-apply the flag.
+   *
+   * Set only on property-type rows. It lives here rather than on the recap
+   * because a single recap routinely covers a home *and* a landlord policy on a
+   * different building.
+   *
+   * Optional for the reason given on the class below: migrated and seeded
+   * recaps predate the field entirely.
+   */
+  @Prop({ type: Object })
+  propertyAddress?: QuoteRecapAddress;
+
+  /** Round-trips the producer's choice for the edit form (PAC-56 #11). */
+  @Prop({ default: false })
+  sameAsHousehold: boolean;
 }
 
 export const QuotedPolicySchema = SchemaFactory.createForClass(QuotedPolicy);
@@ -55,14 +82,6 @@ export class QuoteDocument {
 }
 
 export const QuoteDocumentSchema = SchemaFactory.createForClass(QuoteDocument);
-
-/** The insured property address. Free-form for the `Lead.address` reason. */
-export interface QuoteRecapAddress {
-  street?: string;
-  city?: string;
-  state?: string;
-  zip?: string;
-}
 
 /**
  * Migrated from SmartSuite "The Quote Recaps Table" (6941fdb2dc9a6d024fd8bc53).
@@ -123,11 +142,18 @@ export class QuoteRecap extends TenantRecord {
   @Prop({ type: [QuotedPolicySchema], default: [] })
   policies: QuotedPolicy[];
 
-  /** Captured only when a property-type policy was quoted. */
+  /**
+   * The **recap-level** property address, and the flag that produced it.
+   *
+   * **No longer written.** PAC-56 #14 moved the address onto
+   * `policies[].propertyAddress`, because one address per recap cannot describe
+   * a home and a landlord policy at once. Both fields stay for the recaps
+   * written before that; read paths prefer the per-row addresses and fall back
+   * here.
+   */
   @Prop({ type: Object })
   propertyAddress?: QuoteRecapAddress;
 
-  /** True when `propertyAddress` was copied from the household's own address. */
   @Prop({ default: false })
   sameAsHousehold: boolean;
 

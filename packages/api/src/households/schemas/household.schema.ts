@@ -13,6 +13,23 @@ export type HouseholdDocument = HydratedDocument<Household>;
  */
 @Schema({ timestamps: true, collection: 'households' })
 export class Household extends TenantRecord {
+  /**
+   * Human-readable, agency-unique identifier — `HH-2614` (PAC-56 #7).
+   *
+   * ⚠ Not a foreign key. Everywhere else in the codebase `householdId` is the
+   * ObjectId that points *at* a household (`Lead`, `Contact`, `QuoteRecap`,
+   * `Policy`, …); this is the number a producer reads aloud, and the two are
+   * deliberately named apart.
+   *
+   * Migrated households keep the number SmartSuite gave them (`#HH2614`);
+   * everything created since is allocated from the agency's counter by
+   * `allocateHouseholdRef`. Optional because a household written before this
+   * field existed has none until `reconcileHouseholdRefs` next runs — which the
+   * migration and the demo seed both do at the end of their household pass.
+   */
+  @Prop({ trim: true, uppercase: true })
+  householdRef?: string;
+
   @Prop({ trim: true })
   name?: string;
 
@@ -78,6 +95,18 @@ HouseholdSchema.index(
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 HouseholdSchema.index({ agencyId: 1, name: 1 });
+// Unique per agency — the whole reason the reference replaced the ObjectId-derived
+// label is that it can be trusted to identify one household. Partial, not sparse,
+// for the reason spelled out on LEGACY_DEDUPE_INDEX_OPTIONS: a compound sparse
+// index still indexes documents that have `agencyId`, so every household still
+// awaiting a backfill would collide on `(agencyId, null)`.
+HouseholdSchema.index(
+  { agencyId: 1, householdRef: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { householdRef: { $type: 'string' } },
+  },
+);
 // NOT unique — an apartment building or a house share legitimately yields
 // several households on one `street|zip`.
 HouseholdSchema.index(

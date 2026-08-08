@@ -285,8 +285,17 @@ export class DealAuditsService {
     if (!attachment) {
       throw new NotFoundException('Attachment not found.');
     }
+    // Inline, with the original filename and content type (PAC-56 #30): the
+    // point of opening a proof document is looking at it, and the default
+    // attachment disposition puts it in the downloads folder instead. Sold-form
+    // documents are PDF *or* image, and both render natively.
     const downloadUrl = await this.storage.createPresignedDownload(
       attachment.key,
+      {
+        disposition: 'inline',
+        filename: attachment.filename,
+        contentType: attachment.contentType,
+      },
     );
     return { downloadUrl };
   }

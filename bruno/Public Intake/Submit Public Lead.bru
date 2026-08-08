@@ -26,6 +26,10 @@ body:json {
       "zip": "74110"
     },
     "members": [],
+    "policiesOfInterest": [
+      { "policyType": "Home", "itemCount": 1, "sameAsHousehold": true },
+      { "policyType": "Auto", "itemCount": 2 }
+    ],
     "submissionToken": "{{$guid}}"
   }
 }
@@ -53,6 +57,19 @@ docs {
   Same shape as `POST /leads`, **minus `leadSourceCode`**. Lead source is
   internal vocabulary (Quotewizard, Soleo, Data Lot, JYA) and is never shown to
   an outside submitter.
+
+  That includes `policiesOfInterest` (PAC-56 #2) — canonical-vocabulary rows of
+  `{ policyType, itemCount }`, each property row carrying its **own**
+  `sameAsHousehold` / `propertyAddress` (PAC-56 #6/#14). This is the only part
+  of the public form the submitter answers about the *product* rather than about
+  themselves; the producer reads it back on `GET /leads/:id` before starting the
+  Quote Recap.
+
+  The per-row address is what lets one submission describe a prospect insuring
+  the home they live in **and** a rental they let out. The rule is enforced on
+  this route too — it sits on the shared policy-row schema, not on the
+  authenticated one — so a `Home` row with `sameAsHousehold: false` and a blank
+  address is a `400` here as well.
 
   ## Tenancy comes only from the link
   `agencyId`, `branchId` and `producerId` are read from the stored share-link

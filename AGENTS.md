@@ -33,7 +33,7 @@ npm workspaces (`workspaces: ["packages/*"]`, Node >= 20):
 
 | Package | Stack | State |
 |---|---|---|
-| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, **shadcn/ui (Radix UI primitives)**, React Router 7, TanStack Query, Recharts, lucide-react | Auth + **permission-management pages wired to the API**; the 7 mockup dashboards still render **hard-coded mock data** (Producer Dashboard data widgets being wired now) |
+| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, **shadcn/ui (Radix UI primitives)**, React Router 7, TanStack Query, **TanStack Form + zod**, Recharts, lucide-react | Auth + **permission-management pages wired to the API**; the 7 mockup dashboards still render **hard-coded mock data** (Producer Dashboard data widgets being wired now) |
 | `packages/api` | **NestJS 11**, **Mongoose 8 (MongoDB)**, JWT/passport, class-validator | Full **permission/multi-tenancy spine** + **Mongoose schemas for all ~22 domain collections** + a **SmartSuite→Mongo migration**; the HTTP **feature controllers are still stubs** returning `{ status: 'ready' }` (real query services/DTOs not wired yet) |
 | `packages/shared` | Shared enums / permission constants / types / role templates | Source of truth for module keys & permissions |
 
@@ -41,24 +41,60 @@ npm workspaces (`workspaces: ["packages/*"]`, Node >= 20):
 
 ## 3. Running it
 
-Workspace scripts (from repo root — see `package.json`):
+Env first: copy `.env.example` → `.env`. That one file serves **both** run modes
+— every value in it is the host-mode (localhost) value, and the compose `api`
+service overrides the few addresses that differ (`MONGODB_URI`, `CORS_ORIGIN`,
+`REDIS_URL`, `STORAGE_*`) with compose-network ones. Never edit `.env` to switch
+modes. Deployment notes in `DEPLOYMENT.md`.
+
+### Two run modes
+
+Split by **compose profile** in `docker-compose.yml`: `mongo`, `minio` and
+`redis` (+ the two one-shot init containers) carry no profile so they start in
+both modes; `api` and `web` sit behind `profiles: [app]`.
+
+**a) Backing services in Docker, app on the host — the default dev loop.** Real
+watch mode on both packages.
 
 ```bash
-npm run api:dev            # NestJS API (watch)
-npm run web:dev            # Vite web app
+make dev                   # Mongo + MinIO + Redis only (alias: make infra)
+npm run api:seed:demo:dev  # first run against an empty DB (see below)
+npm run api:dev            # NestJS API (watch)  -> :4000
+npm run web:dev            # Vite web app        -> :5173
+```
+
+**Nothing auto-seeds in this mode** — the auto-seed lives in the containerized
+API's start command, which isn't running.
+
+**b) Everything in Docker.** Verifies the built images; no hot reload.
+
+```bash
+make up                    # build + start all six services
+```
+
+The two modes both want ports 4000/5173, so they can't run at once — `make dev`
+stops the app containers for you. `make down` tears down either.
+
+- Web: `http://localhost:5173` · API: `http://localhost:4000/api/v1`
+- Mongo: `mongodb://localhost:27017/sfa` · MinIO: `:9000` (console `:9001`) · Redis: `:6379`
+
+Every service is published on its **standard default port** — nothing is
+remapped, so any client's out-of-the-box connection settings just work.
+
+Redis is **optional at runtime**: the API caches resolved permission sets only
+when `REDIS_URL` is set, otherwise it reads MongoDB per request. The container
+runs regardless, so uncommenting `REDIS_URL` in `.env` is the whole switch and it
+applies identically in both modes.
+
+Other workspace scripts (from repo root — see `package.json`):
+
+```bash
 npm run shared:build       # build shared package
 npm run api:seed:dev       # core seed: super admin + empty tenant scaffold (agency, branch, roles)
 npm run api:seed:demo:dev  # seed a full synthetic demo tenant (CRM data for local testing)
 npm run api:migrate:dev    # run SmartSuite -> Mongo migration (dev)
 npm run test:e2e           # API e2e tests
 ```
-
-Docker (see `Makefile` / `docker-compose.yml`): `make up` starts Mongo + API + web.
-- Web: `http://localhost:5173`
-- API: `http://localhost:4000/api/v1`
-- Mongo: `mongodb://localhost:27017/sfa`
-
-Env: copy `.env.example` → `.env`. Deployment notes in `DEPLOYMENT.md`.
 
 > **Three ways to populate Mongo:**
 > - `api:seed:dev` — **core / platform-required seed only**: the platform super
@@ -80,6 +116,13 @@ Env: copy `.env.example` → `.env`. Deployment notes in `DEPLOYMENT.md`.
 > - `api:migrate:dev` — real **SmartSuite → Mongo** import; needs SmartSuite
 >   credentials (run `api:seed:dev` first). BigQuery (legacy mailer prospect data)
 >   is **not migrated** — deferred (see arch doc O2).
+>
+> **After migrating, run `api:backfill:deal-refs:dev`** (deal/recap links +
+> policy match keys) — it only rewrites data already in Mongo, so it needs no
+> credentials and is safe to re-run. Household `HH-…` references need no
+> backfill: the migration and the demo seed each reconcile them at the end of
+> their household pass, so whichever one populated the database leaves the
+> numbering consistent.
 
 ---
 
@@ -212,10 +255,28 @@ Chakra, etc.).
   palette is encoded as CSS-variable tokens in `src/styles/theme.css`
   (`bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`,
   `border-border`, `text-primary` = Allstate sky, `text-accent` = emerald,
-  `text-destructive` = amber). For status accents use Tailwind's default palette,
-  which matches the mockups exactly (`amber-500` `#F59E0B`, `sky-400` `#38BDF8`,
-  `emerald-500` `#10B981`, `slate-{200,400,500}`). This keeps the designer's look
-  intact **and** gives us light/dark theming for free.
+  `text-destructive` = amber). **Tokens theme automatically; raw palette values
+  do not.** `theme.css` defines the light theme on `:root` and the navy brand
+  theme on `.dark`, so anything written as `amber-500`, `slate-400`,
+  `white/[0.04]` or a hex literal is a *dark-only* value that will be wrong —
+  often invisible — on the light theme. Reach for the token
+  (`text-destructive`, `text-muted-foreground`, `border-border`, `bg-sunken`)
+  first. Note the two are not interchangeable even where they look it: Tailwind
+  v4's `amber-500` is `oklch(0.769 0.188 70.08)`, which is *not* quite
+  `--destructive`'s `#F59E0B`.
+- **Theme mechanics.** `app/ThemeProvider.tsx` (next-themes) owns the
+  `light`/`dark` class on `<html>`; an inline script in `index.html` writes it
+  before first paint to avoid a flash. It defaults to **dark** with system
+  detection **off** on purpose — the navy theme is what the app shipped as, and
+  enabling system detection would silently repaint every existing user whose OS
+  is light. When a light fix would shift the dark rendering, pin the original
+  with a `dark:` override rather than accepting the drift (see
+  `components/form/FormError.tsx`).
+- The 5 prototype dashboards (management, management-alt, service, tickets,
+  household) are **not** light-theme clean and are not meant to be — they are
+  slated for replacement. They also reference ~9 CSS variables (`--kpi-*`,
+  `--navy-900`, `--emerald`, `--red`, `--amber`) that are defined nowhere and
+  render transparent. Don't copy those patterns into new work.
 - **Match the mockups.** `./agencyops_fe_mockups` is still the visual
   source-of-truth (see `.claude/rules/figma-mockups-reference.md`); port layout
   and spacing onto shadcn primitives + tokens.
@@ -226,7 +287,19 @@ Chakra, etc.).
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
 - **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.claude/rules/api-bruno-docs.md` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
-- Forms: prefer `react-hook-form` + `zod` resolvers.
+- Forms: prefer **TanStack Form** + `zod` (wired via Standard Schema — pass the
+  zod schema straight to `validators`, no resolver package). Build forms from the
+  shared `useAppForm` hook in `src/hooks/form.ts` and the field components in
+  `src/components/form/fields/`; never bind an input to the library by hand.
+  **Field components take a field-path prop and must never hardcode a path** —
+  that is what makes a schema rename a compile error instead of a runtime break.
+  Layout comes from `src/components/form/` (`FormSection`, `FormGrid`, …), which
+  is deliberately library-agnostic. Reusable fragments shared by more than one
+  form are `withFieldGroup`/`withForm` components taking a `fields`/`form` prop
+  — never a component that reaches for the form off context and names its own
+  paths. react-hook-form is fully removed; there is no second forms idiom.
+  Two API traps are written up in `docs/tanstack-form-spike-findings.md` —
+  read it before touching the Sold wizard's per-card validation.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
 - Run each package's `lint` (`npm run lint -w @sfa/api` / `-w @sfa/web`) before finishing.
 - Prefer real Mongoose schemas + services over extending the mock data / stubs when wiring a dashboard.

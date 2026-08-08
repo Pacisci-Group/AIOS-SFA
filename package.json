@@ -24,8 +24,10 @@
     "shared:build": "npm run build -w @sfa/shared",
     "dev": "npm run api:dev",
     "test:e2e": "npm run test:e2e -w @sfa/api",
-    "docker:up": "docker compose up --build -d",
-    "docker:down": "docker compose down"
+    "docker:infra": "docker compose --profile app stop api web; docker compose up -d",
+    "docker:infra:down": "docker compose stop mongo minio redis",
+    "docker:up": "docker compose --profile app up --build -d",
+    "docker:down": "docker compose --profile app down"
   },
   "engines": {
     "node": ">=20"

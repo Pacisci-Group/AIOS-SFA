@@ -27,8 +27,9 @@ export function AddLeadButton({ to = NEW_LEAD_ROUTE, className }: AddLeadButtonP
   return (
     <Button
       asChild
+      variant="brand"
       className={cn(
-        "bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110 active:scale-95 shadow-[0_0_20px_rgba(56,189,248,0.25)]",
+        "active:scale-95 shadow-[0_0_20px_rgba(56,189,248,0.25)]",
         className,
       )}
     >

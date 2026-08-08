@@ -13,6 +13,7 @@ import {
 import type {
   AccessContext,
   CreateQuoteRecapResponse,
+  DocumentDownloadResponse,
   QuoteDocumentPresignResponse,
   QuoteRecapLeadContext,
 } from '@sfa/shared';
@@ -23,6 +24,7 @@ import {
 } from '../activities/schemas/activity.schema';
 import { resolveHouseholdAddress } from '../common/address/household-address';
 import type { StructuredAddress } from '../common/address/household-address';
+import { resolvePolicyPropertyAddress } from '../common/address/policy-property-address';
 import { roundCents } from '../common/domain/money';
 import {
   ResolvedTenantContext,
@@ -146,6 +148,60 @@ export class QuoteRecapsService {
     };
   }
 
+  /**
+   * A short-lived URL that opens the uploaded quote document (PAC-56 #10, #30).
+   *
+   * Signed **inline**, so following it renders the PDF in the browser's own
+   * viewer in a new tab rather than downloading it — the user downloads from
+   * there. That is the whole feature: no bespoke viewer, no download button.
+   *
+   * Gated on `quote_recaps:read` and clamped to the caller's data scope by
+   * `assertOwned`, so a producer cannot open a colleague's document by guessing
+   * a recap id. The storage key never crosses the wire in either direction.
+   */
+  async getDocumentDownload(
+    access: AccessContext,
+    branchId: string | null,
+    recapId: string,
+  ): Promise<DocumentDownloadResponse> {
+    if (!Types.ObjectId.isValid(recapId)) {
+      throw new NotFoundException('Quote recap not found.');
+    }
+
+    const recap = await this.quoteRecapModel.findOne({
+      _id: new Types.ObjectId(recapId),
+      agencyId: access.agencyId,
+    });
+    if (!recap) throw new NotFoundException('Quote recap not found.');
+
+    // Same clamp the replay path uses — 404, never 403.
+    this.leadAccess.assertOwned(recap, access, branchId);
+
+    const document = recap.quoteDocument;
+    if (!document) {
+      throw new NotFoundException('This quote recap has no document.');
+    }
+
+    const downloadUrl = await this.storage.createPresignedDownload(
+      document.key,
+      {
+        disposition: 'inline',
+        filename: document.filename,
+        // Overridden explicitly: the object was stored with whatever the
+        // browser claimed on upload, and a PDF served as octet-stream
+        // downloads instead of rendering however the disposition is set.
+        contentType: document.contentType,
+      },
+    );
+
+    return {
+      downloadUrl,
+      filename: document.filename,
+      contentType: document.contentType,
+      expiresIn: this.storage.downloadUrlTtlSeconds,
+    };
+  }
+
   async create(
     access: AccessContext,
     branchId: string | null,
@@ -183,11 +239,21 @@ export class QuoteRecapsService {
     });
     const stored = await this.verifyQuoteDocument(dto.quoteDocument.key);
 
-    const policies = dto.policies.map((p) => ({
-      policyType: p.policyType,
-      premium: roundCents(p.premium),
-      itemCount: p.itemCount,
-    }));
+    // Resolved once: every row that says "same as household" copies this, so a
+    // recap covering a home and a landlord policy ends up with two rows whose
+    // addresses are independently correct (PAC-56 #14).
+    const householdAddress = this.householdAddress(lead, household);
+    const policies = dto.policies.map((p) => {
+      const propertyAddress = resolvePolicyPropertyAddress(p, householdAddress);
+      return {
+        policyType: p.policyType,
+        premium: roundCents(p.premium),
+        itemCount: p.itemCount,
+        propertyAddress,
+        sameAsHousehold:
+          Boolean(propertyAddress) && p.sameAsHousehold !== false,
+      };
+    });
     const quoteDate = new Date();
 
     try {
@@ -210,8 +276,9 @@ export class QuoteRecapsService {
         leadId: lead._id,
         householdId: household._id,
         policies,
-        propertyAddress: this.resolvePropertyAddress(dto, lead, household),
-        sameAsHousehold: dto.sameAsHousehold,
+        // No recap-level `propertyAddress`/`sameAsHousehold`: since PAC-56 #14
+        // the dwelling belongs to the policy row, and those two fields exist
+        // only for the recaps written before that.
         notes: dto.notes,
         quoteDocument: {
           key: dto.quoteDocument.key,
@@ -262,17 +329,6 @@ export class QuoteRecapsService {
       household?.propertyAddress,
       household?.mailingAddress,
     );
-  }
-
-  private resolvePropertyAddress(
-    dto: CreateQuoteRecapDto,
-    lead: LeadDocument,
-    household: HouseholdDocument,
-  ): StructuredAddress | undefined {
-    if (!dto.sameAsHousehold) return dto.propertyAddress;
-    // The client's address is discarded when it claims "same as household", so
-    // it cannot assert one thing and submit another.
-    return this.householdAddress(lead, household) ?? undefined;
   }
 
   /**

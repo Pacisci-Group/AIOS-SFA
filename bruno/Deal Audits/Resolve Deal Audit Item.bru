@@ -1,7 +1,7 @@
 meta {
   name: Resolve Deal Audit Item
   type: http
-  seq: 3
+  seq: 4
 }
 
 patch {
@@ -17,7 +17,13 @@ headers {
 
 body:json {
   {
-    "note": "Verified prior insurance proof with the client."
+    "note": "Verified prior insurance proof with the client.",
+    "attachment": {
+      "key": "{{dealAuditAttachmentKey}}",
+      "filename": "prior-insurance.pdf",
+      "contentType": "application/pdf",
+      "size": 2048
+    }
   }
 }
 

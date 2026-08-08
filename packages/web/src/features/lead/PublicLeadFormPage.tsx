@@ -7,6 +7,7 @@ import { getPublicLeadForm, submitPublicLead } from "@/lib/lead-intake-api";
 import { LeadIntakeForm } from "./components/LeadIntakeForm";
 import {
   newSubmissionToken,
+  toPolicyOfInterestInputs,
   type LeadIntakeFormValues,
 } from "./components/lead-intake-schema";
 
@@ -40,6 +41,8 @@ export default function PublicLeadFormPage() {
         primaryContact: values.primaryContact,
         address: values.address,
         members: values.members,
+        // Each row carries its own dwelling address (PAC-56 #14).
+        policiesOfInterest: toPolicyOfInterestInputs(values.policiesOfInterest),
         submissionToken: submissionToken.current,
       }),
     onSuccess: () => setSubmitted(true),
@@ -50,14 +53,22 @@ export default function PublicLeadFormPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground px-4 py-8">
-      <div className="mx-auto w-full max-w-lg">
+      {/* Wider than the `max-w-lg` this shipped as (PAC-56 #5). `FormGrid` is
+          already `sm:grid-cols-2`, so the room buys a card whose fields pair up
+          on a laptop and stack on a phone — which is what keeps one-card-per-page
+          from turning into a long scroll on desktop. Matches the `max-w-3xl` the
+          authenticated `/leads/new` page uses.
+
+          The status panels below stay at `max-w-lg` — they are two lines of
+          prose, and prose set to 3xl is a worse read, not a better one. */}
+      <div className="mx-auto w-full max-w-3xl">
         {form.isPending ? (
           <p className="text-center text-sm text-muted-foreground">Loading…</p>
         ) : form.isError ? (
           // The API returns one identical message for an unknown token, a
           // revoked link, a disabled agency and a deactivated producer — so this
           // screen must not speculate about which happened either.
-          <div className="rounded-xl bg-card border border-border p-6 text-center space-y-3">
+          <div className="mx-auto max-w-lg rounded-xl bg-card border border-border p-6 text-center space-y-3">
             <ShieldAlert size={24} className="mx-auto text-amber-500" />
             <h1 className="text-sm font-bold">This form isn't available</h1>
             <p className="text-sm text-muted-foreground">
@@ -66,7 +77,7 @@ export default function PublicLeadFormPage() {
             </p>
           </div>
         ) : submitted ? (
-          <div className="rounded-xl bg-card border border-border p-6 text-center space-y-3">
+          <div className="mx-auto max-w-lg rounded-xl bg-card border border-border p-6 text-center space-y-3">
             <CheckCircle2 size={24} className="mx-auto text-emerald-500" />
             <h1 className="text-sm font-bold">Thank you — we've got it</h1>
             <p className="text-sm text-muted-foreground">
@@ -102,7 +113,7 @@ export default function PublicLeadFormPage() {
 
             <LeadIntakeForm
               key={formKey}
-              showLeadSource={false}
+              variant="public"
               submitting={mutation.isPending}
               errorMessage={error}
               submitLabel="Submit"

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
   DataScope,
@@ -9,6 +9,7 @@ import type {
   AccessContext,
   PolicyCheckMatch,
   PolicyCheckResponse,
+  UpdatePolicyResult,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
@@ -17,7 +18,9 @@ import {
   HouseholdDocument,
 } from '../households/schemas/household.schema';
 import { CheckPolicyDto } from './dto/check-policy.dto';
+import { UpdatePolicyDto } from './dto/update-policy.dto';
 import { normalizePolicyNumber } from './policy-number';
+import { toLeadDetailPolicy } from './policy-view';
 import { Policy, PolicyDocument } from './schemas/policy.schema';
 
 /**
@@ -128,6 +131,97 @@ export class PoliciesService {
     });
 
     return { query: query.number, normalized, matches };
+  }
+
+  /**
+   * Correct a sold policy — `PATCH /policies/:id` (PAC-56 #27).
+   *
+   * The Lead Detail Sold card's quick edit. Deliberately a *field* correction,
+   * not a re-submission: the Sold wizard owns creating the deal, its policies
+   * and the audit items it triggers, and re-running any of that from here would
+   * duplicate the hand-off.
+   *
+   * ## Scope is a hard 404, unlike `check`
+   *
+   * {@link check} reports out-of-scope matches in masked form, because warning a
+   * producer about a duplicate they cannot see is the entire point of it. This
+   * is a **write target**, so it takes the blanket clamp every other write path
+   * uses: outside your scope is indistinguishable from does not exist.
+   *
+   * ⚠ No duplicate check on `policyNumber`. `PolicySchema` is non-unique on
+   * purpose (migrated data already holds duplicates, and carriers reuse numbers
+   * across lines), and warn-and-link belongs on the create path where the
+   * producer is choosing between "link" and "correct". Blocking a typo fix
+   * because the corrected number already exists would strand the record.
+   */
+  async update(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+    dto: UpdatePolicyDto,
+  ): Promise<UpdatePolicyResult> {
+    const policy = await this.loadOwnedPolicy(access, branchId, policyId);
+
+    if (dto.policyNumber !== undefined) {
+      policy.policyNumber = dto.policyNumber ?? undefined;
+      // Kept in lockstep with the number itself — a corrected policy that the
+      // duplicate check can no longer find is worse than no correction.
+      policy.policyNumberKey = dto.policyNumber
+        ? (normalizePolicyNumber(dto.policyNumber) ?? undefined)
+        : undefined;
+    }
+    if (dto.policyType !== undefined) policy.policyType = dto.policyType;
+    if (dto.carrier !== undefined) policy.carrier = dto.carrier ?? undefined;
+    if (dto.premium !== undefined) policy.premium = dto.premium;
+    if (dto.items !== undefined) policy.items = dto.items;
+    if (dto.effectiveDate !== undefined) {
+      policy.effectiveDate = dto.effectiveDate ?? undefined;
+    }
+    if (dto.expirationDate !== undefined) {
+      policy.expirationDate = dto.expirationDate ?? undefined;
+    }
+    if (dto.status !== undefined) policy.policyStatus = dto.status ?? undefined;
+
+    await policy.save();
+    return toLeadDetailPolicy(policy);
+  }
+
+  /**
+   * Load a policy inside the caller's agency and clamp it to their data scope,
+   * 404-ing rather than 403-ing in both directions.
+   *
+   * Ownership is read off the **deal**, exactly as {@link isInScope} explains —
+   * `Policy` has no `producerId`. A policy with no deal is unattributable, so
+   * under `own` scope it is treated as out of scope: this is the write path, and
+   * masking something unattributable is the safe direction.
+   */
+  private async loadOwnedPolicy(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+  ): Promise<PolicyDocument> {
+    if (!Types.ObjectId.isValid(policyId)) {
+      throw new NotFoundException('Policy not found.');
+    }
+
+    const policy = await this.policyModel.findOne({
+      _id: new Types.ObjectId(policyId),
+      agencyId: access.agencyId,
+      isTestRecord: { $ne: true },
+    });
+    if (!policy) throw new NotFoundException('Policy not found.');
+
+    const deal = policy.dealId
+      ? await this.dealModel
+          .findById(policy.dealId)
+          .select('producerId')
+          .lean<{ producerId?: Types.ObjectId }>()
+      : null;
+
+    if (!this.isInScope(access, branchId, policy, deal ?? undefined)) {
+      throw new NotFoundException('Policy not found.');
+    }
+    return policy;
   }
 
   /**

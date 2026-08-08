@@ -76,6 +76,11 @@ export class ActivitiesService {
         summary: activity.summary ?? null,
         occurredAt: occurredAt.toISOString(),
         producerName: await this.producerName(producerId),
+        // Constant, not derived: this endpoint only ever writes a row hung off
+        // the lead itself. The quote-recap and sold pipelines write their own
+        // activities with their own refs, and `LeadDetailService` derives the
+        // origin for those on read.
+        origin: 'lead',
       },
       leadLastActivityAt: leadLastActivityAt.toISOString(),
     };

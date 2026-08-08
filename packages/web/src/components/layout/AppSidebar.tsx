@@ -15,6 +15,7 @@ import { ModuleKey } from "@sfa/shared";
 import { useAuth } from "@/contexts/auth-context";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
@@ -226,7 +227,12 @@ export function AppSidebar() {
       <div className="px-3 py-4 border-t border-sidebar-border">
         <div className="flex items-center gap-3 px-3 py-2 mb-2">
           <Avatar className="w-8 h-8">
-            <AvatarFallback className="bg-blue-900 text-foreground text-xs font-bold">
+            {/* The whole chip needs a light variant, not just the text: on the
+                light theme `text-foreground` is near-black, and blue-900 stays
+                dark whatever the theme, so recolouring only the text just
+                trades dark-on-dark for blue-on-blue. The `dark:` pair restores
+                the original treatment exactly. */}
+            <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground dark:bg-blue-900 dark:text-foreground text-xs font-bold">
               {initialsFromName(displayName)}
             </AvatarFallback>
           </Avatar>
@@ -237,9 +243,10 @@ export function AppSidebar() {
             <p className="text-xs text-muted-foreground truncate">{roleLabel}</p>
           </div>
         </div>
+        <ThemeToggle />
         <button
           onClick={handleLogout}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-muted-foreground hover:text-slate-300 hover:bg-white/5 transition-all text-xs"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-sidebar-accent dark:hover:text-slate-300 dark:hover:bg-white/5 transition-all text-xs"
         >
           <LogOut size={13} />
           Log out

@@ -2,9 +2,12 @@ import { randomBytes } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { formatHouseholdRef, parseHouseholdRef } from '@sfa/shared';
 import { Agency } from '../platform/schemas/agency.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
+import { SequenceService } from '../common/mongo/sequence.service';
+import { reconcileHouseholdRefs } from '../households/household-ref';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { quoteDateYmd } from '../quote-recaps/quote.normalize';
@@ -172,6 +175,7 @@ export class MigrationService {
     private readonly timeOffRequestModel: Model<TimeOffRequest>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
+    private readonly sequences: SequenceService,
   ) {}
 
   async run(options: MigrationOptions): Promise<MigrationReport> {
@@ -451,6 +455,14 @@ export class MigrationService {
       const test = isTestRecord(null, name, toText(rec.title));
       if (test) stat.excludedTest++;
 
+      // `#HH2614` -> `HH-2614`. A title that was never numbered (SmartSuite's
+      // "Record 1" placeholder, or free text someone typed) yields null and the
+      // household stays unnumbered until the backfill allocates one — inventing
+      // a number here would risk colliding with a real one further down the run.
+      const refSeq = parseHouseholdRef(
+        toText(rec[HOUSEHOLD_FIELDS.householdRef]),
+      );
+
       const legacyCrmId = firstLinkedId(rec[HOUSEHOLD_FIELDS.assignedCrm]);
       const crm = legacyCrmId ? producers.get(legacyCrmId) : undefined;
 
@@ -459,6 +471,8 @@ export class MigrationService {
         ctx,
         legacyId,
         {
+          householdRef:
+            refSeq === null ? undefined : formatHouseholdRef(refSeq),
           name,
           status: selectCode(rec[HOUSEHOLD_FIELDS.status]),
           propertyAddress: this.asObject(rec[HOUSEHOLD_FIELDS.propertyAddress]),
@@ -477,7 +491,34 @@ export class MigrationService {
       );
       if (id) map.set(legacyId, id);
     }
-    this.logger.log(`Households: fetched ${stat.fetched}`);
+
+    // Leaves the agency's household numbering consistent in one pass, so the
+    // migration is self-sufficient and needs no follow-up script:
+    //
+    //  1. Seeds the counter above the highest `#HH…` just imported. This has to
+    //     happen before anything can create a household in this agency —
+    //     starting from zero would hand `HH-1` to a new household while a
+    //     migrated one already holds it, and the unique index would reject it.
+    //  2. Allocates for whatever is left unnumbered: a legacy title that was
+    //     never a number, and — the case re-running the import cannot otherwise
+    //     reach — households created natively through intake, which carry no
+    //     `legacySmartSuiteId` and so are never matched by the loop above.
+    //
+    // Shared with the demo seed, which is why a local reseed leaves the same
+    // consistent state without going near SmartSuite.
+    if (!ctx.dryRun) {
+      const refs = await reconcileHouseholdRefs(
+        this.householdModel,
+        this.sequences,
+        ctx.agencyId,
+      );
+      this.logger.log(
+        `Households: fetched ${stat.fetched}, refs — ${refs.alreadyNumbered} ` +
+          `from legacy (highest HH-${refs.seededTo}), ${refs.allocated} allocated`,
+      );
+    } else {
+      this.logger.log(`Households: fetched ${stat.fetched} (dry run)`);
+    }
     return map;
   }
 

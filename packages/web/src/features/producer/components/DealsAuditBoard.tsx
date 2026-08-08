@@ -86,7 +86,7 @@ export function DealsAuditBoard() {
 
         {/* Column Headers */}
         <div
-          className="grid px-5 py-2.5 gap-3 border-b border-white/[0.04]"
+          className="grid px-5 py-2.5 gap-3 border-b border-border dark:border-white/[0.04]"
           style={{ gridTemplateColumns: GRID_COLS }}
         >
           {["Client", "Missing Requirement", "Days Open", "Action"].map((h) => (
@@ -108,7 +108,7 @@ export function DealsAuditBoard() {
             Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className="grid px-5 py-3.5 gap-3 items-center border-b border-white/[0.04]"
+                className="grid px-5 py-3.5 gap-3 items-center border-b border-border dark:border-white/[0.04]"
                 style={{ gridTemplateColumns: GRID_COLS }}
               >
                 <Skeleton className="h-4 w-32" />
@@ -143,7 +143,7 @@ export function DealsAuditBoard() {
                   key={deal.id}
                   className={cn(
                     "grid px-5 py-3.5 gap-3 items-center transition-all hover:bg-white/[0.02] group",
-                    i < items.length - 1 && "border-b border-white/[0.04]",
+                    i < items.length - 1 && "border-b border-border dark:border-white/[0.04]",
                   )}
                   style={{ gridTemplateColumns: GRID_COLS }}
                 >

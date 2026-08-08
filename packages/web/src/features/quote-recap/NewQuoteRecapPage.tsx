@@ -49,9 +49,8 @@ export default function NewQuoteRecapPage() {
     mutationFn: (values: QuoteRecapFormValues) =>
       createQuoteRecapWithDocument({
         leadId,
+        // Each row carries its own property address (PAC-56 #14).
         policies: toPolicyInputs(values.policies),
-        sameAsHousehold: values.sameAsHousehold,
-        propertyAddress: values.propertyAddress,
         notes: values.notes?.trim() ? values.notes.trim() : undefined,
         file: values.quoteDocument,
         submissionToken: submissionToken.current,
@@ -98,7 +97,7 @@ export default function NewQuoteRecapPage() {
         </header>
 
         <main className="px-4 md:px-6 py-6">
-          <div className="max-w-3xl">
+          <div className="mx-auto w-full max-w-3xl">
             {contextQuery.isPending && (
               <div className="flex items-center gap-2 rounded-xl bg-card border border-border p-6 text-sm text-muted-foreground">
                 <Loader2 size={16} className="animate-spin" />
