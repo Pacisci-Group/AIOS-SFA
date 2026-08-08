@@ -2,9 +2,12 @@ import { randomBytes } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { formatHouseholdRef, parseHouseholdRef } from '@sfa/shared';
 import { Agency } from '../platform/schemas/agency.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
+import { SequenceService } from '../common/mongo/sequence.service';
+import { householdCounterKey } from '../households/household-ref';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { quoteDateYmd } from '../quote-recaps/quote.normalize';
@@ -172,6 +175,7 @@ export class MigrationService {
     private readonly timeOffRequestModel: Model<TimeOffRequest>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
+    private readonly sequences: SequenceService,
   ) {}
 
   async run(options: MigrationOptions): Promise<MigrationReport> {
@@ -439,6 +443,11 @@ export class MigrationService {
     );
     stat.fetched = records.length;
 
+    // Highest legacy household number seen, so the agency's counter can be
+    // lifted above it once the import finishes.
+    let maxRefSeq = 0;
+    let unnumbered = 0;
+
     for (const rec of records) {
       const legacyId = rec.id as string;
       if (!legacyId) {
@@ -451,6 +460,16 @@ export class MigrationService {
       const test = isTestRecord(null, name, toText(rec.title));
       if (test) stat.excludedTest++;
 
+      // `#HH2614` -> `HH-2614`. A title that was never numbered (SmartSuite's
+      // "Record 1" placeholder, or free text someone typed) yields null and the
+      // household stays unnumbered until the backfill allocates one — inventing
+      // a number here would risk colliding with a real one further down the run.
+      const refSeq = parseHouseholdRef(
+        toText(rec[HOUSEHOLD_FIELDS.householdRef]),
+      );
+      if (refSeq === null) unnumbered++;
+      else if (refSeq > maxRefSeq) maxRefSeq = refSeq;
+
       const legacyCrmId = firstLinkedId(rec[HOUSEHOLD_FIELDS.assignedCrm]);
       const crm = legacyCrmId ? producers.get(legacyCrmId) : undefined;
 
@@ -459,6 +478,8 @@ export class MigrationService {
         ctx,
         legacyId,
         {
+          householdRef:
+            refSeq === null ? undefined : formatHouseholdRef(refSeq),
           name,
           status: selectCode(rec[HOUSEHOLD_FIELDS.status]),
           propertyAddress: this.asObject(rec[HOUSEHOLD_FIELDS.propertyAddress]),
@@ -477,7 +498,27 @@ export class MigrationService {
       );
       if (id) map.set(legacyId, id);
     }
-    this.logger.log(`Households: fetched ${stat.fetched}`);
+
+    // Must happen before anything can create a household in this agency:
+    // starting the counter from zero would hand `HH-1` to a new household while
+    // a migrated one already holds it, and the unique index would reject it.
+    if (!ctx.dryRun && maxRefSeq > 0) {
+      await this.sequences.ensureAtLeast(
+        householdCounterKey(ctx.agencyId),
+        maxRefSeq,
+      );
+    }
+
+    this.logger.log(
+      `Households: fetched ${stat.fetched}, highest legacy ref HH-${maxRefSeq}`,
+    );
+    if (unnumbered > 0) {
+      this.logger.warn(
+        `Households: ${unnumbered} record(s) had no parseable legacy reference ` +
+          'and are unnumbered. Run `npm run api:backfill:household-refs:dev` to ' +
+          'allocate one for each.',
+      );
+    }
     return map;
   }
 

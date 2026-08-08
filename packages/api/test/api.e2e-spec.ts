@@ -1832,6 +1832,63 @@ describe('SFA API (e2e)', () => {
       expect(lead!.phones).toEqual(['5552223333']);
     });
 
+    /**
+     * PAC-56 #7 — the `HH-2614` identifier on the household.
+     *
+     * Pinned here because the failure mode is invisible in a single-request
+     * test: a broken allocator still returns 201 and still writes *a* household,
+     * it just hands two of them the same number. The concurrent case is the one
+     * that matters — `$inc` is atomic, but the allocation runs inside the intake
+     * transaction, so this is also what proves the write-conflict retries in
+     * `withTransaction` resolve rather than duplicate.
+     */
+    it('gives each new household a distinct sequential reference, even concurrently', async () => {
+      const first = await createAs(producerToken, payload('Ashgrove'));
+      const firstLead = await leadModel.findById(first.id);
+      const firstHousehold = await householdModel.findById(
+        firstLead!.householdId,
+      );
+      expect(firstHousehold!.householdRef).toMatch(/^HH-[1-9][0-9]*$/);
+
+      const created = await Promise.all(
+        ['Bellhaven', 'Corrymore', 'Danecroft', 'Ellerslie', 'Fenwick'].map(
+          (key) => createAs(producerToken, payload(key)),
+        ),
+      );
+
+      const leads = await leadModel.find({
+        _id: { $in: created.map((c) => c.id) },
+      });
+      const households = await householdModel.find({
+        _id: { $in: leads.map((l) => l.householdId) },
+      });
+
+      expect(households).toHaveLength(5);
+      const refs = households.map((h) => h.householdRef);
+      expect(refs.every((ref) => /^HH-[1-9][0-9]*$/.test(ref ?? ''))).toBe(true);
+      // The assertion the whole feature rests on.
+      expect(new Set(refs).size).toBe(refs.length);
+      expect(refs).not.toContain(firstHousehold!.householdRef);
+    });
+
+    it('exposes the household reference on the lead detail contract', async () => {
+      const created = await createAs(producerToken, payload('Gullhaven'));
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/leads/${created.id}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const household = (res.body as { household: { reference: string } })
+        .household;
+      // The card copies this string verbatim now, so it has to be the real
+      // reference rather than anything derived from the ObjectId.
+      expect(household.reference).toMatch(/^HH-[1-9][0-9]*$/);
+      const stored = await householdModel.findOne({
+        householdRef: household.reference,
+      });
+      expect(stored).not.toBeNull();
+    });
+
     it('assigns the lead to the creating producer and shows it in their list', async () => {
       const producer = await userModel.findOne({ email: seed.producerEmail });
       const created = await createAs(producerToken, payload('Bexley'));

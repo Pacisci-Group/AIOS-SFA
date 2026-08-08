@@ -14,7 +14,6 @@ import {
   LeadDetailQuoteRecapSummary,
   LEAD_SOURCE_NONE,
   UpdateLeadResult,
-  householdReference,
   normalizeLeadSource,
   normalizeLeadStatus,
   normalizePolicyType,
@@ -580,9 +579,10 @@ export class LeadDetailService {
 
     return {
       id: household._id.toString(),
-      // Derived here, not in the client: one vocabulary, and the web app is not
-      // the only consumer this contract has to hold for.
-      reference: householdReference(household._id.toString()),
+      // Stored, not derived. Empty only for a household migrated before
+      // `householdRef` existed and not yet backfilled — the card hides the chip
+      // rather than showing a number that would be wrong.
+      reference: household.householdRef ?? '',
       name: household.name ?? null,
       address: resolveHouseholdAddress(
         lead.address,

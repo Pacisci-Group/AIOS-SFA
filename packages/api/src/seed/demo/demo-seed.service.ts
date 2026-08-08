@@ -3,6 +3,11 @@ import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ALL_MODULE_KEYS } from '@sfa/shared';
+import { SequenceService } from '../../common/mongo/sequence.service';
+import {
+  householdCounterKey,
+  reconcileHouseholdRefs,
+} from '../../households/household-ref';
 import { Agency } from '../../platform/schemas/agency.schema';
 import { Branch } from '../../branches/schemas/branch.schema';
 import { User } from '../../users/schemas/user.schema';
@@ -199,6 +204,7 @@ export class DemoSeedService {
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     private readonly permissionsService: PermissionsService,
+    private readonly sequences: SequenceService,
   ) {}
 
   async run(options: DemoSeedOptions): Promise<DemoSeedSummary> {
@@ -421,6 +427,24 @@ export class DemoSeedService {
         address,
       });
     }
+
+    // Numbered in a pass afterwards rather than in the loop above, and via the
+    // same reconcile the backfill uses. Assigning a fixed `HH-{i+1}` inline
+    // looks tidier and is wrong: a local database usually also holds households
+    // created through intake, and forcing the demo block onto `HH-1..24` would
+    // collide with whatever those were already given. Allocating only for the
+    // unnumbered keeps the seed idempotent — a re-run consumes nothing — while
+    // a `--fresh` seed still produces `HH-1..24` in creation order.
+    const refsAllocated = await reconcileHouseholdRefs(
+      this.householdModel,
+      this.sequences,
+      ctx.agencyId,
+    );
+    this.logger.log(
+      `Household refs: ${refsAllocated.allocated} allocated, ` +
+        `${refsAllocated.alreadyNumbered} already numbered`,
+    );
+
     return refs;
   }
 
@@ -1474,6 +1498,15 @@ export class DemoSeedService {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
+
+    // Reset the household counter too, so a `--fresh` seed is actually
+    // reproducible rather than climbing `HH-44`, `HH-68`, … on every run.
+    // Safe because `reconcileHouseholdRefs` seeds the counter from the highest
+    // reference still stored before it allocates anything, so households that
+    // survived the purge (anything not `demo:`-prefixed) keep their numbers and
+    // cannot have one reissued underneath them.
+    await this.sequences.reset(householdCounterKey(agencyId));
+
     this.logger.log('Purged existing demo records');
   }
 

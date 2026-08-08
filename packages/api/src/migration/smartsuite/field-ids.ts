@@ -21,6 +21,12 @@ export const USER_FIELDS = {
 } as const;
 
 export const HOUSEHOLD_FIELDS = {
+  /**
+   * The record title — SmartSuite's auto-generated `#HH2614`, which legacy
+   * surfaced as `householdTitle`. Imported into `Household.householdRef` so the
+   * agency keeps the numbers it already uses.
+   */
+  householdRef: 'title',
   status: 's5f13c562d',
   householdName: 'sb63528cc7',
   normalizedPrimaryName: 'sbdc50a856',

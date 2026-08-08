@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { MongoModule } from '../../common/mongo/mongo.module';
 import { ENV_FILE_PATH } from '../../config/env.config';
 import { Agency, AgencySchema } from '../../platform/schemas/agency.schema';
 import { Branch, BranchSchema } from '../../branches/schemas/branch.schema';
@@ -89,6 +90,10 @@ import { DemoSeedService } from './demo-seed.service';
         uri: config.get<string>('MONGODB_URI', 'mongodb://localhost:27017/sfa'),
       }),
     }),
+    // `demo-seed.ts` boots this module directly rather than AppModule — needed
+    // for `SequenceService`, which lifts the household counter past the block
+    // the seed claims.
+    MongoModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       { name: Branch.name, schema: BranchSchema },

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { MongoModule } from '../common/mongo/mongo.module';
 import { ENV_FILE_PATH } from '../config/env.config';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
@@ -82,6 +83,10 @@ import { MigrationService } from './migration.service';
         uri: config.get<string>('MONGODB_URI', 'mongodb://localhost:27017/sfa'),
       }),
     }),
+    // `migrate.ts` boots this module directly rather than AppModule, so the
+    // global Mongo helpers have to be imported here to get `SequenceService`
+    // (the household counter is seeded at the end of the household import).
+    MongoModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       { name: Branch.name, schema: BranchSchema },

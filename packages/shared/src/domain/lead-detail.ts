@@ -58,12 +58,13 @@ export interface LeadDetailPolicy {
 export interface LeadDetailHousehold {
   id: string;
   /**
-   * Short display reference — `HH-4F2A9C` (PAC-56 #7).
+   * The household's agency-unique number — `HH-2614` (PAC-56 #7).
    *
-   * Derived server-side from {@link id} by `householdReference`, so the
-   * vocabulary is owned in one place rather than reinvented per client. It is a
-   * label, **not** a lookup key: anything that resolves back to the record uses
-   * `id`. See `record-reference.ts`.
+   * `Household.householdRef`, read straight through rather than derived: it is a
+   * real identifier, so it is safe to quote in a support conversation and to
+   * resolve back to this record. Empty string for a household migrated before
+   * the field existed and not yet backfilled; clients hide the affordance rather
+   * than render a bare prefix. See `record-reference.ts`.
    */
   reference: string;
   name: string | null;

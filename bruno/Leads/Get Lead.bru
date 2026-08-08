@@ -99,15 +99,18 @@ tests {
     }
   });
 
-  test("the household carries a display reference alongside its id", function () {
+  test("the household carries its agency-unique reference alongside its id", function () {
     // PAC-56 #7 — David asked for the household's identifier to be visible for
-    // support/lookup. Derived server-side from the ObjectId, so it is present
-    // on migrated households with no write path at all.
+    // support/lookup. `Household.householdRef`, a per-agency sequence continuing
+    // the numbers legacy SmartSuite assigned (`#HH2614` -> `HH-2614`).
     const household = res.getBody().household;
     if (household) {
       expect(household).to.have.property("reference");
-      expect(household.reference).to.match(/^HH-[0-9A-F]{6}$/);
-      // A display label, not a lookup key — the id is still what resolves.
+      // Empty only on a household migrated before the field existed and not yet
+      // put through `api:backfill:household-refs`.
+      if (household.reference) {
+        expect(household.reference).to.match(/^HH-[1-9][0-9]*$/);
+      }
       expect(household.id).to.be.a("string");
     }
   });
@@ -207,15 +210,24 @@ docs {
 
   ### Added by PAC-56, section D
 
-  **`household.reference`** — a short display id, `HH-4F2A9C`, derived
-  server-side from the household ObjectId. David asked for the household's
-  unique identifier to be visible for support/lookup (#7); legacy had SmartSuite
-  autonumbers and the migration carried none, so rather than add a counter and
-  backfill every household, the reference is derived. It is a **display label,
-  not a lookup key** — the last 6 hex characters of an ObjectId are its low
-  counter bytes, so two households can in principle collide. Anything that
-  resolves back to a record uses `id`, which is what the UI's copy button puts
-  on the clipboard.
+  **`household.reference`** — the household's identifier, `HH-2614`, read from
+  `Household.householdRef`. David asked for it to be visible for support/lookup
+  (#7).
+
+  Legacy had this: SmartSuite titled every household `#HH2614` and the old app
+  passed it through as `householdTitle`. Our migration originally dropped the
+  field, and the first version of this contract derived a label from the
+  household ObjectId instead — which was **not** safe to treat as an identifier,
+  since the trailing hex is a per-process counter and collides on a birthday
+  curve. It is now a real stored value: a per-agency sequence, seeded from the
+  highest number imported from SmartSuite so an agency keeps the IDs it already
+  uses, and allocated from the `counters` collection for anything created since.
+
+  Unique per agency, so unlike its predecessor it **is** safe to quote and to
+  resolve back to a record — the UI's copy button now puts this on the clipboard
+  rather than the ObjectId. Empty string for a household migrated before the
+  field existed and not yet put through `npm run api:backfill:household-refs`;
+  clients hide the affordance rather than render a bare prefix.
 
   **`deal.policies`** — the policies that sale bound, for the Sold card (#27).
   The same `LeadDetailPolicy` shape as `household.policies`, filtered to

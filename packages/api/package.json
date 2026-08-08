@@ -17,6 +17,8 @@
     "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
     "backfill:deal-refs": "node dist/migration/backfill/backfill-deal-refs.js",
     "backfill:deal-refs:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/backfill-deal-refs.ts",
+    "backfill:household-refs": "node dist/migration/backfill/backfill-household-refs.js",
+    "backfill:household-refs:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/backfill-household-refs.ts",
     "migrate:permissions": "node dist/seed/migrate-permissions.js",
     "migrate:permissions:dev": "ts-node -r tsconfig-paths/register src/seed/migrate-permissions.ts",
     "sync:roles": "node dist/seed/sync-role-templates.js",

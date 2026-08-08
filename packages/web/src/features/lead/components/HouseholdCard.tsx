@@ -19,9 +19,11 @@ interface HouseholdCardProps {
  *
  * 1. **The household's unique identifier, visible** — a support/lookup
  *    affordance, so it is in the header with a copy button rather than buried.
- *    The chip shows the short reference (`HH-4F2A9C`); copying puts the **full
- *    id** on the clipboard, because that is what actually resolves back to the
- *    record. See `record-reference.ts` for why the two differ.
+ *    The chip shows `HH-2614` and copying puts exactly that on the clipboard.
+ *    It used to show a label derived from the ObjectId and copy the ObjectId
+ *    instead, because the derived label was not unique enough to resolve a
+ *    record; the reference is now a stored per-agency sequence, so the thing
+ *    you read is the thing you paste. See `record-reference.ts`.
  * 2. **Policy number, policy type and carrier on each policy.** The card
  *    previously showed type and carrier run together in a sentence, and no
  *    number at all. Status is ours, not his — flag it if he reviews this.
@@ -68,10 +70,7 @@ export function HouseholdCard({ household }: HouseholdCardProps) {
               {household.name ?? "Household"}
             </h2>
           </div>
-          <HouseholdReference
-            reference={household.reference}
-            householdId={household.id}
-          />
+          <HouseholdReference reference={household.reference} />
         </div>
 
         <p className="text-xs text-muted-foreground">
@@ -150,26 +149,20 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 /**
  * The household's identifier (#7).
  *
- * Shows the short reference and copies the full id — a support conversation
- * starts from the readable chip, but anything that has to *find* the record
- * needs the id, and the reference is a display label rather than a lookup key.
+ * Renders nothing when the reference is empty — a household migrated before
+ * `householdRef` existed and not yet backfilled. An absent chip is honest; a
+ * bare `HH-` is not.
  */
-function HouseholdReference({
-  reference,
-  householdId,
-}: {
-  reference: string;
-  householdId: string;
-}) {
+function HouseholdReference({ reference }: { reference: string }) {
   const [copied, setCopied] = useState(false);
 
   if (!reference) return null;
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(householdId);
+      await navigator.clipboard.writeText(reference);
       setCopied(true);
-      toast.success("Household ID copied");
+      toast.success(`Copied ${reference}`);
       setTimeout(() => setCopied(false), 2000);
     } catch {
       // Clipboard access needs a secure context and can be blocked outright,
@@ -181,12 +174,29 @@ function HouseholdReference({
   return (
     <Button
       variant="ghost"
-      size="sm"
+      size="xs"
       onClick={() => void copy()}
-      title={`Copy household ID ${householdId}`}
-      className="h-6 gap-1.5 px-2 font-mono text-[11px] font-medium text-muted-foreground hover:text-foreground"
+      title={`Copy household ID ${reference}`}
+      className="font-mono font-medium text-muted-foreground hover:text-foreground"
     >
-      {reference}
+      {/*
+       * `translate-y-[0.5px]` is an optical correction, not a fudge.
+       *
+       * Flexbox centres the *line box*, which puts the baseline at
+       * `(height + ascent - descent) / 2`. Optically centred caps want it at
+       * `(height + capHeight) / 2`, and those agree only when
+       * `ascent - descent === capHeight`. That holds for Inter, which is why
+       * the heading beside this needs nothing; it does not hold for
+       * `ui-monospace`, whose asymmetric metrics leave `HH-2614` sitting
+       * 0.51px high — measured in the browser, and enough to snap the text
+       * onto a different pixel row from the heading at this size.
+       *
+       * On the text only: the icon is a replaced box with no baseline, so it
+       * is already centred and shifting it would break what works. The
+       * alternative fix — dropping `font-mono` — aligns perfectly but breaks
+       * ranks with the policy numbers rendered just below in this same card.
+       */}
+      <span className="translate-y-[0.5px]">{reference}</span>
       {copied ? (
         <Check size={11} className="text-emerald-500" />
       ) : (
