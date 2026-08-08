@@ -106,8 +106,8 @@ tests {
     const household = res.getBody().household;
     if (household) {
       expect(household).to.have.property("reference");
-      // Empty only on a household migrated before the field existed and not yet
-      // put through `api:backfill:household-refs`.
+      // Empty only on a household written before the field existed, until the
+      // next migration or demo-seed run reconciles the agency's numbering.
       if (household.reference) {
         expect(household.reference).to.match(/^HH-[1-9][0-9]*$/);
       }
@@ -225,9 +225,10 @@ docs {
 
   Unique per agency, so unlike its predecessor it **is** safe to quote and to
   resolve back to a record — the UI's copy button now puts this on the clipboard
-  rather than the ObjectId. Empty string for a household migrated before the
-  field existed and not yet put through `npm run api:backfill:household-refs`;
-  clients hide the affordance rather than render a bare prefix.
+  rather than the ObjectId. Empty string for a household written before the
+  field existed, until the next migration or demo-seed run reconciles the
+  agency's numbering; clients hide the affordance rather than render a bare
+  prefix.
 
   **`deal.policies`** — the policies that sale bound, for the Sold card (#27).
   The same `LeadDetailPolicy` shape as `household.policies`, filtered to

@@ -1865,7 +1865,9 @@ describe('SFA API (e2e)', () => {
 
       expect(households).toHaveLength(5);
       const refs = households.map((h) => h.householdRef);
-      expect(refs.every((ref) => /^HH-[1-9][0-9]*$/.test(ref ?? ''))).toBe(true);
+      expect(refs.every((ref) => /^HH-[1-9][0-9]*$/.test(ref ?? ''))).toBe(
+        true,
+      );
       // The assertion the whole feature rests on.
       expect(new Set(refs).size).toBe(refs.length);
       expect(refs).not.toContain(firstHousehold!.householdRef);

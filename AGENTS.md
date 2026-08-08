@@ -117,12 +117,12 @@ npm run test:e2e           # API e2e tests
 >   credentials (run `api:seed:dev` first). BigQuery (legacy mailer prospect data)
 >   is **not migrated** — deferred (see arch doc O2).
 >
-> **After migrating, run the backfills** — both only rewrite data already in
-> Mongo, so they need no credentials and are safe to re-run:
-> `api:backfill:deal-refs:dev` (deal/recap links + policy match keys) and
-> `api:backfill:household-refs:dev` (`households.householdRef`, the `HH-2614`
-> identifier — seeds each agency's counter from the highest number imported,
-> then allocates one for every household whose legacy title was never numbered).
+> **After migrating, run `api:backfill:deal-refs:dev`** (deal/recap links +
+> policy match keys) — it only rewrites data already in Mongo, so it needs no
+> credentials and is safe to re-run. Household `HH-…` references need no
+> backfill: the migration and the demo seed each reconcile them at the end of
+> their household pass, so whichever one populated the database leaves the
+> numbering consistent.
 
 ---
 

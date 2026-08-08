@@ -23,8 +23,9 @@ export class Household extends TenantRecord {
    *
    * Migrated households keep the number SmartSuite gave them (`#HH2614`);
    * everything created since is allocated from the agency's counter by
-   * `allocateHouseholdRef`. Optional because a household imported before this
-   * field existed has none until `backfill-household-refs` runs.
+   * `allocateHouseholdRef`. Optional because a household written before this
+   * field existed has none until `reconcileHouseholdRefs` next runs — which the
+   * migration and the demo seed both do at the end of their household pass.
    */
   @Prop({ trim: true, uppercase: true })
   householdRef?: string;

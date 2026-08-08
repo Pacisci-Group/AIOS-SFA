@@ -7,7 +7,7 @@ import { Agency } from '../platform/schemas/agency.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
 import { SequenceService } from '../common/mongo/sequence.service';
-import { householdCounterKey } from '../households/household-ref';
+import { reconcileHouseholdRefs } from '../households/household-ref';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { quoteDateYmd } from '../quote-recaps/quote.normalize';
@@ -443,11 +443,6 @@ export class MigrationService {
     );
     stat.fetched = records.length;
 
-    // Highest legacy household number seen, so the agency's counter can be
-    // lifted above it once the import finishes.
-    let maxRefSeq = 0;
-    let unnumbered = 0;
-
     for (const rec of records) {
       const legacyId = rec.id as string;
       if (!legacyId) {
@@ -467,8 +462,6 @@ export class MigrationService {
       const refSeq = parseHouseholdRef(
         toText(rec[HOUSEHOLD_FIELDS.householdRef]),
       );
-      if (refSeq === null) unnumbered++;
-      else if (refSeq > maxRefSeq) maxRefSeq = refSeq;
 
       const legacyCrmId = firstLinkedId(rec[HOUSEHOLD_FIELDS.assignedCrm]);
       const crm = legacyCrmId ? producers.get(legacyCrmId) : undefined;
@@ -499,25 +492,32 @@ export class MigrationService {
       if (id) map.set(legacyId, id);
     }
 
-    // Must happen before anything can create a household in this agency:
-    // starting the counter from zero would hand `HH-1` to a new household while
-    // a migrated one already holds it, and the unique index would reject it.
-    if (!ctx.dryRun && maxRefSeq > 0) {
-      await this.sequences.ensureAtLeast(
-        householdCounterKey(ctx.agencyId),
-        maxRefSeq,
+    // Leaves the agency's household numbering consistent in one pass, so the
+    // migration is self-sufficient and needs no follow-up script:
+    //
+    //  1. Seeds the counter above the highest `#HH…` just imported. This has to
+    //     happen before anything can create a household in this agency —
+    //     starting from zero would hand `HH-1` to a new household while a
+    //     migrated one already holds it, and the unique index would reject it.
+    //  2. Allocates for whatever is left unnumbered: a legacy title that was
+    //     never a number, and — the case re-running the import cannot otherwise
+    //     reach — households created natively through intake, which carry no
+    //     `legacySmartSuiteId` and so are never matched by the loop above.
+    //
+    // Shared with the demo seed, which is why a local reseed leaves the same
+    // consistent state without going near SmartSuite.
+    if (!ctx.dryRun) {
+      const refs = await reconcileHouseholdRefs(
+        this.householdModel,
+        this.sequences,
+        ctx.agencyId,
       );
-    }
-
-    this.logger.log(
-      `Households: fetched ${stat.fetched}, highest legacy ref HH-${maxRefSeq}`,
-    );
-    if (unnumbered > 0) {
-      this.logger.warn(
-        `Households: ${unnumbered} record(s) had no parseable legacy reference ` +
-          'and are unnumbered. Run `npm run api:backfill:household-refs:dev` to ' +
-          'allocate one for each.',
+      this.logger.log(
+        `Households: fetched ${stat.fetched}, refs — ${refs.alreadyNumbered} ` +
+          `from legacy (highest HH-${refs.seededTo}), ${refs.allocated} allocated`,
       );
+    } else {
+      this.logger.log(`Households: fetched ${stat.fetched} (dry run)`);
     }
     return map;
   }

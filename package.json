@@ -16,8 +16,6 @@
     "api:migrate:dev": "npm run migrate:dev -w @sfa/api",
     "api:backfill:deal-refs": "npm run backfill:deal-refs -w @sfa/api",
     "api:backfill:deal-refs:dev": "npm run backfill:deal-refs:dev -w @sfa/api",
-    "api:backfill:household-refs": "npm run backfill:household-refs -w @sfa/api",
-    "api:backfill:household-refs:dev": "npm run backfill:household-refs:dev -w @sfa/api",
     "api:sync:roles": "npm run sync:roles -w @sfa/api",
     "api:sync:roles:dev": "npm run sync:roles:dev -w @sfa/api",
     "web:dev": "npm run dev -w @sfa/web",
