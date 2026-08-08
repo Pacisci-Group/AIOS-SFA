@@ -16,9 +16,9 @@ interface FormSubPanelProps {
    * Right-aligned slot on the heading row — the remove button on array rows.
    *
    * Passing `null` still reserves the row, which is what the array rows want:
-   * `PolicyRowsField` hides its remove button at a single row, and the heading
-   * must not reflow when it appears. Omit the prop entirely for panels that
-   * never have an action.
+   * `HouseholdMembersField` hides its remove button in some states, and the
+   * heading must not reflow when it appears. Omit the prop entirely for panels
+   * that never have an action.
    */
   action?: React.ReactNode;
   className?: string;
@@ -31,7 +31,7 @@ interface FormSubPanelProps {
  *
  * Replaces the `rounded-lg border border-border bg-background/40 p-3 space-y-3`
  * string pasted at 5 sites, and the `flex items-center justify-between` heading
- * row duplicated in `PolicyRowsField` and `HouseholdMembersField`.
+ * row duplicated across the array-row components.
  *
  * Two lookalikes are deliberately **not** routed through this:
  * - `PolicySummaryList`'s `<li>` is a flex row with no `space-y-3`; forcing it

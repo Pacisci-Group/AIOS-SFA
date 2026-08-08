@@ -44,9 +44,19 @@ body:json {
     ],
     "policiesOfInterest": [
       { "policyType": "Auto", "itemCount": 2 },
-      { "policyType": "Home", "itemCount": 1 }
+      { "policyType": "Home", "itemCount": 1, "sameAsHousehold": true },
+      {
+        "policyType": "Landlord",
+        "itemCount": 1,
+        "sameAsHousehold": false,
+        "propertyAddress": {
+          "street": "4 Rental Row",
+          "city": "Bixby",
+          "state": "OK",
+          "zip": "74008"
+        }
+      }
     ],
-    "sameAsHousehold": true,
     "leadSourceCode": "WCO7l",
     "submissionToken": "{{$guid}}"
   }
@@ -98,9 +108,11 @@ docs {
   | primaryContact.email    | string | yes      | valid email; lowercased on write             |
   | address                 | object | no       | street / city / state / zip, the **living** address |
   | members[]               | array  | no       | max 10; role ∈ Spouse, Child, Driver, Additional Named Insured |
-  | policiesOfInterest[]    | array  | no       | max 12 of `{ policyType, itemCount }`; canonical labels, count 1–99; defaults to `[]` |
-  | sameAsHousehold         | bool   | no       | defaults `true`; when set, `address` is stored as the property address |
-  | propertyAddress         | object | cond.    | required when `sameAsHousehold` is false **and** a property-type policy is requested |
+  | policiesOfInterest[]    | array  | no       | max 12; canonical labels, count 1–99; defaults to `[]` — see the row shape below |
+  | policiesOfInterest[].policyType | string | yes | canonical label; a raw SmartSuite code is a `400` |
+  | policiesOfInterest[].itemCount  | number | yes | integer 1–99                          |
+  | policiesOfInterest[].sameAsHousehold | bool | no | defaults `true`; property rows only. When set, `address` is copied onto **this row** |
+  | policiesOfInterest[].propertyAddress | object | cond. | required when the row is a property type **and** `sameAsHousehold` is false |
   | leadSourceCode          | string | yes      | canonical code; `ENEJP` (Test) is rejected   |
   | quoteControlNumber      | string | no       | dedupe signal 2                              |
   | submissionToken         | string | no       | 8–200 chars; per-form-session idempotency key |
@@ -131,19 +143,35 @@ docs {
   and not free text. Optional here while the web form requires at least one,
   exactly as `address` is: the endpoint would rather store an incomplete lead
   than reject one. On a dedupe merge (signals 2 and 3) the rows are **unioned by
-  policy type** into the existing lead — a restated type keeps the count already
-  on file rather than adding a second row. Legacy captured no equivalent at
-  intake; every migrated lead has `[]`.
+  policy type *and* dwelling** into the existing lead — a restated type at the
+  same address keeps the count already on file, while the same type at a
+  different address is a second row (a landlord adding a second rental is
+  stating a second interest, not restating the first). Legacy captured no
+  equivalent at intake; every migrated lead has `[]`.
 
-  **Property address (PAC-56 #6).** Asked only when a property-type policy
-  (`Home`, `Renters`, `Condominium`, `Landlord`) is requested, and stored
-  **already resolved**: with `sameAsHousehold: true` the server copies `address`
-  and **discards** any `propertyAddress` in the body, so a submission cannot
-  claim one thing and store another. With it false and a property policy
-  requested, a blank address is a `400`. Nothing is stored when no property
-  policy is requested. Legacy kept this on the lead too (`Property Address`,
-  `sfd5ba053e`) — it is the quote stage that inherits it, not the reverse. Read
-  both back on `GET /leads/:id`.
+  > **Which form sends this.** The **public** intake form (`POST
+  > /public/leads/:token`) collects it — PAC-56 #2 scopes the question to the
+  > prospect. The internal `/leads/new` form does **not**, and omits the field
+  > entirely; a producer records what was quoted on the Quote Recap instead, with
+  > real premiums. The endpoint accepts it on both routes because the schema is
+  > shared and PAC-53's white-label forms will post here too — this request
+  > exercises that path.
+
+  **Property address (PAC-56 #6/#14).** Lives on the **policy row**, not on the
+  submission: a prospect can ask about the home they live in *and* a rental they
+  let out, and one lead-level address describes only one of them. Asked only for
+  a property-type row (`Home`, `Renters`, `Condominium`, `Landlord`) and stored
+  **already resolved** — with `sameAsHousehold: true` the server copies `address`
+  onto that row and **discards** any `propertyAddress` sent with it, so a row
+  cannot claim one thing and store another. With it false, a blank address is a
+  `400`. **Nothing is stored on a non-property row**, which is what stops the
+  `sameAsHousehold: true` default from quietly stamping an address onto every
+  Auto-only lead.
+
+  > The **lead-level** `propertyAddress` is no longer written. It stays on the
+  > document for migrated records (SmartSuite `Property Address`, `sfd5ba053e`)
+  > and for leads captured before #14, and `GET /leads/:id` still returns it —
+  > read `policiesOfInterest[].propertyAddress` first and fall back to it.
 
   **Atomicity.** Lead, household and contacts are written in one MongoDB
   transaction; a failure part-way leaves no partial records.

@@ -111,23 +111,46 @@ export function LeadContactCard({
           * as "they wanted nothing" instead of "we never asked".
           */}
         {lead.policiesOfInterest.length > 0 && (
-          <Field
-            icon={ShieldCheck}
-            label="Policies of Interest"
-            // The count is only worth showing when it isn't the default 1 —
-            // "Auto ×1, Home ×1" is noise around the part that matters.
-            value={lead.policiesOfInterest
-              .map((policy) =>
-                policy.itemCount > 1
-                  ? `${policy.policyType} ×${policy.itemCount}`
-                  : policy.policyType,
-              )
-              .join(", ")}
-            className="sm:col-span-2"
-          />
+          <div className="flex items-start gap-2.5 sm:col-span-2">
+            <ShieldCheck
+              size={13}
+              className="mt-0.5 shrink-0 text-muted-foreground"
+            />
+            <div className="min-w-0">
+              <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+                Policies of Interest
+              </p>
+              <ul className="mt-0.5 space-y-0.5">
+                {lead.policiesOfInterest.map((policy, index) => (
+                  <li
+                    key={`${policy.policyType}-${index}`}
+                    className="break-words text-sm text-card-foreground"
+                  >
+                    {/* The count only earns its place when it isn't the default
+                        1 — "Auto ×1" is noise around the part that matters. */}
+                    {policy.itemCount > 1
+                      ? `${policy.policyType} ×${policy.itemCount}`
+                      : policy.policyType}
+                    {/* Each property policy names the building it insures
+                        (PAC-56 #14) — the reason a household can hold a home
+                        and a landlord policy at once. */}
+                    {policy.propertyAddress && (
+                      <span className="text-muted-foreground">
+                        {" · "}
+                        {formatAddress(policy.propertyAddress)}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
         )}
-        {/* Only ever set when a property policy was asked for, and already
-            resolved server-side if it matched the household address. */}
+        {/*
+          The lead-level dwelling. Migrated records and leads captured before
+          the address moved onto the policy row are the only ones that have one,
+          so it is the fallback rather than the primary display.
+        */}
         {lead.propertyAddress && (
           <Field
             icon={Home}

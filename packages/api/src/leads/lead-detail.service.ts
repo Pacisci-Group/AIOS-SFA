@@ -187,11 +187,14 @@ export class LeadDetailService {
         .map((policy) => ({
           policyType: normalizePolicyType(policy.policyType),
           itemCount: policy.itemCount,
+          // Per-row since PAC-56 #14, and through the same coercion as every
+          // other address on this page: the stored shape is
+          // `Record<string, unknown>` and three writers disagree about its keys.
+          propertyAddress: normalizeStoredAddress(policy.propertyAddress),
         }))
         .filter((policy) => policy.policyType.length > 0),
-      // Through the same coercion as every other address on this page: the
-      // stored shape is `Record<string, unknown>` and three writers disagree
-      // about its keys.
+      // The lead-level dwelling, which only migrated records and pre-#14 leads
+      // carry. Clients render it as the fallback when no row has its own.
       propertyAddress: normalizeStoredAddress(lead.propertyAddress),
       agingDays: this.agingDays(lead),
       createdDate: iso(lead.createdDate),
@@ -617,15 +620,11 @@ export class LeadDetailService {
         policyType: normalizePolicyType(policy.policyType),
         premium: policy.premium ?? 0,
         itemCount: policy.itemCount ?? 0,
+        /** Per-row since PAC-56 #14; `null` on non-property and older rows. */
+        propertyAddress: normalizeStoredAddress(policy.propertyAddress),
       })),
-      propertyAddress: recap.propertyAddress
-        ? {
-            street: recap.propertyAddress.street ?? '',
-            city: recap.propertyAddress.city ?? '',
-            state: recap.propertyAddress.state ?? '',
-            zip: recap.propertyAddress.zip ?? '',
-          }
-        : null,
+      // The recap-level dwelling — only recaps written before #14 have one.
+      propertyAddress: normalizeStoredAddress(recap.propertyAddress),
       notes: recap.notes ?? null,
       // Metadata only — the storage `key` stays server-side. Downloading the
       // document needs its own presigned-URL endpoint, not a client that knows

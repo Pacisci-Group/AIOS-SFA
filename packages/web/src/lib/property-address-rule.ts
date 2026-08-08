@@ -1,55 +1,94 @@
-import { isPropertyPolicyType, type PolicyType } from "@sfa/shared";
-import type { z } from "zod";
+import {
+  DEFAULT_ADDRESS_STATE,
+  isPropertyPolicyType,
+  type PolicyType,
+} from "@sfa/shared";
+import { z } from "zod";
+import { ADDRESS_FIELDS, type AddressField } from "@/lib/format-address";
 
-/** The four parts of an address, in the order the forms render them. */
-export const ADDRESS_FIELDS = ["street", "city", "state", "zip"] as const;
-
-type AddressField = (typeof ADDRESS_FIELDS)[number];
+export { ADDRESS_FIELDS };
 
 /**
- * The slice of a form's values this rule reads.
+ * The address block every policy row carries, ready to spread into a row
+ * schema.
  *
- * Deliberately not the policy list: the two forms name that array differently
- * (`policiesOfInterest` on New Lead, `policies` on Quote Recap) and hold
- * different row shapes, so it is supplied by the selector instead.
+ * Both forms declare the same four strings plus the toggle, so they are
+ * declared once here — which is also what lets one refinement below validate
+ * either form's rows.
  */
-export interface PropertyAddressRuleValues {
+export const policyAddressShape = {
+  sameAsHousehold: z.boolean(),
+  propertyAddress: z.object({
+    street: z.string().trim().max(200, "Too long"),
+    city: z.string().trim().max(120, "Too long"),
+    state: z.string().trim().max(60, "Too long"),
+    zip: z.string().trim().max(20, "Too long"),
+  }),
+};
+
+/** The slice of a policy row the rule below reads. */
+export interface PolicyAddressRow {
+  policyType: PolicyType;
   sameAsHousehold: boolean;
   propertyAddress: Record<AddressField, string>;
 }
 
 /**
- * "A property policy needs an address to insure."
+ * "A property policy needs an address to insure" — **per row** (PAC-56 #14).
  *
- * The same question in both the New Lead form (PAC-56) and the Quote Recap form
- * (PAC-39), and it mirrors the API's own rule — so it lives in one place rather
- * than being kept in step by hand. Nothing is required while `sameAsHousehold`
- * is set: the server copies the household address and discards whatever was
- * sent.
+ * The rule used to sit on the whole form: one `propertyAddress` and one
+ * `sameAsHousehold` for a New Lead submission or a Quote Recap. That cannot
+ * describe a household insuring the home they live in *and* a rental they let
+ * out, which is the case this revision exists for — so the address moved onto
+ * the policy row, and the rule moved with it.
  *
- * The policy types come from a **selector** rather than a fixed key, which is
- * what lets one rule serve two schemas that name their array differently. The
- * selector is checked against the parent's shape, so renaming that array is a
- * compile error here too.
+ * Nothing is required while `sameAsHousehold` is set: the server copies the
+ * household address and discards whatever the row sent. Mirrors the API's own
+ * `requirePolicyPropertyAddress`, so the two cannot drift.
  *
  * @example
- * .superRefine(requirePropertyAddress((v) => v.policies.map((p) => p.policyType)))
+ * const row = z.object({ policyType, itemCount, ...policyAddressShape })
+ *   .superRefine(requirePolicyPropertyAddress);
  */
-export function requirePropertyAddress<T extends PropertyAddressRuleValues>(
-  getPolicyTypes: (value: T) => readonly PolicyType[],
-) {
-  return (value: T, ctx: z.core.$RefinementCtx<T>) => {
-    if (value.sameAsHousehold) return;
-    if (!getPolicyTypes(value).some(isPropertyPolicyType)) return;
+export function requirePolicyPropertyAddress<T extends PolicyAddressRow>(
+  row: T,
+  ctx: z.core.$RefinementCtx<T>,
+): void {
+  if (!isPropertyPolicyType(row.policyType)) return;
+  if (row.sameAsHousehold) return;
 
-    for (const field of ADDRESS_FIELDS) {
-      if (!value.propertyAddress[field]?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["propertyAddress", field],
-          message: "Required",
-        });
-      }
+  for (const field of ADDRESS_FIELDS) {
+    if (!row.propertyAddress[field]?.trim()) {
+      ctx.addIssue({ code: "custom", path: ["propertyAddress", field], message: "Required" });
     }
-  };
+  }
+}
+
+/**
+ * The address to send for one row, or `undefined` when the row does not own
+ * one.
+ *
+ * A non-property row has no dwelling, and a "same as household" row has one the
+ * server derives for itself — sending four strings it is contractually obliged
+ * to discard is noise on the wire and a lie in the request log.
+ */
+export function policyAddressInput<T extends PolicyAddressRow>(
+  row: T,
+): Record<AddressField, string> | undefined {
+  if (!isPropertyPolicyType(row.policyType)) return undefined;
+  if (row.sameAsHousehold) return undefined;
+  return row.propertyAddress;
+}
+
+/**
+ * A blank address, for a freshly opened policy drawer.
+ *
+ * Blank apart from the state, which is pre-filled (PAC-56 #3). Seen rarely —
+ * "same as household" starts on, so these fields are hidden until a submitter
+ * says the dwelling is somewhere else — but a policy address is an address, and
+ * having it default differently from the household block above it would be the
+ * odd thing.
+ */
+export function emptyPolicyAddress(): Record<AddressField, string> {
+  return { street: "", city: "", state: DEFAULT_ADDRESS_STATE, zip: "" };
 }

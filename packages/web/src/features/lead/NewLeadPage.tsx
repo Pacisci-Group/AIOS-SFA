@@ -8,7 +8,6 @@ import { createLead } from "@/lib/lead-intake-api";
 import { LeadIntakeForm } from "./components/LeadIntakeForm";
 import {
   newSubmissionToken,
-  toPolicyOfInterestInputs,
   type LeadIntakeFormValues,
 } from "./components/lead-intake-schema";
 
@@ -32,9 +31,9 @@ export default function NewLeadPage() {
         primaryContact: values.primaryContact,
         address: values.address,
         members: values.members,
-        policiesOfInterest: toPolicyOfInterestInputs(values.policiesOfInterest),
-        sameAsHousehold: values.sameAsHousehold,
-        propertyAddress: values.propertyAddress,
+        // No policies of interest and no property address: this form does not
+        // ask (PAC-56 #2 scopes that to the public one), and sending the unasked
+        // defaults would record a choice the producer never made.
         leadSourceCode: values.leadSourceCode ?? "",
         submissionToken: submissionToken.current,
       }),
@@ -74,7 +73,7 @@ export default function NewLeadPage() {
         <main className="px-4 md:px-6 py-6">
           <div className="max-w-3xl">
             <LeadIntakeForm
-              showLeadSource
+              variant="internal"
               submitting={mutation.isPending}
               errorMessage={error}
               onSubmit={(values) => {

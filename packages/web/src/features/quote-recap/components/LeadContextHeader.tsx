@@ -2,20 +2,11 @@ import type { QuoteRecapLeadContext } from "@sfa/shared";
 import { AlertTriangle } from "lucide-react";
 import { FormGrid, FormSection } from "@/components/form";
 import { statusBadgeClass } from "@/features/lead/components/lead-display";
+import { formatAddress } from "@/lib/format-address";
 import { cn } from "@/lib/utils";
 
 interface LeadContextHeaderProps {
   context: QuoteRecapLeadContext;
-}
-
-function formatAddress(
-  address: QuoteRecapLeadContext["householdAddress"],
-): string {
-  if (!address) return "—";
-  const line = [address.street, address.city, address.state, address.zip]
-    .filter(Boolean)
-    .join(", ");
-  return line || "—";
 }
 
 function Field({ label, value }: { label: string; value: string }) {
@@ -57,7 +48,7 @@ export function LeadContextHeader({ context }: LeadContextHeaderProps) {
         <div className="sm:col-span-2">
           <Field
             label="Household address"
-            value={formatAddress(context.householdAddress)}
+            value={formatAddress(context.householdAddress) ?? "—"}
           />
         </div>
       </FormGrid>

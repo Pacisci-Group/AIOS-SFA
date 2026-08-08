@@ -9,6 +9,10 @@ import {
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
+import {
+  formatAddress as formatAddressLine,
+  type AddressLike,
+} from "@/lib/format-address";
 
 /**
  * Shared display vocabulary for the Leads list and the Lead Detail page — the
@@ -150,14 +154,14 @@ export function formatCurrency(value: number): string {
   });
 }
 
-/** `4821 Maple Grove Dr, Austin TX 78745`, skipping whatever is missing. */
-export function formatAddress(
-  address: { street: string; city: string; state: string; zip: string } | null,
-): string {
-  if (!address) return "—";
-  const cityLine = [address.city, address.state, address.zip]
-    .filter(Boolean)
-    .join(" ");
-  const parts = [address.street, cityLine].filter(Boolean);
-  return parts.length ? parts.join(", ") : "—";
+/**
+ * `4821 Maple Grove Dr, Austin TX 78745`, or an em-dash when there is nothing
+ * to show.
+ *
+ * A thin wrapper over the shared {@link formatAddressLine}, which returns `null`
+ * instead: the label/value grids on this page always render a value, so the
+ * placeholder belongs here rather than at every call site.
+ */
+export function formatAddress(address: AddressLike | null): string {
+  return formatAddressLine(address) ?? "—";
 }

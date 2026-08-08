@@ -16,6 +16,19 @@ export interface QuoteRecapPolicyInput {
   policyType: string;
   premium: number;
   itemCount: number;
+  /**
+   * Property-type rows only. When true the server copies the household address
+   * onto **this row** and **discards** `propertyAddress`.
+   *
+   * The address is per-row (PAC-56 #14) because a recap routinely covers a home
+   * *and* a landlord policy on a different building; one address for the whole
+   * recap can only describe one of them. This is a genuine improvement over
+   * legacy rather than a regression fix — SmartSuite held one property address
+   * on the Lead and none on the recap, so it could not represent the pair
+   * either.
+   */
+  sameAsHousehold?: boolean;
+  propertyAddress?: QuoteRecapPropertyAddress;
 }
 
 /**
@@ -46,14 +59,12 @@ export interface CreateQuoteRecapInput {
    * submission without one. The API resolves the household from the lead.
    */
   leadId: string;
-  policies: QuoteRecapPolicyInput[];
   /**
-   * When true the server copies the household's own address and **discards**
-   * `propertyAddress`, so a client cannot claim "same as household" while
-   * submitting something else.
+   * Each row carries its own insured-property address (PAC-56 #14) — see
+   * {@link QuoteRecapPolicyInput}. There is deliberately no recap-level
+   * `propertyAddress`: it could describe only one of several dwellings.
    */
-  sameAsHousehold: boolean;
-  propertyAddress?: QuoteRecapPropertyAddress;
+  policies: QuoteRecapPolicyInput[];
   notes?: string;
   /** Required — a recap without its carrier quote is not accepted. */
   quoteDocument: QuoteDocumentMeta;

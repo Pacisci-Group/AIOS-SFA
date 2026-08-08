@@ -64,15 +64,15 @@ export interface IntakeInput {
   primaryContact: IntakePerson;
   address?: IntakeAddress;
   members: IntakeMember[];
-  /** Canonical labels; empty when the submitter selected nothing. */
-  policiesOfInterest?: LeadPolicyOfInterestInput[];
   /**
-   * When true the pipeline stores `address` as the property address and ignores
-   * `propertyAddress` entirely — a submission cannot claim "same as household"
-   * and store something else.
+   * Canonical labels; empty when the submitter selected nothing.
+   *
+   * Each property-type row carries its own dwelling address (PAC-56 #14). When
+   * a row sets `sameAsHousehold` the pipeline stores a copy of `address` on it
+   * and ignores that row's `propertyAddress` entirely — a submission cannot
+   * claim "same as household" and store something else.
    */
-  sameAsHousehold?: boolean;
-  propertyAddress?: IntakeAddress;
+  policiesOfInterest?: LeadPolicyOfInterestInput[];
   quoteControlNumber?: string;
   /** Raw client token; the orchestrator namespaces it before use. */
   submissionToken?: string;

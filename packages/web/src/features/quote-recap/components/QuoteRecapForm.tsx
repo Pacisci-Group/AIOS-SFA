@@ -1,25 +1,21 @@
 import type { QuoteRecapLeadContext } from "@sfa/shared";
-import { isPropertyPolicyType } from "@sfa/shared";
+import { useState } from "react";
 import { FormError, FormSection } from "@/components/form";
 import { FieldShell, useFieldError } from "@/components/form/fields";
-import {
-  PolicyRowGroup,
-  PolicyRowsShell,
-} from "@/components/policies/PolicyRowsField";
-import {
-  PropertyAddressFields,
-  PropertyAddressSection,
-} from "@/components/policies/PropertyAddressSection";
+import { PolicyList } from "@/components/policies/PolicyList";
 import { Button } from "@/components/ui/button";
 import { FileDropzone } from "@/components/upload/FileDropzone";
 import { useAppForm } from "@/hooks/form";
 import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/quote-recaps-api";
 import { LeadContextHeader } from "./LeadContextHeader";
+import { QuoteRecapPolicySheet } from "./QuoteRecapPolicySheet";
 import {
   emptyQuoteRecap,
+  emptyQuotedPolicy,
   parseQuoteRecap,
   quoteRecapSchema,
   type QuoteRecapFormValues,
+  type QuotedPolicyFormValues,
 } from "./quote-recap-schema";
 
 interface QuoteRecapFormProps {
@@ -29,7 +25,20 @@ interface QuoteRecapFormProps {
   onSubmit: (values: QuoteRecapFormValues) => void;
 }
 
-const emptyRow = () => ({ policyType: "Auto" as const, premium: "", itemCount: "1" });
+/**
+ * Which policy the drawer is on. `index === null` means "adding"; the `key`
+ * remounts the drawer's form so its `defaultValues` are re-read — without it,
+ * opening policy 2 after policy 1 would show policy 1.
+ */
+interface PolicyEditorState {
+  key: number;
+  index: number | null;
+  initial: QuotedPolicyFormValues;
+}
+
+/** Monotonic, so a re-open of the same row still remounts the drawer's form. */
+let editorKey = 0;
+const nextEditorKey = () => ++editorKey;
 
 export function QuoteRecapForm({
   context,
@@ -38,16 +47,18 @@ export function QuoteRecapForm({
   onSubmit,
 }: QuoteRecapFormProps) {
   const form = useAppForm({
-    // Default the toggle on only when there is actually an address to copy.
-    // Otherwise the fields would be blank *and* disabled, the conditional
-    // required rule would fire, and the producer would be stuck.
-    defaultValues: emptyQuoteRecap(Boolean(context.householdAddress)),
+    defaultValues: emptyQuoteRecap(),
     validators: { onBlur: quoteRecapSchema },
     // Validation has already passed here; the parse narrows the optional
     // `quoteDocument` of form state to the required one of the wire shape.
     onSubmit: ({ value }) => onSubmit(parseQuoteRecap(value)),
   });
+  const [editor, setEditor] = useState<PolicyEditorState | null>(null);
 
+  // Default a new row's toggle on only when there is actually an address to
+  // copy. Otherwise its fields would be blank *and* disabled, the conditional
+  // required rule would fire, and the producer would be stuck.
+  const canCopyHouseholdAddress = Boolean(context.householdAddress);
   const blocked = !context.householdId;
 
   return (
@@ -64,63 +75,44 @@ export function QuoteRecapForm({
 
         <FormSection
           title="Quoted policies"
-          description="One row per policy. The totals are calculated for you."
+          description="Add one for each policy quoted — the totals are calculated for you."
         >
           <form.Field name="policies" mode="array">
             {(field) => (
-              <PolicyRowsShell
-                count={field.state.value.length}
-                onAdd={() => field.pushValue(emptyRow())}
-              >
-                {field.state.value.map((_, i) => (
-                  <PolicyRowGroup
-                    key={i}
-                    form={form}
-                    fields={`policies[${i}]`}
-                    index={i}
-                    columns={3}
-                    onRemove={
-                      field.state.value.length > 1
-                        ? () => field.removeValue(i)
-                        : undefined
-                    }
-                  >
-                    {/* Quote-Recap-only: the New Lead form asks for policies of
-                        interest before any quote exists, so it has no premium
-                        to record. Composed in rather than flag-gated. */}
-                    <form.AppField name={`policies[${i}].premium`}>
-                      {(f) => (
-                        <f.NumberField
-                          label="Premium ($)"
-                          step="0.01"
-                          min="0"
-                          inputClassName="bg-card border-border"
-                        />
-                      )}
-                    </form.AppField>
-                  </PolicyRowGroup>
-                ))}
-              </PolicyRowsShell>
+              <PolicyList
+                policies={field.state.value}
+                emptyMessage="No policies added yet — add the first one quoted."
+                error={
+                  field.state.meta.isTouched
+                    ? field.state.meta.errors[0]?.message
+                    : undefined
+                }
+                disabled={blocked}
+                onAdd={() =>
+                  setEditor({
+                    key: nextEditorKey(),
+                    index: null,
+                    initial: emptyQuotedPolicy(canCopyHouseholdAddress),
+                  })
+                }
+                onEdit={(index) =>
+                  setEditor({
+                    key: nextEditorKey(),
+                    index,
+                    initial: field.state.value[index]!,
+                  })
+                }
+                onRemove={(index) => {
+                  field.removeValue(index);
+                  // The array's own `.min(1)` is an `onBlur` rule, and removing
+                  // a row fires no blur — without this, emptying the list
+                  // leaves it looking valid until submit.
+                  field.handleBlur();
+                }}
+              />
             )}
           </form.Field>
         </FormSection>
-
-        <form.Subscribe selector={(s) => s.values.policies}>
-          {(policies) =>
-            (policies ?? []).some((p) => isPropertyPolicyType(p?.policyType)) ? (
-              <PropertyAddressSection>
-                <PropertyAddressFields
-                  form={form}
-                  fields={{
-                    sameAsHousehold: "sameAsHousehold",
-                    propertyAddress: "propertyAddress",
-                  }}
-                  householdAddress={context.householdAddress}
-                />
-              </PropertyAddressSection>
-            ) : null
-          }
-        </form.Subscribe>
 
         <FormSection title="Quote document" description="The carrier quote. Required.">
           <form.Field name="quoteDocument">
@@ -170,6 +162,30 @@ export function QuoteRecapForm({
           {submitting ? "Saving…" : "Record quote recap"}
         </Button>
       </form>
+
+      {/*
+        Outside the `<form>` element: the drawer is a separate form of its own,
+        and nesting one inside another is invalid HTML even though Radix portals
+        the content to the body anyway. Mounted only while open and keyed, so
+        `useAppForm` re-reads its `defaultValues` on every open.
+      */}
+      {editor && (
+        <QuoteRecapPolicySheet
+          key={editor.key}
+          open
+          onOpenChange={(next) => !next && setEditor(null)}
+          initial={editor.initial}
+          isEdit={editor.index !== null}
+          householdAddress={context.householdAddress}
+          onSave={(policy) => {
+            if (editor.index === null) {
+              form.pushFieldValue("policies", policy);
+            } else {
+              void form.replaceFieldValue("policies", editor.index, policy);
+            }
+          }}
+        />
+      )}
     </form.AppForm>
   );
 }

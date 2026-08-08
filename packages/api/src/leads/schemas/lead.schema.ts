@@ -38,6 +38,27 @@ export class LeadPolicyOfInterest {
 
   @Prop({ required: true, min: 1, max: 99 })
   itemCount: number;
+
+  /**
+   * The dwelling **this row** is about (PAC-56 #14) — **already resolved**:
+   * a row the submitter marked "same as household" holds a copy of the living
+   * address, so nothing downstream has to re-apply the flag.
+   *
+   * Set only on property-type rows. It lives here rather than on the lead
+   * because a prospect can ask about the home they live in *and* a rental they
+   * let out in one submission, and a single lead-level address describes only
+   * one of them.
+   */
+  @Prop({ type: Object })
+  propertyAddress?: LeadAddress;
+
+  /**
+   * What the submitter chose, kept alongside the resolved address purely so an
+   * edit form can round-trip the toggle rather than having to guess it back
+   * from an address comparison.
+   */
+  @Prop({ default: false })
+  sameAsHousehold: boolean;
 }
 
 const LeadPolicyOfInterestSchema =
@@ -107,12 +128,14 @@ export class Lead extends TenantRecord {
   policiesOfInterest: LeadPolicyOfInterest[];
 
   /**
-   * The insured dwelling as captured at intake (PAC-56 #6) — **already
-   * resolved**: when the submitter ticked "same as household" this holds a copy
-   * of the living address, so nothing downstream has to re-apply the flag.
+   * The **lead-level** insured dwelling. Legacy stored exactly this on the lead
+   * (`Property Address`, `sfd5ba053e`) and the migration carries it over, so the
+   * field stays for those records.
    *
-   * Legacy stored the same thing on the lead (`Property Address`,
-   * `sfd5ba053e`); it is the quote stage that inherits it, not the reverse.
+   * **No longer written by intake.** PAC-56 #14 moved the address onto
+   * `policiesOfInterest[].propertyAddress`, because one address per lead cannot
+   * represent a household insuring a home and a rental. Read paths prefer the
+   * per-row addresses and fall back to this.
    */
   @Prop({ type: Object })
   propertyAddress?: LeadAddress;
