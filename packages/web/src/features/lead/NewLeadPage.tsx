@@ -71,7 +71,7 @@ export default function NewLeadPage() {
         </header>
 
         <main className="px-4 md:px-6 py-6">
-          <div className="max-w-3xl">
+          <div className="mx-auto w-full max-w-3xl">
             <LeadIntakeForm
               variant="internal"
               submitting={mutation.isPending}

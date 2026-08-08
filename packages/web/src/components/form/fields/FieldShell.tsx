@@ -51,7 +51,20 @@ export function FieldShell({
     [descriptionId, messageId].filter(Boolean).join(" ") || undefined;
 
   return (
-    <div data-slot="form-item" className={cn("grid gap-2", className)}>
+    // `content-start` is a fix, not styling — do not drop it as a deviation
+    // from the shadcn class string above. A `FormGrid` cell stretches this
+    // wrapper to the height of the tallest field in its row, and a grid
+    // container's default `align-content: normal` resolves to *stretch*, which
+    // hands that leftover height to the auto-sized rows. So the moment a
+    // neighbour shows a validation message, an error-free field's own rows grow
+    // and its control slides down out of line with the one beside it — measured
+    // at 13.2px on the New Lead form's first/last name pair. Pinning the rows to
+    // the top keeps every control on a row aligned no matter which of them is
+    // showing a message.
+    <div
+      data-slot="form-item"
+      className={cn("grid content-start gap-2", className)}
+    >
       {label ? (
         <Label
           data-slot="form-label"

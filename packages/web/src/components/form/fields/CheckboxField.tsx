@@ -42,9 +42,13 @@ export function CheckboxField({
     // produced (a `FormItem` given `space-y-1`), gap and margin included. The
     // doubled spacing is odd but it is what ships today, and this tier is not
     // allowed to move anything on screen.
+    //
+    // `content-start` is the same anti-stretch fix `FieldShell` carries — see the
+    // comment there. It only bites when a taller sibling stretches this wrapper,
+    // which is exactly when the checkbox would drift out of line.
     <div
       data-slot="form-item"
-      className={cn("grid gap-2 space-y-1", className)}
+      className={cn("grid content-start gap-2 space-y-1", className)}
     >
       <div className="flex flex-row items-center gap-2">
         <Checkbox

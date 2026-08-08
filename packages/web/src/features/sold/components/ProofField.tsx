@@ -74,8 +74,9 @@ export const ProofField = withFieldGroup({
       }
     };
 
+    // `content-start`: the anti-stretch fix `FieldShell` documents.
     return (
-      <div data-slot="form-item" className="grid gap-2 space-y-2">
+      <div data-slot="form-item" className="grid content-start gap-2 space-y-2">
         <group.AppField name="selected">
           {(f) => (
             <f.CheckboxField
