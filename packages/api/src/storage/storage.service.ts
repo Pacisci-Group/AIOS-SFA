@@ -104,7 +104,7 @@ export class StorageService implements OnModuleInit {
   /**
    * Client used to sign browser-facing URLs. Same as {@link client} unless
    * `STORAGE_PUBLIC_URL` differs from the internal endpoint (e.g. Docker, where
-   * the API reaches MinIO at `minio:9000` but the browser uses `localhost:9100`).
+   * the API reaches MinIO at `minio:9000` but the browser uses `localhost:9000`).
    */
   private readonly signingClient: S3Client;
   private readonly bucket: string;

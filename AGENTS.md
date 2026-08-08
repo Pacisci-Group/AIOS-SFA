@@ -41,24 +41,60 @@ npm workspaces (`workspaces: ["packages/*"]`, Node >= 20):
 
 ## 3. Running it
 
-Workspace scripts (from repo root — see `package.json`):
+Env first: copy `.env.example` → `.env`. That one file serves **both** run modes
+— every value in it is the host-mode (localhost) value, and the compose `api`
+service overrides the few addresses that differ (`MONGODB_URI`, `CORS_ORIGIN`,
+`REDIS_URL`, `STORAGE_*`) with compose-network ones. Never edit `.env` to switch
+modes. Deployment notes in `DEPLOYMENT.md`.
+
+### Two run modes
+
+Split by **compose profile** in `docker-compose.yml`: `mongo`, `minio` and
+`redis` (+ the two one-shot init containers) carry no profile so they start in
+both modes; `api` and `web` sit behind `profiles: [app]`.
+
+**a) Backing services in Docker, app on the host — the default dev loop.** Real
+watch mode on both packages.
 
 ```bash
-npm run api:dev            # NestJS API (watch)
-npm run web:dev            # Vite web app
+make dev                   # Mongo + MinIO + Redis only (alias: make infra)
+npm run api:seed:demo:dev  # first run against an empty DB (see below)
+npm run api:dev            # NestJS API (watch)  -> :4000
+npm run web:dev            # Vite web app        -> :5173
+```
+
+**Nothing auto-seeds in this mode** — the auto-seed lives in the containerized
+API's start command, which isn't running.
+
+**b) Everything in Docker.** Verifies the built images; no hot reload.
+
+```bash
+make up                    # build + start all six services
+```
+
+The two modes both want ports 4000/5173, so they can't run at once — `make dev`
+stops the app containers for you. `make down` tears down either.
+
+- Web: `http://localhost:5173` · API: `http://localhost:4000/api/v1`
+- Mongo: `mongodb://localhost:27017/sfa` · MinIO: `:9000` (console `:9001`) · Redis: `:6379`
+
+Every service is published on its **standard default port** — nothing is
+remapped, so any client's out-of-the-box connection settings just work.
+
+Redis is **optional at runtime**: the API caches resolved permission sets only
+when `REDIS_URL` is set, otherwise it reads MongoDB per request. The container
+runs regardless, so uncommenting `REDIS_URL` in `.env` is the whole switch and it
+applies identically in both modes.
+
+Other workspace scripts (from repo root — see `package.json`):
+
+```bash
 npm run shared:build       # build shared package
 npm run api:seed:dev       # core seed: super admin + empty tenant scaffold (agency, branch, roles)
 npm run api:seed:demo:dev  # seed a full synthetic demo tenant (CRM data for local testing)
 npm run api:migrate:dev    # run SmartSuite -> Mongo migration (dev)
 npm run test:e2e           # API e2e tests
 ```
-
-Docker (see `Makefile` / `docker-compose.yml`): `make up` starts Mongo + API + web.
-- Web: `http://localhost:5173`
-- API: `http://localhost:4000/api/v1`
-- Mongo: `mongodb://localhost:27017/sfa`
-
-Env: copy `.env.example` → `.env`. Deployment notes in `DEPLOYMENT.md`.
 
 > **Three ways to populate Mongo:**
 > - `api:seed:dev` — **core / platform-required seed only**: the platform super
