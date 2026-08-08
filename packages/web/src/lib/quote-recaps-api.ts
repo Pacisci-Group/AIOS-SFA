@@ -1,6 +1,7 @@
 import type {
   CreateQuoteRecapInput,
   CreateQuoteRecapResponse,
+  DocumentDownloadResponse,
   QuoteDocumentPresignResponse,
   QuoteRecapLeadContext,
 } from "@sfa/shared";
@@ -45,6 +46,19 @@ export function presignQuoteDocument(meta: {
   return apiFetch<QuoteDocumentPresignResponse>(
     "/quote-recaps/quote-document/presign",
     { method: "POST", body: JSON.stringify(meta) },
+  );
+}
+
+/**
+ * `GET /quote-recaps/:id/document/download` — a short-lived, inline-signed URL
+ * for the uploaded quote document (PAC-56 #10, #30).
+ *
+ * Pair it with `openDocumentInNewTab`: the URL expires, so it is fetched per
+ * click rather than rendered into an `href`.
+ */
+export function getQuoteDocumentDownload(recapId: string) {
+  return apiFetch<DocumentDownloadResponse>(
+    `/quote-recaps/${encodeURIComponent(recapId)}/document/download`,
   );
 }
 

@@ -11,6 +11,7 @@ import { LeadContactCard } from "./components/LeadContactCard";
 import { LeadDetailHeader } from "./components/LeadDetailHeader";
 import { PriorInsuranceCard } from "./components/PriorInsuranceCard";
 import { QuoteRecapCard } from "./components/QuoteRecapCard";
+import { SoldCard } from "./components/SoldCard";
 import { leadDetailKey, useUpdateLead } from "./components/useUpdateLead";
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
@@ -109,6 +110,10 @@ export default function LeadDetailsPage() {
                   earlier={lead.earlierQuoteRecaps}
                 />
               )}
+
+              {/* Below the quote summary on purpose (PAC-56 #27) — the page
+                  reads quoted → sold. */}
+              {lead.deal && <SoldCard deal={lead.deal} leadId={lead.id} />}
             </main>
 
             <aside className="flex flex-col gap-4 p-4 md:p-5 lg:w-2/5 lg:border-l lg:border-border">

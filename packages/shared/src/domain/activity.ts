@@ -91,3 +91,35 @@ export const ACTIVITY_SUBJECT_TYPES = [
 ] as const;
 
 export type ActivitySubjectType = (typeof ACTIVITY_SUBJECT_TYPES)[number];
+
+/**
+ * Where an activity was written from (PAC-56 #29).
+ *
+ * Distinct from {@link ActivitySubjectType}, which is the storage-level "what
+ * does this row hang off". This is the *provenance the reader needs*: a note
+ * typed on the Lead Detail page, a note that arrived with a quote recap, and
+ * one from the sold flow are three different things to a producer, and today
+ * they render identically.
+ *
+ * Derived on read rather than stored, so it is correct for the rows already in
+ * the collection — nothing has ever written a provenance field. `system` covers
+ * both migrated rows and anything the platform generated with no human author.
+ */
+export const ACTIVITY_ORIGINS = [
+  'lead',
+  'quote_recap',
+  'sold_deal',
+  'audit',
+  'system',
+] as const;
+
+export type ActivityOrigin = (typeof ACTIVITY_ORIGINS)[number];
+
+/** How each origin is labelled on the timeline. */
+export const ACTIVITY_ORIGIN_LABELS: Record<ActivityOrigin, string> = {
+  lead: 'Lead',
+  quote_recap: 'Quote recap',
+  sold_deal: 'Sold deal',
+  audit: 'Audit',
+  system: 'Imported',
+};

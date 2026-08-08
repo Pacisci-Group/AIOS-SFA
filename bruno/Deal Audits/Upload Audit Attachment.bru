@@ -1,0 +1,55 @@
+meta {
+  name: Upload Audit Attachment
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{dealAuditAttachmentUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/pdf
+}
+
+body:text {
+  %PDF-1.4
+  1 0 obj<</Type/Catalog>>endobj
+  trailer<</Root 1 0 R>>
+  %%EOF
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw resolution-document upload (step 2 of 3, PAC-14)
+
+  Not an API endpoint: this goes **straight to object storage** using the URL
+  from `Presign Audit Attachment`. The same three-step chain as
+  `Sold Deals/Upload Sold Document`.
+
+  - **Auth:** `none` — deliberately. The collection-level bearer would be sent
+    on this request and **break the S3 signature**; a presigned URL carries its
+    own credentials.
+
+  ## Why this exists
+  `PATCH /deal-audits/:itemId/resolve` calls `HeadObject` on the declared key
+  and 404s if nothing landed there, so the resolve-with-attachment path cannot
+  be exercised without a real upload. Added with PAC-56 #30, which needed an
+  attachment to exist before `Download Attachment` could assert anything.
+
+  ## Headers
+  `Content-Type` **must** match the signed value (`requiredHeaders` from the
+  presign response) or storage rejects the PUT.
+
+  ## Response
+  - `200 OK` — object stored; the key is now attachable.
+  - `403 Forbidden` — signature mismatch: usually an `Authorization` header
+    being sent, a differing `Content-Type`, or an expired URL.
+}

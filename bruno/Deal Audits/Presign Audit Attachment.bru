@@ -24,9 +24,11 @@ body:json {
 }
 
 script:post-response {
-  // Capture the object key for the Resolve request's attachment metadata.
+  // Capture the object key for the Resolve request's attachment metadata, and
+  // the URL the upload step PUTs the bytes to.
   if (res.getStatus() === 201 || res.getStatus() === 200) {
     bru.setVar("dealAuditAttachmentKey", res.getBody().key);
+    bru.setVar("dealAuditAttachmentUploadUrl", res.getBody().uploadUrl);
   }
 }
 

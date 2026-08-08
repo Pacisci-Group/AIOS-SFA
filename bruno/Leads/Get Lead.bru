@@ -99,6 +99,46 @@ tests {
     }
   });
 
+  test("the household carries a display reference alongside its id", function () {
+    // PAC-56 #7 — David asked for the household's identifier to be visible for
+    // support/lookup. Derived server-side from the ObjectId, so it is present
+    // on migrated households with no write path at all.
+    const household = res.getBody().household;
+    if (household) {
+      expect(household).to.have.property("reference");
+      expect(household.reference).to.match(/^HH-[0-9A-F]{6}$/);
+      // A display label, not a lookup key — the id is still what resolves.
+      expect(household.id).to.be.a("string");
+    }
+  });
+
+  test("the deal carries the policies that sale bound", function () {
+    // PAC-56 #27 — the Sold card renders these. A subset of
+    // `household.policies`, filtered to this deal.
+    const body = res.getBody();
+    if (body.deal) {
+      expect(body.deal.policies).to.be.an("array");
+      const householdPolicyIds = (body.household ? body.household.policies : [])
+        .map(function (policy) { return policy.id; });
+      body.deal.policies.forEach(function (policy) {
+        expect(policy).to.have.property("policyNumber");
+        expect(policy).to.have.property("carrier");
+        expect(policy).to.have.property("status");
+        expect(householdPolicyIds).to.include(policy.id);
+      });
+    }
+  });
+
+  test("every activity says where it was written", function () {
+    // PAC-56 #29 — a note on the lead, on a quote recap and in the sold flow
+    // are otherwise indistinguishable once they are rows in one list.
+    const origins = ["lead", "quote_recap", "sold_deal", "audit", "system"];
+    res.getBody().activities.forEach(function (activity) {
+      expect(activity).to.have.property("origin");
+      expect(origins).to.include(activity.origin);
+    });
+  });
+
   test("activities are newest first", function () {
     const activities = res.getBody().activities;
     for (let i = 1; i < activities.length; i++) {
@@ -163,7 +203,34 @@ docs {
     Recap form captures, and no "current coverage" source exists.
   - `household.policies` is **household-level**. `Policy` links to `Household`
     and `Deal` and never to a contact, so per-member policy icons are not
-    derivable.
+    derivable. (Tracked as PAC-55.)
+
+  ### Added by PAC-56, section D
+
+  **`household.reference`** — a short display id, `HH-4F2A9C`, derived
+  server-side from the household ObjectId. David asked for the household's
+  unique identifier to be visible for support/lookup (#7); legacy had SmartSuite
+  autonumbers and the migration carried none, so rather than add a counter and
+  backfill every household, the reference is derived. It is a **display label,
+  not a lookup key** — the last 6 hex characters of an ObjectId are its low
+  counter bytes, so two households can in principle collide. Anything that
+  resolves back to a record uses `id`, which is what the UI's copy button puts
+  on the clipboard.
+
+  **`deal.policies`** — the policies that sale bound, for the Sold card (#27).
+  The same `LeadDetailPolicy` shape as `household.policies`, filtered to
+  `Policy.dealId`. Repeated rather than referenced by id because a household
+  legitimately holds policies from earlier deals and from the migration that
+  this sale did not write. Empty on a migrated deal whose policies carry only
+  `legacyDealId`.
+
+  **`activities[].origin`** — which surface the row was written from (#29):
+  `lead` | `quote_recap` | `sold_deal` | `audit` | `system`. Derived on read from
+  the activity's own refs, not stored: no writer has ever set a provenance
+  field, so a stored one would be `null` on every row already in the collection.
+  `source: 'migration'` wins over everything and maps to `system`. The ref check
+  precedes `subjectType` because `POST /activities` writes `subjectType: 'lead'`
+  for every client-logged row.
 
   ## Response `200`
   ```json
@@ -206,10 +273,24 @@ docs {
     },
     "household": {
       "id": "665f...c33",
+      "reference": "HH-5F0C33",
       "name": "Rodriguez Household",
       "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
       "members": [],
-      "policies": [],
+      "policies": [
+        {
+          "id": "665f...f66",
+          "policyType": "Auto",
+          "carrier": "Allstate",
+          "policyNumber": "AUT-4821993",
+          "active": true,
+          "status": "Active",
+          "premium": 1200,
+          "items": 2,
+          "effectiveDate": "2026-02-01",
+          "expirationDate": "2027-02-01"
+        }
+      ],
       "totalActivePolicies": 2
     },
     "latestQuoteRecap": {
@@ -240,7 +321,8 @@ docs {
         "type": "quoted",
         "summary": "Quote recap created",
         "occurredAt": "2026-07-24T00:00:00.000Z",
-        "producerName": "Pat Producer"
+        "producerName": "Pat Producer",
+        "origin": "quote_recap"
       }
     ]
   }

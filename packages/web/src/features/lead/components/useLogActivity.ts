@@ -39,6 +39,9 @@ export function useLogActivity(leadId: string) {
           summary: input.summary ?? null,
           occurredAt: new Date().toISOString(),
           producerName: null,
+          // This hook only ever logs against the lead itself, and the server
+          // agrees — `ActivitiesService` returns a constant `lead` origin.
+          origin: "lead",
         };
         queryClient.setQueryData<LeadDetail>(key, {
           ...previous,

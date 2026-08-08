@@ -116,3 +116,22 @@ export interface QuoteDocumentPresignResponse {
   requiredHeaders: Record<string, string>;
   expiresIn: number;
 }
+
+/**
+ * `GET /quote-recaps/:id/document/download` (PAC-56 #10, #30).
+ *
+ * A short-lived presigned GET signed for **inline** display, so following it
+ * hands the file to the browser's own PDF or image viewer in a new tab rather
+ * than starting a download. The user downloads from that viewer if they want to
+ * — building a bespoke viewer or a separate download button is work the browser
+ * already did.
+ *
+ * The storage key never crosses the wire; the client only ever holds this URL.
+ */
+export interface DocumentDownloadResponse {
+  downloadUrl: string;
+  filename: string;
+  contentType: string;
+  /** Seconds until {@link downloadUrl} expires. */
+  expiresIn: number;
+}

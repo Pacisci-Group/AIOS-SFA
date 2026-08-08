@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
@@ -61,6 +61,23 @@ export class QuoteRecapsController {
     body: PresignQuoteDocumentDto,
   ) {
     return this.quoteRecapsService.presignQuoteDocument(access, branchId, body);
+  }
+
+  /**
+   * A presigned, inline URL that opens the uploaded quote document in a new tab
+   * (PAC-56 #10, #30).
+   *
+   * `read`, not `write` — viewing a document you can already see the metadata
+   * of is a read. Declared after the static segments above, per the note at the
+   * top of the class.
+   */
+  @Get(':id/document/download')
+  downloadDocument(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+  ) {
+    return this.quoteRecapsService.getDocumentDownload(access, branchId, id);
   }
 
   /** Record the proposal. Totals are derived server-side from the policy rows. */

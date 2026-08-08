@@ -19,7 +19,7 @@
  */
 
 import type { StructuredAddress } from './address';
-import type { ActivityType } from './activity';
+import type { ActivityOrigin, ActivityType } from './activity';
 import type { ContactDetail } from './contact';
 import type { IntakeChannel } from './lead-intake';
 import type { NormalizedLeadSource } from './lead-source';
@@ -57,6 +57,15 @@ export interface LeadDetailPolicy {
 
 export interface LeadDetailHousehold {
   id: string;
+  /**
+   * Short display reference — `HH-4F2A9C` (PAC-56 #7).
+   *
+   * Derived server-side from {@link id} by `householdReference`, so the
+   * vocabulary is owned in one place rather than reinvented per client. It is a
+   * label, **not** a lookup key: anything that resolves back to the record uses
+   * `id`. See `record-reference.ts`.
+   */
+  reference: string;
   name: string | null;
   address: StructuredAddress | null;
   /** Primary contact first, then `memberContactIds` order. */
@@ -136,6 +145,18 @@ export interface LeadDetailDeal {
   isBundle: boolean;
   /** Canonical labels. */
   policyTypes: string[];
+  /**
+   * The policies this sale bound (PAC-56 #27).
+   *
+   * A subset of `household.policies` — the same {@link LeadDetailPolicy} shape,
+   * filtered to `Policy.dealId === this deal`. Repeated rather than referenced
+   * by id so the Sold card renders from one field; a household can hold
+   * policies from earlier deals and from the migration that this sale did not
+   * write, and those must not appear under it.
+   *
+   * Empty on a migrated deal whose policies were never linked back to it.
+   */
+  policies: LeadDetailPolicy[];
 }
 
 export interface LeadDetailPriorPolicy {
@@ -194,6 +215,15 @@ export interface LeadDetailActivity {
   occurredAt: string | null;
   /** Resolved from `producerId`; `null` for system and migrated rows. */
   producerName: string | null;
+  /**
+   * Which surface the row was written from (PAC-56 #29).
+   *
+   * Derived server-side from the activity's own refs — see
+   * {@link ActivityOrigin}. The timeline needs it because a note left on the
+   * lead, on a quote recap and during the sold flow are otherwise
+   * indistinguishable once they are all rows in the same list.
+   */
+  origin: ActivityOrigin;
 }
 
 /**
