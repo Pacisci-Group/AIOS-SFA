@@ -42,7 +42,7 @@ export function ScoreCards({ range }: ScoreCardsProps) {
   const { data, isPending, isError, refetch } = usePerformance(range);
 
   return (
-    <div className="grid gap-4 px-6 py-4 grid-cols-1 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 px-4 py-4 md:px-6 lg:grid-cols-3">
       <ScorecardShell
         label="Sold"
         accent={SOLD_ACCENT}

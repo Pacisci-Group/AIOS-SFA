@@ -1,8 +1,9 @@
 import type { LeadTemperature } from "@sfa/shared";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Loader2 } from "lucide-react";
-import { Navigate, useParams } from "react-router-dom";
-import { AppSidebar } from "@/components/layout/AppSidebar";
+import { Link, Navigate, useParams } from "react-router-dom";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { getLead } from "@/lib/leads-api";
 import { ActivityTimeline } from "./components/ActivityTimeline";
@@ -47,87 +48,92 @@ export default function LeadDetailsPage() {
   const lead = leadQuery.data;
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      {/* The app shell isn't responsive yet; hidden rather than cramped. */}
-      <div className="hidden md:block">
-        <AppSidebar />
-      </div>
+    <AppShell>
+      {!lead && (
+        <header className="flex items-center gap-2 border-b border-border px-4 py-4 md:px-6">
+          <MobileNav className="-ml-1" />
+          <Link
+            to="/leads"
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Leads
+          </Link>
+        </header>
+      )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        {lead && (
-          <LeadDetailHeader
-            lead={lead}
-            onStatusChange={(status) => update.mutate({ status })}
-            onTemperatureChange={(temperature: LeadTemperature) =>
-              update.mutate({ temperature })
-            }
-            pending={update.isPending}
-          />
-        )}
+      {lead && (
+        <LeadDetailHeader
+          lead={lead}
+          onStatusChange={(status) => update.mutate({ status })}
+          onTemperatureChange={(temperature: LeadTemperature) =>
+            update.mutate({ temperature })
+          }
+          pending={update.isPending}
+        />
+      )}
 
-        {leadQuery.isPending && (
-          <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-            <Loader2 size={16} className="animate-spin" />
-            Loading lead…
-          </div>
-        )}
+      {leadQuery.isPending && (
+        <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+          <Loader2 size={16} className="animate-spin" />
+          Loading lead…
+        </div>
+      )}
 
-        {leadQuery.isError && (
-          <div className="m-4 space-y-3 rounded-xl border border-border bg-card p-6 md:m-6">
-            <p className="flex items-center gap-2 text-sm text-destructive">
-              <AlertCircle size={16} />
-              {leadQuery.error.message}
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void leadQuery.refetch()}
-            >
-              Retry
-            </Button>
-          </div>
-        )}
+      {leadQuery.isError && (
+        <div className="m-4 space-y-3 rounded-xl border border-border bg-card p-6 md:m-6">
+          <p className="flex items-center gap-2 text-sm text-destructive">
+            <AlertCircle size={16} />
+            {leadQuery.error.message}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void leadQuery.refetch()}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
 
-        {lead && (
-          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-            <main className="flex flex-col gap-4 p-4 md:p-5 lg:w-3/5">
-              <LeadContactCard
-                lead={lead}
-                onSourceChange={(leadSourceCode) =>
-                  update.mutate({ leadSourceCode })
-                }
-                pending={update.isPending}
+      {lead && (
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <main className="flex flex-col gap-4 p-4 md:p-5 lg:w-3/5">
+            <LeadContactCard
+              lead={lead}
+              onSourceChange={(leadSourceCode) =>
+                update.mutate({ leadSourceCode })
+              }
+              pending={update.isPending}
+            />
+
+            {/* Only reachable once the lead is sold — see the card's docblock. */}
+            {lead.priorInsurance && (
+              <PriorInsuranceCard priorInsurance={lead.priorInsurance} />
+            )}
+
+            {lead.latestQuoteRecap && (
+              <QuoteRecapCard
+                latest={lead.latestQuoteRecap}
+                earlier={lead.earlierQuoteRecaps}
               />
+            )}
 
-              {/* Only reachable once the lead is sold — see the card's docblock. */}
-              {lead.priorInsurance && (
-                <PriorInsuranceCard priorInsurance={lead.priorInsurance} />
-              )}
+            {/* Below the quote summary on purpose (PAC-56 #27) — the page
+                reads quoted → sold. */}
+            {lead.deal && <SoldCard deal={lead.deal} leadId={lead.id} />}
+          </main>
 
-              {lead.latestQuoteRecap && (
-                <QuoteRecapCard
-                  latest={lead.latestQuoteRecap}
-                  earlier={lead.earlierQuoteRecaps}
-                />
-              )}
-
-              {/* Below the quote summary on purpose (PAC-56 #27) — the page
-                  reads quoted → sold. */}
-              {lead.deal && <SoldCard deal={lead.deal} leadId={lead.id} />}
-            </main>
-
-            <aside className="flex flex-col gap-4 p-4 md:p-5 lg:w-2/5 lg:border-l lg:border-border">
-              <HouseholdCard household={lead.household} />
-              <div className="min-h-[24rem] flex-1">
-                <ActivityTimeline
-                  activities={lead.activities}
-                  leadId={lead.id}
-                />
-              </div>
-            </aside>
-          </div>
-        )}
-      </div>
-    </div>
+          <aside className="flex flex-col gap-4 p-4 md:p-5 lg:w-2/5 lg:border-l lg:border-border">
+            <HouseholdCard household={lead.household} />
+            <div className="min-h-[24rem] flex-1">
+              <ActivityTimeline
+                activities={lead.activities}
+                leadId={lead.id}
+              />
+            </div>
+          </aside>
+        </div>
+      )}
+    </AppShell>
   );
 }

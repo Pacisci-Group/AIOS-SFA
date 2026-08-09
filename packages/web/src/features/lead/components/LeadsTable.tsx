@@ -33,10 +33,17 @@ interface LeadsTableProps {
 /**
  * Desktop Leads table. CSS-grid rows rather than the `Table` primitive, matching
  * the list pattern already established on the Users page and the hand-off board.
+ *
+ * Seven columns need ~960px before the name and email stop truncating —
+ * Status/Temperature/Phone/Actions alone are a fixed 480px. `LeadsPage` shows
+ * this only from `lg` (cards below that), and the `min-w` + `overflow-x-auto`
+ * pair means the table scrolls inside its own card on the narrower half of that
+ * range rather than crushing every column to fit.
  */
 export function LeadsTable({ leads, isPending, pageSize }: LeadsTableProps) {
   return (
-    <div className="rounded-xl overflow-hidden bg-card border border-border">
+    <div className="overflow-x-auto">
+    <div className="min-w-[960px] rounded-xl overflow-hidden bg-card border border-border">
       <div
         className="grid px-5 py-2.5 gap-3 text-xs font-medium uppercase tracking-wide text-muted-foreground border-b border-border"
         style={{ gridTemplateColumns: GRID_COLS }}
@@ -125,6 +132,7 @@ export function LeadsTable({ leads, isPending, pageSize }: LeadsTableProps) {
               </span>
             </div>
           ))}
+    </div>
     </div>
   );
 }

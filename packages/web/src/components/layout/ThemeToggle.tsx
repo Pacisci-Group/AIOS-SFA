@@ -34,8 +34,8 @@ export function ThemeToggle({ collapsed = false }: { collapsed?: boolean }) {
       onClick={() => setTheme(isDark ? 'light' : 'dark')}
       aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
       className={cn(
-        'w-full flex items-center gap-2 py-2 rounded-md text-muted-foreground hover:text-sidebar-accent-foreground hover:bg-sidebar-accent transition-colors text-sm outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
-        collapsed ? 'justify-center px-0' : 'px-3',
+        'w-full flex items-center gap-2.5 py-2 rounded-md text-muted-foreground hover:text-sidebar-accent-foreground hover:bg-sidebar-accent transition-colors text-sm outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+        collapsed ? 'justify-center px-0' : 'px-2.5',
       )}
     >
       {isDark ? (

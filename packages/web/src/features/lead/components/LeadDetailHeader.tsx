@@ -1,6 +1,7 @@
 import type { LeadDetail, LeadTemperature } from "@sfa/shared";
 import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { QuoteRecapAction } from "@/components/leads/QuoteRecapAction";
 import { SoldDealAction } from "@/components/leads/SoldDealAction";
 import {
@@ -36,7 +37,8 @@ export function LeadDetailHeader({
 }: LeadDetailHeaderProps) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card px-4 py-4 md:px-6">
-      <div className="flex min-w-0 flex-wrap items-center gap-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 md:gap-3">
+        <MobileNav className="-ml-1" />
         {/*
           The breadcrumb used to end in the lead's name, repeating the `h1`
           immediately beside it. It now ends at "Leads" and reads as the trail

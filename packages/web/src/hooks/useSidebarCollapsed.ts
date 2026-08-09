@@ -19,9 +19,11 @@ function readStored(): boolean {
  * Whether the app sidebar is collapsed to its icon rail, persisted per browser.
  *
  * Deliberately component-local state rather than a context provider: exactly one
- * `AppSidebar` is mounted at a time (every page composes its own shell — there
- * is no shared layout route yet), and the toggle lives inside the sidebar. A
- * provider would only be needed if a page header had to render a trigger.
+ * `AppSidebar` is mounted at a time (`AppShell` mounts it, and every page
+ * renders one `AppShell`), and the toggle lives inside the sidebar. The mobile
+ * drawer does not use this hook at all — it renders `SidebarBody` always
+ * expanded and owns its own open/closed state. A provider would only be needed
+ * if a page header had to render a trigger for the *desktop* rail.
  *
  * The lazy `useState` initialiser reads storage once on mount rather than on
  * every render. There is no pre-paint script for this the way there is for the

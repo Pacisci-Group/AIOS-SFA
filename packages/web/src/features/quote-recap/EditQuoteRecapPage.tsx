@@ -3,7 +3,8 @@ import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { AppSidebar } from "@/components/layout/AppSidebar";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { leadDetailKey } from "@/features/lead/components/useUpdateLead";
 import {
@@ -90,99 +91,94 @@ export default function EditQuoteRecapPage() {
     Boolean(view) && view!.policies.length === 0 && view!.premium > 0;
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <div className="hidden md:block">
-        <AppSidebar />
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <header className="flex items-center gap-3 px-4 md:px-6 py-4 border-b border-border">
-          <Button
-            asChild
-            variant="ghost"
-            size="icon-sm"
-            className="text-muted-foreground hover:text-foreground"
+    <AppShell>
+      <header className="flex items-center gap-2 border-b border-border px-4 py-4 md:gap-3 md:px-6">
+        <MobileNav className="-ml-1" />
+        <Button
+          asChild
+          variant="ghost"
+          size="icon-sm"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Link
+            to={leadId ? `/leads/${leadId}` : "/leads"}
+            aria-label="Back to lead"
           >
-            <Link
-              to={leadId ? `/leads/${leadId}` : "/leads"}
-              aria-label="Back to lead"
-            >
-              <ArrowLeft />
-            </Link>
-          </Button>
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">
-              Edit quote recap
-            </h1>
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Correct the recorded proposal
-            </p>
-          </div>
-        </header>
+            <ArrowLeft />
+          </Link>
+        </Button>
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">
+            Edit quote recap
+          </h1>
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Correct the recorded proposal
+          </p>
+        </div>
+      </header>
 
-        <main className="px-4 md:px-6 py-6">
-          <div className="mx-auto w-full max-w-3xl space-y-4">
-            {viewQuery.isPending && (
-              <div className="flex items-center gap-2 rounded-xl bg-card border border-border p-6 text-base text-muted-foreground">
-                <Loader2 className="size-5 animate-spin" />
-                Loading quote recap…
-              </div>
-            )}
+      <main className="px-4 md:px-6 py-6">
+        <div className="mx-auto w-full max-w-3xl space-y-4">
+          {viewQuery.isPending && (
+            <div className="flex items-center gap-2 rounded-xl bg-card border border-border p-6 text-base text-muted-foreground">
+              <Loader2 className="size-5 animate-spin" />
+              Loading quote recap…
+            </div>
+          )}
 
-            {viewQuery.isError && (
-              <div className="rounded-xl bg-card border border-border p-6 space-y-3">
-                <p className="flex items-center gap-2 text-base text-destructive">
-                  <AlertCircle className="size-5" />
-                  {viewQuery.error.message}
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void viewQuery.refetch()}
-                >
-                  Retry
-                </Button>
-              </div>
-            )}
-
-            {isMigratedAggregate && (
-              <p
-                role="status"
-                className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-base text-card-foreground"
-              >
-                <AlertCircle className="mt-0.5 size-5 shrink-0 text-destructive" />
-                <span>
-                  This recap was imported and has no per-policy detail. Saving
-                  replaces its {formatCurrency(view!.premium)} total with the
-                  policies you enter, which will change the Quoted figures for
-                  the period it was quoted in.
-                </span>
+          {viewQuery.isError && (
+            <div className="rounded-xl bg-card border border-border p-6 space-y-3">
+              <p className="flex items-center gap-2 text-base text-destructive">
+                <AlertCircle className="size-5" />
+                {viewQuery.error.message}
               </p>
-            )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void viewQuery.refetch()}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
 
-            {/*
-             * Rendered only once the recap resolves, so `defaultValues` are
-             * computed once from real data — the same reason the create page
-             * waits for its context.
-             */}
-            {view && (
-              <QuoteRecapForm
-                mode="edit"
-                context={view.context}
-                initialValues={toQuoteRecapFormValues(view)}
-                attachedDocument={view.document}
-                submitLabel="Save changes"
-                submitting={mutation.isPending}
-                errorMessage={error}
-                onSubmit={(values) => {
-                  setError(null);
-                  mutation.mutate(values);
-                }}
-              />
-            )}
-          </div>
-        </main>
-      </div>
-    </div>
+          {isMigratedAggregate && (
+            <p
+              role="status"
+              className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-base text-card-foreground"
+            >
+              <AlertCircle className="mt-0.5 size-5 shrink-0 text-destructive" />
+              <span>
+                This recap was imported and has no per-policy detail. Saving
+                replaces its {formatCurrency(view!.premium)} total with the
+                policies you enter, which will change the Quoted figures for
+                the period it was quoted in.
+              </span>
+            </p>
+          )}
+
+          {/*
+           * Rendered only once the recap resolves, so `defaultValues` are
+           * computed once from real data — the same reason the create page
+           * waits for its context.
+           */}
+          {view && (
+            <QuoteRecapForm
+              mode="edit"
+              context={view.context}
+              initialValues={toQuoteRecapFormValues(view)}
+              attachedDocument={view.document}
+              submitLabel="Save changes"
+              submitting={mutation.isPending}
+              errorMessage={error}
+              onSubmit={(values) => {
+                setError(null);
+                mutation.mutate(values);
+              }}
+            />
+          )}
+        </div>
+      </main>
+    </AppShell>
   );
 }

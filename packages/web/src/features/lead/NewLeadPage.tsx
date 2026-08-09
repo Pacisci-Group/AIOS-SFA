@@ -2,7 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { AppSidebar } from "@/components/layout/AppSidebar";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { createLead } from "@/lib/lead-intake-api";
 import { LeadIntakeForm } from "./components/LeadIntakeForm";
@@ -45,45 +46,40 @@ export default function NewLeadPage() {
   });
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <div className="hidden md:block">
-        <AppSidebar />
-      </div>
+    <AppShell>
+      <header className="flex items-center gap-2 border-b border-border px-4 py-4 md:gap-3 md:px-6">
+        <MobileNav className="-ml-1" />
+        <Button
+          asChild
+          variant="ghost"
+          size="sm"
+          className="h-8 px-2 text-muted-foreground hover:text-foreground"
+        >
+          <Link to="/leads" aria-label="Back to leads">
+            <ArrowLeft size={16} />
+          </Link>
+        </Button>
+        <div>
+          <h1 className="text-sm font-bold">New lead</h1>
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Household intake
+          </p>
+        </div>
+      </header>
 
-      <div className="flex-1 min-w-0">
-        <header className="flex items-center gap-3 px-4 md:px-6 py-4 border-b border-border">
-          <Button
-            asChild
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-muted-foreground hover:text-foreground"
-          >
-            <Link to="/leads" aria-label="Back to leads">
-              <ArrowLeft size={16} />
-            </Link>
-          </Button>
-          <div>
-            <h1 className="text-sm font-bold">New lead</h1>
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Household intake
-            </p>
-          </div>
-        </header>
-
-        <main className="px-4 md:px-6 py-6">
-          <div className="mx-auto w-full max-w-3xl">
-            <LeadIntakeForm
-              variant="internal"
-              submitting={mutation.isPending}
-              errorMessage={error}
-              onSubmit={(values) => {
-                setError(null);
-                mutation.mutate(values);
-              }}
-            />
-          </div>
-        </main>
-      </div>
-    </div>
+      <main className="px-4 md:px-6 py-6">
+        <div className="mx-auto w-full max-w-3xl">
+          <LeadIntakeForm
+            variant="internal"
+            submitting={mutation.isPending}
+            errorMessage={error}
+            onSubmit={(values) => {
+              setError(null);
+              mutation.mutate(values);
+            }}
+          />
+        </div>
+      </main>
+    </AppShell>
   );
 }
