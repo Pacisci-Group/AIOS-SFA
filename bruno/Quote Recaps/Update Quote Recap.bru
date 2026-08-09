@@ -26,6 +26,7 @@ body:json {
         "sameAsHousehold": true
       }
     ],
+    "insuranceRenewalMonth": "September",
     "notes": "Corrected the auto premium after the carrier re-rated."
   }
 }
@@ -66,6 +67,11 @@ tests {
     expect(document.filename).to.equal("carrier-quote.pdf");
   });
 
+  test("updates the renewal month (PAC-56 #16)", function () {
+    // `Create Quote Recap` sent March; this patch moves it to September.
+    expect(res.getBody().insuranceRenewalMonth).to.equal("September");
+  });
+
   test("does NOT move quoteDate — the Quoted scorecard buckets on it", function () {
     expect(res.getBody().quoteDate).to.equal(bru.getVar("quoteRecapQuoteDate"));
   });
@@ -101,8 +107,17 @@ docs {
   | field         | type   | semantics                                             |
   |---------------|--------|-------------------------------------------------------|
   | policies      | array  | **Full replacement**, 1–12 rows. Omit to leave alone.  |
+  | insuranceRenewalMonth | string | One of the twelve month labels. **Optional here, required on create** — see below. No `null` clear. |
   | notes         | string \| null | `null` (or `""`) clears. Omit to leave alone.  |
   | quoteDocument | object | Replaces the attachment. **Omit to keep it.** `null` is rejected. |
+
+  ### Why `insuranceRenewalMonth` is optional here but required on create
+
+  Same shape of reasoning as `quoteDocument` below. Every migrated recap
+  predates PAC-56 #16, so requiring the month on the patch would make all of
+  them un-editable — a producer fixing a premium on a 2024 recap would be
+  blocked by a field its author was never asked for. There is no `null` clear
+  because no UI expresses "unset the renewal month"; omitting means unchanged.
 
   ### Why `policies` is a full replacement
 

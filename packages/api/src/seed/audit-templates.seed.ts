@@ -27,8 +27,8 @@ import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema'
  *
  * Two mappings worth knowing, because the form and the checklist use different
  * words for the same thing:
- *   - Card 5's "Roof Receipt" resolves to `Hail Resistant Roof`.
- *   - Card 5's "Student Discount" resolves to `Good Student`.
+ *   - The form's "Roof Receipt" resolves to `Hail Resistant Roof`.
+ *   - The form's "Student Discount" resolves to `Good Student`.
  */
 export interface CoreAuditTemplateSpec {
   name: string;
@@ -104,7 +104,7 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     task: 'Issue evidence of insurance to the client and any interested party.',
   },
 
-  // --- Auto: policy-type driven (`Drivers Verified`) + Card 5 discounts ---
+  // --- Auto: policy-type driven (`Drivers Verified`) + discount-driven ---
   {
     name: 'Drivers Verified',
     category: 'Auto',
@@ -138,7 +138,7 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     task: 'Mention Drivewise registration to the client and confirm enrollment.',
   },
 
-  // --- Home: policy-type driven (Inspection, Mortgagee) + Card 5 discounts ---
+  // --- Home: policy-type driven (Inspection, Mortgagee) + discount-driven ---
   {
     name: 'Home Inspection',
     category: 'Home',

@@ -1,4 +1,4 @@
-import { POLICY_TYPES } from '@sfa/shared';
+import { INSURANCE_MONTHS, POLICY_TYPES } from '@sfa/shared';
 import { z } from 'zod';
 import {
   policyAddressFields,
@@ -45,6 +45,21 @@ export const createQuoteRecapSchema = z.object({
     .array(quotedPolicySchema)
     .min(1, 'At least one policy is required')
     .max(12),
+  /**
+   * When the client's current insurance renews (PAC-56 #16).
+   *
+   * **This DTO is the only place it is required.** The Mongoose field is
+   * optional because migrated recaps predate it, and the patch DTO leaves it
+   * optional so those recaps stay editable. Requiring it here is what makes it
+   * required of anyone recording a *new* recap, which is what was asked for.
+   *
+   * Canonical month labels only, for the reason `policyType` above gives:
+   * accepting SmartSuite's choice UUIDs on a write path would put a second
+   * vocabulary back into the collection.
+   */
+  insuranceRenewalMonth: z.enum(INSURANCE_MONTHS, {
+    message: 'Pick the renewal month',
+  }),
   notes: z.string().trim().max(2000).optional(),
   /** Required: a recap without its carrier quote is not accepted (PAC-39 decision 4). */
   quoteDocument: quoteDocumentSchema,

@@ -1,4 +1,4 @@
-import { normalizePolicyType } from '@sfa/shared';
+import { normalizeCarrier, normalizePolicyType } from '@sfa/shared';
 import type { LeadDetailPolicy } from '@sfa/shared';
 import { PolicyDocument } from './schemas/policy.schema';
 
@@ -16,7 +16,9 @@ export function toLeadDetailPolicy(policy: PolicyDocument): LeadDetailPolicy {
     id: policy._id.toString(),
     // Migrated docs hold raw SmartSuite choice codes; the app writes labels.
     policyType: normalizePolicyType(policy.policyType),
-    carrier: policy.carrier ?? null,
+    // Same story for the carrier: the migration stored `B4tEH`, which rendered
+    // verbatim to users until PAC-56 #19 gave us the vocabulary to map it.
+    carrier: normalizeCarrier(policy.carrier) || null,
     policyNumber: policy.policyNumber ?? null,
     active: policy.active ?? false,
     status: policy.policyStatus ?? null,

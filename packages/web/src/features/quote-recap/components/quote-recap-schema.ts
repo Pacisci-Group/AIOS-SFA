@@ -4,7 +4,7 @@ import type {
   QuoteRecapPolicyInput,
   UpdateQuoteRecapInput,
 } from "@sfa/shared";
-import { POLICY_TYPES } from "@sfa/shared";
+import { INSURANCE_MONTHS, POLICY_TYPES } from "@sfa/shared";
 import { z } from "zod";
 import {
   emptyPolicyAddress,
@@ -93,6 +93,15 @@ export const quoteRecapSchema = z.object({
   ...quoteRecapBaseShape,
   /** Required (PAC-39 decision 4) — no recap without its carrier quote. */
   quoteDocument: quoteDocumentFile,
+  /**
+   * Required on create (PAC-56 #16). Outside `quoteRecapBaseShape` for exactly
+   * the reason `quoteDocument` is: the edit schema has to accept `""`, because
+   * every migrated recap predates the field and requiring it would make all of
+   * them un-saveable.
+   */
+  insuranceRenewalMonth: z.enum(INSURANCE_MONTHS, {
+    message: "Pick the renewal month",
+  }),
 });
 
 /**
@@ -112,6 +121,12 @@ export const quoteRecapSchema = z.object({
 export const quoteRecapEditSchema = z.object({
   ...quoteRecapBaseShape,
   quoteDocument: quoteDocumentFile.optional(),
+  /**
+   * `""` is accepted here and nowhere else. A recap recorded before PAC-56 #16
+   * has no month; rejecting that would lock every migrated recap out of the
+   * edit form over a field its author was never asked for.
+   */
+  insuranceRenewalMonth: z.union([z.enum(INSURANCE_MONTHS), z.literal("")]),
 });
 
 export type QuoteRecapFormValues = z.infer<typeof quoteRecapSchema>;
@@ -169,6 +184,7 @@ export function parseQuoteRecapEdit(
 export function emptyQuoteRecap(): QuoteRecapFormState {
   return {
     policies: [],
+    insuranceRenewalMonth: "",
     notes: "",
     quoteDocument: undefined,
   };
@@ -216,6 +232,15 @@ export function toQuoteRecapFormValues(
           }
         : emptyPolicyAddress(),
     })),
+    /*
+     * Seeded verbatim like `policyType` above, and for the same reason: an
+     * unrecognised stored month fails the enum and the producer has to pick
+     * one, rather than being silently rewritten. `null` (a migrated recap)
+     * becomes `""`, which the edit schema accepts.
+     */
+    insuranceRenewalMonth:
+      (view.insuranceRenewalMonth as QuoteRecapFormState["insuranceRenewalMonth"]) ??
+      "",
     notes: view.notes ?? "",
     // Never a `File` — an already-attached document is metadata, and leaving
     // this unset is what tells the API to keep it.
@@ -235,6 +260,12 @@ export function toUpdateQuoteRecapInput(
 ): UpdateQuoteRecapInput {
   return {
     policies: toPolicyInputs(values.policies),
+    // Sent only when set. `""` — a migrated recap the producer left alone —
+    // would fail the API's enum, and the patch has no way to express "clear
+    // it", so omitting is the honest encoding of "unchanged".
+    ...(values.insuranceRenewalMonth
+      ? { insuranceRenewalMonth: values.insuranceRenewalMonth }
+      : {}),
     // `null` clears; the API distinguishes it from absent.
     notes: values.notes?.trim() ? values.notes.trim() : null,
     ...(quoteDocument ? { quoteDocument } : {}),

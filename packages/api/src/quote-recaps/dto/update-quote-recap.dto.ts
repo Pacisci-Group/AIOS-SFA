@@ -1,3 +1,4 @@
+import { INSURANCE_MONTHS } from '@sfa/shared';
 import { z } from 'zod';
 import { clearable, trimmedText } from '../../common/dto/clearable';
 import { quotedPolicySchema } from './create-quote-recap.dto';
@@ -39,6 +40,17 @@ export const updateQuoteRecapSchema = z
       .array(quotedPolicySchema)
       .min(1, 'At least one policy is required')
       .max(12)
+      .optional(),
+    /**
+     * Optional here even though the create DTO requires it (PAC-56 #16).
+     *
+     * Not an oversight: every migrated recap predates the field, and requiring
+     * it on the patch would make all of them un-editable — the same trap
+     * `quoteDocument` below documents. No `null` clear, because no UI expresses
+     * "unset the renewal month".
+     */
+    insuranceRenewalMonth: z
+      .enum(INSURANCE_MONTHS, { message: 'Pick the renewal month' })
       .optional(),
     notes: clearable(trimmedText(2000)),
     /**

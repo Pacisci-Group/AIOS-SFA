@@ -73,12 +73,18 @@ export function LeadDetailHeader({
       <div className="flex shrink-0 items-center gap-2">
         {/* Labelled here, unlike the list rows: this is the one place the pair
             of actions sits together and has to read as a pair. */}
-        <QuoteRecapAction leadId={lead.id} leadName={lead.name} />
+        <QuoteRecapAction
+          leadId={lead.id}
+          leadStatus={lead.status}
+          leadName={lead.name}
+        />
         <SoldDealAction
           leadId={lead.id}
+          leadStatus={lead.status}
           leadName={lead.name}
-          // Pre-selects the recap the sale came from when there is one; the
-          // Sold form treats it as optional.
+          // Pre-selects the recap the sale came from when there is one — and,
+          // since PAC-56 #17, its absence is what disables the button: no
+          // recap on file means there is nothing to mark sold yet.
           quoteRecapId={lead.latestQuoteRecap?.id}
         />
       </div>

@@ -124,6 +124,20 @@ export class QuoteRecap extends TenantRecord {
   @Prop()
   recapStatus?: string;
 
+  /**
+   * When the client's current insurance renews — a month label (PAC-56 #16).
+   *
+   * Legacy's `Insurance X Month` (`s69d7c3f64`), re-ported. Optional here even
+   * though the create DTO requires it, per the class docblock: every migrated
+   * recap predates it.
+   *
+   * Stored as the **label**, not SmartSuite's choice UUID. The migration maps
+   * at write and every read path runs `normalizeInsuranceMonth`, so a database
+   * migrated before this landed still renders month names.
+   */
+  @Prop({ trim: true })
+  insuranceRenewalMonth?: string;
+
   @Prop({ type: Types.ObjectId, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 

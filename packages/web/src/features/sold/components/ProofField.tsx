@@ -1,15 +1,8 @@
 import { useStore } from "@tanstack/react-form";
-import { Loader2 } from "lucide-react";
-import { useState } from "react";
 import { FormSubPanel } from "@/components/form";
-import { FileDropzone } from "@/components/upload/FileDropzone";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { useFieldError } from "@/components/form/fields";
 import { withFieldGroup } from "@/hooks/form";
-import {
-  ALLOWED_SOLD_UPLOAD_TYPES,
-  MAX_SOLD_UPLOAD_BYTES,
-  uploadSoldDocument,
-} from "@/lib/sold-deals-api";
+import { SoldDocumentUpload } from "./SoldDocumentUpload";
 import type { SoldPolicyFormValues } from "./sold-deal-schema";
 
 /**
@@ -22,57 +15,31 @@ import type { SoldPolicyFormValues } from "./sold-deal-schema";
  */
 type ProofValues = SoldPolicyFormValues["discounts"]["fireSubscription"];
 
-const proofDefaults: ProofValues = { selected: false, hasProof: false };
+const proofDefaults: ProofValues = { selected: false };
 
 /**
- * A discount with the spec's yes/no → upload-or-audit fork.
+ * A discount whose proof is **required** to claim it (PAC-56 #21).
  *
- * The fork is the point: answering **no** does not cancel the discount, it
- * hands the chase to the service team. Either way an audit item is generated —
- * with proof it arrives already resolved and carrying the document, without it
- * the item lands on the hand-off board. That is why "no proof" is presented as
- * a normal answer rather than a validation failure.
+ * ## What changed
  *
- * Which discount this is comes from `fields` at the call site. The previous
- * version took a `name` prop typed as a hand-written union of the three literal
- * paths, which is the same nominal typing this refactor exists to remove — the
- * union was correct only for as long as someone kept it in step with the schema.
+ * This used to offer a yes/no fork: "no, I don't have it" was a valid answer
+ * that handed the chase to the service team. David asked for the document up
+ * front, so selecting a discount now requires attaching its proof — there is no
+ * "no" branch, and `hasProof` is gone from form state entirely.
+ *
+ * The proof does not merely sit in storage: `auditAttachmentsByItem` maps it
+ * onto the audit item it evidences, so the service team opens the hand-off
+ * board and finds the file already there. The item still opens as **outstanding**
+ * — a document is evidence for the auditor, not a resolution.
+ *
+ * Which discount this is comes from `fields` at the call site, so a schema
+ * rename is a compile error rather than a runtime miss.
  */
 export const ProofField = withFieldGroup({
   defaultValues: proofDefaults,
   props: { leadId: "", label: "", proofPrompt: "" },
   render: function Render({ group, leadId, label, proofPrompt }) {
-    const [uploading, setUploading] = useState(false);
-    const [uploadError, setUploadError] = useState<string | null>(null);
-    const [file, setFile] = useState<File | null>(null);
-
     const selected = useStore(group.store, (s) => s.values.selected);
-    const hasProof = useStore(group.store, (s) => s.values.hasProof);
-    const attachment = useStore(group.store, (s) => s.values.attachment);
-
-    const onSelectFile = async (candidate: File | null) => {
-      setFile(candidate);
-      setUploadError(null);
-      if (!candidate) {
-        group.setFieldValue("attachment", undefined);
-        return;
-      }
-
-      setUploading(true);
-      try {
-        // Uploaded immediately rather than at submit: the wizard can span several
-        // minutes, and deferring every file to the end would make a slow or
-        // failed upload look like a failed sale.
-        const meta = await uploadSoldDocument(leadId, candidate);
-        group.setFieldValue("attachment", meta);
-      } catch (error) {
-        setUploadError(error instanceof Error ? error.message : "Upload failed");
-        setFile(null);
-        group.setFieldValue("attachment", undefined);
-      } finally {
-        setUploading(false);
-      }
-    };
 
     // `content-start`: the anti-stretch fix `FieldShell` documents.
     return (
@@ -82,12 +49,10 @@ export const ProofField = withFieldGroup({
             <f.CheckboxField
               label={label}
               onChanged={(on) => {
-                if (on) return;
-                // Clear the branch entirely, so an un-ticked discount cannot
-                // leave a stale document behind on submit.
-                group.setFieldValue("hasProof", false);
-                group.setFieldValue("attachment", undefined);
-                setFile(null);
+                // Clear the branch entirely when un-ticked, so a discount the
+                // producer changed their mind about cannot leave a stale
+                // document behind on submit.
+                if (!on) group.setFieldValue("attachment", undefined);
               }}
             />
           )}
@@ -96,63 +61,26 @@ export const ProofField = withFieldGroup({
         {selected && (
           <FormSubPanel>
             <p className="text-sm text-foreground">{proofPrompt}</p>
-
-            <RadioGroup
-              value={hasProof ? "yes" : "no"}
-              onValueChange={(value) => {
-                const yes = value === "yes";
-                group.setFieldValue("hasProof", yes);
-                if (!yes) {
-                  group.setFieldValue("attachment", undefined);
-                  setFile(null);
-                }
-              }}
-              className="flex gap-4"
-            >
-              <label className="flex items-center gap-2 text-sm">
-                <RadioGroupItem value="yes" />
-                Yes, attach it
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <RadioGroupItem value="no" />
-                No — send to audit
-              </label>
-            </RadioGroup>
-
-            {hasProof ? (
-              <div className="space-y-2">
-                <FileDropzone
-                  accept={ALLOWED_SOLD_UPLOAD_TYPES}
-                  maxBytes={MAX_SOLD_UPLOAD_BYTES}
-                  file={file}
-                  onSelect={(candidate) => void onSelectFile(candidate)}
-                  disabled={uploading}
-                  aria-label={`Upload proof for ${label}`}
-                  hint="PDF, JPEG or PNG, up to 10MB"
+            {/*
+              * Bound through the field rather than `group.setFieldValue`, so the
+              * schema's "attach the document" error — which zod reports against
+              * `attachment` — is readable here, and `handleBlur` clears it the
+              * moment an upload satisfies it rather than at the next Continue.
+              */}
+            <group.Field name="attachment">
+              {(field) => (
+                <SoldDocumentUpload
+                  leadId={leadId}
+                  value={field.state.value}
+                  onChange={(meta) => {
+                    field.handleChange(meta);
+                    field.handleBlur();
+                  }}
+                  ariaLabel={`Upload proof for ${label}`}
+                  error={useFieldError(field.state.meta)}
                 />
-                {uploading && (
-                  <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 size={13} className="animate-spin" />
-                    Uploading…
-                  </p>
-                )}
-                {uploadError && (
-                  <p className="text-sm text-destructive">{uploadError}</p>
-                )}
-                {attachment && !uploading && (
-                  <p className="text-xs text-emerald-500">
-                    Attached — {attachment.filename}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <p
-                data-slot="form-description"
-                className="text-sm text-muted-foreground"
-              >
-                The service team will chase this during onboarding.
-              </p>
-            )}
+              )}
+            </group.Field>
           </FormSubPanel>
         )}
       </div>

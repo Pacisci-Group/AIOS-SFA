@@ -122,6 +122,15 @@ export interface LeadDetailQuoteRecap extends LeadDetailQuoteRecapSummary {
    * fallback for a recap whose rows carry none.
    */
   propertyAddress: StructuredAddress | null;
+  /**
+   * When the client's current insurance renews (PAC-56 #16). `null` on a
+   * migrated recap, or one recorded before the field existed.
+   *
+   * On the full recap rather than the summary, so the expander renders it for
+   * earlier recaps too — a renewal month that moved between quotes is exactly
+   * the kind of change the expander exists to show.
+   */
+  insuranceRenewalMonth: string | null;
   notes: string | null;
   /**
    * Who recorded the recap, resolved from `producerId`. `null` on a migrated

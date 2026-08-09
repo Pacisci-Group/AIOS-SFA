@@ -33,7 +33,7 @@ interface EditPolicyDialogProps {
  * David asked for the Sold card to allow "quick edits to sold policies". Legacy
  * had this as a whole second Fillout form (the Deals `Edit Sold` formula); this
  * is deliberately narrower — the fields a producer gets wrong at the keyboard.
- * Re-running the 8-card wizard to fix a transposed policy number would also
+ * Re-running the whole wizard to fix a transposed policy number would also
  * re-generate the audit hand-off.
  *
  * Gated on **`deal_audits:write`**, the same permission the Sold form itself

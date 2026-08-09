@@ -1,4 +1,5 @@
 import type { QuoteRecapLeadContext } from "@sfa/shared";
+import { INSURANCE_MONTH_OPTIONS } from "@sfa/shared";
 import { Paperclip } from "lucide-react";
 import { useState } from "react";
 import { FormError, FormSection } from "@/components/form";
@@ -201,6 +202,29 @@ export function QuoteRecapForm({
               </FieldShell>
             )}
           </form.Field>
+        </FormSection>
+
+        {/*
+          * PAC-56 #16 — a legacy re-port (`Insurance X Month`, `s69d7c3f64`).
+          * Placed between the document and the notes, where David asked for it,
+          * and per-recap because that is legacy's shape: one client, one current
+          * policy renewing.
+          */}
+        <FormSection
+          title="Insurance renewal"
+          description="When the client's current insurance renews, so we can re-engage ahead of it."
+        >
+          <form.AppField name="insuranceRenewalMonth">
+            {(f) => (
+              <f.SelectField
+                label="Renewal month"
+                options={INSURANCE_MONTH_OPTIONS}
+                placeholder="Select a month"
+                disabled={submitting}
+                triggerClassName="w-full bg-card border-border sm:max-w-xs"
+              />
+            )}
+          </form.AppField>
         </FormSection>
 
         <FormSection title="Notes">

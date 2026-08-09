@@ -1,5 +1,10 @@
 import type { LeadDetailQuoteRecap } from "@sfa/shared";
-import { ChevronDown, Home, MessageSquare } from "lucide-react";
+import {
+  CalendarClock,
+  ChevronDown,
+  Home,
+  MessageSquare,
+} from "lucide-react";
 import { useState } from "react";
 import {
   Collapsible,
@@ -155,6 +160,19 @@ function QuoteRecapBody({ recap }: { recap: LeadDetailQuoteRecap }) {
           <span className="break-words">
             Property · {formatAddress(recap.propertyAddress)}
           </span>
+        </p>
+      )}
+
+      {/*
+        PAC-56 #16. Beside the addresses rather than in `RecapMeta`, which is
+        already carrying the badge, the quote date and the edit button — and
+        because this is a fact about the *client's* cover, not about the recap.
+        Absent on migrated recaps and on anything recorded before the field.
+      */}
+      {recap.insuranceRenewalMonth && (
+        <p className="flex items-start gap-2 text-sm text-muted-foreground">
+          <CalendarClock className="mt-0.5 size-4 shrink-0" />
+          <span>Current insurance renews in {recap.insuranceRenewalMonth}</span>
         </p>
       )}
 

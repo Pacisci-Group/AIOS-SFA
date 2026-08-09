@@ -16,7 +16,17 @@ export const ALLOWED_SOLD_UPLOAD_TYPES = [
   "image/png",
 ];
 
+/**
+ * PDF-only — the new business application (PAC-56 #23) is the deliberate
+ * exception to the sold form's PDF-or-image rule. It is a signed application,
+ * not a photographed receipt.
+ */
+export const ALLOWED_NBA_UPLOAD_TYPES = ["application/pdf"];
+
 export const MAX_SOLD_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/** Mirrors the API's `SOLD_UPLOAD_KINDS`. */
+export type SoldUploadKind = "discount_proof" | "new_business_application";
 
 /** `GET /sold-deals/context?leadId=` — the header and driver picker source. */
 export function getSoldDealContext(
@@ -28,7 +38,7 @@ export function getSoldDealContext(
 }
 
 /**
- * `GET /policies/check` — Card 3's duplicate warning.
+ * `GET /policies/check` — the policy-details card's duplicate warning.
  *
  * Always resolves to a well-formed envelope: "no matches" and "input too short"
  * are normal answers, not errors, so the caller never has to distinguish a
@@ -44,16 +54,21 @@ export function checkPolicyNumber(
 }
 
 /**
- * Upload one Card 5 proof and return the metadata to attach to the policy.
+ * Upload one sold-form document and return the metadata to attach to the policy.
  *
  * Three steps: presign → PUT the bytes straight to storage → hand back the key.
  * The bytes never pass through the API, and the server re-derives the real
  * content type and size from the stored object on submit, so what is returned
  * here is a convenience for rendering rather than something trusted.
+ *
+ * `kind` decides both the allowed content types and the key prefix (PAC-56
+ * #23) — the prefix is what lets the server enforce PDF-only on the new
+ * business application at verification time rather than trusting the presign.
  */
 export async function uploadSoldDocument(
   leadId: string,
   file: File,
+  kind: SoldUploadKind = "discount_proof",
 ): Promise<SoldDocumentMeta> {
   const presigned = await apiFetch<SoldDocumentPresignResponse>(
     "/sold-deals/documents/presign",
@@ -61,6 +76,7 @@ export async function uploadSoldDocument(
       method: "POST",
       body: JSON.stringify({
         leadId,
+        kind,
         filename: file.name,
         contentType: file.type,
         size: file.size,

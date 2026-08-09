@@ -1,19 +1,25 @@
-import { POLICY_TYPE_OPTIONS } from "@sfa/shared";
+import { CARRIER_OTHER, POLICY_TYPE_OPTIONS } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
-import { useEffect, useRef, useState } from "react";
-import { FieldShell } from "@/components/form/fields";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FormSubPanel } from "@/components/form";
+import { FieldShell, useFieldError } from "@/components/form/fields";
+import type { SelectOption } from "@/components/form/fields";
 import { Input } from "@/components/ui/input";
 import { withForm } from "@/hooks/form";
-import { checkPolicyNumber } from "@/lib/sold-deals-api";
+import {
+  ALLOWED_NBA_UPLOAD_TYPES,
+  checkPolicyNumber,
+} from "@/lib/sold-deals-api";
 import { DuplicatePolicyNotice } from "./DuplicatePolicyNotice";
-import type { PolicyCheckMatch } from "@sfa/shared";
+import { SoldDocumentUpload } from "./SoldDocumentUpload";
+import type { CarrierOption, PolicyCheckMatch } from "@sfa/shared";
 import { emptyPolicy } from "./sold-deal-schema";
 
 /**
  * The wizard's individual cards.
  *
  * Each is a `withForm` component bound to the **draft** policy form and reached
- * as `<PolicyTypeCard form={draft} />`, except Card 1, which edits the
+ * as `<PolicyTypeCard form={draft} />`, except the sold-date card, which edits the
  * deal-level sold date and takes it as a prop — that is the one field outside
  * the per-policy loop.
  *
@@ -24,7 +30,7 @@ import { emptyPolicy } from "./sold-deal-schema";
  */
 
 /**
- * Card 1 — one sold date for the whole deal.
+ * The sold date — one for the whole deal.
  *
  * Deliberately **outside** the form library: it is deal-level, not policy-level,
  * so it cannot live in the draft form (which is reset per policy), and a second
@@ -65,7 +71,7 @@ export function SoldDateCard({
   );
 }
 
-/** Card 2 — the loop's entry point. */
+/** The loop's entry point. */
 export const PolicyTypeCard = withForm({
   defaultValues: emptyPolicy(),
   render: function Render({ form }) {
@@ -83,19 +89,77 @@ export const PolicyTypeCard = withForm({
   },
 });
 
-/** Card 3 — basic details, plus the duplicate check. */
+/**
+ * Catalog carriers plus the "Other" escape (PAC-56 #18).
+ *
+ * "Other" is always last and always present: the seeded list covers the common
+ * cases well enough that it is rare, not exhaustively enough that it is never
+ * needed, and a carrier we forgot must not be able to block a sale.
+ */
+function useCarrierOptions(
+  carriers: readonly CarrierOption[],
+): SelectOption<string>[] {
+  return useMemo(
+    () => [
+      ...carriers.map((c) => c.name),
+      { value: CARRIER_OTHER, label: "Other…" },
+    ],
+    [carriers],
+  );
+}
+
+/**
+ * The selected carrier's format rule, stated up front.
+ *
+ * Shown as the field's description rather than waiting for the error: a
+ * producer who knows the number must be digits typically has the right one to
+ * hand, and telling them after they have typed the wrong one is worse.
+ */
+function policyNumberHint(
+  carriers: readonly CarrierOption[],
+  carrier: string,
+): string | undefined {
+  return carriers.find((c) => c.name === carrier)?.policyNumberHint ?? undefined;
+}
+
+/** Basic details, plus the duplicate check. */
 export const PolicyDetailsCard = withForm({
   defaultValues: emptyPolicy(),
-  render: function Render({ form }) {
+  props: { carriers: [] as CarrierOption[] },
+  render: function Render({ form, carriers }) {
     const [match, setMatch] = useState<PolicyCheckMatch | null>(null);
     const numberRef = useRef<HTMLInputElement | null>(null);
+    const carrierOptions = useCarrierOptions(carriers);
 
     const policyNumber = useStore(form.store, (s) => s.values.policyNumber);
     const policyType = useStore(form.store, (s) => s.values.policyType);
+    const carrier = useStore(form.store, (s) => s.values.carrier);
+    const numberTouched = useStore(
+      form.store,
+      (s) => s.fieldMeta.policyNumber?.isTouched ?? false,
+    );
     const existingPolicyId = useStore(
       form.store,
       (s) => s.values.existingPolicyId,
     );
+
+    /*
+     * Re-validate the number when the carrier changes.
+     *
+     * Without this the sequence "pick Allstate → type a number → blur → Back →
+     * switch to State Farm" leaves the error from Allstate's rule sitting under
+     * a field the rule no longer applies to. `validateCard` re-runs on Continue
+     * so the submit is safe either way, but the live feedback would be wrong
+     * until then — which reads as the app accepting an invalid number.
+     *
+     * Gated on `isTouched` so switching carrier on a blank form does not light
+     * it up. Same shape as the stale-match effect above.
+     */
+    useEffect(() => {
+      if (!numberTouched) return;
+      void form.validateField("policyNumber", "change");
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [carrier]);
 
     // Clear a stale warning as soon as the number changes — the old match is
     // about a number the producer is no longer entering.
@@ -131,14 +195,33 @@ export const PolicyDetailsCard = withForm({
         </form.AppField>
 
         <form.AppField name="carrier">
-          {(f) => <f.TextField label="Carrier" placeholder="Allstate" />}
+          {(f) => (
+            <f.SelectField
+              label="Carrier"
+              options={carrierOptions}
+              placeholder="Select a carrier"
+            />
+          )}
         </form.AppField>
+
+        {carrier === CARRIER_OTHER && (
+          <form.AppField name="carrierOther">
+            {(f) => (
+              <f.TextField
+                label="Carrier name"
+                placeholder="Name the carrier"
+                description="Not in the list — we'll record what you type."
+              />
+            )}
+          </form.AppField>
+        )}
 
         <form.AppField name="policyNumber">
           {(f) => (
             <f.TextField
               label="Policy number"
               placeholder="ABC-123-456"
+              description={policyNumberHint(carriers, carrier)}
               inputRef={numberRef}
               onBlur={() => void runCheck()}
             />
@@ -161,7 +244,7 @@ export const PolicyDetailsCard = withForm({
   },
 });
 
-/** Card 4 — premium and item count. */
+/** Premium and item count. */
 export const PolicyFinancialsCard = withForm({
   defaultValues: emptyPolicy(),
   render: function Render({ form }) {
@@ -195,12 +278,78 @@ export const PolicyFinancialsCard = withForm({
   },
 });
 
-/** Card 6 — prior insurance. Labels track the policy type. */
+/**
+ * The signed new business application, per policy (PAC-56 #23).
+ *
+ * **Required and PDF-only** — the deliberate exception to the sold form's
+ * PDF-or-image rule, because this is a signed application rather than a
+ * photographed receipt, and David asked for it specifically for data accuracy.
+ *
+ * Per policy rather than legacy's five type-keyed columns on the Deal
+ * (`Auto_`/`Home_`/`Landlord_`/`Renters_`/`Other_`): the wizard already loops
+ * per policy, legacy's own Policies table carried the same field, and two
+ * Landlord policies on one deal each need their own application.
+ */
+export const NewBusinessApplicationCard = withForm({
+  defaultValues: emptyPolicy(),
+  props: { leadId: "" },
+  render: function Render({ form, leadId }) {
+    const policyType = useStore(form.store, (s) => s.values.policyType);
+
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          The signed {policyType.toLowerCase()} application. Required, and a PDF
+          — it is the record the audit checks the rest of this sale against.
+        </p>
+        <form.Field name="newBusinessApplication">
+          {(field) => (
+            <SoldDocumentUpload
+              leadId={leadId}
+              kind="new_business_application"
+              accept={ALLOWED_NBA_UPLOAD_TYPES}
+              hint="PDF up to 10MB"
+              value={field.state.value}
+              onChange={(meta) => {
+                field.handleChange(meta);
+                field.handleBlur();
+              }}
+              ariaLabel="Upload the new business application"
+              error={useFieldError(field.state.meta)}
+            />
+          )}
+        </form.Field>
+      </div>
+    );
+  },
+});
+
+/**
+ * Prior insurance — and, since PAC-56 #24, the cancellation question with it.
+ *
+ * They were two cards. Merging them is the honest shape: cancellation is a
+ * follow-up about the *prior* policy, so asking it of someone who has just said
+ * "no prior insurance" was a step with nothing on it. Everything below the
+ * toggle is hidden in that branch, and `toPolicyInput` collapses the pair so a
+ * stale value cannot survive a change of mind.
+ *
+ * Labels track the policy type.
+ */
 export const PriorInsuranceCard = withForm({
   defaultValues: emptyPolicy(),
-  render: function Render({ form }) {
+  props: { carriers: [] as CarrierOption[] },
+  render: function Render({ form, carriers }) {
     const policyType = useStore(form.store, (s) => s.values.policyType);
     const none = useStore(form.store, (s) => s.values.priorInsurance.none);
+    const priorCarrier = useStore(
+      form.store,
+      (s) => s.values.priorInsurance.carrier,
+    );
+    const cancelled = useStore(
+      form.store,
+      (s) => s.values.cancellation.cancelled,
+    );
+    const carrierOptions = useCarrierOptions(carriers);
 
     return (
       <div className="space-y-4">
@@ -216,53 +365,62 @@ export const PriorInsuranceCard = withForm({
           */}
         {!none && (
           <>
+            {/*
+              * The same catalog as the sold policy's carrier (PAC-56 #18) —
+              * and the place the multi-carrier list actually earns its keep,
+              * since this agency writes Allstate and the prior carrier is
+              * whoever the client is leaving.
+              */}
             <form.AppField name="priorInsurance.carrier">
               {(f) => (
-                <f.TextField
+                <f.SelectField
                   label={`Prior ${policyType} carrier`}
-                  placeholder="Geico"
+                  options={carrierOptions}
+                  placeholder="Select a carrier"
                 />
               )}
             </form.AppField>
+            {priorCarrier === CARRIER_OTHER && (
+              <form.AppField name="priorInsurance.carrierOther">
+                {(f) => (
+                  <f.TextField
+                    label="Prior carrier name"
+                    placeholder="Name the carrier"
+                  />
+                )}
+              </form.AppField>
+            )}
             <form.AppField name="priorInsurance.agentName">
               {(f) => <f.TextField label="Prior agent" placeholder="Optional" />}
             </form.AppField>
+
+            {/*
+              * Was its own card until PAC-56 #24. Inside the `!none` branch so
+              * it disappears entirely when there is no prior policy to cancel —
+              * which is the whole of the change David asked for.
+              */}
+            <FormSubPanel title="Cancellation">
+              <form.AppField name="cancellation.cancelled">
+                {(f) => (
+                  <f.CheckboxField
+                    label="The prior insurance has been cancelled"
+                    hint="Left unticked, the service team is asked to cancel it during onboarding."
+                  />
+                )}
+              </form.AppField>
+
+              {cancelled && (
+                <form.AppField name="cancellation.effectiveDate">
+                  {(f) => (
+                    <f.TextField
+                      label="Effective date of cancellation"
+                      type="date"
+                    />
+                  )}
+                </form.AppField>
+              )}
+            </FormSubPanel>
           </>
-        )}
-      </div>
-    );
-  },
-});
-
-/** Card 7 — did the client cancel the prior policy? */
-export const CancellationCard = withForm({
-  defaultValues: emptyPolicy(),
-  render: function Render({ form }) {
-    const cancelled = useStore(
-      form.store,
-      (s) => s.values.cancellation.cancelled,
-    );
-
-    return (
-      <div className="space-y-4">
-        <form.AppField name="cancellation.cancelled">
-          {(f) => (
-            <f.CheckboxField label="The prior insurance has been cancelled" />
-          )}
-        </form.AppField>
-
-        {cancelled && (
-          <form.AppField name="cancellation.effectiveDate">
-            {(f) => (
-              <f.TextField label="Effective date of cancellation" type="date" />
-            )}
-          </form.AppField>
-        )}
-
-        {!cancelled && (
-          <p className="text-xs text-muted-foreground">
-            Left unticked, the service team is asked to cancel it during onboarding.
-          </p>
         )}
       </div>
     );

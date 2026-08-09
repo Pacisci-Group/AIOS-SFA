@@ -4,6 +4,7 @@ import {
   deriveAuditTriggers,
   deriveDealAggregates,
   deriveMortgagee,
+  derivePersistedDealAggregates,
   derivePriorCarriers,
   findCrossBranchDiscounts,
   parseFormDate,
@@ -13,13 +14,14 @@ import {
 
 const EMPTY_DISCOUNTS: SoldPolicyInput['discounts'] = {
   escrow: false,
-  fireSubscription: { selected: false, hasProof: false },
-  roofReceipt: { selected: false, hasProof: false },
+  inspection: { selected: false },
+  fireSubscription: { selected: false },
+  roofReceipt: { selected: false },
   acvPersonalProperty: false,
   acvDwellingProtection: false,
-  drivewise: false,
+  drivewise: { selected: false },
   defensiveDriver: { selected: false, drivers: [] },
-  studentDiscount: { selected: false, hasProof: false },
+  studentDiscount: { selected: false },
 };
 
 function policy(overrides: Partial<SoldPolicyInput> = {}): SoldPolicyInput {
@@ -152,6 +154,60 @@ describe('deriveDealAggregates', () => {
   });
 });
 
+describe('derivePersistedDealAggregates (PAC-56 #25)', () => {
+  it('folds stored rows the same way the DTO version folds a submission', () => {
+    const totals = derivePersistedDealAggregates([
+      { policyType: 'Auto', premium: 1200.1, items: 2 },
+      { policyType: 'Home', premium: 899.95, items: 3 },
+    ]);
+
+    // Rounded to cents, not 2100.0499999999997.
+    expect(totals.premium).toBe(2100.05);
+    expect(totals.itemCount).toBe(5);
+    expect(totals.policyCount).toBe(2);
+    expect(totals.policyTypes).toEqual(['Auto', 'Home']);
+    expect(totals.isBundle).toBe(true);
+    expect(totals.dealType).toBe('Bundle');
+  });
+
+  it('reads `items`, not `itemCount` — the stored field has the other name', () => {
+    // The single easiest way to get this wrong: copy the DTO version and end up
+    // silently summing `undefined` into zero on every deal.
+    const totals = derivePersistedDealAggregates([
+      { policyType: 'Auto', premium: 100, items: 4 },
+    ]);
+    expect(totals.itemCount).toBe(4);
+  });
+
+  it('normalizes a migrated raw SmartSuite policy code', () => {
+    // `Zgsh3` is Auto in the Policies code set. Left raw, the deal would report
+    // a policy type no reader recognises and `isBundle` would be wrong.
+    const totals = derivePersistedDealAggregates([
+      { policyType: 'Zgsh3', premium: 100, items: 1 },
+      { policyType: 'eCEuV', premium: 100, items: 1 },
+    ]);
+    expect(totals.policyTypes).toEqual(['Auto', 'Home']);
+    expect(totals.isBundle).toBe(true);
+  });
+
+  it('tolerates rows missing every optional field', () => {
+    const totals = derivePersistedDealAggregates([{}, {}]);
+    expect(totals.premium).toBe(0);
+    expect(totals.itemCount).toBe(0);
+    expect(totals.policyCount).toBe(2);
+    expect(totals.policyTypes).toEqual([]);
+  });
+
+  it('never returns a sold date — that is the scorecard bucket key', () => {
+    // A premium correction must not move the deal between reporting days.
+    const totals = derivePersistedDealAggregates([
+      { policyType: 'Auto', premium: 100, items: 1 },
+    ]);
+    expect(totals).not.toHaveProperty('soldDate');
+    expect(totals).not.toHaveProperty('soldDateYmd');
+  });
+});
+
 describe('deriveAuditTriggers', () => {
   it('is all-false for a deal with no discounts', () => {
     const triggers = deriveAuditTriggers([policy()]);
@@ -168,7 +224,10 @@ describe('deriveAuditTriggers', () => {
 
   it('ORs a selection across policies', () => {
     const withDrivewise = policy({
-      discounts: { ...structuredClone(EMPTY_DISCOUNTS), drivewise: true },
+      discounts: {
+        ...structuredClone(EMPTY_DISCOUNTS),
+        drivewise: { selected: true },
+      },
     });
     expect(deriveAuditTriggers([policy(), withDrivewise]).drivewise).toBe(true);
   });
@@ -268,7 +327,10 @@ describe('deriveMortgagee', () => {
 describe('findCrossBranchDiscounts', () => {
   it('accepts discounts that match their policy type', () => {
     const auto = policy({
-      discounts: { ...structuredClone(EMPTY_DISCOUNTS), drivewise: true },
+      discounts: {
+        ...structuredClone(EMPTY_DISCOUNTS),
+        drivewise: { selected: true },
+      },
     });
     const home = policy({
       policyType: 'Home',
@@ -280,7 +342,10 @@ describe('findCrossBranchDiscounts', () => {
   it('rejects auto discounts on a property policy', () => {
     const bogus = policy({
       policyType: 'Home',
-      discounts: { ...structuredClone(EMPTY_DISCOUNTS), drivewise: true },
+      discounts: {
+        ...structuredClone(EMPTY_DISCOUNTS),
+        drivewise: { selected: true },
+      },
     });
     // Stripping silently would generate a Drivewise audit item for a deal with
     // no auto line, and nothing downstream could tell it was bogus.
@@ -301,7 +366,7 @@ describe('findCrossBranchDiscounts', () => {
       policyType: 'Umbrella',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: true,
+        drivewise: { selected: true },
         escrow: true,
       },
     });
@@ -312,7 +377,10 @@ describe('findCrossBranchDiscounts', () => {
     const ok = policy();
     const bad = policy({
       policyType: 'Home',
-      discounts: { ...structuredClone(EMPTY_DISCOUNTS), drivewise: true },
+      discounts: {
+        ...structuredClone(EMPTY_DISCOUNTS),
+        drivewise: { selected: true },
+      },
     });
     const problems = findCrossBranchDiscounts([ok, bad, bad]);
     expect(problems).toHaveLength(2);

@@ -6,10 +6,12 @@ import { ALL_MODULE_KEYS } from '@sfa/shared';
 import { AppModule } from '../app.module';
 import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
 import { Branch } from '../branches/schemas/branch.schema';
+import { Carrier } from '../carriers/schemas/carrier.schema';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency } from '../platform/schemas/agency.schema';
 import { User } from '../users/schemas/user.schema';
 import { seedAuditTemplates } from './audit-templates.seed';
+import { seedCarriers } from './carriers.seed';
 
 /**
  * Core seed — platform-required data only.
@@ -36,6 +38,7 @@ async function seed() {
   const auditTemplateModel = app.get<Model<AuditTemplate>>(
     getModelToken(AuditTemplate.name),
   );
+  const carrierModel = app.get<Model<Carrier>>(getModelToken(Carrier.name));
   const permissionsService = app.get(PermissionsService);
 
   // ---------------------------------------------------------------------------
@@ -70,9 +73,17 @@ async function seed() {
   // ---------------------------------------------------------------------------
   // 2. Global catalog / feature data (plans, feature definitions, constants)
   // ---------------------------------------------------------------------------
-  // Add platform-wide catalog seeding here as those collections come online.
   // Anything seeded here must be part of a shipped feature and required for the
   // app to function — never demo/tenant data (that belongs in the demo seed).
+
+  // Carrier catalog (PAC-56 #19). Platform-required, not demo data: it is the
+  // only source for the Sold wizard's carrier select, so an empty collection
+  // forces every sale through the "Other" escape. Rows carry `agencyId: null`,
+  // which is what makes them visible to every tenant.
+  const carriers = await seedCarriers(carrierModel);
+  console.log(
+    `Carriers seeded (${carriers.created} created, ${carriers.refreshed} already present)`,
+  );
 
   // ---------------------------------------------------------------------------
   // 3. Empty tenant scaffold — migration target (no demo users, no CRM data)

@@ -127,7 +127,12 @@ export function LeadsTable({ leads, isPending, pageSize }: LeadsTableProps) {
               </span>
 
               <span className="flex items-center gap-1.5 justify-self-end">
-                <QuoteRecapAction leadId={lead.id} leadName={lead.name} iconOnly />
+                <QuoteRecapAction
+                  leadId={lead.id}
+                  leadStatus={lead.status}
+                  leadName={lead.name}
+                  iconOnly
+                />
                 <ChevronRight className="size-4 text-muted-foreground" />
               </span>
             </div>

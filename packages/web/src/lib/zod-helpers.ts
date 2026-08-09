@@ -12,7 +12,7 @@ import { z } from "zod";
  * version.
  *
  * Introduced for the Quote Recap form (PAC-39); shared once the Sold wizard
- * (PAC-40) needed the same guarantee on Card 4's premium and item count.
+ * (PAC-40) needed the same guarantee on the sold policy's premium and item count.
  */
 export function numericString(options: {
   required: string;

@@ -69,7 +69,12 @@ export function LeadCard({ lead }: { lead: LeadRow }) {
         )}
       </div>
 
-      <QuoteRecapAction leadId={lead.id} leadName={lead.name} iconOnly />
+      <QuoteRecapAction
+        leadId={lead.id}
+        leadStatus={lead.status}
+        leadName={lead.name}
+        iconOnly
+      />
       <ChevronRight className="size-4 text-muted-foreground shrink-0" />
     </div>
   );

@@ -1,7 +1,7 @@
 meta {
   name: Update Policy
   type: http
-  seq: 8
+  seq: 10
 }
 
 patch {
@@ -133,12 +133,40 @@ docs {
 
   ⚠ **Do not add a unique index** — it would fail to build on migrated data.
 
-  ## Deal roll-ups are not recomputed
-  `Deal.premium` / `itemCount` / `policyCount` were derived at submission and
-  are untouched here, so a corrected premium can disagree with the deal total
-  until the deal is recomputed. Deliberate: silently rewriting a deal's premium
-  from the Lead Detail page would move the producer's Sold scorecard and the
-  leaderboard. Tracked with the wider sold-edit work (PAC-56 #25).
+  ## Policy-number format (PAC-56 #20)
+  If the request **changes `policyNumber`** and the effective carrier (the
+  patched value if present, the stored one otherwise) carries a
+  `policyNumberPattern` from `GET /carriers`, the new number must satisfy it —
+  tested against the normalized key, so punctuation is fine.
+
+  ⚠ Checked **only when the number changes**. Validating on a carrier-only edit
+  would strand every migrated policy whose stored number predates the rule: a
+  rule introduced today must not retroactively lock records written before it.
+
+  ## Deal roll-ups ARE recomputed (PAC-56 #25)
+  `Deal.premium` / `itemCount` / `policyCount` / `policyTypes` / `isBundle` /
+  `dealType` are recomputed from the deal's stored policies after the save. Until
+  this landed they were left alone, so the Sold card's footer total could
+  disagree with the row directly above it.
+
+  **`soldDate` / `soldDateYmd` are never recomputed.** `soldDateYmd` is the Sold
+  scorecard's indexed bucket key; a Thursday correction must not re-date a
+  Monday sale.
+
+  ⚠ **This moves reported numbers.** The Sold scorecard sums `deals.premium` and
+  the leaderboard ranks on it, so a premium correction here changes a producer's
+  dashboard figure and possibly their rank. Intended — a scorecard built on
+  numbers known to be wrong is worse — but say so when demoing it.
+
+  ⚠ **Migrated deals are skipped**, gated on `premiumSource === 'snapshot'` (the
+  value `ResolveDealStep` stamps on deals this app created). A migrated deal's
+  premium is SmartSuite's rollup over rows we may hold only part of, so
+  recomputing would overwrite a historical figure with the imported subset. The
+  trade: a typo fix on a migrated deal will not move its total.
+
+  The recompute is best-effort and post-save — the correction is what the
+  producer asked for, and failing the request after it committed would report
+  the wrong outcome.
 
   ## Response `200`
   The saved policy, in the same shape `GET /leads/:id` returns for

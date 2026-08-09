@@ -1,14 +1,7 @@
-import { ModuleKey } from "@sfa/shared";
+import { ModuleKey, isSoldLeadStatus } from "@sfa/shared";
 import { FileText } from "lucide-react";
-import { Link } from "react-router-dom";
 import { usePermissions } from "@/hooks/usePermissions";
-import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { LeadActionButton } from "./LeadActionButton";
 
 /** Route owning the Quote Recap form (PAC-39, story 4 of the Leads epic). */
 export const NEW_QUOTE_RECAP_ROUTE = "/quote-recaps/new";
@@ -19,6 +12,13 @@ export function newQuoteRecapRoute(leadId: string): string {
 
 interface QuoteRecapActionProps {
   leadId: string;
+  /**
+   * The lead's current status (PAC-56 #17). **Required, not optional** — these
+   * components are deliberately self-gating, and a required prop is what makes
+   * every call site a compile error rather than a surface that quietly keeps
+   * the old behaviour.
+   */
+  leadStatus: string;
   /** Used in the accessible name, e.g. "Record quote recap for Dana Ruiz". */
   leadName?: string;
   /**
@@ -40,13 +40,14 @@ interface QuoteRecapActionProps {
  * Gates itself on `quote_recaps:write` and renders nothing without it — callers
  * don't need their own permission check. (Mirrors `AddLeadButton`.)
  *
- * Built from `Button asChild` rather than a bare styled `<Link>`: it sits beside
- * `SoldDealAction` and the two have to match in height, radius, icon size and
- * focus ring. Hand-rolling both is how they drifted into "one looks like a
- * button and the other doesn't".
+ * Disabled once the lead is **sold** (PAC-56 #17): quoting a closed deal is
+ * always a mis-click, and the recap it would create sits confusingly beside the
+ * sale on Lead Detail. Note this is a UI affordance — the API still accepts a
+ * recap on a sold lead, deliberately, because a late correction is legitimate.
  */
 export function QuoteRecapAction({
   leadId,
+  leadStatus,
   leadName,
   iconOnly = false,
   className,
@@ -58,32 +59,22 @@ export function QuoteRecapAction({
     ? `Record quote recap for ${leadName}`
     : "Record quote recap";
 
-  const button = (
-    <Button
-      asChild
+  return (
+    <LeadActionButton
+      to={newQuoteRecapRoute(leadId)}
+      accessibleName={accessibleName}
       variant="outline"
       size={iconOnly ? "icon-sm" : "sm"}
-      // `relative z-10` lifts it above the stretched row link in LeadsTable /
-      // LeadCard, whose ::after covers the whole row.
-      className={cn("relative z-10", className)}
+      className={className}
+      disabledReason={
+        isSoldLeadStatus(leadStatus)
+          ? "This lead is already sold."
+          : undefined
+      }
+      tooltip={iconOnly ? accessibleName : undefined}
     >
-      <Link
-        to={newQuoteRecapRoute(leadId)}
-        onClick={(e) => e.stopPropagation()}
-        aria-label={accessibleName}
-      >
-        <FileText />
-        {!iconOnly && "Quote"}
-      </Link>
-    </Button>
-  );
-
-  if (!iconOnly) return button;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent>{accessibleName}</TooltipContent>
-    </Tooltip>
+      <FileText />
+      {!iconOnly && "Quote"}
+    </LeadActionButton>
   );
 }

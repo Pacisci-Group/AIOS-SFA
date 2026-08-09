@@ -25,15 +25,23 @@ interface SoldCardProps {
  * because a per-policy patch is a correction, whereas an edit of the deal would
  * have to decide what happens to the audit items the sale generated.
  *
- * ## The totals are the deal's own, not a sum of the rows
+ * ## The totals are the deal's own, and are now kept in step (PAC-56 #25)
  *
- * `premium` / `itemCount` / `policyCount` are roll-ups the Sold form derived at
- * submission and stored on the deal. `PATCH /policies/:id` does not touch them,
- * so after a premium correction the total below can disagree with the rows above
- * it until the deal is recomputed. That is deliberate — silently rewriting a
- * deal's premium from the Lead Detail page would move the producer's Sold
- * scorecard and the leaderboard, which is a bigger decision than a typo fix.
- * Recomputing deal roll-ups belongs with the wider sold-edit work in PAC-56 #25.
+ * `premium` / `itemCount` / `policyCount` are roll-ups stored on the deal, not
+ * summed from the rows below. `PATCH /policies/:id` used to leave them alone, so
+ * a premium correction left this footer disagreeing with the row above it; it
+ * now recomputes them, and `useUpdatePolicy` invalidates the lead detail so the
+ * footer follows.
+ *
+ * ⚠ Two consequences worth knowing before editing a premium here:
+ *   - **It moves reported numbers.** The Sold scorecard sums `deals.premium`
+ *     and the leaderboard ranks on it, so a correction here changes a producer's
+ *     dashboard figure. Intended — a scorecard built on numbers known to be
+ *     wrong is worse — but not a silent side effect.
+ *   - **Migrated deals are skipped.** The recompute is gated on
+ *     `premiumSource === 'snapshot'`, i.e. deals this app created. A migrated
+ *     deal's premium is SmartSuite's rollup over rows we may hold only part of,
+ *     so recomputing would overwrite a historical figure with a subset.
  */
 export function SoldCard({ deal, leadId }: SoldCardProps) {
   return (

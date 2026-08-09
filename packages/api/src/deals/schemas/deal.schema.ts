@@ -12,7 +12,7 @@ export type DealType = 'Auto' | 'Home' | 'Bundle' | 'Other';
 export type PremiumSource = 'rollup' | 'snapshot' | 'none';
 
 /**
- * The Card 5 selections that drive audit-item generation, OR-ed across every
+ * The discount selections that drive audit-item generation, OR-ed across every
  * policy on the deal.
  *
  * Named for the **audit template titles** they resolve to rather than for the
@@ -151,7 +151,7 @@ export class Deal extends TenantRecord {
   mortgagee: boolean;
 
   /**
-   * The deal-level union of every policy's Card 5 selections — what audit
+   * The deal-level union of every policy's discount selections — what audit
    * generation reads. Legacy kept the equivalent booleans directly on the Deal
    * record and its generator re-read them from there, so this preserves the
    * shape the ported algorithm expects.

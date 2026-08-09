@@ -55,6 +55,9 @@ export default function NewQuoteRecapPage() {
         leadId,
         // Each row carries its own property address (PAC-56 #14).
         policies: toPolicyInputs(values.policies),
+        // Recap-level, not per-row (PAC-56 #16) — one client, one current
+        // policy renewing, matching legacy's `Insurance X Month`.
+        insuranceRenewalMonth: values.insuranceRenewalMonth,
         notes: values.notes?.trim() ? values.notes.trim() : undefined,
         file: values.quoteDocument,
         submissionToken: submissionToken.current,

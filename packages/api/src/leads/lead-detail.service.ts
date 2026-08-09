@@ -16,6 +16,7 @@ import {
   UpdateLeadResult,
   normalizeLeadSource,
   normalizeLeadStatus,
+  normalizeInsuranceMonth,
   normalizePolicyType,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
@@ -644,6 +645,10 @@ export class LeadDetailService {
       })),
       // The recap-level dwelling — only recaps written before #14 have one.
       propertyAddress: normalizeStoredAddress(recap.propertyAddress),
+      // Normalized on read: migrated recaps hold SmartSuite's choice UUID
+      // (PAC-56 #16). `null` for a recap recorded before the field existed.
+      insuranceRenewalMonth:
+        normalizeInsuranceMonth(recap.insuranceRenewalMonth) || null,
       notes: recap.notes ?? null,
       // Metadata only — the storage `key` stays server-side. Downloading the
       // document needs its own presigned-URL endpoint, not a client that knows

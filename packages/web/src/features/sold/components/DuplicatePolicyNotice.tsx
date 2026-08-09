@@ -13,7 +13,7 @@ interface DuplicatePolicyNoticeProps {
 const dateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium" });
 
 /**
- * Card 3's duplicate warning.
+ * The policy-details card's duplicate warning.
  *
  * An inline amber panel rather than a toast, matching `LeadIntakeForm`'s error
  * convention: this needs a decision, and a toast that disappears is the wrong

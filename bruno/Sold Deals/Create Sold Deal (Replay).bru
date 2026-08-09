@@ -1,7 +1,7 @@
 meta {
   name: Create Sold Deal (Replay)
   type: http
-  seq: 5
+  seq: 7
 }
 
 post {
@@ -28,6 +28,12 @@ body:json {
         "policyNumber": "{{soldPolicyNumber}}",
         "premium": 1200.10,
         "itemCount": 2,
+        "newBusinessApplication": {
+          "key": "{{nbaDocumentKey}}",
+          "filename": "new-business-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
         "priorInsurance": { "none": true },
         "cancellation": { "cancelled": false }
       }

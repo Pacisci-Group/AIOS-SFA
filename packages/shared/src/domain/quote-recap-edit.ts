@@ -52,6 +52,12 @@ export interface QuoteRecapEditView {
   /** Byte-identical to what `GET /quote-recaps/context` returns. */
   context: QuoteRecapLeadContext;
   policies: QuoteRecapEditPolicy[];
+  /**
+   * `null` on a migrated recap, and on any recap created before PAC-56 #16.
+   * The edit form treats that as "unset" rather than as a validation failure —
+   * see {@link UpdateQuoteRecapInput}.
+   */
+  insuranceRenewalMonth: string | null;
   notes: string | null;
   /**
    * Metadata only — the storage key never crosses the wire. `null` on a
@@ -97,6 +103,16 @@ export interface UpdateQuoteRecapInput {
    * the totals are a fold over all of it regardless.
    */
   policies?: QuoteRecapPolicyInput[];
+  /**
+   * An `INSURANCE_MONTHS` label (PAC-56 #16).
+   *
+   * **Optional here even though it is required on create**, and that asymmetry
+   * is the point: every migrated recap predates the field, so requiring it on
+   * the patch would make all of them un-editable. Same reasoning as
+   * `quoteDocument` below. No `null` clear — nothing in the UI expresses
+   * "unset the renewal month".
+   */
+  insuranceRenewalMonth?: string;
   /** `null` clears the notes; omitted leaves them alone. */
   notes?: string | null;
   /**

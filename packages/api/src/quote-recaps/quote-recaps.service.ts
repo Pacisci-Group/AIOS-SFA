@@ -19,7 +19,7 @@ import type {
   QuoteRecapLeadContext,
   UpdateQuoteRecapResult,
 } from '@sfa/shared';
-import { normalizePolicyType } from '@sfa/shared';
+import { normalizeInsuranceMonth, normalizePolicyType } from '@sfa/shared';
 import type { PolicyType } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import {
@@ -327,6 +327,12 @@ export class QuoteRecapsService {
         propertyAddress: normalizeStoredAddress(policy.propertyAddress),
         sameAsHousehold: policy.sameAsHousehold === true,
       })),
+      // Normalized on read as well as at migration time, so a database
+      // migrated before PAC-56 #16 still yields a month name (see
+      // `normalizeInsuranceMonth`). `''` collapses to `null` — the form treats
+      // that as unset rather than as invalid.
+      insuranceRenewalMonth:
+        normalizeInsuranceMonth(recap.insuranceRenewalMonth) || null,
       notes: recap.notes ?? null,
       document: recap.quoteDocument
         ? {
@@ -406,6 +412,10 @@ export class QuoteRecapsService {
       );
       recap.policies = policies;
       Object.assign(recap, deriveTotals(policies));
+    }
+
+    if (dto.insuranceRenewalMonth !== undefined) {
+      recap.insuranceRenewalMonth = dto.insuranceRenewalMonth;
     }
 
     if (dto.notes !== undefined) {
@@ -519,6 +529,8 @@ export class QuoteRecapsService {
         propertyAddress: normalizeStoredAddress(policy.propertyAddress),
       })),
       propertyAddress: normalizeStoredAddress(recap.propertyAddress),
+      insuranceRenewalMonth:
+        normalizeInsuranceMonth(recap.insuranceRenewalMonth) || null,
       notes: recap.notes ?? null,
       document: recap.quoteDocument
         ? {
@@ -596,6 +608,10 @@ export class QuoteRecapsService {
         // No recap-level `propertyAddress`/`sameAsHousehold`: since PAC-56 #14
         // the dwelling belongs to the policy row, and those two fields exist
         // only for the recaps written before that.
+        //
+        // The renewal month, however, *is* recap-level — one client, one
+        // current policy renewing (PAC-56 #16, matching legacy's shape).
+        insuranceRenewalMonth: dto.insuranceRenewalMonth,
         notes: dto.notes,
         quoteDocument: {
           key: dto.quoteDocument.key,

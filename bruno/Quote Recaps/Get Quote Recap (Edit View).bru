@@ -51,6 +51,12 @@ tests {
     expect(document).to.have.property("uploadedAt");
   });
 
+  test("round-trips the renewal month (PAC-56 #16)", function () {
+    // What `Create Quote Recap` sent. The form seeds the select from this, so a
+    // recap edited for an unrelated reason must not lose it.
+    expect(res.getBody().insuranceRenewalMonth).to.equal("March");
+  });
+
   test("returns the totals as they stand before the edit", function () {
     const body = res.getBody();
     expect(body.premium).to.be.a("number");
@@ -110,6 +116,7 @@ docs {
       { "policyType": "Home", "premium": 940, "itemCount": 1,
         "propertyAddress": { … }, "sameAsHousehold": true }
     ],
+    "insuranceRenewalMonth": "March",
     "notes": "…",
     "document": { "filename": "carrier-quote.pdf", "contentType": "application/pdf",
                   "size": 12345, "uploadedAt": "…" },
@@ -125,6 +132,13 @@ docs {
   `legacyPropertyAddress` is the recap-level dwelling that only pre-PAC-56-#14
   recaps carry. Read-only: the form has no field for it, and saving migrates the
   recap to per-row addresses.
+
+  `insuranceRenewalMonth` (PAC-56 #16) is `null` on every migrated recap and on
+  anything recorded before the field existed. The form treats that as **unset**,
+  not invalid — its edit schema accepts `""` where the create schema does not,
+  because rejecting it would lock every migrated recap out of editing. Values
+  are normalized on read, so a recap holding SmartSuite's choice UUID still
+  comes back as a month name.
 
   ## Errors
   - `404` — malformed id, unknown recap, another agency's, or out of data scope.
