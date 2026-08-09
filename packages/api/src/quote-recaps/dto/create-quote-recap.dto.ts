@@ -6,7 +6,15 @@ import {
 } from '../../common/address/policy-property-address';
 import { quoteDocumentSchema } from './presign-quote-document.dto';
 
-const quotedPolicySchema = z
+/**
+ * One quoted policy row.
+ *
+ * Exported so `update-quote-recap.dto.ts` validates rows through exactly this
+ * schema — the "a property row that opts out of `sameAsHousehold` needs all four
+ * address parts" rule has to be identical on create and edit, and a second copy
+ * is how the two would drift.
+ */
+export const quotedPolicySchema = z
   .object({
     /**
      * Canonical labels only — a raw SmartSuite code is a 400.

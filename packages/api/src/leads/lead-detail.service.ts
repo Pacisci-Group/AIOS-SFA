@@ -158,7 +158,7 @@ export class LeadDetailService {
 
     const [priorInsurance, producerNames] = await Promise.all([
       this.loadPriorInsurance(deal, household, agencyId),
-      this.loadProducerNames(lead, activities),
+      this.loadProducerNames(lead, activities, recaps),
     ]);
 
     const [latestRecap, ...earlierRecaps] = recaps;
@@ -204,9 +204,13 @@ export class LeadDetailService {
         : null,
       primaryContact: this.findPrimaryContact(lead, household, contacts),
       household: this.toHousehold(household, lead, contacts, policies),
-      latestQuoteRecap: latestRecap ? this.toQuoteRecap(latestRecap) : null,
+      latestQuoteRecap: latestRecap
+        ? this.toQuoteRecap(latestRecap, producerNames)
+        : null,
+      // Full recaps, not summaries (PAC-56 #11): the expander has to answer
+      // "what changed since the last quote", which needs the rows.
       earlierQuoteRecaps: earlierRecaps.map((recap) =>
-        this.toQuoteRecapSummary(recap),
+        this.toQuoteRecap(recap, producerNames),
       ),
       deal: deal ? this.toDeal(deal, policies) : null,
       priorInsurance,
@@ -494,11 +498,16 @@ export class LeadDetailService {
   private async loadProducerNames(
     lead: LeadDocument,
     activities: ActivityDocument[],
+    recaps: QuoteRecapDocument[],
   ): Promise<Map<string, string>> {
     const ids = new Set<string>();
     if (lead.producerId) ids.add(lead.producerId.toString());
     for (const activity of activities) {
       if (activity.producerId) ids.add(activity.producerId.toString());
+    }
+    // Recap authors too, for the notes attribution on the Quote Summary card.
+    for (const recap of recaps) {
+      if (recap.producerId) ids.add(recap.producerId.toString());
     }
     if (!ids.size) return new Map();
 
@@ -613,9 +622,19 @@ export class LeadDetailService {
     };
   }
 
-  private toQuoteRecap(recap: QuoteRecapDocument): LeadDetailQuoteRecap {
+  private toQuoteRecap(
+    recap: QuoteRecapDocument,
+    producerNames: Map<string, string>,
+  ): LeadDetailQuoteRecap {
     return {
       ...this.toQuoteRecapSummary(recap),
+      // Attribution for the notes block (PAC-56 #13). Falls back to `null`
+      // rather than a placeholder — a migrated recap genuinely has no author,
+      // and "Unknown" would read as a person.
+      producerName: recap.producerId
+        ? (producerNames.get(recap.producerId.toString()) ?? null)
+        : null,
+      createdAt: iso(recap.createdAt),
       policies: (recap.policies ?? []).map((policy) => ({
         policyType: normalizePolicyType(policy.policyType),
         premium: policy.premium ?? 0,

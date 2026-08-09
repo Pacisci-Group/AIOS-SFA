@@ -64,7 +64,7 @@ export default function NewLeadPage() {
           </Button>
           <div>
             <h1 className="text-sm font-bold">New lead</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
               Household intake
             </p>
           </div>

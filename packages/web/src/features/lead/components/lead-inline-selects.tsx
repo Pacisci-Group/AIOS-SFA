@@ -15,7 +15,12 @@ import {
 } from "@/components/ui/select";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
-import { statusBadgeClass, temperatureDot, temperatureText } from "./lead-display";
+import {
+  statusBadgeClass,
+  statusTextClass,
+  temperatureDot,
+  temperatureText,
+} from "./lead-display";
 
 /**
  * The inline status / temperature / source pills on the Lead Detail page
@@ -38,8 +43,6 @@ interface InlineSelectProps {
   disabled?: boolean;
   label: string;
   triggerClassName: string;
-  /** Rendered inside the trigger, before the value. */
-  adornment?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -49,7 +52,6 @@ function InlineSelect({
   disabled,
   label,
   triggerClassName,
-  adornment,
   children,
 }: InlineSelectProps) {
   return (
@@ -58,20 +60,27 @@ function InlineSelect({
         aria-label={label}
         size="sm"
         className={cn(
-          // `data-[size=sm]:h-6` rather than a bare `h-6`: the primitive sets
+          // `data-[size=sm]:h-7` rather than a bare `h-7`: the primitive sets
           // its height through the same data-attribute variant, which would
           // otherwise win regardless of order.
-          "data-[size=sm]:h-6 w-auto gap-1 rounded-full border-0 px-2 py-0 text-xs font-semibold shadow-none focus-visible:ring-1 [&>svg]:size-3",
-          // Without write access the control still shows the value but stops
-          // looking clickable.
-          disabled && "opacity-100 [&>svg]:hidden cursor-default",
+          "data-[size=sm]:h-7 w-auto gap-1.5 rounded-full border-0 px-2.5 py-0 text-sm font-semibold shadow-none focus-visible:ring-1 [&>svg]:size-3.5",
+          // `disabled:` prefixed, not bare `opacity-100`. The primitive carries
+          // `disabled:opacity-50`; an unprefixed utility does not conflict with
+          // it, so the pill used to dim to half and drop its chevron for the
+          // duration of every save.
+          disabled &&
+            "disabled:opacity-100 [&>svg]:hidden cursor-default",
           triggerClassName,
         )}
       >
-        {adornment}
         <SelectValue />
       </SelectTrigger>
-      <SelectContent>{children}</SelectContent>
+      {/*
+        `sideOffset` clears the pill so the menu reads as attached to it rather
+        than overlapping. The drop-below-at-trigger-width behaviour itself now
+        comes from the primitive's own defaults (`popper` / `align="start"`).
+      */}
+      <SelectContent sideOffset={6}>{children}</SelectContent>
     </Select>
   );
 }
@@ -87,10 +96,38 @@ function StaticPill({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold",
+        "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-sm font-semibold",
         className,
       )}
     >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * A menu row, colour-coded to match the trigger it came from.
+ *
+ * ⚠ Whatever a `SelectItem` renders, Radix mirrors into the trigger through
+ * `SelectValue` — shadcn's item puts `children` inside `ItemText`. So this is
+ * deliberately **text and an optional dot, never a pill**: a pill here draws a
+ * second pill inside the trigger's own, and a dot here duplicates the trigger's
+ * adornment. Colouring the label is the one treatment that reads correctly in
+ * both places, and it is what makes the open menu look like the status
+ * vocabulary rather than a list of anonymous rows.
+ */
+function OptionLabel({
+  className,
+  dot,
+  children,
+}: {
+  className: string;
+  dot?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 font-semibold", className)}>
+      {dot && <span className={cn("size-2 shrink-0 rounded-full", dot)} />}
       {children}
     </span>
   );
@@ -128,12 +165,12 @@ export function LeadStatusSelect({
     >
       {uncatalogued && (
         <SelectItem value={value} disabled>
-          {value}
+          <OptionLabel className={statusTextClass(value)}>{value}</OptionLabel>
         </SelectItem>
       )}
       {LEAD_STATUSES.map((status) => (
         <SelectItem key={status} value={status}>
-          {status}
+          <OptionLabel className={statusTextClass(status)}>{status}</OptionLabel>
         </SelectItem>
       ))}
     </InlineSelect>
@@ -152,14 +189,10 @@ export function LeadTemperatureSelect({
   const { canWrite } = usePermissions();
   const editable = canWrite(ModuleKey.Leads);
 
-  const dot = (
-    <span className={cn("size-1.5 rounded-full", temperatureDot[value])} />
-  );
-
   if (!editable) {
     return (
       <StaticPill className={cn("bg-muted", temperatureText[value])}>
-        {dot}
+        <span className={cn("size-2 rounded-full", temperatureDot[value])} />
         {value}
       </StaticPill>
     );
@@ -172,7 +205,6 @@ export function LeadTemperatureSelect({
       onChange={(next) => onChange(next as LeadTemperature)}
       disabled={pending}
       triggerClassName={cn("bg-muted", temperatureText[value])}
-      adornment={dot}
     >
       {/*
        * `Unknown` is the display state of a lead nobody has assessed, not a
@@ -181,12 +213,19 @@ export function LeadTemperatureSelect({
        */}
       {value === "Unknown" && (
         <SelectItem value="Unknown" disabled>
-          Unknown
+          <OptionLabel className={temperatureText.Unknown} dot={temperatureDot.Unknown}>
+            Unknown
+          </OptionLabel>
         </SelectItem>
       )}
       {LEAD_TEMPERATURE_OPTIONS.map((temperature) => (
         <SelectItem key={temperature} value={temperature}>
-          {temperature}
+          <OptionLabel
+            className={temperatureText[temperature]}
+            dot={temperatureDot[temperature]}
+          >
+            {temperature}
+          </OptionLabel>
         </SelectItem>
       ))}
     </InlineSelect>
@@ -236,7 +275,7 @@ export function LeadSourceSelect({
 
   if (!editable) {
     return (
-      <span className="text-xs text-muted-foreground">
+      <span className="text-sm text-muted-foreground">
         {unset ? "No source" : value.label}
       </span>
     );
@@ -250,7 +289,9 @@ export function LeadSourceSelect({
       disabled={pending}
       triggerClassName={cn(
         "font-medium",
-        unset ? "bg-amber-500/15 text-amber-500" : "bg-muted text-foreground",
+        unset
+          ? "bg-amber-500/15 text-amber-700 dark:text-amber-500"
+          : "bg-muted text-foreground",
       )}
     >
       {current === "__stored__" && (

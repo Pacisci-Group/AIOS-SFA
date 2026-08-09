@@ -102,7 +102,7 @@ export default function PublicLeadFormPage() {
         ) : (
           <>
             <header className="mb-6 text-center">
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 {agencyName}
               </p>
               <h1 className="mt-1 text-lg font-bold">Tell us about yourself</h1>

@@ -2745,7 +2745,7 @@ describe('SFA API (e2e)', () => {
       expect(body.household?.policies[0].policyType).toBe('Auto');
     });
 
-    it('returns the newest recap in full and the rest as summaries', async () => {
+    it('returns every recap in full, newest first', async () => {
       const body = await getAs(producerToken, leadId);
 
       expect(body.latestQuoteRecap?.id).toBe(newerRecapId);
@@ -2755,12 +2755,33 @@ describe('SFA API (e2e)', () => {
       expect(body.latestQuoteRecap?.policies).toHaveLength(2);
       expect(body.latestQuoteRecap?.notes).toContain('multi-policy');
 
+      /*
+       * Earlier recaps used to be summary-shaped — a date, a status and a
+       * total. That could not answer the only question the "N earlier recaps"
+       * expander is opened to ask: *what changed between this quote and the one
+       * before it?* Since PAC-56 #11 they carry the same full shape, so the
+       * expander renders the identical body component (a handful of recaps per
+       * lead, so the payload cost is negligible).
+       */
       expect(body.earlierQuoteRecaps).toHaveLength(1);
       expect(body.earlierQuoteRecaps[0].id).toBe(olderRecapId);
-      // Summary-shaped: the heavy fields belong only to the latest.
-      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('policies');
-      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('notes');
-      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('document');
+      expect(body.earlierQuoteRecaps[0]).toHaveProperty('policies');
+      expect(body.earlierQuoteRecaps[0]).toHaveProperty('notes');
+      expect(body.earlierQuoteRecaps[0]).toHaveProperty('document');
+      expect(body.earlierQuoteRecaps[0].policies[0].policyType).toBe('Auto');
+    });
+
+    it('exposes recap authorship for the notes block', async () => {
+      // PAC-56 #13: a note rendered under system-derived totals is unreadable
+      // without knowing a person wrote it, so the card needs an author and a
+      // date. These fixtures are migration-shaped and carry no `producerId`,
+      // which is exactly the case that must resolve to `null` rather than to a
+      // placeholder — "Unknown" would read as a person's name.
+      const body = await getAs(producerToken, leadId);
+
+      expect(body.latestQuoteRecap).toHaveProperty('producerName');
+      expect(body.latestQuoteRecap?.producerName).toBeNull();
+      expect(body.latestQuoteRecap?.createdAt).toEqual(expect.any(String));
     });
 
     it('returns the deal and its prior insurance, with only stored fields', async () => {

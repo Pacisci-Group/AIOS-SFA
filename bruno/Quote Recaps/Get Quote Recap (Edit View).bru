@@ -1,0 +1,137 @@
+meta {
+  name: Get Quote Recap (Edit View)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/quote-recaps/{{createdQuoteRecapId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // Captured so `Update Quote Recap` can prove the patch did not move it.
+  bru.setVar("quoteRecapQuoteDate", res.getBody().quoteDate);
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the lead context, so the form needs one request", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("context");
+    expect(body.context).to.have.property("leadId");
+    expect(body.context).to.have.property("primaryContactName");
+    expect(body.context).to.have.property("householdAddress");
+    expect(body.context.householdId).to.equal(bru.getVar("quoteContextHouseholdId"));
+  });
+
+  test("round-trips sameAsHousehold — the reason this endpoint exists", function () {
+    // `Create Quote Recap` sends `sameAsHousehold: true` on the Home row and
+    // omits it on the Auto row. Without this the edit form cannot restore the
+    // toggle to the position the producer left it in.
+    const policies = res.getBody().policies;
+    expect(policies).to.have.lengthOf(2);
+    expect(policies[0].sameAsHousehold).to.equal(false);
+    expect(policies[1].sameAsHousehold).to.equal(true);
+  });
+
+  test("returns the attached document as metadata", function () {
+    const document = res.getBody().document;
+    expect(document.filename).to.equal("carrier-quote.pdf");
+    expect(document.contentType).to.equal("application/pdf");
+    expect(document).to.have.property("size");
+    expect(document).to.have.property("uploadedAt");
+  });
+
+  test("returns the totals as they stand before the edit", function () {
+    const body = res.getBody();
+    expect(body.premium).to.be.a("number");
+    expect(body.itemCount).to.be.a("number");
+    expect(body.productsQuoted).to.be.an("array");
+  });
+
+  test("never leaks internals", function () {
+    const raw = JSON.stringify(res.getBody());
+    expect(raw).to.not.contain("agencies/");
+    expect(raw).to.not.contain("submissionToken");
+    expect(raw).to.not.contain("isTestRecord");
+    expect(res.getBody().document).to.not.have.property("key");
+  });
+}
+
+docs {
+  # GET /quote-recaps/:id — the edit form's payload (PAC-56 #11)
+
+  Everything `/quote-recaps/:id/edit` needs to render, in **one** round trip.
+
+  - **Module:** `quote_recaps`
+  - **Permission:** `quote_recaps:read` (class-level; the PATCH adds `:write`)
+  - **Data scope:** `own` — another producer's recap **404s**, never 403s.
+
+  ## Why the lead context is embedded
+
+  The edit route is keyed by **recap id**. Fetching the context separately would
+  mean first learning the recap's `leadId` and then issuing a second request —
+  a waterfall on a page that cannot paint until both have landed. So this
+  returns `context` byte-identical to `GET /quote-recaps/context?leadId=`, and
+  the page mounts the same `LeadContextHeader` and feeds the same
+  `householdAddress` to the "same as household address" toggle.
+
+  ## Why `sameAsHousehold` is here and not on `GET /leads/:id`
+
+  The Lead Detail contract deliberately exposes only the **resolved** address: a
+  row the producer ticked "same as household" stores a *copy* of the household
+  address, not a flag for the reader to re-interpret. That is right for
+  rendering and useless for editing, where the toggle has to come back up in the
+  position it was left. So the flag lives on this endpoint alone.
+
+  ## Response
+
+  ```json
+  {
+    "id": "…",
+    "context": {
+      "leadId": "…", "primaryContactName": "Dana Ruiz",
+      "householdId": "…", "householdName": "Ruiz Household",
+      "householdAddress": { "street": "…", "city": "…", "state": "…", "zip": "…" },
+      "leadStatus": "Quoted"
+    },
+    "policies": [
+      { "policyType": "Auto", "premium": 1180, "itemCount": 2,
+        "propertyAddress": null, "sameAsHousehold": false },
+      { "policyType": "Home", "premium": 940, "itemCount": 1,
+        "propertyAddress": { … }, "sameAsHousehold": true }
+    ],
+    "notes": "…",
+    "document": { "filename": "carrier-quote.pdf", "contentType": "application/pdf",
+                  "size": 12345, "uploadedAt": "…" },
+    "quoteDate": "…", "status": "Submitted",
+    "premium": 2120, "itemCount": 3, "productsQuoted": ["Auto", "Home"],
+    "legacyPropertyAddress": null
+  }
+  ```
+
+  `document.key` is never returned — opening the file goes through
+  `GET /quote-recaps/:id/document/download`.
+
+  `legacyPropertyAddress` is the recap-level dwelling that only pre-PAC-56-#14
+  recaps carry. Read-only: the form has no field for it, and saving migrates the
+  recap to per-row addresses.
+
+  ## Errors
+  - `404` — malformed id, unknown recap, another agency's, or out of data scope.
+    All four are deliberately indistinguishable.
+  - `400` — the recap is not linked to a lead (only reachable on unmigrated data;
+    `GET /leads/:id` self-heals the link).
+
+  ## Run order
+  Depends on `createdQuoteRecapId` from **Create Quote Recap** (seq 4).
+}

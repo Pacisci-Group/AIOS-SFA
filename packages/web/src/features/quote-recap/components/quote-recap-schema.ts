@@ -1,4 +1,9 @@
-import type { QuoteRecapPolicyInput } from "@sfa/shared";
+import type {
+  QuoteDocumentMeta,
+  QuoteRecapEditView,
+  QuoteRecapPolicyInput,
+  UpdateQuoteRecapInput,
+} from "@sfa/shared";
 import { POLICY_TYPES } from "@sfa/shared";
 import { z } from "zod";
 import {
@@ -63,23 +68,50 @@ export function emptyQuotedPolicy(sameAsHousehold: boolean): QuotedPolicyFormVal
   };
 }
 
-export const quoteRecapSchema = z.object({
+/** A newly chosen file, whichever form is asking for one. */
+const quoteDocumentFile = z
+  .instanceof(File, { message: "Attach the quote document" })
+  .refine(
+    (f) => (ALLOWED_UPLOAD_TYPES as readonly string[]).includes(f.type),
+    "Use a PDF",
+  )
+  .refine(
+    (f) => f.size > 0 && f.size <= MAX_UPLOAD_BYTES,
+    "File must be under 10MB",
+  );
+
+/** Everything both forms agree on. */
+const quoteRecapBaseShape = {
   policies: z
     .array(quotedPolicySchema)
     .min(1, "Add at least one policy")
     .max(12, "At most 12 policies"),
   notes: z.string().trim().max(2000, "Too long").optional(),
+};
+
+export const quoteRecapSchema = z.object({
+  ...quoteRecapBaseShape,
   /** Required (PAC-39 decision 4) — no recap without its carrier quote. */
-  quoteDocument: z
-    .instanceof(File, { message: "Attach the quote document" })
-    .refine(
-      (f) => (ALLOWED_UPLOAD_TYPES as readonly string[]).includes(f.type),
-      "Use a PDF, JPG or PNG",
-    )
-    .refine(
-      (f) => f.size > 0 && f.size <= MAX_UPLOAD_BYTES,
-      "File must be under 10MB",
-    ),
+  quoteDocument: quoteDocumentFile,
+});
+
+/**
+ * The same form in **edit** mode (PAC-56 #11).
+ *
+ * Two schemas over one shared shape rather than a discriminated union: TanStack
+ * Form's `defaultValues` type drives every literal `form.Field name=` path, so a
+ * union would make `quoteDocument`'s type depend on a discriminant the form
+ * would have to carry as a real field. Here `QuoteRecapFormState` stays a single
+ * stable type and `QuoteRecapForm` compiles once for both modes.
+ *
+ * `quoteDocument` is optional because the recap already has one. Absent means
+ * "keep it" all the way to the API — which is also what keeps a pre-PAC-56-#9
+ * recap holding a JPEG editable, since re-validating the stored document would
+ * reject exactly those records.
+ */
+export const quoteRecapEditSchema = z.object({
+  ...quoteRecapBaseShape,
+  quoteDocument: quoteDocumentFile.optional(),
 });
 
 export type QuoteRecapFormValues = z.infer<typeof quoteRecapSchema>;
@@ -100,16 +132,16 @@ export function toPolicyInputs(
 
 /**
  * What the form **holds while being filled**, as distinct from what is valid on
- * submit: `quoteDocument` legitimately starts unset, while the schema requires
- * it. Only that one field differs, so the gap is stated here rather than
- * loosening every field (which is what react-hook-form's `DefaultValues<T>`
- * did, and why nothing downstream was properly typed).
+ * submit: `quoteDocument` legitimately starts unset, while the create schema
+ * requires it.
  *
- * {@link parseQuoteRecap} closes the gap at the submit boundary.
+ * It is now literally the edit schema's output type, which is the same
+ * statement said once instead of twice — "what the form holds" and "what a valid
+ * edit looks like" are the same shape by construction, so they cannot drift.
+ *
+ * {@link parseQuoteRecap} closes the gap at the create submit boundary.
  */
-export type QuoteRecapFormState = Omit<QuoteRecapFormValues, "quoteDocument"> & {
-  quoteDocument?: File;
-};
+export type QuoteRecapFormState = z.infer<typeof quoteRecapEditSchema>;
 
 /**
  * Form state → validated values. Validation has already run by the time this is
@@ -118,6 +150,13 @@ export type QuoteRecapFormState = Omit<QuoteRecapFormValues, "quoteDocument"> & 
  */
 export function parseQuoteRecap(state: QuoteRecapFormState): QuoteRecapFormValues {
   return quoteRecapSchema.parse(state);
+}
+
+/** The edit-mode counterpart: `quoteDocument` may legitimately stay absent. */
+export function parseQuoteRecapEdit(
+  state: QuoteRecapFormState,
+): z.infer<typeof quoteRecapEditSchema> {
+  return quoteRecapEditSchema.parse(state);
 }
 
 /**
@@ -132,5 +171,72 @@ export function emptyQuoteRecap(): QuoteRecapFormState {
     policies: [],
     notes: "",
     quoteDocument: undefined,
+  };
+}
+
+/**
+ * Stored recap → form state (PAC-56 #11).
+ *
+ * Mirrors `features/lead/components/policy-schema.ts`'s `toPolicyFormValues`:
+ * numbers become strings because that is what the inputs hold, and nothing is
+ * silently rewritten on the way in.
+ */
+export function toQuoteRecapFormValues(
+  view: QuoteRecapEditView,
+): QuoteRecapFormState {
+  const canCopyHouseholdAddress = Boolean(view.context.householdAddress);
+
+  return {
+    policies: view.policies.map((policy) => ({
+      /*
+       * Seeded verbatim, even though a migrated row can hold a type that
+       * `normalizePolicyType` passed through uncatalogued. Such a row fails
+       * `z.enum(POLICY_TYPES)` and the producer has to pick a type in the
+       * drawer — which is the honest outcome. Defaulting it to "Auto" would
+       * rewrite the record on the first unrelated save.
+       */
+      policyType: policy.policyType as QuotedPolicyFormValues["policyType"],
+      premium: String(policy.premium),
+      itemCount: String(policy.itemCount),
+      /*
+       * The producer's stored choice, plus the same fallback
+       * `emptyQuotedPolicy` applies: a property row that has no address on
+       * file, on a household that has one to copy, starts toggled **on** so
+       * nobody is faced with four blank disabled fields.
+       */
+      sameAsHousehold:
+        policy.sameAsHousehold ||
+        (!policy.propertyAddress && canCopyHouseholdAddress),
+      propertyAddress: policy.propertyAddress
+        ? {
+            street: policy.propertyAddress.street ?? "",
+            city: policy.propertyAddress.city ?? "",
+            state: policy.propertyAddress.state ?? "",
+            zip: policy.propertyAddress.zip ?? "",
+          }
+        : emptyPolicyAddress(),
+    })),
+    notes: view.notes ?? "",
+    // Never a `File` — an already-attached document is metadata, and leaving
+    // this unset is what tells the API to keep it.
+    quoteDocument: undefined,
+  };
+}
+
+/**
+ * Form state → the `PATCH /quote-recaps/:id` body.
+ *
+ * `quoteDocument` is passed separately because the file has to be uploaded to
+ * storage first; omitting the key entirely is what keeps the existing document.
+ */
+export function toUpdateQuoteRecapInput(
+  values: QuoteRecapFormState,
+  quoteDocument?: QuoteDocumentMeta,
+): UpdateQuoteRecapInput {
+  return {
+    policies: toPolicyInputs(values.policies),
+    // `null` clears; the API distinguishes it from absent.
+    notes: values.notes?.trim() ? values.notes.trim() : null,
+    ...(quoteDocument ? { quoteDocument } : {}),
   };
 }

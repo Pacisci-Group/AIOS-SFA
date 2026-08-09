@@ -14,6 +14,7 @@ export * from './domain/policy-check';
 export * from './domain/policy-edit';
 export * from './domain/policy-type';
 export * from './domain/quote-recap';
+export * from './domain/quote-recap-edit';
 export * from './domain/record-reference';
 export * from './domain/sold-deal';
 export * from './enums/module-key.enum';

@@ -124,6 +124,17 @@ export interface LeadDetailQuoteRecap extends LeadDetailQuoteRecapSummary {
   propertyAddress: StructuredAddress | null;
   notes: string | null;
   /**
+   * Who recorded the recap, resolved from `producerId`. `null` on a migrated
+   * recap with no producer on file.
+   *
+   * The card needs it to attribute {@link LeadDetailQuoteRecap.notes} (PAC-56
+   * #13/#29). A note rendered as bare prose beside system-derived totals gives
+   * the reader no way to tell which is which; "Pat Producer · 9 Aug" does.
+   */
+  producerName: string | null;
+  /** ISO. When the recap was recorded, as opposed to when it was quoted. */
+  createdAt: string | null;
+  /**
    * Metadata only. The storage `key` is deliberately withheld: it is an
    * internal path, and downloading the document needs its own presigned-URL
    * endpoint rather than a client that knows where the bytes live.
@@ -280,11 +291,18 @@ export interface LeadDetail {
   /** Newest by `quoteDate`. `null` when the lead has never been quoted. */
   latestQuoteRecap: LeadDetailQuoteRecap | null;
   /**
-   * The rest, newest first, summary-shaped — the "N earlier recaps" expander.
-   * A lead can hold several: `quoteRecaps.leadId` is a plain index and the
-   * status vocabulary includes `Requote`.
+   * The rest, newest first — the "N earlier recaps" expander. A lead can hold
+   * several: `quoteRecaps.leadId` is a plain index and the status vocabulary
+   * includes `Requote`.
+   *
+   * Full recaps, not summaries. The expander used to show a date, a status and
+   * a total, which is not enough to answer the only question anyone opens it to
+   * ask — *what changed between this quote and the one before it?* That needs
+   * the policy rows, and the requote's own notes and document. A lead holds a
+   * handful of recaps, so returning them whole costs a few hundred bytes and
+   * removes the need for a second endpoint keyed by recap id.
    */
-  earlierQuoteRecaps: LeadDetailQuoteRecapSummary[];
+  earlierQuoteRecaps: LeadDetailQuoteRecap[];
   /** `null` until the lead is sold. */
   deal: LeadDetailDeal | null;
   /** Only reachable through a deal or household — `null` on an unsold lead. */

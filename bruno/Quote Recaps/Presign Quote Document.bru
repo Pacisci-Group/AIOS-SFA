@@ -62,10 +62,23 @@ docs {
   |-------------|--------|----------|----------------------------------------------|
   | leadId      | string | yes      | 24-char Mongo ObjectId; ownership is checked first |
   | filename    | string | yes      | 1–255 chars; sanitized into the key          |
-  | contentType | string | yes      | `application/pdf`, `image/jpeg` or `image/png` |
+  | contentType | string | yes      | **`application/pdf` only** (PAC-56 #9)       |
   | size        | number | yes      | positive integer, ≤ 10 MB                    |
 
   ## Behaviour worth knowing
+  **PDF only, since PAC-56 #9.** `image/jpeg` and `image/png` used to be accepted
+  here; ~98% of carrier quotes are PDFs and photographed quotes mostly arrive
+  unreadable. This is a **write-path** rule only — recaps that already hold a
+  JPEG or PNG still download and open normally, because
+  `GET /quote-recaps/:id/document/download` presigns whatever content type is
+  stored. There is no migration and no backfill; do not "clean up" those records.
+  The sold-form and deal-audit uploads deliberately still accept images
+  (PAC-56 #22) — see `Deal Audits/Presign Audit Attachment.bru`.
+
+  **The edit form calls this endpoint too** (PAC-56 #11). Replacing a recap's
+  document presigns here first — the request is scoped by `leadId`, not by recap
+  id, so it is the same call the create flow makes.
+
   **Scoped to the lead, not the recap.** The document is uploaded while the recap
   is still being composed, so no recap id exists yet. The key that comes back is
   `agencies/<agencyId>/quote-recaps/<leadId>/<year>/<uuid>-<filename>`, and

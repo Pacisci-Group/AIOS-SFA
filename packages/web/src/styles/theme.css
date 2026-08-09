@@ -13,6 +13,10 @@
  * `.dark` must stay byte-identical to the palette that shipped before the
  * inversion — that is the acceptance test for this change. `:root` is new.
  *
+ * One deliberate exception since: `--accent` was emerald in **both** themes and
+ * is now the neutral hover/focus surface shadcn's primitives expect, with the
+ * emerald moved to `--success`. See the note on `--accent` below.
+ *
  * Both selectors have specificity (0,1,0) and both match `<html>`, so `.dark`
  * wins only because it comes second. Do not reorder these blocks.
  *
@@ -37,8 +41,24 @@
   /* The one token that needs no light variant — slate-500 clears 4.5:1 on both
      #0B0F19 and #F8FAFC. */
   --muted-foreground: #64748B;
-  --accent: #059669;
-  --accent-foreground: #FFFFFF;
+  /**
+   * `--accent` is shadcn's **subtle hover-and-focus surface**, not a brand
+   * colour. Every primitive uses it that way — `SelectItem`/`DropdownMenuItem`
+   * `focus:bg-accent`, `Button variant="ghost"` `hover:bg-accent`, `Skeleton`
+   * `bg-accent`.
+   *
+   * It used to hold emerald (`#059669` / `#10B981`), which meant highlighted
+   * menu rows, hovered ghost buttons and every loading skeleton rendered solid
+   * green. The brand emerald now lives in `--success` below; nothing outside
+   * the prototypes ever read `--accent` for its colour, so this is a fix rather
+   * than a re-theme. Keep it neutral.
+   */
+  --accent: #F1F5F9;
+  --accent-foreground: #0F172A;
+  /* The brand emerald that `--accent` used to carry. Emerald-700 here rather
+     than the dark theme's emerald-500: #10B981 on white is ~2:1. */
+  --success: #047857;
+  --success-foreground: #FFFFFF;
   /* Still amber — the brand's error colour — but amber-700, because amber-500
      on white is ~2:1. See `components/form/FormError.tsx`. */
   --destructive: #B45309;
@@ -80,8 +100,13 @@
   --secondary-foreground: #E2E8F0;
   --muted: #1E2B44;
   --muted-foreground: #64748B;
-  --accent: #10B981;
-  --accent-foreground: #0B0F19;
+  /* Neutral hover/focus surface — see the note in `:root`. Matches `--muted`
+     and `--popover` so menus highlight against their own background. */
+  --accent: #1E2B44;
+  --accent-foreground: #E2E8F0;
+  /* The emerald `--accent` used to hold. */
+  --success: #10B981;
+  --success-foreground: #0B0F19;
   --destructive: #F59E0B;
   --destructive-foreground: #0B0F19;
   --border: rgba(255, 255, 255, 0.07);
@@ -109,6 +134,14 @@
 }
 
 @theme inline {
+  /**
+   * Without this, Tailwind's `font-sans` utility resolves to its *stock*
+   * system stack and silently overrides the `font-family: 'Inter'` that
+   * `index.css` sets on `<html>` — so any element carrying `font-sans` opted
+   * out of the app's typeface. (`ManagementDashboardAltPage` works around it
+   * with an inline `style`; that workaround is now unnecessary.)
+   */
+  --font-sans: 'Inter Variable', 'Inter', system-ui, sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -123,6 +156,8 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);

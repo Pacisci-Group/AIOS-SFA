@@ -87,8 +87,8 @@ export default function LeadsPage() {
       <div className="flex-1 min-w-0">
         <header className="flex items-center justify-between gap-4 px-4 md:px-6 py-4 border-b border-border">
           <div>
-            <h1 className="text-sm font-bold">Leads</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
+            <h1 className="text-lg font-semibold tracking-tight">Leads</h1>
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
               {isPending || isError ? " " : `${total} total`}
             </p>
           </div>
@@ -144,7 +144,7 @@ export default function LeadsPage() {
 
               {!isPending && (
                 <div className="flex items-center justify-between gap-3 mt-4">
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-sm text-muted-foreground">
                     Showing {firstRow} to {lastRow} of {total}
                   </span>
                   {totalPages > 1 && (

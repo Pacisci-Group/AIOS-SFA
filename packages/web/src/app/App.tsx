@@ -35,6 +35,9 @@ const NewLeadPage = lazy(() => import('@/features/lead/NewLeadPage'));
 const NewQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/NewQuoteRecapPage'),
 );
+const EditQuoteRecapPage = lazy(
+  () => import('@/features/quote-recap/EditQuoteRecapPage'),
+);
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
 const PublicLeadFormPage = lazy(
   () => import('@/features/lead/PublicLeadFormPage'),
@@ -268,6 +271,17 @@ export function App() {
                   element={
                     <LazyPage>
                       <NewQuoteRecapPage />
+                    </LazyPage>
+                  }
+                />
+                {/* Editing a recorded recap (PAC-56 #11). Same gate: every
+                    endpoint it calls — GET :id, the presign, PATCH :id — sits
+                    behind the same module. */}
+                <Route
+                  path="/quote-recaps/:id/edit"
+                  element={
+                    <LazyPage>
+                      <EditQuoteRecapPage />
                     </LazyPage>
                   }
                 />

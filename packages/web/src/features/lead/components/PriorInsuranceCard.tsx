@@ -1,4 +1,6 @@
 import type { LeadDetailPriorInsurance } from "@sfa/shared";
+import { Badge } from "@/components/ui/badge";
+import { DetailCard, SectionLabel } from "./DetailCard";
 import { formatDate } from "./lead-display";
 
 interface PriorInsuranceCardProps {
@@ -8,10 +10,8 @@ interface PriorInsuranceCardProps {
 function Cell({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-        {label}
-      </p>
-      <p className="mt-0.5 text-sm text-card-foreground">{value}</p>
+      <SectionLabel>{label}</SectionLabel>
+      <p className="mt-0.5 text-base text-card-foreground">{value}</p>
     </div>
   );
 }
@@ -49,20 +49,23 @@ export function PriorInsuranceCard({ priorInsurance }: PriorInsuranceCardProps) 
   );
 
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Prior Insurance
-        </h2>
-        {priorInsurance.cancellationDate && (
-          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-500">
+    <DetailCard
+      title="Prior insurance"
+      bodyless
+      action={
+        priorInsurance.cancellationDate && (
+          <Badge
+            size="sm"
+            className="bg-amber-500/15 font-semibold text-amber-700 dark:text-amber-500"
+          >
             Cancels {formatDate(priorInsurance.cancellationDate)}
-          </span>
-        )}
-      </div>
+          </Badge>
+        )
+      }
+    >
 
       {cells.length > 0 && (
-        <div className="grid gap-x-6 gap-y-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-x-6 gap-y-4 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3">
           {cells.map((cell) => (
             <Cell key={cell.label} label={cell.label} value={cell.value} />
           ))}
@@ -71,14 +74,12 @@ export function PriorInsuranceCard({ priorInsurance }: PriorInsuranceCardProps) 
 
       {priorInsurance.policies.length > 0 && (
         <div className="border-t border-border px-5 py-4">
-          <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-            Policies being replaced
-          </p>
+          <SectionLabel>Policies being replaced</SectionLabel>
           <ul className="mt-2 space-y-2">
             {priorInsurance.policies.map((policy) => (
               <li
                 key={policy.id}
-                className="flex flex-wrap items-center justify-between gap-2 text-sm"
+                className="flex flex-wrap items-center justify-between gap-2 text-base"
               >
                 <span className="text-card-foreground">
                   {policy.policyType ?? "Policy"}
@@ -89,7 +90,7 @@ export function PriorInsuranceCard({ priorInsurance }: PriorInsuranceCardProps) 
                     </span>
                   )}
                 </span>
-                <span className="text-xs text-muted-foreground">
+                <span className="text-sm text-muted-foreground">
                   {[
                     policy.cancellationStatus,
                     policy.cancellationDate
@@ -106,10 +107,10 @@ export function PriorInsuranceCard({ priorInsurance }: PriorInsuranceCardProps) 
       )}
 
       {cells.length === 0 && priorInsurance.policies.length === 0 && (
-        <p className="px-5 py-4 text-sm text-muted-foreground">
+        <p className="px-5 py-4 text-base text-muted-foreground">
           A prior-insurance record exists but carries no details.
         </p>
       )}
-    </section>
+    </DetailCard>
   );
 }

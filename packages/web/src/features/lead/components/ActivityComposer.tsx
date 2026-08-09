@@ -62,19 +62,19 @@ export function ActivityComposer({ leadId }: ActivityComposerProps) {
         placeholder="Log a note — what happened, and what's next?"
         rows={2}
         maxLength={500}
-        className="resize-none text-sm"
+        className="resize-none"
       />
       <div className="mt-2 flex items-center justify-between gap-3">
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {/* Surfaced only as the limit approaches; a counter on an empty box is
               noise. 500 matches the API's own cap. */}
           {trimmed.length > 400 ? `${trimmed.length} / 500` : "⌘↵ to save"}
         </span>
         <Button size="sm" onClick={submit} disabled={!canSubmit}>
           {logActivity.isPending ? (
-            <Loader2 size={14} className="animate-spin" />
+            <Loader2 className="size-4 animate-spin" />
           ) : (
-            <Plus size={14} />
+            <Plus className="size-4" />
           )}
           Add note
         </Button>

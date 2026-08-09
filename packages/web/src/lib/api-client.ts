@@ -24,15 +24,41 @@ export function setTokens(accessToken: string, refreshToken: string) {
 }
 
 /**
+ * Device preferences that survive logout.
+ *
+ * Everything else in `localStorage` is session-derived and must not — see
+ * {@link clearTokens}. These are the opposite: they describe the *browser*, not
+ * the person signed into it, they contain nothing about the account, and
+ * resetting them is a bug rather than a safeguard. Logging out used to repaint
+ * the app dark for anyone who had chosen the light theme.
+ *
+ * Keep this list short, and only add a key when leaking it to the next user of
+ * the same machine would be harmless.
+ */
+const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
+
+/**
  * Wipe every trace of the session from the browser. Clears the whole
  * localStorage and sessionStorage rather than individual keys so no cached
  * data (tokens, user, branch selection, or anything added later) can leak
- * into the next session.
+ * into the next session — then restores the handful of device preferences in
+ * {@link PRESERVED_UI_PREFERENCE_KEYS}.
+ *
+ * Deliberately still a clear-then-restore rather than a list of keys to remove:
+ * the default for anything new stays "wiped", which is the safe direction.
  */
 export function clearTokens() {
   try {
+    const preserved = PRESERVED_UI_PREFERENCE_KEYS.map(
+      (key) => [key, localStorage.getItem(key)] as const,
+    );
+
     localStorage.clear();
     sessionStorage.clear();
+
+    for (const [key, value] of preserved) {
+      if (value !== null) localStorage.setItem(key, value);
+    }
   } catch {
     // Storage may be unavailable (private mode / SSR); ignore.
   }

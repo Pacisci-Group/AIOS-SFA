@@ -1,5 +1,7 @@
 import type { LeadDetailDeal } from "@sfa/shared";
 import { CheckCircle2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { DetailCard, SectionLabel } from "./DetailCard";
 import { formatCurrency, formatDate } from "./lead-display";
 import { EditPolicyDialog } from "./EditPolicyDialog";
 import { PolicyRow } from "./PolicyRow";
@@ -35,25 +37,27 @@ interface SoldCardProps {
  */
 export function SoldCard({ deal, leadId }: SoldCardProps) {
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <div className="flex items-center gap-2">
-          <CheckCircle2 size={14} className="shrink-0 text-emerald-500" />
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Sold
-          </h2>
+    <DetailCard
+      title="Sold"
+      icon={CheckCircle2}
+      iconClassName="text-emerald-700 dark:text-emerald-500"
+      action={
+        <>
           {deal.isBundle && (
-            <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-500">
+            <Badge
+              size="sm"
+              className="bg-emerald-500/12 font-semibold text-emerald-700 dark:text-emerald-500"
+            >
               Bundle
-            </span>
+            </Badge>
           )}
-        </div>
-        <span className="text-xs text-muted-foreground">
-          {deal.dealType} · Sold {formatDate(deal.soldDate)}
-        </span>
-      </div>
-
-      <div className="px-5 py-4">
+          <span className="text-sm text-muted-foreground">
+            {deal.dealType} · Sold {formatDate(deal.soldDate)}
+          </span>
+        </>
+      }
+    >
+      <div>
         {deal.policies.length > 0 ? (
           <ul className="divide-y divide-border">
             {deal.policies.map((policy) => (
@@ -75,23 +79,23 @@ export function SoldCard({ deal, leadId }: SoldCardProps) {
            * bound nothing, and the policy types the deal *does* record are the
            * next best thing.
            */
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             {deal.policyTypes.join(", ") ||
               "No policy detail linked to this sale."}
           </p>
         )}
 
-        <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-          <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
+          <SectionLabel>
             Total · {deal.itemCount} item{deal.itemCount === 1 ? "" : "s"} ·{" "}
             {deal.policyCount}{" "}
             {deal.policyCount === 1 ? "policy" : "policies"}
-          </span>
-          <span className="text-base font-semibold text-card-foreground">
+          </SectionLabel>
+          <span className="text-lg font-semibold tabular-nums text-card-foreground">
             {formatCurrency(deal.premium)}
           </span>
         </div>
       </div>
-    </section>
+    </DetailCard>
   );
 }

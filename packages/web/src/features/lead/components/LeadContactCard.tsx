@@ -11,6 +11,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { formatPhone } from "@/lib/leads-api";
 import { cn } from "@/lib/utils";
+import { DetailCard, SectionLabel } from "./DetailCard";
 import { EditContactDialog } from "./EditContactDialog";
 import { LeadSourceSelect } from "./lead-inline-selects";
 import { formatAddress, formatDate } from "./lead-display";
@@ -34,12 +35,10 @@ function Field({
 }) {
   return (
     <div className={cn("flex items-start gap-2.5", className)}>
-      <Icon size={13} className="mt-0.5 shrink-0 text-muted-foreground" />
+      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0">
-        <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-          {label}
-        </p>
-        <p className="mt-0.5 break-words text-sm text-card-foreground">
+        <SectionLabel>{label}</SectionLabel>
+        <p className="mt-0.5 break-words text-base text-card-foreground">
           {value}
         </p>
       </div>
@@ -62,22 +61,21 @@ export function LeadContactCard({
   const contact = lead.primaryContact;
 
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Lead &amp; Contact
-        </h2>
-        <div className="flex items-center gap-2">
+    <DetailCard
+      title="Lead & contact"
+      bodyless
+      action={
+        <>
           <LeadSourceSelect
             value={lead.leadSource}
             onChange={onSourceChange}
             pending={pending}
           />
           {contact && <EditContactDialog leadId={lead.id} contact={contact} />}
-        </div>
-      </div>
-
-      <div className="grid gap-x-8 gap-y-3 px-5 py-4 sm:grid-cols-2">
+        </>
+      }
+    >
+      <div className="grid gap-x-8 gap-y-4 px-5 py-4 sm:grid-cols-2">
         <Field
           icon={MapPin}
           label="Address"
@@ -112,19 +110,14 @@ export function LeadContactCard({
           */}
         {lead.policiesOfInterest.length > 0 && (
           <div className="flex items-start gap-2.5 sm:col-span-2">
-            <ShieldCheck
-              size={13}
-              className="mt-0.5 shrink-0 text-muted-foreground"
-            />
+            <ShieldCheck className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
-              <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-                Policies of Interest
-              </p>
+              <SectionLabel>Policies of interest</SectionLabel>
               <ul className="mt-0.5 space-y-0.5">
                 {lead.policiesOfInterest.map((policy, index) => (
                   <li
                     key={`${policy.policyType}-${index}`}
-                    className="break-words text-sm text-card-foreground"
+                    className="break-words text-base text-card-foreground"
                   >
                     {/* The count only earns its place when it isn't the default
                         1 — "Auto ×1" is noise around the part that matters. */}
@@ -162,11 +155,11 @@ export function LeadContactCard({
       </div>
 
       {!contact && (
-        <p className="border-t border-border px-5 py-3 text-xs text-muted-foreground">
+        <p className="border-t border-border px-5 py-3 text-sm text-muted-foreground">
           No contact record is linked to this lead yet, so the details above come
           from the lead itself.
         </p>
       )}
-    </section>
+    </DetailCard>
   );
 }

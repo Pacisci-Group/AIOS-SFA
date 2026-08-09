@@ -10,8 +10,11 @@ import {
   getQuoteRecapContext,
 } from "@/lib/quote-recaps-api";
 import { newSubmissionToken } from "@/lib/submission-token";
+import { leadDetailKey } from "@/features/lead/components/useUpdateLead";
 import { QuoteRecapForm } from "./components/QuoteRecapForm";
 import {
+  emptyQuoteRecap,
+  parseQuoteRecap,
   toPolicyInputs,
   type QuoteRecapFormValues,
 } from "./components/quote-recap-schema";
@@ -57,6 +60,14 @@ export default function NewQuoteRecapPage() {
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["leads"] });
+      /*
+       * The lead we are about to navigate to. Without this the Lead Detail page
+       * serves its cached `LeadDetail` (`staleTime: 30_000`) and shows the
+       * *previous* recap — or none at all — for half a minute after recording
+       * one. The producer almost always arrives from that page, so its cache is
+       * warm and the bug is the common case rather than the rare one.
+       */
+      void queryClient.invalidateQueries({ queryKey: leadDetailKey(leadId) });
       toast.success("Quote recap recorded");
       // Back to the lead, in context. Deliberately NOT deep-linked to the Sold
       // form: those steps are days apart in reality.
@@ -129,11 +140,15 @@ export default function NewQuoteRecapPage() {
             {contextQuery.data && (
               <QuoteRecapForm
                 context={contextQuery.data}
+                initialValues={emptyQuoteRecap()}
                 submitting={mutation.isPending}
                 errorMessage={error}
                 onSubmit={(values) => {
                   setError(null);
-                  mutation.mutate(values);
+                  // Narrows `quoteDocument` from form state's optional to the
+                  // wire shape's required. Validation has already passed, so
+                  // this is a real check rather than a cast.
+                  mutation.mutate(parseQuoteRecap(values));
                 }}
               />
             )}

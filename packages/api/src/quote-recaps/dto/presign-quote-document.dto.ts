@@ -1,20 +1,28 @@
 import { z } from 'zod';
 
 /**
- * Content types accepted for the carrier quote document.
+ * Content types accepted for the carrier quote document. **PDF only**
+ * (PAC-56 #9).
  *
- * Matches the deal-audit rule rather than the `sfaforms` prototype's PDF-only
- * constraint: producers routinely photograph a quote, and one consistent upload
- * rule across the app is worth more than the prototype's guess.
+ * This previously allowed `image/jpeg` and `image/png` to match the deal-audit
+ * rule, on the reasoning that producers photograph quotes and one upload rule
+ * across the app beats two. David overruled it: roughly 98% of quote documents
+ * are already PDFs, and a carrier quote is a document rather than a snapshot —
+ * accepting photographs here mostly produces unreadable attachments that have
+ * to be chased. The deal-audit and sold-form uploads are unaffected and still
+ * take images (PAC-56 #22), which is exactly the divergence the note below
+ * anticipated.
  *
  * Deliberately its own constant rather than an import from `deal-audits/dto/`:
  * the two features must stay free to diverge on what they accept, and a
  * cross-feature DTO import is coupling the module boundary shouldn't carry.
+ *
+ * ⚠ **Write-path only.** Recaps already holding a JPEG or PNG keep working —
+ * `getDocumentDownload` presigns whatever content type is stored, and nothing
+ * on the read path consults this list. Do not "clean up" those records.
  */
 export const ALLOWED_QUOTE_DOCUMENT_CONTENT_TYPES = [
   'application/pdf',
-  'image/jpeg',
-  'image/png',
 ] as const;
 
 /** Max upload size (10 MB), matching the UI copy. */

@@ -1,5 +1,6 @@
 import { POLICY_TYPES } from '@sfa/shared';
 import { z } from 'zod';
+import { clearable, trimmedText } from '../../common/dto/clearable';
 
 /**
  * `YYYY-MM-DD`, parsed as UTC midnight.
@@ -14,26 +15,6 @@ const calendarDate = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
   .transform((value) => new Date(`${value}T00:00:00.000Z`))
   .refine((value) => !Number.isNaN(value.getTime()), 'Not a real date');
-
-/**
- * A field that can be cleared as well as set.
- *
- * `null` and "absent" are different requests — a producer blanking a mistyped
- * carrier is not the same as one who only touched the premium — so the schema
- * has to keep them distinguishable rather than collapsing both to `undefined`.
- * An empty string is treated as a clear, because that is what a cleared text
- * input actually sends.
- */
-function clearable<T extends z.ZodTypeAny>(inner: T) {
-  return inner.nullable().optional();
-}
-
-const trimmedText = (max: number) =>
-  z
-    .string()
-    .trim()
-    .max(max)
-    .transform((value) => (value.length ? value : null));
 
 /**
  * `PATCH /policies/:id` — the Sold card's quick edits (PAC-56 #27).

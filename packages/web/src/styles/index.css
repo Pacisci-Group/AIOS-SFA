@@ -1,9 +1,30 @@
+/**
+ * Inter, self-hosted.
+ *
+ * Was a render-blocking Google Fonts `<link>` in `index.html`. The variable
+ * build ships one file covering every weight we use, so this is also fewer
+ * requests than the five static cuts the old link asked for.
+ *
+ * Must be imported before `tailwind.css`: `@import` rules have to precede all
+ * other statements in a stylesheet, and the font package is plain
+ * `@font-face` CSS.
+ */
+@import '@fontsource-variable/inter';
 @import './tailwind.css';
 @import './theme.css';
 
 @layer base {
   html {
-    font-family: 'Inter', system-ui, sans-serif;
+    /**
+     * The non-utility fallback. `--font-sans` in `theme.css` is what makes the
+     * `font-sans` *utility* resolve to Inter — without it Tailwind's stock
+     * system stack wins wherever that class is used.
+     */
+    font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
+    font-optical-sizing: auto;
+    /* `cv11` gives Inter's single-storey `l`, which stops `l`/`1`/`I` reading
+       identically — worth having on pages full of policy numbers. */
+    font-feature-settings: 'cv11';
   }
 
   body {

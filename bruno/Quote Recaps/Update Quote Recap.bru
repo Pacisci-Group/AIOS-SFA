@@ -1,0 +1,156 @@
+meta {
+  name: Update Quote Recap
+  type: http
+  seq: 9
+}
+
+patch {
+  url: {{baseUrl}}/quote-recaps/{{createdQuoteRecapId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "policies": [
+      { "policyType": "Auto", "premium": 1300.25, "itemCount": 2 },
+      {
+        "policyType": "Home",
+        "premium": 950.00,
+        "itemCount": 1,
+        "sameAsHousehold": true
+      }
+    ],
+    "notes": "Corrected the auto premium after the carrier re-rated."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("recomputes the totals from the new rows", function () {
+    const body = res.getBody();
+    // 1300.25 + 950.00 — the rounding matters, which is why the fixture uses
+    // cents rather than whole dollars.
+    expect(body.premium).to.equal(2250.25);
+    expect(body.itemCount).to.equal(3);
+    expect(body.productsQuoted).to.eql(["Auto", "Home"]);
+  });
+
+  test("replaces the policy list wholesale", function () {
+    const policies = res.getBody().policies;
+    expect(policies).to.have.lengthOf(2);
+    expect(policies[0].premium).to.equal(1300.25);
+    expect(policies[1].premium).to.equal(950);
+  });
+
+  test("copies the household address onto a sameAsHousehold row", function () {
+    const home = res.getBody().policies[1];
+    expect(home.propertyAddress).to.be.an("object");
+    expect(home.propertyAddress.street).to.be.a("string");
+  });
+
+  test("keeps the attached document when quoteDocument is omitted", function () {
+    // The single most important assertion here. Omitting the field must mean
+    // "keep", not "clear" — and it is also what keeps a pre-PAC-56-#9 recap
+    // holding a JPEG editable at all.
+    const document = res.getBody().document;
+    expect(document).to.be.an("object");
+    expect(document.filename).to.equal("carrier-quote.pdf");
+  });
+
+  test("does NOT move quoteDate — the Quoted scorecard buckets on it", function () {
+    expect(res.getBody().quoteDate).to.equal(bru.getVar("quoteRecapQuoteDate"));
+  });
+
+  test("returns the Lead Detail shape, so the client can splice it in", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("producerName");
+    expect(body).to.have.property("createdAt");
+    expect(body).to.have.property("status");
+  });
+
+  test("never leaks internals", function () {
+    const raw = JSON.stringify(res.getBody());
+    expect(raw).to.not.contain("agencies/");
+    expect(raw).to.not.contain("submissionToken");
+    expect(res.getBody().document).to.not.have.property("key");
+  });
+}
+
+docs {
+  # PATCH /quote-recaps/:id — correct a recorded quote (PAC-56 #11)
+
+  - **Module:** `quote_recaps`
+  - **Permission:** `quote_recaps:write`
+  - **Data scope:** `own` — another producer's recap **404s**, never 403s.
+
+  Legacy had this: the SmartSuite Quote Recaps table carried an `Update URL`
+  formula pointing at Fillout form `cusXRDS52ous`. The rebuild shipped
+  create-only, so a mistyped premium was permanent. This is parity work.
+
+  ## Body — every field optional, at least one required
+
+  | field         | type   | semantics                                             |
+  |---------------|--------|-------------------------------------------------------|
+  | policies      | array  | **Full replacement**, 1–12 rows. Omit to leave alone.  |
+  | notes         | string \| null | `null` (or `""`) clears. Omit to leave alone.  |
+  | quoteDocument | object | Replaces the attachment. **Omit to keep it.** `null` is rejected. |
+
+  ### Why `policies` is a full replacement
+
+  `QuotedPolicy` is an `_id: false` sub-document array — the rows have **no
+  identity** for a per-row patch to address, and index-addressing breaks the
+  moment a row is inserted or removed (and silently, under two concurrent
+  edits). The form edits the list as a whole, and the totals are a fold over all
+  of it either way. Rows are validated through the *create* DTO's own row
+  schema, so the "a property row that opts out of `sameAsHousehold` needs all
+  four address parts" rule cannot diverge between the two writes.
+
+  ### Why omitting `quoteDocument` means keep
+
+  A recap without its carrier quote is not a legal state (PAC-39 decision 4), so
+  there is no "remove". Beyond that: recaps uploaded before PAC-56 #9 may hold a
+  JPEG, which the write path no longer accepts. Re-validating the stored
+  document on every patch would make exactly those records un-editable.
+
+  ## What this deliberately does not do
+
+  - **Move `quoteDate` / `quoteDateYmd`.** That is the day the quote was given,
+    and `quoteDateYmd` is the **Quoted scorecard's** indexed bucket key (PAC-10).
+    Re-dating a Thursday correction onto a Monday quote would retroactively
+    change a number that has already been reported. It *is* backfilled when
+    missing, which self-heals migrated recaps on first touch.
+  - **Re-run the lead-status advance.** PAC-38 made lead status freely editable
+    in both directions so a producer can undo a mis-click; silently re-asserting
+    `Quoted` here would undo a deliberate move back to `Contacted`.
+  - **Touch `submissionToken`.** It guards duplicate *creates*; rewriting it
+    would break the create-replay guarantee.
+  - **Delete the replaced storage object.** `StorageService` has no delete, by
+    design. An orphaned PDF is recoverable; a wrongly-deleted document is not,
+    and an abandoned create form already leaves the identical garbage. A bucket
+    lifecycle rule is the right fix and is a follow-up.
+  - **Recompute anything on the deal.** A recap is a proposal; nothing on a sold
+    deal derives from it.
+
+  Concurrency is last-write-wins and unguarded, matching `PATCH /policies/:id`.
+
+  ## Response
+  `200` with the recap in the same shape `GET /leads/:id` returns
+  (`LeadDetailQuoteRecap`), so the client splices it straight into its cache.
+
+  ## Errors
+  - `400` — empty body, no policies, a property row missing its address, or a
+    `quoteDocument` whose stored object is not a PDF / is over 10 MB.
+  - `404` — malformed id, unknown recap, another agency's, or out of data scope.
+
+  ## Run order
+  Depends on `createdQuoteRecapId` (seq 4) and `quoteRecapQuoteDate` (seq 8).
+}

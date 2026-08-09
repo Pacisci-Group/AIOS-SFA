@@ -85,7 +85,7 @@ export function LeadsFilterSheet({
 
         <div className="flex flex-col gap-5 px-4 overflow-y-auto">
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">Status</Label>
+            <Label className="text-sm text-muted-foreground">Status</Label>
             <MultiSelect
               options={LEAD_STATUS_OPTIONS}
               value={filters.status}
@@ -97,7 +97,7 @@ export function LeadsFilterSheet({
           </div>
 
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">Lead source</Label>
+            <Label className="text-sm text-muted-foreground">Lead source</Label>
             <Select
               value={toSelectValue(filters.leadSource)}
               onValueChange={(v) => onChange({ leadSource: toFilterValue(v) })}
@@ -124,7 +124,7 @@ export function LeadsFilterSheet({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Created from</Label>
+              <Label className="text-sm text-muted-foreground">Created from</Label>
               <Input
                 type="date"
                 value={filters.dateFrom}
@@ -134,7 +134,7 @@ export function LeadsFilterSheet({
               />
             </div>
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Created to</Label>
+              <Label className="text-sm text-muted-foreground">Created to</Label>
               <Input
                 type="date"
                 value={filters.dateTo}
@@ -147,7 +147,7 @@ export function LeadsFilterSheet({
 
           {showProducerFilter && canListUsers && (
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Producer</Label>
+              <Label className="text-sm text-muted-foreground">Producer</Label>
               <Select
                 value={toSelectValue(filters.producerId)}
                 onValueChange={(v) => onChange({ producerId: toFilterValue(v) })}

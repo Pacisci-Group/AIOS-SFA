@@ -12,6 +12,16 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
+        /**
+         * The emerald "completed the sale" action — today just "Mark as Sold".
+         *
+         * Local, like `brand` below, and lost the same way if `button` is
+         * re-added from the registry. It exists so that button stops
+         * hard-coding `bg-emerald-600 text-white`, which is a dark-only raw
+         * palette pair: `text-white` on emerald-600 is fine on the navy theme
+         * and marginal on the light one, and neither value re-themes.
+         */
+        success: "bg-success text-success-foreground hover:bg-success/90",
         outline:
           "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

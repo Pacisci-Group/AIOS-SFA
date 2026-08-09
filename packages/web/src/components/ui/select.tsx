@@ -48,11 +48,24 @@ function SelectTrigger({
   )
 }
 
+/**
+ * ⚠ Local defaults, not stock shadcn — re-adding `select` from the registry
+ * will revert them.
+ *
+ * These were `position="item-aligned"` / `align="center"`, which makes Radix
+ * render the list *over* the trigger, shifted so the selected row lands under
+ * the cursor. On the inline status/temperature pills (a ~70px `rounded-full`
+ * trigger against the menu's `min-w-[8rem]`) that reads as a misaligned box
+ * appearing on top of the control you just clicked. `popper` + `align="start"`
+ * drops the menu below the trigger, and — only under `popper` — the Viewport's
+ * `min-w-[var(--radix-select-trigger-width)]` rule below finally applies, so
+ * the menu matches its trigger's width.
+ */
 function SelectContent({
   className,
   children,
-  position = "item-aligned",
-  align = "center",
+  position = "popper",
+  align = "start",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   return (
@@ -73,8 +86,13 @@ function SelectContent({
         <SelectPrimitive.Viewport
           className={cn(
             "p-1",
+            // Stock shadcn also pins `h-[var(--radix-select-trigger-height)]`
+            // here. Dropped deliberately: now that `popper` is the default it
+            // applies to every Select in the app, and a fixed height equal to
+            // the trigger's would clamp the list to roughly one visible row.
+            // `max-h` on the Content already handles overflow.
             position === "popper" &&
-              "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1"
+              "w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1"
           )}
         >
           {children}

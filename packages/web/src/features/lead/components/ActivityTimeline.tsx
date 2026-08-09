@@ -1,5 +1,6 @@
 import type { ActivityOrigin, LeadDetailActivity } from "@sfa/shared";
 import { ACTIVITY_ORIGIN_LABELS } from "@sfa/shared";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ActivityComposer } from "./ActivityComposer";
 import { activityDisplay, activityLabel } from "./lead-display";
@@ -71,18 +72,18 @@ export function ActivityTimeline({
   leadId,
 }: ActivityTimelineProps) {
   return (
-    <section className="flex h-full flex-col rounded-lg border border-border bg-card">
+    <section className="flex h-full flex-col rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Notes &amp; Activity
+        <h2 className="text-sm font-semibold text-card-foreground">
+          Notes &amp; activity
         </h2>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-sm text-muted-foreground">
           {activities.length} {activities.length === 1 ? "entry" : "entries"}
         </span>
       </div>
 
       {activities.length === 0 ? (
-        <p className="flex-1 px-5 py-4 text-sm text-muted-foreground">
+        <p className="flex-1 px-5 py-4 text-base text-muted-foreground">
           Nothing has been logged against this lead yet.
         </p>
       ) : (
@@ -105,31 +106,31 @@ export function ActivityTimeline({
                 {!isLast && (
                   <span
                     aria-hidden
-                    className="absolute bottom-0 left-3 top-8 w-px bg-border"
+                    className="absolute bottom-0 left-4 top-10 w-px bg-border"
                   />
                 )}
 
                 <span
                   aria-hidden
                   className={cn(
-                    "relative z-10 mt-1 flex size-6 shrink-0 items-center justify-center rounded-full",
+                    "relative z-10 mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full",
                     tint,
                   )}
                 >
-                  <Icon size={11} className={tone} />
+                  <Icon className={cn("size-4", tone)} />
                 </span>
 
                 <div className="min-w-0 flex-1 pb-4">
                   <div className="flex items-baseline justify-between gap-2">
                     <p
                       className={cn(
-                        "text-sm font-medium",
+                        "text-base font-medium",
                         isNote ? "text-muted-foreground" : "text-card-foreground",
                       )}
                     >
                       {isNote ? "Note" : activityLabel[activity.type]}
                     </p>
-                    <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                    <span className="shrink-0 whitespace-nowrap text-sm text-muted-foreground">
                       {formatWhen(activity.occurredAt)}
                     </span>
                   </div>
@@ -142,12 +143,12 @@ export function ActivityTimeline({
                        * meaningful.
                        */
                       body && (
-                        <p className="mt-1.5 whitespace-pre-line rounded-r border-l-2 border-amber-500/50 bg-sunken py-2 pl-3 pr-2 text-sm text-card-foreground">
+                        <p className="mt-1.5 whitespace-pre-line rounded-r-md border-l-2 border-destructive/50 bg-sunken py-2 pl-3 pr-2 text-base text-card-foreground">
                           {body}
                         </p>
                       )
                     : body && (
-                        <p className="mt-0.5 text-sm text-card-foreground">
+                        <p className="mt-0.5 text-base text-card-foreground">
                           {body}
                         </p>
                       )}
@@ -195,12 +196,12 @@ function Provenance({
   if (!producerName && !showOrigin) return null;
 
   return (
-    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+    <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
       {producerName && <span className={tone}>{producerName}</span>}
       {showOrigin && (
-        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+        <Badge size="sm" variant="secondary" className="text-muted-foreground">
           {ACTIVITY_ORIGIN_LABELS[origin]}
-        </span>
+        </Badge>
       )}
     </p>
   );
