@@ -1,0 +1,254 @@
+meta {
+  name: Get Lead
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/leads/{{leadId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // Capture ids the downstream PAC-38 requests need.
+  // Runtime-only vars (never persisted to disk).
+  if (res.getStatus() === 200) {
+    const body = res.getBody();
+    if (body.primaryContact) {
+      bru.setVar("primaryContactId", body.primaryContact.id);
+    }
+    if (body.latestQuoteRecap) {
+      bru.setVar("latestQuoteRecapId", body.latestQuoteRecap.id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the full 360 shape", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(body).to.have.property("name");
+    expect(body).to.have.property("status");
+    expect(body).to.have.property("temperature");
+    expect(body).to.have.property("leadSource");
+    expect(body).to.have.property("primaryContact");
+    expect(body).to.have.property("household");
+    expect(body).to.have.property("latestQuoteRecap");
+    expect(body).to.have.property("earlierQuoteRecaps");
+    expect(body).to.have.property("deal");
+    expect(body).to.have.property("priorInsurance");
+    expect(body).to.have.property("activities");
+    expect(body.activities).to.be.an("array");
+  });
+
+  test("exposes only display fields (no internals leak)", function () {
+    const body = res.getBody();
+    expect(body).to.not.have.property("legacySmartSuiteId");
+    expect(body).to.not.have.property("legacyProducerId");
+    expect(body).to.not.have.property("legacyHouseholdId");
+    expect(body).to.not.have.property("isTestRecord");
+    expect(body).to.not.have.property("agencyId");
+    expect(body).to.not.have.property("branchId");
+    expect(body).to.not.have.property("producerId");
+  });
+
+  test("status is a normalized label, never a raw SmartSuite code", function () {
+    const rawCodes = ["arW7O", "phjnb", "jp76g", "hfwda"];
+    expect(rawCodes).to.not.include(res.getBody().status);
+  });
+
+  test("quoted products are canonical labels, never raw policy codes", function () {
+    const recap = res.getBody().latestQuoteRecap;
+    const rawCodes = ["PYgez", "sNMRK", "Hn155", "mrzQD", "mCt4m", "UAOk8"];
+    if (recap) {
+      recap.productsQuoted.forEach(function (product) {
+        expect(rawCodes).to.not.include(product);
+      });
+    }
+  });
+
+  test("the quote document never exposes its storage key", function () {
+    const recap = res.getBody().latestQuoteRecap;
+    if (recap && recap.document) {
+      expect(recap.document).to.not.have.property("key");
+      expect(recap.document).to.have.property("filename");
+    }
+  });
+
+  test("activities are newest first", function () {
+    const activities = res.getBody().activities;
+    for (let i = 1; i < activities.length; i++) {
+      const previous = activities[i - 1].occurredAt;
+      const current = activities[i].occurredAt;
+      if (previous && current) {
+        expect(new Date(previous).getTime()).to.be.at.least(
+          new Date(current).getTime()
+        );
+      }
+    }
+  });
+}
+
+docs {
+  # GET /leads/:id — Lead Detail 360° view (PAC-38)
+
+  Everything the `/leads/:id` page renders, assembled in one round trip: the
+  lead itself, its household and roster, household policies, the latest quote
+  recap (plus summaries of any earlier ones), the deal it became, the prior
+  insurance captured at sale, and the activity timeline.
+
+  - **Module:** `leads` (must be enabled for the agency)
+  - **Permission:** `leads:read`
+  - **Data scope** (enforced in `LeadAccessService.loadOwnedLead`, never the
+    controller):
+    - `own` → only the caller's own leads. Another producer's lead is a
+      **`404`, not a `403`** — whether it exists is not the caller's business.
+      Note an *unassigned* lead is also a 404 under `own`.
+    - `branch` → clamped to the caller's branch (or the `X-Branch-Id` branch).
+    - `agency` → any lead in the agency.
+
+  ## Path params
+  | param | type   | notes                                                   |
+  |-------|--------|---------------------------------------------------------|
+  | id    | string | ObjectId. A malformed id is a `404`, never a `500`.     |
+
+  ## Behaviour worth knowing
+
+  **Migrated records are found by their legacy ids.** The SmartSuite migration
+  writes only `legacyLeadId` on quote recaps and deals — `backfill-deal-refs`
+  repairs deals, never recaps — so a plain `leadId` lookup would return nothing
+  for every migrated lead. When the primary lookup misses, the service falls
+  back to `legacyLeadId` and then **backfills the ref fire-and-forget**: each
+  lead repairs itself the first time it is viewed, so the second read is fast.
+  The same self-healing already applies to `householdId`.
+
+  **Several recaps per lead are expected.** `quoteRecaps.leadId` is a plain
+  index and the status vocabulary includes `Requote`. The newest by `quoteDate`
+  is returned in full as `latestQuoteRecap`; the rest appear as summaries in
+  `earlierQuoteRecaps`. A recap with no `quoteDate` sorts last — an undated
+  recap is not "the latest".
+
+  **Blocks are `null`, not empty.** `household`, `latestQuoteRecap`, `deal` and
+  `priorInsurance` are each `null` when they do not apply, and the page hides
+  the corresponding card rather than rendering an empty one.
+
+  **Two documented divergences from the Figma mockup**, both data gaps rather
+  than unfinished work:
+  - There is no current-vs-proposed coverage comparison. It needs carrier,
+    liability limits, deductibles, UM/UIM and med pay — none of which the Quote
+    Recap form captures, and no "current coverage" source exists.
+  - `household.policies` is **household-level**. `Policy` links to `Household`
+    and `Deal` and never to a contact, so per-member policy icons are not
+    derivable.
+
+  ## Response `200`
+  ```json
+  {
+    "id": "665f...ac1",
+    "name": "Maria Rodriguez",
+    "firstName": "Maria",
+    "lastName": "Rodriguez",
+    "status": "Quoted",
+    "temperature": "Hot",
+    "leadSource": { "code": "WCO7l", "label": "Mailer" },
+    "emails": ["maria.rodriguez@example.com"],
+    "phones": ["5551234567"],
+    "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
+    "quoteControlNumber": "QCN-11741",
+    "agingDays": 12,
+    "createdDate": "2026-07-16T00:00:00.000Z",
+    "lastActivityAt": "2026-07-28T14:02:11.000Z",
+    "intakeChannel": "internal",
+    "producerName": "Pat Producer",
+    "primaryContact": {
+      "id": "665f...b02",
+      "firstName": "Maria",
+      "lastName": "Rodriguez",
+      "name": "Maria Rodriguez",
+      "dateOfBirth": "1978-04-12",
+      "email": "maria.rodriguez@example.com",
+      "phone": "5551234567",
+      "role": "Primary",
+      "isPrimary": true
+    },
+    "household": {
+      "id": "665f...c33",
+      "name": "Rodriguez Household",
+      "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
+      "members": [],
+      "policies": [],
+      "totalActivePolicies": 2
+    },
+    "latestQuoteRecap": {
+      "id": "665f...d44",
+      "quoteDate": "2026-07-24T00:00:00.000Z",
+      "premium": 1872,
+      "itemCount": 2,
+      "productsQuoted": ["Auto", "Home"],
+      "status": "Quoted",
+      "policies": [{ "policyType": "Auto", "premium": 1200, "itemCount": 1 }],
+      "propertyAddress": null,
+      "notes": "Bundling for the multi-policy discount.",
+      "document": {
+        "filename": "quote.pdf",
+        "contentType": "application/pdf",
+        "size": 84213,
+        "uploadedAt": "2026-07-24T15:10:02.000Z"
+      }
+    },
+    "earlierQuoteRecaps": [],
+    "deal": null,
+    "priorInsurance": null,
+    "activities": [
+      {
+        "id": "665f...e55",
+        "type": "quoted",
+        "summary": "Quote recap created",
+        "occurredAt": "2026-07-24T00:00:00.000Z",
+        "producerName": "Pat Producer"
+      }
+    ]
+  }
+  ```
+
+  Top-level fields:
+  | field              | type            | notes                                                     |
+  |--------------------|-----------------|-----------------------------------------------------------|
+  | id                 | string          | record id                                                 |
+  | name               | string          | `first last`, or `"Unknown Lead"`                         |
+  | status             | string          | canonical label — `arW7O` is normalized to `Requote`      |
+  | temperature        | enum            | `Hot` \| `Warm` \| `Cold` \| `Unknown`                    |
+  | leadSource         | object          | `{ code, label }` — `code` is what `PATCH` accepts back   |
+  | address            | object \| null  | household living address, coerced from three stored shapes |
+  | agingDays          | int             | recomputed live, **not** the stale migrated value          |
+  | intakeChannel      | enum \| null    | `internal` \| `share_link`; `null` on migrated leads       |
+  | primaryContact     | object \| null  | DOB is `YYYY-MM-DD`, never a timestamp                    |
+  | household          | object \| null  | `null` when the lead has no household (a migrated gap)     |
+  | latestQuoteRecap   | object \| null  | newest by `quoteDate`                                      |
+  | earlierQuoteRecaps | array           | summaries, newest first                                    |
+  | deal               | object \| null  | `null` until the lead is sold                              |
+  | priorInsurance     | object \| null  | only stored fields; no fabricated limits/deductibles       |
+  | activities         | array           | newest first, capped at 50                                 |
+
+  No `legacy*` ids, `isTestRecord`, `agencyId`/`branchId`, storage keys, or raw
+  select codes are ever returned.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, or missing `leads:read`.
+  - `404 Not Found` — no such lead, a malformed id, or a lead outside the
+    caller's data scope. All three return the same `"Lead not found."` body by
+    design.
+
+  > **Tip:** run **List Leads** first — it captures `leadId` into a runtime var
+  > that this request consumes.
+}

@@ -1,6 +1,7 @@
 import { Transform } from 'class-transformer';
 import {
   IsInt,
+  IsMongoId,
   IsOptional,
   IsString,
   Max,
@@ -22,4 +23,15 @@ export class SearchRecordsQueryDto {
   @Min(1)
   @Max(50)
   limit?: number;
+
+  /**
+   * Policy search only: restrict results to one household's policies.
+   *
+   * Used by the New Ticket dialog opened from a household page, where offering
+   * the whole agency's book would let a CSR file a ticket against a policy
+   * belonging to a different client. Ignored by the household search.
+   */
+  @IsOptional()
+  @IsMongoId()
+  householdId?: string;
 }

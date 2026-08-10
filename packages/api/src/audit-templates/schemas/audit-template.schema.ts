@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
-import { TenantRecord } from '../../common/schemas/tenant-record.schema';
+import {
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+  TenantRecord,
+} from '../../common/schemas/tenant-record.schema';
 
 export type AuditTemplateDocument = HydratedDocument<AuditTemplate>;
 
@@ -35,5 +38,19 @@ export class AuditTemplate extends TenantRecord {
 export const AuditTemplateSchema = SchemaFactory.createForClass(AuditTemplate);
 AuditTemplateSchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
-  { unique: true, sparse: true },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
 );
+
+/**
+ * Audit generation resolves computed titles against this collection by name,
+ * and the core seed upserts on `{ agencyId, name }` (PAC-40).
+ *
+ * **Non-unique deliberately.** SmartSuite does not constrain the title field,
+ * so a migrated workspace may already hold two templates with the same name; a
+ * unique index would fail to build at boot and take the API down with it. The
+ * generator dedupes by normalized title in memory instead.
+ */
+AuditTemplateSchema.index({ agencyId: 1, name: 1 });
+
+/** The generator only ever loads active templates. */
+AuditTemplateSchema.index({ agencyId: 1, active: 1 });

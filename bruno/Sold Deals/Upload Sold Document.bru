@@ -1,0 +1,56 @@
+meta {
+  name: Upload Sold Document
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{soldDocumentUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/pdf
+}
+
+body:text {
+  %PDF-1.4
+  1 0 obj<</Type/Catalog>>endobj
+  trailer<</Root 1 0 R>>
+  %%EOF
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw Card 5 upload (step 2 of 3, PAC-40)
+
+  Not an API endpoint: this goes **straight to object storage** using the URL
+  from `Presign Sold Document`.
+
+  - **Auth:** `none` — deliberately. The collection-level bearer would be sent
+    on this request and **break the S3 signature**; a presigned URL carries its
+    own credentials. The web client uses a bare `fetch` here rather than
+    `apiFetch` for exactly this reason.
+
+  ## Headers
+  `Content-Type` **must** match the signed value (`requiredHeaders` from the
+  presign response) or storage rejects the PUT.
+
+  ## Body
+  A minimal valid PDF stub. The bytes are irrelevant to the API — only the
+  object's **type and size**, which `POST /sold-deals` reads back with
+  `HeadObject`. Because the server derives the size rather than trusting the
+  declared one, this stub can be far smaller than the `size` sent at presign
+  time and the chain still works.
+
+  ## Response
+  - `200 OK` — object stored; the key is now attachable.
+  - `403 Forbidden` — signature mismatch: usually an `Authorization` header
+    being sent, a differing `Content-Type`, or an expired URL.
+}

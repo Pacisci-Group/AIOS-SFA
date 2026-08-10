@@ -2,17 +2,35 @@
 #
 # Differences from local docker-compose.yml:
 #   - No MongoDB container (uses DigitalOcean Managed MongoDB via MONGODB_URI)
+#   - No MinIO container (uses DigitalOcean Spaces via STORAGE_*)
 #   - Uses pre-built images from the registry (no build on the droplet)
 #   - No auto-seed on startup (run `docker compose run --rm api node packages/api/dist/seed/seed.js` once, manually)
 #   - Web is published only to loopback (127.0.0.1:8080); host Nginx terminates TLS and proxies to it
 #   - API is not published to the host at all (only reachable inside the compose network)
 #
+# /opt/sfa/.env is written in full by .github/workflows/deploy.reusable.yml on
+# every deploy — edit the GitHub Environment secrets, not the file on the box.
+#
 # Required variables (from /opt/sfa/.env):
 #   API_IMAGE, WEB_IMAGE  -> full registry image refs (e.g. ghcr.io/owner/repo/api:sha)
-#   MONGODB_URI           -> managed MongoDB connection string
+#   MONGODB_URI           -> managed MongoDB connection string. Must be a replica
+#                            set (DO Managed MongoDB is) — the lead-intake
+#                            pipeline writes lead+household+contacts in one
+#                            transaction and silently degrades without one.
 #   JWT_ACCESS_SECRET, JWT_REFRESH_SECRET
 #   CORS_ORIGIN           -> e.g. https://dev.example.com
 #   WEB_BIND              -> host bind for web (default 127.0.0.1:8080)
+#   STORAGE_ENDPOINT, STORAGE_REGION, STORAGE_BUCKET,
+#   STORAGE_ACCESS_KEY_ID, STORAGE_SECRET_ACCESS_KEY,
+#   STORAGE_FORCE_PATH_STYLE=false
+#                         -> Spaces bucket for document uploads. Missing values
+#                            disable uploads *silently* — the API still boots and
+#                            passes its health check.
+#   PUBLIC_FORM_BASE_URL  -> public site URL; share links are built from it
+#
+# Optional (defaults in packages/api/src/config/rate-limit.config.ts):
+#   RATE_LIMIT_SHORT, RATE_LIMIT_LONG, PUBLIC_FORM_RATE_LIMIT,
+#   PUBLIC_INTAKE_RATE_LIMIT, PUBLIC_INTAKE_HOURLY_LIMIT
 
 services:
   api:

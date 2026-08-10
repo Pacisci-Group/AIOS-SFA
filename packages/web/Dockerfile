@@ -9,7 +9,11 @@ RUN npm ci --workspace @sfa/shared --workspace @sfa/web 2>/dev/null || \
     npm install --workspace @sfa/shared --workspace @sfa/web
 
 FROM base AS build
-COPY --from=deps /app/node_modules ./node_modules
+# Copy the whole installed tree, not just /app/node_modules: npm nests packages
+# it cannot hoist (@hookform/resolvers and ajv* conflict with the root ajv) under
+# packages/web/node_modules, and copying only the root silently drops them —
+# surfacing later as a TS2307 "cannot find module" during `tsc --noEmit`.
+COPY --from=deps /app ./
 COPY package.json ./
 COPY packages/shared ./packages/shared
 COPY packages/web ./packages/web

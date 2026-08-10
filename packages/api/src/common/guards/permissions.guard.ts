@@ -5,11 +5,11 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AccessContext } from '@sfa/shared';
 import {
   REQUIRE_ANY_PERMISSIONS_KEY,
   REQUIRE_PERMISSIONS_KEY,
 } from '../decorators/access.decorators';
+import { AuthenticatedRequest } from '../types/authenticated-request';
 import { isPublicRoute } from './guard.utils';
 
 @Injectable()
@@ -37,8 +37,8 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest();
-    const access = request.access as AccessContext | undefined;
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const access = request.access;
     if (!access) {
       throw new ForbiddenException('Authentication required');
     }

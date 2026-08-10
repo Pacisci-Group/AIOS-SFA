@@ -20,10 +20,15 @@ import {
   Household,
   HouseholdDocument,
 } from '../households/schemas/household.schema';
+import {
+  normalizeName,
+  parseDateOfBirth,
+} from '../leads/intake/intake.normalize';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
+import { AddHouseholdMemberDto } from './dto/add-household-member.dto';
 
 /**
- * Read-only access to client records (households, their members, and their
+ * Access to client records (households, their members, and their
  * policies).
  *
  * These records are shared across a branch — unlike service tickets they carry
@@ -112,11 +117,20 @@ export class ClientsService {
     return households.map(toHouseholdSummary);
   }
 
-  /** Typeahead over policies in scope, by policy number, type, or carrier. */
+  /**
+   * Typeahead over policies in scope, by policy number, type, or carrier.
+   *
+   * `householdId` narrows the search to a single household — the New Ticket
+   * dialog opened from a household page passes it so the picker cannot offer
+   * another client's policy. An id that is malformed or out of scope yields an
+   * empty list rather than the unfiltered book: a picker that silently widens
+   * on a bad id is the failure this filter exists to prevent.
+   */
   async searchPolicies(
     access: AccessContext,
     term: string,
     limit = 20,
+    householdId?: string,
   ): Promise<PolicySearchResult[]> {
     const scope = this.scopeFilter(access);
     const filter: FilterQuery<PolicyDocument> = { ...scope };
@@ -124,6 +138,12 @@ export class ClientsService {
     if (q) {
       const rx = new RegExp(escapeRegExp(q), 'i');
       filter.$or = [{ policyNumber: rx }, { policyType: rx }, { carrier: rx }];
+    }
+    if (householdId !== undefined) {
+      if (!Types.ObjectId.isValid(householdId)) {
+        return [];
+      }
+      filter.householdId = new Types.ObjectId(householdId);
     }
 
     const policies = await this.policyModel
@@ -278,6 +298,74 @@ export class ClientsService {
       contacts: contacts.map(toContactSummary),
       policies: policies.map(toPolicySummary),
     };
+  }
+
+  /**
+   * Add a member to a household — the "+ Member" dialog on the Household page.
+   *
+   * A member **is** a `Contact`; there is no separate member record. The write
+   * is therefore two documents: the contact, and the household's
+   * `memberContactIds`. Both are needed — the contact's `householdId` is what
+   * the household page reads, while `memberContactIds` is what the lead-intake
+   * pipeline and the migration maintain, and letting them disagree is how a
+   * member becomes visible on one screen and not another.
+   *
+   * Tenancy comes from the household, never from the caller: a producer whose
+   * branch differs from the household's would otherwise stamp a contact into a
+   * branch the household does not belong to, and that contact would then be
+   * invisible to everyone reading the household.
+   *
+   * Deliberately **not** deduplicated against existing contacts, unlike
+   * `ResolveContactStep`. That matcher exists because a public form is filled
+   * by strangers who may already be in the book; this dialog is a human on the
+   * household's own page, who can see the current members listed beside the
+   * button. Silently merging their new "Child · Sam" into an existing Sam
+   * would be the surprising outcome here.
+   */
+  async addHouseholdMember(
+    access: AccessContext,
+    householdId: string,
+    dto: AddHouseholdMemberDto,
+  ): Promise<ContactSummary> {
+    const scope = this.scopeFilter(access);
+    if (!Types.ObjectId.isValid(householdId)) {
+      throw new NotFoundException('Household not found');
+    }
+
+    const household = await this.householdModel.findOne({
+      ...scope,
+      _id: new Types.ObjectId(householdId),
+    });
+    if (!household) {
+      throw new NotFoundException('Household not found');
+    }
+
+    const contact = await this.contactModel.create({
+      agencyId: household.agencyId,
+      branchId: household.branchId,
+      firstName: normalizeName(dto.firstName),
+      lastName: normalizeName(dto.lastName),
+      // Parsed to UTC midnight from explicit components — never
+      // `new Date(str)`, which shifts a birthday a day west of Greenwich.
+      dateOfBirth: dto.dateOfBirth
+        ? (parseDateOfBirth(dto.dateOfBirth) ?? undefined)
+        : undefined,
+      roleInHousehold: dto.role,
+      // Never primary: that role belongs to the household's Named Insured, and
+      // the dialog does not offer it (see `add-household-member.dto.ts`).
+      isPrimary: false,
+      householdId: household._id,
+      emails: [],
+      phones: [],
+      isTestRecord: false,
+    });
+
+    await this.householdModel.updateOne(
+      { _id: household._id },
+      { $addToSet: { memberContactIds: contact._id } },
+    );
+
+    return toContactSummary(contact.toObject());
   }
 
   async getPolicy(access: AccessContext, id: string): Promise<PolicyView> {

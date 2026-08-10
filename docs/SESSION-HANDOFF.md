@@ -66,7 +66,7 @@ Dev "Screen Navigator" at `/` (`src/pages/DevNavPage.tsx`) links all 7. Routes i
 | # | Screen | Route | Persona | Notes |
 |---|---|---|---|---|
 | 1 | **Producer Dashboard** | `/dashboard/producer` | Sales producer | Sidebar+header (⌘K search, Add Lead, time filters), 3 scorecards (Sold/Quoted/Leaderboard), 60/40: Deals Pending Service Hand-off + Hot Leads. **← current focus** |
-| 2 | **Lead Details** | `/leads/:id`, `/leads/demo` | Producer | Lead+contact, Prior Insurance, Active Quote Workspace (current vs proposed), Mark as Sold modal, Household card + Activity timeline. Embodies Lead→Quote→Sold. |
+| 2 | **Lead Details** | `/leads/:id` | Producer | **Built (PAC-38.)** Lead+contact with inline status/temperature/source edits, Prior Insurance (only when sold), Quote Summary, Household card + Activity timeline. Embodies Lead→Quote→Sold. Two documented divergences from the mockup: no current-vs-proposed coverage table and no per-member policy icons — neither is derivable from what the system stores. `/leads/demo` was removed; the page uses real data now. |
 | 3 | **Management v1** | `/dashboard/management` | Owner + Manager toggle | Owner Strategy Hub (KPIs, leaderboard, Lead Source ROI) / Manager Action Hub (alerts, Team Activity Monitor + drawer). Global filter bar. |
 | 4 | **Management v2** | `/dashboard/management-alt` | ⚠ mislabeled | Actually an **"Agency Command Center" / lead-distribution board** (Unclaimed Leads Pool, claim via call/text, Mailer QCN sidecar). Not analytics. Clarify intent. |
 | 5 | **Service Dashboard** | `/crm/service` | Service rep | 4 scorecards (Active Load, Retention Window, Daily Velocity, Book Health), 60/40: Priority Ticket Queue + Proactive Renewal Outreach. |
@@ -117,7 +117,12 @@ The client lifecycle is a **4-phase, session-isolated form pipeline** (forms com
 **Default role templates** (`shared/src/permissions/default-role-templates.ts`):
 - **Agency Owner** (scope: agency, all agency admin perms + all enabled modules)
 - **Branch Manager** (scope: branch; leads, clients, deal_audits, dashboard:read, performance:read, crm_service r/w)
-- **Producer** (scope: **own**; `dashboard:read, leads:r/w, quote_recaps:r/w, performance:read, leaderboard:read`)
+- **Producer** (scope: **own**; `dashboard:read, leads:r/w, quote_recaps:r/w, deal_audits:r/w, clients:write, performance:read, leaderboard:read`)
+  - `clients:write` was added by PAC-38 so a producer can correct their own
+    lead's primary contact. `Contact` has no `producerId`, so `own` scope is
+    **derived** in `ContactAccessService` — the caller must own a lead that
+    reaches the contact. Propagate a template change to existing agencies with
+    `npm run api:sync:roles:dev`; `seedDefaultRoles` unions, so it never removes.
 - **CRM** (scope: branch; clients, crm_service, deal_audits, onboardings, dashboard:read)
 - **Data Team** (scope: agency; dashboard, command_center, management, owner_dashboard, performance, leaderboard reads)
 

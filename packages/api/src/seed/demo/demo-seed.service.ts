@@ -13,7 +13,7 @@ import { Lead } from '../../leads/schemas/lead.schema';
 import { QuoteRecap } from '../../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../../deals/schemas/deal.schema';
 import { Policy } from '../../policies/schemas/policy.schema';
-import { AuditRecord } from '../../audit-records/schemas/audit-record.schema';
+import { DealAuditItem } from '../../deal-audit-items/schemas/deal-audit-item.schema';
 import { DealAudit } from '../../deal-audits/schemas/deal-audit.schema';
 import { AuditTemplate } from '../../audit-templates/schemas/audit-template.schema';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
@@ -27,7 +27,8 @@ import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema'
 import { Activity } from '../../activities/schemas/activity.schema';
 import { PermissionsService } from '../../permissions/permissions.service';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
-import { normalizeLeadSource } from '../../migration/helpers/lead-sources';
+import { normalizeLeadSource } from '@sfa/shared';
+import { seedAuditTemplates } from '../audit-templates.seed';
 import {
   AUDIT_TEMPLATES,
   BRANCHES,
@@ -39,7 +40,7 @@ import {
   FIRST_NAMES,
   LAST_NAMES,
   LEAD_SOURCE_CODES,
-  LEAD_STATUSES,
+  DEMO_LEAD_UNQUOTED_STATUSES,
   POLICY_TYPE_SETS,
   SERVICE_CATEGORIES,
   SERVICE_PRIORITIES,
@@ -95,17 +96,30 @@ interface HouseholdRef {
   address: Record<string, unknown>;
 }
 
+interface ContactRef {
+  id: Types.ObjectId;
+  legacyId: string;
+  isPrimary: boolean;
+}
+
 interface LeadRef {
   id: Types.ObjectId;
   legacyId: string;
   producer: TeamMember;
+  /** Undefined only if no households were seeded at all. */
+  household?: HouseholdRef;
   occurredAt: Date;
   temperature: string;
+  /** Drives the pipeline: `Sold` leads get a deal, `Quoted`/`Requote` a recap. */
+  status: string;
 }
 
 interface QuoteRef {
+  id: Types.ObjectId;
   legacyId: string;
   producer: TeamMember;
+  /** The lead this recap belongs to — mirrors what the migration now writes. */
+  lead: LeadRef;
   occurredAt: Date;
 }
 
@@ -114,6 +128,8 @@ interface DealRef {
   legacyId: string;
   producer: TeamMember;
   household: HouseholdRef;
+  /** The lead this sale closed. */
+  lead: LeadRef;
   occurredAt: Date;
   clientName: string;
   policyTypes: string[];
@@ -158,8 +174,8 @@ export class DemoSeedService {
     private readonly quoteRecapModel: Model<QuoteRecap>,
     @InjectModel(Deal.name) private readonly dealModel: Model<Deal>,
     @InjectModel(Policy.name) private readonly policyModel: Model<Policy>,
-    @InjectModel(AuditRecord.name)
-    private readonly auditRecordModel: Model<AuditRecord>,
+    @InjectModel(DealAuditItem.name)
+    private readonly dealAuditItemModel: Model<DealAuditItem>,
     @InjectModel(DealAudit.name)
     private readonly dealAuditModel: Model<DealAudit>,
     @InjectModel(AuditTemplate.name)
@@ -198,14 +214,22 @@ export class DemoSeedService {
     const crms = team.filter((m) => m.spec.roleSlug === 'crm');
 
     const households = await this.seedHouseholds(ctx, crms, rng);
-    await this.seedContacts(ctx, households, rng);
-    const leads = await this.seedLeads(ctx, producers, households, rng);
-    const quotes = await this.seedQuotes(ctx, producers, households, rng);
-    const deals = await this.seedDeals(ctx, producers, households, rng);
+    const contactsByHousehold = await this.seedContacts(ctx, households, rng);
+    // Leads -> quotes -> deals is a real chain now: each stage hangs off the
+    // previous one's refs, mirroring the order the migration runs in.
+    const leads = await this.seedLeads(
+      ctx,
+      producers,
+      households,
+      contactsByHousehold,
+      rng,
+    );
+    const quotes = await this.seedQuotes(ctx, leads, rng);
+    const deals = await this.seedDeals(ctx, leads, quotes, rng);
     const policies = await this.seedPolicies(ctx, deals, rng);
 
     await this.seedAuditTemplates(ctx);
-    await this.seedAuditRecords(ctx, deals, rng);
+    await this.seedDealAuditItems(ctx, deals, rng);
     await this.seedDealAudits(ctx, deals, rng);
     await this.seedInterestedParties(ctx, policies, rng);
     await this.seedPriorInsurance(ctx, deals, rng);
@@ -399,43 +423,75 @@ export class DemoSeedService {
     return refs;
   }
 
+  /**
+   * Household rosters, returned keyed by household so leads can carry real
+   * `primaryContactId`/`memberContactIds` refs rather than reaching their
+   * contacts only through `legacyHouseholdId`.
+   *
+   * Also backfills the household's own `primaryContactId`/`memberContactIds`,
+   * which `seedHouseholds` cannot set — it runs before the contacts exist.
+   */
   private async seedContacts(
     ctx: Ctx,
     households: HouseholdRef[],
     rng: Rng,
-  ): Promise<void> {
+  ): Promise<Map<string, ContactRef[]>> {
+    const byHousehold = new Map<string, ContactRef[]>();
     let i = 0;
     for (const hh of households) {
+      const roster: ContactRef[] = [];
+
       // Primary contact (the named insured).
-      await this.contact(ctx, rng, hh, i++, {
-        firstName: hh.clientFirst,
-        lastName: hh.clientLast,
-        roleInHousehold: 'Primary',
-        isPrimary: true,
-      });
+      roster.push(
+        await this.contact(ctx, rng, hh, i++, {
+          firstName: hh.clientFirst,
+          lastName: hh.clientLast,
+          roleInHousehold: 'Primary',
+          isPrimary: true,
+        }),
+      );
       // Spouse (~55%).
       if (rng.chance(0.55)) {
-        await this.contact(ctx, rng, hh, i++, {
-          firstName: rng.pick(FIRST_NAMES),
-          lastName: hh.clientLast,
-          roleInHousehold: 'Spouse',
-          isPrimary: false,
-        });
+        roster.push(
+          await this.contact(ctx, rng, hh, i++, {
+            firstName: rng.pick(FIRST_NAMES),
+            lastName: hh.clientLast,
+            roleInHousehold: 'Spouse',
+            isPrimary: false,
+          }),
+        );
       }
       // Additional member (~35%).
       if (rng.chance(0.35)) {
-        await this.contact(ctx, rng, hh, i++, {
-          firstName: rng.pick(FIRST_NAMES),
-          lastName: hh.clientLast,
-          roleInHousehold: rng.pick([
-            'Child',
-            'Driver',
-            'Additional Named Insured',
-          ]),
-          isPrimary: false,
-        });
+        roster.push(
+          await this.contact(ctx, rng, hh, i++, {
+            firstName: rng.pick(FIRST_NAMES),
+            lastName: hh.clientLast,
+            roleInHousehold: rng.pick([
+              'Child',
+              'Driver',
+              'Additional Named Insured',
+            ]),
+            isPrimary: false,
+          }),
+        );
       }
+
+      byHousehold.set(hh.legacyId, roster);
+
+      await this.householdModel.updateOne(
+        { agencyId: ctx.agencyId, legacySmartSuiteId: hh.legacyId },
+        {
+          $set: {
+            primaryContactId: roster.find((c) => c.isPrimary)?.id,
+            memberContactIds: roster
+              .filter((c) => !c.isPrimary)
+              .map((c) => c.id),
+          },
+        },
+      );
     }
+    return byHousehold;
   }
 
   private async contact(
@@ -449,9 +505,9 @@ export class DemoSeedService {
       roleInHousehold: string;
       isPrimary: boolean;
     },
-  ): Promise<void> {
+  ): Promise<ContactRef> {
     const legacyId = `demo:contact:${index}`;
-    await this.upsert(
+    const id = await this.upsert(
       this.contactModel,
       { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
       {
@@ -471,22 +527,46 @@ export class DemoSeedService {
       },
     );
     this.inc('contacts');
+    return { id, legacyId, isPrimary: base.isPrimary };
   }
 
   // ---------------------------------------------------------------------------
   // Leads
   // ---------------------------------------------------------------------------
 
+  /**
+   * Leads, with status assigned by **pipeline position** rather than at random.
+   *
+   * The first `deals` leads are the ones that closed, the next `quotes - deals`
+   * are the ones that got a proposal but not a sale, and the rest never made it
+   * that far. `seedQuotes`/`seedDeals` then hang off this split, so a lead
+   * marked `Sold` genuinely has a deal and a `Quoted` lead genuinely has a
+   * recap — which is what makes the Lead Detail page testable at all.
+   *
+   * Leads are seeded before quotes and deals, so their `_id`s are available to
+   * both — the same ordering the migration relies on.
+   */
   private async seedLeads(
     ctx: Ctx,
     producers: TeamMember[],
     households: HouseholdRef[],
+    contactsByHousehold: Map<string, ContactRef[]>,
     rng: Rng,
   ): Promise<LeadRef[]> {
     const refs: LeadRef[] = [];
+    // Leads carrying a recap; of those, the leading `deals` also closed. The
+    // surplus recaps (`repeatQuoteLeads`) become *second* recaps on sold leads
+    // rather than first recaps on more leads — see `seedQuotes`.
+    const quotedCount = Math.min(
+      DEMO_CONFIG.quotes - DEMO_CONFIG.repeatQuoteLeads,
+      DEMO_CONFIG.leads,
+    );
+
     for (let i = 0; i < DEMO_CONFIG.leads; i++) {
       const producer = this.weightedProducer(producers, rng);
       const hh = this.householdForBranch(households, producer.branchSlug, rng);
+      const roster = hh ? (contactsByHousehold.get(hh.legacyId) ?? []) : [];
+      const primary = roster.find((c) => c.isPrimary);
       const temperature = rng.pick([
         'Hot',
         'Hot',
@@ -497,9 +577,18 @@ export class DemoSeedService {
         'Cold',
         'Unknown',
       ]);
-      const status = rng.pick(LEAD_STATUSES);
+      const status: string =
+        i < DEMO_CONFIG.deals
+          ? 'Sold'
+          : i < quotedCount
+            ? rng.pick<string>(['Quoted', 'Quoted', 'Requote'])
+            : rng.pick<string>([...DEMO_LEAD_UNQUOTED_STATUSES]);
       const createdDate = this.daysAgo(rng.int(0, 45));
-      const lastActivityAt = this.daysAgo(rng.int(0, 6));
+      // Never before the lead existed — a lead created 2 days ago cannot have
+      // last been touched 6 days ago.
+      const lastActivityAt = this.daysAgo(
+        rng.int(0, Math.min(6, this.daysBetween(createdDate, this.now))),
+      );
       const source = normalizeLeadSource(rng.pick(LEAD_SOURCE_CODES));
       const first = hh ? hh.clientFirst : rng.pick(FIRST_NAMES);
       const last = hh ? hh.clientLast : rng.pick(LAST_NAMES);
@@ -524,7 +613,10 @@ export class DemoSeedService {
           lastActivityAt,
           quoteControlNumber: `QCN-${100000 + i}`,
           producerId: producer.userId,
+          householdId: hh?.id,
           legacyHouseholdId: hh?.legacyId,
+          primaryContactId: primary?.id,
+          memberContactIds: roster.filter((c) => !c.isPrimary).map((c) => c.id),
           isTestRecord: false,
         },
       );
@@ -533,8 +625,10 @@ export class DemoSeedService {
         id,
         legacyId,
         producer,
+        household: hh,
         occurredAt: createdDate,
         temperature,
+        status,
       });
     }
     return refs;
@@ -544,42 +638,88 @@ export class DemoSeedService {
   // Quote recaps
   // ---------------------------------------------------------------------------
 
+  /**
+   * Quote recaps, each hung off the lead that produced it.
+   *
+   * One recap per quoted-or-sold lead, plus a second, older one for the first
+   * `repeatQuoteLeads` sold leads — that is what populates the "N earlier
+   * recaps" expander on the Lead Detail page, which was previously unreachable
+   * in demo data.
+   *
+   * A lead's recaps are generated **together**, with their dates drawn from
+   * inside that lead's own lifetime and sorted oldest-first. Drawing each recap
+   * date independently is how you get a quote that predates the lead it belongs
+   * to, which reads as corrupt on the timeline.
+   *
+   * Writes the resolved `leadId`/`householdId` refs, matching what the
+   * migration now produces, so the read path is exercised the same way here as
+   * it is on imported data.
+   */
   private async seedQuotes(
     ctx: Ctx,
-    producers: TeamMember[],
-    households: HouseholdRef[],
+    leads: LeadRef[],
     rng: Rng,
   ): Promise<QuoteRef[]> {
     const refs: QuoteRef[] = [];
-    for (let i = 0; i < DEMO_CONFIG.quotes; i++) {
-      const producer = this.weightedProducer(producers, rng);
-      const hh = this.householdForBranch(households, producer.branchSlug, rng);
-      const quoteDate = this.daysAgo(rng.int(0, 55));
-      const products = rng.pick(POLICY_TYPE_SETS);
-      const premium = rng.int(700, 5200);
-      const legacyId = `demo:quote:${i}`;
 
-      await this.upsert(
-        this.quoteRecapModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
-        {
-          agencyId: ctx.agencyId,
-          branchId: producer.branchId,
-          legacySmartSuiteId: legacyId,
-          title: hh ? `${hh.name} — Quote` : `Quote ${i + 1}`,
-          quoteRecapAutoNumber: 1000 + i,
-          quoteDate,
-          premium,
-          itemCount: products.length + rng.int(0, 2),
-          productsQuoted: products,
-          recapStatus: rng.pick(['Submitted', 'Draft', 'Submitted', 'Won']),
-          producerId: producer.userId,
-          legacyHouseholdId: hh?.legacyId,
-          isTestRecord: false,
-        },
-      );
-      this.inc('quoteRecaps');
-      refs.push({ legacyId, producer, occurredAt: quoteDate });
+    // Lead order is pipeline order: sold first, then quoted-only.
+    const quotedLeads = leads.filter((lead) =>
+      ['Sold', 'Quoted', 'Requote'].includes(lead.status),
+    );
+
+    // How many recaps each lead gets: one, plus a second for the leading few.
+    const surplus = Math.max(0, DEMO_CONFIG.quotes - quotedLeads.length);
+    const plan = quotedLeads.map((lead, index) => ({
+      lead,
+      count: index < surplus ? 2 : 1,
+    }));
+
+    let i = 0;
+    for (const { lead, count } of plan) {
+      const producer = lead.producer;
+      const hh = lead.household;
+      // Every recap lands between the lead's creation and now; oldest first, so
+      // the last one written is the current proposal.
+      const leadAgeDays = this.daysBetween(lead.occurredAt, this.now);
+      const offsets = Array.from({ length: count }, () =>
+        rng.int(0, leadAgeDays),
+      ).sort((a, b) => b - a);
+
+      for (let n = 0; n < count; n++) {
+        const isEarlier = n < count - 1;
+        const quoteDate = this.daysAgo(offsets[n]);
+        const products = rng.pick(POLICY_TYPE_SETS);
+        const premium = rng.int(700, 5200);
+        const legacyId = `demo:quote:${i++}`;
+
+        const id = await this.upsert(
+          this.quoteRecapModel,
+          { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
+          {
+            agencyId: ctx.agencyId,
+            branchId: producer.branchId,
+            legacySmartSuiteId: legacyId,
+            title: hh ? `${hh.name} — Quote` : `Quote ${i}`,
+            quoteRecapAutoNumber: 1000 + i,
+            quoteDate,
+            premium,
+            itemCount: products.length + rng.int(0, 2),
+            productsQuoted: products,
+            recapStatus:
+              lead.status === 'Sold' && !isEarlier
+                ? 'Won'
+                : rng.pick(['Submitted', 'Draft', 'Submitted']),
+            producerId: producer.userId,
+            leadId: lead.id,
+            legacyLeadId: lead.legacyId,
+            householdId: hh?.id,
+            legacyHouseholdId: hh?.legacyId,
+            isTestRecord: false,
+          },
+        );
+        this.inc('quoteRecaps');
+        refs.push({ id, legacyId, producer, lead, occurredAt: quoteDate });
+      }
     }
     return refs;
   }
@@ -588,18 +728,40 @@ export class DemoSeedService {
   // Deals (Sold Log)
   // ---------------------------------------------------------------------------
 
+  /**
+   * Deals — exactly one per `Sold` lead, linked to that lead's winning recap.
+   *
+   * Deals are no longer drawn independently: the lead, its household, its
+   * producer and its quote all come from the same chain, so `GET /leads/:id`
+   * resolves a real deal and `deals.quoteRecapId` points at the recap that
+   * became the sale — the three refs `backfill-deal-refs` exists to repair.
+   *
+   * A lead without a household is skipped rather than paired with an unrelated
+   * one; that only happens if no households were seeded.
+   */
   private async seedDeals(
     ctx: Ctx,
-    producers: TeamMember[],
-    households: HouseholdRef[],
+    leads: LeadRef[],
+    quotes: QuoteRef[],
     rng: Rng,
   ): Promise<DealRef[]> {
     const refs: DealRef[] = [];
-    for (let i = 0; i < DEMO_CONFIG.deals; i++) {
-      const producer = this.weightedProducer(producers, rng);
-      const hh =
-        this.householdForBranch(households, producer.branchSlug, rng) ??
-        households[i % households.length];
+
+    // Newest recap per lead — the one the sale closed on.
+    const winningQuote = new Map<string, QuoteRef>();
+    for (const quote of quotes) {
+      const held = winningQuote.get(quote.lead.legacyId);
+      if (!held || quote.occurredAt > held.occurredAt) {
+        winningQuote.set(quote.lead.legacyId, quote);
+      }
+    }
+
+    const soldLeads = leads.filter((lead) => lead.status === 'Sold');
+    for (let i = 0; i < soldLeads.length; i++) {
+      const lead = soldLeads[i];
+      const hh = lead.household;
+      if (!hh) continue;
+      const producer = lead.producer;
       const policyTypes = rng.pick(POLICY_TYPE_SETS);
       const isBundle =
         policyTypes.some((t) => t.toLowerCase().includes('auto')) &&
@@ -607,7 +769,12 @@ export class DemoSeedService {
           ['home', 'condo', 'renter'].some((k) => t.toLowerCase().includes(k)),
         );
       const dealType = deriveDealType(isBundle, policyTypes);
-      const soldDate = this.daysAgo(rng.int(0, 55));
+      const quote = winningQuote.get(lead.legacyId);
+      // A sale cannot predate the quote it closed on, nor the lead itself.
+      const earliest = quote?.occurredAt ?? lead.occurredAt;
+      const soldDate = this.daysAgo(
+        rng.int(0, this.daysBetween(earliest, this.now)),
+      );
       const premium = rng.int(900, 4800);
       const clientName = `${hh.clientFirst} ${hh.clientLast}`;
       const source = normalizeLeadSource(rng.pick(LEAD_SOURCE_CODES));
@@ -634,7 +801,12 @@ export class DemoSeedService {
           leadSource: { code: source.code, label: source.label },
           clientName,
           producerId: producer.userId,
+          leadId: lead.id,
+          legacyLeadId: lead.legacyId,
+          householdId: hh.id,
           legacyHouseholdId: hh.legacyId,
+          quoteRecapId: quote?.id,
+          legacyQuoteRecapId: quote?.legacyId,
           dealAuditStatus: rng.pick(['Pending', 'In Progress', 'Complete']),
           status: 'Sold',
           isTestRecord: false,
@@ -646,6 +818,7 @@ export class DemoSeedService {
         legacyId,
         producer,
         household: hh,
+        lead,
         occurredAt: soldDate,
         clientName,
         policyTypes,
@@ -718,31 +891,38 @@ export class DemoSeedService {
   // Audit templates + records + parent audits (Deals Pending Service Hand-off)
   // ---------------------------------------------------------------------------
 
+  /**
+   * The audit-template catalog is **core seed data** as of PAC-40, so this
+   * delegates rather than owning its own copy.
+   *
+   * It used to upsert the same 21 templates keyed on
+   * `legacySmartSuiteId: 'demo:tmpl:<i>'` while the core seed keys on
+   * `{ agencyId, name }` — two different keys for one logical row, so running
+   * both seeds produced 42 templates and every generated deal would have
+   * matched a duplicate. The one-off cleanup below removes those phantoms from
+   * databases seeded before this change.
+   */
   private async seedAuditTemplates(ctx: Ctx): Promise<void> {
-    for (let i = 0; i < AUDIT_TEMPLATES.length; i++) {
-      const t = AUDIT_TEMPLATES[i];
-      const legacyId = `demo:tmpl:${i}`;
-      await this.upsert(
-        this.auditTemplateModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
-        {
-          agencyId: ctx.agencyId,
-          branchId: ctx.defaultBranchId,
-          legacySmartSuiteId: legacyId,
-          name: t.name,
-          category: t.category,
-          required: t.required,
-          blocking: t.blocking,
-          active: true,
-          alwaysInclude: t.alwaysInclude,
-          task: t.task,
-        },
+    const orphaned = await this.auditTemplateModel.deleteMany({
+      agencyId: ctx.agencyId,
+      legacySmartSuiteId: { $regex: '^demo:tmpl:' },
+    });
+    if (orphaned.deletedCount) {
+      this.logger.log(
+        `Removed ${orphaned.deletedCount} duplicate demo audit templates ` +
+          '(superseded by the core seed catalog).',
       );
-      this.inc('auditTemplates');
     }
+
+    const { created, refreshed } = await seedAuditTemplates(
+      this.auditTemplateModel,
+      ctx.agencyId,
+      ctx.defaultBranchId,
+    );
+    for (let i = 0; i < created + refreshed; i++) this.inc('auditTemplates');
   }
 
-  private async seedAuditRecords(
+  private async seedDealAuditItems(
     ctx: Ctx,
     deals: DealRef[],
     rng: Rng,
@@ -770,7 +950,7 @@ export class DemoSeedService {
         const legacyId = `demo:audit:${n}`;
 
         await this.upsert(
-          this.auditRecordModel,
+          this.dealAuditItemModel,
           { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
           {
             agencyId: ctx.agencyId,
@@ -802,7 +982,7 @@ export class DemoSeedService {
             isTestRecord: false,
           },
         );
-        this.inc('auditRecords');
+        this.inc('dealAuditItems');
         n++;
       }
     }
@@ -1188,7 +1368,14 @@ export class DemoSeedService {
               subjectType: 'lead',
               leadId: lead.id,
               producerId: lead.producer.userId,
-              occurredAt: this.daysAgo(rng.int(0, 5)),
+              // Clamped to the lead's own lifetime — a follow-up cannot have
+              // happened before the lead was created.
+              occurredAt: this.daysAgo(
+                rng.int(
+                  0,
+                  Math.min(5, this.daysBetween(lead.occurredAt, this.now)),
+                ),
+              ),
               summary: this.touchSummary(touches[t]),
             },
           );
@@ -1201,6 +1388,9 @@ export class DemoSeedService {
         branchId: quote.producer.branchId,
         type: 'quoted',
         subjectType: 'quoteRecap',
+        // The Lead Detail timeline reads `{ agencyId, leadId }`, so without
+        // this the row exists but never renders on the lead it belongs to.
+        leadId: quote.lead.id,
         producerId: quote.producer.userId,
         occurredAt: quote.occurredAt,
         summary: 'Quote recap created',
@@ -1213,6 +1403,7 @@ export class DemoSeedService {
         type: 'sold',
         subjectType: 'deal',
         dealId: deal.id,
+        leadId: deal.lead.id,
         producerId: deal.producer.userId,
         occurredAt: deal.occurredAt,
         summary: `Deal sold: ${deal.clientName}`,
@@ -1255,7 +1446,7 @@ export class DemoSeedService {
       this.quoteRecapModel,
       this.dealModel,
       this.policyModel,
-      this.auditRecordModel,
+      this.dealAuditItemModel,
       this.dealAuditModel,
       this.auditTemplateModel,
       this.interestedPartyModel,
@@ -1319,20 +1510,35 @@ export class DemoSeedService {
     return pool.length ? rng.pick(pool) : undefined;
   }
 
+  /**
+   * A plausible checklist for a demo deal.
+   *
+   * Categories are the production vocabulary (`Common | Auto | Home |
+   * Landlord`, see `audit-templates.seed.ts`) — this used to branch on
+   * `Property` and `Prior Insurance`, which no longer exist. The gating mirrors
+   * the real generator's policy-type rules; the randomness on top is what makes
+   * the demo board look lived-in rather than uniformly complete.
+   */
   private applicableTemplates(deal: DealRef, rng: Rng) {
+    const isLandlord = deal.policyTypes.some((t) =>
+      t.toLowerCase().includes('landlord'),
+    );
     const isHome = deal.policyTypes.some((t) =>
-      ['home', 'condo', 'landlord', 'dwelling', 'renter'].some((k) =>
+      ['home', 'condo', 'dwelling', 'renter'].some((k) =>
         t.toLowerCase().includes(k),
       ),
     );
-    const isAuto = deal.policyTypes.some((t) =>
-      t.toLowerCase().includes('auto'),
+    const isAuto = deal.policyTypes.some(
+      (t) =>
+        t.toLowerCase().includes('auto') ||
+        t.toLowerCase().includes('motorcycle'),
     );
     return AUDIT_TEMPLATES.filter((t) => {
       if (t.alwaysInclude) return true;
-      if (t.category === 'Property') return isHome && rng.chance(0.6);
+      if (t.category === 'Common') return true;
       if (t.category === 'Auto') return isAuto && rng.chance(0.5);
-      if (t.category === 'Prior Insurance') return deal.isBundle || isHome;
+      if (t.category === 'Home') return isHome && rng.chance(0.6);
+      if (t.category === 'Landlord') return isLandlord && rng.chance(0.6);
       return rng.chance(0.5);
     });
   }

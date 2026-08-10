@@ -1,0 +1,189 @@
+meta {
+  name: Create Sold Deal
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/sold-deals
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "soldDate": "2026-02-15",
+    "submissionToken": "{{soldSubmissionToken}}",
+    "policies": [
+      {
+        "policyType": "Auto",
+        "effectiveDate": "2026-02-01",
+        "carrier": "Allstate",
+        "policyNumber": "{{soldPolicyNumber}}",
+        "premium": 1200.10,
+        "itemCount": 2,
+        "discounts": {
+          "drivewise": true,
+          "defensiveDriver": {
+            "selected": true,
+            "drivers": [{ "name": "Dana Driver" }, { "name": "Sam Second" }]
+          },
+          "studentDiscount": { "selected": true, "hasProof": false }
+        },
+        "priorInsurance": { "none": false, "carrier": "Geico" },
+        "cancellation": { "cancelled": false }
+      },
+      {
+        "policyType": "Home",
+        "effectiveDate": "2026-02-01",
+        "carrier": "Allstate",
+        "policyNumber": "{{soldPolicyNumber}}-H",
+        "premium": 899.95,
+        "itemCount": 3,
+        "discounts": {
+          "escrow": true,
+          "roofReceipt": { "selected": true, "hasProof": true,
+            "attachment": {
+              "key": "{{soldDocumentKey}}",
+              "filename": "roof-receipt.pdf",
+              "contentType": "application/pdf",
+              "size": 2048
+            }
+          }
+        },
+        "escrow": {
+          "loanNumber": "LN-99887766",
+          "companyName": "First National Escrow",
+          "address": { "street": "1 Lender Way", "city": "Austin", "state": "TX", "zip": "78745" }
+        },
+        "priorInsurance": { "none": true },
+        "cancellation": { "cancelled": false }
+      }
+    ]
+  }
+}
+
+script:pre-request {
+  // Fresh per run: policy numbers are deduped within a submission, and a
+  // replayed token must resolve to the deal this run created, not a prior one.
+  if (!bru.getVar("soldSubmissionToken")) {
+    bru.setVar("soldSubmissionToken", "bruno-sold-" + Date.now());
+    bru.setVar("soldPolicyNumber", "BRU-" + Date.now());
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("createdSoldDealId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("derives the totals server-side", function () {
+    const body = res.getBody();
+    // 1200.10 + 899.95 — rounded to cents, not 2100.0499999999997.
+    expect(body.premium).to.equal(2100.05);
+    expect(body.itemCount).to.equal(5);
+    expect(body.policyCount).to.equal(2);
+  });
+
+  test("classifies an auto + property sale as a Bundle", function () {
+    const body = res.getBody();
+    expect(body.isBundle).to.equal(true);
+    expect(body.dealType).to.equal("Bundle");
+    expect(body.policyTypes).to.have.members(["Auto", "Home"]);
+  });
+
+  test("advances the lead to Sold", function () {
+    expect(res.getBody().leadStatus).to.equal("Sold");
+  });
+}
+
+docs {
+  # POST /sold-deals — record the closed sale (PAC-40)
+
+  The Sold wizard's write path. Creates the **deal**, every **policy**, the
+  **prior-insurance** summary and its per-line **prior-policy** rows, plus an
+  **interested party** for each escrow — all in one transaction.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write`
+  - **Data scope:** `own` producers may only sell against their own lead
+
+  > **Why `deal_audits` and not `clients`?** The Producer role template grants
+  > no `clients:*`, which is where the generated `DealsController` stub sits —
+  > gating here would mean *no producer could record a sale*. `deal_audits` is
+  > the honest choice among the permissions a producer already holds, and the
+  > submission's whole purpose is generating the post-sale audit.
+
+  ## Body
+  | field            | type   | rules                                       |
+  |------------------|--------|---------------------------------------------|
+  | leadId           | string | required; the household is resolved from it |
+  | soldDate         | date   | `YYYY-MM-DD`, one per deal (Card 1)         |
+  | quoteRecapId     | string | optional — not every sale has a quote       |
+  | policies         | array  | 1–10; one per loop iteration (Cards 2–7)    |
+  | submissionToken  | string | optional idempotency key, 8–200 chars       |
+
+  ### Lead-scoped, not household-scoped
+  Legacy rejects a sold log with no lead, and resolving the household
+  server-side is what stops a client claiming one it does not own.
+
+  ## Derived server-side — never trusted from the client
+  `premium` (summed and rounded to cents), `itemCount`, `policyCount`,
+  `policyTypes`, `isBundle`, `dealType`, `soldDateYmd`, `clientName` and
+  `leadSource`. Legacy received these pre-aggregated from Fillout because
+  SmartSuite maintained them as rollups; Mongo has none, so they are computed
+  here — and a client-supplied total would corrupt the Sold scorecard (PAC-11).
+
+  ## Card 5 rules worth knowing
+  - **Cross-branch discounts are rejected (400), not stripped.** A Home policy
+    claiming `drivewise` would otherwise generate an auto audit item for a deal
+    with no auto line, and nothing downstream could tell it was bogus.
+  - **Escrow ticked ⇒ the escrow sub-card is required**, because the audit item
+    it generates asks the service team to verify exactly those fields.
+  - **`hasProof: false` is a valid answer**, not an omission — it routes the
+    chase to the service team rather than cancelling the discount.
+  - Attachment `contentType`/`size` are **re-derived from storage** via
+    `HeadObject`; the declared values are ignored.
+
+  ## Idempotency
+  Replaying `submissionToken` returns the **same deal id** and creates nothing
+  new. A concurrent double-submit loses the race on the unique
+  `{agencyId, submissionToken}` index and is resolved by re-reading the winner.
+
+  ## Response `201`
+  ```json
+  {
+    "id": "665f…d31", "leadId": "665f…ac1",
+    "premium": 2100.05, "itemCount": 5, "policyCount": 2,
+    "policyTypes": ["Auto", "Home"], "dealType": "Bundle", "isBundle": true,
+    "soldDate": "2026-02-15T00:00:00.000Z", "leadStatus": "Sold",
+    "auditItemCount": 0, "crmAssigned": false
+  }
+  ```
+  `auditItemCount` / `crmAssigned` are populated once audit generation and CRM
+  assignment land (PR5); they are `0` / `false` until then rather than absent,
+  so the wire shape does not change under the web app later.
+
+  ## Errors
+  - `400` — validation, cross-branch discounts, a duplicate policy number within
+    the same submission, or an oversized/disallowed document.
+  - `401` / `403` — auth, module or permission.
+  - `404` — unknown lead, a lead outside scope, or a document key that never landed.
+  - `409` — the lead is not linked to a household.
+
+  ## Ordering
+  Needs **Leads/Create Lead** (`createdLeadId`) and **Presign + Upload Sold
+  Document** (`soldDocumentKey`) to have run first.
+}

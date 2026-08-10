@@ -24,8 +24,17 @@ ssh_allowed_ips = ["YOUR.IP.ADDRESS/32"]          # REQUIRED
 enable_dns          = true
 create_domain_zone  = false   # true only if domain is not yet in DO
 enable_reserved_ip  = false
-enable_spaces       = false
+
+# Object storage for document uploads (deal-audit attachments, lead intake).
+# Applying this also needs SPACES_ACCESS_KEY_ID / SPACES_SECRET_ACCESS_KEY
+# exported — Spaces buckets are managed over the S3 API, not the DO API.
+enable_spaces       = true
 enable_backups      = false
+
+# Origins allowed to run presigned browser uploads. Empty derives them from
+# `domain`/`enable_tls` plus the droplet's public IP.
+spaces_cors_origins = []
+
 prevent_destroy     = false
 project_id          = ""
 

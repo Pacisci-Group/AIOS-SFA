@@ -1,0 +1,109 @@
+meta {
+  name: Presign Quote Document
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/quote-recaps/quote-document/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "filename": "carrier-quote.pdf",
+    "contentType": "application/pdf",
+    "size": 2048
+  }
+}
+
+script:post-response {
+  // Feeds the raw PUT (seq 3) and then the create (seq 4).
+  if (res.getStatus() === 201) {
+    bru.setVar("quoteDocumentKey", res.getBody().key);
+    bru.setVar("quoteDocumentUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a presigned PUT scoped to the agency and lead", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("key");
+    expect(body).to.have.property("uploadUrl");
+    expect(body.requiredHeaders).to.have.property("Content-Type");
+    expect(body.key).to.contain("/quote-recaps/");
+    expect(body.expiresIn).to.be.a("number");
+  });
+}
+
+docs {
+  # POST /quote-recaps/quote-document/presign — upload URL for the carrier quote (PAC-39)
+
+  Issues a short-lived presigned PUT so the browser uploads the quote document
+  **directly to object storage**. File bytes never pass through the API, and no
+  base64 data URL is ever stored.
+
+  - **Module:** `quote_recaps`
+  - **Permission:** `quote_recaps:write`
+  - **Data scope:** `own` — presigning against another producer's lead **404s**.
+
+  ## Body
+  | field       | type   | required | rules                                        |
+  |-------------|--------|----------|----------------------------------------------|
+  | leadId      | string | yes      | 24-char Mongo ObjectId; ownership is checked first |
+  | filename    | string | yes      | 1–255 chars; sanitized into the key          |
+  | contentType | string | yes      | `application/pdf`, `image/jpeg` or `image/png` |
+  | size        | number | yes      | positive integer, ≤ 10 MB                    |
+
+  ## Behaviour worth knowing
+  **Scoped to the lead, not the recap.** The document is uploaded while the recap
+  is still being composed, so no recap id exists yet. The key that comes back is
+  `agencies/<agencyId>/quote-recaps/<leadId>/<year>/<uuid>-<filename>`, and
+  `POST /quote-recaps` rejects any key that does not carry exactly that prefix —
+  which is what stops a caller attaching another agency's object to their own
+  record.
+
+  **The `agencyId` in the key comes from the lead document**, never from the
+  request, so it cannot be forged.
+
+  **`size` here is advisory.** A presigned PUT signs only `Content-Type`, so a
+  caller holding a valid URL could upload something larger. The real enforcement
+  is on create, which re-reads type and size from storage via `HeadObject`.
+
+  ## Uploading (step 2 of 3)
+  ```
+  PUT <uploadUrl>
+  Content-Type: application/pdf      # must match requiredHeaders exactly
+  <raw file bytes>
+  ```
+  Send **no `Authorization` header** — any header outside the signature
+  invalidates it.
+
+  ## Response `201`
+  ```json
+  {
+    "key": "agencies/665.../quote-recaps/665.../2026/9f2c-carrier-quote.pdf",
+    "uploadUrl": "http://localhost:9100/sfa-uploads/agencies/...?X-Amz-Signature=...",
+    "requiredHeaders": { "Content-Type": "application/pdf" },
+    "expiresIn": 300
+  }
+  ```
+
+  ## Errors
+  - `400 Bad Request` — bad `leadId`, unsupported `contentType`, or `size` over
+    10 MB.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `quote_recaps` module disabled, or missing
+    `quote_recaps:write`.
+  - `404 Not Found` — no such lead, or one outside the caller's data scope.
+}

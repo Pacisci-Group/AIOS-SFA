@@ -172,7 +172,10 @@ export const RenewalCycleSchema = SchemaFactory.createForClass(RenewalCycle);
 // `Onboarding.dealId` — which is nullable, and so needed a partial filter to
 // stop every hand-started onboarding colliding on null — `groupKey` and
 // `termKey` are both required and always present.
-RenewalCycleSchema.index({ agencyId: 1, groupKey: 1, termKey: 1 }, { unique: true });
+RenewalCycleSchema.index(
+  { agencyId: 1, groupKey: 1, termKey: 1 },
+  { unique: true },
+);
 
 // The open-cycle sweep and the "renewals this month" KPI.
 RenewalCycleSchema.index({ agencyId: 1, completedAt: 1, renewalDate: 1 });

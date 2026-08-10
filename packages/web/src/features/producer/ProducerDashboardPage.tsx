@@ -10,15 +10,7 @@ export default function ProducerDashboardPage() {
   return (
     // Navigation now lives in the shared AppLayout/AppSidebar shell; this page
     // only renders its own content column (header + workspace).
-    <div
-      className="flex-1 flex flex-col min-w-0 overflow-x-hidden"
-      style={{
-        background: "#0B0F19",
-        color: "#E2E8F0",
-        fontFamily: "'Inter', 'system-ui', sans-serif",
-        minHeight: "100vh",
-      }}
-    >
+    <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden bg-background text-foreground">
       <Header activeFilter={activeFilter} onFilterChange={setActiveFilter} />
 
       <div className="flex-1 overflow-y-auto">
@@ -30,7 +22,10 @@ export default function ProducerDashboardPage() {
             Reaching this route already requires `dashboard:read`, so every
             panel the dashboard shows is part of the dashboard page and is
             visible to anyone with `dashboard:read`. */}
-        <div className="grid gap-4 px-6 pb-6" style={{ gridTemplateColumns: "3fr 2fr" }}>
+        <div
+          className="grid gap-4 px-6 pb-6"
+          style={{ gridTemplateColumns: "3fr 2fr" }}
+        >
           <DealsAuditBoard />
           <HotLeadsPanel />
         </div>

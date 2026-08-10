@@ -359,7 +359,14 @@ agency's module entitlements change (all members).
 | View agency leads | ✓ | ✓ | | | |
 | View branch leads | ✓ | ✓ | ✓ | | ✓ |
 | View own leads | | ✓ | ✓ | ✓ | |
-| Run deal audits | | ✓ | ✓ | | ✓ |
+| Run deal audits | | ✓ | ✓ | ✓ | ✓ |
+| Edit a client contact | | ✓ | ✓ | ✓¹ | ✓ |
+
+¹ Producers hold `clients:write` (added by PAC-38 for the Lead Detail contact
+edit), but `Contact` carries no `producerId`, so their `own` scope cannot be a
+field comparison. `ContactAccessService` **derives** it: a producer may edit a
+contact only if they own a lead that reaches it, directly or through its
+household. Everything else in the `clients` module remains out of their reach.
 
 ---
 

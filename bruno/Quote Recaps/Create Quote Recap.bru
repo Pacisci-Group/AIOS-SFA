@@ -1,0 +1,157 @@
+meta {
+  name: Create Quote Recap
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/quote-recaps
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "policies": [
+      { "policyType": "Auto", "premium": 1200.10, "itemCount": 2 },
+      { "policyType": "Home", "premium": 899.95, "itemCount": 1 }
+    ],
+    "sameAsHousehold": true,
+    "notes": "Bundled auto + home. Client wants to review the deductible.",
+    "quoteDocument": {
+      "key": "{{quoteDocumentKey}}",
+      "filename": "carrier-quote.pdf",
+      "contentType": "application/pdf",
+      "size": 2048
+    },
+    "submissionToken": "{{$guid}}"
+  }
+}
+
+script:post-response {
+  // Captured for the Replay request, which must return this same id.
+  if (res.getStatus() === 201) {
+    bru.setVar("createdQuoteRecapId", res.getBody().id);
+    bru.setVar("quoteRecapToken", req.getBody().submissionToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("derives the totals server-side", function () {
+    const body = res.getBody();
+    // 1200.10 + 899.95 — summed and rounded to cents by the server.
+    expect(body.premium).to.equal(2100.05);
+    expect(body.itemCount).to.equal(3);
+    expect(body.productsQuoted).to.eql(["Auto", "Home"]);
+  });
+
+  test("advances the lead to Quoted", function () {
+    expect(res.getBody().leadStatus).to.equal("Quoted");
+  });
+}
+
+docs {
+  # POST /quote-recaps — record the proposal (PAC-39)
+
+  Writes one `quoteRecaps` document linked to a real lead **and** household, with
+  the per-policy rows the producer entered, server-derived totals, the property
+  address when one applies, notes, and the uploaded quote document.
+
+  - **Module:** `quote_recaps`
+  - **Permission:** `quote_recaps:write`
+  - **Data scope:** `own` — the recap is assigned to **the caller**, and a lead
+    outside their scope **404s**.
+
+  > `quote_recaps:write` is held by **Producer** and **Agency Owner**. Unlike
+  > `leads:write`, the Branch Manager template does **not** grant it, so a
+  > manager cannot record a recap today. That is a live product question, not an
+  > oversight of this endpoint.
+
+  ## Body
+  | field            | type    | required | rules                                              |
+  |------------------|---------|----------|----------------------------------------------------|
+  | leadId           | string  | yes      | 24-char ObjectId; household is resolved from it     |
+  | policies[]       | array   | yes      | 1–12 rows                                          |
+  | policies[].policyType | string | yes  | canonical label from `POLICY_TYPES`; raw SmartSuite codes are rejected |
+  | policies[].premium    | number | yes  | ≥ 0, ≤ 1,000,000                                   |
+  | policies[].itemCount  | number | yes  | integer 1–99                                       |
+  | sameAsHousehold  | boolean | yes      | when true the server copies the household address and **discards** `propertyAddress` |
+  | propertyAddress  | object  | conditional | required (all four fields) when a property-type policy is quoted and `sameAsHousehold` is false |
+  | notes            | string  | no       | ≤ 2000 chars                                       |
+  | quoteDocument    | object  | **yes**  | `{ key, filename, contentType, size }` from the presign step |
+  | submissionToken  | string  | no       | 8–200 chars; per-form-session idempotency key      |
+
+  Property-type policies are **Home, Renters, Condominium, Landlord**.
+
+  ## Behaviour worth knowing
+  **Totals are derived server-side and never trusted from the client.**
+  `premium` is the sum of the row premiums rounded to cents, `itemCount` their
+  sum, and `productsQuoted` the distinct policy types. These three fields back
+  the **Quoted scorecard** (PAC-10), so a client-supplied total would silently
+  corrupt reporting. Rounding matters: `1200.10 + 899.95` is `2100.0499999999997`
+  in IEEE-754. Any `premium` / `itemCount` / `productsQuoted` sent in the body is
+  ignored.
+
+  **`quoteDate` is the submission date and `producerId` comes from the token.**
+  A recap with a null `quoteDate` would be invisible to the scorecard.
+
+  **The document is verified against storage, not against the request.** The key
+  must start with `agencies/<agencyId>/quote-recaps/<leadId>/`, and the server
+  then `HeadObject`s it: a key that never landed is a `404`, and the **stored**
+  size and content type are what get persisted and enforced. A presigned PUT
+  signs only `Content-Type`, so the declared `size` is a claim, not evidence.
+
+  **Lead status advances forward only.** `New`, `Contacted`, `Qualified` and
+  `Requote` become `Quoted`; `Quoted`, `Sold`, `Converted`, `Not Qualified`,
+  `Lost` and `Closed` are left alone, so a late recap can't drag a sold deal
+  backwards. The check runs against every *stored* form, including the raw
+  migrated codes (`hfwda` for Qualified, `arW7O` for Requote).
+
+  **Many recaps per lead.** Each submit creates a new document; the newest is the
+  current one. This is what supports the `Requote` status.
+
+  **Idempotency.** Send the same `submissionToken` twice — a double-click or a
+  retry — and you get the same recap id with no second record. Two genuinely
+  concurrent requests also resolve to one, via the unique
+  `{agencyId, submissionToken}` index.
+
+  **No transaction.** The recap is a single-document insert; the status advance
+  and the `quoted` activity are idempotent best-effort follow-ups. Wrapping all
+  three would risk losing the recap — the only irreplaceable part — to a failure
+  in one of the two recoverable ones.
+
+  ## Response `201`
+  ```json
+  {
+    "id": "665f0a1b2c3d4e5f60718295",
+    "leadId": "665f0a1b2c3d4e5f60718293",
+    "premium": 2100.05,
+    "itemCount": 3,
+    "productsQuoted": ["Auto", "Home"],
+    "quoteDate": "2026-08-03T12:00:00.000Z",
+    "leadStatus": "Quoted"
+  }
+  ```
+  The totals are echoed so they are observable without a database query.
+
+  ## Errors
+  - `400 Bad Request` — validation failure (`{ message, errors }` with zod's
+    flattened field errors), a document key outside the caller's agency/lead
+    prefix, or a stored object that is too large or the wrong type.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `quote_recaps` module disabled, missing
+    `quote_recaps:write`, a platform-admin caller with no agency, or an agency
+    with no default branch.
+  - `404 Not Found` — no such lead, a lead outside the caller's data scope, or a
+    declared document that never landed in storage.
+  - `409 Conflict` — the lead is not linked to a household yet.
+}

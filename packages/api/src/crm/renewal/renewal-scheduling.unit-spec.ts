@@ -1,7 +1,7 @@
 import {
   DEFAULT_RENEWAL_STEP_DEFINITIONS,
   renewalTrackFor,
-  normalizePolicyType,
+  normalizeRenewalPolicyType,
 } from '@sfa/shared';
 import type { RenewalStepDefinition } from '@sfa/shared';
 import { deriveStepStatus } from '../scheduling/step-status';
@@ -175,7 +175,7 @@ describe('renewalTrackFor', () => {
   it('normalizes the free-form policyType string', () => {
     // `Policy.policyType` has no enum behind it, so the match has to tolerate
     // whatever the carrier import produced.
-    expect(normalizePolicyType('  Home   Owners ')).toBe('home owner');
+    expect(normalizeRenewalPolicyType('  Home   Owners ')).toBe('home owner');
   });
 });
 

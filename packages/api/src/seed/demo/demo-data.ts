@@ -9,6 +9,11 @@
  * `isTestRecord: false` so they surface on the real dashboards.
  */
 
+import {
+  CORE_AUDIT_TEMPLATES,
+  type CoreAuditTemplateSpec,
+} from '../audit-templates.seed';
+
 export type RoleSlug =
   'agency_owner' | 'branch_manager' | 'producer' | 'crm' | 'data_team';
 
@@ -255,7 +260,7 @@ export const CARRIERS = [
   'Farmers',
 ] as const;
 
-/** Canonical lead-source choice codes (see migration/helpers/lead-sources.ts). */
+/** Canonical lead-source choice codes (see `CANONICAL_LEAD_SOURCES` in @sfa/shared). */
 export const LEAD_SOURCE_CODES = [
   'WCO7l', // Mailer
   'GVCgc', // Book of Business
@@ -269,12 +274,45 @@ export const LEAD_SOURCE_CODES = [
   'ymZHL', // JYA
 ] as const;
 
-export const LEAD_STATUSES = [
+/**
+ * Statuses the demo seed picks from — weighted toward the top of the pipeline so
+ * the Leads page has plenty of New/Contacted rows. Every value must be one of
+ * the canonical `LEAD_STATUSES` in @sfa/shared (PAC-36); the previous list used
+ * `Working`/`Won`, which are not real SmartSuite choices and so fell outside the
+ * status filter.
+ */
+export const DEMO_LEAD_STATUSES = [
+  'New',
   'New',
   'Contacted',
-  'Working',
+  'Contacted',
+  'Qualified',
   'Quoted',
-  'Won',
+  'Requote',
+  'Sold',
+  'Not Qualified',
+  'Lost',
+] as const;
+
+/**
+ * The statuses a lead can hold when it never reached a proposal.
+ *
+ * `Quoted`/`Requote`/`Sold` are deliberately absent: those are assigned by
+ * pipeline position in `seedLeads` and backed by a real recap or deal. Drawing
+ * them at random here is what previously produced leads marked `Sold` with no
+ * deal attached — the whole reason the Lead Detail page looked broken on demo
+ * data. Weighted to keep the top of the funnel busiest.
+ */
+export const DEMO_LEAD_UNQUOTED_STATUSES = [
+  'New',
+  'New',
+  'New',
+  'Contacted',
+  'Contacted',
+  'Contacted',
+  'Qualified',
+  'Qualified',
+  'Not Qualified',
   'Lost',
 ] as const;
 
@@ -286,103 +324,41 @@ export const CONTACT_ROLES = [
   'Additional Named Insured',
 ] as const;
 
-/** Policy-type label sets a deal/quote can cover. Feeds `deriveDealType`. */
+/**
+ * Policy-type label sets a deal/quote can cover. Feeds `deriveDealType`.
+ *
+ * Values must be canonical `POLICY_TYPES` labels (`@sfa/shared`) — seeding a
+ * non-canonical spelling puts a third vocabulary into the same field the
+ * migration and the app both write.
+ */
 export const POLICY_TYPE_SETS: string[][] = [
   ['Auto'],
   ['Home'],
   ['Auto', 'Home'],
   ['Renters'],
   ['Auto', 'Renters'],
-  ['Condo'],
+  ['Condominium'],
   ['Auto', 'Home', 'Umbrella'],
   ['Motorcycle'],
   ['Landlord'],
 ];
 
-export interface AuditTemplateSpec {
-  name: string;
-  category: string;
-  required: boolean;
-  blocking: boolean;
-  alwaysInclude: boolean;
-  task: string;
-}
+export type AuditTemplateSpec = CoreAuditTemplateSpec;
 
-/** The catalog of audit-item definitions used to generate hand-off items. */
-export const AUDIT_TEMPLATES: AuditTemplateSpec[] = [
-  {
-    name: 'Signed Application',
-    category: 'Documentation',
-    required: true,
-    blocking: true,
-    alwaysInclude: true,
-    task: 'Collect the client-signed application for the new policy.',
-  },
-  {
-    name: 'EFT / Payment Authorization',
-    category: 'Financial',
-    required: true,
-    blocking: true,
-    alwaysInclude: true,
-    task: 'Confirm payment method and signed EFT authorization.',
-  },
-  {
-    name: 'Proof of Prior Insurance',
-    category: 'Prior Insurance',
-    required: true,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Obtain declarations page proving continuous prior coverage.',
-  },
-  {
-    name: 'Escrow / Mortgagee Info',
-    category: 'Property',
-    required: true,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Verify mortgagee clause and escrow billing details.',
-  },
-  {
-    name: 'Home Inspection Photos',
-    category: 'Property',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Upload 4-corner exterior inspection photos.',
-  },
-  {
-    name: 'Fire Receipt',
-    category: 'Property',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Attach proof of fire-extinguisher / alarm for discount.',
-  },
-  {
-    name: 'Roof Receipt',
-    category: 'Property',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Attach roof-replacement receipt to validate roof age.',
-  },
-  {
-    name: 'Drivewise Enrollment',
-    category: 'Auto',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Confirm Drivewise telematics enrollment for the discount.',
-  },
-  {
-    name: 'Defensive Driver Certificate',
-    category: 'Auto',
-    required: false,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Collect defensive-driver course completion certificate.',
-  },
-];
+/**
+ * The catalog of audit-item definitions used to generate hand-off items.
+ *
+ * Re-exported from the **core** seed (PAC-40) rather than defined here. It used
+ * to be its own list — "Signed Application", "EFT / Payment Authorization",
+ * "Fire Receipt", … — which shared **zero** names with the production
+ * vocabulary that `AuditGenerationService` resolves against. Demo data
+ * therefore exercised a checklist no real agency has, and a sold deal seeded
+ * locally would have generated a completely different set of items than one
+ * booked against migrated data.
+ *
+ * Keeping one list means the demo tenant is a faithful rehearsal of production.
+ */
+export const AUDIT_TEMPLATES: AuditTemplateSpec[] = CORE_AUDIT_TEMPLATES;
 
 export const SERVICE_CATEGORIES = [
   'Billing',
@@ -406,9 +382,17 @@ export const SERVICE_STATUSES = [
 export const DEMO_CONFIG = {
   seed: 20260722,
   households: 24,
-  leads: 40,
+  leads: 90,
   quotes: 32,
   deals: 24,
+  /**
+   * How many sold leads get a **second, older** recap.
+   *
+   * Without this the funnel divides exactly one recap per quoted-or-sold lead
+   * and the Lead Detail "N earlier recaps" expander can never be exercised —
+   * so `quotes` is deliberately more than the number of leads that carry one.
+   */
+  repeatQuoteLeads: 4,
   serviceTickets: 16,
   timeOffRequests: 6,
 } as const;

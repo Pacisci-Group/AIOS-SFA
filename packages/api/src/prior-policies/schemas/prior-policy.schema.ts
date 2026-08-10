@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { TenantRecord } from '../../common/schemas/tenant-record.schema';
+import {
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+  TenantRecord,
+} from '../../common/schemas/tenant-record.schema';
 
 export type PriorPolicyDocument = HydratedDocument<PriorPolicy>;
 
@@ -58,5 +61,8 @@ export class PriorPolicy extends TenantRecord {
 export const PriorPolicySchema = SchemaFactory.createForClass(PriorPolicy);
 PriorPolicySchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
-  { unique: true, sparse: true },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
 );
+/** The per-line rows under the Lead Detail Prior Insurance block (PAC-38). */
+PriorPolicySchema.index({ agencyId: 1, dealId: 1 });
+PriorPolicySchema.index({ agencyId: 1, householdId: 1 });

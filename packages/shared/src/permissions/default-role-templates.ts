@@ -59,6 +59,13 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       ...permissionsForModule(ModuleKey.QuoteRecaps),
       ...permissionsForModule(ModuleKey.Mailers),
       ...permissionsForModule(ModuleKey.DealAudits),
+      // Editing a lead's primary contact on the Lead Detail page (PAC-38) is a
+      // `clients` write — a Contact is a CRM record, not a lead field. `write`
+      // implies `read` in `resolvePermissionSet`, so this single grant is
+      // enough. Note the scope clamp cannot come from the module: `Contact` has
+      // no `producerId`, so `ContactAccessService` derives ownership from the
+      // leads that reach the contact.
+      modulePermission(ModuleKey.Clients, 'write'),
       modulePermission(ModuleKey.Performance, 'read'),
       modulePermission(ModuleKey.Leaderboard, 'read'),
     ],

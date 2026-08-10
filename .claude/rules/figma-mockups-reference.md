@@ -1,0 +1,47 @@
+# Figma FE mockups — read-only design reference
+
+The **`agencyops_fe_mockups`** repo (Figma design pictures + Figma-exported React
+components, CSS/theme, and agent-context docs) is available inside this repo at
+`./agencyops_fe_mockups` — a **symlink** to the sibling `../agencyops_fe_mockups`
+checkout, so you can read and search it without leaving the AIOS-SFA workspace.
+It is **gitignored** (see `.gitignore` → "Local project folders") and never
+committed here.
+
+Use this as the **design source-of-truth** when building or refining any of the
+7 mockup dashboards in `packages/web`. The real, wired implementation still lives
+in `packages/web` — these exports are reference, not code to import.
+
+## Rules
+- **Read-only.** Never edit, create, or delete files under
+  `./agencyops_fe_mockups`. Build all UI work in `packages/web`. If the folder is
+  missing, recreate the link with `ln -s ../agencyops_fe_mockups agencyops_fe_mockups`
+  from the repo root.
+- **Reference, don't copy wholesale.** These are Figma Make exports (their own
+  Vite/pnpm scaffold, shadcn `ui/` primitives, inline mock data). Port the layout,
+  visual structure, and component composition into `packages/web` conventions
+  (Tailwind 4, existing Radix/`ui` components, `cn` util) — do not import the
+  export scaffold or its `package.json`/config directly.
+- **Match the design.** When a task touches a dashboard, read its mockup folder
+  first (screenshots in `assets/`, components in `source/src/app/components/`) and
+  follow it for spacing, color, and layout.
+
+## Layout of each design folder
+Each `Insurance-*/` folder contains:
+- `figma-link.txt` — the source Figma Make URL.
+- `assets/` — exported design screenshots/images (PNG).
+- `source/` — the Figma Make React export: `src/app/App.tsx`, feature components in
+  `src/app/components/`, shadcn primitives in `src/app/components/ui/`, styles/theme
+  in `src/styles/` + `default_shadcn_theme.css`, and `guidelines/Guidelines.md`.
+- Root `_export-manifest.json` — maps every folder → Figma fileKey/URL → exported
+  source file list.
+
+## Design folder → dashboard mapping
+| Design folder | Dashboard | Route (`packages/web`) |
+|---|---|---|
+| `Insurance-Producer-Dashboard` | Producer Dashboard | `/dashboard/producer` |
+| `Insurance-Lead-Details` | Lead Details | `/leads/:id` |
+| `Insurance-Management-Dashboard` | Management v1 | `/dashboard/management` |
+| `Insurance-Management-Dashboard-2` | Management v2 / Command Center | `/dashboard/management-alt` |
+| `Insurance-Service-Dashboard-Design` | Service Dashboard | `/crm/service` |
+| `Insurance-Dashboard-Design` | Ticket Workspace | `/crm/tickets` |
+| `Insurance-Household-Details` | Household Details | `/clients/:id` |

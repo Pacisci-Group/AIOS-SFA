@@ -1,0 +1,102 @@
+meta {
+  name: Add Household Member
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/households/{{householdId}}/members
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "firstName": "Dana",
+    "lastName": "Tyson",
+    "dateOfBirth": "1974-03-09",
+    "role": "Spouse"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns the new member as a ContactSummary", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(body.firstName).to.equal("Dana");
+    expect(body.lastName).to.equal("Tyson");
+    expect(body.roleInHousehold).to.equal("Spouse");
+    expect(body.emails).to.be.an("array");
+    expect(body.phones).to.be.an("array");
+  });
+
+  test("a member is never the primary contact", function () {
+    expect(res.getBody().isPrimary).to.equal(false);
+  });
+
+  test("the date of birth is stored as the calendar day sent, not shifted", function () {
+    // Parsed to UTC midnight from explicit components. `new Date("1974-03-09")`
+    // through a timezone west of Greenwich would land on the 8th.
+    expect(res.getBody().dateOfBirth).to.contain("1974-03-09");
+  });
+}
+
+docs {
+  # POST /households/:id/members
+
+  Add a member to a household — the **"+ Member"** dialog on the Household
+  Details page (`/clients/:id`). A member *is* a `Contact`; there is no separate
+  member record.
+
+  - **Module:** `clients` (the class-level OR-gate also accepts `crm_service`
+    for the **reads** on this controller, but this write does not).
+  - **Permission:** `clients:write`. `crm_service:read` alone cannot reach it.
+  - **Data scope:** the household is loaded through the same scope filter as
+    `GET /households/:id` — `own` collapses to branch on client records. Out of
+    scope reads as 404.
+
+  ## Body
+  | Field | Required | Notes |
+  |---|---|---|
+  | `firstName` | yes | 1–60 chars, trimmed |
+  | `lastName` | yes | 1–60 chars, trimmed |
+  | `dateOfBirth` | no | `YYYY-MM-DD`. Members often have none on file |
+  | `role` | yes | One of `HOUSEHOLD_MEMBER_ROLES`: `Spouse`, `Child`, `Driver`, `Additional Named Insured` |
+
+  `Named Insured` is **rejected**. It is the primary contact's role, implied by
+  `contacts.isPrimary` and stamped by lead intake; accepting it here would give
+  a household two primaries.
+
+  ## What it writes
+  Two documents, both required — the contact's `householdId` is what the
+  household page reads, while `memberContactIds` is what the lead-intake
+  pipeline and the migration maintain:
+
+  1. A `Contact` with `isPrimary: false`, `roleInHousehold: <role>`, and the
+     household's own `agencyId` / `branchId` (never the caller's).
+  2. `$addToSet` of the new contact id onto the household's `memberContactIds`.
+
+  Deliberately **not** deduplicated against existing contacts, unlike the public
+  intake pipeline: this is a human on the household's own page who can already
+  see its members listed, so silently merging into a same-named contact would be
+  the surprising outcome.
+
+  ## Response
+  `ContactSummary` — the same shape `GET /households/:id` lists members in.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | Missing/blank name, `role` outside the enum, malformed `dateOfBirth` |
+  | 401 | Missing/expired bearer token |
+  | 403 | `clients` disabled for the agency, or the caller lacks `clients:write` |
+  | 404 | Unknown household, malformed id, or a household outside the caller's scope |
+}

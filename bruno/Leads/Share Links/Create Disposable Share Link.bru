@@ -1,0 +1,45 @@
+meta {
+  name: Create Disposable Share Link
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/leads/share-links
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "label": "disposable — revoked by the next request"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("disposableShareLinkId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /leads/share-links — a link for **Revoke Share Link** to destroy
+
+  Test plumbing, not a distinct endpoint: it is the same call as
+  **Create Share Link**.
+
+  It exists so the collection runs correctly in **any order**. The Bruno CLI
+  walks folders alphabetically, so `Leads/Share Links/Revoke Share Link` always
+  executes before `Public Intake/*`. If Revoke killed the shared
+  `shareLinkToken`, the public requests would then — correctly — return the
+  generic 404, and a fully passing collection would be impossible to achieve.
+
+  Revoke therefore destroys *this* throwaway link (`disposableShareLinkId`) and
+  leaves `shareLinkToken` alive for the Public Intake folder.
+}

@@ -160,8 +160,7 @@ export class RenewalStepEntry {
   outcomeAt: Date | null;
 }
 
-export const RenewalStepSchema =
-  SchemaFactory.createForClass(RenewalStepEntry);
+export const RenewalStepSchema = SchemaFactory.createForClass(RenewalStepEntry);
 
 @Schema({ timestamps: true, collection: 'service_tickets' })
 export class ServiceTicket {

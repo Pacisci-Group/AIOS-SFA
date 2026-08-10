@@ -1,0 +1,91 @@
+meta {
+  name: Update Lead (Invalid)
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/leads/{{leadId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "status": "Warm Prospect",
+    "temperature": "Unknown"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("reports a validation failure", function () {
+    expect(res.getBody().message).to.equal("Validation failed");
+  });
+
+  test("names both offending fields", function () {
+    const errors = JSON.stringify(res.getBody().errors);
+    expect(errors).to.contain("status");
+    expect(errors).to.contain("temperature");
+  });
+}
+
+docs {
+  # PATCH /leads/:id — rejected values (PAC-38)
+
+  Pins the write vocabulary. This request sends two values that read paths
+  tolerate but writes must not accept.
+
+  - **Module:** `leads`
+  - **Permission:** `leads:write`
+
+  ## What is being asserted
+
+  **`status: "Warm Prospect"`** — an arbitrary label. `normalizeLeadStatus` is
+  deliberately lenient on *read* (it passes unrecognized values through so a
+  migrated record still renders as itself), but the write side only accepts
+  canonical `LEAD_STATUSES` labels. That asymmetry is what makes the migrated
+  mix converge over time rather than grow: every edit lands a canonical value.
+  Raw SmartSuite codes (`arW7O`, `phjnb`, `jp76g`, `hfwda`) are rejected here
+  for the same reason.
+
+  **`temperature: "Unknown"`** — a valid `LEAD_TEMPERATURES` member and a
+  perfectly good value to *receive*, but not one a producer may *choose*. It is
+  the display state of a lead nobody has assessed. The DTO enumerates
+  `LEAD_TEMPERATURE_OPTIONS` (`Hot`, `Warm`, `Cold`), which excludes it.
+
+  An empty body `{}` is also a `400` — the schema requires at least one field,
+  which is what makes this a patch rather than a no-op.
+
+  ## Response `400`
+  ```json
+  {
+    "message": "Validation failed",
+    "errors": {
+      "formErrors": [],
+      "fieldErrors": {
+        "status": ["Invalid enum value. ..."],
+        "temperature": ["Invalid enum value. ..."]
+      }
+    }
+  }
+  ```
+
+  Shape comes from `ZodValidationPipe` (`common/pipes/zod-validation.pipe.ts`),
+  which flattens the zod error.
+
+  ## Errors
+  - `400 Bad Request` — the case under test.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, or missing `leads:write`.
+  - `404 Not Found` — validation runs *after* the scope clamp, so an unowned
+    lead is a 404 even with an invalid body.
+}

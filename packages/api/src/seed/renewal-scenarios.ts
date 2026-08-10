@@ -58,9 +58,24 @@ const SCENARIOS: Scenario[] = [
     // The headline case: three lines bought together, all renewing the same
     // week. One deal, one call, three checklist items.
     policies: [
-      { policyNumber: 'BND-AUTO-001', policyType: 'Auto', premium: 1740, renewsInDays: 88 },
-      { policyNumber: 'BND-HOME-001', policyType: 'Home', premium: 2410, renewsInDays: 88 },
-      { policyNumber: 'BND-UMBR-001', policyType: 'Umbrella', premium: 620, renewsInDays: 90 },
+      {
+        policyNumber: 'BND-AUTO-001',
+        policyType: 'Auto',
+        premium: 1740,
+        renewsInDays: 88,
+      },
+      {
+        policyNumber: 'BND-HOME-001',
+        policyType: 'Home',
+        premium: 2410,
+        renewsInDays: 88,
+      },
+      {
+        policyNumber: 'BND-UMBR-001',
+        policyType: 'Umbrella',
+        premium: 620,
+        renewsInDays: 90,
+      },
     ],
     expect:
       'ONE cycle, annual track (a 12-month line is present) — Annual Review open, ' +
@@ -72,8 +87,18 @@ const SCENARIOS: Scenario[] = [
     householdName: 'Delgado Household',
     // Same bundle shape, further along: the 45-day call is the live one.
     policies: [
-      { policyNumber: 'BND-HOME-002', policyType: 'Home', premium: 3180, renewsInDays: 38 },
-      { policyNumber: 'BND-AUTO-002', policyType: 'Auto', premium: 1520, renewsInDays: 40 },
+      {
+        policyNumber: 'BND-HOME-002',
+        policyType: 'Home',
+        premium: 3180,
+        renewsInDays: 38,
+      },
+      {
+        policyNumber: 'BND-AUTO-002',
+        policyType: 'Auto',
+        premium: 1520,
+        renewsInDays: 40,
+      },
     ],
     expect:
       'ONE cycle, annual track — Annual Review overdue, Renewal Review open. ' +
@@ -86,8 +111,18 @@ const SCENARIOS: Scenario[] = [
     // Two cars, nothing else. Auto renews every 6 months, so both agendas
     // merge into a single call — there is no 90-day warm-up at all.
     policies: [
-      { policyNumber: 'BND-AUTO-003', policyType: 'Auto', premium: 1180, renewsInDays: 42 },
-      { policyNumber: 'BND-AUTO-004', policyType: 'Auto', premium: 940, renewsInDays: 44 },
+      {
+        policyNumber: 'BND-AUTO-003',
+        policyType: 'Auto',
+        premium: 1180,
+        renewsInDays: 42,
+      },
+      {
+        policyNumber: 'BND-AUTO-004',
+        policyType: 'Auto',
+        premium: 940,
+        renewsInDays: 44,
+      },
     ],
     expect:
       'ONE cycle, semiannual track — exactly ONE merged ticket at T-45, no ' +
@@ -100,8 +135,18 @@ const SCENARIOS: Scenario[] = [
     // The case that proves grouping is by *renewal window*, not just by client:
     // the auto is on a 6-month term and has drifted months away from the home.
     policies: [
-      { policyNumber: 'SPL-AUTO-001', policyType: 'Auto', premium: 1290, renewsInDays: 25 },
-      { policyNumber: 'SPL-HOME-001', policyType: 'Home', premium: 2650, renewsInDays: 86 },
+      {
+        policyNumber: 'SPL-AUTO-001',
+        policyType: 'Auto',
+        premium: 1290,
+        renewsInDays: 25,
+      },
+      {
+        policyNumber: 'SPL-HOME-001',
+        policyType: 'Home',
+        premium: 2650,
+        renewsInDays: 86,
+      },
     ],
     expect:
       'TWO separate cycles — the auto and the home renew months apart, so they ' +
@@ -114,8 +159,18 @@ const SCENARIOS: Scenario[] = [
     // Past the renewal date but inside the 14-day grace window, so it can
     // still be closed out with an outcome.
     policies: [
-      { policyNumber: 'BND-HOME-003', policyType: 'Home', premium: 2890, renewsInDays: -6 },
-      { policyNumber: 'BND-AUTO-005', policyType: 'Auto', premium: 1610, renewsInDays: -6 },
+      {
+        policyNumber: 'BND-HOME-003',
+        policyType: 'Home',
+        premium: 2890,
+        renewsInDays: -6,
+      },
+      {
+        policyNumber: 'BND-AUTO-005',
+        policyType: 'Auto',
+        premium: 1610,
+        renewsInDays: -6,
+      },
     ],
     expect:
       'ONE cycle, already renewed 6 days ago — inside the grace window, so it ' +
@@ -151,7 +206,9 @@ async function run() {
     slug: 'main',
   });
   if (!agency || !branch) {
-    console.error('Run `npm run seed:dev -w @sfa/api` first — no agency/branch.');
+    console.error(
+      'Run `npm run seed:dev -w @sfa/api` first — no agency/branch.',
+    );
     await app.close();
     process.exit(1);
   }
@@ -222,7 +279,8 @@ async function run() {
       const renewalDate = new Date(now + policy.renewsInDays * DAY);
       // Term length follows the line: auto every 6 months, everything else
       // annually — which is what makes the merged-call scenarios real.
-      const termMonths = renewalTrackFor(policy.policyType) === 'semiannual' ? 6 : 12;
+      const termMonths =
+        renewalTrackFor(policy.policyType) === 'semiannual' ? 6 : 12;
       await policyModel.create({
         ...tenant,
         // Its own key per policy: `policies` carries a unique index on
@@ -245,7 +303,9 @@ async function run() {
     }
 
     console.log(`  ${scenario.slug}`);
-    console.log(`    ${scenario.clientName} — ${scenario.policies.length} policies`);
+    console.log(
+      `    ${scenario.clientName} — ${scenario.policies.length} policies`,
+    );
     console.log(`    expect: ${scenario.expect}\n`);
   }
 
@@ -310,7 +370,9 @@ async function run() {
       );
     }
     for (const policy of cycle.policies) {
-      console.log(`        [ ] ${policy.policyType.padEnd(9)} ${policy.policyNumber}`);
+      console.log(
+        `        [ ] ${policy.policyType.padEnd(9)} ${policy.policyNumber}`,
+      );
     }
     console.log('');
   }

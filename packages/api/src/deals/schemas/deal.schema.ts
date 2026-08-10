@@ -1,15 +1,52 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import type { NormalizedLeadSource } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
-import { TenantRecord } from '../../common/schemas/tenant-record.schema';
+import {
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+  TenantRecord,
+} from '../../common/schemas/tenant-record.schema';
 
 export type DealDocument = HydratedDocument<Deal>;
 
 export type DealType = 'Auto' | 'Home' | 'Bundle' | 'Other';
 export type PremiumSource = 'rollup' | 'snapshot' | 'none';
 
-export interface NormalizedLeadSource {
-  code: string | null;
-  label: string;
+/**
+ * The Card 5 selections that drive audit-item generation, OR-ed across every
+ * policy on the deal.
+ *
+ * Named for the **audit template titles** they resolve to rather than for the
+ * form controls that set them, because that is what the generator matches on:
+ * `roofReceipt` produces `Home/Landlord Hail Resistant Roof`, and
+ * `studentDiscount` produces `Good Student`.
+ */
+export interface DealAuditTriggers {
+  defensiveDriver: boolean;
+  goodStudent: boolean;
+  drivewise: boolean;
+  fireSubscription: boolean;
+  actualCashValue: boolean;
+  hailResistantRoof: boolean;
+  /** One audit item is generated per name, so N drivers give N certificates. */
+  defensiveDriverNames: string[];
+}
+
+/**
+ * A factory, not a shared constant: `{ ...CONST }` copies
+ * `defensiveDriverNames` **by reference**, so every deal defaulted from one
+ * object would share a single array instance and one `push` would leak across
+ * documents.
+ */
+export function emptyAuditTriggers(): DealAuditTriggers {
+  return {
+    defensiveDriver: false,
+    goodStudent: false,
+    drivewise: false,
+    fireSubscription: false,
+    actualCashValue: false,
+    hailResistantRoof: false,
+    defensiveDriverNames: [],
+  };
 }
 
 /**
@@ -74,6 +111,91 @@ export class Deal extends TenantRecord {
   @Prop()
   legacyQuoteRecapId?: string;
 
+  /*
+   * Real ObjectId refs (PAC-40).
+   *
+   * Until these existed the only links to a deal were the `legacy*` strings
+   * above, which the migration writes and nothing else does — so an
+   * app-created deal was unreachable from its lead, and audit generation and
+   * CRM assignment had no way to resolve the client.
+   *
+   * All optional: thousands of migrated deals predate them. `required: true`
+   * would assert something false about existing documents and break the
+   * migration the moment anyone passed `runValidators`. Requiredness belongs
+   * in the create DTO, not the collection.
+   */
+
+  @Prop({ type: Types.ObjectId, ref: 'Lead', index: true })
+  leadId?: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  householdId?: Types.ObjectId;
+
+  /** Optional by design — not every sale has a recorded quote. */
+  @Prop({ type: Types.ObjectId, ref: 'QuoteRecap' })
+  quoteRecapId?: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'Contact' })
+  primaryContactId?: Types.ObjectId;
+
+  /** Per-wizard-session idempotency key; see the partial unique index below. */
+  @Prop({ trim: true })
+  submissionToken?: string;
+
+  /**
+   * Set when any policy claimed escrow. Legacy tracked this as a separate
+   * "Escrow Payment" flag on the deal and gated the `Home/Landlord Mortgagee`
+   * audit items on it.
+   */
+  @Prop({ default: false })
+  mortgagee: boolean;
+
+  /**
+   * The deal-level union of every policy's Card 5 selections — what audit
+   * generation reads. Legacy kept the equivalent booleans directly on the Deal
+   * record and its generator re-read them from there, so this preserves the
+   * shape the ported algorithm expects.
+   */
+  @Prop({ type: Object, default: emptyAuditTriggers })
+  auditTriggers: DealAuditTriggers;
+
+  // --- CRM assignment (PAC-40), mirrored from the household ---
+
+  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  assignedCrmId?: Types.ObjectId;
+
+  @Prop({ type: Date })
+  crmAssignedAt?: Date;
+
+  /** `assigned | skipped_existing | no_pool | missing_input | failed`. */
+  @Prop()
+  crmAssignmentStatus?: string;
+
+  @Prop()
+  crmAssignmentError?: string;
+
+  // --- Post-sale audit generation (PAC-40) ---
+
+  /*
+   * Generation runs post-commit and best-effort, so it cannot fail the request.
+   * Without this telemetry a generation that produced nothing is completely
+   * invisible: the deal looks fine and the service team simply never receives
+   * a hand-off.
+   */
+
+  @Prop({ type: Date })
+  auditGeneratedAt?: Date;
+
+  /** `generated | no_templates | failed`. */
+  @Prop()
+  auditGenerationStatus?: string;
+
+  @Prop()
+  auditGenerationError?: string;
+
+  @Prop({ default: 0 })
+  auditItemCount: number;
+
   @Prop()
   dealAuditStatus?: string;
 
@@ -87,6 +209,42 @@ export class Deal extends TenantRecord {
 export const DealSchema = SchemaFactory.createForClass(Deal);
 DealSchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
-  { unique: true, sparse: true },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 DealSchema.index({ agencyId: 1, producerId: 1, soldDate: -1 });
+DealSchema.index({ agencyId: 1, householdId: 1, soldDate: -1 });
+
+/**
+ * The Lead Detail deal lookup (PAC-38) — "the sale this lead became". Only a
+ * single-field `leadId` index existed, which cannot order the result.
+ */
+DealSchema.index({ agencyId: 1, leadId: 1, soldDate: -1 });
+
+/**
+ * Its legacy fallback. `backfill-deal-refs` populates `leadId` on migrated
+ * deals, but only for agencies where it has actually been run, so the read path
+ * must still be able to find a deal by the lead's SmartSuite id.
+ *
+ * Partial, never `sparse` — see the `submissionToken` index below.
+ */
+DealSchema.index(
+  { agencyId: 1, legacyLeadId: 1 },
+  { partialFilterExpression: { legacyLeadId: { $type: 'string' } } },
+);
+
+/**
+ * Idempotency for `POST /sold-deals`.
+ *
+ * `partialFilterExpression`, **never `sparse: true`**: on a compound index
+ * MongoDB only omits a document when *every* indexed field is missing, and
+ * `agencyId` is always present — so under `sparse` the second token-less deal
+ * in an agency (i.e. every migrated one) fails with E11000. Same trap as
+ * `LEGACY_DEDUPE_INDEX_OPTIONS` and `QuoteRecap.submissionToken`.
+ */
+DealSchema.index(
+  { agencyId: 1, submissionToken: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { submissionToken: { $type: 'string' } },
+  },
+);

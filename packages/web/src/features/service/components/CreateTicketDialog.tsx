@@ -47,11 +47,45 @@ import {
   listServiceTicketAssignees,
 } from "@/lib/service-tickets-api";
 
+/**
+ * What the opening page already knows about the ticket. Opened from the Service
+ * Dashboard there is nothing to fill in; opened from a client's page the
+ * household — and often the policy and CRM — are already on screen, and making
+ * the user search for them again is busywork.
+ *
+ * The labels travel with the ids because the pickers are backed by *search*
+ * endpoints: an id alone would select a record the combobox has no row for, and
+ * render as the empty placeholder.
+ */
+export interface CreateTicketPrefill {
+  householdId?: string | null;
+  householdLabel?: string;
+  policyId?: string | null;
+  policyLabel?: string;
+  assignedUserId?: string | null;
+}
+
 interface CreateTicketDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Called with the new ticket's id once it is created. */
   onCreated?: (ticketId: string) => void;
+  /** Seeded into the form every time the dialog opens. */
+  prefill?: CreateTicketPrefill;
+  /**
+   * Restrict the Policy picker to the selected household's policies.
+   *
+   * Set by the household page, where the ticket is being filed *for that
+   * client* and the whole agency's book is noise the user has to filter out —
+   * and, worse, an opportunity to link a policy belonging to someone else.
+   * Left off elsewhere (e.g. the Service Dashboard), where the user is
+   * legitimately picking any policy.
+   *
+   * It follows the household *currently selected in the form*, not the
+   * prefill, so changing the household re-scopes the list rather than leaving
+   * a stale one behind.
+   */
+  restrictPolicyToHousehold?: boolean;
 }
 
 interface Option {
@@ -174,6 +208,23 @@ function SearchableSelect({
   );
 }
 
+/**
+ * Put a prefilled record at the head of a search result list.
+ *
+ * The pickers render only what the search returned, so a prefilled household
+ * that happens not to match the empty-term search would select an option that
+ * does not exist and display as unselected. A no-op when the search already
+ * found it, or when there is nothing prefilled.
+ */
+function pinOption(
+  options: Option[],
+  value?: string | null,
+  label?: string,
+): Option[] {
+  if (!value || options.some((o) => o.value === value)) return options;
+  return [{ value, label: label ?? value }, ...options];
+}
+
 const DEFAULT_STATUS: ServiceTicketStatus = "open";
 
 /**
@@ -184,6 +235,8 @@ export function CreateTicketDialog({
   open,
   onOpenChange,
   onCreated,
+  prefill,
+  restrictPolicyToHousehold = false,
 }: CreateTicketDialogProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -202,10 +255,16 @@ export function CreateTicketDialog({
   const policyQ = useDebounced(policyTerm);
   const householdQ = useDebounced(householdTerm);
 
+  // `null` outside restricted mode, so the query key and the request are
+  // byte-identical to what every other caller has always sent.
+  const policyHouseholdId = restrictPolicyToHousehold ? householdId : null;
+
   const policiesQuery = useQuery({
-    queryKey: ["policies", "search", policyQ],
-    queryFn: () => searchPolicies(policyQ),
-    enabled: open,
+    queryKey: ["policies", "search", policyQ, policyHouseholdId],
+    queryFn: () => searchPolicies(policyQ, 20, policyHouseholdId),
+    // With no household chosen there is nothing to scope to; searching the
+    // whole book is exactly what this mode exists to avoid.
+    enabled: open && (!restrictPolicyToHousehold || !!householdId),
   });
   const householdsQuery = useQuery({
     queryKey: ["households", "search", householdQ],
@@ -218,28 +277,42 @@ export function CreateTicketDialog({
     enabled: open,
   });
 
+  // The prefilled policy belongs to the prefilled household. Once the user has
+  // switched to another household in restricted mode, pinning it would put a
+  // foreign client's policy back into a list built to exclude exactly that.
+  const canPinPolicy =
+    !restrictPolicyToHousehold || householdId === prefill?.householdId;
+
   const policyOptions: Option[] = useMemo(
     () =>
-      (policiesQuery.data ?? []).map((p) => ({
-        value: p.id,
-        label: [p.policyNumber ?? "No number", p.policyType]
-          .filter(Boolean)
-          .join(" · "),
-        hint: p.householdName ?? p.carrier ?? undefined,
-      })),
-    [policiesQuery.data],
+      pinOption(
+        (policiesQuery.data ?? []).map((p) => ({
+          value: p.id,
+          label: [p.policyNumber ?? "No number", p.policyType]
+            .filter(Boolean)
+            .join(" · "),
+          hint: p.householdName ?? p.carrier ?? undefined,
+        })),
+        canPinPolicy ? prefill?.policyId : null,
+        prefill?.policyLabel,
+      ),
+    [policiesQuery.data, canPinPolicy, prefill?.policyId, prefill?.policyLabel],
   );
 
   const householdOptions: Option[] = useMemo(
     () =>
-      (householdsQuery.data ?? []).map((h) => ({
-        value: h.id,
-        label: h.name ?? h.primaryContactName ?? "Unnamed household",
-        hint: h.totalActivePolicies
-          ? `${h.totalActivePolicies} active`
-          : undefined,
-      })),
-    [householdsQuery.data],
+      pinOption(
+        (householdsQuery.data ?? []).map((h) => ({
+          value: h.id,
+          label: h.name ?? h.primaryContactName ?? "Unnamed household",
+          hint: h.totalActivePolicies
+            ? `${h.totalActivePolicies} active`
+            : undefined,
+        })),
+        prefill?.householdId,
+        prefill?.householdLabel,
+      ),
+    [householdsQuery.data, prefill?.householdId, prefill?.householdLabel],
   );
 
   // The CRM list is small, so it is fetched once and filtered in the browser.
@@ -254,6 +327,29 @@ export function CreateTicketDialog({
       )
       .map((a) => ({ value: a.id, label: a.name, hint: a.email }));
   }, [assigneesQuery.data, crmTerm]);
+
+  // Seed the linked records each time the dialog opens. Keyed on `open` rather
+  // than done once, so reopening after a create starts from the prefill again
+  // instead of the cleared form.
+  useEffect(() => {
+    if (!open) return;
+    setHouseholdId(prefill?.householdId ?? null);
+    setPolicyId(prefill?.policyId ?? null);
+  }, [open, prefill?.householdId, prefill?.policyId]);
+
+  // The CRM is seeded separately, and only once the assignee list can name it:
+  // the picker renders from that list, so an id it does not contain would show
+  // as the empty placeholder while still being submitted — assigning the ticket
+  // to someone the user never saw.
+  useEffect(() => {
+    if (!open || !prefill?.assignedUserId) return;
+    const known = (assigneesQuery.data ?? []).some(
+      (a) => a.id === prefill.assignedUserId,
+    );
+    if (known) {
+      setAssignedUserId(prefill.assignedUserId ?? null);
+    }
+  }, [open, prefill?.assignedUserId, assigneesQuery.data]);
 
   const resetForm = () => {
     setPolicyId(null);
@@ -331,10 +427,19 @@ export function CreateTicketDialog({
               value={policyId}
               onChange={setPolicyId}
               onSearch={setPolicyTerm}
-              placeholder="Search a policy…"
+              placeholder={
+                restrictPolicyToHousehold && !householdId
+                  ? "Pick a household first…"
+                  : "Search a policy…"
+              }
               searchPlaceholder="Policy number, type, or carrier"
-              emptyLabel="No policies match."
+              emptyLabel={
+                restrictPolicyToHousehold
+                  ? "This household has no matching policies."
+                  : "No policies match."
+              }
               loading={policiesQuery.isFetching}
+              disabled={restrictPolicyToHousehold && !householdId}
             />
           </div>
 
@@ -344,7 +449,15 @@ export function CreateTicketDialog({
               id="ticket-household"
               options={householdOptions}
               value={householdId}
-              onChange={setHouseholdId}
+              onChange={(next) => {
+                setHouseholdId(next);
+                // In restricted mode the policy list is the household's, so a
+                // policy chosen for the previous one would be submitted while
+                // no longer visible in the picker.
+                if (restrictPolicyToHousehold) {
+                  setPolicyId(null);
+                }
+              }}
               onSearch={setHouseholdTerm}
               placeholder="Search a household…"
               searchPlaceholder="Household or contact name"

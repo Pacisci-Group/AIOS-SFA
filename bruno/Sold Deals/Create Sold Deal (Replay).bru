@@ -1,0 +1,75 @@
+meta {
+  name: Create Sold Deal (Replay)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/sold-deals
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "soldDate": "2026-02-15",
+    "submissionToken": "{{soldSubmissionToken}}",
+    "policies": [
+      {
+        "policyType": "Auto",
+        "effectiveDate": "2026-02-01",
+        "carrier": "Allstate",
+        "policyNumber": "{{soldPolicyNumber}}",
+        "premium": 1200.10,
+        "itemCount": 2,
+        "priorInsurance": { "none": true },
+        "cancellation": { "cancelled": false }
+      }
+    ]
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("resolves to the SAME deal — no second sale was booked", function () {
+    expect(res.getBody().id).to.equal(bru.getVar("createdSoldDealId"));
+  });
+
+  test("still reports the original two-policy totals", function () {
+    // The replay returns the *stored* deal, so the single-policy body above is
+    // ignored entirely rather than partially applied.
+    const body = res.getBody();
+    expect(body.policyCount).to.equal(2);
+    expect(body.premium).to.equal(2100.05);
+  });
+}
+
+docs {
+  # POST /sold-deals (replay) — idempotency (PAC-40)
+
+  The same `submissionToken` as `Create Sold Deal`, with a **deliberately
+  different body** (one policy instead of two).
+
+  It must return the **same deal id** and the **original** totals: the token is
+  probed before any work happens, so a replay never re-runs policy upserts,
+  never partially applies the new body, and — critically once PR5 lands — never
+  generates a second set of audit items for the service team.
+
+  This is what makes "a double-click books one sale" true. Under genuine
+  concurrency the loser of the race hits the unique
+  `{agencyId, submissionToken}` index and is resolved by re-reading the winner,
+  because E11000 is not transient and `withTransaction` will not retry it.
+
+  A token replayed by a **different** producer returns `404`, not the deal —
+  the ownership clamp runs against the found record, so a guessed token cannot
+  leak someone else's sale.
+}

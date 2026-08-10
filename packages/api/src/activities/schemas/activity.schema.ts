@@ -1,13 +1,17 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { TenantRecord } from '../../common/schemas/tenant-record.schema';
+import {
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+  TenantRecord,
+} from '../../common/schemas/tenant-record.schema';
+import type { ActivitySubjectType, ActivityType } from '@sfa/shared';
 
 export type ActivityDocument = HydratedDocument<Activity>;
 
-export type ActivityType =
-  'lead_created' | 'quoted' | 'sold' | 'call' | 'text' | 'email' | 'note';
-
-export type ActivitySubjectType = 'lead' | 'deal' | 'quoteRecap';
+// The unions moved to `@sfa/shared` (PAC-38): the Lead Detail timeline renders
+// one icon and tone per type, and the web app cannot import from the API.
+// Re-exported so existing API-side importers keep working.
+export type { ActivitySubjectType, ActivityType };
 
 /**
  * Derived activity/timeline collection. Seeded from lead/quote/deal lifecycle events
@@ -16,10 +20,14 @@ export type ActivitySubjectType = 'lead' | 'deal' | 'quoteRecap';
  */
 @Schema({ timestamps: true, collection: 'activities' })
 export class Activity extends TenantRecord {
-  @Prop({ required: true, index: true })
+  // `type: String` is explicit for both of these because the unions are now
+  // indexed-access types (`(typeof ACTIVITY_TYPES)[number]`), which
+  // `emitDecoratorMetadata` reports as `Object` — Mongoose can't infer from it.
+  // Same trap as `Lead.temperature`.
+  @Prop({ type: String, required: true, index: true })
   type: ActivityType;
 
-  @Prop({ required: true })
+  @Prop({ type: String, required: true })
   subjectType: ActivitySubjectType;
 
   @Prop({ index: true })
@@ -30,6 +38,13 @@ export class Activity extends TenantRecord {
 
   @Prop({ type: Types.ObjectId, ref: 'Deal' })
   dealId?: Types.ObjectId;
+
+  /**
+   * Set by `POST /quote-recaps` (PAC-39). Unset on migrated `quoted` rows,
+   * which identify their subject through `legacySubjectId` instead.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'QuoteRecap' })
+  quoteRecapId?: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'User', index: true })
   producerId?: Types.ObjectId;
@@ -50,6 +65,9 @@ export class Activity extends TenantRecord {
 export const ActivitySchema = SchemaFactory.createForClass(Activity);
 ActivitySchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
-  { unique: true, sparse: true },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 ActivitySchema.index({ agencyId: 1, producerId: 1, occurredAt: -1 });
+// The Lead Detail timeline (PAC-38). The producer-scoped index above cannot
+// serve it: a lead's timeline spans whatever producer wrote each row.
+ActivitySchema.index({ agencyId: 1, leadId: 1, occurredAt: -1 });

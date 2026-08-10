@@ -9,6 +9,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
+import { Toaster } from '@/components/ui/sonner';
 
 const ProducerDashboardPage = lazy(
   () => import('@/features/producer/ProducerDashboardPage'),
@@ -33,6 +34,15 @@ const HouseholdDetailsPage = lazy(
 );
 const PolicyDetailPage = lazy(
   () => import('@/features/policy/PolicyDetailPage'),
+);
+const LeadsPage = lazy(() => import('@/features/lead/LeadsPage'));
+const NewLeadPage = lazy(() => import('@/features/lead/NewLeadPage'));
+const NewQuoteRecapPage = lazy(
+  () => import('@/features/quote-recap/NewQuoteRecapPage'),
+);
+const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
+const PublicLeadFormPage = lazy(
+  () => import('@/features/lead/PublicLeadFormPage'),
 );
 const LeadDetailsPage = lazy(() => import('@/features/lead/LeadDetailsPage'));
 const RolePermissionsPage = lazy(
@@ -87,7 +97,7 @@ function RoleLanding() {
     return <Navigate to="/clients/demo" replace />;
   }
   if (canRead(ModuleKey.Leads)) {
-    return <Navigate to="/leads/demo" replace />;
+    return <Navigate to="/leads" replace />;
   }
   return <DevNavPage />;
 }
@@ -165,15 +175,39 @@ export function App() {
                   }
                 >
                   <Route
-                    path="/leads/:id"
+                    path="/leads"
                     element={
                       <LazyPage>
-                        <LeadDetailsPage />
+                        <LeadsPage />
                       </LazyPage>
                     }
                   />
+                  {/* Static segment, so it wins over `/leads/:id` regardless of
+                      order — declared first for readability. Needs `leads:write`,
+                      which is stricter than the surrounding read gate. */}
                   <Route
-                    path="/leads/demo"
+                    element={
+                      <RequirePermission
+                        permission={`${ModuleKey.Leads}:write`}
+                        redirectTo="/leads"
+                      />
+                    }
+                  >
+                    <Route
+                      path="/leads/new"
+                      element={
+                        <LazyPage>
+                          <NewLeadPage />
+                        </LazyPage>
+                      }
+                    />
+                  </Route>
+                  {/* `/leads/demo` was removed with PAC-38: the page renders real
+                      data now, so a route that could only ever show the mockup was
+                      dead weight. It had no inbound links, and the `*` catch-all
+                      below handles a stale bookmark. */}
+                  <Route
+                    path="/leads/:id"
                     element={
                       <LazyPage>
                         <LeadDetailsPage />
@@ -206,8 +240,9 @@ export function App() {
                 />
               </Route>
 
-              {/* The mock demo page stays behind the Clients page permission —
-                  it is what the (Clients-gated) Households nav item points at.
+              {/* The mock demo page stays behind the Clients page permission.
+                  No sidebar entry points here any more (see AppSidebar) — it is
+                  reachable from the dev Screen Navigator at `/`.
                   Declared before `/clients/:id` so the literal segment wins. */}
               <Route
                 element={
@@ -254,6 +289,56 @@ export function App() {
                 />
               </Route>
 
+              {/* Quote Recap form (PAC-39). Deliberately NOT nested under the
+                  `leads:read` gate: every endpoint this page calls (context,
+                  presign, create) sits behind `quote_recaps`, so one gate covers
+                  the whole flow rather than letting a user pass the outer check
+                  and fail mid-form. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.QuoteRecaps}:write`}
+                    redirectTo="/leads"
+                  />
+                }
+              >
+                <Route
+                  path="/quote-recaps/new"
+                  element={
+                    <LazyPage>
+                      <NewQuoteRecapPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Sold form (PAC-40). Gated on `deal_audits:write` because that
+                  is what POST /sold-deals itself requires, so the route and the
+                  API agree.
+
+                  Note PAC-38 has since added `clients:write` to the Producer
+                  template (for editing a lead's contact), so the original
+                  reasoning — "producers hold no `clients:*`" — no longer holds.
+                  The gate stays where it is regardless: it matches the endpoint,
+                  which is the durable reason. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.DealAudits}:write`}
+                    redirectTo="/leads"
+                  />
+                }
+              >
+                <Route
+                  path="/sold/new"
+                  element={
+                    <LazyPage>
+                      <SoldDealPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               {/* Owner-only role & per-user permission management */}
               <Route
                 element={<RequirePermission permission="agency:users:permissions" />}
@@ -291,9 +376,25 @@ export function App() {
               </Route>
             </Route>
 
+            {/* Public share-link intake. Outside BOTH route guards on purpose:
+                `ProtectedRoute` would bounce an anonymous prospect to /login,
+                and `PublicOnlyRoute` would redirect a signed-in producer away
+                from previewing their own link. Must sit above the catch-all. */}
+            <Route
+              path="/f/lead/:token"
+              element={
+                <LazyPage>
+                  <PublicLeadFormPage />
+                </LazyPage>
+              }
+            />
+
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
+        {/* `sonner` was installed but never mounted, so `toast()` silently
+            no-opped. Used by the share-link dialog's copy action. */}
+        <Toaster richColors position="top-right" />
       </AuthProvider>
     </QueryClientProvider>
   );

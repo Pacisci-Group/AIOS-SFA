@@ -1,11 +1,7 @@
 import { useState } from "react";
 import {
-  Car,
-  Home,
   Shield,
-  Building2,
   Heart,
-  Umbrella,
   Plus,
   ExternalLink,
   AlertTriangle,
@@ -25,84 +21,21 @@ interface CrossSell {
   icon: LucideIcon;
   priority: "High" | "Medium";
   reason: string;
-  estimatedPremium: string;
 }
 
-const mockPolicies: Policy[] = [
-  {
-    id: "pol-1",
-    line: "Auto",
-    policyNumber: "AUT-847-663-21",
-    premium: "$184",
-    premiumValue: 184,
-    premiumFreq: "/mo",
-    status: "Active",
-    effective: "Mar 15, 2024",
-    expiration: "Mar 15, 2025",
-    icon: Car,
-    iconColor: "#3b82f6",
-    iconBg: "#1e3a5f",
-    carrier: "Allstate",
-    deductible: "$500 comp / $500 coll",
-  },
-  {
-    id: "pol-2",
-    line: "Home",
-    policyNumber: "HOM-291-447-08",
-    premium: "$312",
-    premiumValue: 312,
-    premiumFreq: "/mo",
-    status: "Active",
-    effective: "Jun 1, 2024",
-    expiration: "Jun 1, 2025",
-    icon: Home,
-    iconColor: "#10b981",
-    iconBg: "#052e16",
-    carrier: "Allstate",
-    deductible: "$2,500 AOP / $5,000 wind",
-  },
-  {
-    id: "pol-3",
-    line: "Umbrella",
-    policyNumber: "UMB-033-119-55",
-    premium: "$28",
-    premiumValue: 28,
-    premiumFreq: "/mo",
-    status: "Active",
-    effective: "Jun 1, 2024",
-    expiration: "Jun 1, 2025",
-    icon: Umbrella,
-    iconColor: "#8b5cf6",
-    iconBg: "#1e1b4b",
-    carrier: "Allstate",
-    deductible: "—",
-  },
-  {
-    id: "pol-4",
-    line: "Landlord",
-    policyNumber: "LND-558-882-34",
-    premium: "$96",
-    premiumValue: 96,
-    premiumFreq: "/mo",
-    status: "Active",
-    effective: "Jan 10, 2024",
-    expiration: "Jan 10, 2025",
-    icon: Building2,
-    iconColor: "#f59e0b",
-    iconBg: "#1c1002",
-    carrier: "Allstate",
-    deductible: "$2,500 AOP",
-  },
-];
-
-const crossSells: CrossSell[] = [
+/**
+ * Demo only. Nothing derives these: the reasons reference household facts we
+ * never checked, and the original premium estimates ("~$45/mo") had no rating
+ * source behind them at all, so they are gone. Deriving real opportunities
+ * from the lines a household does *not* hold is tracked separately.
+ */
+const demoCrossSells: CrossSell[] = [
   {
     line: "Life Insurance",
     opportunity: "Term Life — 20yr",
     icon: Heart,
     priority: "High",
     reason: "Spouse + minor driver in household. No current life coverage on file.",
-    estimatedPremium: "~$45/mo",
   },
   {
     line: "Motorcycle / Rec",
@@ -110,7 +43,6 @@ const crossSells: CrossSell[] = [
     icon: Shield,
     priority: "Medium",
     reason: "Teen driver flagged. Common add-on for households with 3+ vehicles.",
-    estimatedPremium: "~$38/mo",
   },
 ];
 
@@ -210,7 +142,7 @@ function CrossSellCard({ item }: { item: CrossSell }) {
               {item.priority} Priority
             </span>
           </div>
-          <p className="text-xs mt-0.5" style={{ color: "var(--muted-foreground)" }}>{item.opportunity} · Est. {item.estimatedPremium}</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--muted-foreground)" }}>{item.opportunity}</p>
           <p className="text-xs mt-2" style={{ color: "var(--muted-foreground)", opacity: 0.7 }}>{item.reason}</p>
           <button className="mt-3 flex items-center gap-1.5 text-xs transition-colors hover:text-blue-300" style={{ color: "#3b82f6" }}>
             <TrendingUp size={11} /> Start Quote
@@ -222,23 +154,29 @@ function CrossSellCard({ item }: { item: CrossSell }) {
 }
 
 interface PolicyPortfolioProps {
-  /** Live policies. When omitted the component renders its original mock data. */
-  policies?: PolicySummary[];
+  policies: PolicySummary[];
+  /** Enables the cross-sell block, which nothing derives yet. */
+  isDemo?: boolean;
 }
 
-export function PolicyPortfolio({ policies }: PolicyPortfolioProps) {
+export function PolicyPortfolio({ policies, isDemo = false }: PolicyPortfolioProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const activePolicies = policies ? policies.map(toDisplayPolicy) : mockPolicies;
-  const premiumFreq = policies ? "/yr" : "/mo";
+  // Every policy renders — a lapsed one is exactly what a CSR needs to see, and
+  // the card already carries a Lapsed badge. Only the headline count and the
+  // premium total narrow to active, because both claim to describe active
+  // coverage and a cancelled policy was inflating them.
+  const displayPolicies = policies.map(toDisplayPolicy);
+  const activePolicies = displayPolicies.filter((p) => p.status === "Active");
 
-  const totalPremium = activePolicies.reduce(
-    (sum, p) => sum + p.premiumValue,
-    0,
-  );
+  const totalPremium = activePolicies.reduce((sum, p) => sum + p.premiumValue, 0);
+  const inactiveCount = displayPolicies.length - activePolicies.length;
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto" style={{ scrollbarWidth: "none" }}>
+    // A plain scrolling block, deliberately not a flex column: as flex items
+    // these sections would shrink to min-content to fit the height, squashing
+    // the policy grid instead of overflowing into a scroll.
+    <div className="h-full min-h-0 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
       {/* Summary bar */}
       <div className="px-5 py-4 border-b flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
         <div>
@@ -246,32 +184,34 @@ export function PolicyPortfolio({ policies }: PolicyPortfolioProps) {
             Policy Portfolio
           </p>
           <p className="mt-0.5 text-xs" style={{ color: "var(--muted-foreground)" }}>
-            {activePolicies.length} active lines · {crossSells.length} cross-sell opportunities
+            {activePolicies.length} active {activePolicies.length === 1 ? "line" : "lines"}
+            {inactiveCount > 0 && ` · ${inactiveCount} inactive`}
+            {isDemo && ` · ${demoCrossSells.length} cross-sell opportunities`}
           </p>
         </div>
         <div className="text-right">
           <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-            {policies ? "Total Annual Premium" : "Total Monthly Premium"}
+            Total Annual Premium
           </p>
           <p className="text-xl font-semibold" style={{ color: "#4ade80", fontFamily: "'JetBrains Mono', monospace" }}>
-            ${totalPremium.toLocaleString()}<span className="text-xs font-normal" style={{ color: "var(--muted-foreground)" }}>{premiumFreq}</span>
+            ${totalPremium.toLocaleString()}<span className="text-xs font-normal" style={{ color: "var(--muted-foreground)" }}>/yr</span>
           </p>
         </div>
       </div>
 
       <div className="p-5 flex flex-col gap-4">
-        {/* Active Policies */}
+        {/* Policies */}
         <div>
           <p className="text-xs uppercase tracking-widest mb-3" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-            Active Policies
+            Policies
           </p>
-          {activePolicies.length === 0 && (
+          {displayPolicies.length === 0 && (
             <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
               No policies on file.
             </p>
           )}
           <div className="grid grid-cols-2 gap-3">
-            {activePolicies.map((p) => (
+            {displayPolicies.map((p) => (
               <PolicyCard
                 key={p.id}
                 policy={p}
@@ -282,23 +222,25 @@ export function PolicyPortfolio({ policies }: PolicyPortfolioProps) {
           </div>
         </div>
 
-        {/* Cross-sell section */}
-        <div>
-          <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle size={13} style={{ color: "#f59e0b" }} />
-            <p className="text-xs uppercase tracking-widest" style={{ color: "#f59e0b", fontFamily: "'JetBrains Mono', monospace" }}>
-              Cross-Sell Opportunities
-            </p>
+        {/* Cross-sell section — demo only until real opportunities are derived. */}
+        {isDemo && (
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle size={13} style={{ color: "#f59e0b" }} />
+              <p className="text-xs uppercase tracking-widest" style={{ color: "#f59e0b", fontFamily: "'JetBrains Mono', monospace" }}>
+                Cross-Sell Opportunities
+              </p>
+            </div>
+            <div className="flex flex-col gap-3">
+              {demoCrossSells.map((item) => (
+                <CrossSellCard key={item.line} item={item} />
+              ))}
+            </div>
+            <button className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-medium transition-colors hover:bg-white/5" style={{ border: "1px dashed rgba(255,255,255,0.12)", color: "var(--muted-foreground)" }}>
+              <Plus size={12} /> Add Custom Opportunity
+            </button>
           </div>
-          <div className="flex flex-col gap-3">
-            {crossSells.map((item) => (
-              <CrossSellCard key={item.line} item={item} />
-            ))}
-          </div>
-          <button className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-medium transition-colors hover:bg-white/5" style={{ border: "1px dashed rgba(255,255,255,0.12)", color: "var(--muted-foreground)" }}>
-            <Plus size={12} /> Add Custom Opportunity
-          </button>
-        </div>
+        )}
       </div>
     </div>
   );

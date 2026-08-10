@@ -1,0 +1,131 @@
+meta {
+  name: Update Lead
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{baseUrl}}/leads/{{leadId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "status": "Contacted",
+    "temperature": "Warm",
+    "leadSourceCode": "WCO7l"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes the changed fields in canonical form", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(body.status).to.equal("Contacted");
+    expect(body.temperature).to.equal("Warm");
+    expect(body.leadSource.label).to.equal("Mailer");
+    expect(body.leadSource.code).to.equal("WCO7l");
+  });
+
+  test("bumps lastActivityAt", function () {
+    expect(res.getBody()).to.have.property("lastActivityAt");
+  });
+
+  test("returns only the patchable fields, not a whole LeadDetail", function () {
+    const body = res.getBody();
+    expect(body).to.not.have.property("household");
+    expect(body).to.not.have.property("activities");
+    expect(body).to.not.have.property("latestQuoteRecap");
+  });
+}
+
+docs {
+  # PATCH /leads/:id — Lead Detail inline edits (PAC-38)
+
+  Status, temperature and lead source, edited in place from `/leads/:id`. Each
+  Select on the page fires one field; every field is optional and the body must
+  not be empty.
+
+  - **Module:** `leads`
+  - **Permission:** `leads:write`
+  - **Data scope:** identical clamp to `GET /leads/:id` —
+    `LeadAccessService.loadOwnedLead` runs **before** anything is written, so
+    another producer's lead is a `404` and is never modified.
+
+  ## Path params
+  | param | type   | notes                                               |
+  |-------|--------|-----------------------------------------------------|
+  | id    | string | ObjectId. A malformed id is a `404`, never a `500`. |
+
+  ## Body
+  | field          | type   | rules                                                        |
+  |----------------|--------|--------------------------------------------------------------|
+  | status         | enum   | a canonical `LEAD_STATUSES` label — raw codes are rejected   |
+  | temperature    | enum   | `Hot` \| `Warm` \| `Cold`. **`Unknown` is not accepted.**    |
+  | leadSourceCode | string | a selectable source **code**, or `__none__` to clear it      |
+
+  At least one must be present; `{}` is a `400`.
+
+  ## Behaviour worth knowing
+
+  **`leadSourceCode` is the point of this endpoint.** Leads that arrive through
+  a public share link (PAC-37) store `{ code: null, label: "" }` — nobody has
+  said where they came from yet. Without this control those leads could never be
+  corrected. Sending `__none__` writes that empty shape back, so a
+  mis-attributed lead can be returned to "not known yet" and will again match
+  the `GET /leads?leadSource=__none__` filter.
+
+  **`Test` (ENEJP) is not selectable**, matching `POST /leads`. The
+  `isTestRecord` heuristic hides any record it flags from every read path, so
+  allowing it would silently make a real lead disappear.
+
+  **`Unknown` temperature is not selectable.** It is the display state of a lead
+  nobody has assessed, not a choice — mirroring `LEAD_TEMPERATURE_OPTIONS`.
+
+  **Status is not forward-only.** Unlike the automatic advance the Quote and
+  Sold forms perform, this accepts any canonical label in any direction: a
+  producer correcting a mis-clicked `Sold` back to `Requote` is a real
+  operation, and a one-way control would strand the record.
+
+  **`lastActivityAt` is always bumped**, so the row moves to the top of the
+  Leads list afterwards. The list sorts on it and an edit *is* activity —
+  intended, not a bug.
+
+  **No activity row is written.** None of the `ACTIVITY_TYPES` members means
+  "status changed"; adding one is a follow-up, not a side effect of this
+  endpoint.
+
+  ## Response `200`
+  ```json
+  {
+    "id": "665f...ac1",
+    "status": "Contacted",
+    "temperature": "Warm",
+    "leadSource": { "code": "WCO7l", "label": "Mailer" },
+    "lastActivityAt": "2026-08-04T09:15:44.120Z"
+  }
+  ```
+
+  Only the fields the patch can change are returned, in their server-canonical
+  form — re-running the ten-collection `GET /leads/:id` assembly on every
+  dropdown change would make an inline edit cost more than the page load. The
+  client writes these four values straight into its cached `LeadDetail`.
+
+  ## Errors
+  - `400 Bad Request` — empty body, an unknown status, `temperature: "Unknown"`,
+    or a lead-source code that is not selectable.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, or missing `leads:write` (a
+    read-only user gets this).
+  - `404 Not Found` — no such lead, a malformed id, or a lead outside scope.
+}

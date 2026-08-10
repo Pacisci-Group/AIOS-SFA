@@ -1,12 +1,15 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { TenantRecord } from '../../common/schemas/tenant-record.schema';
+import {
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+  TenantRecord,
+} from '../../common/schemas/tenant-record.schema';
 
 export type DealAuditDocument = HydratedDocument<DealAudit>;
 
 /**
  * Migrated from SmartSuite "The Deal Audits Table" (6941fdb2dc9a6d024fd8caef).
- * The parent audit summary for a deal (rolls up Deal Audit Items -> auditRecords).
+ * The parent audit summary for a deal (rolls up Deal Audit Items -> dealAuditItems).
  */
 @Schema({ timestamps: true, collection: 'dealAudits' })
 export class DealAudit extends TenantRecord {
@@ -44,5 +47,5 @@ export class DealAudit extends TenantRecord {
 export const DealAuditSchema = SchemaFactory.createForClass(DealAudit);
 DealAuditSchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
-  { unique: true, sparse: true },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
 );

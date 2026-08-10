@@ -11,8 +11,9 @@ import { HouseholdRecordsController } from './household-records.controller';
 import { PolicyRecordsController } from './policy-records.controller';
 
 /**
- * Read-only APIs over the migrated client-record schemas. Exporting
- * `MongooseModule` also makes these models injectable in the seed scripts.
+ * APIs over the migrated client-record schemas — reads, plus adding a member to
+ * a household. Exporting `MongooseModule` also makes these models injectable in
+ * the seed scripts.
  */
 @Module({
   imports: [

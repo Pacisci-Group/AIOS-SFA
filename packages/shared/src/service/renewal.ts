@@ -48,9 +48,9 @@ export const RENEWAL_TERM_MONTHS: Record<RenewalTrack, number> = {
 
 /**
  * Policy types that renew on a 6-month term, normalized (see
- * `normalizePolicyType`). `Policy.policyType` is a free-form string — the seeds
- * alone contain Auto, Home, Life, Umbrella and Renters — so this is a value
- * match, not an enum lookup.
+ * {@link normalizeRenewalPolicyType}). `Policy.policyType` is a free-form
+ * string — the seeds alone contain Auto, Home, Life, Umbrella and Renters — so
+ * this is a value match, not an enum lookup.
  *
  * **Extending this array is the only change needed to add another 6-month
  * line.** There is deliberately no `if (policyType === 'Auto')` anywhere in the
@@ -62,8 +62,16 @@ export const SEMIANNUAL_POLICY_TYPES: readonly string[] = ['auto'];
  * Fold a free-form policy type down to something comparable: trimmed,
  * lowercased, inner whitespace collapsed, and a trailing plural dropped so
  * "Autos" matches "Auto".
+ *
+ * Distinct from `domain/policy-type`'s `normalizePolicyType`, which resolves a
+ * stored value to its **canonical label** ("Auto", "Condominium") and is what
+ * read paths should use. This one produces a lowercase *comparison key* and
+ * exists only so renewal-track matching tolerates the free-form spellings
+ * sitting in `policies.policyType`.
  */
-export function normalizePolicyType(value: string | null | undefined): string {
+export function normalizeRenewalPolicyType(
+  value: string | null | undefined,
+): string {
   const normalized = (value ?? '')
     .trim()
     .toLowerCase()
@@ -75,7 +83,7 @@ export function normalizePolicyType(value: string | null | undefined): string {
 export function renewalTrackFor(
   policyType: string | null | undefined,
 ): RenewalTrack {
-  return SEMIANNUAL_POLICY_TYPES.includes(normalizePolicyType(policyType))
+  return SEMIANNUAL_POLICY_TYPES.includes(normalizeRenewalPolicyType(policyType))
     ? 'semiannual'
     : 'annual';
 }

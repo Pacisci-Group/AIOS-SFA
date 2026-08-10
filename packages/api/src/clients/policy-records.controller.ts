@@ -23,7 +23,12 @@ import { SearchRecordsQueryDto } from './dto/search-records.dto';
 export class PolicyRecordsController {
   constructor(private readonly clientsService: ClientsService) {}
 
-  /** Typeahead for the ticket-create policy picker. Declared before `:id`. */
+  /**
+   * Typeahead for the ticket-create policy picker. Declared before `:id`.
+   *
+   * `householdId` restricts the results to that household's policies, which is
+   * what the dialog opened from a household page sends.
+   */
   @Get('search')
   search(
     @Access() access: AccessContext,
@@ -33,6 +38,7 @@ export class PolicyRecordsController {
       access,
       query.q ?? '',
       query.limit,
+      query.householdId,
     );
   }
 

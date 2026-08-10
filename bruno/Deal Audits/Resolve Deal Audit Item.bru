@@ -1,0 +1,103 @@
+meta {
+  name: Resolve Deal Audit Item
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{baseUrl}}/deal-audits/{{dealAuditItemId}}/resolve
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "note": "Verified prior insurance proof with the client."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the resolved item", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(body).to.have.property("resolved");
+    expect(body.resolved).to.equal(true);
+    expect(body).to.have.property("resolvedAt");
+  });
+}
+
+docs {
+  # PATCH /deal-audits/:itemId/resolve — resolve a hand-off item (PAC-14)
+
+  Marks a pending service hand-off audit item as **verified/complete** so it
+  drops off the "Deals Pending Service Hand-off" board. Optionally records a
+  note and/or a supporting document (uploaded first via **Presign Audit
+  Attachment**). Writes an `audit_resolved` **activity** (who/when) for the
+  timeline.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write` (`write ⇒ read`)
+  - **Data scope:** a producer (`own`) may only resolve their **own** items
+    (`producerId = user`); branch callers are limited to their branch. Resolving
+    another producer's item is rejected by the guard/service (`403`).
+
+  Effect: sets `updateStatus = "complete"` (`Verified - Complete`),
+  `isResolved = true`, `resolvedAt`, `resolvedById`, and appends any attachment.
+
+  **Idempotent.** Resolving is one-shot: if the item is already resolved the call
+  returns `200` with the *original* `resolvedAt` and changes nothing — a replay
+  (stale tab, client retry) will not append the attachment or overwrite the note
+  a second time.
+
+  The `audit_resolved` activity is written **best-effort** after the item is
+  committed: if the timeline write fails it is logged server-side, but the call
+  still reports success because the resolution itself has already been applied.
+
+  ## Path params
+  | param  | type   | notes                          |
+  |--------|--------|--------------------------------|
+  | itemId | string | Deal Audit Item `_id` (raw id) |
+
+  ## Body (all optional)
+  | field      | type   | rules                                              |
+  |------------|--------|----------------------------------------------------|
+  | note       | string | ≤ 2000 chars                                       |
+  | attachment | object | `{ key, filename, contentType, size }` from presign |
+
+  `attachment.key` **must** be a key returned by the presign endpoint and the
+  object must already exist in storage (the upload completed), else `404`.
+
+  ```json
+  {
+    "note": "Uploaded the signed defensive-driver certificate.",
+    "attachment": {
+      "key": "agencies/<agencyId>/deal-audits/<itemId>/<uuid>-cert.pdf",
+      "filename": "cert.pdf",
+      "contentType": "application/pdf",
+      "size": 204800
+    }
+  }
+  ```
+
+  ## Response `200`
+  ```json
+  { "id": "665f...ac1", "resolved": true, "resolvedAt": "2026-07-23T12:00:00.000Z" }
+  ```
+
+  ## Errors
+  - `400 Bad Request` — invalid body (note too long, bad attachment metadata).
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — module disabled, missing `deal_audits:write`, or the item
+    is not the caller's (own scope) / not in their branch.
+  - `404 Not Found` — no such audit item, or the declared attachment object was
+    not found in storage.
+}

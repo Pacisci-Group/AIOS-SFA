@@ -1,0 +1,56 @@
+meta {
+  name: Check Policy Number (Match)
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/policies/check?number={{soldPolicyNumber}}
+  body: none
+  auth: inherit
+}
+
+params:query {
+  number: {{soldPolicyNumber}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("now finds the policy the sale just created", function () {
+    // `Policies/Check Policy Number` runs before any sale exists and can only
+    // assert an empty envelope; this is the positive case.
+    expect(res.getBody().matches.length).to.be.greaterThan(0);
+  });
+
+  test("the match is attributed to the producer who sold it", function () {
+    const match = res.getBody().matches[0];
+    expect(match.isOwn).to.equal(true);
+    // In scope, so the identifying fields are present rather than masked.
+    expect(match.clientName).to.be.a("string");
+    expect(match.dealId).to.equal(bru.getVar("createdSoldDealId"));
+  });
+}
+
+docs {
+  # GET /policies/check — the positive match (PAC-40)
+
+  The counterpart to `Policies/Check Policy Number`. Bruno walks folders
+  alphabetically (`… → Policies → Public Intake → Quote Recaps → Sold Deals`),
+  so the request in the `Policies` folder runs **before** any sale exists and
+  can only assert a well-formed empty envelope. This one runs after
+  `Create Sold Deal`, so it asserts the behaviour that actually matters:
+
+  - the number the sale just booked is now found;
+  - `isOwn` is `true` for the producer who sold it, so `clientName`,
+    `householdId` and `dealId` are returned rather than masked.
+
+  Ownership resolves through the match's **deal** — `Policy` carries no
+  `producerId` of its own.
+}

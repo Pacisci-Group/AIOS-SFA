@@ -251,6 +251,41 @@ export class ServiceTicketsService {
     return tickets.map((t) => serializeTicket(t));
   }
 
+  /**
+   * Every ticket a client owns, most recently touched first — the history
+   * behind the household page's Activity & Tickets column.
+   *
+   * Deliberately unlike `list()` in one way: archived tickets stay in. A
+   * client's history is the whole history, and dropping the ticket that was
+   * resolved eight days ago would read as "that never happened" rather than
+   * "that has aged out of the queue". `isArchived` on the view lets the caller
+   * tell the two apart if it wants to.
+   *
+   * Scheduled steps stay out for the same reason they do everywhere else —
+   * they are not work yet, and the household page shows the upcoming
+   * onboarding calls in its own block above this one.
+   *
+   * The caller's data scope still applies, so an `own`-scoped user sees the
+   * client's tickets that are assigned to them, not the branch's.
+   */
+  async listForHousehold(
+    access: AccessContext,
+    householdId: string,
+  ): Promise<ServiceTicketView[]> {
+    if (!Types.ObjectId.isValid(householdId)) {
+      return [];
+    }
+    const filter = this.scopeFilter(access);
+    filter.householdId = new Types.ObjectId(householdId);
+    filter.$nor = scheduledStepMatches(new Date());
+
+    const tickets = await this.ticketModel
+      .find(filter)
+      .sort({ lastActivityAt: -1 })
+      .lean();
+    return tickets.map((t) => serializeTicket(t));
+  }
+
   async findOne(access: AccessContext, id: string): Promise<ServiceTicketView> {
     const ticket = await this.getScopedOrThrow(access, id);
     return serializeTicket(ticket);
@@ -1207,9 +1242,7 @@ export class ServiceTicketsService {
     }
 
     const now = new Date();
-    const horizonStart = new Date(
-      now.getTime() - RENEWAL_GRACE_DAYS * DAY_MS,
-    );
+    const horizonStart = new Date(now.getTime() - RENEWAL_GRACE_DAYS * DAY_MS);
     const horizonEnd = new Date(now.getTime() + RENEWAL_HORIZON_DAYS * DAY_MS);
 
     // Side A — policies entering the horizon.
@@ -1358,9 +1391,7 @@ export class ServiceTicketsService {
 
     // (3) Adopt a small drift, refresh the checklist, and re-plan.
     cycle.renewalDate = anchor;
-    cycle.policies = policies.map((policy) =>
-      mergeCyclePolicy(cycle, policy),
-    ) as typeof cycle.policies;
+    cycle.policies = policies.map((policy) => mergeCyclePolicy(cycle, policy));
     cycle.track = trackForPolicies(policies);
     cycle.markModified('policies');
 
@@ -1641,14 +1672,16 @@ export class ServiceTicketsService {
     if (step.completedAt) {
       throw new BadRequestException('This call is already complete');
     }
-    if (!isStepActionable(
-      {
-        availableAt: step.availableAt,
-        dueAt: step.dueAt,
-        completedAt: step.completedAt,
-      },
-      new Date(),
-    )) {
+    if (
+      !isStepActionable(
+        {
+          availableAt: step.availableAt,
+          dueAt: step.dueAt,
+          completedAt: step.completedAt,
+        },
+        new Date(),
+      )
+    ) {
       throw new BadRequestException('This call has not opened yet');
     }
 
@@ -2057,9 +2090,7 @@ function mergeCyclePolicy(
   cycle: RenewalCycleDocument,
   policy: PolicyRenewalCandidate,
 ) {
-  const existing = cycle.policies.find(
-    (p) => String(p.policyId) === policy.id,
-  );
+  const existing = cycle.policies.find((p) => String(p.policyId) === policy.id);
   return {
     ...toCyclePolicy(policy),
     discussedAt: existing?.discussedAt ?? null,
@@ -2152,9 +2183,7 @@ function scheduledOnboardingMatch(
  * Keyed on payload presence rather than category, because `Renewal Review` is
  * a category a CSR can also pick by hand in the New Ticket dialog.
  */
-function scheduledStepMatches(
-  now: Date,
-): FilterQuery<ServiceTicketDocument>[] {
+function scheduledStepMatches(now: Date): FilterQuery<ServiceTicketDocument>[] {
   return [
     scheduledOnboardingMatch(now),
     { 'renewal.availableAt': { $gt: now } },

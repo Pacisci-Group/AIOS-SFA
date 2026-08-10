@@ -1,22 +1,42 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
+import { MongoDuplicateKeyFilter } from './common/filters/mongo-duplicate-key.filter';
 import { AccessContextGuard } from './common/guards/access-context.guard';
 import { BranchGuard } from './common/guards/branch.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { ModuleGuard } from './common/guards/module.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { TenantGuard } from './common/guards/tenant.guard';
+import { TrustedProxyThrottlerGuard } from './common/guards/trusted-proxy-throttler.guard';
+import { MongoModule } from './common/mongo/mongo.module';
+import { TenancyModule } from './common/tenancy/tenancy.module';
+import {
+  DEFAULT_LONG_LIMIT,
+  DEFAULT_SHORT_LIMIT,
+  HOUR_MS,
+  MINUTE_MS,
+} from './config/rate-limit.config';
+import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { ClientsModule } from './clients/clients.module';
 import { CrmModule } from './crm/crm.module';
+import { ContactsModule } from './contacts/contacts.module';
+import { DealAuditsModule } from './deal-audits/deal-audits.module';
+import { LeadsModule } from './leads/leads.module';
+import { PoliciesModule } from './policies/policies.module';
+import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
 import { HealthController } from './health.controller';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PlatformModule } from './platform/platform.module';
 import { RolesModule } from './roles/roles.module';
+import { ShareLinksModule } from './share-links/share-links.module';
+import { SoldDealsModule } from './sold-deals/sold-deals.module';
+import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
 import { ENV_FILE_PATH } from './config/env.config';
 
@@ -30,6 +50,18 @@ import { ENV_FILE_PATH } from './config/env.config';
         uri: config.get<string>('MONGODB_URI', 'mongodb://localhost:27017/sfa'),
       }),
     }),
+    // In-memory storage on purpose. Redis is optional in this codebase (there is
+    // a NoopPermissionCache fallback), so a Redis-backed throttler would
+    // silently degrade to *unlimited* whenever Redis was down — strictly worse
+    // than per-instance limits.
+    ThrottlerModule.forRoot({
+      throttlers: [
+        { name: 'short', ttl: MINUTE_MS, limit: DEFAULT_SHORT_LIMIT },
+        { name: 'long', ttl: HOUR_MS, limit: DEFAULT_LONG_LIMIT },
+      ],
+    }),
+    MongoModule,
+    TenancyModule,
     AuthModule,
     PermissionsModule,
     PlatformModule,
@@ -40,16 +72,38 @@ import { ENV_FILE_PATH } from './config/env.config';
     // Registered before FeatureModulesModule so the real `/households/:id`
     // read is matched ahead of the `/households` stub controller.
     ClientsModule,
+    StorageModule,
+    DealAuditsModule,
+    // Before LeadsModule so `/leads/share-links` is registered ahead of
+    // `/leads/:id` (PAC-38), which would otherwise shadow it. Pinned by an e2e
+    // assertion in "Leads (PAC-38 detail)".
+    ShareLinksModule,
+    LeadsModule,
+    ContactsModule,
+    QuoteRecapsModule,
+    PoliciesModule,
+    SoldDealsModule,
+    // Registers the `auditTemplates` model so its indexes build and the core
+    // seed / audit generation can inject it (PAC-40).
+    AuditTemplatesModule,
     FeatureModulesModule,
   ],
   controllers: [HealthController],
   providers: [
+    // Order is load-bearing: Nest runs global guards in registration order, so
+    // throttling must come FIRST — a flood is then rejected before JWT
+    // verification and before AccessContextGuard's database round-trip.
+    { provide: APP_GUARD, useClass: TrustedProxyThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: AccessContextGuard },
     { provide: APP_GUARD, useClass: TenantGuard },
     { provide: APP_GUARD, useClass: BranchGuard },
     { provide: APP_GUARD, useClass: ModuleGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    // A duplicate key is a caller-visible conflict (409), not a 500. Without
+    // this the driver's raw error — which echoes the stored values that
+    // collided — reaches the default handler.
+    { provide: APP_FILTER, useClass: MongoDuplicateKeyFilter },
   ],
 })
 export class AppModule {}

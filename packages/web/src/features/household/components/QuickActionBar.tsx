@@ -2,9 +2,17 @@ import { Plus, User, Ticket, FileText, ChevronRight, Bell, Search } from "lucide
 
 interface QuickActionBarProps {
   householdName: string;
+  /** Opens the New Service Ticket dialog. */
+  onNewTicket?: () => void;
+  /** Opens the Add Household Member dialog. */
+  onAddMember?: () => void;
 }
 
-export function QuickActionBar({ householdName }: QuickActionBarProps) {
+export function QuickActionBar({
+  householdName,
+  onNewTicket,
+  onAddMember,
+}: QuickActionBarProps) {
   return (
     <div className="flex items-center justify-between px-6 py-3 border-b" style={{ borderColor: "var(--border)", background: "var(--card)" }}>
       <div className="flex items-center gap-2 text-xs" style={{ color: "var(--muted-foreground)" }}>
@@ -39,12 +47,16 @@ export function QuickActionBar({ householdName }: QuickActionBarProps) {
 
         {[
           { label: "+ Policy", icon: FileText, color: "#3b82f6" },
-          { label: "+ Member", icon: User, color: "#10b981" },
-          { label: "+ Ticket", icon: Ticket, color: "#f59e0b" },
+          { label: "+ Member", icon: User, color: "#10b981", onClick: onAddMember },
+          { label: "+ Ticket", icon: Ticket, color: "#f59e0b", onClick: onNewTicket },
           { label: "+ Start Quote", icon: Plus, color: "#8b5cf6", primary: true },
-        ].map(({ label, icon: Icon, color, primary }) => (
+        ].map(({ label, icon: Icon, color, primary, onClick }) => (
           <button
             key={label}
+            type="button"
+            // Member and Ticket carry handlers; Policy and Start Quote are
+            // still mockup and stay inert.
+            onClick={onClick}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all hover:opacity-90 active:scale-95"
             style={
               primary

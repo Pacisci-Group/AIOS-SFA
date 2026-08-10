@@ -2,7 +2,7 @@ import {
   CANONICAL_LEAD_SOURCES,
   isTestRecord,
   normalizeLeadSource,
-} from './lead-sources';
+} from '@sfa/shared';
 import {
   daysSince,
   deriveDealType,
@@ -109,6 +109,24 @@ describe('deal type derivation', () => {
     expect(policyTypeLabels([['PYgez'], ['sNMRK']])).toEqual(
       expect.arrayContaining(['Auto', 'Home']),
     );
+  });
+
+  it('emits the canonical Landlord spelling, not SmartSuite’s plural', () => {
+    // The old migration-local map returned "Landlords" for `mCt4m`. The audit
+    // generator (PAC-40) resolves template titles by exact name, so a plural
+    // here means a landlord deal generates no landlord audit items at all.
+    expect(policyTypeLabels([['mCt4m']])).toEqual(['Landlord']);
+    expect(policyTypeLabels([['AiFB5']])).toEqual(['Landlord']);
+  });
+
+  it('collapses the two Landlord code sets to one label', () => {
+    // A deal linking policies recorded under both code sets must not list the
+    // same line of business twice.
+    expect(policyTypeLabels([['mCt4m'], ['AiFB5']])).toEqual(['Landlord']);
+  });
+
+  it('passes an uncatalogued code through rather than dropping it', () => {
+    expect(policyTypeLabels([['Dwelling Fire']])).toEqual(['Dwelling Fire']);
   });
 });
 

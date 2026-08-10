@@ -1,0 +1,87 @@
+meta {
+  name: List Household Tickets
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/crm/service-tickets/household/{{householdId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns an array of tickets", function () {
+    expect(res.getBody()).to.be.an("array");
+  });
+
+  test("every ticket belongs to the requested household", function () {
+    // Tolerant of an empty result: a household with no tickets is a valid
+    // steady state, and an unknown or malformed id returns [] rather than 404.
+    for (const ticket of res.getBody()) {
+      expect(ticket.householdId).to.equal(bru.getVar("householdId"));
+    }
+  });
+
+  test("every ticket carries the fields the household feed renders", function () {
+    for (const ticket of res.getBody()) {
+      expect(ticket).to.have.property("id");
+      expect(ticket).to.have.property("ticketNumber");
+      expect(ticket).to.have.property("category");
+      expect(ticket).to.have.property("status");
+      expect(ticket).to.have.property("priority");
+      expect(ticket).to.have.property("assignedRep");
+      expect(ticket).to.have.property("lastActivityAt");
+      expect(ticket).to.have.property("isArchived");
+      expect(ticket.timeline).to.be.an("array");
+    }
+  });
+}
+
+docs {
+  # GET /crm/service-tickets/household/:householdId
+
+  Every service ticket a household owns, most recently touched first. Backs the
+  **Activity & Tickets** column on the Household Details page (`/clients/:id`).
+
+  - **Module:** `crm_service`
+  - **Permission:** `crm_service:read`
+  - **Data scope:** applied as everywhere else — `own` sees only the tickets of
+    this household assigned to the caller, `branch` sees the caller's branch,
+    `agency` sees the whole agency.
+
+  ## Params
+  | Param | In | Notes |
+  |---|---|---|
+  | `householdId` | path | Mongo ObjectId. A malformed id returns `[]`, not a 400. |
+
+  ## Response
+  `ServiceTicketView[]` (the same shape as `GET /crm/service-tickets`), sorted
+  by `lastActivityAt` descending.
+
+  Two differences from the queue list at `GET /crm/service-tickets`:
+
+  - **Archived tickets are included.** A client's history is the whole history;
+    a ticket resolved beyond the archive window still belongs on the 360 view.
+    Use `isArchived` on each ticket to tell them apart.
+  - **No status / category / archived query params.** The household feed filters
+    client-side over the full set.
+
+  Scheduled onboarding and renewal calls whose `availableAt` is still in the
+  future are excluded, matching every other list — they are not work yet, and
+  the household page shows upcoming onboarding calls in its own block.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | `crm_service` disabled for the agency, or the caller lacks `crm_service:read` |
+}

@@ -16,14 +16,22 @@
     "seed:onboarding": "ts-node -r tsconfig-paths/register src/seed/onboarding-scenarios.ts",
     "migrate": "node dist/migration/migrate.js",
     "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
+    "backfill:deal-refs": "node dist/migration/backfill/backfill-deal-refs.js",
+    "backfill:deal-refs:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/backfill-deal-refs.ts",
+    "fix:dedupe-indexes": "node dist/migration/backfill/fix-legacy-dedupe-indexes.js",
+    "fix:dedupe-indexes:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/fix-legacy-dedupe-indexes.ts",
     "migrate:permissions": "node dist/seed/migrate-permissions.js",
     "migrate:permissions:dev": "ts-node -r tsconfig-paths/register src/seed/migrate-permissions.ts",
+    "sync:roles": "node dist/seed/sync-role-templates.js",
+    "sync:roles:dev": "ts-node -r tsconfig-paths/register src/seed/sync-role-templates.ts",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:unit": "jest --config ./test/jest-unit.json",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1093.0",
+    "@aws-sdk/s3-request-presigner": "^3.1093.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
@@ -31,6 +39,7 @@
     "@nestjs/mongoose": "^11.0.3",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/throttler": "^6.5.0",
     "@sfa/shared": "*",
     "bcrypt": "^5.1.1",
     "class-transformer": "^0.5.1",
@@ -40,7 +49,8 @@
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

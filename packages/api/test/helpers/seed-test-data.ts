@@ -36,6 +36,9 @@ export interface TestSeedContext {
   /** Client records in the main test branch. */
   householdId: string;
   policyId: string;
+  /** A second in-scope household + policy, for household-scoped filtering. */
+  secondHouseholdId: string;
+  secondPolicyId: string;
   /** In a second branch of the same agency — invisible to branch-scoped users. */
   otherBranchHouseholdId: string;
   /** In a different agency entirely. */
@@ -219,6 +222,31 @@ export async function seedTestData(
     householdId: household._id,
   });
 
+  // A second household in the SAME branch, with its own policy. Both are fully
+  // visible to the same users — they exist so the household-scoped policy
+  // search has something in scope that it must still exclude.
+  const secondHousehold = await householdModel.create({
+    ...tenant,
+    legacySmartSuiteId: 'test:hh:second',
+    name: 'Second Test Household',
+    status: 'Active',
+    primaryContactName: 'Second Client',
+    totalActivePolicies: 1,
+  });
+
+  const secondPolicy = await policyModel.create({
+    ...tenant,
+    legacySmartSuiteId: 'test:pol:second',
+    policyNumber: 'TEST-000-2',
+    policyType: 'Auto',
+    carrier: 'Test Carrier',
+    active: true,
+    policyStatus: 'Active',
+    premium: 900,
+    items: 1,
+    householdId: secondHousehold._id,
+  });
+
   // A second branch, so branch-scoped users have something they must NOT see.
   const otherBranch = await branchModel.create({
     agencyId: agency._id,
@@ -254,6 +282,8 @@ export async function seedTestData(
     branchId: branch._id.toString(),
     householdId: household._id.toString(),
     policyId: policy._id.toString(),
+    secondHouseholdId: secondHousehold._id.toString(),
+    secondPolicyId: secondPolicy._id.toString(),
     otherBranchHouseholdId: otherBranchHousehold._id.toString(),
     otherAgencyHouseholdId: otherAgencyHousehold._id.toString(),
     ownerRoleId: ownerRole!._id.toString(),

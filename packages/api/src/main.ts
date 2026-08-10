@@ -24,4 +24,4 @@ async function bootstrap() {
   console.log(`SFA API listening on http://localhost:${port}/api/v1`);
 }
 
-bootstrap();
+void bootstrap();

@@ -1,0 +1,56 @@
+meta {
+  name: Get Public Lead Form (Unknown)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/public/lead-form/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+  body: none
+  auth: none
+}
+
+tests {
+  test("returns 404 for a token that never existed", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("says nothing about whether the token ever existed", function () {
+    expect(res.getBody().message).to.equal("This form is no longer available.");
+  });
+
+  test("leaks no agency or producer information", function () {
+    const raw = JSON.stringify(res.getBody());
+    expect(raw).to.not.contain("agencyName");
+    expect(raw).to.not.contain("producer");
+  });
+}
+
+docs {
+  # GET /public/lead-form/:token — unknown token (negative case)
+
+  Documents the **non-disclosure contract** of the public routes, which is why
+  it is a request in its own right rather than a note on the happy path.
+
+  A well-formed but unknown token returns exactly what a revoked link returns,
+  what a malformed token returns, and what a link belonging to a suspended
+  agency returns:
+
+  ```json
+  { "message": "This form is no longer available.", "error": "Not Found", "statusCode": 404 }
+  ```
+
+  Identical status, identical body. Someone probing the endpoint cannot tell:
+  - whether a token ever existed,
+  - whether a link was revoked or never minted,
+  - which agency (if any) a token belongs to,
+  - whether the producer behind it is still active.
+
+  Any future change that specialises one of these messages — however helpful it
+  looks — reintroduces an oracle. The e2e suite pins this by deep-comparing the
+  unknown, revoked and malformed responses to each other.
+
+  Note the token here is 43 characters, so it passes the shape check and reaches
+  the database lookup. A malformed token short-circuits earlier and must still
+  produce this same response.
+}

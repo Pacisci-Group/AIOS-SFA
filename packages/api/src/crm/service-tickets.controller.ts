@@ -85,6 +85,19 @@ export class ServiceTicketsController {
     return this.ticketsService.getRenewalCycle(access, renewalCycleId);
   }
 
+  /**
+   * Every ticket a client owns, for the household page's Activity & Tickets
+   * column. Includes archived tickets — a client's history is the whole
+   * history. Two path segments, so `GET :id` below never swallows it.
+   */
+  @Get('household/:householdId')
+  listForHousehold(
+    @Access() access: AccessContext,
+    @Param('householdId') householdId: string,
+  ) {
+    return this.ticketsService.listForHousehold(access, householdId);
+  }
+
   @Get(':id')
   findOne(@Access() access: AccessContext, @Param('id') id: string) {
     return this.ticketsService.findOne(access, id);

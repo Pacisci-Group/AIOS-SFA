@@ -1,0 +1,81 @@
+meta {
+  name: Create Quote Recap (Replay)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/quote-recaps
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "policies": [
+      { "policyType": "Auto", "premium": 1200.10, "itemCount": 2 },
+      { "policyType": "Home", "premium": 899.95, "itemCount": 1 }
+    ],
+    "sameAsHousehold": true,
+    "notes": "Bundled auto + home. Client wants to review the deductible.",
+    "quoteDocument": {
+      "key": "{{quoteDocumentKey}}",
+      "filename": "carrier-quote.pdf",
+      "contentType": "application/pdf",
+      "size": 2048
+    },
+    "submissionToken": "{{quoteRecapToken}}"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("resolves to the SAME recap — no duplicate", function () {
+    expect(res.getBody().id).to.equal(bru.getVar("createdQuoteRecapId"));
+  });
+}
+
+docs {
+  # POST /quote-recaps (replay) — idempotency check (PAC-39)
+
+  Re-sends the previous request **with the same `submissionToken`** and asserts
+  the response carries the same recap id. Run it straight after
+  `Create Quote Recap`, which captures both the id and the token.
+
+  - **Module:** `quote_recaps`
+  - **Permission:** `quote_recaps:write`
+
+  ## What this proves
+  A double-click, a flaky connection, or a client retry produces **one** recap,
+  not two. Two duplicate recaps would double-count premium in the Quoted
+  scorecard, which is the failure this guards against.
+
+  Three layers make it hold:
+
+  1. **A pre-transaction probe.** The token is looked up before any work, so a
+     replay never re-resolves the household or re-verifies storage.
+  2. **A unique partial index** on `{ agencyId, submissionToken }` — a partial
+     filter, deliberately *not* `sparse`, because a compound sparse index only
+     skips a document when *every* indexed field is missing, and `agencyId`
+     always has a value. Under `sparse` the second token-less (i.e. migrated)
+     recap in an agency would fail with E11000.
+  3. **An E11000 catch** on create, which re-reads by token and returns the
+     winner — so even two genuinely concurrent requests collapse to one recap.
+
+  The token is namespaced server-side (`WEB|<UPPERCASED>`), so clients never need
+  to worry about collisions with other channels.
+
+  A replayed token belonging to **another** producer 404s rather than returning
+  their recap id — the ownership clamp runs against the found record too.
+
+  ## Response `201`
+  Identical to `Create Quote Recap`, with the same `id`.
+}

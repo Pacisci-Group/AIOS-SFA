@@ -96,6 +96,15 @@ export function createServiceTicket(input: CreateServiceTicketInput) {
   });
 }
 
+/**
+ * Every ticket a client owns, most recently touched first. Unlike
+ * `listServiceTickets`, archived tickets are included — this is the client's
+ * whole history, not the active queue.
+ */
+export function listServiceTicketsForHousehold(householdId: string) {
+  return apiFetch<ServiceTicketView[]>(`${BASE}/household/${householdId}`);
+}
+
 export function getServiceTicket(id: string) {
   return apiFetch<ServiceTicketView>(`${BASE}/${id}`);
 }

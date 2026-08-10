@@ -36,18 +36,22 @@ function createFeatureController(path: string, moduleKey: ModuleKey) {
   return FeatureController;
 }
 
-export const ContactsController = createFeatureController(
-  'contacts',
-  ModuleKey.Clients,
-);
+/**
+ * NOTE: there is no `ContactsController` stub any more. PAC-38 replaced it with
+ * the real `ContactsModule` (`src/contacts`), which exposes an id-scoped
+ * `PATCH /contacts/:id` behind a derived-ownership clamp. Two classes on
+ * `@Controller('contacts')` would register silently, first-wins — so the stub
+ * had to go in the same commit, not later.
+ */
 export const HouseholdsController = createFeatureController(
   'households',
   ModuleKey.Clients,
 );
-export const LeadsController = createFeatureController(
-  'leads',
-  ModuleKey.Leads,
-);
+/**
+ * @deprecated Superseded by the real `QuoteRecapsController` in
+ * `src/quote-recaps` (PAC-39) and no longer registered. Kept only for symmetry
+ * with `DealAuditsController` below; import the real one, not this.
+ */
 export const QuoteRecapsController = createFeatureController(
   'quote-recaps',
   ModuleKey.QuoteRecaps,
@@ -94,13 +98,3 @@ export const CommandCenterController = createFeatureController(
   'command-center',
   ModuleKey.CommandCenter,
 );
-
-@Controller('files')
-@RequireModule(ModuleKey.QuoteRecaps)
-@RequirePermissions(modulePermission(ModuleKey.QuoteRecaps, 'read'))
-export class FilesController {
-  @Get()
-  status() {
-    return { module: 'files', status: 'ready' };
-  }
-}
