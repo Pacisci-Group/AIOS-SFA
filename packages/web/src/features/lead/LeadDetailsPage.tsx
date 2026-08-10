@@ -1,7 +1,9 @@
 import type { LeadTemperature } from "@sfa/shared";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Loader2 } from "lucide-react";
-import { Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { getLead } from "@/lib/leads-api";
 import { ActivityTimeline } from "./components/ActivityTimeline";
@@ -10,6 +12,7 @@ import { LeadContactCard } from "./components/LeadContactCard";
 import { LeadDetailHeader } from "./components/LeadDetailHeader";
 import { PriorInsuranceCard } from "./components/PriorInsuranceCard";
 import { QuoteRecapCard } from "./components/QuoteRecapCard";
+import { SoldCard } from "./components/SoldCard";
 import { leadDetailKey, useUpdateLead } from "./components/useUpdateLead";
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
@@ -45,9 +48,19 @@ export default function LeadDetailsPage() {
   const lead = leadQuery.data;
 
   return (
-    // Navigation now lives in the shared AppLayout/AppSidebar shell; this page
-    // renders only its own content column.
-    <div className="flex min-w-0 flex-1 flex-col bg-background text-foreground">
+    <AppShell>
+      {!lead && (
+        <header className="flex items-center gap-2 border-b border-border px-4 py-4 md:px-6">
+          <MobileNav className="-ml-1" />
+          <Link
+            to="/leads"
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Leads
+          </Link>
+        </header>
+      )}
+
       {lead && (
         <LeadDetailHeader
           lead={lead}
@@ -104,16 +117,23 @@ export default function LeadDetailsPage() {
                 earlier={lead.earlierQuoteRecaps}
               />
             )}
+
+            {/* Below the quote summary on purpose (PAC-56 #27) — the page
+                reads quoted → sold. */}
+            {lead.deal && <SoldCard deal={lead.deal} leadId={lead.id} />}
           </main>
 
           <aside className="flex flex-col gap-4 p-4 md:p-5 lg:w-2/5 lg:border-l lg:border-border">
             <HouseholdCard household={lead.household} />
             <div className="min-h-[24rem] flex-1">
-              <ActivityTimeline activities={lead.activities} />
+              <ActivityTimeline
+                activities={lead.activities}
+                leadId={lead.id}
+              />
             </div>
           </aside>
         </div>
       )}
-    </div>
+    </AppShell>
   );
 }

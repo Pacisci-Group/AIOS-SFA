@@ -21,7 +21,7 @@ import type { PresignSoldDocumentDto } from './dto/presign-sold-document.dto';
 import { SoldDealsService } from './sold-deals.service';
 
 /**
- * Sold form (PAC-40) — the 8-card wizard's write path.
+ * Sold form (PAC-40) — the wizard's write path.
  *
  * ## Why `deal_audits` and not `clients`
  *
@@ -65,7 +65,7 @@ export class SoldDealsController {
   }
 
   /**
-   * Issue a presigned URL for a Card 5 proof document (fire subscription, roof
+   * Issue a presigned URL for a sold-form document (a discount proof, or the
    * receipt, student transcript).
    *
    * Lead-scoped, not deal-scoped: the upload happens while the wizard is still

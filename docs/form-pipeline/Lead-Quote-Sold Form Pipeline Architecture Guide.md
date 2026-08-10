@@ -18,7 +18,7 @@ CRITICAL NOTE FOR SOLD FORM: The styling, structure, and flow of the Sold Form s
 
 * **Framework:** Next.js (App Router), React, TypeScript (Strict mode).  
 * **Styling:** Tailwind CSS. **Rule:** Do NOT use @apply in CSS files. Use clsx and tailwind-merge (via a cn utility) for all dynamic classes.  
-* **Forms & Validation:** react-hook-form paired with @hookform/resolvers/zod for strict type safety and field validation.  
+* **Forms & Validation:** TanStack Form paired with zod (via Standard Schema — the zod schema is passed straight to `validators`, no resolver package) for strict type safety and field validation. Build on the shared `useAppForm` hook and the field components in `src/components/form/fields/`; field components take a field-path prop and never hardcode a path.  
 * **Architecture:** Adhere to functional components with named exports. Keep UI components modular in src/components/ui/.
 
 ## Data Flow & Mock Environment

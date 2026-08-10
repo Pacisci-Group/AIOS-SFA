@@ -19,9 +19,14 @@ body:json {
     "leadId": "{{createdLeadId}}",
     "policies": [
       { "policyType": "Auto", "premium": 1200.10, "itemCount": 2 },
-      { "policyType": "Home", "premium": 899.95, "itemCount": 1 }
+      {
+        "policyType": "Home",
+        "premium": 899.95,
+        "itemCount": 1,
+        "sameAsHousehold": true
+      }
     ],
-    "sameAsHousehold": true,
+    "insuranceRenewalMonth": "March",
     "notes": "Bundled auto + home. Client wants to review the deductible.",
     "quoteDocument": {
       "key": "{{quoteDocumentKey}}",
@@ -63,8 +68,9 @@ docs {
   # POST /quote-recaps — record the proposal (PAC-39)
 
   Writes one `quoteRecaps` document linked to a real lead **and** household, with
-  the per-policy rows the producer entered, server-derived totals, the property
-  address when one applies, notes, and the uploaded quote document.
+  the per-policy rows the producer entered — each carrying its own insured
+  property address when one applies — server-derived totals, notes, and the
+  uploaded quote document.
 
   - **Module:** `quote_recaps`
   - **Permission:** `quote_recaps:write`
@@ -84,8 +90,9 @@ docs {
   | policies[].policyType | string | yes  | canonical label from `POLICY_TYPES`; raw SmartSuite codes are rejected |
   | policies[].premium    | number | yes  | ≥ 0, ≤ 1,000,000                                   |
   | policies[].itemCount  | number | yes  | integer 1–99                                       |
-  | sameAsHousehold  | boolean | yes      | when true the server copies the household address and **discards** `propertyAddress` |
-  | propertyAddress  | object  | conditional | required (all four fields) when a property-type policy is quoted and `sameAsHousehold` is false |
+  | policies[].sameAsHousehold | boolean | no | defaults `true`; property rows only. When set the server copies the household address onto **this row** and **discards** its `propertyAddress` |
+  | policies[].propertyAddress | object | conditional | required (all four fields) when the row is a property type and `sameAsHousehold` is false |
+  | insuranceRenewalMonth | string | **yes** | one of the twelve month labels (`January`…`December`) |
   | notes            | string  | no       | ≤ 2000 chars                                       |
   | quoteDocument    | object  | **yes**  | `{ key, filename, contentType, size }` from the presign step |
   | submissionToken  | string  | no       | 8–200 chars; per-form-session idempotency key      |
@@ -93,6 +100,31 @@ docs {
   Property-type policies are **Home, Renters, Condominium, Landlord**.
 
   ## Behaviour worth knowing
+  **The property address is per policy row (PAC-56 #14).** One recap routinely
+  covers a home *and* a landlord policy on a different building, and a single
+  recap-level address could name only one of them. Each property row resolves
+  independently: `sameAsHousehold` copies the household address onto that row,
+  false requires a complete address of its own, and a non-property row stores
+  none at all. The recap-level `propertyAddress` / `sameAsHousehold` are **no
+  longer written** — they remain on the document for recaps created before this
+  change, and `GET /leads/:id` returns both so a client can fall back.
+
+  **`insuranceRenewalMonth` is per recap, and required only here (PAC-56 #16).**
+  When the client's *current* insurance renews, so the agency can re-engage
+  ahead of it. A legacy re-port — SmartSuite's `Insurance X Month`
+  (`s69d7c3f64`) — and per-recap for the same reason legacy had it that way:
+  one client, one current policy renewing. Contrast the property address, which
+  became per-row in #14 because a recap can describe two buildings.
+
+  Only the twelve canonical labels are accepted. SmartSuite's choice UUIDs are
+  for *reading* migrated data — `normalizeInsuranceMonth` maps them on every
+  read — and accepting them here would put a second vocabulary back into the
+  collection.
+
+  ⚠ The field is **optional** on `PATCH /quote-recaps/:id` and optional in
+  Mongoose. That asymmetry is deliberate: every migrated recap predates the
+  field, so requiring it on the patch would make all of them un-editable.
+
   **Totals are derived server-side and never trusted from the client.**
   `premium` is the sum of the row premiums rounded to cents, `itemCount` their
   sum, and `productsQuoted` the distinct policy types. These three fields back

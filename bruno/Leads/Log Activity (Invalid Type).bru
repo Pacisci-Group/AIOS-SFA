@@ -1,0 +1,53 @@
+meta {
+  name: Log Activity (Invalid Type)
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{baseUrl}}/activities
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "leadId": "{{hotLeadId}}",
+    "type": "sold"
+  }
+}
+
+tests {
+  test("refuses a system-generated type", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /activities with `type: "sold"` — `400`
+
+  **The security-relevant negative test.** Kept in the collection as executable
+  documentation of a boundary that is easy to widen by accident.
+
+  `ACTIVITY_TYPES` — the vocabulary the timeline *reads* — contains
+  `lead_created`, `quoted`, `sold` and `audit_resolved`. `LOGGABLE_ACTIVITY_TYPES`
+  — what a client may *write* — contains only `call`, `text`, `email` and `note`.
+
+  The gap is deliberate. Those four are system-generated provenance, each written
+  by the pipeline that owns the event. A client able to post a `sold` row could
+  invent a sale that would appear on the **Sold scorecard** and the
+  **Leaderboard**, both of which read from the same collections.
+
+  If this request ever returns `201`, the write vocabulary has been widened and
+  the dashboard's numbers are forgeable.
+
+  `lead_created`, `quoted` and `audit_resolved` are rejected for the same reason.
+
+  ## Response `400`
+  ```json
+  {
+    "message": "Validation failed",
+    "errors": { "fieldErrors": { "type": ["Invalid option: expected one of \"call\"|\"text\"|\"email\"|\"note\""] } }
+  }
+  ```
+}

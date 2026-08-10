@@ -24,9 +24,11 @@ body:json {
 }
 
 script:post-response {
-  // Capture the object key for the Resolve request's attachment metadata.
+  // Capture the object key for the Resolve request's attachment metadata, and
+  // the URL the upload step PUTs the bytes to.
   if (res.getStatus() === 201 || res.getStatus() === 200) {
     bru.setVar("dealAuditAttachmentKey", res.getBody().key);
+    bru.setVar("dealAuditAttachmentUploadUrl", res.getBody().uploadUrl);
   }
 }
 
@@ -78,7 +80,7 @@ docs {
   ```json
   {
     "key": "agencies/<agencyId>/deal-audits/<itemId>/<uuid>-prior-insurance.pdf",
-    "uploadUrl": "http://localhost:9100/sfa-uploads/agencies/...",
+    "uploadUrl": "http://localhost:9000/sfa-uploads/agencies/...",
     "requiredHeaders": { "Content-Type": "application/pdf" },
     "expiresIn": 300
   }

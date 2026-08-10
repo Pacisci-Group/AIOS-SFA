@@ -21,6 +21,12 @@ export const USER_FIELDS = {
 } as const;
 
 export const HOUSEHOLD_FIELDS = {
+  /**
+   * The record title — SmartSuite's auto-generated `#HH2614`, which legacy
+   * surfaced as `householdTitle`. Imported into `Household.householdRef` so the
+   * agency keeps the numbers it already uses.
+   */
+  householdRef: 'title',
   status: 's5f13c562d',
   householdName: 'sb63528cc7',
   normalizedPrimaryName: 'sbdc50a856',
@@ -52,6 +58,8 @@ export const QUOTE_RECAP_FIELDS = {
   premium: 's98af0638c',
   items: 'sd19cab342',
   productsQuoted: 's1e17612aa',
+  /** "Insurance X Month" — a single-select of the 12 months (PAC-56 #16). */
+  insuranceMonth: 's69d7c3f64',
   recapStatus: 'recap_status',
   producer: 'sf9e2dcdfb',
   lead: 'sbcb3c8b31',

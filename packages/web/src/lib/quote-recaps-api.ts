@@ -1,24 +1,35 @@
 import type {
   CreateQuoteRecapInput,
   CreateQuoteRecapResponse,
+  DocumentDownloadResponse,
   QuoteDocumentPresignResponse,
+  QuoteRecapEditView,
   QuoteRecapLeadContext,
+  UpdateQuoteRecapInput,
+  UpdateQuoteRecapResult,
 } from "@sfa/shared";
 import { apiFetch } from "@/lib/api-client";
 
 export type {
   CreateQuoteRecapResponse,
+  QuoteRecapEditView,
   QuoteRecapLeadContext,
   QuoteRecapPolicyInput,
   QuoteRecapPropertyAddress,
+  UpdateQuoteRecapInput,
+  UpdateQuoteRecapResult,
 } from "@sfa/shared";
 
-/** Content types accepted for the quote document. Mirrors the API DTO. */
-export const ALLOWED_UPLOAD_TYPES = [
-  "application/pdf",
-  "image/jpeg",
-  "image/png",
-] as const;
+/**
+ * Content types accepted for the quote document. Mirrors the API DTO.
+ *
+ * **PDF only** since PAC-56 #9 — see the rationale on
+ * `ALLOWED_QUOTE_DOCUMENT_CONTENT_TYPES` in
+ * `api/src/quote-recaps/dto/presign-quote-document.dto.ts`. The sold-form and
+ * deal-audit uploads (`deal-audits-api.ts`) still accept images and must not be
+ * narrowed to match this.
+ */
+export const ALLOWED_UPLOAD_TYPES = ["application/pdf"] as const;
 
 /** Max upload size (10 MB), matching the API + UI copy. */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -45,6 +56,19 @@ export function presignQuoteDocument(meta: {
   return apiFetch<QuoteDocumentPresignResponse>(
     "/quote-recaps/quote-document/presign",
     { method: "POST", body: JSON.stringify(meta) },
+  );
+}
+
+/**
+ * `GET /quote-recaps/:id/document/download` — a short-lived, inline-signed URL
+ * for the uploaded quote document (PAC-56 #10, #30).
+ *
+ * Pair it with `openDocumentInNewTab`: the URL expires, so it is fetched per
+ * click rather than rendered into an `href`.
+ */
+export function getQuoteDocumentDownload(recapId: string) {
+  return apiFetch<DocumentDownloadResponse>(
+    `/quote-recaps/${encodeURIComponent(recapId)}/document/download`,
   );
 }
 
@@ -102,6 +126,69 @@ export async function createQuoteRecapWithDocument(
   );
 
   return createQuoteRecap({
+    ...rest,
+    quoteDocument: { key: presigned.key, ...meta },
+  });
+}
+
+/**
+ * `GET /quote-recaps/:id` — the edit form's payload (PAC-56 #11).
+ *
+ * Carries the lead/household context alongside the recap, so the edit page
+ * renders `LeadContextHeader` and the "same as household" toggle without a
+ * second request.
+ */
+export function getQuoteRecapEditView(recapId: string) {
+  return apiFetch<QuoteRecapEditView>(
+    `/quote-recaps/${encodeURIComponent(recapId)}`,
+  );
+}
+
+export function updateQuoteRecap(
+  recapId: string,
+  input: UpdateQuoteRecapInput,
+) {
+  return apiFetch<UpdateQuoteRecapResult>(
+    `/quote-recaps/${encodeURIComponent(recapId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+/**
+ * Save an edit, uploading a replacement document first if one was chosen.
+ *
+ * The presign step is **skipped entirely** when no new file was picked, and the
+ * PATCH then omits `quoteDocument` — which is what tells the API to keep the
+ * attachment it already has. Structurally the same three-step flow as
+ * {@link createQuoteRecapWithDocument}, minus the steps that aren't needed.
+ *
+ * `leadId` rather than the recap id, because `presignQuoteDocument` is
+ * lead-scoped: the object key it mints has to match the prefix the API checks.
+ */
+export async function updateQuoteRecapWithDocument(
+  recapId: string,
+  input: Omit<UpdateQuoteRecapInput, "quoteDocument"> & {
+    leadId: string;
+    file?: File;
+  },
+): Promise<UpdateQuoteRecapResult> {
+  const { leadId, file, ...rest } = input;
+
+  if (!file) return updateQuoteRecap(recapId, rest);
+
+  const meta = {
+    filename: file.name,
+    contentType: file.type,
+    size: file.size,
+  };
+  const presigned = await presignQuoteDocument({ leadId, ...meta });
+  await uploadToPresignedUrl(
+    presigned.uploadUrl,
+    presigned.requiredHeaders,
+    file,
+  );
+
+  return updateQuoteRecap(recapId, {
     ...rest,
     quoteDocument: { key: presigned.key, ...meta },
   });

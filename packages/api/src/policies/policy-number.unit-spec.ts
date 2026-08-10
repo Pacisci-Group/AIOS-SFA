@@ -1,7 +1,30 @@
 import {
   MIN_POLICY_NUMBER_KEY_LENGTH,
   normalizePolicyNumber,
+  policyNumberKey,
 } from './policy-number';
+
+describe('policyNumberKey', () => {
+  it('applies the same transform as normalizePolicyNumber', () => {
+    expect(policyNumberKey('ABC-123-456')).toBe('ABC123456');
+    expect(policyNumberKey('  abc 123 456 ')).toBe('ABC123456');
+  });
+
+  it('has no length floor — that is the whole reason it exists', () => {
+    // PAC-56 #20: a carrier pattern tested against `null` silently passes, so
+    // a short number would skip format validation entirely.
+    expect(policyNumberKey('12')).toBe('12');
+    expect(policyNumberKey('A-1')).toBe('A1');
+    expect(normalizePolicyNumber('12')).toBeNull();
+  });
+
+  it('returns an empty string, never null, so callers can test it directly', () => {
+    expect(policyNumberKey(undefined)).toBe('');
+    expect(policyNumberKey(null)).toBe('');
+    expect(policyNumberKey('---')).toBe('');
+    expect(policyNumberKey(42 as unknown as string)).toBe('');
+  });
+});
 
 describe('normalizePolicyNumber', () => {
   it('collapses the spellings a producer actually types', () => {

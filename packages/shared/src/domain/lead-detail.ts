@@ -19,7 +19,7 @@
  */
 
 import type { StructuredAddress } from './address';
-import type { ActivityType } from './activity';
+import type { ActivityOrigin, ActivityType } from './activity';
 import type { ContactDetail } from './contact';
 import type { IntakeChannel } from './lead-intake';
 import type { NormalizedLeadSource } from './lead-source';
@@ -57,6 +57,16 @@ export interface LeadDetailPolicy {
 
 export interface LeadDetailHousehold {
   id: string;
+  /**
+   * The household's agency-unique number — `HH-2614` (PAC-56 #7).
+   *
+   * `Household.householdRef`, read straight through rather than derived: it is a
+   * real identifier, so it is safe to quote in a support conversation and to
+   * resolve back to this record. Empty string for a household migrated before
+   * the field existed and not yet backfilled; clients hide the affordance rather
+   * than render a bare prefix. See `record-reference.ts`.
+   */
+  reference: string;
   name: string | null;
   address: StructuredAddress | null;
   /** Primary contact first, then `memberContactIds` order. */
@@ -82,6 +92,16 @@ export interface LeadDetailQuoteRecapPolicy {
   policyType: string;
   premium: number;
   itemCount: number;
+  /**
+   * The dwelling this row insures (PAC-56 #14), already resolved: a row the
+   * producer marked "same as household" holds the household address itself, not
+   * a flag to re-interpret.
+   *
+   * `null` on non-property rows, and on every recap written before the address
+   * moved onto the row — those carry {@link LeadDetailQuoteRecap.propertyAddress}
+   * instead.
+   */
+  propertyAddress: StructuredAddress | null;
 }
 
 /**
@@ -96,8 +116,33 @@ export interface LeadDetailQuoteRecapPolicy {
  */
 export interface LeadDetailQuoteRecap extends LeadDetailQuoteRecapSummary {
   policies: LeadDetailQuoteRecapPolicy[];
+  /**
+   * The **recap-level** property address, which only pre-PAC-56-#14 recaps have.
+   * Newer ones put the address on each policy row; render this only as the
+   * fallback for a recap whose rows carry none.
+   */
   propertyAddress: StructuredAddress | null;
+  /**
+   * When the client's current insurance renews (PAC-56 #16). `null` on a
+   * migrated recap, or one recorded before the field existed.
+   *
+   * On the full recap rather than the summary, so the expander renders it for
+   * earlier recaps too — a renewal month that moved between quotes is exactly
+   * the kind of change the expander exists to show.
+   */
+  insuranceRenewalMonth: string | null;
   notes: string | null;
+  /**
+   * Who recorded the recap, resolved from `producerId`. `null` on a migrated
+   * recap with no producer on file.
+   *
+   * The card needs it to attribute {@link LeadDetailQuoteRecap.notes} (PAC-56
+   * #13/#29). A note rendered as bare prose beside system-derived totals gives
+   * the reader no way to tell which is which; "Pat Producer · 9 Aug" does.
+   */
+  producerName: string | null;
+  /** ISO. When the recap was recorded, as opposed to when it was quoted. */
+  createdAt: string | null;
   /**
    * Metadata only. The storage `key` is deliberately withheld: it is an
    * internal path, and downloading the document needs its own presigned-URL
@@ -121,6 +166,18 @@ export interface LeadDetailDeal {
   isBundle: boolean;
   /** Canonical labels. */
   policyTypes: string[];
+  /**
+   * The policies this sale bound (PAC-56 #27).
+   *
+   * A subset of `household.policies` — the same {@link LeadDetailPolicy} shape,
+   * filtered to `Policy.dealId === this deal`. Repeated rather than referenced
+   * by id so the Sold card renders from one field; a household can hold
+   * policies from earlier deals and from the migration that this sale did not
+   * write, and those must not appear under it.
+   *
+   * Empty on a migrated deal whose policies were never linked back to it.
+   */
+  policies: LeadDetailPolicy[];
 }
 
 export interface LeadDetailPriorPolicy {
@@ -155,6 +212,23 @@ export interface LeadDetailPriorInsurance {
   policies: LeadDetailPriorPolicy[];
 }
 
+/**
+ * One row of "what they asked us to quote", as captured at intake (PAC-56 #2).
+ *
+ * Read-side twin of `LeadPolicyOfInterestInput`: `policyType` is a canonical
+ * label here even if a raw code somehow reached the collection.
+ */
+export interface LeadDetailPolicyOfInterest {
+  policyType: string;
+  itemCount: number;
+  /**
+   * The dwelling this row is about (PAC-56 #14), already resolved server-side.
+   * `null` on non-property rows and on every lead captured before the address
+   * moved onto the row — those carry {@link LeadDetail.propertyAddress}.
+   */
+  propertyAddress: StructuredAddress | null;
+}
+
 export interface LeadDetailActivity {
   id: string;
   type: ActivityType;
@@ -162,6 +236,15 @@ export interface LeadDetailActivity {
   occurredAt: string | null;
   /** Resolved from `producerId`; `null` for system and migrated rows. */
   producerName: string | null;
+  /**
+   * Which surface the row was written from (PAC-56 #29).
+   *
+   * Derived server-side from the activity's own refs — see
+   * {@link ActivityOrigin}. The timeline needs it because a note left on the
+   * lead, on a quote recap and during the sold flow are otherwise
+   * indistinguishable once they are all rows in the same list.
+   */
+  origin: ActivityOrigin;
 }
 
 /**
@@ -188,6 +271,22 @@ export interface LeadDetail {
   /** The household's living address, resolved from lead → household. */
   address: StructuredAddress | null;
   quoteControlNumber: string | null;
+  /**
+   * What the submitter asked to be quoted (PAC-56 #2), canonical labels.
+   *
+   * Always an array — empty on every migrated lead and on any submitted before
+   * the field existed. It is an intent signal captured at intake, **not** a
+   * record of what was actually quoted; that is `latestQuoteRecap.policies`.
+   */
+  policiesOfInterest: LeadDetailPolicyOfInterest[];
+  /**
+   * The **lead-level** insured dwelling. Only leads captured before PAC-56 #14
+   * moved the address onto each policy row have one, plus whatever the
+   * migration carried over from SmartSuite's `Property Address` (`sfd5ba053e`).
+   * `null` otherwise — read `policiesOfInterest[].propertyAddress` first and
+   * fall back to this.
+   */
+  propertyAddress: StructuredAddress | null;
   /** Recomputed live from `createdDate`, not the value migration froze in. */
   agingDays: number;
   createdDate: string | null;
@@ -201,11 +300,18 @@ export interface LeadDetail {
   /** Newest by `quoteDate`. `null` when the lead has never been quoted. */
   latestQuoteRecap: LeadDetailQuoteRecap | null;
   /**
-   * The rest, newest first, summary-shaped — the "N earlier recaps" expander.
-   * A lead can hold several: `quoteRecaps.leadId` is a plain index and the
-   * status vocabulary includes `Requote`.
+   * The rest, newest first — the "N earlier recaps" expander. A lead can hold
+   * several: `quoteRecaps.leadId` is a plain index and the status vocabulary
+   * includes `Requote`.
+   *
+   * Full recaps, not summaries. The expander used to show a date, a status and
+   * a total, which is not enough to answer the only question anyone opens it to
+   * ask — *what changed between this quote and the one before it?* That needs
+   * the policy rows, and the requote's own notes and document. A lead holds a
+   * handful of recaps, so returning them whole costs a few hundred bytes and
+   * removes the need for a second endpoint keyed by recap id.
    */
-  earlierQuoteRecaps: LeadDetailQuoteRecapSummary[];
+  earlierQuoteRecaps: LeadDetailQuoteRecap[];
   /** `null` until the lead is sold. */
   deal: LeadDetailDeal | null;
   /** Only reachable through a deal or household — `null` on an unsold lead. */

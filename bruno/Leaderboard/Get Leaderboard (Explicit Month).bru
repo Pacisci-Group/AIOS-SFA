@@ -1,0 +1,51 @@
+meta {
+  name: Get Leaderboard (Explicit Month)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/leaderboard?month=2026-07&limit=10
+  body: none
+  auth: inherit
+}
+
+params:query {
+  month: 2026-07
+  limit: 10
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the month that was asked for", function () {
+    expect(res.getBody().month).to.equal("2026-07");
+  });
+
+  test("respects the limit, allowing for an appended self row", function () {
+    const body = res.getBody();
+    const max = body.self && body.self.isOutsideTop ? 11 : 10;
+    expect(body.entries.length).to.be.at.most(max);
+  });
+}
+
+docs {
+  # GET /leaderboard?month= — a past month (PAC-13)
+
+  Same contract as the default request; only the window moves. Useful for
+  checking last month's standings, and for confirming that a producer with no
+  sales in the requested month still appears when they have a goal row for it.
+
+  - **Module / permission:** `leaderboard` / `leaderboard:read`
+
+  ## Note on `entries.length`
+  It can be `limit + 1`. When the caller falls outside the top `limit`, their own
+  row is appended at its true rank rather than dropped — "own row highlighted" is
+  meaningless for a producer ranked 12th, and `self.isOutsideTop` tells the UI to
+  draw a separator before it.
+
+  ## Errors
+  - `400` — `month` not in `YYYY-MM` form, or `limit` outside 1–25.
+}

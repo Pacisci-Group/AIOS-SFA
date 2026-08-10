@@ -1,0 +1,92 @@
+meta {
+  name: Download Attachment
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/{{dealAuditItemId}}/attachments/0/download
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a presigned URL", function () {
+    expect(res.getBody()).to.have.property("downloadUrl");
+    expect(res.getBody().downloadUrl).to.be.a("string");
+  });
+
+  test("signs the URL for inline display, not download", function () {
+    // PAC-56 #30 — an attachment disposition defeats the browser's native
+    // viewer, which is the only viewer we build.
+    const url = decodeURIComponent(res.getBody().downloadUrl);
+    expect(url).to.contain("response-content-disposition=inline");
+  });
+
+  test("never leaks the storage key", function () {
+    expect(res.getBody()).to.not.have.property("key");
+  });
+}
+
+docs {
+  # GET /deal-audits/:itemId/attachments/:index/download — open a resolution document
+
+  A **short-lived presigned GET** for a document uploaded when a producer
+  resolved an audit item (PAC-14). Existed before PAC-56 but was never mirrored
+  here; #30 changed it to sign **inline**, so this file records both.
+
+  - **Module:** `deal_audits` (must be enabled for the agency)
+  - **Permission:** `deal_audits:read` — the controller-level gate; no
+    `@RequireWrite`, because opening a document is a read
+  - **Data scope:** enforced on the audit item, 404 (never 403) outside it
+
+  ## Path params
+  | param   | type     | notes                                             |
+  |---------|----------|---------------------------------------------------|
+  | itemId  | ObjectId | the `dealAuditItems` row                           |
+  | index   | integer  | position in the item's `attachments[]`, 0-based    |
+
+  Indexed rather than keyed by id: attachments are a subdocument array with no
+  `_id` of their own, and exposing the storage key as a path param would let a
+  client name an object rather than a record.
+
+  ## Inline, and per request
+  The URL carries `response-content-disposition=inline` plus the stored
+  filename and an explicit `response-content-type`, all fixed at signing time.
+  Sold-form documents are **PDF or image** (PAC-56 #22, deliberately wider than
+  the PDF-only quote document) and both render natively.
+
+  Fetch it per click, not at render: the URL expires
+  (`STORAGE_DOWNLOAD_URL_TTL_SECONDS`, default 300s).
+
+  ## Response `200`
+  ```json
+  { "downloadUrl": "http://localhost:9000/sfa-uploads/agencies/...?X-Amz-Signature=..." }
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `deal_audits` module disabled, or missing `deal_audits:read`.
+  - `404 Not Found` — unknown item, an item outside the caller's scope, or an
+    index with no attachment at it.
+
+  ## Run-order note
+  Depends on the full three-step chain that precedes it: `Presign Audit
+  Attachment` (seq 2) mints the key and upload URL, `Upload Audit Attachment`
+  (seq 3) puts the bytes there, and `Resolve Deal Audit Item` (seq 4) attaches
+  it at index 0.
+
+  ⚠ Resolving is **one-shot** — an already-resolved item returns early and
+  appends nothing. `List Deal Audits` returns only *pending* items, so each run
+  picks a fresh one; a database with no pending hand-off items left will fail
+  here rather than silently pass. Re-seed with `npm run api:seed:demo:dev
+  -- --fresh`.
+}

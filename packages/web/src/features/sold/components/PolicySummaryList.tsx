@@ -1,4 +1,5 @@
 import { Trash2 } from "lucide-react";
+import { FormSection } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { SoldPolicyFormValues } from "./sold-deal-schema";
@@ -18,7 +19,8 @@ const currency = new Intl.NumberFormat("en-US", {
  * The policies committed so far.
  *
  * Standing in for the progress a linear stepper cannot express: after the loop
- * re-enters Card 2 the step counter resets, so this list is the producer's only
+ * re-enters the policy-type card the step counter resets, so this list is the
+ * producer's only
  * record of what the submission already contains — and their only chance to
  * catch a mistyped policy before it is booked.
  */
@@ -30,10 +32,11 @@ export function PolicySummaryList({
   if (!policies.length) return null;
 
   return (
-    <section className="rounded-xl bg-card border border-border p-4 md:p-5 space-y-3">
-      <h3 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-        Policies on this sale
-      </h3>
+    <FormSection
+      title="Policies on this sale"
+      titleAs="h3"
+      className="space-y-3"
+    >
       <ul className="space-y-2">
         {policies.map((policy, index) => (
           <li
@@ -68,6 +71,6 @@ export function PolicySummaryList({
           </li>
         ))}
       </ul>
-    </section>
+    </FormSection>
   );
 }

@@ -3,6 +3,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Archive } from "lucide-react";
 import { SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from "@sfa/shared";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import type { TicketStatus } from "./components/ticket-data";
@@ -87,13 +89,16 @@ export default function ArchivedTicketsPage() {
   };
 
   return (
-    // Fills the shell's content column rather than asserting 100vh inside it,
-    // matching TicketWorkspacePage — same two-column split, same scrolling.
-    <div className="flex-1 flex flex-col min-w-0 h-full min-h-0 overflow-hidden bg-background font-sans">
+    // Asserts the viewport height itself, matching TicketWorkspacePage — same
+    // two-column split, same internal scrolling, and `AppShell` is
+    // `min-h-screen` rather than a pinned parent to measure against.
+    <AppShell>
+      <div className="flex-1 flex flex-col min-w-0 h-screen min-h-0 overflow-hidden bg-background font-sans">
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {/* Page header */}
         <div className="bg-card border-b border-border px-5 py-2.5 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
+            <MobileNav className="-ml-1" />
             <Link
               to="/crm/service"
               className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -146,6 +151,7 @@ export default function ArchivedTicketsPage() {
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </AppShell>
   );
 }

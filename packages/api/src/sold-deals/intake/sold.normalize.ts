@@ -15,6 +15,7 @@ import type {
   DealType,
 } from '../../deals/schemas/deal.schema';
 import { emptyAuditTriggers } from '../../deals/schemas/deal.schema';
+import type { SoldUploadKind } from '../dto/presign-sold-document.dto';
 
 /**
  * Pure derivations for the Sold write path (PAC-40).
@@ -96,8 +97,67 @@ export function deriveDealAggregates(
   };
 }
 
+/** What {@link derivePersistedDealAggregates} can recompute from stored rows. */
+export type PersistedDealAggregates = Pick<
+  DealAggregates,
+  | 'premium'
+  | 'itemCount'
+  | 'policyCount'
+  | 'policyTypes'
+  | 'isBundle'
+  | 'dealType'
+>;
+
+/** The stored `Policy` fields the recompute reads. All optional on old rows. */
+export interface PersistedPolicyTotals {
+  policyType?: string;
+  premium?: number;
+  /** Note: `items` on the stored document, `itemCount` on the wire. */
+  items?: number;
+}
+
 /**
- * OR every policy's Card 5 selections into the deal-level flags audit
+ * Recompute a deal's roll-ups from the policies **already in Mongo** (PAC-56 #25).
+ *
+ * The counterpart to {@link deriveDealAggregates}, which folds the submission
+ * DTO. `PATCH /policies/:id` has no DTO to fold — it corrects one stored row
+ * and the deal's totals then disagree with the rows the user is looking at.
+ *
+ * Three differences from the DTO version, each a real trap:
+ *   - the stored field is `items`, not `itemCount`;
+ *   - a migrated `policyType` may be a raw SmartSuite code, so it goes through
+ *     `normalizePolicyType` (the DTO version's input is already canonical);
+ *   - everything is optional, because migrated rows are.
+ *
+ * ⚠ **`soldDate` / `soldDateYmd` are deliberately absent.** `soldDateYmd` is
+ * the Sold scorecard's indexed bucket key; correcting a premium must not move
+ * the deal between reporting days.
+ */
+export function derivePersistedDealAggregates(
+  policies: PersistedPolicyTotals[],
+): PersistedDealAggregates {
+  const policyTypes = [
+    ...new Set(
+      policies.map((p) => normalizePolicyType(p.policyType)).filter(Boolean),
+    ),
+  ].sort();
+
+  const isBundle =
+    policyTypes.some(isAutoPolicyType) &&
+    policyTypes.some(isPropertyPolicyType);
+
+  return {
+    premium: sumCents(policies.map((p) => p.premium ?? 0)),
+    itemCount: policies.reduce((sum, p) => sum + (p.items ?? 0), 0),
+    policyCount: policies.length,
+    policyTypes,
+    isBundle,
+    dealType: deriveDealType(isBundle, policyTypes),
+  };
+}
+
+/**
+ * OR every policy's discount selections into the deal-level flags audit
  * generation reads.
  *
  * Legacy kept these booleans directly on the Deal and its generator re-read
@@ -123,8 +183,11 @@ export function deriveAuditTriggers(
     triggers.actualCashValue ||=
       d.acvPersonalProperty === true || d.acvDwellingProtection === true;
 
-    triggers.drivewise ||= d.drivewise === true;
+    triggers.drivewise ||= d.drivewise?.selected === true;
     triggers.goodStudent ||= d.studentDiscount?.selected === true;
+    // `inspection` is deliberately absent: `Home Inspection` /
+    // `Landlord Inspection` are already emitted from the policy type, and
+    // adding a trigger would generate the item twice (PAC-56 #21).
     triggers.defensiveDriver ||= d.defensiveDriver?.selected === true;
 
     if (d.defensiveDriver?.selected) {
@@ -147,32 +210,74 @@ export function deriveMortgagee(policies: SoldPolicyInput[]): boolean {
 }
 
 /**
- * Every Card 5 proof document across the submission.
+ * Every uploaded document on a policy row, with what kind it is.
  *
- * Returns the **live objects**, not copies, so the caller can stamp each one
- * with the size and content type storage actually reports. Only the three
- * proof-backed discounts can carry a document; escrow's answer is data, not a
- * file.
+ * ⚠ **This function is a security boundary.** `SoldDealsService.verifyAttachments`
+ * is the only place `assertKeyOwnership` runs on a sold upload, and it iterates
+ * exactly what this returns — so a file-carrying field missed here is a key the
+ * server never checks belongs to this agency and lead. It walked three hard-coded
+ * discounts before PAC-56 #21; there are now seven places a document can hang.
+ *
+ * Structured as one pass over a **derived** list rather than a literal so that
+ * adding a proof-backed discount cannot forget it: the discount keys come from
+ * the object itself.
+ *
+ * Returns the **live objects**, not copies, so the caller can stamp each with
+ * the size and content type storage actually reports.
  */
 export function collectAttachments(
   policies: SoldPolicyInput[],
-): SoldDocumentMeta[] {
-  const found: SoldDocumentMeta[] = [];
+): SoldAttachmentRef[] {
+  const found: SoldAttachmentRef[] = [];
+  const add = (
+    attachment: SoldDocumentMeta | undefined,
+    kind: SoldUploadKind = 'discount_proof',
+  ) => {
+    if (attachment) found.push({ attachment, kind });
+  };
 
   for (const policy of policies) {
+    // Its own kind: PDF-only, and under a distinct key prefix (PAC-56 #23).
+    add(policy.newBusinessApplication, 'new_business_application');
+
     const d = policy.discounts;
     if (!d) continue;
 
-    for (const discount of [
-      d.fireSubscription,
-      d.roofReceipt,
-      d.studentDiscount,
-    ]) {
-      if (discount?.attachment) found.push(discount.attachment);
+    // Every proof-backed discount, found structurally: anything shaped
+    // `{ selected, attachment? }` qualifies, so a new one is covered the day it
+    // is added rather than the day someone remembers to list it here.
+    for (const value of Object.values(d)) {
+      if (isProofBacked(value)) add(value.attachment);
     }
+
+    for (const driver of d.defensiveDriver?.drivers ?? []) {
+      add(driver.attachment);
+    }
+
+    // Escrow's statement lives on the details object, not on the flag.
+    add(policy.escrow?.attachment);
   }
 
   return found;
+}
+
+/** One document to verify, and which allow-list applies to it. */
+export interface SoldAttachmentRef {
+  attachment: SoldDocumentMeta;
+  kind: SoldUploadKind;
+}
+
+/** Structural test for `{ selected, attachment? }`, used by the sweep above. */
+function isProofBacked(value: unknown): value is {
+  selected?: boolean;
+  attachment?: SoldDocumentMeta;
+} {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'selected' in value &&
+    !('drivers' in value)
+  );
 }
 
 /**
@@ -198,12 +303,16 @@ export function findCrossBranchDiscounts(
     const isProperty = isPropertyPolicyType(type);
 
     const autoSelections =
-      d.drivewise === true ||
+      d.drivewise?.selected === true ||
       d.defensiveDriver?.selected === true ||
       d.studentDiscount?.selected === true;
 
     const propertySelections =
       d.escrow === true ||
+      // ⚠ Listed, or an Auto policy ticking inspection would be accepted,
+      // generate nothing (inspection items come from the policy type) and lose
+      // the proof silently.
+      d.inspection?.selected === true ||
       d.fireSubscription?.selected === true ||
       d.roofReceipt?.selected === true ||
       d.acvPersonalProperty === true ||

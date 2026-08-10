@@ -29,6 +29,7 @@ import { LinkEntitiesStep } from './intake/link-entities.step';
 import { ResolveContactStep } from './intake/resolve-contact.step';
 import { ResolveHouseholdStep } from './intake/resolve-household.step';
 import { ResolveLeadStep } from './intake/resolve-lead.step';
+import { HotLeadsService } from './hot-leads.service';
 import { LeadAccessService } from './lead-access.service';
 import { LeadDetailService } from './lead-detail.service';
 import { LeadsController } from './leads.controller';
@@ -57,6 +58,7 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
   providers: [
     LeadsService,
     LeadDetailService,
+    HotLeadsService,
     LeadIntakeService,
     LeadAccessService,
     ResolveContactStep,

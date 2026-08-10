@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { createLead } from "@/lib/lead-intake-api";
 import { LeadIntakeForm } from "./components/LeadIntakeForm";
@@ -30,6 +32,9 @@ export default function NewLeadPage() {
         primaryContact: values.primaryContact,
         address: values.address,
         members: values.members,
+        // No policies of interest and no property address: this form does not
+        // ask (PAC-56 #2 scopes that to the public one), and sending the unasked
+        // defaults would record a choice the producer never made.
         leadSourceCode: values.leadSourceCode ?? "",
         submissionToken: submissionToken.current,
       }),
@@ -41,43 +46,40 @@ export default function NewLeadPage() {
   });
 
   return (
-    // The sidebar belongs to `AppLayout`, which this route renders inside —
-    // rendering one here too put two of them on screen.
-    <div className="flex min-h-screen bg-background text-foreground">
-      <div className="flex-1 min-w-0">
-        <header className="flex items-center gap-3 px-4 md:px-6 py-4 border-b border-border">
-          <Button
-            asChild
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-muted-foreground hover:text-foreground"
-          >
-            <Link to="/leads" aria-label="Back to leads">
-              <ArrowLeft size={16} />
-            </Link>
-          </Button>
-          <div>
-            <h1 className="text-sm font-bold">New lead</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
-              Household intake
-            </p>
-          </div>
-        </header>
+    <AppShell>
+      <header className="flex items-center gap-2 border-b border-border px-4 py-4 md:gap-3 md:px-6">
+        <MobileNav className="-ml-1" />
+        <Button
+          asChild
+          variant="ghost"
+          size="sm"
+          className="h-8 px-2 text-muted-foreground hover:text-foreground"
+        >
+          <Link to="/leads" aria-label="Back to leads">
+            <ArrowLeft size={16} />
+          </Link>
+        </Button>
+        <div>
+          <h1 className="text-sm font-bold">New lead</h1>
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Household intake
+          </p>
+        </div>
+      </header>
 
-        <main className="px-4 md:px-6 py-6">
-          <div className="max-w-3xl">
-            <LeadIntakeForm
-              showLeadSource
-              submitting={mutation.isPending}
-              errorMessage={error}
-              onSubmit={(values) => {
-                setError(null);
-                mutation.mutate(values);
-              }}
-            />
-          </div>
-        </main>
-      </div>
-    </div>
+      <main className="px-4 md:px-6 py-6">
+        <div className="mx-auto w-full max-w-3xl">
+          <LeadIntakeForm
+            variant="internal"
+            submitting={mutation.isPending}
+            errorMessage={error}
+            onSubmit={(values) => {
+              setError(null);
+              mutation.mutate(values);
+            }}
+          />
+        </div>
+      </main>
+    </AppShell>
   );
 }

@@ -1,29 +1,17 @@
 import type { SoldHouseholdContact } from "@sfa/shared";
 import { isAutoPolicyType, isPropertyPolicyType } from "@sfa/shared";
+import { useStore } from "@tanstack/react-form";
 import { Plus, X } from "lucide-react";
-import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
+import { FormGrid, FormSubPanel } from "@/components/form";
+import { useFieldError } from "@/components/form/fields";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
+import { withForm } from "@/hooks/form";
 import { ProofField } from "./ProofField";
-import type { SoldPolicyFormValues } from "./sold-deal-schema";
-
-interface DiscountsCardProps {
-  leadId: string;
-  /** Household members offered as defensive drivers. */
-  contacts: SoldHouseholdContact[];
-}
+import { SoldDocumentUpload } from "./SoldDocumentUpload";
+import { emptyPolicy } from "./sold-deal-schema";
 
 /**
- * Card 5 — Discounts & Required Documentation.
+ * The Discounts & Required Documentation card.
  *
  * The product value of the whole form: these selections are what generate the
  * post-sale audit items, so a discount ticked here becomes work on the service
@@ -34,298 +22,352 @@ interface DiscountsCardProps {
  * and the server **rejects** a cross-branch selection rather than stripping it,
  * so a Home policy can never conjure an auto audit item.
  */
-export function DiscountsCard({ leadId, contacts }: DiscountsCardProps) {
-  const form = useFormContext<SoldPolicyFormValues>();
-  const policyType = useWatch({ control: form.control, name: "policyType" });
+export const DiscountsCard = withForm({
+  defaultValues: emptyPolicy(),
+  props: { leadId: "", contacts: [] as SoldHouseholdContact[] },
+  render: function Render({ form, leadId, contacts }) {
+    const policyType = useStore(form.store, (s) => s.values.policyType);
 
-  const isProperty = isPropertyPolicyType(policyType);
-  const isAuto = isAutoPolicyType(policyType);
+    const isProperty = isPropertyPolicyType(policyType);
+    const isAuto = isAutoPolicyType(policyType);
 
-  if (!isProperty && !isAuto) {
+    if (!isProperty && !isAuto) {
+      return (
+        <p className="text-sm text-muted-foreground">
+          No discounts apply to a {policyType} policy. Continue to prior insurance.
+        </p>
+      );
+    }
+
     return (
-      <p className="text-sm text-muted-foreground">
-        No discounts apply to a {policyType} policy. Continue to prior insurance.
-      </p>
+      <div className="space-y-5">
+        {isProperty && <PropertyDiscounts form={form} leadId={leadId} />}
+        {isAuto && (
+          <AutoDiscounts form={form} leadId={leadId} contacts={contacts} />
+        )}
+      </div>
     );
-  }
+  },
+});
 
-  return (
-    <div className="space-y-5">
-      {isProperty && <PropertyDiscounts leadId={leadId} />}
-      {isAuto && <AutoDiscounts leadId={leadId} contacts={contacts} />}
-    </div>
-  );
-}
+/** Written once as `[path, label]` pairs so each path is checked against the schema. */
+const ESCROW_ADDRESS_FIELDS = [
+  ["escrow.address.street", "Street"],
+  ["escrow.address.city", "City"],
+  ["escrow.address.state", "State"],
+  ["escrow.address.zip", "ZIP"],
+] as const;
 
 /** Home / Renters / Condominium / Landlord. */
-function PropertyDiscounts({ leadId }: { leadId: string }) {
-  const form = useFormContext<SoldPolicyFormValues>();
-  const escrow = useWatch({ control: form.control, name: "discounts.escrow" });
+const PropertyDiscounts = withForm({
+  defaultValues: emptyPolicy(),
+  props: { leadId: "" },
+  render: function Render({ form, leadId }) {
+    const escrow = useStore(form.store, (s) => s.values.discounts.escrow);
 
-  return (
-    <div className="space-y-5">
-      <DiscountToggle
-        name="discounts.escrow"
-        label="Escrow / mortgagee"
-        hint="The lender pays the premium. Generates a mortgagee verification item."
-      />
+    return (
+      <div className="space-y-5">
+        <form.AppField name="discounts.escrow">
+          {(f) => (
+            <f.CheckboxField
+              label="Escrow / mortgagee"
+              hint="The lender pays the premium. Generates a mortgagee verification item."
+            />
+          )}
+        </form.AppField>
 
-      {/*
-        * Required *because* it was ticked: the audit item this generates asks
-        * the service team to verify the loan number, company and address, which
-        * is unanswerable without them.
-        */}
-      {escrow && (
-        <div className="rounded-lg border border-border bg-background/40 p-3 space-y-3">
-          <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-            Escrow details
-          </h4>
-          <FormField
-            control={form.control}
-            name="escrow.loanNumber"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Loan number</FormLabel>
-                <FormControl>
-                  <Input {...field} value={field.value ?? ""} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control}
-            name="escrow.companyName"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Escrow company</FormLabel>
-                <FormControl>
-                  <Input {...field} value={field.value ?? ""} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <div className="grid gap-3 sm:grid-cols-2">
-            {(
-              [
-                ["escrow.address.street", "Street"],
-                ["escrow.address.city", "City"],
-                ["escrow.address.state", "State"],
-                ["escrow.address.zip", "ZIP"],
-              ] as const
-            ).map(([name, label]) => (
-              <FormField
-                key={name}
-                control={form.control}
-                name={name}
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{label}</FormLabel>
-                    <FormControl>
-                      <Input {...field} value={field.value ?? ""} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+        {/*
+          * Required *because* it was ticked: the audit item this generates asks
+          * the service team to verify the loan number, company and address, which
+          * is unanswerable without them.
+          */}
+        {escrow && (
+          <FormSubPanel title="Escrow details" titleAs="h4">
+            <form.AppField name="escrow.loanNumber">
+              {(f) => <f.TextField label="Loan number" />}
+            </form.AppField>
+            <form.AppField name="escrow.companyName">
+              {(f) => <f.TextField label="Escrow company" />}
+            </form.AppField>
+            <FormGrid gap={3}>
+              {ESCROW_ADDRESS_FIELDS.map(([name, label]) => (
+                <form.AppField key={name} name={name}>
+                  {(f) => <f.TextField label={label} />}
+                </form.AppField>
+              ))}
+            </FormGrid>
 
-      <ProofField
-        leadId={leadId}
-        name="discounts.fireSubscription"
-        label="Fire subscription"
-        proofPrompt="Do you have proof of the fire subscription?"
-      />
+            {/*
+              * The escrow statement (PAC-56 #21). Inside the details panel
+              * rather than as a `ProofField`, because it evidences the loan
+              * number sitting directly above it.
+              */}
+            <EscrowStatementField form={form} leadId={leadId} />
+          </FormSubPanel>
+        )}
 
-      <ProofField
-        leadId={leadId}
-        name="discounts.roofReceipt"
-        label="New roof / hail resistant roof"
-        proofPrompt="Do you have the roof receipt?"
-      />
+        {/*
+          * New in PAC-56 #21 — legacy's `Passed Home Inspection` (`sqmmybna`)
+          * was never ported, so the control had to exist before it could be
+          * made conditional. It generates no audit item of its own: `Home
+          * Inspection` / `Landlord Inspection` already come from the policy
+          * type, and this only carries the report onto them.
+          */}
+        <ProofField
+          form={form}
+          fields="discounts.inspection"
+          leadId={leadId}
+          label="Passed home inspection"
+          proofPrompt="Attach the inspection report."
+        />
 
-      <DiscountToggle
-        name="discounts.acvPersonalProperty"
-        label="ACV — personal property"
-        hint="Generates an actual-cash-value acknowledgement item."
-      />
-      <DiscountToggle
-        name="discounts.acvDwellingProtection"
-        label="ACV — dwelling protection"
-        hint="Shares the one actual-cash-value item with the option above."
-      />
-    </div>
-  );
-}
+        <ProofField
+          form={form}
+          fields="discounts.fireSubscription"
+          leadId={leadId}
+          label="Fire subscription"
+          proofPrompt="Attach proof of the fire subscription."
+        />
+
+        <ProofField
+          form={form}
+          fields="discounts.roofReceipt"
+          leadId={leadId}
+          label="New roof / hail resistant roof"
+          proofPrompt="Attach the roof receipt or inspection."
+        />
+
+        <form.AppField name="discounts.acvPersonalProperty">
+          {(f) => (
+            <f.CheckboxField
+              label="ACV — personal property"
+              hint="Generates an actual-cash-value acknowledgement item."
+            />
+          )}
+        </form.AppField>
+        <form.AppField name="discounts.acvDwellingProtection">
+          {(f) => (
+            <f.CheckboxField
+              label="ACV — dwelling protection"
+              hint="Shares the one actual-cash-value item with the option above."
+            />
+          )}
+        </form.AppField>
+      </div>
+    );
+  },
+});
 
 /** Auto / Auto - Special / Motorcycle. */
-function AutoDiscounts({
-  leadId,
-  contacts,
-}: {
-  leadId: string;
-  contacts: SoldHouseholdContact[];
-}) {
-  const form = useFormContext<SoldPolicyFormValues>();
-  const defensiveDriver = useWatch({
-    control: form.control,
-    name: "discounts.defensiveDriver.selected",
-  });
+const AutoDiscounts = withForm({
+  defaultValues: emptyPolicy(),
+  props: { leadId: "", contacts: [] as SoldHouseholdContact[] },
+  render: function Render({ form, leadId, contacts }) {
+    const defensiveDriver = useStore(
+      form.store,
+      (s) => s.values.discounts.defensiveDriver.selected,
+    );
 
-  const { fields, append, remove } = useFieldArray({
-    control: form.control,
-    name: "discounts.defensiveDriver.drivers",
-  });
+    return (
+      <div className="space-y-5">
+        {/*
+          * Proof-backed since PAC-56 #21 — it was a bare checkbox, and the
+          * generated item told the service team to chase an enrolment nobody
+          * had evidenced.
+          */}
+        <ProofField
+          form={form}
+          fields="discounts.drivewise"
+          leadId={leadId}
+          label="Drivewise"
+          proofPrompt="Attach proof of Drivewise enrolment."
+        />
 
-  return (
-    <div className="space-y-5">
-      <DiscountToggle
-        name="discounts.drivewise"
-        label="Drivewise"
-        // Per the spec: unconditionally an audit item, with no proof prompt.
-        hint="Always generates an item — service must mention registration."
-      />
-
-      <DiscountToggle
-        name="discounts.defensiveDriver.selected"
-        label="Defensive driver"
-        hint="One certificate item is generated per driver named below."
-      />
-
-      {defensiveDriver && (
-        <div className="rounded-lg border border-border bg-background/40 p-3 space-y-3">
-          <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-            Which drivers?
-          </h4>
-
-          {contacts.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {contacts.map((contact) => {
-                const name = `${contact.firstName} ${contact.lastName}`.trim();
-                const already = fields.some(
-                  (f, i) =>
-                    form.getValues(
-                      `discounts.defensiveDriver.drivers.${i}.name`,
-                    ) === name,
-                );
-                return (
-                  <Button
-                    key={contact.id}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={already}
-                    onClick={() => append({ name, contactId: contact.id })}
-                  >
-                    <Plus size={13} />
-                    {name || "Unnamed"}
-                  </Button>
-                );
-              })}
-            </div>
+        <form.AppField name="discounts.defensiveDriver.selected">
+          {(f) => (
+            <f.CheckboxField
+              label="Defensive driver"
+              hint="One certificate item is generated per driver named below."
+            />
           )}
+        </form.AppField>
 
-          {/*
-            * Free text alongside the picker: the spec calls for a sub-card to
-            * add drivers the household does not list yet, and a producer should
-            * not have to leave the sale to record one.
-            */}
-          {fields.map((field, index) => (
-            <div key={field.id} className="flex items-end gap-2">
-              <FormField
-                control={form.control}
-                name={`discounts.defensiveDriver.drivers.${index}.name`}
-                render={({ field: nameField }) => (
-                  <FormItem className="flex-1">
-                    <FormLabel className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                      Driver {index + 1}
-                    </FormLabel>
-                    <FormControl>
-                      <Input placeholder="Full name" {...nameField} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+        {defensiveDriver && (
+          <form.Field name="discounts.defensiveDriver.drivers" mode="array">
+            {(drivers) => (
+              <FormSubPanel title="Which drivers?" titleAs="h4">
+                {contacts.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {contacts.map((contact) => {
+                      const name =
+                        `${contact.firstName} ${contact.lastName}`.trim();
+                      const already = drivers.state.value.some(
+                        (driver) => driver.name === name,
+                      );
+                      return (
+                        <Button
+                          key={contact.id}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={already}
+                          onClick={() =>
+                            drivers.pushValue({ name, contactId: contact.id })
+                          }
+                        >
+                          <Plus size={13} />
+                          {name || "Unnamed"}
+                        </Button>
+                      );
+                    })}
+                  </div>
                 )}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => remove(index)}
-                aria-label={`Remove driver ${index + 1}`}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <X size={14} />
-              </Button>
-            </div>
-          ))}
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => append({ name: "" })}
-          >
-            <Plus size={14} />
-            Add a driver
-          </Button>
+                {/*
+                  * Free text alongside the picker: the spec calls for a sub-card to
+                  * add drivers the household does not list yet, and a producer should
+                  * not have to leave the sale to record one.
+                  */}
+                {drivers.state.value.map((_, index) => (
+                  <div key={index} className="space-y-2">
+                    <div className="flex items-end gap-2">
+                      <form.AppField
+                        name={`discounts.defensiveDriver.drivers[${index}].name`}
+                      >
+                        {(f) => (
+                          <f.TextField
+                            label={`Driver ${index + 1}`}
+                            placeholder="Full name"
+                            className="flex-1"
+                          />
+                        )}
+                      </form.AppField>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => drivers.removeValue(index)}
+                        aria-label={`Remove driver ${index + 1}`}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <X className="size-4" />
+                      </Button>
+                    </div>
+                    {/*
+                      * Per driver, not one for the group (PAC-56 #21): the
+                      * certificates are per person, and the audit generator
+                      * already fans out one item per name.
+                      */}
+                    <DriverCertificateField
+                      form={form}
+                      leadId={leadId}
+                      index={index}
+                    />
+                  </div>
+                ))}
 
-          {form.formState.errors.discounts?.defensiveDriver?.drivers && (
-            <p className="text-sm text-destructive">
-              {form.formState.errors.discounts.defensiveDriver.drivers.message}
-            </p>
-          )}
-        </div>
-      )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => drivers.pushValue({ name: "" })}
+                >
+                  <Plus size={14} />
+                  Add a driver
+                </Button>
 
-      <ProofField
-        leadId={leadId}
-        name="discounts.studentDiscount"
-        label="Good student / student away from home"
-        proofPrompt="Do you have the report card or transcript?"
-      />
-    </div>
-  );
-}
+                {/*
+                  * The array-level "Add at least one driver." rule, which zod
+                  * reports against the array itself rather than any one row.
+                  * Gated on touched like every other message, so it appears when
+                  * Continue is pressed — not the moment the toggle is ticked.
+                  */}
+                <ArrayMessage meta={drivers.state.meta} />
+              </FormSubPanel>
+            )}
+          </form.Field>
+        )}
 
-/** A plain on/off discount with no proof prompt. */
-function DiscountToggle({
-  name,
-  label,
-  hint,
+        <ProofField
+          form={form}
+          fields="discounts.studentDiscount"
+          leadId={leadId}
+          label="Good student / student away from home"
+          proofPrompt="Do you have the report card or transcript?"
+        />
+      </div>
+    );
+  },
+});
+
+/**
+ * The escrow statement (PAC-56 #21).
+ *
+ * A `form.AppField` binding rather than a `ProofField`, because escrow's
+ * selection is a bare boolean and its document belongs inside the details panel
+ * beside the loan number it evidences — not in a generic proof slot.
+ */
+const EscrowStatementField = withForm({
+  defaultValues: emptyPolicy(),
+  props: { leadId: "" },
+  render: function Render({ form, leadId }) {
+    return (
+      <form.Field name="escrow.attachment">
+        {(field) => (
+          <SoldDocumentUpload
+            leadId={leadId}
+            value={field.state.value}
+            onChange={(meta) => {
+              field.handleChange(meta);
+              field.handleBlur();
+            }}
+            ariaLabel="Upload the escrow statement"
+            error={useFieldError(field.state.meta)}
+          />
+        )}
+      </form.Field>
+    );
+  },
+});
+
+/**
+ * One driver's defensive-driver certificate (PAC-56 #21).
+ *
+ * Per driver rather than one for the group: the certificates are issued per
+ * person, and `computeRequiredTitles` already fans out one audit item per name,
+ * so they map 1:1 onto what the service team will be chasing.
+ */
+const DriverCertificateField = withForm({
+  defaultValues: emptyPolicy(),
+  props: { leadId: "", index: 0 },
+  render: function Render({ form, leadId, index }) {
+    return (
+      <form.Field
+        name={`discounts.defensiveDriver.drivers[${index}].attachment`}
+      >
+        {(field) => (
+          <SoldDocumentUpload
+            leadId={leadId}
+            value={field.state.value}
+            onChange={(meta) => {
+              field.handleChange(meta);
+              field.handleBlur();
+            }}
+            ariaLabel={`Upload the certificate for driver ${index + 1}`}
+            hint="Their defensive-driver certificate. PDF, JPEG or PNG."
+            error={useFieldError(field.state.meta)}
+          />
+        )}
+      </form.Field>
+    );
+  },
+});
+
+function ArrayMessage({
+  meta,
 }: {
-  name:
-    | "discounts.escrow"
-    | "discounts.acvPersonalProperty"
-    | "discounts.acvDwellingProtection"
-    | "discounts.drivewise"
-    | "discounts.defensiveDriver.selected";
-  label: string;
-  hint: string;
+  meta: { errors: unknown[]; isTouched: boolean };
 }) {
-  const form = useFormContext<SoldPolicyFormValues>();
-  return (
-    <FormField
-      control={form.control}
-      name={name}
-      render={({ field }) => (
-        <FormItem className="space-y-1">
-          <div className="flex flex-row items-center gap-2 space-y-0">
-            <FormControl>
-              <Checkbox
-                checked={Boolean(field.value)}
-                onCheckedChange={(checked) => field.onChange(checked === true)}
-              />
-            </FormControl>
-            <FormLabel className="font-normal">{label}</FormLabel>
-          </div>
-          <FormDescription>{hint}</FormDescription>
-        </FormItem>
-      )}
-    />
-  );
+  const error = useFieldError(meta);
+  return error ? <p className="text-sm text-destructive">{error}</p> : null;
 }

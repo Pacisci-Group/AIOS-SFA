@@ -1,24 +1,31 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
   RequireModule,
   RequirePermissions,
+  RequireWrite,
 } from '../common/decorators/access.decorators';
 import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { checkPolicySchema } from './dto/check-policy.dto';
 import type { CheckPolicyDto } from './dto/check-policy.dto';
+import { updatePolicySchema } from './dto/update-policy.dto';
+import type { UpdatePolicyDto } from './dto/update-policy.dto';
 import { PoliciesService } from './policies.service';
 
 /**
- * Policies (PAC-40) — currently only the Sold wizard's duplicate check.
+ * Policies — the Sold wizard's duplicate check (PAC-40) and the Lead Detail
+ * Sold card's quick edit (PAC-56 #27).
  *
  * ## Why this is gated on `deal_audits`
  *
- * This route exists solely to serve Card 3 of the Sold form, so it carries the
+ * The check exists solely to serve the Sold form's policy-details card, so it carries the
  * same gate as the Sold write path itself. Splitting them would let a producer
  * pass the wizard's checks and fail at submit, or lose the dedupe entirely.
+ * The patch inherits it for the same reason: correcting what the Sold form
+ * wrote is the same act as writing it, and the roles that can record a sale are
+ * exactly the ones that should be able to fix a typo in it.
  *
  * (The original argument was that the Producer template granted no `clients:*`.
  * PAC-38 changed that — producers now hold `clients:write` for contact editing
@@ -53,5 +60,23 @@ export class PoliciesController {
     @Query(new ZodValidationPipe(checkPolicySchema)) query: CheckPolicyDto,
   ) {
     return this.policiesService.check(access, branchId, query);
+  }
+
+  /**
+   * Correct a sold policy from the Lead Detail Sold card (PAC-56 #27).
+   *
+   * A field patch, not a re-submission — the Sold wizard remains the only thing
+   * that creates deals, policies and audit items. 404s for a policy outside the
+   * caller's data scope.
+   */
+  @Patch(':id')
+  @RequireWrite(ModuleKey.DealAudits)
+  update(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(updatePolicySchema)) body: UpdatePolicyDto,
+  ) {
+    return this.policiesService.update(access, branchId, id, body);
   }
 }

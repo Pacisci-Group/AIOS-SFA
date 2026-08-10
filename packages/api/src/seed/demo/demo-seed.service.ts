@@ -3,6 +3,11 @@ import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ALL_MODULE_KEYS } from '@sfa/shared';
+import { SequenceService } from '../../common/mongo/sequence.service';
+import {
+  householdCounterKey,
+  reconcileHouseholdRefs,
+} from '../../households/household-ref';
 import { Agency } from '../../platform/schemas/agency.schema';
 import { Branch } from '../../branches/schemas/branch.schema';
 import { User } from '../../users/schemas/user.schema';
@@ -10,6 +15,7 @@ import { AgencyRole } from '../../roles/schemas/agency-role.schema';
 import { Household } from '../../households/schemas/household.schema';
 import { Contact } from '../../contacts/schemas/contact.schema';
 import { Lead } from '../../leads/schemas/lead.schema';
+import { quoteDateYmd } from '../../quote-recaps/quote.normalize';
 import { QuoteRecap } from '../../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../../deals/schemas/deal.schema';
 import { Policy } from '../../policies/schemas/policy.schema';
@@ -27,7 +33,11 @@ import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema'
 import { Activity } from '../../activities/schemas/activity.schema';
 import { PermissionsService } from '../../permissions/permissions.service';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
-import { normalizeLeadSource } from '@sfa/shared';
+import {
+  INSURANCE_MONTHS,
+  normalizeLeadSource,
+  POLICY_TYPES,
+} from '@sfa/shared';
 import { seedAuditTemplates } from '../audit-templates.seed';
 import {
   AUDIT_TEMPLATES,
@@ -198,6 +208,7 @@ export class DemoSeedService {
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     private readonly permissionsService: PermissionsService,
+    private readonly sequences: SequenceService,
   ) {}
 
   async run(options: DemoSeedOptions): Promise<DemoSeedSummary> {
@@ -420,6 +431,24 @@ export class DemoSeedService {
         address,
       });
     }
+
+    // Numbered in a pass afterwards rather than in the loop above, and via the
+    // same reconcile the backfill uses. Assigning a fixed `HH-{i+1}` inline
+    // looks tidier and is wrong: a local database usually also holds households
+    // created through intake, and forcing the demo block onto `HH-1..24` would
+    // collide with whatever those were already given. Allocating only for the
+    // unnumbered keeps the seed idempotent — a re-run consumes nothing — while
+    // a `--fresh` seed still produces `HH-1..24` in creation order.
+    const refsAllocated = await reconcileHouseholdRefs(
+      this.householdModel,
+      this.sequences,
+      ctx.agencyId,
+    );
+    this.logger.log(
+      `Household refs: ${refsAllocated.allocated} allocated, ` +
+        `${refsAllocated.alreadyNumbered} already numbered`,
+    );
+
     return refs;
   }
 
@@ -612,6 +641,14 @@ export class DemoSeedService {
           createdDate,
           lastActivityAt,
           quoteControlNumber: `QCN-${100000 + i}`,
+          // A quarter are left empty on purpose: every migrated lead, and every
+          // one submitted before PAC-56 #2 shipped, has none — so the Lead
+          // Detail card's "omit when empty" path has data to exercise locally.
+          policiesOfInterest: rng.chance(0.75)
+            ? rng
+                .sample(POLICY_TYPES, rng.int(1, 3))
+                .map((policyType) => ({ policyType, itemCount: rng.int(1, 3) }))
+            : [],
           producerId: producer.userId,
           householdId: hh?.id,
           legacyHouseholdId: hh?.legacyId,
@@ -702,9 +739,15 @@ export class DemoSeedService {
             title: hh ? `${hh.name} — Quote` : `Quote ${i}`,
             quoteRecapAutoNumber: 1000 + i,
             quoteDate,
+            // Written here so a fresh demo tenant drives the Quoted scorecard
+            // (PAC-10) without anyone having to run the backfill first.
+            quoteDateYmd: quoteDateYmd(quoteDate),
             premium,
             itemCount: products.length + rng.int(0, 2),
             productsQuoted: products,
+            // PAC-56 #16 — seeded so the Quote Summary card and the edit form
+            // have something to render locally.
+            insuranceRenewalMonth: rng.pick([...INSURANCE_MONTHS]),
             recapStatus:
               lead.status === 'Sold' && !isEarlier
                 ? 'Won'
@@ -856,7 +899,11 @@ export class DemoSeedService {
             agencyId: ctx.agencyId,
             branchId: deal.producer.branchId,
             legacySmartSuiteId: legacyId,
-            policyNumber: `ALL-${policyType.slice(0, 2).toUpperCase()}-${200000 + n}`,
+            // Digits only, because the carrier below is Allstate and PAC-56 #20
+            // now enforces that format. Demo data has to satisfy the rules the
+            // app enforces, or the first person to edit a seeded policy on the
+            // Sold card gets a 400 on data we shipped them.
+            policyNumber: `9${String(200000 + n).padStart(8, '0')}`,
             policyType,
             carrier: 'Allstate',
             active: true,
@@ -1462,6 +1509,15 @@ export class DemoSeedService {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
+
+    // Reset the household counter too, so a `--fresh` seed is actually
+    // reproducible rather than climbing `HH-44`, `HH-68`, … on every run.
+    // Safe because `reconcileHouseholdRefs` seeds the counter from the highest
+    // reference still stored before it allocates anything, so households that
+    // survived the purge (anything not `demo:`-prefixed) keep their numbers and
+    // cannot have one reissued underneath them.
+    await this.sequences.reset(householdCounterKey(agencyId));
+
     this.logger.log('Purged existing demo records');
   }
 

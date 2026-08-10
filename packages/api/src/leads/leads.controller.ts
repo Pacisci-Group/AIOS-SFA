@@ -16,8 +16,11 @@ import {
 } from '../common/decorators/access.decorators';
 import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import { HotLeadsService } from './hot-leads.service';
 import { LeadDetailService } from './lead-detail.service';
 import { LeadsService } from './leads.service';
+import { listHotLeadsSchema } from './dto/list-hot-leads.dto';
+import type { ListHotLeadsDto } from './dto/list-hot-leads.dto';
 import { listLeadsSchema } from './dto/list-leads.dto';
 import type { ListLeadsDto } from './dto/list-leads.dto';
 import { createLeadSchema } from './dto/create-lead.dto';
@@ -39,6 +42,7 @@ export class LeadsController {
   constructor(
     private readonly leadsService: LeadsService,
     private readonly leadDetailService: LeadDetailService,
+    private readonly hotLeadsService: HotLeadsService,
   ) {}
 
   @Get()
@@ -73,11 +77,33 @@ export class LeadsController {
     return this.leadsService.create(access, branchId, body);
   }
 
+  /**
+   * Hot Leads / Priority Contact List on the Producer Dashboard (PAC-15).
+   *
+   * Same `leads:read` gate as the list, and the same server-side scope clamp —
+   * this is a different *view* of the caller's leads, not a different resource,
+   * so it needs no module or permission of its own.
+   *
+   * **Must stay above the `:id` banner below.** `@Get(':id')` matches `hot`
+   * just as happily as an ObjectId, and Nest resolves in declaration order.
+   */
+  @Get('hot')
+  hot(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Query(new ZodValidationPipe(listHotLeadsSchema))
+    query: ListHotLeadsDto,
+  ) {
+    return this.hotLeadsService.list(access, branchId, query);
+  }
+
   /*
    * ─── Parameterized routes below this line ──────────────────────────────────
    *
    * `:id` matches anything, so both handlers must stay **after** the static
-   * `@Get()` / `@Post()` above — Nest resolves in declaration order.
+   * `@Get()` / `@Get('hot')` / `@Post()` above — Nest resolves in declaration
+   * order. An e2e test in "Hot Leads (PAC-15)" pins this: it asserts
+   * `GET /leads/hot` returns the panel rather than a 404 from the detail route.
    *
    * The same hazard exists one level up and is already handled: `ShareLinksModule`
    * (`@Controller('leads/share-links')`) is registered *before* `LeadsModule` in

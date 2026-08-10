@@ -16,6 +16,19 @@ export interface QuoteRecapPolicyInput {
   policyType: string;
   premium: number;
   itemCount: number;
+  /**
+   * Property-type rows only. When true the server copies the household address
+   * onto **this row** and **discards** `propertyAddress`.
+   *
+   * The address is per-row (PAC-56 #14) because a recap routinely covers a home
+   * *and* a landlord policy on a different building; one address for the whole
+   * recap can only describe one of them. This is a genuine improvement over
+   * legacy rather than a regression fix — SmartSuite held one property address
+   * on the Lead and none on the recap, so it could not represent the pair
+   * either.
+   */
+  sameAsHousehold?: boolean;
+  propertyAddress?: QuoteRecapPropertyAddress;
 }
 
 /**
@@ -46,14 +59,21 @@ export interface CreateQuoteRecapInput {
    * submission without one. The API resolves the household from the lead.
    */
   leadId: string;
+  /**
+   * Each row carries its own insured-property address (PAC-56 #14) — see
+   * {@link QuoteRecapPolicyInput}. There is deliberately no recap-level
+   * `propertyAddress`: it could describe only one of several dwellings.
+   */
   policies: QuoteRecapPolicyInput[];
   /**
-   * When true the server copies the household's own address and **discards**
-   * `propertyAddress`, so a client cannot claim "same as household" while
-   * submitting something else.
+   * When the client's current insurance renews — an `INSURANCE_MONTHS` label
+   * (PAC-56 #16). Required on create, so the agency can re-engage ahead of it.
+   *
+   * Per-recap rather than per-policy: that is legacy's shape
+   * (`Insurance X Month`, `s69d7c3f64` on the Quote Recaps table) and the
+   * placement David asked for.
    */
-  sameAsHousehold: boolean;
-  propertyAddress?: QuoteRecapPropertyAddress;
+  insuranceRenewalMonth: string;
   notes?: string;
   /** Required — a recap without its carrier quote is not accepted. */
   quoteDocument: QuoteDocumentMeta;
@@ -103,5 +123,24 @@ export interface QuoteDocumentPresignResponse {
   key: string;
   uploadUrl: string;
   requiredHeaders: Record<string, string>;
+  expiresIn: number;
+}
+
+/**
+ * `GET /quote-recaps/:id/document/download` (PAC-56 #10, #30).
+ *
+ * A short-lived presigned GET signed for **inline** display, so following it
+ * hands the file to the browser's own PDF or image viewer in a new tab rather
+ * than starting a download. The user downloads from that viewer if they want to
+ * — building a bespoke viewer or a separate download button is work the browser
+ * already did.
+ *
+ * The storage key never crosses the wire; the client only ever holds this URL.
+ */
+export interface DocumentDownloadResponse {
+  downloadUrl: string;
+  filename: string;
+  contentType: string;
+  /** Seconds until {@link downloadUrl} expires. */
   expiresIn: number;
 }

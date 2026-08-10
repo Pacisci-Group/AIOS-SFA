@@ -1,9 +1,8 @@
-import { zodResolver } from "@hookform/resolvers/zod";
 import type { LeadDetailContact } from "@sfa/shared";
 import { ModuleKey } from "@sfa/shared";
 import { Loader2, Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import { FormGrid } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,15 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
+import { useAppForm } from "@/hooks/form";
 import { usePermissions } from "@/hooks/usePermissions";
 import {
   contactFormSchema,
@@ -53,40 +44,37 @@ export function EditContactDialog({ leadId, contact }: EditContactDialogProps) {
   const [open, setOpen] = useState(false);
   const mutation = useUpdateContact(leadId, contact.id);
 
-  const form = useForm<ContactFormValues>({
-    resolver: zodResolver(contactFormSchema),
-    defaultValues: {
-      firstName: contact.firstName,
-      lastName: contact.lastName,
-      // The API already returns `YYYY-MM-DD`, which is exactly what
-      // `<input type="date">` wants — no parsing on either side.
-      dateOfBirth: contact.dateOfBirth ?? "",
-      email: contact.email ?? "",
-      phone: contact.phone ?? "",
+  const seed = (): ContactFormValues => ({
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    // The API already returns `YYYY-MM-DD`, which is exactly what
+    // `<input type="date">` wants — no parsing on either side.
+    dateOfBirth: contact.dateOfBirth ?? "",
+    email: contact.email ?? "",
+    phone: contact.phone ?? "",
+  });
+
+  const form = useAppForm({
+    defaultValues: seed(),
+    validators: { onBlur: contactFormSchema },
+    onSubmit: ({ value }) => {
+      mutation.mutate(toUpdateContactInput(value), {
+        onSuccess: () => setOpen(false),
+      });
     },
-    mode: "onBlur",
   });
 
   // Re-seed when the dialog opens so a cancelled edit doesn't persist, and so
   // the form reflects any change made since this component mounted.
   useEffect(() => {
     if (!open) return;
-    form.reset({
-      firstName: contact.firstName,
-      lastName: contact.lastName,
-      dateOfBirth: contact.dateOfBirth ?? "",
-      email: contact.email ?? "",
-      phone: contact.phone ?? "",
-    });
-  }, [open, contact, form]);
+    form.reset(seed());
+    // `form` is a stable instance (useForm holds it in useState), so it does not
+    // need to be a dependency the way react-hook-form's context object did.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, contact]);
 
   if (!canWrite(ModuleKey.Clients)) return null;
-
-  const onSubmit = (values: ContactFormValues) => {
-    mutation.mutate(toUpdateContactInput(values), {
-      onSuccess: () => setOpen(false),
-    });
-  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -111,94 +99,63 @@ export function EditContactDialog({ leadId, contact }: EditContactDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <Form {...form}>
+        <form.AppForm>
           <form
-            onSubmit={form.handleSubmit(onSubmit)}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void form.handleSubmit();
+            }}
             className="space-y-4"
             noValidate
           >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField
-                control={form.control}
-                name="firstName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>First name</FormLabel>
-                    <FormControl>
-                      <Input className="bg-card border-border" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+            <FormGrid>
+              <form.AppField name="firstName">
+                {(f) => (
+                  <f.TextField
+                    label="First name"
+                    inputClassName="bg-card border-border"
+                  />
                 )}
-              />
-              <FormField
-                control={form.control}
-                name="lastName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Last name</FormLabel>
-                    <FormControl>
-                      <Input className="bg-card border-border" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+              </form.AppField>
+              <form.AppField name="lastName">
+                {(f) => (
+                  <f.TextField
+                    label="Last name"
+                    inputClassName="bg-card border-border"
+                  />
                 )}
-              />
-            </div>
+              </form.AppField>
+            </FormGrid>
 
-            <FormField
-              control={form.control}
-              name="dateOfBirth"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Date of birth</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="date"
-                      className="bg-card border-border"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
+            <form.AppField name="dateOfBirth">
+              {(f) => (
+                <f.TextField
+                  label="Date of birth"
+                  type="date"
+                  inputClassName="bg-card border-border"
+                />
               )}
-            />
+            </form.AppField>
 
-            <FormField
-              control={form.control}
-              name="email"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Email</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="email"
-                      className="bg-card border-border"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
+            <form.AppField name="email">
+              {(f) => (
+                <f.TextField
+                  label="Email"
+                  type="email"
+                  inputClassName="bg-card border-border"
+                />
               )}
-            />
+            </form.AppField>
 
-            <FormField
-              control={form.control}
-              name="phone"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Phone</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="tel"
-                      className="bg-card border-border"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
+            <form.AppField name="phone">
+              {(f) => (
+                <f.TextField
+                  label="Phone"
+                  type="tel"
+                  inputClassName="bg-card border-border"
+                />
               )}
-            />
+            </form.AppField>
 
             <p className="text-xs text-muted-foreground">
               Leave a field blank to clear it.
@@ -221,7 +178,7 @@ export function EditContactDialog({ leadId, contact }: EditContactDialogProps) {
               </Button>
             </DialogFooter>
           </form>
-        </Form>
+        </form.AppForm>
       </DialogContent>
     </Dialog>
   );

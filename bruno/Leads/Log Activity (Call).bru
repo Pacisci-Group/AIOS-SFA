@@ -1,0 +1,102 @@
+meta {
+  name: Log Activity (Call)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/activities
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "leadId": "{{hotLeadId}}",
+    "type": "call"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a timeline-ready row", function () {
+    const body = res.getBody();
+    expect(body.activity.type).to.equal("call");
+    expect(body.activity).to.have.property("occurredAt");
+    expect(body.activity).to.have.property("producerName");
+  });
+
+  test("defaults the summary — a call stands on its own", function () {
+    expect(res.getBody().activity.summary).to.equal("Call logged");
+  });
+
+  test("echoes the lead's bumped timestamp", function () {
+    expect(res.getBody()).to.have.property("leadLastActivityAt");
+  });
+}
+
+docs {
+  # POST /activities — log a touch on a lead (PAC-16)
+
+  One endpoint behind two surfaces: the Producer Dashboard's Call / Text / Email
+  quick actions, and the Lead Detail note composer. They differ only in `type`.
+
+  - **Module:** `leads` — logging a touch on a lead is a lead write.
+  - **Permission:** `leads:write`
+  - **Data scope:** the lead must be reachable by the caller. Another producer's
+    lead is a **404**, not a 403 — whether it exists is not the caller's business.
+
+  > **This records a touch; it does not perform one.** The client's
+  > `tel:` / `sms:` / `mailto:` link places the call — this call says the
+  > producer made it. Nothing here integrates with a phone system.
+
+  ## Body
+  | field | type | rules |
+  |-------|------|-------|
+  | leadId | string | required |
+  | type | enum | required — `call` \| `text` \| `email` \| `note` |
+  | summary | string | 1–500 chars. **Required for `note`**; defaulted otherwise |
+  | occurredAt | date | optional, for backdating a touch made away from the app |
+
+  ### The write vocabulary is narrower than the read vocabulary
+  `ACTIVITY_TYPES` also contains `lead_created`, `quoted`, `sold` and
+  `audit_resolved`. Those are **system-generated provenance**, each written by
+  the pipeline that owns the event, and a client cannot post them — see
+  `Log Activity (Invalid Type)`. This is a security boundary: a forged `sold`
+  row would invent a sale on the Sold scorecard and the Leaderboard.
+
+  ## Side effects
+  - The lead's `lastActivityAt` moves forward with `$max`, **never `$set`** — a
+    backdated touch must not drag it backwards and float an old lead to the top
+    of the stalest-first Hot Leads panel. Best-effort and post-commit: the
+    activity row is the durable artifact and is already written.
+  - `source` is stamped `internal`. The schema default is `migration`, so
+    omitting it would label a producer's own note as imported data.
+
+  ## Response `201`
+  ```json
+  {
+    "activity": {
+      "id": "6a74...910",
+      "type": "call",
+      "summary": "Call logged",
+      "occurredAt": "2026-08-06T09:56:53.463Z",
+      "producerName": "Pat Producer"
+    },
+    "leadLastActivityAt": "2026-08-06T09:56:53.463Z"
+  }
+  ```
+  `activity` is the same `LeadDetailActivity` shape `GET /leads/:id` returns, so
+  the timeline splices it in with no mapping layer.
+
+  ## Errors
+  - `400` — a system-generated `type`, a `note` with no `summary`, or a summary
+    over 500 chars.
+  - `403` — missing `leads:write`.
+  - `404` — unknown, malformed, or another producer's `leadId`.
+
+  > Run **List Hot Leads** first: it captures `hotLeadId`.
+}

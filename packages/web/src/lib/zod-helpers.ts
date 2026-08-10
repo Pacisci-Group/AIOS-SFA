@@ -7,11 +7,12 @@ import { z } from "zod";
  * The alternative, `z.coerce.number()`, turns an untouched `""` into `0`, which
  * passes `.min(0)`, so a producer who never filled the field silently submits a
  * $0 premium. `z.preprocess` fixes that but makes the schema's input type
- * `unknown`, which breaks react-hook-form's generic inference through every
- * child component. Validating the string is the honest version.
+ * `unknown`, which collapses the form's inferred field paths — the thing every
+ * field component is checked against. Validating the string is the honest
+ * version.
  *
  * Introduced for the Quote Recap form (PAC-39); shared once the Sold wizard
- * (PAC-40) needed the same guarantee on Card 4's premium and item count.
+ * (PAC-40) needed the same guarantee on the sold policy's premium and item count.
  */
 export function numericString(options: {
   required: string;

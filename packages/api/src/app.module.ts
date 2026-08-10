@@ -20,13 +20,17 @@ import {
   HOUR_MS,
   MINUTE_MS,
 } from './config/rate-limit.config';
+import { ActivitiesModule } from './activities/activities.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
+import { CarriersModule } from './carriers/carriers.module';
 import { ClientsModule } from './clients/clients.module';
 import { CrmModule } from './crm/crm.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
+import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { LeadsModule } from './leads/leads.module';
+import { PerformanceModule } from './performance/performance.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -82,7 +86,13 @@ import { ENV_FILE_PATH } from './config/env.config';
     ContactsModule,
     QuoteRecapsModule,
     PoliciesModule,
+    // The Sold wizard's carrier vocabulary (PAC-56 #19). Also registers the
+    // `carriers` model so its indexes build and the core seed can inject it.
+    CarriersModule,
     SoldDealsModule,
+    PerformanceModule,
+    LeaderboardModule,
+    ActivitiesModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,

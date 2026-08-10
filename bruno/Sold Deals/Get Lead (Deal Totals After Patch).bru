@@ -1,0 +1,87 @@
+meta {
+  name: Get Lead (Deal Totals After Patch)
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/leads/{{createdLeadId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the deal's roll-up followed the policy correction (PAC-56 #25)", function () {
+    // `Create Sold Deal` booked 1200.10 (Auto) + 899.95 (Home) = 2100.05.
+    // `Update Policy` (seq 8) then corrected the Auto policy to 1275.50.
+    // 1275.50 + 899.95 = 2175.45 — and the rounding matters, which is why the
+    // fixtures use cents.
+    expect(res.getBody().deal.premium).to.equal(2175.45);
+  });
+
+  test("item count followed too", function () {
+    // Auto patched from 2 items to 3; Home stays at 3.
+    expect(res.getBody().deal.itemCount).to.equal(6);
+  });
+
+  test("policy count is unchanged — nothing was added or removed", function () {
+    expect(res.getBody().deal.policyCount).to.equal(2);
+  });
+
+  test("the sold date did NOT move", function () {
+    // The Sold scorecard buckets on `soldDateYmd`, derived from this date. A
+    // premium correction must not re-date the sale.
+    expect(res.getBody().deal.soldDate).to.contain("2026-02-15");
+  });
+
+  test("the rows and the total agree", function () {
+    const deal = res.getBody().deal;
+    const summed = deal.policies.reduce((total, p) => total + p.premium, 0);
+    expect(Math.round(summed * 100) / 100).to.equal(deal.premium);
+  });
+}
+
+docs {
+  # GET /leads/:id — deal roll-ups after a policy patch (PAC-56 #25)
+
+  Not a new endpoint: this re-reads Lead Detail purely to pin the **side effect**
+  of `PATCH /policies/:id` (seq 8), which returns the corrected *policy* and
+  therefore cannot assert anything about its parent deal.
+
+  - **Module:** `leads` · **Permission:** `leads:read`
+
+  ## What it pins
+
+  `Deal.premium` / `itemCount` / `policyCount` / `policyTypes` / `isBundle` /
+  `dealType` are stored roll-ups, not sums computed at read time. Until PAC-56
+  #25 the patch left them alone, so the Sold card's footer total sat directly
+  beneath a row it disagreed with. The final test states the invariant that was
+  broken: **the rows and the total agree.**
+
+  `soldDate` is asserted *unchanged* for the opposite reason — `soldDateYmd` is
+  the Sold scorecard's indexed bucket key, so a correction must never re-date
+  the sale.
+
+  ⚠ Downstream consequence, worth saying out loud when this is demoed: the Sold
+  scorecard sums `deals.premium` and the leaderboard ranks on it, so the patch
+  in seq 8 also moves a producer's dashboard figure.
+
+  ⚠ Not covered here: **migrated deals are skipped**, gated on
+  `premiumSource === 'snapshot'`. Bruno only ever exercises app-created deals,
+  so that branch is pinned by the e2e suite instead
+  (`deal roll-up recompute … › leaves a migrated deal alone`).
+
+  ## Run order
+  Must run **after** `Update Policy` (seq 8), and depends on `createdLeadId`
+  from **Leads/Create Lead**. The expected numbers are hard-coded from the
+  fixtures in `Create Sold Deal` (seq 4) and `Update Policy` (seq 8) — change
+  either and this fails, which is the point.
+}

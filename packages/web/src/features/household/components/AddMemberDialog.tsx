@@ -1,10 +1,9 @@
-import { zodResolver } from "@hookform/resolvers/zod";
 import { HOUSEHOLD_MEMBER_ROLES } from "@sfa/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
-import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { FormGrid } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,22 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { useAppForm } from "@/hooks/form";
 import { addHouseholdMember } from "@/lib/households-api";
 
 /**
@@ -91,16 +75,6 @@ export function AddMemberDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const queryClient = useQueryClient();
-  const form = useForm<MemberFormValues>({
-    resolver: zodResolver(memberSchema),
-    defaultValues: EMPTY,
-    mode: "onBlur",
-  });
-
-  // Clear on open so a cancelled entry never resurfaces in the next one.
-  useEffect(() => {
-    if (open) form.reset(EMPTY);
-  }, [open, form]);
 
   const mutation = useMutation({
     mutationFn: (values: MemberFormValues) =>
@@ -119,6 +93,21 @@ export function AddMemberDialog({
     },
   });
 
+  const form = useAppForm({
+    defaultValues: EMPTY,
+    validators: { onBlur: memberSchema },
+    onSubmit: ({ value }) => {
+      mutation.mutate(value);
+    },
+  });
+
+  // Clear on open so a cancelled entry never resurfaces in the next one.
+  // `form` is a stable instance, so it does not need to be a dependency.
+  useEffect(() => {
+    if (open) form.reset(EMPTY);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -130,82 +119,51 @@ export function AddMemberDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <Form {...form}>
+        <form.AppForm>
           <form
-            onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void form.handleSubmit();
+            }}
             className="space-y-4"
             noValidate
           >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField
-                control={form.control}
-                name="firstName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>First name</FormLabel>
-                    <FormControl>
-                      <Input className="bg-card border-border" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+            <FormGrid>
+              <form.AppField name="firstName">
+                {(f) => (
+                  <f.TextField
+                    label="First name"
+                    inputClassName="bg-card border-border"
+                  />
                 )}
-              />
-              <FormField
-                control={form.control}
-                name="lastName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Last name</FormLabel>
-                    <FormControl>
-                      <Input className="bg-card border-border" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+              </form.AppField>
+              <form.AppField name="lastName">
+                {(f) => (
+                  <f.TextField
+                    label="Last name"
+                    inputClassName="bg-card border-border"
+                  />
                 )}
-              />
-              <FormField
-                control={form.control}
-                name="dateOfBirth"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Date of birth</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="date"
-                        className="bg-card border-border"
-                        {...field}
-                        value={field.value ?? ""}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+              </form.AppField>
+              <form.AppField name="dateOfBirth">
+                {(f) => (
+                  <f.TextField
+                    label="Date of birth"
+                    type="date"
+                    inputClassName="bg-card border-border"
+                  />
                 )}
-              />
-              <FormField
-                control={form.control}
-                name="role"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Relationship</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <FormControl>
-                        <SelectTrigger className="w-full bg-card border-border">
-                          <SelectValue />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {HOUSEHOLD_MEMBER_ROLES.map((role) => (
-                          <SelectItem key={role} value={role}>
-                            {role}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
+              </form.AppField>
+              <form.AppField name="role">
+                {(f) => (
+                  <f.SelectField
+                    label="Relationship"
+                    options={HOUSEHOLD_MEMBER_ROLES}
+                    triggerClassName="w-full bg-card border-border"
+                  />
                 )}
-              />
-            </div>
+              </form.AppField>
+            </FormGrid>
 
             {mutation.isError && (
               <p role="alert" className="text-xs text-destructive">
@@ -232,7 +190,7 @@ export function AddMemberDialog({
               </Button>
             </DialogFooter>
           </form>
-        </Form>
+        </form.AppForm>
       </DialogContent>
     </Dialog>
   );

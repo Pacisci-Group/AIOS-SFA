@@ -6,8 +6,8 @@ import { z } from "zod";
  *
  * Mirrors `contacts/dto/update-contact.dto.ts` but accepts `""` where the API
  * accepts `null`: an empty text input is how a producer says "remove this", and
- * `react-hook-form` has no way to express `null` in a text field. The two are
- * reconciled in {@link toUpdateContactInput} at the submit boundary.
+ * a text field has no way to express `null`. The two are reconciled in
+ * {@link toUpdateContactInput} at the submit boundary.
  *
  * Only the names are required — a migrated contact frequently has no DOB, and
  * demanding one in order to fix a typo'd surname would force invented data.

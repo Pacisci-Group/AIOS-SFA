@@ -6,8 +6,13 @@ import { App } from 'supertest/types';
 import { ModuleKey, SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from '@sfa/shared';
 import type {
   ContactDetail,
+  CreateActivityResponse,
   CreateSoldDealResponse,
+  HotLeadListResponse,
+  LeaderboardResponse,
   LeadDetail,
+  PerformanceMetric,
+  PerformanceResponse,
   PolicyCheckResponse,
   SoldDealLeadContext,
   UpdateLeadResult,
@@ -28,7 +33,9 @@ import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { Policy } from '../src/policies/schemas/policy.schema';
 import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
+import { ProducerGoal } from '../src/producer-goals/schemas/producer-goal.schema';
 import { PriorPolicy } from '../src/prior-policies/schemas/prior-policy.schema';
+import { Carrier } from '../src/carriers/schemas/carrier.schema';
 import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
 import { StorageService } from '../src/storage/storage.service';
@@ -556,13 +563,13 @@ describe('SFA API (e2e)', () => {
       { path: 'deals', module: ModuleKey.Clients },
       // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14), `leads`
       // (LeadsModule / PAC-36), `quote-recaps` (QuoteRecapsModule / PAC-39),
-      // `contacts` (ContactsModule / PAC-38) and `crm/service-tickets`
-      // (CrmModule) are real modules, not `{status:'ready'}` stubs — each is
-      // covered by its own describe block below. The `files` stub was removed
-      // with PAC-39: it borrowed the `quote_recaps` gate and the real file API
-      // is now `POST /quote-recaps/quote-document/presign`.
-      { path: 'performance', module: ModuleKey.Performance },
-      { path: 'leaderboard', module: ModuleKey.Leaderboard },
+      // `contacts` (ContactsModule / PAC-38), `performance`
+      // (PerformanceModule / PAC-10+11), `leaderboard` (LeaderboardModule /
+      // PAC-13) and `crm/service-tickets` (CrmModule) are real modules, not
+      // `{status:'ready'}` stubs — each is covered by its own describe block
+      // below. The `files` stub was removed with PAC-39: it borrowed the
+      // `quote_recaps` gate and the real file API is now
+      // `POST /quote-recaps/quote-document/presign`.
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
@@ -605,10 +612,14 @@ describe('SFA API (e2e)', () => {
     // both are real modules now. Producer write access through the full guard
     // chain is covered by "Quote Recaps (PAC-39 create)" below.
 
-    it('PATCH /api/v1/performance — forbidden without write (read-only page)', async () => {
-      // Producer role grants performance:read but not performance:write.
+    it('PATCH /api/v1/dashboard — forbidden without write (read-only page)', async () => {
+      // Was `/performance` until PAC-10/11 replaced that stub with a real,
+      // read-only module. `dashboard` proves the same thing and for the same
+      // reason: the Producer template grants `dashboard:read` and not
+      // `dashboard:write`, so reading a page you may read does not imply
+      // writing to it.
       await request(app.getHttpServer())
-        .patch('/api/v1/performance')
+        .patch('/api/v1/dashboard')
         .set(authHeader(producerToken))
         .expect(403);
     });
@@ -740,10 +751,11 @@ describe('SFA API (e2e)', () => {
       // `contacts` write is now id-scoped too (ContactsModule / PAC-38) — both
       // are covered by their own describe blocks below. `leads` writes are
       // `POST /leads` (PAC-37) and `PATCH /leads/:id` (PAC-38), likewise
-      // id-scoped rather than a bare PATCH on the collection. `crm/service-tickets`
-      // is a real module (CrmModule) with its own describe block too.
-      { path: 'performance', module: ModuleKey.Performance },
-      { path: 'leaderboard', module: ModuleKey.Leaderboard },
+      // id-scoped rather than a bare PATCH on the collection.
+      // `performance` (PAC-10/11) and `leaderboard` (PAC-13) are real read-only
+      // modules now, with no mutating handler at all, so neither can appear in
+      // this list. `crm/service-tickets` is a real module (CrmModule) with its
+      // own describe block too.
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
@@ -787,13 +799,867 @@ describe('SFA API (e2e)', () => {
       },
     );
 
-    it('GET /api/v1/leaderboard — read-only user can read (read-only page)', async () => {
-      // Was `/files` until PAC-39 removed that stub. Any read-only-for-everyone
-      // page proves the same thing: read access does not imply write.
+    // NOTE: the "read-only user can read a read-only page" test that lived here
+    // moved into `Leaderboard / Motivation Hub (PAC-13)` below, where it now
+    // asserts a real payload rather than a stub's `{status:'ready'}`.
+  });
+
+  describe('Performance scorecards (PAC-10 quoted / PAC-11 sold)', () => {
+    /** Asserted field-by-field: `expect.any` inside a typed `toMatchObject` is
+     *  an `any` the lint rules reject, and this reads no worse. */
+    function expectMetricShape(metric: PerformanceMetric): void {
+      expect(typeof metric.premium).toBe('number');
+      expect(typeof metric.itemCount).toBe('number');
+      expect(typeof metric.recordCount).toBe('number');
+      expect(typeof metric.householdCount).toBe('number');
+      // Nullable by contract, so `typeof` alone would not pin them down.
+      for (const avg of [
+        metric.avgPremiumPerHousehold,
+        metric.avgItemsPerHousehold,
+      ]) {
+        expect(avg === null || typeof avg === 'number').toBe(true);
+        expect(Number.isNaN(avg)).toBe(false);
+      }
+    }
+
+    it('GET /api/v1/performance — producer gets both cards', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      expect(body.range.key).toBe('mtd');
+      expectMetricShape(body.sold);
+      expectMetricShape(body.quoted);
+    });
+
+    it('defaults to mtd and echoes the resolved window back', async () => {
+      // The client sends a key and gets dates: that echo is what lets a preset
+      // and a custom window render through one code path on the web.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      expect(body.range.from).toMatch(/^\d{4}-\d{2}-01$/);
+      expect(body.range.to >= body.range.from).toBe(true);
+    });
+
+    it('echoes back exactly the custom window requested', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query({ range: 'custom', from: '2026-01-01', to: '2026-01-31' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as PerformanceResponse).range).toEqual({
+        key: 'custom',
+        from: '2026-01-01',
+        to: '2026-01-31',
+      });
+    });
+
+    it('reports null averages, never 0 or NaN, on an empty range', async () => {
+      // A far-past window matches nothing. `$group` on `_id: null` emits zero
+      // documents rather than a row of zeroes, and "nothing to average" must
+      // not serialize as "averages zero per household".
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query({ range: 'custom', from: '1990-01-01', to: '1990-01-02' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as PerformanceResponse;
+      for (const card of [body.sold, body.quoted]) {
+        expect(card.recordCount).toBe(0);
+        expect(card.avgPremiumPerHousehold).toBeNull();
+        expect(card.avgItemsPerHousehold).toBeNull();
+      }
+    });
+
+    it.each([
+      ['custom without bounds', { range: 'custom' }],
+      ['custom missing `to`', { range: 'custom', from: '2026-01-01' }],
+      [
+        'from after to',
+        { range: 'custom', from: '2026-02-01', to: '2026-01-01' },
+      ],
+      [
+        'a date that does not exist',
+        { range: 'custom', from: '2026-02-31', to: '2026-03-01' },
+      ],
+      [
+        'a span beyond the cap',
+        { range: 'custom', from: '2020-01-01', to: '2026-01-01' },
+      ],
+      ['an unknown range key', { range: 'fortnight' }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('is readable by any role holding performance:read', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/performance')
+        .set(authHeader(readOnlyToken))
+        .expect(200);
+    });
+
+    it('has no mutating handler — the scorecard is a projection', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/performance')
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    describe('the arithmetic, over seeded rows', () => {
+      // An isolated window far from `mtd`, so these fixtures can never be
+      // counted by — or collide with — any other block's data.
+      const WINDOW = { range: 'custom', from: '2026-05-01', to: '2026-05-31' };
+
+      beforeAll(async () => {
+        const userModel = app.get<Model<User>>(getModelToken(User.name));
+        const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+        const recapModel = app.get<Model<QuoteRecap>>(
+          getModelToken(QuoteRecap.name),
+        );
+
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const owner = await userModel.findOne({ email: seed.ownerEmail });
+        const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+        const householdOne = new Types.ObjectId();
+
+        await dealModel.create([
+          // Two deals, one household — the household must be counted once.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            soldDateYmd: 20260504,
+            premium: 1000,
+            itemCount: 2,
+          },
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            soldDateYmd: 20260511,
+            premium: 500,
+            itemCount: 1,
+          },
+          // Rung 2 of the identity ladder: no ref, but a legacy string id.
+          {
+            ...base,
+            producerId: producer!._id,
+            legacyHouseholdId: 'legacy-hh-1',
+            soldDateYmd: 20260518,
+            premium: 300,
+            itemCount: 1,
+          },
+          // Rung 3: no household at all — counts as its own.
+          {
+            ...base,
+            producerId: producer!._id,
+            soldDateYmd: 20260525,
+            premium: 200,
+            itemCount: 1,
+          },
+          // Excluded: test record.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260505,
+            premium: 99_999,
+            itemCount: 99,
+            isTestRecord: true,
+          },
+          // Excluded under `own` scope: another producer's deal.
+          {
+            ...base,
+            producerId: owner!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260506,
+            premium: 77_777,
+            itemCount: 77,
+          },
+          // Excluded: inside the agency but outside the window.
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: new Types.ObjectId(),
+            soldDateYmd: 20260601,
+            premium: 55_555,
+            itemCount: 55,
+          },
+        ]);
+
+        await recapModel.create([
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: householdOne,
+            quoteDate: new Date('2026-05-04T00:00:00.000Z'),
+            quoteDateYmd: 20260504,
+            premium: 800,
+            itemCount: 2,
+          },
+        ]);
+      });
+
+      it('sums premium and items, and counts each household once', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).sold).toEqual({
+          premium: 2000,
+          itemCount: 5,
+          recordCount: 4,
+          // Two deals share a household; the legacy-id row and the
+          // household-less row each count as one. 2 shared + 1 + 1 = 3.
+          householdCount: 3,
+          avgPremiumPerHousehold: 666.67,
+          avgItemsPerHousehold: 1.67,
+        });
+      });
+
+      it('rolls quoted recaps up independently of sold deals', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).quoted).toMatchObject({
+          premium: 800,
+          itemCount: 2,
+          recordCount: 1,
+          householdCount: 1,
+          avgPremiumPerHousehold: 800,
+          avgItemsPerHousehold: 2,
+        });
+      });
+
+      it('clamps a producer to their own rows even when asking for agency', async () => {
+        // The owner's 77,777 deal sits in the same agency and window. A
+        // client-supplied scope may only ever narrow.
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query({ ...WINDOW, scope: 'agency' })
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        expect((res.body as PerformanceResponse).sold.premium).toBe(2000);
+      });
+
+      it('includes every producer for an agency-scoped caller', async () => {
+        // Same window, agency data scope: the owner's own deal is now in range
+        // alongside the producer's four. Test records stay excluded.
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query(WINDOW)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        const body = res.body as PerformanceResponse;
+        expect(body.sold.premium).toBe(2000 + 77_777);
+        expect(body.sold.recordCount).toBe(5);
+      });
+    });
+  });
+
+  describe('Activity log (PAC-16)', () => {
+    let ownLeadId: string;
+    let foreignLeadId: string;
+    let createdLeadIds: Types.ObjectId[] = [];
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      const [own, foreign] = await leadModel.create([
+        {
+          ...base,
+          firstName: 'Touchable',
+          lastName: 'Lead',
+          status: 'Contacted',
+          temperature: 'Warm',
+          producerId: producer!._id,
+          lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+        {
+          ...base,
+          firstName: 'Not',
+          lastName: 'Yours',
+          status: 'New',
+          temperature: 'Warm',
+          producerId: owner!._id,
+        },
+      ]);
+      ownLeadId = own._id.toString();
+      foreignLeadId = foreign._id.toString();
+      createdLeadIds = [own._id, foreign._id];
+    });
+
+    // Same reason as the Hot Leads block: `Leads (PAC-36 list)` asserts exact
+    // agency-wide totals and declares later.
+    afterAll(async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      await activityModel.deleteMany({ leadId: { $in: createdLeadIds } });
+      await leadModel.deleteMany({ _id: { $in: createdLeadIds } });
+      createdLeadIds = [];
+    });
+
+    it('a producer logs a call on their own lead', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'call' })
+        .expect(201);
+
+      const body = res.body as CreateActivityResponse;
+      expect(body.activity.type).toBe('call');
+      // Defaulted, because a call is an event that stands on its own.
+      expect(body.activity.summary).toBe('Call logged');
+      expect(body.leadLastActivityAt).toBeTruthy();
+    });
+
+    it('bumps the lead’s lastActivityAt', async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'text' })
+        .expect(201);
+
+      const lead = await leadModel.findById(ownLeadId);
+      expect(lead?.lastActivityAt?.getTime()).toBeGreaterThan(
+        new Date('2026-01-01T00:00:00.000Z').getTime(),
+      );
+    });
+
+    it('a backdated touch does not drag lastActivityAt backwards', async () => {
+      // `$max`, not `$set`. Otherwise logging a call you made last week would
+      // float the lead to the top of a stalest-first panel.
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const before = (await leadModel.findById(ownLeadId))?.lastActivityAt;
+
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({
+          leadId: ownLeadId,
+          type: 'note',
+          summary: 'Backdated note',
+          occurredAt: '2020-01-01T00:00:00.000Z',
+        })
+        .expect(201);
+
+      const after = (await leadModel.findById(ownLeadId))?.lastActivityAt;
+      expect(after?.getTime()).toBe(before?.getTime());
+    });
+
+    it('marks the row as app-written, not migrated', async () => {
+      // The schema default for `source` is `'migration'`, so an omission here
+      // would label a producer's note as imported data.
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'email' })
+        .expect(201);
+
+      const { activity } = res.body as CreateActivityResponse;
+      const row = await activityModel
+        .findById(activity.id)
+        .lean<{ source?: string; isTestRecord?: boolean } | null>();
+      expect(row).not.toBeNull();
+      expect(row?.source).toBe('internal');
+      expect(row?.isTestRecord).toBe(false);
+    });
+
+    it('surfaces the logged activity on the lead timeline', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'note', summary: 'Spoke to spouse' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/leads/${ownLeadId}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const summaries = (res.body as LeadDetail).activities.map(
+        (a) => a.summary,
+      );
+      expect(summaries).toContain('Spoke to spouse');
+    });
+
+    /*
+     * The security-relevant one. `ACTIVITY_TYPES` is the read vocabulary and
+     * includes `sold`; the write vocabulary must not. A client able to post a
+     * `sold` row could invent a sale on the Sold scorecard and the Leaderboard.
+     */
+    it('refuses a system-generated type', async () => {
+      for (const type of ['sold', 'quoted', 'lead_created', 'audit_resolved']) {
+        await request(app.getHttpServer())
+          .post('/api/v1/activities')
+          .set(authHeader(producerToken))
+          .send({ leadId: ownLeadId, type })
+          .expect(400);
+      }
+    });
+
+    it('refuses a note with no text — a note IS its text', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'note' })
+        .expect(400);
+    });
+
+    it('404s on another producer’s lead, never 403', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: foreignLeadId, type: 'call' })
+        .expect(404);
+    });
+
+    it('404s on a malformed lead id rather than 500', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: 'not-an-object-id', type: 'call' })
+        .expect(404);
+    });
+
+    it('403s for a role without leads:write', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(readOnlyToken))
+        .send({ leadId: ownLeadId, type: 'call' })
+        .expect(403);
+    });
+  });
+
+  describe('Hot Leads (PAC-15)', () => {
+    let staleHotLeadId: string;
+    /*
+     * Tracked so `afterAll` can remove exactly what this block created.
+     *
+     * Cleanup is mandatory here, not tidiness: `Leads (PAC-36 list)` asserts
+     * exact agency-wide totals (`body.total).toBe(2)`), and this block declares
+     * earlier, so leaving five extra leads behind fails five of its tests with
+     * numbers that say nothing about the code.
+     */
+    let createdLeadIds: Types.ObjectId[] = [];
+
+    afterAll(async () => {
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      await activityModel.deleteMany({ leadId: { $in: createdLeadIds } });
+      await leadModel.deleteMany({ _id: { $in: createdLeadIds } });
+      createdLeadIds = [];
+    });
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+      const own = { ...base, producerId: producer!._id };
+
+      const [stale, recent, warm, lost, foreign] = await leadModel.create([
+        {
+          ...own,
+          firstName: 'Stale',
+          lastName: 'Hotlead',
+          status: 'Contacted',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
+          phones: ['5550001111'],
+          emails: ['stale@example.test'],
+        },
+        {
+          ...own,
+          firstName: 'Recent',
+          lastName: 'Hotlead',
+          status: 'Quoted',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2026-07-01T00:00:00.000Z'),
+        },
+        {
+          ...own,
+          firstName: 'Warm',
+          lastName: 'Topup',
+          status: 'New',
+          temperature: 'Warm',
+          lastActivityAt: new Date('2025-01-01T00:00:00.000Z'),
+        },
+        // Terminal: must never appear, however hot it was left. Stored as the
+        // raw SmartSuite code for `Lost` so the code expansion is exercised.
+        {
+          ...own,
+          firstName: 'Lost',
+          lastName: 'Cause',
+          status: 'jp76g',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2020-01-01T00:00:00.000Z'),
+        },
+        // Another producer's hot lead: invisible under `own` scope.
+        {
+          ...base,
+          firstName: 'Someone',
+          lastName: 'Elses',
+          status: 'New',
+          temperature: 'Hot',
+          lastActivityAt: new Date('2019-01-01T00:00:00.000Z'),
+        },
+      ]);
+      staleHotLeadId = stale._id.toString();
+      createdLeadIds = [stale, recent, warm, lost, foreign].map((l) => l._id);
+
+      await activityModel.create([
+        {
+          ...base,
+          leadId: stale._id,
+          producerId: producer!._id,
+          type: 'note',
+          subjectType: 'lead',
+          summary: 'Waiting on premium approval',
+          occurredAt: new Date('2026-01-01T00:00:00.000Z'),
+          source: 'internal',
+        },
+        // Older, so it must lose to the note above.
+        {
+          ...base,
+          leadId: stale._id,
+          producerId: producer!._id,
+          type: 'lead_created',
+          subjectType: 'lead',
+          summary: 'Lead created',
+          occurredAt: new Date('2025-12-01T00:00:00.000Z'),
+          source: 'internal',
+        },
+      ]);
+    });
+
+    /*
+     * The regression guard for the most likely way this route breaks.
+     * `@Get(':id')` matches the literal string `hot` just as happily as an
+     * ObjectId, so a reordering in the controller would turn this endpoint into
+     * a lead-detail lookup for a lead that does not exist.
+     */
+    it('resolves as its own route, not as GET /leads/:id', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as HotLeadListResponse;
+      expect(Array.isArray(body.items)).toBe(true);
+      // A detail response would have `id`/`contact` at the top level instead.
+      expect(body).not.toHaveProperty('id');
+    });
+
+    it('orders stalest first — the inverse of the Leads list', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names.indexOf('Stale Hotlead')).toBeLessThan(
+        names.indexOf('Recent Hotlead'),
+      );
+    });
+
+    it('ranks every Hot lead above any Warm one', async () => {
+      // The Warm lead is staler than both Hot leads, so a single sort across
+      // temperatures would float it to the top.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const items = (res.body as HotLeadListResponse).items;
+      const firstWarm = items.findIndex((i) => i.temperature === 'Warm');
+      const lastHot = items.map((i) => i.temperature).lastIndexOf('Hot');
+      if (firstWarm !== -1) expect(lastHot).toBeLessThan(firstWarm);
+    });
+
+    it('carries the narrative line from the most recent activity', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const stale = (res.body as HotLeadListResponse).items.find(
+        (i) => i.id === staleHotLeadId,
+      );
+      expect(stale?.lastActivitySummary).toBe('Waiting on premium approval');
+      expect(stale?.lastActivityType).toBe('note');
+      expect(stale?.initials).toBe('SH');
+    });
+
+    it('excludes terminal statuses, including migrated raw codes', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 25 })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names).not.toContain('Lost Cause');
+    });
+
+    it('clamps a producer to their own leads even when asking for agency', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 25, scope: 'agency' })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const names = (res.body as HotLeadListResponse).items.map((i) => i.name);
+      expect(names).not.toContain('Someone Elses');
+    });
+
+    it('honours the limit', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query({ limit: 1 })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as HotLeadListResponse).items).toHaveLength(1);
+    });
+
+    it('is not the paginated envelope — this panel has no page controls', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      for (const key of ['page', 'pageSize', 'total', 'totalPages']) {
+        expect(res.body).not.toHaveProperty(key);
+      }
+    });
+
+    it.each([
+      ['a limit above the cap', { limit: 99 }],
+      ['a zero limit', { limit: 0 }],
+      ['an unknown temperature', { temperature: 'Lukewarm' }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+  });
+
+  describe('Leaderboard / Motivation Hub (PAC-13)', () => {
+    /*
+     * April 2026 — this block seeds its own deals rather than leaning on the
+     * performance block's May fixtures. Sharing them would make these tests
+     * pass only when both describes run, so any filtered run (`-t`) would
+     * report failures that say nothing about the code.
+     */
+    const MONTH = '2026-04';
+
+    beforeAll(async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      const goalModel = app.get<Model<ProducerGoal>>(
+        getModelToken(ProducerGoal.name),
+      );
+
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const owner = await userModel.findOne({ email: seed.ownerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      await dealModel.create([
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260410,
+          premium: 2000,
+          itemCount: 2,
+        },
+        {
+          ...base,
+          producerId: owner!._id,
+          soldDateYmd: 20260415,
+          premium: 77_777,
+          itemCount: 9,
+        },
+        // Must not reach the office total.
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260420,
+          premium: 500_000,
+          itemCount: 1,
+          isTestRecord: true,
+        },
+        // Outside the month.
+        {
+          ...base,
+          producerId: producer!._id,
+          soldDateYmd: 20260331,
+          premium: 400_000,
+          itemCount: 1,
+        },
+      ]);
+
+      await goalModel.create([
+        // Producer sold 2,000 against 4,000 -> 50%.
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: producer!._id,
+          month: MONTH,
+          goalPremium: 4000,
+        },
+        // Owner sold 77,777 against 100,000 -> 77.8%, so they outrank the
+        // producer on attainment despite a far larger goal.
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: owner!._id,
+          month: MONTH,
+          goalPremium: 100_000,
+        },
+      ]);
+    });
+
+    it('returns the office total, ranked entries, and the caller row', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.month).toBe(MONTH);
+      expect(body.officeTotalPremium).toBe(2000 + 77_777);
+      expect(body.entries.length).toBeGreaterThan(0);
+      expect(body.self).not.toBeNull();
+      expect(body.self!.premium).toBe(2000);
+      expect(body.self!.attainmentPct).toBe(50);
+    });
+
+    it('a producer sees the whole board — the DataScope bypass is the feature', async () => {
+      // `own` scope everywhere else means "your rows only". Here it must not:
+      // a motivation panel showing a producer only themselves is pointless.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.entries.some((entry) => !entry.isSelf)).toBe(true);
+      expect(body.producerCount).toBeGreaterThanOrEqual(2);
+    });
+
+    // The privacy contract, as an executable assertion. This is the reason the
+    // bypass above is acceptable, so it must fail loudly if anyone widens the
+    // response type.
+    it('never exposes another producer’s dollars', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      for (const entry of body.entries) {
+        expect(entry).not.toHaveProperty('premium');
+        expect(entry).not.toHaveProperty('goalPremium');
+      }
+    });
+
+    it('ranks by attainment, not by premium', async () => {
+      // The owner sold ~39x the producer's premium but hit 77.8% of a much
+      // larger goal; the producer hit 50%. Ranking by premium would invert this.
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query({ month: MONTH })
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      const body = res.body as LeaderboardResponse;
+      expect(body.entries[0].attainmentPct).toBe(77.8);
+      expect(body.entries[0].rank).toBe(1);
+      expect(body.entries[1].attainmentPct).toBe(50);
+    });
+
+    it('defaults to the current month when none is given', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      expect((res.body as LeaderboardResponse).month).toMatch(
+        /^\d{4}-(0[1-9]|1[0-2])$/,
+      );
+    });
+
+    it('read-only user can read (read access does not imply write)', async () => {
+      // Re-homed from the feature-stub block, which no longer has a leaderboard
+      // route to point at.
       await request(app.getHttpServer())
         .get('/api/v1/leaderboard')
         .set(authHeader(readOnlyToken))
         .expect(200);
+    });
+
+    it.each([
+      ['a malformed month', { month: '2026-5' }],
+      ['a month out of range', { month: '2026-13' }],
+      ['a limit above the cap', { limit: 99 }],
+      ['a zero limit', { limit: 0 }],
+    ])('rejects %s with 400', async (_label, query) => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leaderboard')
+        .query(query)
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
+    it('has no mutating handler', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/leaderboard')
+        .set(authHeader(ownerToken))
+        .expect(404);
     });
   });
 
@@ -2011,6 +2877,65 @@ describe('SFA API (e2e)', () => {
       expect(lead!.phones).toEqual(['5552223333']);
     });
 
+    /**
+     * PAC-56 #7 — the `HH-2614` identifier on the household.
+     *
+     * Pinned here because the failure mode is invisible in a single-request
+     * test: a broken allocator still returns 201 and still writes *a* household,
+     * it just hands two of them the same number. The concurrent case is the one
+     * that matters — `$inc` is atomic, but the allocation runs inside the intake
+     * transaction, so this is also what proves the write-conflict retries in
+     * `withTransaction` resolve rather than duplicate.
+     */
+    it('gives each new household a distinct sequential reference, even concurrently', async () => {
+      const first = await createAs(producerToken, payload('Ashgrove'));
+      const firstLead = await leadModel.findById(first.id);
+      const firstHousehold = await householdModel.findById(
+        firstLead!.householdId,
+      );
+      expect(firstHousehold!.householdRef).toMatch(/^HH-[1-9][0-9]*$/);
+
+      const created = await Promise.all(
+        ['Bellhaven', 'Corrymore', 'Danecroft', 'Ellerslie', 'Fenwick'].map(
+          (key) => createAs(producerToken, payload(key)),
+        ),
+      );
+
+      const leads = await leadModel.find({
+        _id: { $in: created.map((c) => c.id) },
+      });
+      const households = await householdModel.find({
+        _id: { $in: leads.map((l) => l.householdId) },
+      });
+
+      expect(households).toHaveLength(5);
+      const refs = households.map((h) => h.householdRef);
+      expect(refs.every((ref) => /^HH-[1-9][0-9]*$/.test(ref ?? ''))).toBe(
+        true,
+      );
+      // The assertion the whole feature rests on.
+      expect(new Set(refs).size).toBe(refs.length);
+      expect(refs).not.toContain(firstHousehold!.householdRef);
+    });
+
+    it('exposes the household reference on the lead detail contract', async () => {
+      const created = await createAs(producerToken, payload('Gullhaven'));
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/leads/${created.id}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const household = (res.body as { household: { reference: string } })
+        .household;
+      // The card copies this string verbatim now, so it has to be the real
+      // reference rather than anything derived from the ObjectId.
+      expect(household.reference).toMatch(/^HH-[1-9][0-9]*$/);
+      const stored = await householdModel.findOne({
+        householdRef: household.reference,
+      });
+      expect(stored).not.toBeNull();
+    });
+
     it('assigns the lead to the creating producer and shows it in their list', async () => {
       const producer = await userModel.findOne({ email: seed.producerEmail });
       const created = await createAs(producerToken, payload('Bexley'));
@@ -2182,6 +3107,234 @@ describe('SFA API (e2e)', () => {
         created.id,
       );
     });
+    it('stores the policies of interest with their item counts (PAC-56 #2)', async () => {
+      const created = await createAs(
+        producerToken,
+        payload('Kelbrook', {
+          policiesOfInterest: [
+            { policyType: 'Auto', itemCount: 2 },
+            { policyType: 'Umbrella', itemCount: 1 },
+          ],
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(
+        lead!.policiesOfInterest.map((p) => [p.policyType, p.itemCount]),
+      ).toEqual([
+        ['Auto', 2],
+        ['Umbrella', 1],
+      ]);
+    });
+
+    it('defaults the policies of interest to an empty array when omitted', async () => {
+      // The web form requires a selection; the endpoint must not, or a partial
+      // submission would 400 and the lead would be lost outright.
+      const created = await createAs(producerToken, payload('Lanyon'));
+
+      const lead = await leadModel.findById(created.id);
+      expect(lead!.policiesOfInterest).toEqual([]);
+    });
+
+    it('rejects a policy type outside the canonical vocabulary', async () => {
+      await createAs(
+        producerToken,
+        payload('Marlow', {
+          policiesOfInterest: [{ policyType: 'Pet', itemCount: 1 }],
+        }),
+        400,
+      );
+    });
+
+    it('unions the policies of interest when deduping onto an existing lead', async () => {
+      const first = await createAs(
+        producerToken,
+        payload('Norbury', {
+          quoteControlNumber: 'QCN-PAC56-1',
+          policiesOfInterest: [{ policyType: 'Auto', itemCount: 1 }],
+        }),
+      );
+
+      // Same QCN — signal 2 merges the second submission onto the first lead.
+      const second = await createAs(
+        producerToken,
+        payload('Norbury', {
+          quoteControlNumber: 'QCN-PAC56-1',
+          policiesOfInterest: [
+            // Restating Auto with a different count must NOT add a second row.
+            { policyType: 'Auto', itemCount: 3 },
+            { policyType: 'Umbrella', itemCount: 1 },
+          ],
+          address: {
+            street: '9 Norbury Rise',
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74109',
+          },
+        }),
+      );
+
+      expect(second.id).toBe(first.id);
+      const lead = await leadModel.findById(first.id);
+      // Additive: someone re-enquiring about a second line wants both quoted,
+      // and the count already on file wins over the restatement.
+      expect(
+        lead!.policiesOfInterest.map((p) => [p.policyType, p.itemCount]),
+      ).toEqual([
+        ['Auto', 1],
+        ['Umbrella', 1],
+      ]);
+    });
+
+    it('keeps two same-type policies at different addresses distinct on merge', async () => {
+      // Type alone stopped being an identity once the dwelling moved onto the
+      // row (PAC-56 #14): a second Landlord policy on another building is a
+      // second interest, not the first one restated.
+      const landlord = (street: string) => ({
+        policyType: 'Landlord',
+        itemCount: 1,
+        sameAsHousehold: false,
+        propertyAddress: { street, city: 'Bixby', state: 'OK', zip: '74008' },
+      });
+
+      const first = await createAs(
+        producerToken,
+        payload('Trellis', {
+          quoteControlNumber: 'QCN-PAC56-14',
+          policiesOfInterest: [landlord('4 Rental Row')],
+        }),
+      );
+      const second = await createAs(
+        producerToken,
+        payload('Trellis', {
+          quoteControlNumber: 'QCN-PAC56-14',
+          policiesOfInterest: [
+            // Same building — collapses onto the row already on file.
+            landlord('4 Rental Row'),
+            landlord('88 Second Rental Ave'),
+          ],
+        }),
+      );
+
+      expect(second.id).toBe(first.id);
+      const lead = await leadModel.findById(first.id);
+      expect(
+        lead!.policiesOfInterest.map((p) => p.propertyAddress?.street),
+      ).toEqual(['4 Rental Row', '88 Second Rental Ave']);
+    });
+
+    it('copies the household address onto a same-as policy row (PAC-56 #6/#14)', async () => {
+      const created = await createAs(
+        producerToken,
+        payload('Oakridge', {
+          policiesOfInterest: [
+            {
+              policyType: 'Home',
+              itemCount: 1,
+              sameAsHousehold: true,
+              // Discarded: a row cannot claim "same as household" and store
+              // something else.
+              propertyAddress: {
+                street: '999 Elsewhere Ave',
+                city: 'Broken Arrow',
+                state: 'OK',
+                zip: '74011',
+              },
+            },
+          ],
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(lead!.policiesOfInterest[0].propertyAddress?.street).toBe(
+        '77 Oakridge Lane',
+      );
+      expect(lead!.policiesOfInterest[0].sameAsHousehold).toBe(true);
+      // The lead-level field is migration-only now and must stay unwritten.
+      expect(lead!.propertyAddress).toBeUndefined();
+    });
+
+    it('gives each property policy its own address (PAC-56 #14)', async () => {
+      // The case this ticket exists for: one household insuring the home they
+      // live in AND a rental they let out.
+      const created = await createAs(
+        producerToken,
+        payload('Pinehurst', {
+          policiesOfInterest: [
+            { policyType: 'Home', itemCount: 1, sameAsHousehold: true },
+            {
+              policyType: 'Landlord',
+              itemCount: 2,
+              sameAsHousehold: false,
+              propertyAddress: {
+                street: '4 Rental Row',
+                city: 'Bixby',
+                state: 'OK',
+                zip: '74008',
+              },
+            },
+          ],
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(
+        lead!.policiesOfInterest.map((p) => [
+          p.policyType,
+          p.propertyAddress?.street,
+        ]),
+      ).toEqual([
+        ['Home', '77 Pinehurst Lane'],
+        ['Landlord', '4 Rental Row'],
+      ]);
+      // The living address is untouched — they are different places.
+      expect(lead!.address?.street).toBe('77 Pinehurst Lane');
+    });
+
+    it('rejects a property policy with no address once same-as is cleared', async () => {
+      await createAs(
+        producerToken,
+        payload('Quarry', {
+          policiesOfInterest: [
+            {
+              policyType: 'Home',
+              itemCount: 1,
+              sameAsHousehold: false,
+              propertyAddress: { street: '', city: '', state: '', zip: '' },
+            },
+          ],
+        }),
+        400,
+      );
+    });
+
+    it('stores no property address for a non-property policy, even with same-as on', async () => {
+      // `sameAsHousehold` DEFAULTS to true, so this is the regression guard: an
+      // Auto-only lead must not silently acquire a copy of the living address.
+      const created = await createAs(
+        producerToken,
+        payload('Ravenswood', {
+          policiesOfInterest: [
+            { policyType: 'Auto', itemCount: 1, sameAsHousehold: true },
+          ],
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(lead!.policiesOfInterest[0].propertyAddress).toBeUndefined();
+      expect(lead!.policiesOfInterest[0].sameAsHousehold).toBe(false);
+      expect(lead!.propertyAddress).toBeUndefined();
+    });
+
+    it('stores no property address when policies of interest are not asked for', async () => {
+      // The internal `/leads/new` form omits the section entirely — it never
+      // asks what to quote. Nothing about a property must be inferred from that.
+      const created = await createAs(producerToken, payload('Selby'));
+
+      const lead = await leadModel.findById(created.id);
+      expect(lead!.policiesOfInterest).toEqual([]);
+      expect(lead!.propertyAddress).toBeUndefined();
+    });
 
     it('does not reassign the producer when deduping onto an existing lead', async () => {
       const owner = await userModel.findOne({ email: seed.ownerEmail });
@@ -2347,6 +3500,31 @@ describe('SFA API (e2e)', () => {
         emails: ['devon.detail@example.com'],
         phones: ['5551110000'],
         quoteControlNumber: 'QCN-380001',
+        // `PYgez` is stored as the raw Quote Recaps choice code, to prove the
+        // read path normalizes this field like every other policy type here.
+        policiesOfInterest: [
+          // No row address — the pre-PAC-56-#14 shape, which must still read.
+          { policyType: 'PYgez', itemCount: 2 },
+          {
+            policyType: 'Home',
+            itemCount: 1,
+            propertyAddress: {
+              street: '11 Insured Way',
+              city: 'Jenks',
+              state: 'OK',
+              zip: '74037',
+            },
+            sameAsHousehold: false,
+          },
+        ],
+        // The lead-level dwelling migrated records carry. Kept alongside the
+        // row address above so one fixture exercises both read paths.
+        propertyAddress: {
+          street: '3 Legacy Lane',
+          city: 'Jenks',
+          state: 'OK',
+          zip: '74037',
+        },
         producerId: producer!._id,
         householdId: household._id,
         primaryContactId: primary._id,
@@ -2533,6 +3711,29 @@ describe('SFA API (e2e)', () => {
       expect(body.temperature).toBe('Hot');
       expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
       expect(body.quoteControlNumber).toBe('QCN-380001');
+      // `PYgez` is the SmartSuite code for Auto — normalized on read. The
+      // dwelling rides on the row that needs it (PAC-56 #14); a row without one
+      // reads `null` rather than borrowing the lead's.
+      expect(body.policiesOfInterest).toEqual([
+        { policyType: 'Auto', itemCount: 2, propertyAddress: null },
+        {
+          policyType: 'Home',
+          itemCount: 1,
+          propertyAddress: {
+            street: '11 Insured Way',
+            city: 'Jenks',
+            state: 'OK',
+            zip: '74037',
+          },
+        },
+      ]);
+      // Still surfaced, for the migrated leads that only have this.
+      expect(body.propertyAddress).toEqual({
+        street: '3 Legacy Lane',
+        city: 'Jenks',
+        state: 'OK',
+        zip: '74037',
+      });
       expect(body.intakeChannel).toBe('internal');
       // Recomputed from `createdDate`, not the stored `agingDays` (0).
       expect(body.agingDays).toBeGreaterThan(0);
@@ -2589,7 +3790,7 @@ describe('SFA API (e2e)', () => {
       expect(body.household?.policies[0].policyType).toBe('Auto');
     });
 
-    it('returns the newest recap in full and the rest as summaries', async () => {
+    it('returns every recap in full, newest first', async () => {
       const body = await getAs(producerToken, leadId);
 
       expect(body.latestQuoteRecap?.id).toBe(newerRecapId);
@@ -2599,12 +3800,33 @@ describe('SFA API (e2e)', () => {
       expect(body.latestQuoteRecap?.policies).toHaveLength(2);
       expect(body.latestQuoteRecap?.notes).toContain('multi-policy');
 
+      /*
+       * Earlier recaps used to be summary-shaped — a date, a status and a
+       * total. That could not answer the only question the "N earlier recaps"
+       * expander is opened to ask: *what changed between this quote and the one
+       * before it?* Since PAC-56 #11 they carry the same full shape, so the
+       * expander renders the identical body component (a handful of recaps per
+       * lead, so the payload cost is negligible).
+       */
       expect(body.earlierQuoteRecaps).toHaveLength(1);
       expect(body.earlierQuoteRecaps[0].id).toBe(olderRecapId);
-      // Summary-shaped: the heavy fields belong only to the latest.
-      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('policies');
-      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('notes');
-      expect(body.earlierQuoteRecaps[0]).not.toHaveProperty('document');
+      expect(body.earlierQuoteRecaps[0]).toHaveProperty('policies');
+      expect(body.earlierQuoteRecaps[0]).toHaveProperty('notes');
+      expect(body.earlierQuoteRecaps[0]).toHaveProperty('document');
+      expect(body.earlierQuoteRecaps[0].policies[0].policyType).toBe('Auto');
+    });
+
+    it('exposes recap authorship for the notes block', async () => {
+      // PAC-56 #13: a note rendered under system-derived totals is unreadable
+      // without knowing a person wrote it, so the card needs an author and a
+      // date. These fixtures are migration-shaped and carry no `producerId`,
+      // which is exactly the case that must resolve to `null` rather than to a
+      // placeholder — "Unknown" would read as a person's name.
+      const body = await getAs(producerToken, leadId);
+
+      expect(body.latestQuoteRecap).toHaveProperty('producerName');
+      expect(body.latestQuoteRecap?.producerName).toBeNull();
+      expect(body.latestQuoteRecap?.createdAt).toEqual(expect.any(String));
     });
 
     it('returns the deal and its prior insurance, with only stored fields', async () => {
@@ -3067,7 +4289,8 @@ describe('SFA API (e2e)', () => {
     ) => ({
       leadId,
       policies: [{ policyType: 'Auto', premium: 1200.1, itemCount: 2 }],
-      sameAsHousehold: true,
+      // Required on create since PAC-56 #16.
+      insuranceRenewalMonth: 'March',
       quoteDocument: {
         key: keyFor(leadId),
         filename: 'quote.pdf',
@@ -3198,19 +4421,95 @@ describe('SFA API (e2e)', () => {
       const body = await createAs(
         producerToken,
         payload(lead._id.toString(), {
-          policies: [{ policyType: 'Home', premium: 800, itemCount: 1 }],
-          sameAsHousehold: true,
-          propertyAddress: {
-            street: 'Somewhere Else',
-            city: 'X',
-            state: 'Y',
-            zip: '00000',
-          },
+          policies: [
+            {
+              policyType: 'Home',
+              premium: 800,
+              itemCount: 1,
+              sameAsHousehold: true,
+              propertyAddress: {
+                street: 'Somewhere Else',
+                city: 'X',
+                state: 'Y',
+                zip: '00000',
+              },
+            },
+          ],
         }),
       );
 
       const recap = await quoteRecapModel.findById(body.id);
-      expect(recap!.propertyAddress?.street).toBe('9 Quote Way');
+      expect(recap!.policies[0].propertyAddress?.street).toBe('9 Quote Way');
+      expect(recap!.policies[0].sameAsHousehold).toBe(true);
+      // The recap-level field is pre-PAC-56-#14 only and must stay unwritten.
+      expect(recap!.propertyAddress).toBeUndefined();
+    });
+
+    it('gives each quoted property policy its own address (PAC-56 #14)', async () => {
+      // A home and a landlord policy are two buildings; one recap-level address
+      // could only ever have named one of them.
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            {
+              policyType: 'Home',
+              premium: 800,
+              itemCount: 1,
+              sameAsHousehold: true,
+            },
+            {
+              policyType: 'Landlord',
+              premium: 640,
+              itemCount: 1,
+              sameAsHousehold: false,
+              propertyAddress: {
+                street: '4 Rental Row',
+                city: 'Bixby',
+                state: 'OK',
+                zip: '74008',
+              },
+            },
+            // Non-property: gets no address even though same-as defaults on.
+            { policyType: 'Auto', premium: 1200, itemCount: 2 },
+          ],
+        }),
+      );
+
+      const recap = await quoteRecapModel.findById(body.id);
+      expect(
+        recap!.policies.map((p) => [p.policyType, p.propertyAddress?.street]),
+      ).toEqual([
+        ['Home', '9 Quote Way'],
+        ['Landlord', '4 Rental Row'],
+        ['Auto', undefined],
+      ]);
+    });
+
+    it('rejects a quoted property policy with no address once same-as is cleared', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            {
+              policyType: 'Landlord',
+              premium: 640,
+              itemCount: 1,
+              sameAsHousehold: false,
+              propertyAddress: { street: '', city: '', state: '', zip: '' },
+            },
+          ],
+        }),
+        400,
+      );
     });
 
     it('resolves a migrated lead’s household via legacyHouseholdId and backfills it', async () => {
@@ -3387,12 +4686,33 @@ describe('SFA API (e2e)', () => {
         payload(id, { quoteDocument: undefined }),
         400,
       );
+      // The renewal month is required on create (PAC-56 #16) — and only the
+      // twelve canonical labels are accepted, not SmartSuite's choice UUIDs,
+      // for the same reason `policyType` rejects raw codes above.
+      await createAs(
+        producerToken,
+        payload(id, { insuranceRenewalMonth: undefined }),
+        400,
+      );
+      await createAs(
+        producerToken,
+        payload(id, {
+          insuranceRenewalMonth: '0897f82f-de3a-4bbb-b973-c56bb1f4fecb',
+        }),
+        400,
+      );
       // A property policy with no address and no "same as household".
       await createAs(
         producerToken,
         payload(id, {
-          policies: [{ policyType: 'Home', premium: 900, itemCount: 1 }],
-          sameAsHousehold: false,
+          policies: [
+            {
+              policyType: 'Home',
+              premium: 900,
+              itemCount: 1,
+              sameAsHousehold: false,
+            },
+          ],
         }),
         400,
       );
@@ -3477,6 +4797,80 @@ describe('SFA API (e2e)', () => {
         .get(`/api/v1/quote-recaps/context?leadId=${lead._id.toString()}`)
         .set(authHeader(producerToken))
         .expect(404);
+    });
+
+    it('round-trips the renewal month through the edit view (PAC-56 #16)', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      const id = lead._id.toString();
+      upload(id);
+
+      const created = await createAs(
+        producerToken,
+        payload(id, { insuranceRenewalMonth: 'September' }),
+      );
+
+      const view = await request(app.getHttpServer())
+        .get(`/api/v1/quote-recaps/${created.id}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+      expect(
+        (view.body as { insuranceRenewalMonth: string | null })
+          .insuranceRenewalMonth,
+      ).toBe('September');
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/quote-recaps/${created.id}`)
+        .set(authHeader(producerToken))
+        .send({ insuranceRenewalMonth: 'January' })
+        .expect(200);
+
+      const after = await request(app.getHttpServer())
+        .get(`/api/v1/quote-recaps/${created.id}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+      expect(
+        (after.body as { insuranceRenewalMonth: string | null })
+          .insuranceRenewalMonth,
+      ).toBe('January');
+    });
+
+    it('a recap with no renewal month is still editable (PAC-56 #16)', async () => {
+      /*
+       * The trap the create/patch asymmetry exists for. Every migrated recap
+       * predates the field; if the patch DTO required it, all of them would be
+       * un-saveable — and the failure would only show up against real migrated
+       * data, not in development.
+       */
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead, household } = await seedLead(producer!._id);
+      const legacy = await quoteRecapModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        leadId: lead._id,
+        householdId: household._id,
+        producerId: producer!._id,
+        premium: 900,
+        itemCount: 1,
+        productsQuoted: ['Auto'],
+        policies: [{ policyType: 'Auto', premium: 900, itemCount: 1 }],
+        // No `insuranceRenewalMonth` — exactly what the migration writes.
+      });
+
+      const view = await request(app.getHttpServer())
+        .get(`/api/v1/quote-recaps/${String(legacy._id)}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+      expect(
+        (view.body as { insuranceRenewalMonth: string | null })
+          .insuranceRenewalMonth,
+      ).toBeNull();
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/quote-recaps/${String(legacy._id)}`)
+        .set(authHeader(producerToken))
+        .send({ notes: 'Corrected the premium.' })
+        .expect(200);
     });
   });
 
@@ -3699,6 +5093,49 @@ describe('SFA API (e2e)', () => {
       // Left empty on purpose: nobody has said where this came from yet.
       expect(lead!.leadSource?.code ?? null).toBeNull();
       expect(lead!.leadSource?.label ?? '').toBe('');
+    });
+
+    it('records the policies of interest submitted publicly (PAC-56 #2)', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/v1/public/leads/${activeToken}`)
+        .send({
+          ...submission('Oyelaran'),
+          policiesOfInterest: [
+            { policyType: 'Home', itemCount: 1, sameAsHousehold: true },
+            { policyType: 'Auto', itemCount: 2 },
+          ],
+        })
+        .expect(201);
+
+      const lead = await leadModel.findOne({ lastName: 'Oyelaran' });
+      expect(
+        lead!.policiesOfInterest.map((p) => [
+          p.policyType,
+          p.itemCount,
+          p.propertyAddress?.street,
+        ]),
+      ).toEqual([
+        // A Home row with "same as household" ticked resolves server-side; the
+        // Auto row beside it gets no dwelling at all.
+        ['Home', 1, '5 Oyelaran Street'],
+        ['Auto', 2, undefined],
+      ]);
+    });
+
+    it('rejects a public property policy with no address once same-as is cleared', async () => {
+      // The public path runs the identical refinement — it is on the shared
+      // policy row schema, not bolted onto the authenticated one.
+      await request(app.getHttpServer())
+        .post(`/api/v1/public/leads/${activeToken}`)
+        .send({
+          ...submission('Osei'),
+          policiesOfInterest: [
+            { policyType: 'Renters', itemCount: 1, sameAsHousehold: false },
+          ],
+        })
+        .expect(400);
+
+      expect(await leadModel.countDocuments({ lastName: 'Osei' })).toBe(0);
     });
 
     it('surfaces a share-link lead under the no-source filter', async () => {
@@ -3956,22 +5393,46 @@ describe('SFA API (e2e)', () => {
 
     const EMPTY_DISCOUNTS = {
       escrow: false,
-      fireSubscription: { selected: false, hasProof: false },
-      roofReceipt: { selected: false, hasProof: false },
+      inspection: { selected: false },
+      fireSubscription: { selected: false },
+      roofReceipt: { selected: false },
       acvPersonalProperty: false,
       acvDwellingProtection: false,
-      drivewise: false,
+      drivewise: { selected: false },
       defensiveDriver: { selected: false, drivers: [] },
-      studentDiscount: { selected: false, hasProof: false },
+      studentDiscount: { selected: false },
     };
 
-    const policyWith = (overrides: Record<string, unknown> = {}) => ({
+    /** A key under the NBA prefix, which `assertKeyOwnership` enforces (#23). */
+    const nbaKey = (leadId: string) =>
+      `agencies/${seed.agencyId}/sold-deals/${leadId}/nba/2026/application.pdf`;
+
+    const uploadNba = (leadId: string) => {
+      const key = nbaKey(leadId);
+      uploaded.set(key, { size: 2048, contentType: 'application/pdf' });
+      return {
+        key,
+        filename: 'application.pdf',
+        contentType: 'application/pdf',
+        size: 2048,
+      };
+    };
+
+    /**
+     * ⚠ `leadId` is required now: the new business application is per policy
+     * and its key is lead-scoped (PAC-56 #23).
+     */
+    const policyWith = (
+      leadId: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
       policyType: 'Auto',
       effectiveDate: '2026-02-01',
       carrier: 'Allstate',
       policyNumber: nextCard5Number(),
       premium: 500,
       itemCount: 1,
+      newBusinessApplication: uploadNba(leadId),
       priorInsurance: { none: true },
       cancellation: { cancelled: false },
       ...overrides,
@@ -4055,6 +5516,382 @@ describe('SFA API (e2e)', () => {
       presignSpy.mockRestore();
     });
 
+    describe('carrier policy-number rules (PAC-56 #20)', () => {
+      /*
+       * ⚠ The rest of this suite passes only because the `carriers` collection
+       * is **empty** under test — `seedTestData` does not run the core seed, so
+       * `assertPolicyNumberFormats` short-circuits and every `C5-000001`-style
+       * number sails through. That is a real coverage hole, so this block seeds
+       * its own catalog rather than relying on the global one.
+       */
+      let carrierModel: Model<Carrier>;
+
+      beforeAll(async () => {
+        carrierModel = app.get<Model<Carrier>>(getModelToken(Carrier.name));
+        await carrierModel.create([
+          {
+            agencyId: null,
+            name: 'E2E Digits',
+            slug: 'e2e-digits',
+            active: true,
+            policyNumberPattern: '\\d+',
+            policyNumberHint: 'E2E Digits policy numbers are digits only.',
+          },
+          {
+            agencyId: null,
+            name: 'E2E Anything',
+            slug: 'e2e-anything',
+            active: true,
+          },
+        ]);
+      });
+
+      afterAll(async () => {
+        await carrierModel.deleteMany({
+          slug: { $in: ['e2e-digits', 'e2e-anything'] },
+        });
+      });
+
+      it('rejects a number that violates its carrier’s pattern', async () => {
+        const lead = await seedLead();
+        const res = await post(
+          {
+            leadId: lead._id.toString(),
+            soldDate: '2026-02-15',
+            policies: [
+              policyWith(lead._id.toString(), {
+                carrier: 'E2E Digits',
+                policyNumber: 'AB-123-456',
+              }),
+            ],
+          },
+          400,
+        );
+        const body = res.body as { message: string };
+        // Names the policy and quotes the carrier's own hint — "invalid policy
+        // number" on a five-policy sale tells a producer nothing.
+        expect(body.message).toContain('Policy 1');
+        expect(body.message).toContain('digits only');
+      });
+
+      it('accepts punctuation, because the rule is applied to the normalized key', async () => {
+        const lead = await seedLead();
+        await post({
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              carrier: 'E2E Digits',
+              policyNumber: '123-456-789',
+            }),
+          ],
+        });
+      });
+
+      it('leaves a carrier with no pattern unvalidated', async () => {
+        const lead = await seedLead();
+        await post({
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              carrier: 'E2E Anything',
+              policyNumber: 'AB-123-456',
+            }),
+          ],
+        });
+      });
+
+      it('leaves a carrier absent from the catalog unvalidated — the "Other" path', async () => {
+        const lead = await seedLead();
+        await post({
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              carrier: 'Some Regional Mutual',
+              policyNumber: 'AB-123-456',
+            }),
+          ],
+        });
+      });
+
+      it('rejects the client-side "Other" sentinel as a carrier name', async () => {
+        const lead = await seedLead();
+        await post(
+          {
+            leadId: lead._id.toString(),
+            soldDate: '2026-02-15',
+            policies: [
+              policyWith(lead._id.toString(), { carrier: '__other__' }),
+            ],
+          },
+          400,
+        );
+      });
+
+      it('404s a foreign lead before it ever checks the format', async () => {
+        // Ordering matters: a format error on someone else's lead would leak
+        // that the lead exists.
+        const owner = await app
+          .get<Model<User>>(getModelToken(User.name))
+          .findOne({ email: seed.ownerEmail });
+        const household = await card5HouseholdModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          name: 'Foreign Household',
+        });
+        const foreign = await card5LeadModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Foreign',
+          lastName: 'Lead',
+          status: 'Quoted',
+          producerId: owner!._id,
+          householdId: household._id,
+        });
+
+        await post(
+          {
+            leadId: foreign._id.toString(),
+            soldDate: '2026-02-15',
+            policies: [
+              policyWith(foreign._id.toString(), {
+                carrier: 'E2E Digits',
+                policyNumber: 'AB-123',
+              }),
+            ],
+          },
+          404,
+        );
+      });
+    });
+
+    describe('new business application (PAC-56 #23)', () => {
+      it('presigns it under its own prefix, so the kind is enforced by the key', async () => {
+        // `presignSpy` captures the key the service asked storage to sign,
+        // which is the thing that actually matters here.
+        const lead = await seedLead();
+        lastSignedKey = undefined;
+
+        await request(app.getHttpServer())
+          .post(PRESIGN)
+          .set(authHeader(producerToken))
+          .send({
+            leadId: lead._id.toString(),
+            kind: 'new_business_application',
+            filename: 'application.pdf',
+            contentType: 'application/pdf',
+            size: 2048,
+          })
+          .expect(201);
+
+        expect(lastSignedKey).toContain(
+          `/sold-deals/${lead._id.toString()}/nba/`,
+        );
+      });
+
+      it('keeps the discount-proof prefix byte-identical', async () => {
+        // In-flight keys exist in every environment and the verification path
+        // matches on this prefix — changing it would orphan them.
+        const lead = await seedLead();
+        lastSignedKey = undefined;
+
+        await request(app.getHttpServer())
+          .post(PRESIGN)
+          .set(authHeader(producerToken))
+          .send({
+            leadId: lead._id.toString(),
+            filename: 'proof.pdf',
+            contentType: 'application/pdf',
+            size: 2048,
+          })
+          .expect(201);
+
+        expect(lastSignedKey).toContain(`/sold-deals/${lead._id.toString()}/`);
+        expect(lastSignedKey).not.toContain('/nba/');
+      });
+
+      it('refuses to presign a non-PDF application', async () => {
+        const lead = await seedLead();
+        await request(app.getHttpServer())
+          .post(PRESIGN)
+          .set(authHeader(producerToken))
+          .send({
+            leadId: lead._id.toString(),
+            kind: 'new_business_application',
+            filename: 'application.png',
+            contentType: 'image/png',
+            size: 2048,
+          })
+          .expect(400);
+      });
+
+      it('rejects an image declared as the application, even if presigned as a proof', async () => {
+        /*
+         * The bypass the presign narrowing alone would not catch: presign a PNG
+         * as a discount proof, then declare that key as the application. Two
+         * independent gates stop it — the key sits under the wrong prefix, and
+         * `HeadObject` reports `image/png` for a PDF-only slot.
+         */
+        const lead = await seedLead();
+        const proofKey = keyFor(lead._id.toString());
+        uploaded.set(proofKey, { size: 2048, contentType: 'image/png' });
+
+        await post(
+          {
+            leadId: lead._id.toString(),
+            soldDate: '2026-02-15',
+            policies: [
+              policyWith(lead._id.toString(), {
+                newBusinessApplication: {
+                  key: proofKey,
+                  filename: 'application.png',
+                  contentType: 'application/pdf',
+                  size: 2048,
+                },
+              }),
+            ],
+          },
+          400,
+        );
+      });
+
+      it('requires one per policy', async () => {
+        const lead = await seedLead();
+        await post(
+          {
+            leadId: lead._id.toString(),
+            soldDate: '2026-02-15',
+            policies: [
+              policyWith(lead._id.toString(), {
+                newBusinessApplication: undefined,
+              }),
+            ],
+          },
+          400,
+        );
+      });
+
+      it('persists it on the policy with a server-stamped uploadedAt', async () => {
+        const lead = await seedLead();
+        const application = uploadNba(lead._id.toString());
+
+        const res = await post({
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              newBusinessApplication: application,
+            }),
+          ],
+        });
+
+        const dealId = new Types.ObjectId((res.body as { id: string }).id);
+        const [policy] = await card5PolicyModel.find({ dealId });
+        expect(policy.newBusinessApplication?.key).toBe(application.key);
+        expect(policy.newBusinessApplication?.contentType).toBe(
+          'application/pdf',
+        );
+        expect(policy.newBusinessApplication?.uploadedAt).toBeInstanceOf(Date);
+      });
+    });
+
+    describe('the wizard gate (PAC-56 #17)', () => {
+      const context = (leadId: string) =>
+        request(app.getHttpServer())
+          .get(`${SOLD}/context?leadId=${leadId}`)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+      it('reports no quote recap on a bare lead', async () => {
+        const lead = await seedLead();
+        const res = await context(lead._id.toString());
+        expect((res.body as { hasQuoteRecap: boolean }).hasQuoteRecap).toBe(
+          false,
+        );
+      });
+
+      it('reports a recap linked by leadId', async () => {
+        const lead = await seedLead();
+        const recapModel = app.get<Model<QuoteRecap>>(
+          getModelToken(QuoteRecap.name),
+        );
+        await recapModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          leadId: lead._id,
+          premium: 100,
+          itemCount: 1,
+        });
+
+        const res = await context(lead._id.toString());
+        expect((res.body as { hasQuoteRecap: boolean }).hasQuoteRecap).toBe(
+          true,
+        );
+      });
+
+      it('reports a recap reachable only by legacyLeadId', async () => {
+        /*
+         * The trap. The migration links recaps to leads *only* by legacy id, so
+         * a bare `{ leadId }` probe answers "no recap" for every migrated lead
+         * — which would lock all of them out of the Sold wizard, and would only
+         * show up against real migrated data.
+         */
+        const household = await card5HouseholdModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          name: 'Migrated Household',
+        });
+        const lead = await card5LeadModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Morgan',
+          lastName: 'Migrated',
+          status: 'Quoted',
+          producerId: card5ProducerId,
+          householdId: household._id,
+          legacySmartSuiteId: 'legacy-lead-pac56-17',
+        });
+        const recapModel = app.get<Model<QuoteRecap>>(
+          getModelToken(QuoteRecap.name),
+        );
+        await recapModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          // No `leadId` — exactly what the migration writes.
+          legacyLeadId: 'legacy-lead-pac56-17',
+          premium: 100,
+          itemCount: 1,
+        });
+
+        const res = await context(lead._id.toString());
+        expect((res.body as { hasQuoteRecap: boolean }).hasQuoteRecap).toBe(
+          true,
+        );
+      });
+
+      it('still books a sale on an already-sold lead — the gate is UI-only', async () => {
+        /*
+         * Deliberate, and the reason the gate is not enforced server-side:
+         * `AdvanceLeadStep` is idempotent so a `submissionToken` replay can
+         * self-heal a create whose follow-up died. Rejecting a sold lead here
+         * would trade that guarantee for a UI rule.
+         */
+        const lead = await seedLead();
+        await card5LeadModel.updateOne(
+          { _id: lead._id },
+          { $set: { status: 'Sold' } },
+        );
+
+        await post({
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [policyWith(lead._id.toString())],
+        });
+      });
+    });
+
     it('presigns a proof upload scoped to the agency and lead', async () => {
       const lead = await seedLead();
       lastSignedKey = undefined;
@@ -4123,9 +5960,9 @@ describe('SFA API (e2e)', () => {
           leadId: lead._id.toString(),
           soldDate: '2026-02-15',
           policies: [
-            policyWith({
+            policyWith(lead._id.toString(), {
               policyType: 'Home',
-              discounts: { ...EMPTY_DISCOUNTS, drivewise: true },
+              discounts: { ...EMPTY_DISCOUNTS, drivewise: { selected: true } },
             }),
           ],
         },
@@ -4140,7 +5977,7 @@ describe('SFA API (e2e)', () => {
           leadId: lead._id.toString(),
           soldDate: '2026-02-15',
           policies: [
-            policyWith({
+            policyWith(lead._id.toString(), {
               policyType: 'Home',
               discounts: { ...EMPTY_DISCOUNTS, escrow: true },
             }),
@@ -4156,7 +5993,7 @@ describe('SFA API (e2e)', () => {
         leadId: lead._id.toString(),
         soldDate: '2026-02-15',
         policies: [
-          policyWith({
+          policyWith(lead._id.toString(), {
             policyType: 'Home',
             discounts: { ...EMPTY_DISCOUNTS, escrow: true },
             escrow: {
@@ -4168,6 +6005,8 @@ describe('SFA API (e2e)', () => {
                 state: 'TX',
                 zip: '78745',
               },
+              // Required since PAC-56 #21, alongside the details.
+              attachment: upload(lead._id.toString()),
             },
           }),
         ],
@@ -4187,29 +6026,32 @@ describe('SFA API (e2e)', () => {
       expect(parties[0].mortgagee).toBe('First National Escrow');
     });
 
-    it('unions Card 5 selections into the deal audit triggers', async () => {
+    it('unions the discount selections into the deal audit triggers', async () => {
       const lead = await seedLead();
+      // Every selected discount now needs its proof (PAC-56 #21), so the same
+      // stub key stands in for all of them here.
+      const proof = upload(lead._id.toString());
       const res = await post({
         leadId: lead._id.toString(),
         soldDate: '2026-02-15',
         policies: [
-          policyWith({
+          policyWith(lead._id.toString(), {
             policyType: 'Auto',
             discounts: {
               ...EMPTY_DISCOUNTS,
-              drivewise: true,
+              drivewise: { selected: true, attachment: proof },
               defensiveDriver: {
                 selected: true,
                 // The same driver twice — one certificate, not two.
                 drivers: [
-                  { name: 'Dana Driver' },
-                  { name: 'Sam Second' },
-                  { name: 'Dana Driver' },
+                  { name: 'Dana Driver', attachment: proof },
+                  { name: 'Sam Second', attachment: proof },
+                  { name: 'Dana Driver', attachment: proof },
                 ],
               },
             },
           }),
-          policyWith({
+          policyWith(lead._id.toString(), {
             policyType: 'Home',
             discounts: { ...EMPTY_DISCOUNTS, acvDwellingProtection: true },
           }),
@@ -4231,44 +6073,135 @@ describe('SFA API (e2e)', () => {
       ]);
     });
 
-    it('accepts "no proof" as a real answer, not a validation failure', async () => {
+    it('demands the document for every selected discount (PAC-56 #21)', async () => {
+      /*
+       * The "no — send it to the audit" fork is gone: selecting a discount now
+       * requires its proof. Each of these was a legal submission before.
+       */
       const lead = await seedLead();
-      // The discount still applies — the chase moves to the service team.
-      const res = await post({
+      const withDiscount = (discounts: Record<string, unknown>) => ({
         leadId: lead._id.toString(),
         soldDate: '2026-02-15',
         policies: [
-          policyWith({
-            discounts: {
-              ...EMPTY_DISCOUNTS,
-              studentDiscount: { selected: true, hasProof: false },
-            },
+          policyWith(lead._id.toString(), {
+            policyType:
+              (discounts.drivewise ??
+              discounts.studentDiscount ??
+              discounts.defensiveDriver)
+                ? 'Auto'
+                : 'Home',
+            discounts: { ...EMPTY_DISCOUNTS, ...discounts },
           }),
         ],
       });
 
-      const dealId = new Types.ObjectId((res.body as { id: string }).id);
-      const deal = await card5DealModel.findById(dealId);
-      expect(deal!.auditTriggers.goodStudent).toBe(true);
+      for (const discounts of [
+        { studentDiscount: { selected: true } },
+        { drivewise: { selected: true } },
+        { inspection: { selected: true } },
+        { fireSubscription: { selected: true } },
+        { roofReceipt: { selected: true } },
+      ]) {
+        await post(withDiscount(discounts), 400);
+      }
     });
 
-    it('demands the document when the producer said they had proof', async () => {
+    it('demands a certificate per defensive driver (PAC-56 #21)', async () => {
       const lead = await seedLead();
+      const attachment = upload(lead._id.toString());
+
+      // One driver evidenced, one not — still a 400, because the certificates
+      // are per person and the audit generator emits an item per name.
       await post(
         {
           leadId: lead._id.toString(),
           soldDate: '2026-02-15',
           policies: [
-            policyWith({
+            policyWith(lead._id.toString(), {
               discounts: {
                 ...EMPTY_DISCOUNTS,
-                studentDiscount: { selected: true, hasProof: true },
+                defensiveDriver: {
+                  selected: true,
+                  drivers: [
+                    { name: 'Dana Driver', attachment },
+                    { name: 'Sam Second' },
+                  ],
+                },
               },
             }),
           ],
         },
         400,
       );
+    });
+
+    it('demands the escrow statement, not just the escrow details (PAC-56 #21)', async () => {
+      const lead = await seedLead();
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              policyType: 'Home',
+              discounts: { ...EMPTY_DISCOUNTS, escrow: true },
+              escrow: {
+                loanNumber: 'LN-1',
+                companyName: 'First National',
+                address: {
+                  street: '1 Lender Way',
+                  city: 'Tulsa',
+                  state: 'Oklahoma',
+                  zip: '74101',
+                },
+              },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('rejects an inspection selection on an auto policy', async () => {
+      // Cross-branch: without `inspection` in the property OR-list it would be
+      // accepted, generate nothing, and lose the proof silently.
+      const lead = await seedLead();
+      const attachment = upload(lead._id.toString());
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              policyType: 'Auto',
+              discounts: {
+                ...EMPTY_DISCOUNTS,
+                inspection: { selected: true, attachment },
+              },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('accepts a selected discount once its proof is attached', async () => {
+      const lead = await seedLead();
+      const attachment = upload(lead._id.toString());
+
+      await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith(lead._id.toString(), {
+            policyType: 'Auto',
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              studentDiscount: { selected: true, attachment },
+            },
+          }),
+        ],
+      });
     });
 
     it('stores the size storage reports, not the size the client claimed', async () => {
@@ -4282,13 +6215,12 @@ describe('SFA API (e2e)', () => {
         leadId: lead._id.toString(),
         soldDate: '2026-02-15',
         policies: [
-          policyWith({
+          policyWith(lead._id.toString(), {
             discounts: {
               ...EMPTY_DISCOUNTS,
               // The client lies about the size; HeadObject is the evidence.
               studentDiscount: {
                 selected: true,
-                hasProof: true,
                 attachment: { ...attachment, size: 1 },
               },
             },
@@ -4313,12 +6245,11 @@ describe('SFA API (e2e)', () => {
           leadId: lead._id.toString(),
           soldDate: '2026-02-15',
           policies: [
-            policyWith({
+            policyWith(lead._id.toString(), {
               discounts: {
                 ...EMPTY_DISCOUNTS,
                 studentDiscount: {
                   selected: true,
-                  hasProof: true,
                   attachment: {
                     key: foreignKey,
                     filename: 'proof.pdf',
@@ -4344,12 +6275,11 @@ describe('SFA API (e2e)', () => {
           leadId: lead._id.toString(),
           soldDate: '2026-02-15',
           policies: [
-            policyWith({
+            policyWith(lead._id.toString(), {
               discounts: {
                 ...EMPTY_DISCOUNTS,
                 studentDiscount: {
                   selected: true,
-                  hasProof: true,
                   attachment: {
                     key: ghost,
                     filename: 'proof.pdf',
@@ -4435,19 +6365,64 @@ describe('SFA API (e2e)', () => {
       return res.body as CreateSoldDealResponse;
     };
 
-    const autoPolicy = (overrides: Record<string, unknown> = {}) => ({
+    /** The new business application is required per policy since #23. */
+    const genNba = (leadId: string) => {
+      const key = `agencies/${seed.agencyId}/sold-deals/${leadId}/nba/2026/application.pdf`;
+      genUploaded.set(key, { size: 2048, contentType: 'application/pdf' });
+      return {
+        key,
+        filename: 'application.pdf',
+        contentType: 'application/pdf',
+        size: 2048,
+      };
+    };
+
+    const autoPolicy = (
+      leadId: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
       policyType: 'Auto',
       effectiveDate: '2026-02-01',
       carrier: 'Allstate',
       policyNumber: nextNum(),
       premium: 500,
       itemCount: 1,
+      newBusinessApplication: genNba(leadId),
       priorInsurance: { none: true },
       cancellation: { cancelled: false },
       ...overrides,
     });
 
+    /*
+     * Every selected discount needs a proof since PAC-56 #21, and these tests
+     * exist to exercise discount-driven generation — so this block needs its
+     * own storage stub. Same approach as the Card 5 block, whose spy is
+     * restored before this one runs.
+     */
+    const genUploaded = new Map<
+      string,
+      { size: number; contentType: string }
+    >();
+    let genStatSpy: jest.SpyInstance;
+
+    const genProof = (leadId: string) => {
+      const key = `agencies/${seed.agencyId}/sold-deals/${leadId}/2026/gen-proof.pdf`;
+      genUploaded.set(key, { size: 2048, contentType: 'application/pdf' });
+      return {
+        key,
+        filename: 'gen-proof.pdf',
+        contentType: 'application/pdf',
+        size: 2048,
+      };
+    };
+
     beforeAll(async () => {
+      genStatSpy = jest
+        .spyOn(app.get(StorageService), 'statObject')
+        .mockImplementation((key: string) =>
+          Promise.resolve(genUploaded.get(key) ?? null),
+        );
+
       genDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
       genLeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
       genHouseholdModel = app.get<Model<Household>>(
@@ -4479,9 +6454,15 @@ describe('SFA API (e2e)', () => {
       );
     });
 
+    afterAll(() => {
+      genStatSpy.mockRestore();
+    });
+
     it('generates the baseline plus policy-type items for a simple sale', async () => {
       const { lead } = await seedLead();
-      const deal = await sell(lead._id.toString(), [autoPolicy()]);
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString()),
+      ]);
 
       expect(deal.auditItemCount).toBeGreaterThan(0);
 
@@ -4502,7 +6483,9 @@ describe('SFA API (e2e)', () => {
 
     it('creates the parent roll-up audit record', async () => {
       const { lead } = await seedLead();
-      const deal = await sell(lead._id.toString(), [autoPolicy()]);
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString()),
+      ]);
 
       const parent = await genAuditModel.findOne({
         dealId: new Types.ObjectId(deal.id),
@@ -4529,7 +6512,9 @@ describe('SFA API (e2e)', () => {
      */
     it('surfaces the generated items on the hand-off board', async () => {
       const { lead, clientName } = await seedLead();
-      const deal = await sell(lead._id.toString(), [autoPolicy()]);
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString()),
+      ]);
 
       const res = await request(app.getHttpServer())
         .get(`${BOARD}?page=1&pageSize=50`)
@@ -4569,7 +6554,7 @@ describe('SFA API (e2e)', () => {
 
     it("hides another producer's generated items from the board", async () => {
       const { lead, clientName } = await seedLead();
-      await sell(lead._id.toString(), [autoPolicy()]);
+      await sell(lead._id.toString(), [autoPolicy(lead._id.toString())]);
 
       // The read-only user has agency scope but a different id; the producer
       // filter is what must keep these rows out of a *producer's* board.
@@ -4584,22 +6569,76 @@ describe('SFA API (e2e)', () => {
       expect(body.items.some((r) => r.client === clientName)).toBe(true);
     });
 
+    it('carries the proof onto the generated audit item (PAC-56 #21b)', async () => {
+      /*
+       * Without this, #21 would make the hand-off *worse*: the producer is
+       * forced to upload a document for every discount they claim, and the only
+       * person who needs it — the service team on the audit board — would never
+       * see it.
+       */
+      const { lead } = await seedLead();
+      const attachment = genProof(lead._id.toString());
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString(), {
+          discounts: {
+            escrow: false,
+            inspection: { selected: false },
+            fireSubscription: { selected: false },
+            roofReceipt: { selected: false },
+            acvPersonalProperty: false,
+            acvDwellingProtection: false,
+            drivewise: { selected: true, attachment },
+            defensiveDriver: { selected: false, drivers: [] },
+            studentDiscount: { selected: false },
+          },
+        }),
+      ]);
+
+      const item = await genItemModel.findOne({
+        dealId: new Types.ObjectId(deal.id),
+        title: 'Drivewise',
+      });
+
+      expect(item).toBeTruthy();
+      expect(item!.attachments).toHaveLength(1);
+      expect(item!.attachments[0].key).toBe(attachment.key);
+      expect(item!.attachments[0].filename).toBe('gen-proof.pdf');
+      // ⚠ Still outstanding. A pre-attached document is evidence *for* the
+      // auditor, not a resolution — flipping the status because a file exists
+      // would delete the item from the hand-off board before anyone verified
+      // it. This is the first thing someone will try to "fix".
+      expect(item!.status).toBe('in_progress');
+      expect(item!.isFailed).toBe(true);
+      expect(item!.isResolved).toBe(false);
+    });
+
     it('creates one certificate item per named defensive driver', async () => {
       const { lead } = await seedLead();
       const deal = await sell(lead._id.toString(), [
-        autoPolicy({
+        autoPolicy(lead._id.toString(), {
           discounts: {
             escrow: false,
-            fireSubscription: { selected: false, hasProof: false },
-            roofReceipt: { selected: false, hasProof: false },
+            inspection: { selected: false },
+            fireSubscription: { selected: false },
+            roofReceipt: { selected: false },
             acvPersonalProperty: false,
             acvDwellingProtection: false,
-            drivewise: false,
+            drivewise: { selected: false },
             defensiveDriver: {
               selected: true,
-              drivers: [{ name: 'Dana Driver' }, { name: 'Sam Second' }],
+              // A certificate each, since PAC-56 #21.
+              drivers: [
+                {
+                  name: 'Dana Driver',
+                  attachment: genProof(lead._id.toString()),
+                },
+                {
+                  name: 'Sam Second',
+                  attachment: genProof(lead._id.toString()),
+                },
+              ],
             },
-            studentDiscount: { selected: false, hasProof: false },
+            studentDiscount: { selected: false },
           },
         }),
       ]);
@@ -4624,17 +6663,18 @@ describe('SFA API (e2e)', () => {
     it('generates the mortgagee item only when escrow was taken', async () => {
       const { lead } = await seedLead();
       const deal = await sell(lead._id.toString(), [
-        autoPolicy({
+        autoPolicy(lead._id.toString(), {
           policyType: 'Home',
           discounts: {
             escrow: true,
-            fireSubscription: { selected: false, hasProof: false },
-            roofReceipt: { selected: false, hasProof: false },
+            inspection: { selected: false },
+            fireSubscription: { selected: false },
+            roofReceipt: { selected: false },
             acvPersonalProperty: false,
             acvDwellingProtection: false,
-            drivewise: false,
+            drivewise: { selected: false },
             defensiveDriver: { selected: false, drivers: [] },
-            studentDiscount: { selected: false, hasProof: false },
+            studentDiscount: { selected: false },
           },
           escrow: {
             loanNumber: 'LN-1',
@@ -4645,6 +6685,7 @@ describe('SFA API (e2e)', () => {
               state: 'TX',
               zip: '78745',
             },
+            attachment: genProof(lead._id.toString()),
           },
         }),
       ]);
@@ -4659,7 +6700,7 @@ describe('SFA API (e2e)', () => {
     it('does not double-generate when the submission is replayed', async () => {
       const { lead } = await seedLead();
       const token = `replay-${Date.now()}`;
-      const policies = [autoPolicy()];
+      const policies = [autoPolicy(lead._id.toString())];
 
       const first = await request(app.getHttpServer())
         .post(SOLD)
@@ -4704,7 +6745,9 @@ describe('SFA API (e2e)', () => {
       );
 
       const { lead } = await seedLead();
-      const deal = await sell(lead._id.toString(), [autoPolicy()]);
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString()),
+      ]);
       expect(deal.auditItemCount).toBe(0);
 
       const stored = await genDealModel.findById(new Types.ObjectId(deal.id));
@@ -4740,11 +6783,15 @@ describe('SFA API (e2e)', () => {
       ]);
 
       const first = await seedLead();
-      const dealOne = await sell(first.lead._id.toString(), [autoPolicy()]);
+      const dealOne = await sell(first.lead._id.toString(), [
+        autoPolicy(first.lead._id.toString()),
+      ]);
       expect(dealOne.crmAssigned).toBe(true);
 
       const second = await seedLead();
-      await sell(second.lead._id.toString(), [autoPolicy()]);
+      await sell(second.lead._id.toString(), [
+        autoPolicy(second.lead._id.toString()),
+      ]);
 
       const householdOne = await genHouseholdModel.findById(
         first.household._id,
@@ -4763,7 +6810,9 @@ describe('SFA API (e2e)', () => {
       // A second sale to the SAME household keeps its CRM — the relationship
       // is with the client, not the transaction.
       const already = householdOne!.assignedCrmId!.toString();
-      await sell(first.lead._id.toString(), [autoPolicy()]);
+      await sell(first.lead._id.toString(), [
+        autoPolicy(first.lead._id.toString()),
+      ]);
       const reread = await genHouseholdModel.findById(first.household._id);
       expect(reread!.assignedCrmId!.toString()).toBe(already);
     });
@@ -5046,15 +7095,61 @@ describe('SFA API (e2e)', () => {
       ...overrides,
     });
 
+    /**
+     * Object storage isn't running under test, so `statObject` reports only the
+     * keys this block has "uploaded" — which since PAC-56 #23 is every policy's
+     * new business application. Same approach as the Card 5 suite.
+     */
+    const soldUploaded = new Map<
+      string,
+      { size: number; contentType: string }
+    >();
+    let soldStatSpy: jest.SpyInstance;
+
+    /** A key under the `/nba/` prefix, which `assertKeyOwnership` enforces. */
+    const soldNba = (leadId: string) => {
+      const key = `agencies/${seed.agencyId}/sold-deals/${leadId}/nba/2026/application.pdf`;
+      soldUploaded.set(key, { size: 2048, contentType: 'application/pdf' });
+      return {
+        key,
+        filename: 'application.pdf',
+        contentType: 'application/pdf',
+        size: 2048,
+      };
+    };
+
+    /**
+     * Stamps the required new business application onto every row that has not
+     * declared one.
+     *
+     * Done here rather than in `soldPolicy` because the key is lead-scoped and
+     * only `payload` knows the lead — and doing it in one place kept twenty-odd
+     * call sites unchanged.
+     */
+    const withApplications = (
+      leadId: string,
+      policies: unknown,
+    ): Record<string, unknown>[] =>
+      (policies as Record<string, unknown>[]).map((row) => ({
+        newBusinessApplication: soldNba(leadId),
+        ...row,
+      }));
+
     const payload = (
       leadId: string,
       overrides: Record<string, unknown> = {},
-    ) => ({
-      leadId,
-      soldDate: '2026-02-15',
-      policies: [soldPolicy()],
-      ...overrides,
-    });
+    ) => {
+      const body = {
+        leadId,
+        soldDate: '2026-02-15',
+        policies: [soldPolicy()],
+        ...overrides,
+      };
+      return {
+        ...body,
+        policies: withApplications(leadId, body.policies),
+      };
+    };
 
     // `object` rather than `unknown`: supertest's `.send` rejects `unknown`, and
     // every payload here is an object anyway.
@@ -5094,6 +7189,12 @@ describe('SFA API (e2e)', () => {
     };
 
     beforeAll(async () => {
+      soldStatSpy = jest
+        .spyOn(app.get(StorageService), 'statObject')
+        .mockImplementation((key: string) =>
+          Promise.resolve(soldUploaded.get(key) ?? null),
+        );
+
       soldDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
       soldPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
       soldLeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
@@ -5113,6 +7214,10 @@ describe('SFA API (e2e)', () => {
       const userModel = app.get<Model<User>>(getModelToken(User.name));
       const producer = await userModel.findOne({ email: seed.producerEmail });
       producerId = producer!._id;
+    });
+
+    afterAll(() => {
+      soldStatSpy.mockRestore();
     });
 
     it('books a deal with server-derived totals', async () => {
@@ -5483,7 +7588,7 @@ describe('SFA API (e2e)', () => {
                 policyType: 'Home',
                 // Silently stripping this would generate a Drivewise audit item
                 // for a deal with no auto line.
-                discounts: { drivewise: true },
+                discounts: { drivewise: { selected: true } },
               }),
             ],
           }),
@@ -5511,6 +7616,18 @@ describe('SFA API (e2e)', () => {
         {
           policies: [
             soldPolicy({ policyType: 'Home', discounts: { escrow: true } }),
+          ],
+        },
+        // No prior insurance, yet a cancellation (PAC-56 #24). Rejected rather
+        // than stripped: `PriorInsuranceStep` filters to declared policies, so
+        // stripping would drop a date the producer typed with no row to show
+        // for it.
+        {
+          policies: [
+            soldPolicy({
+              priorInsurance: { none: true },
+              cancellation: { cancelled: true, effectiveDate: '2026-01-01' },
+            }),
           ],
         },
       ];
@@ -5579,6 +7696,114 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       expect((res.body as SoldDealLeadContext).householdId).toBeNull();
+    });
+
+    describe('deal roll-up recompute on PATCH /policies/:id (PAC-56 #25)', () => {
+      const patchPolicy = (policyId: string, body: object, expected = 200) =>
+        request(app.getHttpServer())
+          .patch(`/api/v1/policies/${policyId}`)
+          .set(authHeader(producerToken))
+          .send(body)
+          .expect(expected);
+
+      it('moves the deal totals when a premium is corrected', async () => {
+        const { lead } = await seedSoldLead(producerId);
+        const created = await createAs(
+          producerToken,
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({ premium: 1000, itemCount: 2 }),
+              soldPolicy({ policyType: 'Home', premium: 500, itemCount: 1 }),
+            ],
+          }),
+        );
+        expect(created.premium).toBe(1500);
+
+        const policies = await soldPolicyModel
+          .find({ dealId: dealRef(created.id) })
+          .sort({ premium: -1 });
+        await patchPolicy(policies[0]._id.toString(), { premium: 1250.5 });
+
+        const deal = await soldDealModel.findById(created.id);
+        expect(deal!.premium).toBe(1750.5);
+        expect(deal!.itemCount).toBe(3);
+        expect(deal!.policyCount).toBe(2);
+      });
+
+      it('never moves soldDateYmd — the Sold scorecard buckets on it', async () => {
+        const { lead } = await seedSoldLead(producerId);
+        const created = await createAs(
+          producerToken,
+          payload(lead._id.toString(), {
+            policies: [soldPolicy({ premium: 400, itemCount: 1 })],
+          }),
+        );
+        const before = await soldDealModel.findById(created.id);
+
+        const policy = await soldPolicyModel.findOne({
+          dealId: dealRef(created.id),
+        });
+        await patchPolicy(policy!._id.toString(), { premium: 900 });
+
+        const after = await soldDealModel.findById(created.id);
+        expect(after!.premium).toBe(900);
+        // A Thursday correction must not re-date a Monday sale.
+        expect(after!.soldDateYmd).toBe(before!.soldDateYmd);
+        expect(after!.soldDate?.toISOString()).toBe(
+          before!.soldDate?.toISOString(),
+        );
+      });
+
+      it('leaves a migrated deal alone', async () => {
+        /*
+         * The data-integrity guard. A migrated deal's premium is SmartSuite's
+         * rollup over rows we may hold only part of, so recomputing would
+         * silently overwrite a historical figure with the imported subset —
+         * from a page whose button says "quick edit".
+         */
+        const migrated = await soldDealModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId,
+          premium: 9999,
+          itemCount: 42,
+          policyCount: 7,
+          // What the migration writes; the app writes 'snapshot'.
+          premiumSource: 'rollup',
+          legacySmartSuiteId: 'legacy-deal-pac56-25',
+        });
+        const policy = await soldPolicyModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          policyNumber: nextNumber(),
+          policyType: 'Auto',
+          premium: 100,
+          items: 1,
+          dealId: migrated._id,
+        });
+
+        await patchPolicy(policy._id.toString(), { premium: 250 });
+
+        const after = await soldDealModel.findById(migrated._id);
+        expect(after!.premium).toBe(9999);
+        expect(after!.itemCount).toBe(42);
+        expect(after!.policyCount).toBe(7);
+      });
+
+      it('leaves a deal-less policy alone rather than erroring', async () => {
+        const orphan = await soldPolicyModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          policyNumber: nextNumber(),
+          policyType: 'Auto',
+          premium: 100,
+          items: 1,
+        });
+        // No `dealId`, so nothing to roll up. Under `own` scope a policy with
+        // no deal is unattributable and 404s — which is the correct answer, and
+        // is what this pins.
+        await patchPolicy(orphan._id.toString(), { premium: 250 }, 404);
+      });
     });
   });
 });

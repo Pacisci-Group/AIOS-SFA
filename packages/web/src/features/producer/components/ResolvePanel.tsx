@@ -94,7 +94,7 @@ export function ResolvePanel({ deal, onClose, onResolved }: ResolvePanelProps) {
     <Sheet open={!!deal} onOpenChange={(open) => !open && !pending && close()}>
       <SheetContent
         side="right"
-        className="w-[420px] sm:max-w-[420px] p-0 gap-0 flex flex-col bg-[#0D1628] border-l border-white/[0.08]"
+        className="flex w-full flex-col gap-0 border-l border-border p-0 sm:w-[420px] sm:max-w-[420px] dark:border-white/[0.08] dark:bg-[#0D1628]"
       >
         {deal && (
           <>

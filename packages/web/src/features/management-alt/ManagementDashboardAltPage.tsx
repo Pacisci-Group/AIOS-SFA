@@ -136,8 +136,8 @@ function SidecarMailer({ onClose }: { onClose: () => void }) {
       <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
         <div>
           <div className="flex items-center gap-2 mb-0.5">
-            <Mail size={15} className="text-accent" />
-            <span className="text-xs font-mono font-medium text-accent uppercase tracking-widest">Mailer QCN Lookup</span>
+            <Mail size={15} className="text-success" />
+            <span className="text-xs font-mono font-medium text-success uppercase tracking-widest">Mailer QCN Lookup</span>
           </div>
           <p className="text-muted-foreground text-xs">Enter a Quote Control Number to pull property data</p>
         </div>
@@ -179,8 +179,8 @@ function SidecarMailer({ onClose }: { onClose: () => void }) {
             {/* Property Details */}
             <div className="bg-secondary rounded-lg border border-border p-4">
               <div className="flex items-center gap-2 mb-3">
-                <Home size={13} className="text-accent" />
-                <span className="text-xs font-mono uppercase tracking-widest text-accent">Property Details</span>
+                <Home size={13} className="text-success" />
+                <span className="text-xs font-mono uppercase tracking-widest text-success">Property Details</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -218,7 +218,7 @@ function SidecarMailer({ onClose }: { onClose: () => void }) {
             className={`w-full py-3 rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2 ${
               logged
                 ? "bg-emerald-700/40 text-emerald-300 border border-emerald-700/50 cursor-default"
-                : "bg-accent text-white hover:bg-emerald-500 active:scale-[0.98]"
+                : "bg-success text-white hover:bg-emerald-500 active:scale-[0.98]"
             }`}
           >
             {logged ? <><CheckCircle2 size={15} /> Logged to Pipeline</> : <><Zap size={15} /> LOG LEAD INTO MY WORKING PIPELINE</>}
@@ -476,7 +476,7 @@ export default function App() {
                 {/* Rows */}
                 {unclaimedLeads.length === 0 ? (
                   <div className="px-5 py-10 text-center text-muted-foreground text-sm">
-                    <CheckCircle2 size={20} className="mx-auto mb-2 text-accent" />
+                    <CheckCircle2 size={20} className="mx-auto mb-2 text-success" />
                     All leads claimed. Great work!
                   </div>
                 ) : (
@@ -584,7 +584,7 @@ export default function App() {
                           <div>
                             <p className="text-sm font-semibold text-foreground leading-tight">{lead.name}</p>
                             {lead.premium && (
-                              <p className="text-xs font-mono text-accent mt-0.5">{lead.premium}</p>
+                              <p className="text-xs font-mono text-success mt-0.5">{lead.premium}</p>
                             )}
                           </div>
                           <SourcePill source={lead.source} />
@@ -639,8 +639,8 @@ export default function App() {
         onClick={openMailer}
         className={`fixed bottom-6 right-6 flex items-center gap-2.5 px-5 py-3 rounded-xl font-semibold text-sm shadow-2xl transition-all duration-200 hover:scale-105 active:scale-100 z-50 ${
           sidecarState === "mailer"
-            ? "bg-accent text-white shadow-emerald-900/50"
-            : "bg-accent text-white shadow-emerald-900/30 hover:bg-emerald-500"
+            ? "bg-success text-white shadow-emerald-900/50"
+            : "bg-success text-white shadow-emerald-900/30 hover:bg-emerald-500"
         }`}
       >
         <Mail size={15} />

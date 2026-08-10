@@ -3,7 +3,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
   CreateLeadResponse,
-  DataScope,
   LEAD_SOURCE_NONE,
   NormalizedLeadSource,
   leadStatusQueryValues,
@@ -11,6 +10,7 @@ import {
   normalizeLeadStatus,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { buildScopeFilter } from '../common/access/scope-filter';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { ListLeadsDto } from './dto/list-leads.dto';
@@ -65,6 +65,7 @@ export class LeadsService {
       primaryContact: dto.primaryContact,
       address: dto.address,
       members: dto.members,
+      policiesOfInterest: dto.policiesOfInterest,
       quoteControlNumber: dto.quoteControlNumber,
       submissionToken: dto.submissionToken,
     });
@@ -140,12 +141,13 @@ export class LeadsService {
     branchId: string | null,
     query: ListLeadsDto,
   ): FilterQuery<LeadDocument> {
-    const filter: FilterQuery<LeadDocument> = {
-      agencyId: access.agencyId,
-      isTestRecord: { $ne: true },
-    };
-
-    this.applyScope(filter, access, branchId, query);
+    // Tenancy + data-scope clamp. `scope`/`producerId` are the client's
+    // *request*; `buildScopeFilter` only ever lets them narrow.
+    const filter: FilterQuery<LeadDocument> = buildScopeFilter<LeadDocument>(
+      access,
+      branchId,
+      { requestedScope: query.scope, producerId: query.producerId },
+    );
 
     if (query.status?.length) {
       // Each selected label expands to itself plus any raw SmartSuite code that
@@ -200,50 +202,6 @@ export class LeadsService {
     }
 
     return filter;
-  }
-
-  /**
-   * Data scope is enforced here, never in the controller, and a client-supplied
-   * `scope`/`producerId` can only ever *narrow* the result set:
-   *
-   * - `own`    — pinned to the caller. `scope=agency` and a foreign `producerId`
-   *              are silently ignored rather than rejected, so a stale tab or a
-   *              tampered query returns the caller's own leads instead of an
-   *              error or (as in legacy) somebody else's.
-   * - `branch` — pinned to the caller's branch; `producerId` applies *within* it.
-   * - `agency` — pinned to the agency; `producerId` applies within it.
-   *
-   * `scope=own` is honoured at every level as a voluntary narrowing (the My/Agency
-   * toggle).
-   */
-  private applyScope(
-    filter: FilterQuery<LeadDocument>,
-    access: AccessContext,
-    branchId: string | null,
-    query: ListLeadsDto,
-  ): void {
-    const self = new Types.ObjectId(access.userId);
-
-    if (access.dataScope === DataScope.Own) {
-      filter.producerId = self;
-      return;
-    }
-
-    if (access.dataScope === DataScope.Branch && branchId) {
-      filter.branchId = branchId;
-    }
-    // Agency scope: no narrowing beyond agencyId.
-
-    if (query.scope === 'own') {
-      filter.producerId = self;
-      return;
-    }
-
-    if (query.producerId && Types.ObjectId.isValid(query.producerId)) {
-      // Kept alongside the branch clamp above, so a branch-scoped user can't
-      // reach a producer outside their branch.
-      filter.producerId = new Types.ObjectId(query.producerId);
-    }
   }
 
   /** Inclusive `createdDate` range; `dateTo` covers the whole day. */

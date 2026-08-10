@@ -12,7 +12,7 @@ export type DealType = 'Auto' | 'Home' | 'Bundle' | 'Other';
 export type PremiumSource = 'rollup' | 'snapshot' | 'none';
 
 /**
- * The Card 5 selections that drive audit-item generation, OR-ed across every
+ * The discount selections that drive audit-item generation, OR-ed across every
  * policy on the deal.
  *
  * Named for the **audit template titles** they resolve to rather than for the
@@ -151,7 +151,7 @@ export class Deal extends TenantRecord {
   mortgagee: boolean;
 
   /**
-   * The deal-level union of every policy's Card 5 selections — what audit
+   * The deal-level union of every policy's discount selections — what audit
    * generation reads. Legacy kept the equivalent booleans directly on the Deal
    * record and its generator re-read them from there, so this preserves the
    * shape the ported algorithm expects.
@@ -213,6 +213,23 @@ DealSchema.index(
 );
 DealSchema.index({ agencyId: 1, producerId: 1, soldDate: -1 });
 DealSchema.index({ agencyId: 1, householdId: 1, soldDate: -1 });
+
+/**
+ * The Sold scorecard's own-scope aggregation (PAC-11). The `soldDate` index
+ * above is on the **Date**; it cannot serve a range over the `YYYYMMDD`
+ * integer the dashboard buckets by, so this is a separate index rather than a
+ * reordering. Do not reorder.
+ */
+DealSchema.index({ agencyId: 1, producerId: 1, soldDateYmd: -1 });
+
+/**
+ * The Leaderboard (PAC-13), which groups by producer across the whole agency
+ * and so cannot use the producer-prefixed index above. Also serves the Sold
+ * scorecard for an agency-scoped caller. `soldDateYmd` carries only a
+ * single-field index on its own, which leaves `agencyId` unindexed for this
+ * query shape.
+ */
+DealSchema.index({ agencyId: 1, soldDateYmd: -1 });
 
 /**
  * The Lead Detail deal lookup (PAC-38) — "the sale this lead became". Only a

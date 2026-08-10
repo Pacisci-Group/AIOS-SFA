@@ -140,14 +140,14 @@ export function ShareLinkDialog({ open, onOpenChange }: ShareLinkDialogProps) {
             />
             <Button
               type="button"
+              variant="brand"
               disabled={create.isPending}
               onClick={() => create.mutate()}
-              className="bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110"
             >
               {create.isPending ? "Creating…" : "Create"}
             </Button>
           </div>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             The label is just for you — it never reaches the lead.
           </p>
         </div>
@@ -174,7 +174,7 @@ export function ShareLinkDialog({ open, onOpenChange }: ShareLinkDialogProps) {
                     <p className="text-sm truncate">
                       {link.label ?? "Untitled link"}
                     </p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {link.submissionCount}{" "}
                       {link.submissionCount === 1 ? "submission" : "submissions"}
                       {link.lastSubmissionAt

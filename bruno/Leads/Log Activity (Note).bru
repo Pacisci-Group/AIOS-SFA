@@ -1,0 +1,56 @@
+meta {
+  name: Log Activity (Note)
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{baseUrl}}/activities
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "leadId": "{{hotLeadId}}",
+    "type": "note",
+    "summary": "Spouse handles renewals — call back Tuesday AM"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("keeps the producer's own words", function () {
+    expect(res.getBody().activity.summary).to.equal(
+      "Spouse handles renewals — call back Tuesday AM",
+    );
+  });
+}
+
+docs {
+  # POST /activities (note) — the Lead Detail composer (PAC-16)
+
+  What the "Log a note" box on the Lead Detail timeline sends.
+
+  - **Module / permission:** `leads` / `leads:write`
+
+  A note **is** its text, so `summary` is required here while `call` / `text` /
+  `email` get a default one — those are events that stand on their own.
+
+  ## Why this matters beyond the timeline
+  Notes written here are ordinary `activities` rows, which is exactly what
+  `GET /leads/hot` reads for its narrative line. Log a note against a hot lead
+  and it becomes that lead's line on the Producer Dashboard's Priority Contact
+  List — the "mix of computer-generated activity and user-written notes" that
+  panel is specified to show.
+
+  ## Errors
+  - `400` — `type: "note"` with no `summary`:
+    ```json
+    { "message": "Validation failed",
+      "errors": { "fieldErrors": { "summary": ["A note needs some text."] } } }
+    ```
+}

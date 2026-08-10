@@ -1,6 +1,7 @@
 import type { LeadDetail, LeadTemperature } from "@sfa/shared";
 import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { QuoteRecapAction } from "@/components/leads/QuoteRecapAction";
 import { SoldDealAction } from "@/components/leads/SoldDealAction";
 import {
@@ -36,23 +37,24 @@ export function LeadDetailHeader({
 }: LeadDetailHeaderProps) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card px-4 py-4 md:px-6">
-      <div className="flex min-w-0 flex-wrap items-center gap-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 md:gap-3">
+        <MobileNav className="-ml-1" />
+        {/*
+          The breadcrumb used to end in the lead's name, repeating the `h1`
+          immediately beside it. It now ends at "Leads" and reads as the trail
+          it is — the name is the heading's job.
+        */}
         <nav
           aria-label="Breadcrumb"
-          className="flex items-center gap-1.5 text-xs text-muted-foreground"
+          className="flex items-center gap-1.5 text-sm text-muted-foreground"
         >
           <Link to="/leads" className="hover:text-foreground transition-colors">
             Leads
           </Link>
-          <ChevronRight size={12} aria-hidden />
-          <span className="max-w-[16rem] truncate font-medium text-card-foreground">
-            {lead.name}
-          </span>
+          <ChevronRight className="size-4" aria-hidden />
         </nav>
 
-        <div className="hidden h-4 w-px bg-border sm:block" />
-
-        <h1 className="truncate text-base font-semibold text-card-foreground">
+        <h1 className="truncate text-lg font-semibold tracking-tight text-card-foreground">
           {lead.name}
         </h1>
 
@@ -69,16 +71,20 @@ export function LeadDetailHeader({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        {/* Labelled here, unlike the list rows: this is the one place the pair
+            of actions sits together and has to read as a pair. */}
         <QuoteRecapAction
           leadId={lead.id}
+          leadStatus={lead.status}
           leadName={lead.name}
-          className="px-3 py-1.5 font-semibold"
         />
         <SoldDealAction
           leadId={lead.id}
+          leadStatus={lead.status}
           leadName={lead.name}
-          // Pre-selects the recap the sale came from when there is one; the
-          // Sold form treats it as optional.
+          // Pre-selects the recap the sale came from when there is one — and,
+          // since PAC-56 #17, its absence is what disables the button: no
+          // recap on file means there is nothing to mark sold yet.
           quoteRecapId={lead.latestQuoteRecap?.id}
         />
       </div>

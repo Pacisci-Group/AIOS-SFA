@@ -3,13 +3,14 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ModuleKey } from '@sfa/shared';
 import { AuthProvider } from '@/contexts/auth-context';
+import { ThemeProvider } from '@/app/ThemeProvider';
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/layout/ProtectedRoute';
 import { RequirePermission } from '@/components/layout/RequirePermission';
-import { AppLayout } from '@/components/layout/AppLayout';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { Toaster } from '@/components/ui/sonner';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 const ProducerDashboardPage = lazy(
   () => import('@/features/producer/ProducerDashboardPage'),
@@ -39,6 +40,9 @@ const LeadsPage = lazy(() => import('@/features/lead/LeadsPage'));
 const NewLeadPage = lazy(() => import('@/features/lead/NewLeadPage'));
 const NewQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/NewQuoteRecapPage'),
+);
+const EditQuoteRecapPage = lazy(
+  () => import('@/features/quote-recap/EditQuoteRecapPage'),
 );
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
 const PublicLeadFormPage = lazy(
@@ -104,9 +108,16 @@ function RoleLanding() {
 
 export function App() {
   return (
+    <ThemeProvider>
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
+      {/* Radix tooltips need a provider ancestor or `Tooltip.Root` throws at
+          render — and `components/ui/tooltip` deliberately does not self-wrap,
+          because the open/close delays are a global concern. Mounted once here
+          rather than per call site (first needed by the dashboard's lead quick
+          actions, PAC-16). */}
+      <TooltipProvider delayDuration={200}>
+        <AuthProvider>
+          <BrowserRouter>
           <Routes>
             <Route element={<PublicOnlyRoute />}>
               <Route path="/login" element={<LoginPage />} />
@@ -117,12 +128,14 @@ export function App() {
               <Route path="/nav" element={<DevNavPage />} />
 
               {/*
-                Shared app shell: CSR-accessible pages (Producer Dashboard,
-                Leads, CRM Service, Mailer, My Performance) all render inside
-                AppLayout so they share the RBAC AppSidebar. Each page still
-                declares its own per-page `RequirePermission` gate.
+                No layout route here: the shell is `AppShell`, which each page
+                renders itself so it can put `MobileNav` inside its own header
+                instead of stacking a second app bar above it. A layout route
+                would render `AppSidebar` a second time around pages that
+                already have one. Each page still declares its own per-page
+                `RequirePermission` gate.
               */}
-              <Route element={<AppLayout />}>
+              <>
                 <Route
                   element={
                     <RequirePermission permission={`${ModuleKey.Dashboard}:read`} />
@@ -215,7 +228,7 @@ export function App() {
                     }
                   />
                 </Route>
-              </Route>
+              </>
 
               <Route
                 element={
@@ -310,6 +323,17 @@ export function App() {
                     </LazyPage>
                   }
                 />
+                {/* Editing a recorded recap (PAC-56 #11). Same gate: every
+                    endpoint it calls — GET :id, the presign, PATCH :id — sits
+                    behind the same module. */}
+                <Route
+                  path="/quote-recaps/:id/edit"
+                  element={
+                    <LazyPage>
+                      <EditQuoteRecapPage />
+                    </LazyPage>
+                  }
+                />
               </Route>
 
               {/* Sold form (PAC-40). Gated on `deal_audits:write` because that
@@ -391,11 +415,13 @@ export function App() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </BrowserRouter>
-        {/* `sonner` was installed but never mounted, so `toast()` silently
-            no-opped. Used by the share-link dialog's copy action. */}
-        <Toaster richColors position="top-right" />
-      </AuthProvider>
+          </BrowserRouter>
+          {/* `sonner` was installed but never mounted, so `toast()` silently
+              no-opped. Used by the share-link dialog's copy action. */}
+          <Toaster richColors position="top-right" />
+        </AuthProvider>
+      </TooltipProvider>
     </QueryClientProvider>
+    </ThemeProvider>
   );
 }

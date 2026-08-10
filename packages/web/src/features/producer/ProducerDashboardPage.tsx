@@ -1,35 +1,34 @@
-import { useState } from "react";
+import { AppShell } from "@/components/layout/AppShell";
 import { Header } from "./components/Header";
 import { ScoreCards } from "./components/ScoreCards";
 import { DealsAuditBoard } from "./components/DealsAuditBoard";
 import { HotLeadsPanel } from "./components/HotLeadsPanel";
+import { useDashboardRange } from "./useDashboardRange";
 
 export default function ProducerDashboardPage() {
-  const [activeFilter, setActiveFilter] = useState("This Month");
+  const { range, setRange } = useDashboardRange();
 
   return (
-    // Navigation now lives in the shared AppLayout/AppSidebar shell; this page
-    // only renders its own content column (header + workspace).
-    <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden bg-background text-foreground">
-      <Header activeFilter={activeFilter} onFilterChange={setActiveFilter} />
+    <AppShell>
+      <Header range={range} onRangeChange={setRange} />
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1">
         {/* Scorecards */}
-        <ScoreCards filter={activeFilter} />
+        <ScoreCards range={range} />
 
-        {/* Workspace 60/40 split.
+        {/* Workspace 60/40 split, stacked below `xl`. `xl` rather than `lg`
+            because the hand-off board needs ~500px before its four columns
+            read; at 1024px, three fifths of what is left beside the sidebar is
+            not that.
             Page-level permission rule: access is all-or-nothing per page.
             Reaching this route already requires `dashboard:read`, so every
             panel the dashboard shows is part of the dashboard page and is
             visible to anyone with `dashboard:read`. */}
-        <div
-          className="grid gap-4 px-6 pb-6"
-          style={{ gridTemplateColumns: "3fr 2fr" }}
-        >
+        <div className="grid grid-cols-1 gap-4 px-4 pb-6 md:px-6 xl:grid-cols-[3fr_2fr]">
           <DealsAuditBoard />
           <HotLeadsPanel />
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }

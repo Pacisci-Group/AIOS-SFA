@@ -1,7 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
   DataScope,
+  carrierPolicyNumberMatches,
+  carrierSlug,
+  normalizeCarrier,
   normalizePolicyType,
   policyTypeQueryValues,
 } from '@sfa/shared';
@@ -9,15 +17,20 @@ import type {
   AccessContext,
   PolicyCheckMatch,
   PolicyCheckResponse,
+  UpdatePolicyResult,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { CarriersService } from '../carriers/carriers.service';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   Household,
   HouseholdDocument,
 } from '../households/schemas/household.schema';
+import { derivePersistedDealAggregates } from '../sold-deals/intake/sold.normalize';
 import { CheckPolicyDto } from './dto/check-policy.dto';
-import { normalizePolicyNumber } from './policy-number';
+import { UpdatePolicyDto } from './dto/update-policy.dto';
+import { normalizePolicyNumber, policyNumberKey } from './policy-number';
+import { toLeadDetailPolicy } from './policy-view';
 import { Policy, PolicyDocument } from './schemas/policy.schema';
 
 /**
@@ -38,16 +51,19 @@ type PolicyLean = Pick<
 
 @Injectable()
 export class PoliciesService {
+  private readonly logger = new Logger(PoliciesService.name);
+
   constructor(
     @InjectModel(Policy.name)
     private readonly policyModel: Model<PolicyDocument>,
     @InjectModel(Deal.name) private readonly dealModel: Model<DealDocument>,
     @InjectModel(Household.name)
     private readonly householdModel: Model<HouseholdDocument>,
+    private readonly carriers: CarriersService,
   ) {}
 
   /**
-   * Find existing policies with the same number, so Card 3 can offer to link
+   * Find existing policies with the same number, so the wizard can offer to link
    * rather than duplicate.
    *
    * Agency-scoped always. Out-of-scope matches are **reported but masked**
@@ -128,6 +144,205 @@ export class PoliciesService {
     });
 
     return { query: query.number, normalized, matches };
+  }
+
+  /**
+   * Correct a sold policy — `PATCH /policies/:id` (PAC-56 #27).
+   *
+   * The Lead Detail Sold card's quick edit. Deliberately a *field* correction,
+   * not a re-submission: the Sold wizard owns creating the deal, its policies
+   * and the audit items it triggers, and re-running any of that from here would
+   * duplicate the hand-off.
+   *
+   * ## Scope is a hard 404, unlike `check`
+   *
+   * {@link check} reports out-of-scope matches in masked form, because warning a
+   * producer about a duplicate they cannot see is the entire point of it. This
+   * is a **write target**, so it takes the blanket clamp every other write path
+   * uses: outside your scope is indistinguishable from does not exist.
+   *
+   * ⚠ No duplicate check on `policyNumber`. `PolicySchema` is non-unique on
+   * purpose (migrated data already holds duplicates, and carriers reuse numbers
+   * across lines), and warn-and-link belongs on the create path where the
+   * producer is choosing between "link" and "correct". Blocking a typo fix
+   * because the corrected number already exists would strand the record.
+   */
+  async update(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+    dto: UpdatePolicyDto,
+  ): Promise<UpdatePolicyResult> {
+    const policy = await this.loadOwnedPolicy(access, branchId, policyId);
+
+    if (dto.policyNumber) {
+      // Against the *effective* carrier: the patched value if this request is
+      // changing it, the stored one otherwise.
+      await this.assertPolicyNumberFormat(
+        access.agencyId,
+        dto.carrier !== undefined ? dto.carrier : policy.carrier,
+        dto.policyNumber,
+      );
+    }
+
+    if (dto.policyNumber !== undefined) {
+      policy.policyNumber = dto.policyNumber ?? undefined;
+      // Kept in lockstep with the number itself — a corrected policy that the
+      // duplicate check can no longer find is worse than no correction.
+      policy.policyNumberKey = dto.policyNumber
+        ? (normalizePolicyNumber(dto.policyNumber) ?? undefined)
+        : undefined;
+    }
+    if (dto.policyType !== undefined) policy.policyType = dto.policyType;
+    if (dto.carrier !== undefined) policy.carrier = dto.carrier ?? undefined;
+    if (dto.premium !== undefined) policy.premium = dto.premium;
+    if (dto.items !== undefined) policy.items = dto.items;
+    if (dto.effectiveDate !== undefined) {
+      policy.effectiveDate = dto.effectiveDate ?? undefined;
+    }
+    if (dto.expirationDate !== undefined) {
+      policy.expirationDate = dto.expirationDate ?? undefined;
+    }
+    if (dto.status !== undefined) policy.policyStatus = dto.status ?? undefined;
+
+    await policy.save();
+    await this.recomputeDealTotals(policy);
+    return toLeadDetailPolicy(policy);
+  }
+
+  /**
+   * Bring the parent deal's roll-ups back in line with its policies (PAC-56 #25).
+   *
+   * Until now `PATCH /policies/:id` deliberately left them alone, so correcting
+   * a premium on the Sold card left the card's own footer total disagreeing
+   * with the rows above it. Item #27 deferred the fix here.
+   *
+   * ## This moves reported numbers, and that is the point
+   *
+   * `PerformanceService` sums `deals.premium` for the Sold scorecard and the
+   * leaderboard computes attainment and breaks ties on it. A premium correction
+   * on the Lead Detail page therefore changes a producer's dashboard figure and
+   * possibly their rank. That is the intended behaviour — a scorecard built on
+   * numbers known to be wrong is worse — but it belongs in the PR description,
+   * not in a commit nobody reads.
+   *
+   * ## ⚠ Migrated deals are skipped
+   *
+   * Gated on `premiumSource === 'snapshot'`, i.e. deals **this app created**
+   * (`ResolveDealStep` stamps it). A migrated deal's premium is SmartSuite's
+   * rollup over rows we may only have partially imported —
+   * `LeadDetailDeal.policies` is documented as empty for a migrated deal whose
+   * policies carry only `legacyDealId` — so recomputing would silently
+   * overwrite a historical figure with the subset we happen to hold. The
+   * `policyCount === 0` guard is the second belt on the same trousers.
+   *
+   * The trade: a typo fix on a migrated deal still will not move its total.
+   * That is the safer direction, and it is flagged for the product owner.
+   *
+   * Best-effort and post-save: the correction is what the producer asked for,
+   * and failing the request after it committed would report the wrong outcome.
+   */
+  private async recomputeDealTotals(policy: PolicyDocument): Promise<void> {
+    if (!policy.dealId) return;
+
+    try {
+      const deal = await this.dealModel
+        .findOne({ _id: policy.dealId, agencyId: policy.agencyId })
+        .select('premiumSource');
+      if (!deal || deal.premiumSource !== 'snapshot') return;
+
+      const policies = await this.policyModel
+        .find({
+          agencyId: policy.agencyId,
+          dealId: policy.dealId,
+          isTestRecord: { $ne: true },
+        })
+        .select('policyType premium items')
+        .lean();
+
+      const totals = derivePersistedDealAggregates(policies);
+      // A zero count means the read found nothing it should have found; leaving
+      // the stored totals alone beats zeroing a real sale.
+      if (totals.policyCount === 0) return;
+
+      await this.dealModel.updateOne({ _id: deal._id }, { $set: totals });
+    } catch (error) {
+      // `premiumSource` is deliberately left as `snapshot` after a recompute:
+      // it records provenance (migrated rollup vs. app snapshot), and rewriting
+      // it would muddy exactly the distinction the guard above depends on.
+      this.logger.warn(
+        `Deal roll-up recompute failed for policy ${policy._id.toString()}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Apply the carrier's policy-number rule to a correction (PAC-56 #20).
+   *
+   * ⚠ Runs **only when the request changes the number**, deliberately. A
+   * carrier-only change on a migrated policy whose stored number predates the
+   * rule would otherwise be un-saveable — the same trap `quote-recap-edit.ts`
+   * documents for `quoteDocument`: a rule introduced today must not retroactively
+   * lock records written before it.
+   */
+  private async assertPolicyNumberFormat(
+    agencyId: string | null,
+    carrierName: string | null | undefined,
+    policyNumber: string,
+  ): Promise<void> {
+    if (!carrierName) return;
+
+    const bySlug = await this.carriers.optionsBySlug(agencyId);
+    const carrier = bySlug.get(carrierSlug(normalizeCarrier(carrierName)));
+    if (!carrier?.policyNumberPattern) return;
+
+    const key = policyNumberKey(policyNumber);
+    if (carrierPolicyNumberMatches(carrier.policyNumberPattern, key)) return;
+
+    throw new BadRequestException(
+      carrier.policyNumberHint ??
+        `"${policyNumber}" is not a valid ${carrier.name} policy number.`,
+    );
+  }
+
+  /**
+   * Load a policy inside the caller's agency and clamp it to their data scope,
+   * 404-ing rather than 403-ing in both directions.
+   *
+   * Ownership is read off the **deal**, exactly as {@link isInScope} explains —
+   * `Policy` has no `producerId`. A policy with no deal is unattributable, so
+   * under `own` scope it is treated as out of scope: this is the write path, and
+   * masking something unattributable is the safe direction.
+   */
+  private async loadOwnedPolicy(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+  ): Promise<PolicyDocument> {
+    if (!Types.ObjectId.isValid(policyId)) {
+      throw new NotFoundException('Policy not found.');
+    }
+
+    const policy = await this.policyModel.findOne({
+      _id: new Types.ObjectId(policyId),
+      agencyId: access.agencyId,
+      isTestRecord: { $ne: true },
+    });
+    if (!policy) throw new NotFoundException('Policy not found.');
+
+    const deal = policy.dealId
+      ? await this.dealModel
+          .findById(policy.dealId)
+          .select('producerId')
+          .lean<{ producerId?: Types.ObjectId }>()
+      : null;
+
+    if (!this.isInScope(access, branchId, policy, deal ?? undefined)) {
+      throw new NotFoundException('Policy not found.');
+    }
+    return policy;
   }
 
   /**

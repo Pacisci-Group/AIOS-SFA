@@ -1,7 +1,7 @@
 meta {
   name: Create Sold Deal
   type: http
-  seq: 4
+  seq: 6
 }
 
 post {
@@ -28,13 +28,54 @@ body:json {
         "policyNumber": "{{soldPolicyNumber}}",
         "premium": 1200.10,
         "itemCount": 2,
+        "newBusinessApplication": {
+          "key": "{{nbaDocumentKey}}",
+          "filename": "new-business-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
         "discounts": {
-          "drivewise": true,
+          "drivewise": {
+            "selected": true,
+            "attachment": {
+              "key": "{{soldDocumentKey}}",
+              "filename": "drivewise.pdf",
+              "contentType": "application/pdf",
+              "size": 2048
+            }
+          },
           "defensiveDriver": {
             "selected": true,
-            "drivers": [{ "name": "Dana Driver" }, { "name": "Sam Second" }]
+            "drivers": [
+              {
+                "name": "Dana Driver",
+                "attachment": {
+                  "key": "{{soldDocumentKey}}",
+                  "filename": "dana-certificate.pdf",
+                  "contentType": "application/pdf",
+                  "size": 2048
+                }
+              },
+              {
+                "name": "Sam Second",
+                "attachment": {
+                  "key": "{{soldDocumentKey}}",
+                  "filename": "sam-certificate.pdf",
+                  "contentType": "application/pdf",
+                  "size": 2048
+                }
+              }
+            ]
           },
-          "studentDiscount": { "selected": true, "hasProof": false }
+          "studentDiscount": {
+            "selected": true,
+            "attachment": {
+              "key": "{{soldDocumentKey}}",
+              "filename": "transcript.pdf",
+              "contentType": "application/pdf",
+              "size": 2048
+            }
+          }
         },
         "priorInsurance": { "none": false, "carrier": "Geico" },
         "cancellation": { "cancelled": false }
@@ -43,12 +84,28 @@ body:json {
         "policyType": "Home",
         "effectiveDate": "2026-02-01",
         "carrier": "Allstate",
-        "policyNumber": "{{soldPolicyNumber}}-H",
+        "policyNumber": "{{soldPolicyNumberHome}}",
         "premium": 899.95,
         "itemCount": 3,
+        "newBusinessApplication": {
+          "key": "{{nbaDocumentKey}}",
+          "filename": "new-business-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
         "discounts": {
           "escrow": true,
-          "roofReceipt": { "selected": true, "hasProof": true,
+          "inspection": {
+            "selected": true,
+            "attachment": {
+              "key": "{{soldDocumentKey}}",
+              "filename": "inspection-report.pdf",
+              "contentType": "application/pdf",
+              "size": 2048
+            }
+          },
+          "roofReceipt": {
+            "selected": true,
             "attachment": {
               "key": "{{soldDocumentKey}}",
               "filename": "roof-receipt.pdf",
@@ -60,7 +117,13 @@ body:json {
         "escrow": {
           "loanNumber": "LN-99887766",
           "companyName": "First National Escrow",
-          "address": { "street": "1 Lender Way", "city": "Austin", "state": "TX", "zip": "78745" }
+          "address": { "street": "1 Lender Way", "city": "Austin", "state": "TX", "zip": "78745" },
+          "attachment": {
+            "key": "{{soldDocumentKey}}",
+            "filename": "escrow-statement.pdf",
+            "contentType": "application/pdf",
+            "size": 2048
+          }
         },
         "priorInsurance": { "none": true },
         "cancellation": { "cancelled": false }
@@ -72,9 +135,16 @@ body:json {
 script:pre-request {
   // Fresh per run: policy numbers are deduped within a submission, and a
   // replayed token must resolve to the deal this run created, not a prior one.
+  //
+  // Digits only, and two distinct values rather than one plus a "-H" suffix:
+  // the carrier is Allstate, whose seeded rule is digits-only (PAC-56 #20), and
+  // the check runs on the *normalized* key — so "…-H" would normalize to
+  // "…H" and 400.
   if (!bru.getVar("soldSubmissionToken")) {
-    bru.setVar("soldSubmissionToken", "bruno-sold-" + Date.now());
-    bru.setVar("soldPolicyNumber", "BRU-" + Date.now());
+    const stamp = Date.now();
+    bru.setVar("soldSubmissionToken", "bruno-sold-" + stamp);
+    bru.setVar("soldPolicyNumber", String(stamp));
+    bru.setVar("soldPolicyNumberHome", String(stamp + 1));
   }
 }
 
@@ -132,8 +202,28 @@ docs {
   | leadId           | string | required; the household is resolved from it |
   | soldDate         | date   | `YYYY-MM-DD`, one per deal (Card 1)         |
   | quoteRecapId     | string | optional — not every sale has a quote       |
-  | policies         | array  | 1–10; one per loop iteration (Cards 2–7)    |
+  | policies         | array  | 1–10; one per loop iteration                |
+  | policies[].newBusinessApplication | object | **required**, PDF only — see below |
   | submissionToken  | string | optional idempotency key, 8–200 chars       |
+
+  ## The new business application (PAC-56 #23)
+  Required on **every policy**, and **PDF only** — the deliberate exception to
+  the sold form's PDF-or-image rule, because it is a signed application rather
+  than a photographed receipt.
+
+  Per policy rather than legacy's five type-keyed columns on the Deal
+  (`Auto_`/`Home_`/`Landlord_`/`Renters_`/`Other_New Business Application`): the
+  wizard already loops per policy, legacy's own Policies table carried the same
+  field (`sd61f05a5f`), and two Landlord policies on one deal each need their
+  own application rather than sharing a slot.
+
+  Its key must have been issued with `kind: "new_business_application"` — see
+  `Presign New Business Application`. A key from the discount-proof prefix is
+  rejected, which is what stops an image being declared as the application.
+
+  ⚠ The migration does **not** port legacy's copies. They are SmartSuite
+  `file[]` values behind opaque Filestack handles; moving those binaries out is
+  a separate exercise, not an oversight.
 
   ### Lead-scoped, not household-scoped
   Legacy rejects a sold log with no lead, and resolving the household
@@ -146,14 +236,45 @@ docs {
   SmartSuite maintained them as rollups; Mongo has none, so they are computed
   here — and a client-supplied total would corrupt the Sold scorecard (PAC-11).
 
-  ## Card 5 rules worth knowing
+  ## Carrier and policy-number rules (PAC-56 #18/#20)
+  `carrier` is still a free string on the wire — the catalog (`GET /carriers`)
+  constrains what the *wizard offers*, and its "Other" escape means an unseeded
+  carrier must never block a sale. The one value rejected is the client's own
+  `__other__` sentinel.
+
+  If the submitted carrier **is** in the catalog and carries a
+  `policyNumberPattern`, the policy number must satisfy it — checked against the
+  **normalized** key (uppercase, non-alphanumerics stripped), so `123-456`
+  passes a digits-only rule. Today only Allstate carries a pattern. The 400
+  quotes the carrier's own hint and names the policy's position.
+
+  Ordering matters: this runs **after** the lead ownership clamp, so a foreign
+  lead still 404s rather than leaking its existence through a format error.
+
+  ## Discount rules worth knowing
+  - **Every selected discount requires its proof (PAC-56 #21).** The old
+    "do you have proof? / no — send it to the audit" fork is gone, and `hasProof`
+    with it: escrow, inspection, fire subscription, roof receipt, Drivewise,
+    each defensive driver, and the student transcript all 400 without a
+    document. `hasProof` is *dropped* rather than rejected if still sent, so a
+    stale client degrades quietly during a rollout.
+  - **The proof reaches the audit item, not just storage (#21b).** Each upload is
+    mapped onto the item it evidences, so the service team opens the hand-off
+    board and finds the file already attached. ⚠ The item still opens as
+    `in_progress` / failed — a document is evidence *for* the auditor, not a
+    resolution.
   - **Cross-branch discounts are rejected (400), not stripped.** A Home policy
     claiming `drivewise` would otherwise generate an auto audit item for a deal
     with no auto line, and nothing downstream could tell it was bogus.
+    `inspection` counts as a property selection for this rule.
   - **Escrow ticked ⇒ the escrow sub-card is required**, because the audit item
-    it generates asks the service team to verify exactly those fields.
-  - **`hasProof: false` is a valid answer**, not an omission — it routes the
-    chase to the service team rather than cancelling the discount.
+    it generates asks the service team to verify exactly those fields — plus its
+    statement, on `escrow.attachment` rather than on the discount flag, because
+    it evidences the loan number beside it.
+  - **`inspection` is new and generates nothing of its own.** `Home Inspection`
+    / `Landlord Inspection` already come from the policy type; the control
+    exists to carry the report. Legacy's `Passed Home Inspection` (`sqmmybna`)
+    was never ported, so it had to be added before it could be conditional.
   - Attachment `contentType`/`size` are **re-derived from storage** via
     `HeadObject`; the declared values are ignored.
 
@@ -178,7 +299,8 @@ docs {
 
   ## Errors
   - `400` — validation, cross-branch discounts, a duplicate policy number within
-    the same submission, or an oversized/disallowed document.
+    the same submission, a policy number that fails its carrier's format rule,
+    or an oversized/disallowed document.
   - `401` / `403` — auth, module or permission.
   - `404` — unknown lead, a lead outside scope, or a document key that never landed.
   - `409` — the lead is not linked to a household.

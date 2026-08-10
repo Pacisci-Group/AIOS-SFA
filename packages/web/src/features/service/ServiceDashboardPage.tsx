@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Search, ChevronDown, Archive, Plus } from "lucide-react";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { CreateTicketDialog } from "./components/CreateTicketDialog";
 import { ScorecardRow } from "./components/ScorecardRow";
 import { PriorityTicketQueue } from "./components/PriorityTicketQueue";
@@ -67,11 +69,13 @@ export default function App() {
   const openTicket = (id: string) => navigate(`/crm/tickets?ticket=${id}`);
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
+    <AppShell>
+      <div className="flex-1 flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
         <header className="relative z-50 flex-shrink-0 flex items-center gap-4 px-6 py-3.5 border-b border-border bg-background/95 backdrop-blur-sm">
+          <MobileNav className="-ml-2" />
           <div className="flex items-center gap-1.5 text-sm">
             <span className="text-muted-foreground">Dashboard</span>
             <ChevronDown size={13} className="text-muted-foreground -rotate-90" />
@@ -197,6 +201,7 @@ export default function App() {
         onOpenChange={setCreateOpen}
         onCreated={openTicket}
       />
-    </div>
+      </div>
+    </AppShell>
   );
 }

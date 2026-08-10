@@ -46,7 +46,7 @@ export function LeadsFilters({
               type="button"
               onClick={() => onScopeChange(value)}
               className={cn(
-                "px-3 py-1.5 rounded-md text-xs transition-colors",
+                "px-3 py-1.5 rounded-md text-sm transition-colors",
                 scope === value
                   ? "bg-primary/10 text-primary font-semibold"
                   : "text-muted-foreground hover:text-foreground",
@@ -60,10 +60,7 @@ export function LeadsFilters({
 
       <div className="flex flex-col gap-3 md:flex-row md:items-center">
         <div className="relative flex-1 min-w-0">
-          <Search
-            size={15}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
-          />
+          <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <Input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
@@ -96,10 +93,10 @@ export function LeadsFilters({
             onClick={onOpenAdvanced}
             className="shrink-0 bg-card border-border"
           >
-            <SlidersHorizontal size={14} />
+            <SlidersHorizontal className="size-4" />
             <span className="hidden sm:inline">Filters</span>
             {activeCount > 0 && (
-              <Badge className="bg-primary/12 text-primary border-transparent rounded-full text-[10px] px-1.5 py-0 font-semibold">
+              <Badge size="sm" className="bg-primary/12 text-primary px-1.5 font-semibold">
                 {activeCount}
               </Badge>
             )}

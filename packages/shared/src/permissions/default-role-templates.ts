@@ -44,6 +44,10 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       ...permissionsForModule(ModuleKey.DealAudits),
       ...permissionsForModule(ModuleKey.Dashboard, ['read']),
       ...permissionsForModule(ModuleKey.Performance, ['read']),
+      // Added by PAC-13. A Branch Manager already holds `dashboard:read` and
+      // can therefore open the Producer Dashboard — without this, the Motivation
+      // Hub on that page 403s for them while every other widget loads.
+      ...permissionsForModule(ModuleKey.Leaderboard, ['read']),
       modulePermission(ModuleKey.CrmService, 'read'),
       modulePermission(ModuleKey.CrmService, 'write'),
     ],

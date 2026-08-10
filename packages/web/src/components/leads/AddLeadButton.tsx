@@ -27,14 +27,19 @@ export function AddLeadButton({ to = NEW_LEAD_ROUTE, className }: AddLeadButtonP
   return (
     <Button
       asChild
+      variant="brand"
       className={cn(
-        "bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110 active:scale-95 shadow-[0_0_20px_rgba(56,189,248,0.25)]",
+        "active:scale-95 shadow-[0_0_20px_rgba(56,189,248,0.25)]",
         className,
       )}
     >
       <Link to={to}>
         <Plus size={15} />
-        Add New Lead
+        {/* "Add New Lead" is 100px of label next to a Share button and a
+            hamburger on a 375px header. The short form keeps the same verb and
+            noun; the full one returns as soon as there is room. */}
+        <span className="sm:hidden">New Lead</span>
+        <span className="hidden sm:inline">Add New Lead</span>
       </Link>
     </Button>
   );

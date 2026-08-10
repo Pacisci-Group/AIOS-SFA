@@ -25,6 +25,46 @@ export interface LeadAddress {
 }
 
 /**
+ * One policy the submitter asked to have quoted (PAC-56 #2).
+ *
+ * A real sub-schema rather than `type: Object`, so the item count is stored as a
+ * number and a malformed row fails on write instead of surfacing as `NaN` on a
+ * dashboard later.
+ */
+@Schema({ _id: false })
+export class LeadPolicyOfInterest {
+  @Prop({ required: true, trim: true })
+  policyType: string;
+
+  @Prop({ required: true, min: 1, max: 99 })
+  itemCount: number;
+
+  /**
+   * The dwelling **this row** is about (PAC-56 #14) — **already resolved**:
+   * a row the submitter marked "same as household" holds a copy of the living
+   * address, so nothing downstream has to re-apply the flag.
+   *
+   * Set only on property-type rows. It lives here rather than on the lead
+   * because a prospect can ask about the home they live in *and* a rental they
+   * let out in one submission, and a single lead-level address describes only
+   * one of them.
+   */
+  @Prop({ type: Object })
+  propertyAddress?: LeadAddress;
+
+  /**
+   * What the submitter chose, kept alongside the resolved address purely so an
+   * edit form can round-trip the toggle rather than having to guess it back
+   * from an address comparison.
+   */
+  @Prop({ default: false })
+  sameAsHousehold: boolean;
+}
+
+const LeadPolicyOfInterestSchema =
+  SchemaFactory.createForClass(LeadPolicyOfInterest);
+
+/**
  * Provenance — how this lead entered the platform (PAC-37). A producer needs to
  * tell an externally-submitted record from one they typed in themselves, and a
  * misbehaving share link has to be traceable back to the leads it produced.
@@ -74,6 +114,31 @@ export class Lead extends TenantRecord {
 
   @Prop({ type: Date, index: true })
   lastActivityAt?: Date;
+
+  /**
+   * What the submitter asked to be quoted, captured at intake (PAC-56 #2).
+   * Canonical `POLICY_TYPES` labels plus an item count, mirroring the Quote
+   * Recap's policy rows minus premium.
+   *
+   * Empty on every migrated lead: SmartSuite's Leads table has no equivalent
+   * field, and the legacy Fillout intake forms never asked. Treat it as a
+   * hint for the producer, never as a precondition for anything downstream.
+   */
+  @Prop({ type: [LeadPolicyOfInterestSchema], default: [] })
+  policiesOfInterest: LeadPolicyOfInterest[];
+
+  /**
+   * The **lead-level** insured dwelling. Legacy stored exactly this on the lead
+   * (`Property Address`, `sfd5ba053e`) and the migration carries it over, so the
+   * field stays for those records.
+   *
+   * **No longer written by intake.** PAC-56 #14 moved the address onto
+   * `policiesOfInterest[].propertyAddress`, because one address per lead cannot
+   * represent a household insuring a home and a rental. Read paths prefer the
+   * per-row addresses and fall back to this.
+   */
+  @Prop({ type: Object })
+  propertyAddress?: LeadAddress;
 
   @Prop()
   quoteControlNumber?: string;
@@ -133,6 +198,24 @@ LeadSchema.index(
 LeadSchema.index({ agencyId: 1, producerId: 1, temperature: 1, status: 1 });
 // Default Leads-list query (PAC-36): scope clamp + the `lastActivityAt` sort.
 LeadSchema.index({ agencyId: 1, producerId: 1, lastActivityAt: -1 });
+
+/**
+ * The Hot Leads / Priority Contact List (PAC-15): equality on `temperature`,
+ * then **ascending** `lastActivityAt` — stalest first, which is the inverse of
+ * the Leads-list sort above and the actual definition of "needs a touch".
+ *
+ * Neither existing index serves it. The first can equality-match `temperature`
+ * but has no ordering field after it; the second orders correctly but cannot
+ * filter by temperature without a scan. A single index whose leading fields are
+ * equality predicates and whose last field is the sort key is what makes the
+ * panel an index-only read.
+ */
+LeadSchema.index({
+  agencyId: 1,
+  producerId: 1,
+  temperature: 1,
+  lastActivityAt: 1,
+});
 
 // Every one of these is a PARTIAL filter, never `sparse: true` — the same trap
 // documented on LEGACY_DEDUPE_INDEX_OPTIONS. On a compound index MongoDB only

@@ -64,16 +64,18 @@ export const DealAuditsController = createFeatureController(
   'deal-audits',
   ModuleKey.DealAudits,
 );
-// NOTE: `crm/service-tickets` is now a real domain module (see `CrmModule`),
-// not a stub feature controller.
-export const PerformanceController = createFeatureController(
-  'performance',
-  ModuleKey.Performance,
-);
-export const LeaderboardController = createFeatureController(
-  'leaderboard',
-  ModuleKey.Leaderboard,
-);
+/**
+ * NOTE: there is no `PerformanceController` stub any more. PAC-10/PAC-11
+ * replaced it with the real `PerformanceModule` (`src/performance`), which
+ * serves the Sold and Quoted scorecards. As with `ContactsController` above,
+ * the stub had to go in the same commit as the real controller: two classes on
+ * `@Controller('performance')` both register, first-wins, and which one answers
+ * depends on module import order.
+ *
+ * Likewise no `LeaderboardController` stub: PAC-13 replaced it with the real
+ * `LeaderboardModule` (`src/leaderboard`), and no `CrmServiceController` stub:
+ * the CSR work replaced it with the real `CrmModule` (`src/crm`).
+ */
 export const MailersController = createFeatureController(
   'mailers',
   ModuleKey.Mailers,

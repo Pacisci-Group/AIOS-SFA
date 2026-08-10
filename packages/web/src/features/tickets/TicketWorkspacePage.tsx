@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { KpiStrip } from "./components/KpiStrip";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
@@ -165,21 +167,26 @@ export default function App() {
   };
 
   return (
-    // `h-full`, not `h-screen`: the shell already pins itself to the viewport,
-    // so this fills the content column instead of asserting its own height
-    // inside it. Asserting 100vh here is what let the two columns drift.
-    <div className="flex-1 flex flex-col min-w-0 h-full min-h-0 overflow-hidden bg-background font-sans">
+    // `h-screen`: `AppShell` is `min-h-screen`, so it grows with its content
+    // rather than pinning the viewport. This page is a two-pane layout that
+    // scrolls each pane internally, so it has to assert the viewport height
+    // itself — `h-full` would collapse against a parent with no set height.
+    <AppShell>
+      <div className="flex-1 flex flex-col min-w-0 h-screen min-h-0 overflow-hidden bg-background font-sans">
       {/* Main content area */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {/* Page header */}
         <div className="bg-card border-b border-border px-5 py-2.5 flex items-center justify-between shrink-0">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">Service Tickets</h2>
-            <p className="text-xs text-muted-foreground">
-              {ticketsQuery.isLoading
-                ? "Loading tickets…"
-                : `${tickets.length} ticket${tickets.length !== 1 ? "s" : ""} in your queue`}
-            </p>
+          <div className="flex items-center gap-2">
+            <MobileNav className="-ml-1" />
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Service Tickets</h2>
+              <p className="text-xs text-muted-foreground">
+                {ticketsQuery.isLoading
+                  ? "Loading tickets…"
+                  : `${tickets.length} ticket${tickets.length !== 1 ? "s" : ""} in your queue`}
+              </p>
+            </div>
           </div>
         </div>
 
@@ -244,6 +251,7 @@ export default function App() {
           </>
         )}
       </div>
-    </div>
+      </div>
+    </AppShell>
   );
 }

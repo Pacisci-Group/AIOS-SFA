@@ -10,11 +10,13 @@ import {
   DealAuditDocument,
 } from '../deal-audits/schemas/deal-audit.schema';
 import {
+  DealAuditAttachment,
   DealAuditItem,
   DealAuditItemDocument,
 } from '../deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
+  attachmentKey,
   buildDedupeKey,
   buildItemName,
   computeRequiredTitles,
@@ -32,6 +34,20 @@ export interface GenerateAuditInput {
   submissionToken?: string | null;
   /** Policy id per policy type, so an item can point at what triggered it. */
   policyIdByType?: Map<string, Types.ObjectId>;
+  /**
+   * Proofs the producer uploaded at sale time, keyed by
+   * `` `${normalizeTitle(title)}|${normalizeTitle(subjectName)}` `` (PAC-56 #21b).
+   *
+   * Built by `SoldDealsService` — see `auditAttachmentsByItem`. Keyed on the
+   * title/subject pair rather than `buildDedupeKey` so the caller does not need
+   * the deal id it has not created yet.
+   *
+   * ⚠ Without this, PAC-56 #21 would make the hand-off *worse*: producers are
+   * now forced to upload a document for every discount they claim, and it would
+   * land in object storage where the only person who needs it — the service
+   * team working the audit board — could not see it.
+   */
+  attachmentsByItem?: Map<string, DealAuditAttachment[]>;
 }
 
 export interface GenerateAuditResult {
@@ -249,7 +265,17 @@ export class AuditGenerationService {
       firstCreatedAt: now,
       submissionToken: input.submissionToken ?? undefined,
       dedupeKey: buildDedupeKey(input.dealId.toString(), item),
-      attachments: [],
+      /*
+       * The proof the producer uploaded at sale time, if this item has one
+       * (PAC-56 #21b).
+       *
+       * ⚠ The item still opens as `in_progress` / `isFailed` above, and that is
+       * deliberate — a pre-attached document is *evidence for* the auditor, not
+       * a resolution. Flipping the status because a file exists would delete
+       * the item from the hand-off board before anyone verified it. This is the
+       * first thing someone will try to "fix".
+       */
+      attachments: input.attachmentsByItem?.get(attachmentKey(item)) ?? [],
       isTestRecord: false,
     };
   }

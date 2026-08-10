@@ -10,13 +10,13 @@ import { WIZARD_CARDS, type WizardCard } from "./sold-deal-schema";
  * than something that has to be untangled first.
  */
 
-/** Card 2 — where every loop iteration begins. */
+/** Where every loop iteration begins. */
 export const FIRST_LOOP_CARD: WizardCard = "policyType";
 
 /**
  * The card after `card`, or `null` at the end of the wizard.
  *
- * Deliberately linear today. Card 5 (PR4) introduces the first genuinely
+ * Deliberately linear today. A conditional hop would be the first genuinely
  * conditional hop — the escrow sub-card only exists when escrow was ticked —
  * which is why this is a function rather than an index bump at the call site.
  */
@@ -32,7 +32,7 @@ export interface WizardNavigation {
   atStart: boolean;
   advance: (to?: WizardCard) => void;
   back: () => void;
-  /** Restart the loop at Card 2 for the next policy. */
+  /** Restart the loop at its first card, for the next policy. */
   restartLoop: () => void;
 }
 

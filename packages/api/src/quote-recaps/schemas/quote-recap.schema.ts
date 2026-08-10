@@ -8,6 +8,14 @@ import {
 
 export type QuoteRecapDocument = HydratedDocument<QuoteRecap>;
 
+/** The insured property address. Free-form for the `Lead.address` reason. */
+export interface QuoteRecapAddress {
+  street?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+}
+
 /**
  * One row of the quoted proposal. Legacy stored only the aggregates (Fillout
  * pre-computed them); keeping the rows preserves what the producer actually
@@ -28,6 +36,25 @@ export class QuotedPolicy {
 
   @Prop({ required: true, min: 1 })
   itemCount: number;
+
+  /**
+   * The dwelling **this row** insures (PAC-56 #14) — **already resolved**: a
+   * row the producer marked "same as household" holds a copy of the household
+   * address, so nothing downstream has to re-apply the flag.
+   *
+   * Set only on property-type rows. It lives here rather than on the recap
+   * because a single recap routinely covers a home *and* a landlord policy on a
+   * different building.
+   *
+   * Optional for the reason given on the class below: migrated and seeded
+   * recaps predate the field entirely.
+   */
+  @Prop({ type: Object })
+  propertyAddress?: QuoteRecapAddress;
+
+  /** Round-trips the producer's choice for the edit form (PAC-56 #11). */
+  @Prop({ default: false })
+  sameAsHousehold: boolean;
 }
 
 export const QuotedPolicySchema = SchemaFactory.createForClass(QuotedPolicy);
@@ -55,14 +82,6 @@ export class QuoteDocument {
 }
 
 export const QuoteDocumentSchema = SchemaFactory.createForClass(QuoteDocument);
-
-/** The insured property address. Free-form for the `Lead.address` reason. */
-export interface QuoteRecapAddress {
-  street?: string;
-  city?: string;
-  state?: string;
-  zip?: string;
-}
 
 /**
  * Migrated from SmartSuite "The Quote Recaps Table" (6941fdb2dc9a6d024fd8bc53).
@@ -105,6 +124,20 @@ export class QuoteRecap extends TenantRecord {
   @Prop()
   recapStatus?: string;
 
+  /**
+   * When the client's current insurance renews — a month label (PAC-56 #16).
+   *
+   * Legacy's `Insurance X Month` (`s69d7c3f64`), re-ported. Optional here even
+   * though the create DTO requires it, per the class docblock: every migrated
+   * recap predates it.
+   *
+   * Stored as the **label**, not SmartSuite's choice UUID. The migration maps
+   * at write and every read path runs `normalizeInsuranceMonth`, so a database
+   * migrated before this landed still renders month names.
+   */
+  @Prop({ trim: true })
+  insuranceRenewalMonth?: string;
+
   @Prop({ type: Types.ObjectId, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
@@ -123,11 +156,18 @@ export class QuoteRecap extends TenantRecord {
   @Prop({ type: [QuotedPolicySchema], default: [] })
   policies: QuotedPolicy[];
 
-  /** Captured only when a property-type policy was quoted. */
+  /**
+   * The **recap-level** property address, and the flag that produced it.
+   *
+   * **No longer written.** PAC-56 #14 moved the address onto
+   * `policies[].propertyAddress`, because one address per recap cannot describe
+   * a home and a landlord policy at once. Both fields stay for the recaps
+   * written before that; read paths prefer the per-row addresses and fall back
+   * here.
+   */
   @Prop({ type: Object })
   propertyAddress?: QuoteRecapAddress;
 
-  /** True when `propertyAddress` was copied from the household's own address. */
   @Prop({ default: false })
   sameAsHousehold: boolean;
 
@@ -154,6 +194,21 @@ export class QuoteRecap extends TenantRecord {
   @Prop()
   legacyHouseholdId?: string;
 
+  /**
+   * `YYYYMMDD` calendar-day label, the counterpart to `Deal.soldDateYmd`.
+   *
+   * Lets the Quoted scorecard (PAC-10) run the same indexed integer range
+   * comparison the Sold scorecard uses, rather than a second `Date`-bounded
+   * code path with its own timezone edge cases. Derived by `quoteDateYmd` in
+   * `../quote.normalize`, which reads Chicago or UTC parts depending on the
+   * recap's provenance — see that docblock.
+   *
+   * Optional: every recap written before PAC-9 lacks it until
+   * `backfill:deal-refs` has run.
+   */
+  @Prop({ index: true })
+  quoteDateYmd?: number;
+
   @Prop({ default: false, index: true })
   isTestRecord: boolean;
 }
@@ -165,6 +220,17 @@ QuoteRecapSchema.index(
 );
 /** Exactly the Quoted-scorecard query. Do not reorder. */
 QuoteRecapSchema.index({ agencyId: 1, producerId: 1, quoteDate: -1 });
+
+/**
+ * The Quoted scorecard's own-scope aggregation (PAC-10). The `quoteDate` index
+ * above is on the **Date**; it cannot serve a range over the `YYYYMMDD`
+ * integer, so this is a separate index rather than a reordering. Mirrors
+ * `{ agencyId, producerId, soldDateYmd }` on `deals` exactly. Do not reorder.
+ */
+QuoteRecapSchema.index({ agencyId: 1, producerId: 1, quoteDateYmd: -1 });
+
+/** Its agency-scope counterpart, for a caller reading beyond their own rows. */
+QuoteRecapSchema.index({ agencyId: 1, quoteDateYmd: -1 });
 
 /**
  * `{ agencyId, leadId }` is a prefix of this, so lead-detail lookups are served

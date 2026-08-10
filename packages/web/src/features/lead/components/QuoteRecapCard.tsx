@@ -1,20 +1,216 @@
-import type {
-  LeadDetailQuoteRecap,
-  LeadDetailQuoteRecapSummary,
-} from "@sfa/shared";
-import { ChevronDown, FileText } from "lucide-react";
+import type { LeadDetailQuoteRecap } from "@sfa/shared";
+import {
+  CalendarClock,
+  ChevronDown,
+  Home,
+  MessageSquare,
+} from "lucide-react";
 import { useState } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Badge } from "@/components/ui/badge";
+import { EditQuoteRecapAction } from "@/components/leads/EditQuoteRecapAction";
 import { cn } from "@/lib/utils";
-import { formatCurrency, formatDate, statusBadgeClass } from "./lead-display";
+import { DetailCard, SectionLabel } from "./DetailCard";
+import { QuoteDocumentLink } from "./QuoteDocumentLink";
+import {
+  formatAddress,
+  formatCurrency,
+  formatDate,
+  statusBadgeClass,
+} from "./lead-display";
 
 interface QuoteRecapCardProps {
   latest: LeadDetailQuoteRecap;
-  earlier: LeadDetailQuoteRecapSummary[];
+  earlier: LeadDetailQuoteRecap[];
+}
+
+/**
+ * The headline figure, above the rows that make it up.
+ *
+ * The total used to sit *below* the policy list, which is the wrong way round
+ * for the question this card exists to answer. "What did we quote them?" is a
+ * number; the breakdown is the supporting detail. Putting the number last meant
+ * the reader assembled it themselves from the rows and then found the answer
+ * after they no longer needed it — and "Total · 2 items" immediately under a
+ * list of per-policy item counts read as one more row rather than a sum.
+ */
+function QuoteTotals({ recap }: { recap: LeadDetailQuoteRecap }) {
+  const policyCount = recap.policies.length || recap.productsQuoted.length;
+
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <p className="text-2xl font-semibold tabular-nums text-card-foreground">
+        {formatCurrency(recap.premium)}
+        <span className="ml-1 text-sm font-normal text-muted-foreground">
+          /yr
+        </span>
+      </p>
+      <p className="text-sm tabular-nums text-muted-foreground">
+        {policyCount > 0 && (
+          <>
+            {policyCount} {policyCount === 1 ? "policy" : "policies"}
+            {" · "}
+          </>
+        )}
+        {recap.itemCount} item{recap.itemCount === 1 ? "" : "s"}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The producer's own words, marked as such.
+ *
+ * Notes rendered as a bare paragraph of muted text directly under
+ * system-derived totals, so there was no way to tell whether a line was
+ * something a person wrote or something the app computed. It now carries a
+ * label, a rule and an attribution — the same treatment `ActivityTimeline` uses
+ * for notes on this page (PAC-56 #29), which PAC-56 #13 names as the reference.
+ */
+function QuoteNotes({ recap }: { recap: LeadDetailQuoteRecap }) {
+  if (!recap.notes) return null;
+
+  const attribution = [recap.producerName, formatDate(recap.createdAt)]
+    .filter((part) => part && part !== "—")
+    .join(" · ");
+
+  return (
+    <div className="rounded-lg border-l-2 border-primary/50 bg-sunken py-2.5 pl-3 pr-3">
+      <div className="flex items-center gap-1.5">
+        <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+        <SectionLabel>Producer notes</SectionLabel>
+      </div>
+      <p className="mt-1.5 whitespace-pre-line text-base text-card-foreground">
+        {recap.notes}
+      </p>
+      {attribution && (
+        <p className="mt-1.5 text-sm text-muted-foreground">{attribution}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One recap's contents, shared by the current recap and each earlier one.
+ *
+ * Extracted so the expander shows the *same* thing the top of the card does —
+ * an earlier recap that renders differently from the current one cannot be
+ * compared against it, which is the only reason to open the expander at all.
+ */
+function QuoteRecapBody({ recap }: { recap: LeadDetailQuoteRecap }) {
+  return (
+    <div className="space-y-4">
+      <QuoteTotals recap={recap} />
+
+      {recap.policies.length > 0 ? (
+        <ul className="divide-y divide-border border-y border-border">
+          {recap.policies.map((policy, index) => (
+            <li
+              key={`${policy.policyType}-${index}`}
+              className="flex items-start justify-between gap-3 py-2.5"
+            >
+              <span className="min-w-0">
+                <span className="block text-base text-card-foreground">
+                  {policy.policyType}
+                </span>
+                {/*
+                  Each property policy names the building it insures
+                  (PAC-56 #14). Recaps written before that carry one address
+                  for the whole proposal — rendered below the list instead.
+                */}
+                {policy.propertyAddress && (
+                  <span className="mt-0.5 flex items-start gap-1.5 text-sm text-muted-foreground">
+                    <Home className="mt-0.5 size-4 shrink-0" />
+                    <span className="break-words">
+                      {formatAddress(policy.propertyAddress)}
+                    </span>
+                  </span>
+                )}
+              </span>
+              <span className="flex shrink-0 items-center gap-3">
+                <span className="text-sm tabular-nums text-muted-foreground">
+                  {policy.itemCount} item{policy.itemCount === 1 ? "" : "s"}
+                </span>
+                <span className="text-base font-medium tabular-nums text-card-foreground">
+                  {formatCurrency(policy.premium)}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        // Migrated recaps carry the totals but not the per-policy rows.
+        <p className="text-base text-muted-foreground">
+          {recap.productsQuoted.join(", ") || "No policy detail recorded."}
+        </p>
+      )}
+
+      {/*
+        Pre-PAC-56-#14 recaps only: one address for the whole proposal, which
+        is exactly what could not describe a home plus a landlord policy.
+        Newer recaps put it on the row above and leave this null.
+      */}
+      {recap.propertyAddress && (
+        <p className="flex items-start gap-2 text-sm text-muted-foreground">
+          <Home className="mt-0.5 size-4 shrink-0" />
+          <span className="break-words">
+            Property · {formatAddress(recap.propertyAddress)}
+          </span>
+        </p>
+      )}
+
+      {/*
+        PAC-56 #16. Beside the addresses rather than in `RecapMeta`, which is
+        already carrying the badge, the quote date and the edit button — and
+        because this is a fact about the *client's* cover, not about the recap.
+        Absent on migrated recaps and on anything recorded before the field.
+      */}
+      {recap.insuranceRenewalMonth && (
+        <p className="flex items-start gap-2 text-sm text-muted-foreground">
+          <CalendarClock className="mt-0.5 size-4 shrink-0" />
+          <span>Current insurance renews in {recap.insuranceRenewalMonth}</span>
+        </p>
+      )}
+
+      <QuoteNotes recap={recap} />
+
+      {recap.document && (
+        <QuoteDocumentLink
+          recapId={recap.id}
+          filename={recap.document.filename}
+          contentType={recap.document.contentType}
+          size={recap.document.size}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Status + quote date + edit, the row that identifies a recap in a list of them.
+ *
+ * Edit is here rather than only on the current recap because an earlier recap
+ * is just as likely to hold the typo — and `EditQuoteRecapAction` gates itself,
+ * so this card takes no permission dependency.
+ */
+function RecapMeta({ recap }: { recap: LeadDetailQuoteRecap }) {
+  return (
+    <>
+      {recap.status && (
+        <Badge size="sm" className={cn("font-semibold", statusBadgeClass(recap.status))}>
+          {recap.status}
+        </Badge>
+      )}
+      <span className="text-sm tabular-nums text-muted-foreground">
+        Quoted {formatDate(recap.quoteDate)}
+      </span>
+      <EditQuoteRecapAction recapId={recap.id} />
+    </>
+  );
 }
 
 /**
@@ -43,83 +239,13 @@ export function QuoteRecapCard({ latest, earlier }: QuoteRecapCardProps) {
   const [showEarlier, setShowEarlier] = useState(false);
 
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Quote Summary
-        </h2>
-        <div className="flex items-center gap-2">
-          {latest.status && (
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-xs font-semibold",
-                statusBadgeClass(latest.status),
-              )}
-            >
-              {latest.status}
-            </span>
-          )}
-          <span className="text-xs text-muted-foreground">
-            Quoted {formatDate(latest.quoteDate)}
-          </span>
-        </div>
-      </div>
-
+    <DetailCard
+      title="Quote summary"
+      bodyless
+      action={<RecapMeta recap={latest} />}
+    >
       <div className="px-5 py-4">
-        {latest.policies.length > 0 ? (
-          <ul className="divide-y divide-border">
-            {latest.policies.map((policy, index) => (
-              <li
-                key={`${policy.policyType}-${index}`}
-                className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
-              >
-                <span className="text-sm text-card-foreground">
-                  {policy.policyType}
-                </span>
-                <span className="flex items-center gap-3 text-sm">
-                  <span className="text-xs text-muted-foreground">
-                    {policy.itemCount} item{policy.itemCount === 1 ? "" : "s"}
-                  </span>
-                  <span className="font-medium text-card-foreground">
-                    {formatCurrency(policy.premium)}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          // Migrated recaps carry the totals but not the per-policy rows.
-          <p className="text-sm text-muted-foreground">
-            {latest.productsQuoted.join(", ") || "No policy detail recorded."}
-          </p>
-        )}
-
-        <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-          <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-            Total · {latest.itemCount} item{latest.itemCount === 1 ? "" : "s"}
-          </span>
-          <span className="text-base font-semibold text-card-foreground">
-            {formatCurrency(latest.premium)}
-          </span>
-        </div>
-
-        {latest.notes && (
-          <p className="mt-3 whitespace-pre-line text-sm text-muted-foreground">
-            {latest.notes}
-          </p>
-        )}
-
-        {latest.document && (
-          <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <FileText size={13} className="shrink-0" />
-            {/*
-              Filename only, not a link: the API returns document metadata
-              without the storage key, and downloading needs its own presigned
-              -URL endpoint rather than a client that knows the path.
-            */}
-            <span className="truncate">{latest.document.filename}</span>
-          </p>
-        )}
+        <QuoteRecapBody recap={latest} />
       </div>
 
       {earlier.length > 0 && (
@@ -133,14 +259,13 @@ export function QuoteRecapCard({ latest, earlier }: QuoteRecapCardProps) {
             index and the status vocabulary includes `Requote`. Showing only the
             newest without saying so would hide a requote's predecessor.
           */}
-          <CollapsibleTrigger className="flex w-full items-center justify-between px-5 py-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+          <CollapsibleTrigger className="flex w-full items-center justify-between px-5 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground">
             <span>
               {earlier.length} earlier recap{earlier.length === 1 ? "" : "s"}
             </span>
             <ChevronDown
-              size={14}
               className={cn(
-                "transition-transform",
+                "size-4 transition-transform",
                 showEarlier && "rotate-180",
               )}
             />
@@ -148,37 +273,17 @@ export function QuoteRecapCard({ latest, earlier }: QuoteRecapCardProps) {
           <CollapsibleContent>
             <ul className="divide-y divide-border border-t border-border">
               {earlier.map((recap) => (
-                <li
-                  key={recap.id}
-                  className="flex flex-wrap items-center justify-between gap-2 px-5 py-2.5 text-sm"
-                >
-                  <span className="text-muted-foreground">
-                    {formatDate(recap.quoteDate)}
-                    {recap.productsQuoted.length > 0 && (
-                      <span> · {recap.productsQuoted.join(", ")}</span>
-                    )}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    {recap.status && (
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                          statusBadgeClass(recap.status),
-                        )}
-                      >
-                        {recap.status}
-                      </span>
-                    )}
-                    <span className="text-card-foreground">
-                      {formatCurrency(recap.premium)}
-                    </span>
-                  </span>
+                <li key={recap.id} className="bg-sunken/50 px-5 py-4">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <RecapMeta recap={recap} />
+                  </div>
+                  <QuoteRecapBody recap={recap} />
                 </li>
               ))}
             </ul>
           </CollapsibleContent>
         </Collapsible>
       )}
-    </section>
+    </DetailCard>
   );
 }

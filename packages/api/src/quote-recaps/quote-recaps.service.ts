@@ -13,26 +13,38 @@ import {
 import type {
   AccessContext,
   CreateQuoteRecapResponse,
+  DocumentDownloadResponse,
   QuoteDocumentPresignResponse,
+  QuoteRecapEditView,
   QuoteRecapLeadContext,
+  UpdateQuoteRecapResult,
 } from '@sfa/shared';
+import { normalizeInsuranceMonth, normalizePolicyType } from '@sfa/shared';
+import type { PolicyType } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import {
   Activity,
   ActivityDocument,
 } from '../activities/schemas/activity.schema';
-import { resolveHouseholdAddress } from '../common/address/household-address';
+import {
+  normalizeStoredAddress,
+  resolveHouseholdAddress,
+} from '../common/address/household-address';
 import type { StructuredAddress } from '../common/address/household-address';
+import { resolvePolicyPropertyAddress } from '../common/address/policy-property-address';
 import { roundCents } from '../common/domain/money';
 import {
   ResolvedTenantContext,
   TenantContextResolver,
 } from '../common/tenancy/tenant-context.resolver';
+import { quoteDateYmd } from './quote.normalize';
 import { HouseholdDocument } from '../households/schemas/household.schema';
 import { LeadAccessService } from '../leads/lead-access.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { StorageService } from '../storage/storage.service';
+import { User, UserDocument } from '../users/schemas/user.schema';
 import { CreateQuoteRecapDto } from './dto/create-quote-recap.dto';
+import { UpdateQuoteRecapDto } from './dto/update-quote-recap.dto';
 import {
   ALLOWED_QUOTE_DOCUMENT_CONTENT_TYPES,
   MAX_QUOTE_DOCUMENT_BYTES,
@@ -57,6 +69,69 @@ const ALLOWED_CONTENT_TYPES = new Set<string>(
 );
 
 /**
+ * A quoted policy as it is stored on the recap sub-document array.
+ *
+ * `policyType` is the **narrow** `PolicyType` union, not `string`: that is what
+ * `QuotedPolicy` on the schema declares, and widening it here would let an
+ * uncatalogued label reach the collection — the second-vocabulary problem the
+ * create DTO's `z.enum(POLICY_TYPES)` exists to prevent.
+ */
+interface StoredQuotedPolicy {
+  policyType: PolicyType;
+  premium: number;
+  itemCount: number;
+  propertyAddress?: StructuredAddress;
+  sameAsHousehold: boolean;
+}
+
+/**
+ * A validated policy row, as either DTO produces it.
+ *
+ * Taken from the zod schema rather than from `QuoteRecapPolicyInput` (whose
+ * `policyType` is a plain `string`, since `packages/shared` has no zod
+ * dependency): both write paths validate through the same `quotedPolicySchema`,
+ * so this is the type that has actually been checked.
+ */
+type ValidatedPolicyRow = CreateQuoteRecapDto['policies'][number];
+
+/**
+ * Resolve the client's rows into what gets stored.
+ *
+ * Shared by create and update so the two cannot disagree about rounding or
+ * about what "same as household" resolves to. Every row that opts in gets its
+ * own **copy** of the household address (PAC-56 #14), which is what lets one
+ * recap describe a home and a landlord policy on different buildings.
+ */
+function derivePolicies(
+  rows: ValidatedPolicyRow[],
+  householdAddress: StructuredAddress | null,
+): StoredQuotedPolicy[] {
+  return rows.map((row) => {
+    const propertyAddress = resolvePolicyPropertyAddress(row, householdAddress);
+    return {
+      policyType: row.policyType,
+      premium: roundCents(row.premium),
+      itemCount: row.itemCount,
+      propertyAddress,
+      sameAsHousehold:
+        Boolean(propertyAddress) && row.sameAsHousehold !== false,
+    };
+  });
+}
+
+/**
+ * The three recap-level totals, derived from the rows and **never** taken from
+ * the client — they back the Quoted scorecard (PAC-10).
+ */
+function deriveTotals(policies: StoredQuotedPolicy[]) {
+  return {
+    premium: roundCents(policies.reduce((sum, p) => sum + p.premium, 0)),
+    itemCount: policies.reduce((sum, p) => sum + p.itemCount, 0),
+    productsQuoted: [...new Set(policies.map((p) => p.policyType))],
+  };
+}
+
+/**
  * Quote Recap write path (PAC-39) — the native replacement for the legacy
  * Fillout `quote-recap` webhook.
  *
@@ -75,6 +150,7 @@ export class QuoteRecapsService {
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
     @InjectModel(Activity.name)
     private readonly activityModel: Model<ActivityDocument>,
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly tenancy: TenantContextResolver,
     private readonly storage: StorageService,
     private readonly leadAccess: LeadAccessService,
@@ -91,7 +167,21 @@ export class QuoteRecapsService {
   ): Promise<QuoteRecapLeadContext> {
     const lead = await this.leadAccess.loadOwnedLead(access, branchId, leadId);
     const household = await this.leadAccess.findHousehold(lead, access);
+    return this.buildLeadContext(lead, household);
+  }
 
+  /**
+   * The lead/household header both the create form and the edit form show.
+   *
+   * Extracted so `getEditView` returns something byte-identical to
+   * `getLeadContext` — the edit page mounts the same `LeadContextHeader` and
+   * feeds the same `householdAddress` to the "same as household" toggle, and a
+   * second projection would drift from this one silently.
+   */
+  private buildLeadContext(
+    lead: LeadDocument,
+    household: HouseholdDocument | null,
+  ): QuoteRecapLeadContext {
     return {
       leadId: lead._id.toString(),
       primaryContactName:
@@ -145,6 +235,314 @@ export class QuoteRecapsService {
     };
   }
 
+  /**
+   * A short-lived URL that opens the uploaded quote document (PAC-56 #10, #30).
+   *
+   * Signed **inline**, so following it renders the PDF in the browser's own
+   * viewer in a new tab rather than downloading it — the user downloads from
+   * there. That is the whole feature: no bespoke viewer, no download button.
+   *
+   * Gated on `quote_recaps:read` and clamped to the caller's data scope by
+   * `assertOwned`, so a producer cannot open a colleague's document by guessing
+   * a recap id. The storage key never crosses the wire in either direction.
+   */
+  async getDocumentDownload(
+    access: AccessContext,
+    branchId: string | null,
+    recapId: string,
+  ): Promise<DocumentDownloadResponse> {
+    const recap = await this.loadOwnedRecap(access, branchId, recapId);
+
+    const document = recap.quoteDocument;
+    if (!document) {
+      throw new NotFoundException('This quote recap has no document.');
+    }
+
+    const downloadUrl = await this.storage.createPresignedDownload(
+      document.key,
+      {
+        disposition: 'inline',
+        filename: document.filename,
+        // Overridden explicitly: the object was stored with whatever the
+        // browser claimed on upload, and a PDF served as octet-stream
+        // downloads instead of rendering however the disposition is set.
+        contentType: document.contentType,
+      },
+    );
+
+    return {
+      downloadUrl,
+      filename: document.filename,
+      contentType: document.contentType,
+      expiresIn: this.storage.downloadUrlTtlSeconds,
+    };
+  }
+
+  /**
+   * `GET /quote-recaps/:id` — everything the edit form needs, in one request.
+   *
+   * Carries the lead/household context alongside the recap so the page can
+   * render `LeadContextHeader` and the "same as household address" toggle
+   * without a second round trip. Keying the edit route by recap id and then
+   * fetching the context by lead id would be a waterfall on a page that cannot
+   * paint until both have landed.
+   *
+   * This is also the **only** surface that exposes `policies[].sameAsHousehold`.
+   * `GET /leads/:id` deliberately does not: there the stored row address is
+   * already resolved, and re-exposing the flag invites a reader to
+   * re-interpret it.
+   */
+  async getEditView(
+    access: AccessContext,
+    branchId: string | null,
+    recapId: string,
+  ): Promise<QuoteRecapEditView> {
+    const recap = await this.loadOwnedRecap(access, branchId, recapId);
+
+    if (!recap.leadId) {
+      // `LeadDetailService.backfillLeadRef` self-heals this the first time the
+      // lead page is viewed, and the Edit button only exists there — so this is
+      // a defensive branch rather than an expected one.
+      throw new BadRequestException(
+        'This quote recap is not linked to a lead yet.',
+      );
+    }
+
+    // Through `loadOwnedLead`, not a raw lookup, so the lead is scope-clamped
+    // on its own terms too.
+    const lead = await this.leadAccess.loadOwnedLead(
+      access,
+      branchId,
+      recap.leadId.toString(),
+    );
+    const household = await this.leadAccess.findHousehold(lead, access);
+
+    return {
+      id: recap._id.toString(),
+      context: this.buildLeadContext(lead, household),
+      policies: (recap.policies ?? []).map((policy) => ({
+        policyType: normalizePolicyType(policy.policyType),
+        premium: policy.premium ?? 0,
+        itemCount: policy.itemCount ?? 0,
+        propertyAddress: normalizeStoredAddress(policy.propertyAddress),
+        sameAsHousehold: policy.sameAsHousehold === true,
+      })),
+      // Normalized on read as well as at migration time, so a database
+      // migrated before PAC-56 #16 still yields a month name (see
+      // `normalizeInsuranceMonth`). `''` collapses to `null` — the form treats
+      // that as unset rather than as invalid.
+      insuranceRenewalMonth:
+        normalizeInsuranceMonth(recap.insuranceRenewalMonth) || null,
+      notes: recap.notes ?? null,
+      document: recap.quoteDocument
+        ? {
+            filename: recap.quoteDocument.filename,
+            contentType: recap.quoteDocument.contentType,
+            size: recap.quoteDocument.size,
+            uploadedAt: recap.quoteDocument.uploadedAt.toISOString(),
+          }
+        : null,
+      quoteDate: recap.quoteDate ? recap.quoteDate.toISOString() : null,
+      status: recap.recapStatus ?? null,
+      premium: recap.premium ?? 0,
+      itemCount: recap.itemCount ?? 0,
+      productsQuoted: (recap.productsQuoted ?? [])
+        .map((value) => normalizePolicyType(value))
+        .filter(Boolean),
+      legacyPropertyAddress: normalizeStoredAddress(recap.propertyAddress),
+    };
+  }
+
+  /**
+   * `PATCH /quote-recaps/:id` — correct a recorded quote (PAC-56 #11).
+   *
+   * Legacy had this (SmartSuite `Update URL` → Fillout `cusXRDS52ous`); the
+   * rebuild shipped create-only, so a mistyped premium was permanent.
+   *
+   * ## What it deliberately does not do
+   *
+   * **It never moves `quoteDate`.** That is the day the quote was given, and
+   * `quoteDateYmd` is the Quoted scorecard's indexed bucket. Re-dating a
+   * correction to today would retroactively change a number that has already
+   * been reported. It *is* opportunistically backfilled when missing, which
+   * self-heals migrated recaps the first time one is touched — the same idiom
+   * as `LeadAccessService.findHousehold`.
+   *
+   * **It does not re-run `advanceLeadStatus`.** PAC-38 made lead status freely
+   * editable in both directions so a producer can undo a mis-click; silently
+   * re-asserting `Quoted` here would undo a deliberate move back to `Contacted`
+   * with nothing on screen to explain it. The advance belongs to the event
+   * "a quote was recorded", which happened once.
+   *
+   * **It does not touch `submissionToken`.** That guards duplicate *creates*;
+   * rewriting it would break the create-replay guarantee.
+   *
+   * **It does not delete the replaced storage object.** `StorageService` has no
+   * delete, deliberately — it has never destroyed anything. An orphaned 10 MB
+   * PDF is recoverable; a wrongly-deleted document is not, and the abandoned
+   * create-form flow already leaves the identical garbage. A bucket lifecycle
+   * rule over unreferenced `agencies/*&#47;quote-recaps/**` keys is the right
+   * fix, and is a follow-up rather than app code.
+   */
+  async update(
+    access: AccessContext,
+    branchId: string | null,
+    recapId: string,
+    dto: UpdateQuoteRecapDto,
+  ): Promise<UpdateQuoteRecapResult> {
+    const recap = await this.loadOwnedRecap(access, branchId, recapId);
+
+    if (!recap.leadId) {
+      throw new BadRequestException(
+        'This quote recap is not linked to a lead yet.',
+      );
+    }
+
+    const lead = await this.leadAccess.loadOwnedLead(
+      access,
+      branchId,
+      recap.leadId.toString(),
+    );
+
+    if (dto.policies) {
+      const household = await this.leadAccess.findHousehold(lead, access);
+      const policies = derivePolicies(
+        dto.policies,
+        this.householdAddress(lead, household),
+      );
+      recap.policies = policies;
+      Object.assign(recap, deriveTotals(policies));
+    }
+
+    if (dto.insuranceRenewalMonth !== undefined) {
+      recap.insuranceRenewalMonth = dto.insuranceRenewalMonth;
+    }
+
+    if (dto.notes !== undefined) {
+      recap.notes = dto.notes ?? undefined;
+    }
+
+    if (dto.quoteDocument) {
+      // Same verification the create path runs: the key must live under this
+      // agency and lead, and the type/size come from `HeadObject` rather than
+      // from the client's claim.
+      this.storage.assertKeyOwnership(dto.quoteDocument.key, {
+        agencyId: recap.agencyId,
+        purpose: `quote-recaps/${recap.leadId.toString()}`,
+      });
+      const stored = await this.verifyQuoteDocument(dto.quoteDocument.key);
+      recap.quoteDocument = {
+        key: dto.quoteDocument.key,
+        filename: dto.quoteDocument.filename,
+        contentType: stored.contentType,
+        size: stored.size,
+        uploadedAt: new Date(),
+      };
+    }
+
+    // Opportunistic, never recomputed — see the docblock.
+    if (recap.quoteDate && recap.quoteDateYmd == null) {
+      recap.quoteDateYmd = quoteDateYmd(recap.quoteDate);
+    }
+
+    await recap.save();
+
+    // Best-effort and post-commit, like the create path's follow-ups: the Leads
+    // list sorts on `lastActivityAt`, and an edit is activity.
+    try {
+      await this.leadModel.updateOne(
+        { _id: lead._id },
+        { $set: { lastActivityAt: new Date() } },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to bump lastActivityAt for lead ${lead._id.toString()}: ${String(error)}`,
+      );
+    }
+
+    return this.toLeadDetailQuoteRecap(recap);
+  }
+
+  /**
+   * Load a recap the caller is allowed to see, or 404.
+   *
+   * **404, never 403, in every direction** — a malformed id, a missing recap,
+   * another agency's recap and another producer's recap are deliberately
+   * indistinguishable, matching `LeadAccessService.loadOwnedLead` and
+   * `PoliciesService.loadOwnedPolicy`. A 403 would confirm the record exists.
+   */
+  private async loadOwnedRecap(
+    access: AccessContext,
+    branchId: string | null,
+    recapId: string,
+  ): Promise<QuoteRecapDocument> {
+    if (!Types.ObjectId.isValid(recapId)) {
+      throw new NotFoundException('Quote recap not found.');
+    }
+
+    const recap = await this.quoteRecapModel.findOne({
+      _id: new Types.ObjectId(recapId),
+      agencyId: access.agencyId,
+    });
+    if (!recap) throw new NotFoundException('Quote recap not found.');
+
+    this.leadAccess.assertOwned(recap, access, branchId);
+    return recap;
+  }
+
+  /**
+   * The saved recap in the shape `GET /leads/:id` returns, so the web app can
+   * splice it straight into the cached `LeadDetail`.
+   *
+   * `producerName` is looked up rather than taken from the caller: the editor
+   * and the original author are not always the same person, and the card
+   * attributes the *notes*, which belong to whoever recorded the recap.
+   */
+  private async toLeadDetailQuoteRecap(
+    recap: QuoteRecapDocument,
+  ): Promise<UpdateQuoteRecapResult> {
+    const policies = recap.policies ?? [];
+    const producer = recap.producerId
+      ? await this.userModel
+          .findById(recap.producerId)
+          .select('firstName lastName')
+      : null;
+    const producerName = producer
+      ? [producer.firstName, producer.lastName].filter(Boolean).join(' ').trim()
+      : '';
+
+    return {
+      id: recap._id.toString(),
+      quoteDate: recap.quoteDate ? recap.quoteDate.toISOString() : null,
+      premium: recap.premium ?? 0,
+      itemCount: recap.itemCount ?? 0,
+      productsQuoted: (recap.productsQuoted ?? [])
+        .map((value) => normalizePolicyType(value))
+        .filter(Boolean),
+      status: recap.recapStatus ?? null,
+      producerName: producerName || null,
+      createdAt: recap.createdAt ? recap.createdAt.toISOString() : null,
+      policies: policies.map((policy) => ({
+        policyType: normalizePolicyType(policy.policyType),
+        premium: policy.premium ?? 0,
+        itemCount: policy.itemCount ?? 0,
+        propertyAddress: normalizeStoredAddress(policy.propertyAddress),
+      })),
+      propertyAddress: normalizeStoredAddress(recap.propertyAddress),
+      insuranceRenewalMonth:
+        normalizeInsuranceMonth(recap.insuranceRenewalMonth) || null,
+      notes: recap.notes ?? null,
+      document: recap.quoteDocument
+        ? {
+            filename: recap.quoteDocument.filename,
+            contentType: recap.quoteDocument.contentType,
+            size: recap.quoteDocument.size,
+            uploadedAt: recap.quoteDocument.uploadedAt.toISOString(),
+          }
+        : null,
+    };
+  }
+
   async create(
     access: AccessContext,
     branchId: string | null,
@@ -182,11 +580,11 @@ export class QuoteRecapsService {
     });
     const stored = await this.verifyQuoteDocument(dto.quoteDocument.key);
 
-    const policies = dto.policies.map((p) => ({
-      policyType: p.policyType,
-      premium: roundCents(p.premium),
-      itemCount: p.itemCount,
-    }));
+    // Resolved once: every row that says "same as household" copies this, so a
+    // recap covering a home and a landlord policy ends up with two rows whose
+    // addresses are independently correct (PAC-56 #14).
+    const householdAddress = this.householdAddress(lead, household);
+    const policies = derivePolicies(dto.policies, householdAddress);
     const quoteDate = new Date();
 
     try {
@@ -195,18 +593,25 @@ export class QuoteRecapsService {
         branchId: tenant.branchId,
         title: household.name ? `${household.name} — Quote` : 'Quote',
         quoteDate,
+        // The indexed calendar-day label the Quoted scorecard buckets by
+        // (PAC-10). Derived here rather than at read time so the scorecard is a
+        // plain integer range — the same reason `Deal.soldDateYmd` is persisted.
+        quoteDateYmd: quoteDateYmd(quoteDate),
         // Derived server-side and never taken from the client: these three back
         // the Quoted scorecard, so a client-supplied total would corrupt it.
-        premium: roundCents(policies.reduce((sum, p) => sum + p.premium, 0)),
-        itemCount: policies.reduce((sum, p) => sum + p.itemCount, 0),
-        productsQuoted: [...new Set(policies.map((p) => p.policyType))],
+        ...deriveTotals(policies),
         recapStatus: 'Submitted',
         producerId: new Types.ObjectId(access.userId),
         leadId: lead._id,
         householdId: household._id,
         policies,
-        propertyAddress: this.resolvePropertyAddress(dto, lead, household),
-        sameAsHousehold: dto.sameAsHousehold,
+        // No recap-level `propertyAddress`/`sameAsHousehold`: since PAC-56 #14
+        // the dwelling belongs to the policy row, and those two fields exist
+        // only for the recaps written before that.
+        //
+        // The renewal month, however, *is* recap-level — one client, one
+        // current policy renewing (PAC-56 #16, matching legacy's shape).
+        insuranceRenewalMonth: dto.insuranceRenewalMonth,
         notes: dto.notes,
         quoteDocument: {
           key: dto.quoteDocument.key,
@@ -259,17 +664,6 @@ export class QuoteRecapsService {
     );
   }
 
-  private resolvePropertyAddress(
-    dto: CreateQuoteRecapDto,
-    lead: LeadDocument,
-    household: HouseholdDocument,
-  ): StructuredAddress | undefined {
-    if (!dto.sameAsHousehold) return dto.propertyAddress;
-    // The client's address is discarded when it claims "same as household", so
-    // it cannot assert one thing and submit another.
-    return this.householdAddress(lead, household) ?? undefined;
-  }
-
   /**
    * Verify the upload actually landed, and take its real type and size.
    *
@@ -291,9 +685,7 @@ export class QuoteRecapsService {
       throw new BadRequestException('Quote document is larger than 10MB.');
     }
     if (!stored.contentType || !ALLOWED_CONTENT_TYPES.has(stored.contentType)) {
-      throw new BadRequestException(
-        'Quote document must be a PDF, JPEG or PNG.',
-      );
+      throw new BadRequestException('Quote document must be a PDF.');
     }
     return { contentType: stored.contentType, size: stored.size };
   }

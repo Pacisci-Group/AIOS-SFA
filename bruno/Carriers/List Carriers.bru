@@ -1,0 +1,166 @@
+meta {
+  name: List Carriers
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/carriers
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a carriers array", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("carriers");
+    expect(body.carriers).to.be.an("array");
+    expect(body.carriers.length).to.be.above(0);
+  });
+
+  test("every carrier carries the four option fields", function () {
+    for (const carrier of res.getBody().carriers) {
+      expect(carrier).to.have.property("id");
+      expect(carrier).to.have.property("name");
+      expect(carrier).to.have.property("policyNumberPattern");
+      expect(carrier).to.have.property("policyNumberHint");
+    }
+  });
+
+  test("Allstate is present and sorts first", function () {
+    const carriers = res.getBody().carriers;
+    expect(carriers[0].name).to.equal("Allstate");
+  });
+
+  test("Allstate carries the digits-only rule", function () {
+    const allstate = res.getBody().carriers.find((c) => c.name === "Allstate");
+    expect(allstate.policyNumberPattern).to.equal("\\d+");
+    expect(allstate.policyNumberHint).to.be.a("string");
+  });
+
+  test("carriers we have no format for carry a null pattern", function () {
+    const unconstrained = res
+      .getBody()
+      .carriers.filter((c) => c.policyNumberPattern === null);
+    expect(unconstrained.length).to.be.above(0);
+  });
+
+  test("never leaks the internal slug", function () {
+    for (const carrier of res.getBody().carriers) {
+      expect(carrier).to.not.have.property("slug");
+      expect(carrier).to.not.have.property("agencyId");
+    }
+  });
+}
+
+docs {
+  # GET /carriers — the carrier vocabulary (PAC-56 #19)
+
+  The list behind the Sold wizard's **carrier select** (#18) and its
+  **per-carrier policy-number rules** (#20). Returns platform-global carriers
+  unioned with the calling agency's own rows.
+
+  - **Module:** `deal_audits` (must be enabled for the agency)
+  - **Permission:** `deal_audits:read`
+  - **Data scope:** none — reference data, identical for everyone in the agency
+
+  > **Why `deal_audits` and not a `carriers` module?** The list exists to serve
+  > the Sold form, so it carries the Sold form's gate — the same argument
+  > `GET /policies/check` makes. A dedicated `ModuleKey.Carriers` would add a row
+  > to the permission matrix (one entry per module key) for something that is not
+  > a page, and give every agency a second switch that can silently break the
+  > wizard.
+  >
+  > ⚠ Consequence: disabling the `deal_audits` module also disables this list,
+  > and therefore the carrier select.
+
+  ## Two kinds of row
+  A carrier document carries `agencyId: string | null`.
+
+  | `agencyId` | meaning | who writes it |
+  |---|---|---|
+  | `null` | platform global, visible to every agency | the core seed (`seedCarriers`) |
+  | an id | that agency's own addition | future agency-owner CRUD |
+
+  An agency row **shadows** a global with the same slug, so an agency can
+  override a global's display name or pattern rather than having to invent a
+  different name to avoid the clash. Only globals exist today.
+
+  Neither `slug` nor `agencyId` is returned — both are internal.
+
+  ## Curation is deliberately not here
+  Seeding only. Super-admin CRUD belongs at `platform/carriers` under
+  `platform:*`; agency-owner CRUD under `agency:*`. The schema already carries
+  `agencyId`, `active` and `displayOrder` so both drop in as controllers with no
+  schema change.
+
+  ## Where the list came from
+  ⚠ **Not from migrated data.** Legacy's Policies `Carrier` (`s33be9b77d`) is a
+  single-select with exactly one choice, `B4tEH` = Allstate, and the
+  prior-insurance carrier fields were plain strings. Allstate is the only name
+  with legacy authority; the other sixteen are our proposal.
+
+  ## `policyNumberPattern`
+  A regex **source**, stored **unanchored**, tested against the *normalized*
+  policy-number key (uppercase, non-alphanumerics stripped) so `123-456`
+  satisfies a digits-only rule. The consumer anchors it —
+  `carrierPolicyNumberMatches` wraps it as `^(?:pattern)$` — so a pattern can
+  never accidentally match a substring.
+
+  `null` means the carrier imposes no format. **Only Allstate carries one.** A
+  wrong rule fails closed — it blocks a real sale, and with no admin UI the only
+  fix is a deploy — so a pattern is seeded only where we are certain. We know
+  Allstate is digits-only; we do not know its length, hence `\d+` rather than a
+  bounded form.
+
+  Enforced server-side in `POST /sold-deals` and on `PATCH /policies/:id` when
+  the number changes. The wizard validates live off the same data; that is an
+  assist, not the gate.
+
+  ## Response `200`
+  ```json
+  {
+    "carriers": [
+      {
+        "id": "665f...ac1",
+        "name": "Allstate",
+        "policyNumberPattern": "\\d+",
+        "policyNumberHint": "Allstate policy numbers are digits only."
+      },
+      {
+        "id": "665f...ac2",
+        "name": "State Farm",
+        "policyNumberPattern": null,
+        "policyNumberHint": null
+      }
+    ]
+  }
+  ```
+
+  Sorted by `displayOrder` then `name`, so Allstate — the agency's own carrier —
+  is first. Inactive carriers (`active: false`) are never returned.
+
+  ## The "Other" escape
+  The wizard renders an **Other** choice that reveals a free-text box, so an
+  unseeded carrier never blocks a sale. That is a client-side sentinel
+  (`CARRIER_OTHER`) resolved to the typed name before submission; the API rejects
+  the sentinel outright, so it can never be stored as a carrier name. A carrier
+  absent from this list carries no pattern and is therefore unvalidated.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `deal_audits` module disabled, or missing `deal_audits:read`.
+
+  ## Run order
+  No dependencies — only `Auth/Login` for the token. Bruno walks folders
+  alphabetically, so this runs early and needs nothing seeded beyond
+  `npm run api:seed:dev`.
+}

@@ -24,8 +24,10 @@ into `packages/api` + `packages/web`, this reference can be dropped.
   - **Uploads:** real file storage, not base64 `dataUrl` blobs.
   - **Routing:** React Router 7 routes under `ProtectedRoute`, behind the
     `leads` / `quote_recaps` / `deal_audits` module keys + permissions.
-  - **Keep:** `react-hook-form` + `zod` resolvers, the session-isolated
-    entity-driven flow (`?householdId=` / `?quoteId=`), the field arrays, the
+  - **Keep:** the zod schemas (bound via **TanStack Form**, not the prototype's
+    `react-hook-form` + resolvers — that library is fully removed here), the
+    session-isolated entity-driven flow (`?householdId=` / `?quoteId=`), the
+    field arrays, the
     "Same as Household Address" toggle, and the sold → audit auto-trigger.
 
 ## What's in `./sfaforms`

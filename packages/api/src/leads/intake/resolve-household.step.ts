@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { SequenceService } from '../../common/mongo/sequence.service';
 import {
   Contact,
   ContactDocument,
 } from '../../contacts/schemas/contact.schema';
+import { allocateHouseholdRef } from '../../households/household-ref';
 import {
   Household,
   HouseholdDocument,
@@ -45,6 +47,7 @@ export class ResolveHouseholdStep {
     private readonly householdModel: Model<HouseholdDocument>,
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
+    private readonly sequences: SequenceService,
   ) {}
 
   async run(
@@ -115,11 +118,20 @@ export class ResolveHouseholdStep {
       input.address?.zip,
     );
 
+    // Allocated on the same session as the insert, so a failed intake rolls the
+    // number back with it and the agency's series stays gapless.
+    const householdRef = await allocateHouseholdRef(
+      this.sequences,
+      deps.ctx.agencyId,
+      deps.session,
+    );
+
     const [created] = await this.householdModel.create(
       [
         {
           agencyId: deps.ctx.agencyId,
           branchId: deps.ctx.branchId,
+          householdRef,
           name: lastName ? `${lastName} Household` : 'New Household',
           // The household's LIVING address. An insured property address is a
           // different thing entirely and is captured later, on the quote.

@@ -2,7 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { LEAD_STATUSES, leadStatusQueryValues } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { normalizeStoredAddress } from '../../common/address/household-address';
+import { resolvePolicyPropertyAddress } from '../../common/address/policy-property-address';
 import { Lead, LeadDocument } from '../schemas/lead.schema';
+import type { LeadPolicyOfInterest } from '../schemas/lead.schema';
 import {
   buildAddressKey,
   normalizeEmail,
@@ -46,6 +49,56 @@ const TERMINAL_STATUSES = [
   'Not Qualified',
 ];
 const TERMINAL_STATUS_VALUES = TERMINAL_STATUSES.flatMap(leadStatusQueryValues);
+
+/**
+ * The policy rows to store, each with its own dwelling address and
+ * "same as household" already applied (PAC-56 #14).
+ *
+ * Resolving here rather than persisting the flag alone means nothing downstream
+ * has to remember the rule — and a row that claims "same as household" cannot
+ * smuggle in a different address: its own `propertyAddress` is discarded, not
+ * merged. Non-property rows get no address at all, which is load-bearing:
+ * `sameAsHousehold` defaults to TRUE, so without that guard an Auto-only lead
+ * would silently acquire a copy of the living address.
+ */
+function resolvePolicies(input: IntakeInput): LeadPolicyOfInterest[] {
+  const householdAddress = normalizeStoredAddress(input.address);
+
+  return (input.policiesOfInterest ?? []).map((policy) => {
+    const propertyAddress = resolvePolicyPropertyAddress(
+      policy,
+      householdAddress,
+    );
+    return {
+      policyType: policy.policyType,
+      itemCount: policy.itemCount,
+      propertyAddress,
+      // Only meaningful where an address exists — a non-property row is not
+      // "same as household", it simply has no dwelling.
+      sameAsHousehold:
+        Boolean(propertyAddress) && policy.sameAsHousehold !== false,
+    };
+  });
+}
+
+/**
+ * Identity of a policy row for merge purposes.
+ *
+ * Type alone is not enough once addresses are per-row: a household adding a
+ * second Landlord policy on a different building is stating a second interest,
+ * not restating the first. The address is folded into the key so those stay
+ * distinct while "Home ×1" and "Home ×2" at one address still collapse.
+ */
+function policyKey(policy: {
+  policyType: string;
+  propertyAddress?: { street?: string; city?: string; zip?: string };
+}): string {
+  const address = policy.propertyAddress;
+  const where = [address?.street, address?.city, address?.zip]
+    .map((part) => (part ?? '').trim().toUpperCase())
+    .join('|');
+  return `${policy.policyType}::${where}`;
+}
 
 interface LeadRefs {
   contactId: Types.ObjectId;
@@ -154,6 +207,10 @@ export class ResolveLeadStep {
           // unusable — the migration stamped every record with the import time).
           // Without this the lead sinks to the bottom of its own list.
           lastActivityAt: now,
+          policiesOfInterest: resolvePolicies(input),
+          // `propertyAddress` is deliberately not set: since PAC-56 #14 the
+          // dwelling belongs to the policy row, and the lead-level field exists
+          // only for migrated SmartSuite records.
           quoteControlNumber: input.quoteControlNumber?.trim() || undefined,
           producerId: deps.ctx.producerId,
           householdId: refs.householdId,
@@ -216,6 +273,24 @@ export class ResolveLeadStep {
     if (!lead.primaryContactId) set.primaryContactId = refs.contactId;
     if (!lead.quoteControlNumber && input.quoteControlNumber?.trim()) {
       set.quoteControlNumber = input.quoteControlNumber.trim();
+    }
+
+    // Additive, like the contact details above: someone re-enquiring about a
+    // second line wants both quoted, so the union is the honest answer. Merged
+    // in code rather than with `$addToSet`, which compares whole sub-documents
+    // — "Auto x1" and "Auto x2" are not two interests, they are one restated.
+    // See {@link policyKey} for why the dwelling is part of that identity.
+    const incoming = resolvePolicies(input);
+    if (incoming.length > 0) {
+      const merged = [...(lead.policiesOfInterest ?? [])];
+      const seen = new Set(merged.map(policyKey));
+      for (const policy of incoming) {
+        const key = policyKey(policy);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(policy);
+      }
+      set.policiesOfInterest = merged;
     }
 
     await this.leadModel.updateOne(
