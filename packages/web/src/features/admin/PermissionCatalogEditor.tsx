@@ -6,6 +6,8 @@ import {
   type PageLevelOverride,
 } from '@sfa/shared';
 import { ArrowLeft, Check, RotateCcw, Search } from 'lucide-react';
+import { AppShell } from '@/components/layout/AppShell';
+import { MobileNav } from '@/components/layout/MobileNav';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -107,27 +109,28 @@ export function PermissionCatalogEditor({
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border">
-        <div className="flex items-center gap-3">
+    <AppShell>
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-6">
+        <div className="flex min-w-0 items-center gap-2 md:gap-3">
+          <MobileNav className="-ml-1" />
           <Button
             asChild
             variant="ghost"
-            size="icon"
-            className="text-muted-foreground hover:text-slate-300 hover:bg-white/5"
+            size="icon-sm"
+            className="text-muted-foreground hover:text-foreground"
           >
-            <Link to={backTo}>
+            <Link to={backTo} aria-label="Back">
               <ArrowLeft size={16} />
             </Link>
           </Button>
-          <div>
-            <h1 className="text-sm font-bold">{title}</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-bold">{title}</h1>
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               {subtitle}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-1 items-center justify-end gap-3">
           {headerControl}
           {saved && !saving && (
             <span className="flex items-center gap-1.5 text-xs text-emerald-500">
@@ -145,7 +148,7 @@ export function PermissionCatalogEditor({
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-6 py-8">
+      <main className="mx-auto w-full max-w-3xl px-4 py-8 md:px-6">
         {readOnly && (
           <div className="mb-5 px-4 py-3 rounded-lg text-sm bg-sky-400/10 border border-sky-400/25 text-sky-300">
             {readOnlyNotice}
@@ -182,33 +185,39 @@ export function PermissionCatalogEditor({
               <section
                 key={page.moduleKey}
                 className={cn(
-                  'rounded-xl px-5 py-4 flex items-center justify-between gap-4 bg-card border',
+                  // The three-way level switch is ~230px wide and the label
+                  // column needs at least as much again — below `sm` they get a
+                  // row each rather than both being crushed.
+                  'flex flex-col gap-3 rounded-xl border bg-card px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5',
                   isOverride ? 'border-primary/35' : 'border-border',
                 )}
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm text-foreground font-medium">
+                    <span className="text-sm font-medium text-foreground">
                       {page.label}
                     </span>
                     {isOverride && (
-                      <Badge className="bg-primary/12 text-sky-300 border-transparent rounded-full text-[10px] px-1.5 py-0.5">
+                      <Badge
+                        size="sm"
+                        className="rounded-full border-transparent bg-primary/12 text-primary"
+                      >
                         Override
                       </Badge>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
+                  <p className="mt-0.5 text-xs text-muted-foreground">
                     {page.description}
                   </p>
                   {defaultLevel !== undefined && (
-                    <p className="text-[10px] text-slate-600 mt-1">
+                    <p className="mt-1 text-xs text-muted-foreground">
                       Role default: {levelLabel(defaultLevel)}
                     </p>
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="flex items-center gap-1 rounded-lg p-1 bg-gray-900">
+                <div className="flex shrink-0 items-center gap-2">
+                  <div className="flex flex-1 items-center gap-1 rounded-lg bg-muted p-1">
                     {LEVELS.map((option) => {
                       const active = current === option.value;
                       return (
@@ -218,10 +227,10 @@ export function PermissionCatalogEditor({
                           disabled={readOnly}
                           onClick={() => setLevel(page.moduleKey, option.value)}
                           className={cn(
-                            'px-3 py-1.5 rounded-md text-xs transition-all duration-150 disabled:cursor-not-allowed border',
+                            'flex-1 rounded-md border px-2.5 py-1.5 text-xs whitespace-nowrap transition-all duration-150 disabled:cursor-not-allowed sm:flex-none sm:px-3',
                             active
-                              ? 'bg-muted text-primary border-primary/20 font-semibold'
-                              : 'bg-transparent text-muted-foreground border-transparent',
+                              ? 'border-primary/20 bg-background font-semibold text-primary'
+                              : 'border-transparent bg-transparent text-muted-foreground',
                           )}
                         >
                           {option.label}
@@ -233,10 +242,10 @@ export function PermissionCatalogEditor({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
                       title="Reset to role default"
                       onClick={() => resetToDefault(page.moduleKey)}
-                      className="text-muted-foreground hover:text-slate-300 hover:bg-white/5"
+                      className="text-muted-foreground hover:text-foreground"
                     >
                       <RotateCcw size={14} />
                     </Button>
@@ -247,6 +256,6 @@ export function PermissionCatalogEditor({
           })}
         </div>
       </main>
-    </div>
+    </AppShell>
   );
 }

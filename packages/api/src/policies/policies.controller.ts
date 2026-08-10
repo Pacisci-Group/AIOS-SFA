@@ -20,7 +20,7 @@ import { PoliciesService } from './policies.service';
  *
  * ## Why this is gated on `deal_audits`
  *
- * The check exists solely to serve Card 3 of the Sold form, so it carries the
+ * The check exists solely to serve the Sold form's policy-details card, so it carries the
  * same gate as the Sold write path itself. Splitting them would let a producer
  * pass the wizard's checks and fail at submit, or lose the dedupe entirely.
  * The patch inherits it for the same reason: correcting what the Sold form

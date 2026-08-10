@@ -10,7 +10,7 @@ import type { UpsertedPolicy } from './upsert-policies.step';
 import { SoldStepDeps, sessionOptions } from './sold-intake.types';
 
 /**
- * Card 5's escrow sub-card — the mortgagee on a property policy.
+ * The escrow sub-card — the mortgagee on a property policy.
  *
  * Legacy stored this in its own **Interested Parties** table rather than on the
  * deal, and the same split is kept: escrow is a fact about one policy (a
@@ -36,12 +36,22 @@ export class InterestedPartiesStep {
   ): Promise<void> {
     const { ctx } = deps;
 
+    /*
+     * Keyed by the row that produced each policy, not by array position.
+     *
+     * This used to be `policies[index]`, which was correct only because
+     * `UpsertPoliciesStep` happens to push one result per row — an invariant
+     * nothing enforced. Any future filter there would have silently attached a
+     * mortgagee to another dwelling, and no downstream reader could have told.
+     */
+    const byRow = new Map(policies.map((p) => [p.sourceIndex, p]));
+
     for (const [index, row] of dto.policies.entries()) {
       // `escrow` details are only required — and only meaningful — when the
       // discount was ticked. The DTO already rejects one without the other.
       if (!row.discounts?.escrow || !row.escrow) continue;
 
-      const policy = policies[index];
+      const policy = byRow.get(index);
 
       const [party] = await this.interestedPartyModel.create(
         [

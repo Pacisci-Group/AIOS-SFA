@@ -1,6 +1,23 @@
-import { POLICY_TYPES } from '@sfa/shared';
+import { CARRIER_OTHER, POLICY_TYPES } from '@sfa/shared';
 import { z } from 'zod';
+import { policyNumberKey } from '../../policies/policy-number';
 import { findCrossBranchDiscounts } from '../intake/sold.normalize';
+
+/**
+ * A carrier name as submitted.
+ *
+ * Still a free string, deliberately: the catalog (PAC-56 #19) constrains what
+ * the wizard *offers*, but its "Other" escape exists so an unseeded carrier
+ * never blocks a sale, and migrated data holds names that predate the list. The
+ * one thing rejected is the client's own sentinel, which must never be
+ * persisted as a carrier name.
+ */
+const carrierName = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max, 'Too long')
+    .refine((value) => value !== CARRIER_OTHER, 'Name the carrier');
 
 /** A 24-char hex ObjectId. Mongoose would throw a 500 on anything else. */
 const objectId = z
@@ -30,19 +47,26 @@ const attachment = z.object({
   size: z.coerce.number().int().nonnegative(),
 });
 
-/** Selected + "do you have proof?" + the proof itself. */
+/**
+ * Selected + the proof for it.
+ *
+ * ⚠ `hasProof` is **deliberately absent** (PAC-56 #21). The "no — send it to
+ * the audit" fork is gone: selecting a discount now requires its document. The
+ * key is dropped rather than rejected — zod strips unknown keys on `z.object`
+ * — so a stale SPA bundle still sending it is silently ignored during a
+ * rollout instead of 400-ing, and nothing new is ever persisted with it.
+ */
 const proofBackedDiscount = z
   .object({
     selected: z.boolean().default(false),
-    hasProof: z.boolean().default(false),
     attachment: attachment.optional(),
   })
-  .default(() => ({ selected: false, hasProof: false }))
+  .default(() => ({ selected: false }))
   .superRefine((value, ctx) => {
-    if (value.selected && value.hasProof && !value.attachment) {
+    if (value.selected && !value.attachment) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Attach the proof document, or answer "no proof".',
+        message: 'Attach the proof document for this discount.',
         path: ['attachment'],
       });
     }
@@ -52,12 +76,14 @@ const discounts = z
   .object({
     // Home / Renters / Condominium / Landlord
     escrow: z.boolean().default(false),
+    // New in PAC-56 #21 — legacy's `Passed Home Inspection` was never ported.
+    inspection: proofBackedDiscount,
     fireSubscription: proofBackedDiscount,
     roofReceipt: proofBackedDiscount,
     acvPersonalProperty: z.boolean().default(false),
     acvDwellingProtection: z.boolean().default(false),
     // Auto / Auto - Special / Motorcycle
-    drivewise: z.boolean().default(false),
+    drivewise: proofBackedDiscount,
     defensiveDriver: z
       .object({
         selected: z.boolean().default(false),
@@ -66,6 +92,7 @@ const discounts = z
             z.object({
               name: z.string().trim().min(1, 'Name the driver').max(120),
               contactId: objectId.optional(),
+              attachment: attachment.optional(),
             }),
           )
           .max(10, 'At most 10 drivers')
@@ -75,28 +102,42 @@ const discounts = z
       // would hand every one the same array instance.
       .default(() => ({ selected: false, drivers: [] }))
       .superRefine((value, ctx) => {
-        if (value.selected && value.drivers.length === 0) {
+        if (!value.selected) return;
+        if (value.drivers.length === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: 'Select at least one driver.',
             path: ['drivers'],
           });
+          return;
         }
+        // Per driver, because the certificates are per person and the audit
+        // generator emits one item per name (PAC-56 #21).
+        value.drivers.forEach((driver, index) => {
+          if (!driver.attachment) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "Attach this driver's certificate.",
+              path: ['drivers', index, 'attachment'],
+            });
+          }
+        });
       }),
     studentDiscount: proofBackedDiscount,
   })
-  // A policy the wizard sent no Card 5 answers for means "no discounts", not
+  // A policy the wizard sent no discount answers for means "no discounts", not
   // "unknown" — so the shape is always present and audit generation can read it
   // without null-checks.
   .default(() => ({
     escrow: false,
-    fireSubscription: { selected: false, hasProof: false },
-    roofReceipt: { selected: false, hasProof: false },
+    inspection: { selected: false },
+    fireSubscription: { selected: false },
+    roofReceipt: { selected: false },
     acvPersonalProperty: false,
     acvDwellingProtection: false,
-    drivewise: false,
+    drivewise: { selected: false },
     defensiveDriver: { selected: false, drivers: [] },
-    studentDiscount: { selected: false, hasProof: false },
+    studentDiscount: { selected: false },
   }));
 
 const escrowDetails = z.object({
@@ -108,17 +149,22 @@ const escrowDetails = z.object({
     state: z.string().trim().min(1, 'Required').max(60),
     zip: z.string().trim().min(1, 'Required').max(20),
   }),
+  /**
+   * The escrow statement (PAC-56 #21). Optional in the shape but required by
+   * the policy-level rule whenever `discounts.escrow` is ticked — the same
+   * place that already requires this whole object.
+   */
+  attachment: attachment.optional(),
 });
 
-/** One iteration of the wizard's Card 2 → Card 7 loop. */
+/** One iteration of the wizard's per-policy loop. */
 const soldPolicySchema = z
   .object({
-    // Card 2 — canonical labels only. `normalizePolicyType` exists for *reading*
+    // Canonical labels only. `normalizePolicyType` exists for *reading*
     // legacy data, not for laundering input on a write path.
     policyType: z.enum(POLICY_TYPES),
-    // Card 3
     effectiveDate: ymd,
-    carrier: z.string().trim().min(1, 'Enter the carrier').max(120),
+    carrier: carrierName(120).min(1, 'Enter the carrier'),
     policyNumber: z.string().trim().min(1, 'Enter the policy number').max(60),
     /**
      * Set when `GET /policies/check` matched and the producer confirmed "this
@@ -127,7 +173,6 @@ const soldPolicySchema = z
      * primitive.
      */
     existingPolicyId: objectId.optional(),
-    // Card 4
     premium: z.coerce
       .number()
       .nonnegative('Premium must be 0 or greater')
@@ -137,19 +182,29 @@ const soldPolicySchema = z
       .int('Whole numbers only')
       .min(1, 'At least 1 item')
       .max(99, 'Too many'),
-    // Card 5
+    /**
+     * The signed new business application for this policy (PAC-56 #23).
+     *
+     * **Required, and PDF-only** — the one exception to the sold form's
+     * PDF-or-image rule. Per policy rather than the five type-keyed columns
+     * legacy kept on the Deal (`Auto_`/`Home_`/…): our wizard already loops per
+     * policy, legacy's own Policies table carried the same field
+     * (`sd61f05a5f`), and two Landlord policies on one deal each need their own
+     * application rather than sharing a slot.
+     */
+    newBusinessApplication: attachment,
+    // Discounts & documentation
     discounts,
     escrow: escrowDetails.optional(),
-    // Card 6
     priorInsurance: z
       .object({
         /** The "No prior [Type] insurance" toggle. */
         none: z.boolean().default(false),
-        carrier: z.string().trim().max(120).optional(),
+        carrier: carrierName(120).optional(),
         agentName: z.string().trim().max(120).optional(),
       })
       .default({ none: false }),
-    // Card 7
+    // Asked inside the prior-insurance card since #24.
     cancellation: z
       .object({
         cancelled: z.boolean().default(false),
@@ -174,6 +229,26 @@ const soldPolicySchema = z
       });
     }
 
+    /*
+     * "No prior insurance" plus "the prior insurance was cancelled" is a
+     * contradiction, and PAC-56 #24 makes it unreachable in the UI — the
+     * cancellation question is only asked when prior insurance exists.
+     *
+     * **Rejected rather than stripped**, following the house rule
+     * `findCrossBranchDiscounts` sets out: stripping silently would be worse.
+     * And it is not hypothetical — `PriorInsuranceStep` filters to declared
+     * policies, so today such a row's cancellation date is *already* dropped on
+     * the floor with no `priorPolicies` row to show for it. Better a 400 than a
+     * date the producer typed and nobody stored.
+     */
+    if (policy.priorInsurance.none && policy.cancellation.cancelled) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A policy with no prior insurance cannot have a cancellation.',
+        path: ['cancellation'],
+      });
+    }
+
     // Escrow's sub-card is required *because* it was ticked — the audit item it
     // generates is "verify loan number, company and address", which is
     // unanswerable without them.
@@ -182,6 +257,17 @@ const soldPolicySchema = z
         code: z.ZodIssueCode.custom,
         message: 'Escrow details are required when escrow is selected.',
         path: ['escrow'],
+      });
+    }
+
+    // …and its statement, on the same footing as every other discount proof
+    // (PAC-56 #21). Reported separately from the details above so the message
+    // lands on the field that is actually missing.
+    if (policy.discounts.escrow && policy.escrow && !policy.escrow.attachment) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Attach the escrow statement.',
+        path: ['escrow', 'attachment'],
       });
     }
   });
@@ -194,7 +280,7 @@ export const createSoldDealSchema = z
      * is what stops a client claiming one it does not own.
      */
     leadId: objectId,
-    /** Card 1 — one sold date for the whole deal. */
+    /** One sold date for the whole deal, however many policies it covers. */
     soldDate: ymd,
     /** Optional: not every sale has a recorded quote. */
     quoteRecapId: objectId.optional(),
@@ -220,7 +306,11 @@ export const createSoldDealSchema = z
     // through the upsert and leave one silently overwriting the other.
     const seen = new Set<string>();
     dto.policies.forEach((policy, index) => {
-      const key = policy.policyNumber.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      // `policyNumberKey`, not `normalizePolicyNumber`: the 4-character floor
+      // exists to keep the *duplicate warning* meaningful, and does not belong
+      // on a write-time collision check. Was a hand-rolled copy of the same
+      // expression until PAC-56 #20 split the normalizer.
+      const key = policyNumberKey(policy.policyNumber);
       if (!key) return;
       if (seen.has(key)) {
         ctx.addIssue({

@@ -1,5 +1,7 @@
 import type { LeadDetailDeal } from "@sfa/shared";
 import { CheckCircle2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { DetailCard, SectionLabel } from "./DetailCard";
 import { formatCurrency, formatDate } from "./lead-display";
 import { EditPolicyDialog } from "./EditPolicyDialog";
 import { PolicyRow } from "./PolicyRow";
@@ -23,37 +25,47 @@ interface SoldCardProps {
  * because a per-policy patch is a correction, whereas an edit of the deal would
  * have to decide what happens to the audit items the sale generated.
  *
- * ## The totals are the deal's own, not a sum of the rows
+ * ## The totals are the deal's own, and are now kept in step (PAC-56 #25)
  *
- * `premium` / `itemCount` / `policyCount` are roll-ups the Sold form derived at
- * submission and stored on the deal. `PATCH /policies/:id` does not touch them,
- * so after a premium correction the total below can disagree with the rows above
- * it until the deal is recomputed. That is deliberate — silently rewriting a
- * deal's premium from the Lead Detail page would move the producer's Sold
- * scorecard and the leaderboard, which is a bigger decision than a typo fix.
- * Recomputing deal roll-ups belongs with the wider sold-edit work in PAC-56 #25.
+ * `premium` / `itemCount` / `policyCount` are roll-ups stored on the deal, not
+ * summed from the rows below. `PATCH /policies/:id` used to leave them alone, so
+ * a premium correction left this footer disagreeing with the row above it; it
+ * now recomputes them, and `useUpdatePolicy` invalidates the lead detail so the
+ * footer follows.
+ *
+ * ⚠ Two consequences worth knowing before editing a premium here:
+ *   - **It moves reported numbers.** The Sold scorecard sums `deals.premium`
+ *     and the leaderboard ranks on it, so a correction here changes a producer's
+ *     dashboard figure. Intended — a scorecard built on numbers known to be
+ *     wrong is worse — but not a silent side effect.
+ *   - **Migrated deals are skipped.** The recompute is gated on
+ *     `premiumSource === 'snapshot'`, i.e. deals this app created. A migrated
+ *     deal's premium is SmartSuite's rollup over rows we may hold only part of,
+ *     so recomputing would overwrite a historical figure with a subset.
  */
 export function SoldCard({ deal, leadId }: SoldCardProps) {
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <div className="flex items-center gap-2">
-          <CheckCircle2 size={14} className="shrink-0 text-emerald-500" />
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Sold
-          </h2>
+    <DetailCard
+      title="Sold"
+      icon={CheckCircle2}
+      iconClassName="text-emerald-700 dark:text-emerald-500"
+      action={
+        <>
           {deal.isBundle && (
-            <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-500">
+            <Badge
+              size="sm"
+              className="bg-emerald-500/12 font-semibold text-emerald-700 dark:text-emerald-500"
+            >
               Bundle
-            </span>
+            </Badge>
           )}
-        </div>
-        <span className="text-xs text-muted-foreground">
-          {deal.dealType} · Sold {formatDate(deal.soldDate)}
-        </span>
-      </div>
-
-      <div className="px-5 py-4">
+          <span className="text-sm text-muted-foreground">
+            {deal.dealType} · Sold {formatDate(deal.soldDate)}
+          </span>
+        </>
+      }
+    >
+      <div>
         {deal.policies.length > 0 ? (
           <ul className="divide-y divide-border">
             {deal.policies.map((policy) => (
@@ -75,23 +87,23 @@ export function SoldCard({ deal, leadId }: SoldCardProps) {
            * bound nothing, and the policy types the deal *does* record are the
            * next best thing.
            */
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             {deal.policyTypes.join(", ") ||
               "No policy detail linked to this sale."}
           </p>
         )}
 
-        <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-          <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
+          <SectionLabel>
             Total · {deal.itemCount} item{deal.itemCount === 1 ? "" : "s"} ·{" "}
             {deal.policyCount}{" "}
             {deal.policyCount === 1 ? "policy" : "policies"}
-          </span>
-          <span className="text-base font-semibold text-card-foreground">
+          </SectionLabel>
+          <span className="text-lg font-semibold tabular-nums text-card-foreground">
             {formatCurrency(deal.premium)}
           </span>
         </div>
       </div>
-    </section>
+    </DetailCard>
   );
 }

@@ -154,6 +154,28 @@ export function terminalLeadStatusValues(): string[] {
 export const SOLD_ADVANCE_TARGET: LeadStatus = 'Sold';
 
 /**
+ * Has this lead already been sold? (PAC-56 #17)
+ *
+ * Drives the **UI gate** on the Quote and Mark-as-Sold actions: both are
+ * disabled once the lead is sold, so a producer cannot start a second recap or
+ * a second sale on a closed deal by habit.
+ *
+ * Deliberately narrower than {@link TERMINAL_LEAD_STATUSES}. A `Lost` or
+ * `Not Qualified` lead is also finished, but it can legitimately come back —
+ * PAC-38 made status freely editable in both directions for exactly that
+ * reason — and greying out its actions would be a different product decision
+ * from the one David asked for. Widening it later is one line here.
+ *
+ * Normalizes first, so a migrated lead stored as a raw choice code answers
+ * correctly. This is a **UI affordance only**: `POST /sold-deals` deliberately
+ * does *not* reject a sold lead, because `AdvanceLeadStep` is idempotent so the
+ * `submissionToken` replay path can self-heal a create whose follow-up died.
+ */
+export function isSoldLeadStatus(status?: string | null): boolean {
+  return normalizeLeadStatus(status) === SOLD_ADVANCE_TARGET;
+}
+
+/**
  * Statuses a sold deal must **not** drag the lead back from.
  *
  * Note this is listed while {@link QUOTE_ADVANCEABLE_LEAD_STATUSES} lists the

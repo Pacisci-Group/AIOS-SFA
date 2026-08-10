@@ -1,4 +1,5 @@
 import type { LeadDetailPolicy } from "@sfa/shared";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "./lead-display";
 
@@ -23,13 +24,13 @@ export function PolicyRow({ policy }: { policy: LeadDetailPolicy }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-card-foreground">
+        <p className="truncate text-base font-medium text-card-foreground">
           {policy.policyType || "Policy"}
         </p>
-        <p className="truncate text-xs text-muted-foreground">
+        <p className="truncate text-sm text-muted-foreground">
           {policy.carrier ?? "Carrier not recorded"}
         </p>
-        <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+        <p className="mt-0.5 truncate font-mono text-sm tabular-nums text-muted-foreground">
           {policy.policyNumber ?? "No policy number"}
         </p>
       </div>
@@ -37,9 +38,9 @@ export function PolicyRow({ policy }: { policy: LeadDetailPolicy }) {
       <div className="shrink-0 text-right">
         <PolicyStatus policy={policy} />
         {policy.premium > 0 && (
-          <p className="mt-0.5 text-sm text-card-foreground">
+          <p className="mt-1 text-base tabular-nums text-card-foreground">
             {formatCurrency(policy.premium)}
-            <span className="text-xs text-muted-foreground">/yr</span>
+            <span className="text-sm text-muted-foreground">/yr</span>
           </p>
         )}
       </div>
@@ -64,15 +65,16 @@ function PolicyStatus({ policy }: { policy: LeadDetailPolicy }) {
   const label = policy.status ?? (policy.active ? "Active" : "Inactive");
 
   return (
-    <span
+    <Badge
+      size="sm"
       className={cn(
-        "inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold",
+        "font-semibold",
         policy.active
-          ? "bg-emerald-500/12 text-emerald-500"
+          ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-500"
           : "bg-muted text-muted-foreground",
       )}
     >
       {label}
-    </span>
+    </Badge>
   );
 }

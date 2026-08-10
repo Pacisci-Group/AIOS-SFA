@@ -2,7 +2,12 @@ import { randomBytes } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
-import { formatHouseholdRef, parseHouseholdRef } from '@sfa/shared';
+import {
+  formatHouseholdRef,
+  normalizeCarrier,
+  normalizeInsuranceMonth,
+  parseHouseholdRef,
+} from '@sfa/shared';
 import { Agency } from '../platform/schemas/agency.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
@@ -751,6 +756,13 @@ export class MigrationService {
           productsQuoted: this.selectCodes(
             rec[QUOTE_RECAP_FIELDS.productsQuoted],
           ).map(normalizePolicyType),
+          // "Insurance X Month" (PAC-56 #16). Mapped to the month label at
+          // write, not left as SmartSuite's choice UUID — the read paths
+          // normalize too, so a re-run heals recaps imported before this.
+          insuranceRenewalMonth:
+            normalizeInsuranceMonth(
+              selectCode(rec[QUOTE_RECAP_FIELDS.insuranceMonth]),
+            ) || undefined,
           recapStatus: selectCode(rec[QUOTE_RECAP_FIELDS.recapStatus]),
           producerId: producer?.userId,
           legacyProducerId: firstLinkedId(rec[QUOTE_RECAP_FIELDS.producer]),
@@ -1038,7 +1050,10 @@ export class MigrationService {
         {
           policyNumber: toText(rec[POLICY_FIELDS.policyNumber]),
           policyType: selectCode(rec[POLICY_FIELDS.policyType]),
-          carrier: selectCode(rec[POLICY_FIELDS.carrier]),
+          // Mapped at write as well as normalized on read (PAC-56 #19): the raw
+          // `B4tEH` was being rendered to users, and mapping only on read would
+          // leave the stored value un-matchable against the carrier catalog.
+          carrier: normalizeCarrier(selectCode(rec[POLICY_FIELDS.carrier])),
           active: toBool(rec[POLICY_FIELDS.active]),
           effectiveDate: toDate(rec[POLICY_FIELDS.effectiveDate]),
           expirationDate: toDate(rec[POLICY_FIELDS.expirationDate]),

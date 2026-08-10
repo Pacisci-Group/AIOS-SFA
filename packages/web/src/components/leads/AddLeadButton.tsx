@@ -35,7 +35,11 @@ export function AddLeadButton({ to = NEW_LEAD_ROUTE, className }: AddLeadButtonP
     >
       <Link to={to}>
         <Plus size={15} />
-        Add New Lead
+        {/* "Add New Lead" is 100px of label next to a Share button and a
+            hamburger on a 375px header. The short form keeps the same verb and
+            noun; the full one returns as soon as there is room. */}
+        <span className="sm:hidden">New Lead</span>
+        <span className="hidden sm:inline">Add New Lead</span>
       </Link>
     </Button>
   );

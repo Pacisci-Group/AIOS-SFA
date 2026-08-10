@@ -89,7 +89,7 @@ function NavCard({
   return (
     <Link
       to={to}
-      className="flex items-center gap-3 px-4 py-3 rounded-lg bg-card border border-border transition-colors hover:bg-white/5"
+      className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:bg-muted/60"
     >
       <Icon size={16} className="text-primary shrink-0" />
       <span className="text-sm font-medium">{label}</span>
@@ -110,26 +110,28 @@ export function DevNavPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-6">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
             <Shield size={16} className="text-primary-foreground" />
           </div>
           <div>
             <h1 className="text-sm font-bold">AgencyOps</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Screen Navigator
             </p>
           </div>
         </div>
         <div className="flex items-center gap-4">
           {user && (
-            <span className="text-xs text-muted-foreground">{user.email}</span>
+            <span className="max-w-[45vw] truncate text-xs text-muted-foreground">
+              {user.email}
+            </span>
           )}
           <button
             type="button"
             onClick={logout}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-slate-400"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
           >
             <LogOut size={14} />
             Log out
@@ -137,8 +139,8 @@ export function DevNavPage() {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-6 py-10">
-        <p className="text-slate-400 text-sm mb-8">
+      <main className="mx-auto w-full max-w-3xl px-4 py-10 md:px-6">
+        <p className="mb-8 text-sm text-muted-foreground">
           All 7 Figma mockup screens are wired as routes. Pick a screen to preview — management
           v1 and v2 are both available for comparison.
         </p>
@@ -146,7 +148,7 @@ export function DevNavPage() {
         <div className="space-y-8">
           {visibleSections.map((section) => (
             <section key={section.title}>
-              <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3">
+              <h2 className="mb-3 text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 {section.title}
               </h2>
               <div className="grid gap-2">
@@ -159,7 +161,7 @@ export function DevNavPage() {
 
           {isOwner && (
             <section>
-              <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3">
+              <h2 className="mb-3 text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Administration
               </h2>
               <div className="grid gap-2">

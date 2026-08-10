@@ -22,6 +22,7 @@ import {
 import { ActivitiesModule } from './activities/activities.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
+import { CarriersModule } from './carriers/carriers.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { LeaderboardModule } from './leaderboard/leaderboard.module';
@@ -78,6 +79,9 @@ import { ENV_FILE_PATH } from './config/env.config';
     ContactsModule,
     QuoteRecapsModule,
     PoliciesModule,
+    // The Sold wizard's carrier vocabulary (PAC-56 #19). Also registers the
+    // `carriers` model so its indexes build and the core seed can inject it.
+    CarriersModule,
     SoldDealsModule,
     PerformanceModule,
     LeaderboardModule,

@@ -35,6 +35,13 @@ tests {
   test("returns the household contacts the driver picker offers", function () {
     expect(res.getBody().contacts).to.be.an("array");
   });
+
+  test("reports whether a quote has been recorded (PAC-56 #17)", function () {
+    // Boolean, always present. Tolerant of either value: this request runs
+    // first in the folder, so whether a recap exists depends on whether the
+    // Quote Recaps folder has run against this lead yet.
+    expect(res.getBody().hasQuoteRecap).to.be.a("boolean");
+  });
 }
 
 docs {
@@ -57,6 +64,23 @@ docs {
   form uses: the migration writes only `legacyHouseholdId` on leads, so the
   fallback repairs `lead.householdId` the first time a migrated lead is touched.
 
+  ## `hasQuoteRecap` and `leadStatus` — the wizard's two gates (PAC-56 #17)
+
+  `/sold/new` refuses to mount the wizard when the lead is **already sold**, or
+  when **no quote recap exists**. Both mirror the disabled states on the Lead
+  Detail buttons, so a typed or stale URL cannot walk around them.
+
+  ⚠ **Neither is enforced by `POST /sold-deals`, deliberately.** `AdvanceLeadStep`
+  is idempotent precisely so a replayed `submissionToken` can self-heal a create
+  whose post-commit follow-up died; rejecting a sold lead would trade that real
+  guarantee for a UI rule, and would also forbid a legitimate second deal on the
+  same household later. The gate belongs here.
+
+  `hasQuoteRecap` carries the **same `legacyLeadId` fallback** as the Lead
+  Detail read. The migration links recaps to leads only by legacy id, so a bare
+  `{ leadId }` probe would answer `false` for every migrated lead — locking all
+  of them out of the wizard, and only on real migrated data.
+
   ## Response `200`
   ```json
   {
@@ -67,7 +91,8 @@ docs {
     "contacts": [
       { "id": "665f…c10", "firstName": "Robin", "lastName": "Nakamura", "roleInHousehold": "Primary" }
     ],
-    "leadStatus": "Quoted"
+    "leadStatus": "Quoted",
+    "hasQuoteRecap": true
   }
   ```
 

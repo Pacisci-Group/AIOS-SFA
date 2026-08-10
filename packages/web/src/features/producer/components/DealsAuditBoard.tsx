@@ -16,7 +16,14 @@ import {
 import { ResolvePanel } from "./ResolvePanel";
 
 const PAGE_SIZE = 8;
-const GRID_COLS = "1fr 1.3fr 90px 80px";
+/**
+ * Four columns from `lg` up; below that a row collapses to "who + what to do
+ * about it", with the requirement and the age folded in under the client name.
+ * A 90px "Days Open" column and a Resolve button cannot both sit beside a
+ * client name on a phone — or on a tablet, once the sidebar has taken 224px.
+ */
+const GRID_COLS =
+  "grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[1fr_1.3fr_90px_80px]";
 
 const typeStyles: Record<DealAuditType, string> = {
   Auto: "bg-sky-400/10 text-sky-400",
@@ -70,7 +77,7 @@ export function DealsAuditBoard() {
     <>
       <Card className="flex flex-col rounded-xl overflow-hidden p-0 gap-0 bg-card border-border">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-5 rounded-full bg-amber-500" />
             <h2 className="text-sm text-foreground font-semibold">
@@ -85,14 +92,11 @@ export function DealsAuditBoard() {
         </div>
 
         {/* Column Headers */}
-        <div
-          className="grid px-5 py-2.5 gap-3 border-b border-border dark:border-white/[0.04]"
-          style={{ gridTemplateColumns: GRID_COLS }}
-        >
+        <div className="hidden grid-cols-[1fr_1.3fr_90px_80px] gap-3 border-b border-border px-5 py-2.5 lg:grid dark:border-white/[0.04]">
           {["Client", "Missing Requirement", "Days Open", "Action"].map((h) => (
             <span
               key={h}
-              className="text-[10px] uppercase tracking-widest text-slate-600"
+              className="text-xs font-medium tracking-wide text-muted-foreground uppercase"
             >
               {h}
             </span>
@@ -108,12 +112,14 @@ export function DealsAuditBoard() {
             Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className="grid px-5 py-3.5 gap-3 items-center border-b border-border dark:border-white/[0.04]"
-                style={{ gridTemplateColumns: GRID_COLS }}
+                className={cn(
+                  "grid items-center gap-3 border-b border-border px-4 py-3.5 lg:px-5 dark:border-white/[0.04]",
+                  GRID_COLS,
+                )}
               >
                 <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-3 w-40" />
-                <Skeleton className="h-5 w-12 rounded-full" />
+                <Skeleton className="hidden h-3 w-40 lg:block" />
+                <Skeleton className="hidden h-5 w-12 rounded-full lg:block" />
                 <Skeleton className="h-7 w-16 rounded-lg" />
               </div>
             ))
@@ -142,38 +148,44 @@ export function DealsAuditBoard() {
                 <div
                   key={deal.id}
                   className={cn(
-                    "grid px-5 py-3.5 gap-3 items-center transition-all hover:bg-white/[0.02] group",
-                    i < items.length - 1 && "border-b border-border dark:border-white/[0.04]",
+                    "group grid items-center gap-3 px-4 py-3.5 transition-all hover:bg-muted/40 lg:px-5",
+                    GRID_COLS,
+                    i < items.length - 1 &&
+                      "border-b border-border dark:border-white/[0.04]",
                   )}
-                  style={{ gridTemplateColumns: GRID_COLS }}
                 >
                   {/* Client */}
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span
                       className={cn(
-                        "flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0",
+                        "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs",
                         typeStyles[deal.type],
                       )}
                     >
                       <TypeIcon type={deal.type} />
                     </span>
                     <div className="min-w-0">
-                      <span className="block text-sm text-foreground truncate font-medium">
+                      <span className="block truncate text-sm font-medium text-foreground">
                         {deal.client}
                       </span>
-                      <span className="block text-[10px] text-slate-600 tracking-wide">
+                      <span className="block truncate text-xs tracking-wide text-muted-foreground">
                         {deal.ref}
+                      </span>
+                      {/* The two columns that don't fit on a phone, folded in
+                          under the name rather than dropped. */}
+                      <span className="mt-1 block truncate text-xs text-muted-foreground lg:hidden">
+                        {deal.missing} · {deal.daysOpen}d open
                       </span>
                     </div>
                   </div>
 
                   {/* Missing */}
-                  <span className="text-xs text-slate-400 truncate">
+                  <span className="hidden truncate text-xs text-muted-foreground lg:block">
                     {deal.missing}
                   </span>
 
                   {/* Days */}
-                  <div className="flex items-center gap-1.5">
+                  <div className="hidden items-center gap-1.5 lg:flex">
                     <Clock
                       size={11}
                       className={cn(
@@ -182,17 +194,17 @@ export function DealsAuditBoard() {
                           ? "text-amber-500"
                           : warning
                             ? "text-amber-300"
-                            : "text-slate-600",
+                            : "text-muted-foreground",
                       )}
                     />
                     <span
                       className={cn(
-                        "text-xs px-2 py-0.5 rounded-full",
+                        "rounded-full px-2 py-0.5 text-xs",
                         urgent
-                          ? "bg-amber-500/15 text-amber-500 font-bold"
+                          ? "bg-amber-500/15 font-bold text-amber-500"
                           : warning
-                            ? "bg-amber-300/10 text-amber-300 font-medium"
-                            : "bg-slate-600/30 text-slate-500 font-medium",
+                            ? "bg-amber-300/10 font-medium text-amber-300"
+                            : "bg-muted font-medium text-muted-foreground",
                       )}
                     >
                       {deal.daysOpen}d
@@ -208,14 +220,14 @@ export function DealsAuditBoard() {
                       className={cn(
                         "rounded-lg font-semibold hover:brightness-110 active:scale-95",
                         urgent
-                          ? "bg-amber-500/12 text-amber-500 border-amber-500/20 hover:bg-amber-500/12"
-                          : "bg-sky-400/10 text-sky-400 border-sky-400/20 hover:bg-sky-400/10",
+                          ? "border-amber-500/20 bg-amber-500/12 text-amber-500 hover:bg-amber-500/12"
+                          : "border-sky-400/20 bg-sky-400/10 text-sky-400 hover:bg-sky-400/10",
                       )}
                     >
                       Resolve
                     </Button>
                   ) : (
-                    <span className="text-xs text-slate-600">—</span>
+                    <span className="text-xs text-muted-foreground">—</span>
                   )}
                 </div>
               );
@@ -225,7 +237,7 @@ export function DealsAuditBoard() {
 
         {/* Pagination */}
         {!isPending && !isError && totalPages > 1 && (
-          <div className="flex items-center justify-between px-5 py-3 border-t border-border">
+          <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3 md:px-5">
             <span className="text-xs text-muted-foreground">
               Page {page} of {totalPages}
             </span>

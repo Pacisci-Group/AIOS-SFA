@@ -19,6 +19,18 @@ export interface UpsertedPolicy {
   policyId: Types.ObjectId;
   policyType: string;
   isNew: boolean;
+  /**
+   * Which `dto.policies` row produced this, so downstream steps can look the
+   * policy up by row rather than by array position.
+   *
+   * The loop below pushes exactly one result per row with no `continue`, so
+   * position *happens* to line up today — but nothing enforced that, and
+   * `InterestedPartiesStep` was zipping the two arrays on the assumption. The
+   * failure mode is silent and serious: any future filter here would attach an
+   * escrow mortgagee to the wrong dwelling, with nothing downstream able to
+   * tell. Carrying the index makes the coupling explicit instead of emergent.
+   */
+  sourceIndex: number;
 }
 
 /**
@@ -45,7 +57,7 @@ export class UpsertPoliciesStep {
     const { ctx } = deps;
     const results: UpsertedPolicy[] = [];
 
-    for (const row of dto.policies) {
+    for (const [sourceIndex, row] of dto.policies.entries()) {
       const shared = {
         policyNumber: row.policyNumber,
         policyNumberKey: normalizePolicyNumber(row.policyNumber) ?? undefined,
@@ -57,6 +69,11 @@ export class UpsertPoliciesStep {
         active: true,
         policyStatus: 'Active',
         discounts: row.discounts,
+        // `uploadedAt` is stamped here, not taken from the client (PAC-56 #23).
+        newBusinessApplication: {
+          ...row.newBusinessApplication,
+          uploadedAt: new Date(),
+        },
         householdId: ctx.householdId,
         dealId,
       };
@@ -68,7 +85,12 @@ export class UpsertPoliciesStep {
           access,
           deps,
         );
-        results.push({ policyId, policyType: row.policyType, isNew: false });
+        results.push({
+          policyId,
+          policyType: row.policyType,
+          isNew: false,
+          sourceIndex,
+        });
         continue;
       }
 
@@ -88,6 +110,7 @@ export class UpsertPoliciesStep {
         policyId: policy._id,
         policyType: row.policyType,
         isNew: true,
+        sourceIndex,
       });
     }
 

@@ -50,9 +50,17 @@ function applyPolicyPatch(
  * rather than triggering a refetch — re-running the ten-collection Lead Detail
  * assembly to learn one corrected premium is the wrong trade.
  *
- * Deal-level totals (`deal.premium`, `itemCount`) are **not** recomputed here.
- * They are stored roll-ups the Sold form derived at submission, and this
- * endpoint does not touch them — see the note in `SoldCard`.
+ * ## Why the cache patch is not enough on its own (PAC-56 #25)
+ *
+ * The endpoint now **does** recompute the parent deal's roll-ups, but the
+ * response is a `LeadDetailPolicy` — one row, not the deal. So splicing it in
+ * would leave the Sold card's footer total showing the pre-edit sum directly
+ * beneath the corrected row. Hence the invalidations below.
+ *
+ * They deliberately invalidate rather than widening `UpdatePolicyResult` to
+ * carry the new deal totals: that would couple a policy patch to deal
+ * reporting, and the same argument applies twice over to `performance` and
+ * `leaderboard`, which are different pages entirely.
  */
 export function useUpdatePolicy(leadId: string, policyId: string) {
   const queryClient = useQueryClient();
@@ -62,9 +70,20 @@ export function useUpdatePolicy(leadId: string, policyId: string) {
     mutationFn: (input: UpdatePolicyInput) => updatePolicy(policyId, input),
 
     onSuccess: (saved: UpdatePolicyResult) => {
+      // Applied first so the corrected row is on screen immediately; the
+      // refetch below then reconciles the totals around it.
       queryClient.setQueryData<LeadDetail>(queryKey, (current) =>
         current ? applyPolicyPatch(current, saved) : current,
       );
+      void queryClient.invalidateQueries({ queryKey });
+      /*
+       * A premium correction moves the deal's roll-up, which is what the Sold
+       * scorecard sums and what the leaderboard ranks on. Leaving those cached
+       * would show a producer two different numbers for the same sale on two
+       * pages.
+       */
+      void queryClient.invalidateQueries({ queryKey: ["performance"] });
+      void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
       toast.success("Policy updated");
     },
 

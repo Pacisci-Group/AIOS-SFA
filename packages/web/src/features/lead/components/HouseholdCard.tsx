@@ -3,6 +3,7 @@ import { Check, Copy, Users } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { DetailCard, SectionLabel } from "./DetailCard";
 import { formatCurrency, formatDate, initials } from "./lead-display";
 import { PolicyRow } from "./PolicyRow";
 
@@ -40,17 +41,11 @@ interface HouseholdCardProps {
 export function HouseholdCard({ household }: HouseholdCardProps) {
   if (!household) {
     return (
-      <section className="rounded-lg border border-border bg-card">
-        <div className="flex items-center gap-2 border-b border-border px-5 py-3">
-          <Users size={14} className="text-muted-foreground" />
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Household
-          </h2>
-        </div>
-        <p className="px-5 py-4 text-sm text-muted-foreground">
+      <DetailCard title="Household" icon={Users}>
+        <p className="text-base text-muted-foreground">
           This lead isn’t linked to a household yet.
         </p>
-      </section>
+      </DetailCard>
     );
   }
 
@@ -61,26 +56,20 @@ export function HouseholdCard({ household }: HouseholdCardProps) {
   );
 
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <header className="space-y-2 border-b border-border px-5 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <Users size={14} className="shrink-0 text-muted-foreground" />
-            <h2 className="truncate text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              {household.name ?? "Household"}
-            </h2>
-          </div>
-          <HouseholdReference reference={household.reference} />
-        </div>
-
-        <p className="text-xs text-muted-foreground">
+    <DetailCard
+      title={household.name ?? "Household"}
+      icon={Users}
+      bodyless
+      action={<HouseholdReference reference={household.reference} />}
+      subheading={
+        <p className="mt-1 text-sm tabular-nums text-muted-foreground">
           {activePolicies.length || household.totalActivePolicies} active
           {premium > 0 && <> · {formatCurrency(premium)}/yr</>}
         </p>
-      </header>
-
+      }
+    >
       <section className="border-b border-border">
-        <SectionLabel>Members</SectionLabel>
+        <SectionLabel className="px-5 pb-1 pt-3">Members</SectionLabel>
 
         {household.members.length > 0 ? (
           <ul className="divide-y divide-border">
@@ -88,15 +77,15 @@ export function HouseholdCard({ household }: HouseholdCardProps) {
               <li key={member.id} className="flex items-center gap-3 px-5 py-3">
                 <span
                   aria-hidden
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/12 text-[11px] font-bold text-primary"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/12 text-xs font-bold text-primary"
                 >
                   {initials(member.name)}
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate text-sm text-card-foreground">
+                  <p className="truncate text-base text-card-foreground">
                     {member.name}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-sm text-muted-foreground">
                     {[
                       member.isPrimary ? "Primary" : member.role,
                       member.dateOfBirth
@@ -111,14 +100,14 @@ export function HouseholdCard({ household }: HouseholdCardProps) {
             ))}
           </ul>
         ) : (
-          <p className="px-5 pb-4 text-sm text-muted-foreground">
+          <p className="px-5 pb-4 text-base text-muted-foreground">
             No household members on file.
           </p>
         )}
       </section>
 
       <section>
-        <SectionLabel>Policies</SectionLabel>
+        <SectionLabel className="px-5 pb-1 pt-3">Policies</SectionLabel>
 
         {household.policies.length > 0 ? (
           <ul className="divide-y divide-border">
@@ -129,20 +118,12 @@ export function HouseholdCard({ household }: HouseholdCardProps) {
             ))}
           </ul>
         ) : (
-          <p className="px-5 pb-4 text-sm text-muted-foreground">
+          <p className="px-5 pb-4 text-base text-muted-foreground">
             No policies bound on this household yet.
           </p>
         )}
       </section>
-    </section>
-  );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="px-5 pb-1 pt-3 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-      {children}
-    </p>
+    </DetailCard>
   );
 }
 
@@ -174,7 +155,7 @@ function HouseholdReference({ reference }: { reference: string }) {
   return (
     <Button
       variant="ghost"
-      size="xs"
+      size="sm"
       onClick={() => void copy()}
       title={`Copy household ID ${reference}`}
       className="font-mono font-medium text-muted-foreground hover:text-foreground"
@@ -198,9 +179,9 @@ function HouseholdReference({ reference }: { reference: string }) {
        */}
       <span className="translate-y-[0.5px]">{reference}</span>
       {copied ? (
-        <Check size={11} className="text-emerald-500" />
+        <Check className="size-4 text-emerald-700 dark:text-emerald-500" />
       ) : (
-        <Copy size={11} />
+        <Copy className="size-4" />
       )}
       <span className="sr-only">Copy household ID</span>
     </Button>

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { CarriersModule } from '../carriers/carriers.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 import {
   Household,
@@ -28,6 +29,9 @@ import { Policy, PolicySchema } from './schemas/policy.schema';
       { name: Deal.name, schema: DealSchema },
       { name: Household.name, schema: HouseholdSchema },
     ]),
+    // Supplies the carrier's policy-number rule when a correction changes the
+    // number (PAC-56 #20).
+    CarriersModule,
   ],
   controllers: [PoliciesController],
   providers: [PoliciesService],

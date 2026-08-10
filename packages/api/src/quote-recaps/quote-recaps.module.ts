@@ -8,6 +8,7 @@ import { LeadsModule } from '../leads/leads.module';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { QuoteRecapsController } from './quote-recaps.controller';
 import { QuoteRecapsService } from './quote-recaps.service';
+import { User, UserSchema } from '../users/schemas/user.schema';
 import { QuoteRecap, QuoteRecapSchema } from './schemas/quote-recap.schema';
 
 @Module({
@@ -18,6 +19,9 @@ import { QuoteRecap, QuoteRecapSchema } from './schemas/quote-recap.schema';
       { name: QuoteRecap.name, schema: QuoteRecapSchema },
       { name: Lead.name, schema: LeadSchema },
       { name: Activity.name, schema: ActivitySchema },
+      // Only to resolve the recap author's name on the PATCH response, so the
+      // client gets back the same shape `GET /leads/:id` returns.
+      { name: User.name, schema: UserSchema },
     ]),
     // For `LeadAccessService` — the shared lead scope clamp and household
     // resolver. It owns the Household model, so this module no longer needs it.

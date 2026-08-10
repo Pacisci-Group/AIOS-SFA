@@ -31,7 +31,7 @@ export function HotLeadsPanel() {
 
   return (
     <Card className="flex flex-col rounded-xl overflow-hidden p-0 gap-0 bg-card border-border">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
         <div className="flex items-center gap-2">
           <div className="w-1.5 h-5 rounded-full bg-red-400" />
           <h2 className="text-sm text-foreground font-semibold">
@@ -52,7 +52,7 @@ export function HotLeadsPanel() {
           Array.from({ length: PANEL_SIZE }).map((_, i) => (
             <div
               key={i}
-              className="px-5 py-4 border-b border-border flex items-start gap-3"
+              className="flex items-start gap-3 border-b border-border px-4 py-4 md:px-5"
             >
               <Skeleton className="h-9 w-9 rounded-full shrink-0" />
               <div className="flex-1">

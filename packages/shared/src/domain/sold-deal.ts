@@ -1,6 +1,6 @@
 /**
  * Sold Deal wire contracts (PAC-40) — shared by the NestJS write path and the
- * `/sold/new` 8-card wizard.
+ * `/sold/new` wizard.
  *
  * Deliberately plain TypeScript, for the reason given in `lead-intake.ts`: zod
  * is not a dependency of this package. The API validates with its own zod DTO
@@ -23,12 +23,26 @@ export interface SoldDocumentMeta {
   size: number;
 }
 
-/** A discount whose proof is either attached now or chased through the audit. */
+/**
+ * A discount that has to be evidenced.
+ *
+ * ⚠ **Selecting one now requires the document** (PAC-56 #21). It used to offer
+ * a "no — send it to the audit" fork, which is what {@link
+ * ProofBackedDiscount.hasProof} was for; David asked for the proof up front, so
+ * the fork is gone and `attachment` is required whenever `selected`.
+ */
 export interface ProofBackedDiscount {
   selected: boolean;
-  /** When false the discount still applies — the proof becomes an audit item. */
-  hasProof: boolean;
-  /** Required when `selected && hasProof`. */
+  /**
+   * @deprecated PAC-56 #21 removed the "do you have proof?" fork; nothing
+   * writes this any more and nothing reads it. Kept **optional** rather than
+   * deleted because deals booked before that still carry it on
+   * `Policy.discounts`, and removing the property would make those documents
+   * un-typeable on read for no gain. The API DTO drops the key on the way in,
+   * so a stale client sending `true` is ignored rather than 400'd.
+   */
+  hasProof?: boolean;
+  /** Required when `selected`. */
   attachment?: SoldDocumentMeta;
 }
 
@@ -38,10 +52,16 @@ export interface DefensiveDriverSelection {
   name: string;
   /** Set when the driver was picked from the household rather than typed. */
   contactId?: string;
+  /**
+   * That driver's certificate (PAC-56 #21). Required per row when the discount
+   * is selected — the certificates are per person, and the audit generator
+   * already emits one item per name, so they map 1:1.
+   */
+  attachment?: SoldDocumentMeta;
 }
 
 /**
- * Card 5 — Discounts & Required Documentation, per policy.
+ * Discounts & Required Documentation, per policy.
  *
  * Split by branch: the property fields are only meaningful for a policy where
  * `isPropertyPolicyType` holds, the auto fields only where `isAutoPolicyType`
@@ -52,8 +72,28 @@ export interface DefensiveDriverSelection {
  */
 export interface SoldPolicyDiscounts {
   // --- Home / Renters / Condominium / Landlord ---
-  /** Implies a mortgagee, which drives the `Home/Landlord Mortgagee` audit items. */
+  /**
+   * Implies a mortgagee, which drives the `Home/Landlord Mortgagee` audit items.
+   *
+   * Stays a plain boolean rather than becoming a {@link ProofBackedDiscount}
+   * for symmetry: its evidence belongs beside the loan number and the
+   * mortgagee's address, so it lives on {@link SoldEscrowDetails.attachment}.
+   * Converting it would ripple through `deriveMortgagee`,
+   * `findCrossBranchDiscounts`, `InterestedPartiesStep` and every fixture, to
+   * make one control look like its neighbours.
+   */
   escrow: boolean;
+  /**
+   * "Passed home inspection", with its report (PAC-56 #21).
+   *
+   * New — legacy's `Passed Home Inspection` (`sqmmybna`) was never ported, so
+   * the control had to exist before it could be made conditional.
+   *
+   * ⚠ Generates **no audit item of its own**. `Home Inspection` /
+   * `Landlord Inspection` are already emitted deterministically from the policy
+   * type, so this only carries the proof onto the item that exists.
+   */
+  inspection: ProofBackedDiscount;
   fireSubscription: ProofBackedDiscount;
   /** Legacy calls the resulting audit item `Hail Resistant Roof`. */
   roofReceipt: ProofBackedDiscount;
@@ -61,8 +101,13 @@ export interface SoldPolicyDiscounts {
   acvDwellingProtection: boolean;
 
   // --- Auto / Auto - Special / Motorcycle ---
-  /** Always generates an audit item: service must mention registration. */
-  drivewise: boolean;
+  /**
+   * Always generates an audit item: service must mention registration.
+   *
+   * Proof-backed since PAC-56 #21. Unlike escrow it has no details object to
+   * hang a document off, so it takes the standard shape.
+   */
+  drivewise: ProofBackedDiscount;
   defensiveDriver: {
     selected: boolean;
     /** One audit item is generated per driver, each carrying their name. */
@@ -77,9 +122,15 @@ export interface SoldEscrowDetails {
   loanNumber: string;
   companyName: string;
   address: StructuredAddress;
+  /**
+   * The escrow / mortgagee statement (PAC-56 #21). Required whenever
+   * `discounts.escrow` is ticked — here rather than on the discount flag
+   * because it belongs with the loan number it evidences.
+   */
+  attachment?: SoldDocumentMeta;
 }
 
-/** Card 6 — Prior Insurance, per policy. Labels track the policy type. */
+/** Prior insurance, per policy. Labels track the policy type. */
 export interface SoldPriorInsurance {
   /** The "No prior [Type] insurance" toggle; suppresses the other fields. */
   none: boolean;
@@ -87,18 +138,24 @@ export interface SoldPriorInsurance {
   agentName?: string;
 }
 
-/** Card 7 — Cancellation of the prior policy. */
+/**
+ * Cancellation of the prior policy.
+ *
+ * Asked inside the prior-insurance step since PAC-56 #24 — a client with no
+ * prior insurance has nothing to cancel, and the API rejects the pair rather
+ * than silently dropping it.
+ */
 export interface SoldCancellation {
   cancelled: boolean;
   /** ISO date (YYYY-MM-DD). Required when `cancelled`. */
   effectiveDate?: string;
 }
 
-/** One iteration of the wizard's Card 2 → Card 7 loop. */
+/** One iteration of the wizard's per-policy loop. */
 export interface SoldPolicyInput {
   /** A canonical label from `POLICY_TYPES` — raw SmartSuite codes are rejected. */
   policyType: string;
-  /** Card 3 "start date", ISO (YYYY-MM-DD). Stored as `Policy.effectiveDate`. */
+  /** The "start date", ISO (YYYY-MM-DD). Stored as `Policy.effectiveDate`. */
   effectiveDate: string;
   carrier: string;
   policyNumber: string;
@@ -111,10 +168,14 @@ export interface SoldPolicyInput {
   premium: number;
   itemCount: number;
   /**
+   * The signed new business application (PAC-56 #23). **Required, PDF-only** —
+   * the one exception to the sold form's PDF-or-image rule.
+   */
+  newBusinessApplication: SoldDocumentMeta;
+  /**
    * Optional on the wire: the server defaults an omitted object to "nothing
-   * selected". Card 5 lands in PR4, so the wizard sends none today — and a
-   * policy that genuinely carries no discounts should not have to spell that
-   * out in eight false booleans.
+   * selected", so a policy that genuinely carries no discounts does not have to
+   * spell that out in nine false booleans.
    */
   discounts?: SoldPolicyDiscounts;
   escrow?: SoldEscrowDetails;
@@ -129,11 +190,11 @@ export interface CreateSoldDealInput {
    * claim a household it does not own.
    */
   leadId: string;
-  /** Card 1 — one sold date for the whole deal, ISO (YYYY-MM-DD). */
+  /** One sold date for the whole deal, ISO (YYYY-MM-DD). */
   soldDate: string;
   /** Optional: not every sale has a recorded quote. */
   quoteRecapId?: string;
-  /** At least one; the wizard's Card 8 loop appends to this array. */
+  /** At least one; the wizard's loop card appends to this array. */
   policies: SoldPolicyInput[];
   /**
    * Client-generated per-wizard-session idempotency key. A double-click or a
@@ -182,6 +243,16 @@ export interface SoldDealLeadContext {
   /** Feeds Card 5's Defensive Driver picker. */
   contacts: SoldHouseholdContact[];
   leadStatus: string;
+  /**
+   * Whether a quote recap exists for this lead (PAC-56 #17).
+   *
+   * The wizard blocks without one, so a typed `/sold/new?leadId=…` cannot walk
+   * around the disabled "Mark as Sold" button. Computed with the same
+   * `legacyLeadId` fallback the Lead Detail read uses — the migration links
+   * recaps only by legacy id, so a bare `leadId` probe would report `false` for
+   * every migrated lead.
+   */
+  hasQuoteRecap: boolean;
 }
 
 export interface SoldHouseholdContact {

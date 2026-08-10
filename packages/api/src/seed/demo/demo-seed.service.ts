@@ -33,7 +33,11 @@ import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema'
 import { Activity } from '../../activities/schemas/activity.schema';
 import { PermissionsService } from '../../permissions/permissions.service';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
-import { normalizeLeadSource, POLICY_TYPES } from '@sfa/shared';
+import {
+  INSURANCE_MONTHS,
+  normalizeLeadSource,
+  POLICY_TYPES,
+} from '@sfa/shared';
 import { seedAuditTemplates } from '../audit-templates.seed';
 import {
   AUDIT_TEMPLATES,
@@ -741,6 +745,9 @@ export class DemoSeedService {
             premium,
             itemCount: products.length + rng.int(0, 2),
             productsQuoted: products,
+            // PAC-56 #16 — seeded so the Quote Summary card and the edit form
+            // have something to render locally.
+            insuranceRenewalMonth: rng.pick([...INSURANCE_MONTHS]),
             recapStatus:
               lead.status === 'Sold' && !isEarlier
                 ? 'Won'
@@ -892,7 +899,11 @@ export class DemoSeedService {
             agencyId: ctx.agencyId,
             branchId: deal.producer.branchId,
             legacySmartSuiteId: legacyId,
-            policyNumber: `ALL-${policyType.slice(0, 2).toUpperCase()}-${200000 + n}`,
+            // Digits only, because the carrier below is Allstate and PAC-56 #20
+            // now enforces that format. Demo data has to satisfy the rules the
+            // app enforces, or the first person to edit a seeded policy on the
+            // Sold card gets a 400 on data we shipped them.
+            policyNumber: `9${String(200000 + n).padStart(8, '0')}`,
             policyType,
             carrier: 'Allstate',
             active: true,

@@ -30,7 +30,7 @@ export function HotLeadRow({ lead, isLast }: HotLeadRowProps) {
   return (
     <div
       className={cn(
-        "px-5 py-4 transition-all hover:bg-muted/50 group",
+        "group px-4 py-4 transition-all hover:bg-muted/50 md:px-5",
         !isLast && "border-b border-border",
       )}
     >

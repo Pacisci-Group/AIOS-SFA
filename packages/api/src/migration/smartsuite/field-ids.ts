@@ -58,6 +58,8 @@ export const QUOTE_RECAP_FIELDS = {
   premium: 's98af0638c',
   items: 'sd19cab342',
   productsQuoted: 's1e17612aa',
+  /** "Insurance X Month" — a single-select of the 12 months (PAC-56 #16). */
+  insuranceMonth: 's69d7c3f64',
   recapStatus: 'recap_status',
   producer: 'sf9e2dcdfb',
   lead: 'sbcb3c8b31',

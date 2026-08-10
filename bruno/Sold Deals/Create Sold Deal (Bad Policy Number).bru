@@ -1,0 +1,98 @@
+meta {
+  name: Create Sold Deal (Bad Policy Number)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/sold-deals
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "soldDate": "2026-02-15",
+    "policies": [
+      {
+        "policyType": "Auto",
+        "effectiveDate": "2026-02-01",
+        "carrier": "Allstate",
+        "policyNumber": "AB-123-456",
+        "premium": 100,
+        "itemCount": 1,
+        "newBusinessApplication": {
+          "key": "{{nbaDocumentKey}}",
+          "filename": "new-business-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
+        "priorInsurance": { "none": true },
+        "cancellation": { "cancelled": false }
+      }
+    ]
+  }
+}
+
+tests {
+  test("rejects a letter-bearing number for a digits-only carrier", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("quotes the carrier's own hint, and names the policy", function () {
+    const message = res.getBody().message;
+    expect(message).to.be.a("string");
+    expect(message).to.contain("Policy 1");
+    expect(message.toLowerCase()).to.contain("digits only");
+  });
+
+  test("no submissionToken, so nothing was booked to replay", function () {
+    // The check runs before the intake transaction opens; a 400 here must not
+    // have created a deal. Asserted indirectly: `Create Sold Deal (Replay)`
+    // (seq 5) already pins the only deal this run should own.
+    expect(res.getBody()).to.not.have.property("id");
+  });
+}
+
+docs {
+  # POST /sold-deals — carrier policy-number rule (PAC-56 #20), negative case
+
+  Allstate's seeded rule is **digits only**, so `AB-123-456` is rejected. Exists
+  to pin three things that are easy to break:
+
+  1. **The rule is enforced server-side.** The wizard validates live off the same
+     catalog rows, but that is an assist — a stale bundle, a direct API call, or
+     a carriers fetch that failed open all bypass it. This is the gate.
+  2. **The message is actionable.** It quotes the carrier's `policyNumberHint`
+     and names the policy's position in the submission, because "invalid policy
+     number" on a five-policy sale tells a producer nothing.
+  3. **It runs after the ownership clamp.** A foreign lead must still 404 —
+     see `Create Sold Deal (Foreign Lead)` — rather than leaking the lead's
+     existence through a format error.
+
+  - **Module:** `deal_audits` · **Permission:** `deal_audits:write`
+
+  ## What is *not* rejected
+  | case | why it passes |
+  |---|---|
+  | `123-456` for Allstate | tested against the **normalized** key (uppercase, non-alphanumerics stripped), which is the form stored and looked up. Punctuation nobody persists is not a policy-number rule. |
+  | `AB-123-456` for State Farm | no seeded pattern — only Allstate carries one, because a rule we are guessing at fails **closed** and there is no admin UI to fix it. |
+  | `AB-123-456` for a carrier typed through "Other" | absent from the catalog ⇒ no pattern ⇒ unvalidated. That is the escape hatch working. |
+
+  ## Response `400`
+  ```json
+  { "statusCode": 400, "message": "Policy 1: Allstate policy numbers are digits only." }
+  ```
+
+  ## Run order
+  Needs **Leads/Create Lead** (`createdLeadId`). Deliberately sequenced after
+  the happy-path create so it cannot interfere with `createdSoldDealId` or the
+  replay assertion. Sends **no** `submissionToken`: a rejected submission must
+  not burn the idempotency key the earlier requests rely on.
+}

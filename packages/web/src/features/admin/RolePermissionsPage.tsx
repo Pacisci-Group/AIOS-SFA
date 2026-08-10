@@ -63,7 +63,7 @@ export default function RolePermissionsPage() {
 
   const roleSelector = (
     <Select value={selectedRoleId} onValueChange={setSelectedRoleId}>
-      <SelectTrigger className="w-[200px] bg-card border-border text-sm">
+      <SelectTrigger className="w-[150px] border-border bg-card text-sm sm:w-[200px]">
         <SelectValue placeholder="Select a role" />
       </SelectTrigger>
       <SelectContent>

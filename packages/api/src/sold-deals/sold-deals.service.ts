@@ -4,7 +4,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { normalizeLeadStatus } from '@sfa/shared';
+import {
+  carrierPolicyNumberMatches,
+  carrierSlug,
+  normalizeLeadStatus,
+} from '@sfa/shared';
 import type {
   AccessContext,
   CreateSoldDealResponse,
@@ -15,11 +19,17 @@ import type {
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { AuditGenerationService } from '../audit-generation/audit-generation.service';
+import { CarriersService } from '../carriers/carriers.service';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CrmAssignmentService } from '../crm-rotations/crm-assignment.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { LeadAccessService } from '../leads/lead-access.service';
+import { policyNumberKey } from '../policies/policy-number';
+import {
+  QuoteRecap,
+  QuoteRecapDocument,
+} from '../quote-recaps/schemas/quote-recap.schema';
 import { StorageService } from '../storage/storage.service';
 import type { HouseholdDocument } from '../households/schemas/household.schema';
 import type { LeadDocument } from '../leads/schemas/lead.schema';
@@ -28,19 +38,31 @@ import type {
   SoldDealContextDto,
 } from './dto/create-sold-deal.dto';
 import {
-  ALLOWED_SOLD_DOCUMENT_CONTENT_TYPES,
   MAX_SOLD_DOCUMENT_BYTES,
+  SOLD_UPLOAD_KINDS,
   soldDocumentPurpose,
   type PresignSoldDocumentDto,
+  type SoldUploadKind,
 } from './dto/presign-sold-document.dto';
+import { auditAttachmentsByItem } from './intake/sold-audit-attachments';
 import { collectAttachments } from './intake/sold.normalize';
 import { SoldDealIntakeService } from './intake/sold-deal-intake.service';
 import { buildSoldSubmissionToken } from './intake/sold.normalize';
 import type { SoldIntakeContext } from './intake/sold-intake.types';
 
-const ALLOWED_CONTENT_TYPES = new Set<string>(
-  ALLOWED_SOLD_DOCUMENT_CONTENT_TYPES,
-);
+/**
+ * The allow-list per upload kind, as `HeadObject` enforces it.
+ *
+ * Derived from `SOLD_UPLOAD_KINDS` rather than re-listed, so the presign
+ * narrowing and this verification can never disagree — the presign is a
+ * fast-fail, this is the gate.
+ */
+const ALLOWED_CONTENT_TYPES = Object.fromEntries(
+  Object.entries(SOLD_UPLOAD_KINDS).map(([kind, types]) => [
+    kind,
+    new Set<string>(types),
+  ]),
+) as Record<SoldUploadKind, Set<string>>;
 
 @Injectable()
 export class SoldDealsService {
@@ -49,7 +71,10 @@ export class SoldDealsService {
     private readonly contactModel: Model<ContactDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(QuoteRecap.name)
+    private readonly quoteRecapModel: Model<QuoteRecapDocument>,
     private readonly tenancy: TenantContextResolver,
+    private readonly carriers: CarriersService,
     private readonly leadAccess: LeadAccessService,
     private readonly storage: StorageService,
     private readonly intake: SoldDealIntakeService,
@@ -58,12 +83,16 @@ export class SoldDealsService {
   ) {}
 
   /**
-   * Issue a presigned PUT for a Card 5 proof document.
+   * Issue a presigned PUT for a sold-form document.
    *
    * Ownership is checked **first**: a presign is a write, and must not leak the
    * existence of another producer's lead. The key is built from the loaded
    * document's `agencyId`, never from the request, so a caller cannot aim an
    * upload at another agency's prefix.
+   *
+   * `kind` puts the New Business Application under its own key prefix (PAC-56
+   * #23), which is what makes `assertKeyOwnership` enforce the PDF-only rule at
+   * verification time rather than trusting this narrowing.
    */
   async presignDocument(
     access: AccessContext,
@@ -78,7 +107,7 @@ export class SoldDealsService {
 
     const key = this.storage.buildObjectKey({
       agencyId: lead.agencyId,
-      purpose: soldDocumentPurpose(lead._id.toString()),
+      purpose: soldDocumentPurpose(lead._id.toString(), dto.kind),
       filename: dto.filename,
     });
 
@@ -96,7 +125,7 @@ export class SoldDealsService {
 
   /**
    * What the wizard needs on mount: who the sale is for, and which household
-   * members can be named as drivers on Card 5.
+   * members can be named as defensive drivers.
    *
    * Mirrors `GET /quote-recaps/context`, including the decision to report a
    * missing household as `householdId: null` rather than a 409 — the page can
@@ -122,6 +151,7 @@ export class SoldDealsService {
       householdName: household?.name ?? null,
       contacts: household ? await this.householdContacts(household) : [],
       leadStatus: normalizeLeadStatus(lead.status),
+      hasQuoteRecap: await this.hasQuoteRecap(lead),
     };
   }
 
@@ -151,6 +181,7 @@ export class SoldDealsService {
     );
     const household = await this.leadAccess.resolveHousehold(lead, access);
 
+    await this.assertPolicyNumberFormats(dto, tenant.agencyId);
     await this.verifyAttachments(dto, tenant.agencyId, lead._id.toString());
 
     const ctx: SoldIntakeContext = {
@@ -188,6 +219,9 @@ export class SoldDealsService {
       producerName: await this.producerName(ctx.producerId),
       clientName: ctx.clientName,
       submissionToken: ctx.submissionToken,
+      // Built *after* `verifyAttachments`, so what gets persisted is the size
+      // and content type storage reported, not the client's claim.
+      attachmentsByItem: auditAttachmentsByItem(dto.policies),
     });
 
     const crm = await this.crmAssignment.assignForDeal({
@@ -216,7 +250,85 @@ export class SoldDealsService {
   }
 
   /**
-   * Verify every Card 5 proof actually landed, and replace the client's claimed
+   * Does this lead have a quote recap on file? (PAC-56 #17)
+   *
+   * Backs the "Mark as Sold is disabled until a quote has been given" gate, and
+   * lets `/sold/new` block a typed URL rather than trusting the button.
+   *
+   * ⚠ **The legacy fallback is load-bearing, not defensive.** The migration
+   * writes only `legacyLeadId` on recaps — `backfill-deal-refs` repairs deals,
+   * never these — so a bare `{ leadId }` probe answers "no recap" for *every*
+   * migrated lead, locking all of them out of the wizard. `LeadDetailService
+   * .loadQuoteRecaps` carries the same fallback for the same reason, and both
+   * indexes exist to serve it.
+   *
+   * Unlike that one this does not backfill: it is a read on a gate, and
+   * viewing the lead page (which does backfill) is how anyone arrives here.
+   */
+  private async hasQuoteRecap(lead: LeadDocument): Promise<boolean> {
+    const agencyId = lead.agencyId;
+    const byRef = await this.quoteRecapModel.exists({
+      agencyId,
+      leadId: lead._id,
+      isTestRecord: { $ne: true },
+    });
+    if (byRef) return true;
+
+    if (!lead.legacySmartSuiteId) return false;
+
+    const byLegacy = await this.quoteRecapModel.exists({
+      agencyId,
+      legacyLeadId: lead.legacySmartSuiteId,
+      isTestRecord: { $ne: true },
+    });
+    return Boolean(byLegacy);
+  }
+
+  /**
+   * Enforce each carrier's policy-number format (PAC-56 #20).
+   *
+   * **This is the enforcement point.** The wizard validates live off the same
+   * catalog rows, but that is an assist — it can be bypassed by a stale bundle,
+   * a direct API call, or a carriers fetch that failed open.
+   *
+   * Three deliberate choices:
+   *
+   * - Tested against the **normalized key**, so `123-456` satisfies a
+   *   digits-only rule. That is the form the number is stored and looked up in;
+   *   rejecting punctuation nobody persists would be a rule about typing.
+   * - A carrier **absent from the catalog** carries no pattern and passes. That
+   *   is the "Other" escape and migrated data, both of which must keep working.
+   * - The message quotes the carrier's own hint, because "invalid policy
+   *   number" tells a producer nothing about how to fix it.
+   */
+  private async assertPolicyNumberFormats(
+    dto: CreateSoldDealDto,
+    agencyId: string,
+  ): Promise<void> {
+    // Only reach for the catalog if some row could actually be constrained.
+    if (dto.policies.length === 0) return;
+
+    const bySlug = await this.carriers.optionsBySlug(agencyId);
+    if (bySlug.size === 0) return;
+
+    dto.policies.forEach((policy, index) => {
+      const carrier = bySlug.get(carrierSlug(policy.carrier));
+      if (!carrier?.policyNumberPattern) return;
+
+      const key = policyNumberKey(policy.policyNumber);
+      if (carrierPolicyNumberMatches(carrier.policyNumberPattern, key)) return;
+
+      throw new BadRequestException(
+        `Policy ${index + 1}: ${
+          carrier.policyNumberHint ??
+          `"${policy.policyNumber}" is not a valid ${carrier.name} policy number.`
+        }`,
+      );
+    });
+  }
+
+  /**
+   * Verify every uploaded document actually landed, and replace the client's claimed
    * `contentType` / `size` with what storage reports.
    *
    * The presigned PUT signs only the content type, so the declared size in the
@@ -233,13 +345,20 @@ export class SoldDealsService {
     agencyId: string,
     leadId: string,
   ): Promise<void> {
-    for (const attachment of collectAttachments(dto.policies)) {
-      // Reject a key this agency and lead did not produce, before touching
-      // storage — otherwise a caller could attach any object they knew of,
-      // including another agency's.
+    for (const { attachment, kind } of collectAttachments(dto.policies)) {
+      /*
+       * Reject a key this agency and lead did not produce, before touching
+       * storage — otherwise a caller could attach any object they knew of,
+       * including another agency's.
+       *
+       * The purpose now carries the **kind** (PAC-56 #23), so this also rejects
+       * a JPEG presigned as a discount proof and then declared as the New
+       * Business Application: its key sits under the wrong prefix. The
+       * content-type check below is the second, independent gate.
+       */
       this.storage.assertKeyOwnership(attachment.key, {
         agencyId,
-        purpose: soldDocumentPurpose(leadId),
+        purpose: soldDocumentPurpose(leadId, kind),
       });
 
       const stored = await this.storage.statObject(attachment.key);
@@ -251,11 +370,13 @@ export class SoldDealsService {
       if (stored.size > MAX_SOLD_DOCUMENT_BYTES) {
         throw new BadRequestException('A document is larger than 10MB.');
       }
-      if (
-        !stored.contentType ||
-        !ALLOWED_CONTENT_TYPES.has(stored.contentType)
-      ) {
-        throw new BadRequestException('Documents must be a PDF, JPEG or PNG.');
+      const allowed = ALLOWED_CONTENT_TYPES[kind];
+      if (!stored.contentType || !allowed.has(stored.contentType)) {
+        throw new BadRequestException(
+          kind === 'new_business_application'
+            ? 'The new business application must be a PDF.'
+            : 'Documents must be a PDF, JPEG or PNG.',
+        );
       }
 
       this.applyVerifiedMeta(attachment, stored);

@@ -254,9 +254,12 @@ Chakra, etc.).
 - **Style with design tokens, never hard-coded hex/inline styles.** The mockup
   palette is encoded as CSS-variable tokens in `src/styles/theme.css`
   (`bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`,
-  `border-border`, `text-primary` = Allstate sky, `text-accent` = emerald,
+  `border-border`, `text-primary` = Allstate sky, `text-success` = emerald,
   `text-destructive` = amber). **Tokens theme automatically; raw palette values
-  do not.** `theme.css` defines the light theme on `:root` and the navy brand
+  do not.** ⚠ `--accent` is **not** the brand emerald — it is shadcn's subtle
+  hover/focus surface (`focus:bg-accent` on every menu item, `hover:bg-accent` on
+  ghost buttons, `bg-accent` on `Skeleton`). It held emerald until PAC-56, which
+  is why menus and skeletons rendered green. The brand emerald is `--success`. `theme.css` defines the light theme on `:root` and the navy brand
   theme on `.dark`, so anything written as `amber-500`, `slate-400`,
   `white/[0.04]` or a hex literal is a *dark-only* value that will be wrong —
   often invisible — on the light theme. Reach for the token
@@ -277,9 +280,23 @@ Chakra, etc.).
   slated for replacement. They also reference ~9 CSS variables (`--kpi-*`,
   `--navy-900`, `--emerald`, `--red`, `--amber`) that are defined nowhere and
   render transparent. Don't copy those patterns into new work.
-- **Match the mockups.** `./agencyops_fe_mockups` is still the visual
-  source-of-truth (see `.claude/rules/figma-mockups-reference.md`); port layout
-  and spacing onto shadcn primitives + tokens.
+- **We own UI/UX. The mockups are the starting point, not a contract.** There is
+  no dedicated designer on this team, and the product owner has said explicitly
+  that UI/UX calls are ours. `./agencyops_fe_mockups` is where a screen's layout,
+  spacing and visual language come *from* (see
+  `.claude/rules/figma-mockups-reference.md`) — but where a mockup produces
+  something confusing, unreadable or unbuildable against the real data, **improve
+  it rather than porting the problem**. Three standing constraints on that
+  freedom: stay inside the **shadcn/ui design language** (compose `ui/`
+  primitives, add variants via `cva`, no second component library), stay inside
+  the **`theme.css` token palette**, and keep **light + dark** at parity. Say in
+  the PR what you changed and why, so it can be put to the owner in one batch.
+  Where the design asks for data we do not capture, the honest move is to say so
+  (see the docblock on `QuoteRecapCard.tsx`), not to render empty rows.
+- **Follow the type & sizing scale** in `packages/web/src/styles/TYPOGRAPHY.md` —
+  text roles, icon sizes, radii and the "every clickable thing goes through
+  `Button`" rule. It exists because the first pass over Leads/Lead Detail drifted
+  into three competing label tiers and the same pill at three sizes.
 
 ### General
 

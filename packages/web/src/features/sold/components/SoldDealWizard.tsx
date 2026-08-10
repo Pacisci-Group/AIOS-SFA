@@ -1,7 +1,7 @@
-import type { SoldDealLeadContext } from "@sfa/shared";
+import type { CarrierOption, SoldDealLeadContext } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { ArrowLeft, ArrowRight, Loader2, Plus, Send } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,18 +15,20 @@ import {
 import { FormError, FormSection } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { useAppForm } from "@/hooks/form";
+import { PolicyReviewList } from "./PolicyReviewList";
 import { PolicySummaryList } from "./PolicySummaryList";
 import { DiscountsCard } from "./DiscountsCard";
 import {
   CARD_FIELDS,
+  buildSoldPolicySchema,
   emptyPolicy,
-  soldPolicySchema,
+  type SoldDealFormValues,
   type SoldPolicyFormValues,
   type WizardCard,
 } from "./sold-deal-schema";
 import { useWizardNavigation } from "./useWizardNavigation";
 import {
-  CancellationCard,
+  NewBusinessApplicationCard,
   PolicyDetailsCard,
   PolicyFinancialsCard,
   PolicyTypeCard,
@@ -37,12 +39,11 @@ import { WizardProgress } from "./WizardProgress";
 
 interface SoldDealWizardProps {
   context: SoldDealLeadContext;
+  /** The carrier catalog. The page waits for it, so it is never mid-flight here. */
+  carriers: CarrierOption[];
   submitting: boolean;
   errorMessage: string | null;
-  onSubmit: (values: {
-    soldDate: string;
-    policies: SoldPolicyFormValues[];
-  }) => void;
+  onSubmit: (values: SoldDealFormValues) => void;
 }
 
 /**
@@ -59,6 +60,7 @@ function fieldPaths<T extends object>(fieldMeta: T): Array<keyof T> {
 
 export function SoldDealWizard({
   context,
+  carriers,
   submitting,
   errorMessage,
   onSubmit,
@@ -68,11 +70,33 @@ export function SoldDealWizard({
   const [soldDateError, setSoldDateError] = useState<string>();
   const [policies, setPolicies] = useState<SoldPolicyFormValues[]>([]);
   const [discardOpen, setDiscardOpen] = useState(false);
+  /**
+   * Remount key for the draft subtree.
+   *
+   * ⚠ **Monotonic, not `policies.length`.** The original keyed the remount on
+   * the array's length, which was safe only while the array grew by exactly one
+   * at a commit point. It is now mutated in other ways too, and any of those
+   * would silently remount the live draft and wipe whatever the producer had
+   * typed — an intermittent "the wizard cleared my form" bug that is very hard
+   * to reproduce on demand. Bump this **only** where a genuinely fresh policy
+   * starts. Same pattern as `QuoteRecapForm`'s `editorKey`.
+   */
+  const [draftKey, setDraftKey] = useState(0);
+  /**
+   * Which committed policy the draft is replacing, or `null` for a new one.
+   *
+   * Set by the review card's Edit. Without it, editing a policy would splice it
+   * out and re-append it at the end of a list the producer is reading.
+   */
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  /** Guards the double-commit described on `commitDraft`. */
+  const [draftCommitted, setDraftCommitted] = useState(false);
 
   /**
    * The **draft** policy — its own form, remounted per policy via `key` below.
    *
-   * This separation is what keeps Cards 2–7 isolated across loop iterations:
+   * This separation is what keeps the per-policy cards isolated across loop
+   * iterations:
    * a single array-backed form would revalidate finished policies on every
    * keystroke and leak `onBlur` touched-state, so entering policy 2 would light
    * up policy 1's errors.
@@ -80,10 +104,27 @@ export function SoldDealWizard({
    * `onBlur` is the only validator key that both surfaces errors on blur — which
    * is the behaviour these cards were built with — and answers the
    * `"submit"`-cause `validateField` that per-card validation runs on.
+   *
+   * The schema is rebuilt whenever the carrier catalog changes (PAC-56 #20 keys
+   * the policy-number rule off it). `useForm` re-applies its options on every
+   * render, so the new validator is live on the next validation run.
    */
+  const schema = useMemo(() => buildSoldPolicySchema(carriers), [carriers]);
+
+  /**
+   * Hoisted out of the `useAppForm` call deliberately.
+   *
+   * `FormApi.update` compares `defaultValues` **structurally** and resets an
+   * untouched form when they differ. A fresh `emptyPolicy()` per render survives
+   * that only because the factory is deterministic — the day someone defaults
+   * `effectiveDate` to today's date, every render would silently wipe the form.
+   * Memoizing turns that from an emergent property into a guaranteed one.
+   */
+  const defaults = useMemo(emptyPolicy, []);
+
   const draft = useAppForm({
-    defaultValues: emptyPolicy(),
-    validators: { onBlur: soldPolicySchema },
+    defaultValues: defaults,
+    validators: { onBlur: schema },
   });
 
   const draftDirty = useStore(draft.store, (s) => s.isDirty);
@@ -145,7 +186,9 @@ export function SoldDealWizard({
       ...roots,
       ...fieldPaths(draft.state.fieldMeta).filter(owns),
     ]);
-    await Promise.all([...paths].map((path) => draft.validateField(path, "submit")));
+    await Promise.all(
+      [...paths].map((path) => draft.validateField(path, "submit")),
+    );
 
     // One authoritative form-level run, so a path that errors without a mounted
     // field still lands in meta before the scan.
@@ -171,28 +214,92 @@ export function SoldDealWizard({
     if (await validateCard(nav.card)) nav.advance();
   };
 
-  /** Card 8 — commit the draft, then either loop or submit. */
+  /**
+   * Fold the draft into the committed list.
+   *
+   * ⚠ **Not idempotent on its own** — hence `draftCommitted`. Before the review
+   * card, `commitDraft` ran once per journey and reset immediately afterwards.
+   * Now the producer can reach review, go Back, and press "Review & book"
+   * again, which would append the same policy twice. The flag is cleared
+   * wherever a genuinely new or reloaded draft starts.
+   *
+   * When `editingIndex` is set the policy **replaces** the row it came from
+   * rather than appending. Order is user-visible on the list they are about to
+   * book, so an edited policy must not jump to the end.
+   */
   const commitDraft = async (): Promise<SoldPolicyFormValues[] | null> => {
+    if (draftCommitted) return policies;
+
     await draft.validate("submit");
     if (!draft.state.isValid) return null;
-    // Cloned, not referenced: `draft.reset` below hands the next policy a fresh
+
+    // Cloned, not referenced: `draft.reset` hands the next policy a fresh
     // values object, and a committed policy must not be able to follow it.
-    const next = [...policies, structuredClone(draft.state.values)];
+    const committed = structuredClone(draft.state.values);
+    const next =
+      editingIndex === null
+        ? [...policies, committed]
+        : policies.map((policy, index) =>
+            index === editingIndex ? committed : policy,
+          );
+
     setPolicies(next);
+    setDraftCommitted(true);
     return next;
   };
 
   const addAnother = async () => {
     const next = await commitDraft();
     if (!next) return;
-    draft.reset(emptyPolicy());
+    startFreshDraft();
     nav.restartLoop();
   };
 
-  const finish = async () => {
+  /**
+   * Begin a genuinely new policy: clear the values *and* remount the subtree.
+   *
+   * Both halves matter. `reset` clears values; the remount is what drops the
+   * touched-state, without which policy 2 opens showing policy 1's errors.
+   */
+  const startFreshDraft = () => {
+    draft.reset(emptyPolicy());
+    setDraftKey((key) => key + 1);
+    setEditingIndex(null);
+    setDraftCommitted(false);
+  };
+
+  /** Pull a committed policy back into the draft, to be replaced in place. */
+  const editPolicy = (index: number) => {
+    const existing = policies[index];
+    if (!existing) return;
+    draft.reset(structuredClone(existing));
+    setDraftKey((key) => key + 1);
+    setEditingIndex(index);
+    setDraftCommitted(false);
+    nav.restartLoop();
+  };
+
+  const removePolicy = (index: number) => {
+    setPolicies((prev) => prev.filter((_, i) => i !== index));
+    // The draft is untouched — `draftKey` is not bumped, which is exactly the
+    // bug the counter replaced `policies.length` to avoid.
+    setEditingIndex((current) => {
+      if (current === null) return null;
+      if (current === index) return null;
+      return current > index ? current - 1 : current;
+    });
+  };
+
+  /** Commit whatever is in the draft, then show the review card. */
+  const reviewSale = async () => {
     const next = await commitDraft();
     if (!next) return;
-    onSubmit({ soldDate, policies: next });
+    nav.advance();
+  };
+
+  const finish = () => {
+    if (!policies.length) return;
+    onSubmit({ soldDate, policies });
   };
 
   return (
@@ -208,11 +315,11 @@ export function SoldDealWizard({
 
         <draft.AppForm>
           {/*
-            * `key` remounts the draft form for each policy, which resets both
-            * values and touched-state — the mechanism behind the isolation
-            * described above.
-            */}
-          <div key={policies.length} className="space-y-4">
+           * `key` remounts the draft form for each policy, which resets both
+           * values and touched-state — the mechanism behind the isolation
+           * described above. See `draftKey` for why it is a counter.
+           */}
+          <div key={draftKey} className="space-y-4">
             {nav.card === "soldDate" && (
               <SoldDateCard
                 value={soldDate}
@@ -224,8 +331,16 @@ export function SoldDealWizard({
               />
             )}
             {nav.card === "policyType" && <PolicyTypeCard form={draft} />}
-            {nav.card === "policyDetails" && <PolicyDetailsCard form={draft} />}
+            {nav.card === "policyDetails" && (
+              <PolicyDetailsCard form={draft} carriers={carriers} />
+            )}
             {nav.card === "financials" && <PolicyFinancialsCard form={draft} />}
+            {nav.card === "application" && (
+              <NewBusinessApplicationCard
+                form={draft}
+                leadId={context.leadId}
+              />
+            )}
             {nav.card === "discounts" && (
               <DiscountsCard
                 form={draft}
@@ -233,20 +348,51 @@ export function SoldDealWizard({
                 contacts={context.contacts}
               />
             )}
-            {nav.card === "priorInsurance" && <PriorInsuranceCard form={draft} />}
-            {nav.card === "cancellation" && <CancellationCard form={draft} />}
+            {nav.card === "priorInsurance" && (
+              <PriorInsuranceCard form={draft} carriers={carriers} />
+            )}
             {nav.card === "loop" && (
               <div className="space-y-2">
-                <p className="text-sm text-foreground">
+                <p className="text-base text-foreground">
                   Add another policy to this sale?
                 </p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                   Everything entered so far is submitted together as one deal.
                 </p>
               </div>
             )}
           </div>
         </draft.AppForm>
+
+        {/*
+         * Outside the draft form: it reads the **committed** list, and nothing
+         * on it is bound to the draft. Inside the keyed subtree it would
+         * remount on every edit for no reason.
+         */}
+        {nav.card === "review" && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Sold {soldDate || "—"} ·{" "}
+              {policies.length === 1
+                ? "1 policy"
+                : `${policies.length} policies`}
+              . Check it over — booking creates the deal, its policies and the
+              service hand-off.
+            </p>
+            {policies.length ? (
+              <PolicyReviewList
+                policies={policies}
+                onEdit={editPolicy}
+                onRemove={removePolicy}
+                disabled={submitting}
+              />
+            ) : (
+              <p className="text-sm text-destructive">
+                Every policy has been removed. Add one before booking.
+              </p>
+            )}
+          </div>
+        )}
 
         <FormError icon>{errorMessage}</FormError>
 
@@ -256,13 +402,19 @@ export function SoldDealWizard({
             variant="ghost"
             size="sm"
             disabled={nav.atStart || submitting}
-            onClick={() => (dirty ? setDiscardOpen(true) : nav.back())}
+            /*
+             * Only warn when the *draft* has unsaved input. `dirty` also counts
+             * a non-empty policy list and a sold date, so on the review card —
+             * where nothing was entered — it fired every time and told the
+             * producer they might lose work they had already committed.
+             */
+            onClick={() => (draftDirty ? setDiscardOpen(true) : nav.back())}
           >
             <ArrowLeft size={14} />
             Back
           </Button>
 
-          {nav.card === "loop" ? (
+          {nav.card === "loop" && (
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
@@ -278,17 +430,31 @@ export function SoldDealWizard({
                 type="button"
                 size="sm"
                 disabled={submitting}
-                onClick={() => void finish()}
+                onClick={() => void reviewSale()}
               >
-                {submitting ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <Send size={14} />
-                )}
-                {submitting ? "Booking…" : "Book the sale"}
+                Review &amp; book
+                <ArrowRight size={14} />
               </Button>
             </div>
-          ) : (
+          )}
+
+          {nav.card === "review" && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={submitting || policies.length === 0}
+              onClick={finish}
+            >
+              {submitting ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Send size={14} />
+              )}
+              {submitting ? "Booking…" : "Book the sale"}
+            </Button>
+          )}
+
+          {nav.card !== "loop" && nav.card !== "review" && (
             <Button
               type="button"
               size="sm"
@@ -302,13 +468,17 @@ export function SoldDealWizard({
         </div>
       </FormSection>
 
-      <PolicySummaryList
-        policies={policies}
-        disabled={submitting}
-        onRemove={(index) =>
-          setPolicies((prev) => prev.filter((_, i) => i !== index))
-        }
-      />
+      {/*
+       * The running tally, during the loop only — the review card renders the
+       * same policies in full, and showing both would be the list twice.
+       */}
+      {nav.card !== "review" && (
+        <PolicySummaryList
+          policies={policies}
+          disabled={submitting}
+          onRemove={removePolicy}
+        />
+      )}
 
       <AlertDialog open={discardOpen} onOpenChange={setDiscardOpen}>
         <AlertDialogContent>

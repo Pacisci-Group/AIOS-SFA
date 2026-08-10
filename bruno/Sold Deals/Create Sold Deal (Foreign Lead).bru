@@ -1,7 +1,7 @@
 meta {
   name: Create Sold Deal (Foreign Lead)
   type: http
-  seq: 6
+  seq: 8
 }
 
 post {
@@ -27,6 +27,12 @@ body:json {
         "policyNumber": "SHOULD-NEVER-EXIST",
         "premium": 100,
         "itemCount": 1,
+        "newBusinessApplication": {
+          "key": "{{nbaDocumentKey}}",
+          "filename": "new-business-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
         "priorInsurance": { "none": true },
         "cancellation": { "cancelled": false }
       }

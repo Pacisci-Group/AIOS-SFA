@@ -19,8 +19,8 @@ import type { DealAuditTriggers } from '../deals/schemas/deal.schema';
  *
  * Two mappings exist because the form and the checklist use different words
  * for the same thing:
- *   - Card 5's "Roof Receipt"      → `Hail Resistant Roof`
- *   - Card 5's "Student Discount"  → `Good Student`
+ *   - The form's "Roof Receipt"     → `Hail Resistant Roof`
+ *   - The form's "Student Discount" → `Good Student`
  */
 
 /** One item the deal needs, before it is resolved against a template. */
@@ -130,8 +130,7 @@ export function computeRequiredTitles(
   //    both a home-like and a landlord line — legacy does the same, because
   //    each property needs its own proof.
   const addVariants = (suffix: string) => {
-    if (hasHome) add(`Home ${suffix}`);
-    if (hasLandlord) add(`Landlord ${suffix}`);
+    for (const title of homeLandlordVariants(policyTypes, suffix)) add(title);
   };
   if (triggers.fireSubscription) addVariants('Fire Subscription');
   if (triggers.actualCashValue) addVariants('Actual Cash Value');
@@ -180,5 +179,36 @@ export function buildDedupeKey(
   dealId: string,
   item: RequiredAuditItem,
 ): string {
-  return `${dealId}|${normalizeTitle(item.title)}|${normalizeTitle(item.subjectName)}`;
+  return `${dealId}|${attachmentKey(item)}`;
+}
+
+/**
+ * `<title>|<subject>` — the deal-less half of {@link buildDedupeKey}.
+ *
+ * Used to map an uploaded proof onto the item it evidences (PAC-56 #21b). The
+ * deal id is deliberately not in it: the caller builds the map *before* the
+ * deal exists, and both sides normalize identically so the join holds.
+ */
+export function attachmentKey(item: {
+  title: string;
+  subjectName?: string;
+}): string {
+  return `${normalizeTitle(item.title)}|${normalizeTitle(item.subjectName)}`;
+}
+
+/**
+ * The Home / Landlord variants a suffix expands to for this deal.
+ *
+ * Extracted so the discount → audit-title mapping in `SoldDealsService` uses
+ * the *same* rule `computeRequiredTitles` does. Two copies would silently
+ * attach a roof receipt to an item that was never generated.
+ */
+export function homeLandlordVariants(
+  policyTypes: string[],
+  suffix: string,
+): string[] {
+  const titles: string[] = [];
+  if (policyTypes.some(isHomeVariant)) titles.push(`Home ${suffix}`);
+  if (policyTypes.some(isLandlord)) titles.push(`Landlord ${suffix}`);
+  return titles;
 }

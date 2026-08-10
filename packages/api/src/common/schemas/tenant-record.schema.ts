@@ -13,6 +13,19 @@ export class TenantRecord {
 
   @Prop({ sparse: true, index: true })
   legacySmartSuiteId?: string;
+
+  /**
+   * Written by `timestamps: true` above, declared here so it is *typed*.
+   *
+   * Mongoose adds both fields to every document at runtime but `@nestjs/mongoose`
+   * infers the document type from the class, so without these a read of
+   * `record.createdAt` is an implicit `any` — it compiles, then trips
+   * `no-unsafe-argument` the moment it is passed anywhere. Declared without
+   * `@Prop` on purpose: the schema option owns the fields, and re-declaring them
+   * as props would add a second, conflicting definition.
+   */
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export const TenantRecordSchema = SchemaFactory.createForClass(TenantRecord);

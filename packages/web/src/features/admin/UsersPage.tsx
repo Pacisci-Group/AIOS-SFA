@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, Search, Users } from 'lucide-react';
+import { AppShell } from '@/components/layout/AppShell';
+import { MobileNav } from '@/components/layout/MobileNav';
 import { listUsers, type AgencyUser } from '@/lib/users-api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,35 +48,38 @@ export default function UsersPage() {
   );
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border">
-        <div className="flex items-center gap-3">
+    <AppShell>
+      <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-6">
+        <div className="flex min-w-0 items-center gap-2 md:gap-3">
+          <MobileNav className="-ml-1" />
           <Button
             asChild
             variant="ghost"
-            size="icon"
-            className="text-muted-foreground hover:text-slate-300 hover:bg-white/5"
+            size="icon-sm"
+            className="text-muted-foreground hover:text-foreground"
           >
-            <Link to="/">
+            <Link to="/" aria-label="Back">
               <ArrowLeft size={16} />
             </Link>
           </Button>
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
+          <div className="hidden size-8 shrink-0 items-center justify-center rounded-lg bg-primary sm:flex">
             <Users size={16} className="text-primary-foreground" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h1 className="text-sm font-bold">Agency Users</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               People in your agency
             </p>
           </div>
         </div>
         {!usersQuery.isLoading && (
-          <span className="text-xs text-muted-foreground">{totalUsers} users</span>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {totalUsers} users
+          </span>
         )}
       </header>
 
-      <main className="max-w-3xl mx-auto px-6 py-8">
+      <main className="mx-auto w-full max-w-3xl px-4 py-8 md:px-6">
         {usersQuery.isError && (
           <div className="mb-5 px-4 py-3 rounded-lg text-sm bg-amber-500/10 border border-amber-500/25 text-amber-500">
             {(usersQuery.error as Error).message}
@@ -99,11 +104,10 @@ export default function UsersPage() {
         ) : users.length === 0 ? (
           <p className="text-sm text-muted-foreground">No users found.</p>
         ) : (
-          <div className="rounded-xl overflow-hidden bg-card border border-border">
-            <div
-              className="grid px-5 py-2.5 gap-3 text-[10px] uppercase tracking-widest text-slate-600 border-b border-border"
-              style={{ gridTemplateColumns: '1.4fr 1fr 90px 20px' }}
-            >
+          <div className="overflow-hidden rounded-xl border border-border bg-card">
+            {/* The four-column table only exists from `md` up; below that each
+                row stacks into a card, so its header would label nothing. */}
+            <div className="hidden grid-cols-[1.4fr_1fr_90px_20px] gap-3 border-b border-border px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground uppercase md:grid">
               <span>User</span>
               <span>Roles</span>
               <span>Status</span>
@@ -115,59 +119,74 @@ export default function UsersPage() {
                 key={user._id}
                 to={`/settings/users/${user._id}/permissions`}
                 className={cn(
-                  'grid px-5 py-3.5 gap-3 items-center transition-colors hover:bg-white/[0.03]',
+                  'flex flex-col gap-2 px-4 py-3.5 transition-colors hover:bg-muted/50 md:grid md:grid-cols-[1.4fr_1fr_90px_20px] md:items-center md:gap-3 md:px-5',
                   i < users.length - 1 && 'border-b border-border',
                 )}
-                style={{ gridTemplateColumns: '1.4fr 1fr 90px 20px' }}
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  <Avatar className="w-8 h-8">
-                    <AvatarFallback className="bg-blue-900 text-foreground text-xs font-bold">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Avatar className="size-8">
+                    <AvatarFallback className="bg-sidebar-accent text-xs font-bold text-sidebar-accent-foreground dark:bg-blue-900 dark:text-foreground">
                       {initials(user)}
                     </AvatarFallback>
                   </Avatar>
                   <div className="min-w-0">
-                    <p className="text-sm text-foreground truncate font-medium">
+                    <p className="truncate text-sm font-medium text-foreground">
                       {displayName(user)}
                     </p>
-                    <p className="text-xs text-muted-foreground truncate">
+                    <p className="truncate text-xs text-muted-foreground">
                       {user.email}
                     </p>
                   </div>
+                  <ChevronRight
+                    size={16}
+                    className="ml-auto shrink-0 text-muted-foreground md:hidden"
+                  />
                 </div>
 
-                <div className="flex flex-wrap gap-1">
-                  {user.roleIds.length ? (
-                    user.roleIds.map((role) => (
-                      <Badge
-                        key={role._id}
-                        className="bg-primary/12 text-primary border-transparent rounded-full text-[10px] px-2 py-0.5 font-normal"
-                      >
-                        {role.name}
-                      </Badge>
-                    ))
-                  ) : (
-                    <span className="text-xs text-slate-600">No role</span>
-                  )}
+                {/* `md:contents` dissolves this wrapper into the grid, so the
+                    same two nodes are one wrapped line on a phone and columns
+                    2 and 3 of the table on a desktop — no duplicate markup. */}
+                <div className="flex flex-wrap items-center gap-1.5 md:contents">
+                  <div className="flex flex-wrap gap-1">
+                    {user.roleIds.length ? (
+                      user.roleIds.map((role) => (
+                        <Badge
+                          key={role._id}
+                          size="sm"
+                          className="rounded-full border-transparent bg-primary/12 font-normal text-primary"
+                        >
+                          {role.name}
+                        </Badge>
+                      ))
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        No role
+                      </span>
+                    )}
+                  </div>
+
+                  <Badge
+                    size="sm"
+                    className={cn(
+                      'w-fit rounded-full border-transparent font-semibold',
+                      user.isActive
+                        ? 'bg-success/12 text-success'
+                        : 'bg-destructive/15 text-destructive',
+                    )}
+                  >
+                    {user.isActive ? 'Active' : 'Invited'}
+                  </Badge>
                 </div>
 
-                <Badge
-                  className={cn(
-                    'rounded-full text-[10px] px-2 py-0.5 w-fit border-transparent font-semibold',
-                    user.isActive
-                      ? 'bg-emerald-500/12 text-emerald-500'
-                      : 'bg-amber-500/15 text-amber-500',
-                  )}
-                >
-                  {user.isActive ? 'Active' : 'Invited'}
-                </Badge>
-
-                <ChevronRight size={16} className="text-slate-600 justify-self-end" />
+                <ChevronRight
+                  size={16}
+                  className="hidden justify-self-end text-muted-foreground md:block"
+                />
               </Link>
             ))}
           </div>
         )}
       </main>
-    </div>
+    </AppShell>
   );
 }

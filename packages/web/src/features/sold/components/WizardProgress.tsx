@@ -31,7 +31,7 @@ export function WizardProgress({ card, policyCount }: WizardProgressProps) {
         <h2 className="text-sm font-semibold text-foreground">
           {CARD_TITLES[card]}
         </h2>
-        <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Step {step} of {total}
           {policyCount > 0 && (
             <>

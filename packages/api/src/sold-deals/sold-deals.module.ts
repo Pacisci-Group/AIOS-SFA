@@ -5,6 +5,7 @@ import {
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
 import { AuditGenerationModule } from '../audit-generation/audit-generation.module';
+import { CarriersModule } from '../carriers/carriers.module';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { CrmRotationsModule } from '../crm-rotations/crm-rotations.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
@@ -15,6 +16,10 @@ import {
 import { LeadsModule } from '../leads/leads.module';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
+import {
+  QuoteRecap,
+  QuoteRecapSchema,
+} from '../quote-recaps/schemas/quote-recap.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import {
   PriorInsurance,
@@ -54,8 +59,13 @@ import { SoldDealsService } from './sold-deals.service';
       { name: Contact.name, schema: ContactSchema },
       { name: Activity.name, schema: ActivitySchema },
       { name: User.name, schema: UserSchema },
+      // Read-only, for the "has a quote been given?" gate (PAC-56 #17).
+      { name: QuoteRecap.name, schema: QuoteRecapSchema },
     ]),
     LeadsModule,
+    // The carrier catalog supplies each carrier's policy-number rule, enforced
+    // before the transaction opens (PAC-56 #20).
+    CarriersModule,
     // The submission's server-side side-effects. Both run post-commit and
     // best-effort, so neither can fail a sale that is already booked.
     AuditGenerationModule,

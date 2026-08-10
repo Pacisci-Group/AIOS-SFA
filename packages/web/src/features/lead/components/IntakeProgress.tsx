@@ -24,7 +24,7 @@ export function IntakeProgress({ step, total, title }: IntakeProgressProps) {
     <div className="sticky top-0 z-10 space-y-2 rounded-xl border border-border bg-card/95 px-4 py-3 backdrop-blur md:px-5">
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Step {step} of {total}
         </p>
       </div>

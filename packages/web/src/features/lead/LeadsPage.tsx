@@ -3,7 +3,8 @@ import { AlertCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AddLeadButton } from "@/components/leads/AddLeadButton";
 import { ShareLinkButton } from "@/components/leads/ShareLinkButton";
-import { AppSidebar } from "@/components/layout/AppSidebar";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -76,103 +77,97 @@ export default function LeadsPage() {
   const lastRow = Math.min(page * PAGE_SIZE, total);
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      {/* `AppSidebar` is a fixed 260px and the app shell is not responsive yet,
-          so it would eat two-thirds of a phone viewport. Hide it below `md`
-          until a mobile nav exists — a shell-wide concern, not this page's. */}
-      <div className="hidden md:block">
-        <AppSidebar />
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <header className="flex items-center justify-between gap-4 px-4 md:px-6 py-4 border-b border-border">
-          <div>
-            <h1 className="text-sm font-bold">Leads</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
-              {isPending || isError ? " " : `${total} total`}
+    <AppShell>
+      <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 md:gap-4 md:px-6">
+        <div className="flex min-w-0 items-center gap-2">
+          <MobileNav className="-ml-1" />
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold tracking-tight">Leads</h1>
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              {isPending || isError ? " " : `${total} total`}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <ShareLinkButton />
-            <AddLeadButton />
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <ShareLinkButton />
+          <AddLeadButton />
+        </div>
+      </header>
+
+      <main className="px-4 md:px-6 py-6">
+        <LeadsFilters
+          search={search}
+          onSearchChange={setSearch}
+          filters={filters}
+          onChange={patchFilters}
+          onOpenAdvanced={() => setAdvancedOpen(true)}
+          showScopeToggle={showScopeToggle}
+          scope={scope}
+          onScopeChange={setScope}
+        />
+
+        {isError ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-16 text-center rounded-xl bg-card border border-border">
+            <AlertCircle size={22} className="text-amber-500" />
+            <p className="text-sm text-muted-foreground">
+              Couldn't load leads.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              Retry
+            </Button>
           </div>
-        </header>
-
-        <main className="px-4 md:px-6 py-6">
-          <LeadsFilters
-            search={search}
-            onSearchChange={setSearch}
-            filters={filters}
-            onChange={patchFilters}
-            onOpenAdvanced={() => setAdvancedOpen(true)}
-            showScopeToggle={showScopeToggle}
-            scope={scope}
-            onScopeChange={setScope}
-          />
-
-          {isError ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center rounded-xl bg-card border border-border">
-              <AlertCircle size={22} className="text-amber-500" />
-              <p className="text-sm text-muted-foreground">
-                Couldn't load leads.
-              </p>
-              <Button variant="outline" size="sm" onClick={() => refetch()}>
-                Retry
-              </Button>
+        ) : !isPending && items.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center rounded-xl bg-card border border-border">
+            <p className="text-sm text-muted-foreground">No leads found.</p>
+          </div>
+        ) : (
+          <>
+            {/* Desktop: the 7-column table — see `LeadsTable` for why `lg`. */}
+            <div className="hidden lg:block">
+              <LeadsTable
+                leads={items}
+                isPending={isPending}
+                pageSize={PAGE_SIZE}
+              />
             </div>
-          ) : !isPending && items.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center rounded-xl bg-card border border-border">
-              <p className="text-sm text-muted-foreground">No leads found.</p>
+
+            {/* Phone and tablet: one card per lead — the table's columns don't fit. */}
+            <div className="flex flex-col gap-2 lg:hidden">
+              {items.map((lead) => (
+                <LeadCard key={lead.id} lead={lead} />
+              ))}
             </div>
-          ) : (
-            <>
-              {/* Desktop: the 7-column table. */}
-              <div className="hidden md:block">
-                <LeadsTable
-                  leads={items}
-                  isPending={isPending}
-                  pageSize={PAGE_SIZE}
-                />
-              </div>
 
-              {/* Mobile: one card per lead — the table's columns don't fit. */}
-              <div className="flex flex-col gap-2 md:hidden">
-                {items.map((lead) => (
-                  <LeadCard key={lead.id} lead={lead} />
-                ))}
+            {!isPending && (
+              <div className="flex items-center justify-between gap-3 mt-4">
+                <span className="text-sm text-muted-foreground">
+                  Showing {firstRow} to {lastRow} of {total}
+                </span>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={page <= 1 || isFetching}
+                      onClick={() => setPage(Math.max(1, page - 1))}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={page >= totalPages || isFetching}
+                      onClick={() => setPage(Math.min(totalPages, page + 1))}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                )}
               </div>
-
-              {!isPending && (
-                <div className="flex items-center justify-between gap-3 mt-4">
-                  <span className="text-xs text-muted-foreground">
-                    Showing {firstRow} to {lastRow} of {total}
-                  </span>
-                  {totalPages > 1 && (
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={page <= 1 || isFetching}
-                        onClick={() => setPage(Math.max(1, page - 1))}
-                      >
-                        Previous
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={page >= totalPages || isFetching}
-                        onClick={() => setPage(Math.min(totalPages, page + 1))}
-                      >
-                        Next
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </main>
-      </div>
+            )}
+          </>
+        )}
+      </main>
 
       <LeadsFilterSheet
         open={advancedOpen}
@@ -182,6 +177,6 @@ export default function LeadsPage() {
         onClear={clearFilters}
         showProducerFilter={showScopeToggle}
       />
-    </div>
+    </AppShell>
   );
 }

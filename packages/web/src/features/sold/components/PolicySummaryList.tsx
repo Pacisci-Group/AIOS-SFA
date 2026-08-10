@@ -19,7 +19,8 @@ const currency = new Intl.NumberFormat("en-US", {
  * The policies committed so far.
  *
  * Standing in for the progress a linear stepper cannot express: after the loop
- * re-enters Card 2 the step counter resets, so this list is the producer's only
+ * re-enters the policy-type card the step counter resets, so this list is the
+ * producer's only
  * record of what the submission already contains — and their only chance to
  * catch a mistyped policy before it is booked.
  */

@@ -65,6 +65,15 @@ export interface CreateQuoteRecapInput {
    * `propertyAddress`: it could describe only one of several dwellings.
    */
   policies: QuoteRecapPolicyInput[];
+  /**
+   * When the client's current insurance renews — an `INSURANCE_MONTHS` label
+   * (PAC-56 #16). Required on create, so the agency can re-engage ahead of it.
+   *
+   * Per-recap rather than per-policy: that is legacy's shape
+   * (`Insurance X Month`, `s69d7c3f64` on the Quote Recaps table) and the
+   * placement David asked for.
+   */
+  insuranceRenewalMonth: string;
   notes?: string;
   /** Required — a recap without its carrier quote is not accepted. */
   quoteDocument: QuoteDocumentMeta;
