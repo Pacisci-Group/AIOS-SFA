@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { COMPANY_TRANSFER_MATCH, NEW_BUSINESS_MATCH } from '@sfa/shared';
 import type { AccessContext, PerformanceResponse } from '@sfa/shared';
 import { FilterQuery, Model, PipelineStage } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
@@ -49,17 +50,38 @@ export class PerformanceService {
       { requestedScope: query.scope },
     );
 
-    // Two single-collection pipelines rather than one: `$facet` cannot span
-    // collections, and there is nothing to facet *within* either of them.
-    const [sold, quoted] = await Promise.all([
-      this.rollup(this.dealModel, scope, 'soldDateYmd', range),
+    /*
+     * Single-collection pipelines rather than one: `$facet` cannot span
+     * collections, and there is nothing to facet *within* the recap one.
+     *
+     * Sold and transfers are two passes over `deals` split on `businessType`
+     * rather than one `$facet`, because they are separate cards that must add
+     * up independently and the `{agencyId, businessType, soldDateYmd}` index
+     * serves each directly.
+     */
+    const [sold, quoted, transfers] = await Promise.all([
+      this.rollup(
+        this.dealModel,
+        scope,
+        'soldDateYmd',
+        range,
+        NEW_BUSINESS_MATCH,
+      ),
       this.rollup(this.quoteRecapModel, scope, 'quoteDateYmd', range),
+      this.rollup(
+        this.dealModel,
+        scope,
+        'soldDateYmd',
+        range,
+        COMPANY_TRANSFER_MATCH,
+      ),
     ]);
 
     return {
       range: { key: query.range, from: range.from, to: range.to },
       sold: toMetric(sold),
       quoted: toMetric(quoted),
+      transfers: toMetric(transfers),
     };
   }
 
@@ -74,11 +96,19 @@ export class PerformanceService {
     scope: FilterQuery<DealDocument | QuoteRecapDocument>,
     dateField: 'soldDateYmd' | 'quoteDateYmd',
     range: YmdRange,
+    /**
+     * The business-type split, applied only to the `deals` passes. Kept here
+     * rather than folded into `buildScopeFilter`, which is shared with `find()`
+     * call sites across leads, policies and deal-audits — putting it there would
+     * leak the exclusion into reads that have nothing to do with reporting.
+     */
+    businessType?: FilterQuery<DealDocument>,
   ): Promise<PerformanceAggregate | undefined> {
     const pipeline: PipelineStage[] = [
       {
         $match: {
           ...scope,
+          ...businessType,
           [dateField]: { $gte: range.startYmd, $lt: range.endYmd },
         },
       },

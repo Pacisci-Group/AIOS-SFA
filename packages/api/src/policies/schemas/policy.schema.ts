@@ -101,6 +101,23 @@ export class Policy extends TenantRecord {
   @Prop()
   legacyDealId?: string;
 
+  /*
+   * Policy transfer links — the two ends of "this package replaced that one".
+   *
+   * Set as a pair by `UpsertPoliciesStep` when a row carries `fromPolicyId`, so
+   * the move is legible from either policy: the retired one points forward, the
+   * new one points back. Both null on every policy written by the Sold form.
+   *
+   * Deliberately *not* `existingPolicyId`'s behaviour, which updates one row in
+   * place — a transfer keeps both rows, because the client genuinely had two
+   * policies over time and the old one's history has to survive.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  transferredToPolicyId: Types.ObjectId | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  transferredFromPolicyId: Types.ObjectId | null;
+
   /**
    * The discount selections this specific policy carried (PAC-40).
    *
@@ -147,6 +164,11 @@ PolicySchema.index(
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 PolicySchema.index({ agencyId: 1, householdId: 1 });
+
+// Renewal outreach scans the book by renewal window on every desk read.
+// Without this the scan is a full collection scan — `renewalDate` had no index
+// at all before proactive renewals existed.
+PolicySchema.index({ agencyId: 1, active: 1, renewalDate: 1 });
 
 /**
  * Backs `GET /policies/check`.

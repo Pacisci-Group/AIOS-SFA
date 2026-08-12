@@ -1,10 +1,10 @@
-import { ALL_MODULE_KEYS } from '../enums/module-key.enum';
-import { allPagePermissionKeys } from './permission-catalog';
+import { ALL_MODULE_KEYS, ModuleKey } from '../enums/module-key.enum';
+import { allPagePermissionKeys, pageLevelMap } from './permission-catalog';
 import {
   ALL_AGENCY_ADMIN_PERMISSIONS,
   ALL_PLATFORM_PERMISSIONS,
 } from './permission.constants';
-import { DEFAULT_ROLE_TEMPLATES } from './default-role-templates';
+import { DataScope, DEFAULT_ROLE_TEMPLATES } from './default-role-templates';
 import { resolvePermissionSet } from './resolve-permissions';
 
 /**
@@ -57,6 +57,69 @@ describe('page-level permission model', () => {
         expect(adminPermissions.has(permission)).toBe(true);
       }
     }
+  });
+
+  describe('CSR role template', () => {
+    const csr = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === 'csr');
+
+    it('exists with own data scope', () => {
+      expect(csr).toBeDefined();
+      expect(csr!.dataScope).toBe(DataScope.Own);
+    });
+
+    it('resolves to exactly the expected page levels', () => {
+      const resolved = resolvePermissionSet({
+        rolePermissions: csr!.permissions,
+      });
+      const levels = pageLevelMap(resolved);
+
+      const expected: Record<string, 'none' | 'read' | 'write'> = {
+        [ModuleKey.Dashboard]: 'read',
+        [ModuleKey.Leads]: 'write',
+        [ModuleKey.Mailers]: 'write',
+        [ModuleKey.Performance]: 'read',
+        [ModuleKey.CrmService]: 'write',
+        // Start Quote on the Household page: step 1 is a `leads` write, step 2
+        // a `quote_recaps` write, and the CSR runs both.
+        [ModuleKey.QuoteRecaps]: 'write',
+        [ModuleKey.Clients]: 'none',
+        [ModuleKey.DealAudits]: 'none',
+        [ModuleKey.Onboardings]: 'none',
+        [ModuleKey.Management]: 'none',
+        [ModuleKey.OwnerDashboard]: 'none',
+        [ModuleKey.CommandCenter]: 'none',
+        [ModuleKey.Leaderboard]: 'none',
+      };
+
+      for (const moduleKey of ALL_MODULE_KEYS) {
+        expect(levels[moduleKey]).toBe(expected[moduleKey]);
+      }
+    });
+
+    it('grants write pages their implied read', () => {
+      const resolved = new Set(
+        resolvePermissionSet({ rolePermissions: csr!.permissions }),
+      );
+      for (const moduleKey of [
+        ModuleKey.Leads,
+        ModuleKey.Mailers,
+        ModuleKey.CrmService,
+        ModuleKey.QuoteRecaps,
+      ]) {
+        expect(resolved.has(`${moduleKey}:write`)).toBe(true);
+        expect(resolved.has(`${moduleKey}:read`)).toBe(true);
+      }
+    });
+  });
+
+  describe('producer role template', () => {
+    const producer = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === 'producer');
+
+    it('includes the Mailer page (read + write)', () => {
+      expect(producer).toBeDefined();
+      expect(producer!.permissions).toContain('mailers:read');
+      expect(producer!.permissions).toContain('mailers:write');
+    });
   });
 
   describe('resolvePermissionSet enforces write-implies-read', () => {

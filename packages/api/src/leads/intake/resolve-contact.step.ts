@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { PRIMARY_HOUSEHOLD_ROLE } from '@sfa/shared';
 import type { HouseholdMemberRole } from '@sfa/shared';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   Contact,
   ContactDocument,
@@ -39,10 +39,20 @@ export class ResolveContactStep {
     private readonly contactModel: Model<ContactDocument>,
   ) {}
 
+  /**
+   * @param householdId When the intake is pinned to a household, matching is
+   *   confined to **that household's** contacts. The household is a fact here,
+   *   not something to infer, so an agency-wide name hit is the wrong answer
+   *   twice over: `LinkEntitiesStep` would move a stranger's contact into this
+   *   household, and the household they came from would silently lose them.
+   *   Confining it can only produce a duplicate contact — recoverable, and the
+   *   trade this file already makes everywhere else.
+   */
   async run(
     person: IntakePerson,
     role: 'primary' | HouseholdMemberRole,
     deps: StepDeps,
+    householdId?: Types.ObjectId,
   ): Promise<ResolvedContact> {
     const firstName = normalizeName(person.firstName);
     const lastName = normalizeName(person.lastName);
@@ -58,6 +68,7 @@ export class ResolveContactStep {
         firstName,
         lastName,
         isTestRecord: { $ne: true },
+        ...(householdId ? { householdId } : {}),
       })
       .collation(NAME_COLLATION)
       .limit(CANDIDATE_LIMIT)

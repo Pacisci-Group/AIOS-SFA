@@ -1,0 +1,153 @@
+meta {
+  name: Record Policy Transfer
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/crm/service-tickets/{{ticketId}}/policy-transfer
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "transferDate": "2026-03-10",
+    "policies": [
+      {
+        "fromPolicyId": "{{fromPolicyId}}",
+        "policyType": "Auto",
+        "effectiveDate": "2026-03-15",
+        "carrier": "Allstate",
+        "policyNumber": "XFER-000123",
+        "premium": 900,
+        "itemCount": 1,
+        "newBusinessApplication": {
+          "key": "agencies/{{agencyId}}/policy-transfers/{{householdId}}/nba/app.pdf",
+          "filename": "app.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        }
+      }
+    ],
+    "submissionToken": "XFER-SESSION-0001"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns the refreshed ticket carrying the transfer", function () {
+    const body = res.getBody();
+    expect(body.allowsPolicyTransfer).to.equal(true);
+    expect(body.policyTransfer).to.not.equal(null);
+    expect(body.policyTransfer.pairs).to.have.lengthOf(1);
+  });
+
+  test("links the retired policy to its replacement", function () {
+    const pair = res.getBody().policyTransfer.pairs[0];
+    expect(pair.fromPolicyId).to.be.a("string");
+    expect(pair.toPolicyId).to.be.a("string");
+    expect(pair.fromPolicyId).to.not.equal(pair.toPolicyId);
+  });
+
+  test("logs a system entry on the ticket", function () {
+    const timeline = res.getBody().timeline;
+    expect(timeline.some((e) => e.type === "system")).to.equal(true);
+  });
+}
+
+docs {
+  # POST /crm/service-tickets/:id/policy-transfer
+
+  Record a client's move from one package to another — a cheaper tier, a
+  different product — **without booking new business**.
+
+  - **Module:** `crm_service`
+  - **Permission:** `crm_service:write`
+  - **Data scope:** the **ticket is the clamp**. `getScopedOrThrow` 404s an
+    out-of-scope ticket, and the household is then read off it, so nothing in
+    the body can widen what a caller reaches. This replaces the Sold path's
+    `loadOwnedLead`, which a leadless transfer has no equivalent of.
+
+  ## What it is
+
+  The **same intake pipeline as `POST /sold-deals`**, with a different anchor
+  and a different label. A policy needs the same information to exist however it
+  came about, so the policy rows, the documents, the discount block and the
+  generated audit checklist are all identical. Three differences:
+
+  | | Sold form | Policy transfer |
+  |---|---|---|
+  | Anchor | a lead | a **ticket** (and its household) |
+  | `businessType` | `new_business` | **`company_transfer`** |
+  | Prior insurance | asked | **never asked** — injected as `{ none: true }` |
+
+  Prior insurance is omitted because the policy being replaced is already in our
+  own book: there is no other carrier to name and nothing to cancel. Sending it
+  is not just unnecessary, it is rejected — the fields are not in this schema.
+
+  ## Allowed ticket categories
+
+  `Renewal Review`, `Policy Change`, `Payment`, `Company Transfer`. Any other
+  category is a `400`. Read `allowsPolicyTransfer` off the ticket rather than
+  re-deriving the list client-side.
+
+  ## Body
+
+  | field | type | notes |
+  |---|---|---|
+  | `transferDate` | `YYYY-MM-DD` | **The reporting date** — becomes `soldDateYmd`. Deliberately distinct from each policy's `effectiveDate`, so a policy that starts next month does not book its premium into a future period. |
+  | `policies` | array, 1–10 | One row per policy being replaced. |
+  | `policies[].fromPolicyId` | ObjectId | **Required.** The policy being retired. Must belong to the ticket's household — a cross-household pairing is a `400` and writes nothing. |
+  | `policies[]` (rest) | — | Exactly `POST /sold-deals`'s policy row: `policyType`, `effectiveDate`, `carrier`, `policyNumber`, `premium`, `itemCount`, the required PDF `newBusinessApplication`, plus optional `discounts` / `escrow`. |
+  | `submissionToken` | string | Per-session idempotency key, namespaced `XFER\|…` server-side. |
+
+  ## What it writes
+
+  1. A **`Deal`** with `businessType: 'company_transfer'`, `ticketId` set,
+     `leadId` **null**, and `producerId` = the acting CSR.
+  2. One **new `Policy`** per row, active, carrying `transferredFromPolicyId`.
+  3. The **from-policy retired** — `active: false`, `policyStatus: 'Cancelled'`,
+     `transferredToPolicyId` pointing forward. Both rows survive: the client
+     genuinely held both over time.
+  4. The **deal-audit checklist**, from the same discount triggers a sale uses.
+  5. A `system` entry on the ticket timeline. **No `Activity` row** —
+     `ACTIVITY_TYPES` has no "transferred" member, and a `sold` row for
+     something that was not sold would be worse than none.
+  6. `Household.totalActivePolicies`, recounted.
+
+  ## Reporting
+
+  This is the whole point. The premium lands on the **Transfers** scorecard
+  (`GET /performance` → `transfers`) and is excluded from **Sold** and from the
+  producer leaderboard. See `Performance/Get Performance (This Month).bru`.
+
+  ## Idempotency
+
+  **One transfer per ticket**, enforced by a partial-unique `{agencyId, ticketId}`
+  index on `deals`. A second call is a `409`, not a second transfer.
+
+  ## Response `201`
+
+  The refreshed `ServiceTicketView`, with `policyTransfer` populated —
+  `dealId`, `transferDate`, `premium`, `policyCount`, `premiumDelta` (negative
+  is a saving; `null` if a from-policy no longer resolves), `recordedByName`,
+  `dealAuditId`, and a `pairs[]` of from → to.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | Category not allowed; ticket has no household; from-policy on another household; carrier policy-number format; cross-branch discounts; duplicate policy number within the submission |
+  | 401 | Missing/expired bearer token |
+  | 403 | `crm_service` disabled, or the caller lacks `crm_service:write` |
+  | 404 | No such ticket, or out of scope; an uploaded document not found in storage |
+  | 409 | A transfer already exists on this ticket |
+}

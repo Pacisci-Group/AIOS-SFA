@@ -61,6 +61,7 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Dashboard, 'read'),
       ...permissionsForModule(ModuleKey.Leads),
       ...permissionsForModule(ModuleKey.QuoteRecaps),
+      ...permissionsForModule(ModuleKey.Mailers),
       ...permissionsForModule(ModuleKey.DealAudits),
       // Editing a lead's primary contact on the Lead Detail page (PAC-38) is a
       // `clients` write — a Contact is a CRM record, not a lead field. `write`
@@ -71,6 +72,29 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Clients, 'write'),
       modulePermission(ModuleKey.Performance, 'read'),
       modulePermission(ModuleKey.Leaderboard, 'read'),
+    ],
+  },
+  {
+    name: 'CSR',
+    slug: 'csr',
+    description:
+      'Customer service representative — own producer pages plus CRM service.',
+    dataScope: DataScope.Own,
+    permissions: [
+      modulePermission(ModuleKey.Dashboard, 'read'),
+      ...permissionsForModule(ModuleKey.Leads),
+      ...permissionsForModule(ModuleKey.Mailers),
+      modulePermission(ModuleKey.Performance, 'read'),
+      ...permissionsForModule(ModuleKey.CrmService),
+      // "Start Quote" on the Household page spans two modules — step 1 creates
+      // the lead, step 2 writes the recap — and it is the CSR who runs it and
+      // takes the resulting quote ticket. Without this the button is disabled
+      // for exactly the role the flow was built around.
+      //
+      // A narrow widening, unlike the `clients:read` grant rejected under
+      // PAC-32/33: `quote_recaps` has no entry in `nav-items.ts`, so it opens
+      // `/quote-recaps/new` and this button and surfaces no new page.
+      ...permissionsForModule(ModuleKey.QuoteRecaps),
     ],
   },
   {

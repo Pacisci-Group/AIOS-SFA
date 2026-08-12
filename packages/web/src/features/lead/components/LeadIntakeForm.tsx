@@ -39,6 +39,16 @@ interface LeadIntakeFormProps {
    *   (PAC-56 #5); the internal one is the flat stack it has always been.
    */
   variant: LeadIntakeVariant;
+  /**
+   * What the form opens with. Defaults to a blank intake; the Household page's
+   * "Start Quote" dialog seeds it from the household on screen so a producer
+   * starting a second lead for an existing client re-types nothing.
+   *
+   * Read once, on mount — `useAppForm`'s `defaultValues` are not reactive. Key
+   * the component on whatever the values are derived from if it can change
+   * while mounted.
+   */
+  initialValues?: LeadIntakeFormValues;
   submitting: boolean;
   errorMessage: string | null;
   submitLabel?: string;
@@ -74,6 +84,7 @@ interface PolicyEditorState {
  */
 export function LeadIntakeForm({
   variant,
+  initialValues,
   submitting,
   errorMessage,
   submitLabel = "Create lead",
@@ -85,7 +96,7 @@ export function LeadIntakeForm({
   // validator object on every keystroke.
   const schema = useMemo(() => makeLeadIntakeSchema(variant), [variant]);
   const form = useAppForm({
-    defaultValues: emptyLeadIntake(),
+    defaultValues: initialValues ?? emptyLeadIntake(),
     validators: { onBlur: schema },
     onSubmit: ({ value }) => onSubmit(value),
   });

@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import {
   CommandCenterController,
-  CrmServiceController,
   DashboardController,
   DealsController,
   HouseholdsController,
@@ -14,7 +13,8 @@ import {
 // NOTE: `deal-audits` is now served by the real `DealAuditsModule`
 // (see src/deal-audits), `leads` by the real `LeadsModule` (see src/leads),
 // `quote-recaps` by the real `QuoteRecapsModule` (see src/quote-recaps),
-// `contacts` by the real `ContactsModule` (see src/contacts), `performance` by
+// `contacts` by the real `ContactsModule` (see src/contacts),
+// `crm/service-tickets` by the real `CrmModule` (see src/crm), `performance` by
 // the real `PerformanceModule` (see src/performance) and `leaderboard` by the
 // real `LeaderboardModule` (see src/leaderboard), so their stub controllers are
 // intentionally omitted here.
@@ -27,7 +27,6 @@ const controllers = [
   DashboardController,
   HouseholdsController,
   DealsController,
-  CrmServiceController,
   MailersController,
   OnboardingsController,
   ManagementController,

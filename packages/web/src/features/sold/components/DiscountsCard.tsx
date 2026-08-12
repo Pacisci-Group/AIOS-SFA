@@ -1,3 +1,4 @@
+import type { UploadScope } from "@/lib/sold-deals-api";
 import type { SoldHouseholdContact } from "@sfa/shared";
 import { isAutoPolicyType, isPropertyPolicyType } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
@@ -24,8 +25,11 @@ import { emptyPolicy } from "./sold-deal-schema";
  */
 export const DiscountsCard = withForm({
   defaultValues: emptyPolicy(),
-  props: { leadId: "", contacts: [] as SoldHouseholdContact[] },
-  render: function Render({ form, leadId, contacts }) {
+  props: {
+    uploadScope: { kind: "lead", leadId: "" } as UploadScope,
+    contacts: [] as SoldHouseholdContact[],
+  },
+  render: function Render({ form, uploadScope, contacts }) {
     const policyType = useStore(form.store, (s) => s.values.policyType);
 
     const isProperty = isPropertyPolicyType(policyType);
@@ -41,9 +45,9 @@ export const DiscountsCard = withForm({
 
     return (
       <div className="space-y-5">
-        {isProperty && <PropertyDiscounts form={form} leadId={leadId} />}
+        {isProperty && <PropertyDiscounts form={form} uploadScope={uploadScope} />}
         {isAuto && (
-          <AutoDiscounts form={form} leadId={leadId} contacts={contacts} />
+          <AutoDiscounts form={form} uploadScope={uploadScope} contacts={contacts} />
         )}
       </div>
     );
@@ -61,8 +65,8 @@ const ESCROW_ADDRESS_FIELDS = [
 /** Home / Renters / Condominium / Landlord. */
 const PropertyDiscounts = withForm({
   defaultValues: emptyPolicy(),
-  props: { leadId: "" },
-  render: function Render({ form, leadId }) {
+  props: { uploadScope: { kind: "lead", leadId: "" } as UploadScope },
+  render: function Render({ form, uploadScope }) {
     const escrow = useStore(form.store, (s) => s.values.discounts.escrow);
 
     return (
@@ -102,7 +106,7 @@ const PropertyDiscounts = withForm({
               * rather than as a `ProofField`, because it evidences the loan
               * number sitting directly above it.
               */}
-            <EscrowStatementField form={form} leadId={leadId} />
+            <EscrowStatementField form={form} uploadScope={uploadScope} />
           </FormSubPanel>
         )}
 
@@ -116,7 +120,7 @@ const PropertyDiscounts = withForm({
         <ProofField
           form={form}
           fields="discounts.inspection"
-          leadId={leadId}
+          uploadScope={uploadScope}
           label="Passed home inspection"
           proofPrompt="Attach the inspection report."
         />
@@ -124,7 +128,7 @@ const PropertyDiscounts = withForm({
         <ProofField
           form={form}
           fields="discounts.fireSubscription"
-          leadId={leadId}
+          uploadScope={uploadScope}
           label="Fire subscription"
           proofPrompt="Attach proof of the fire subscription."
         />
@@ -132,7 +136,7 @@ const PropertyDiscounts = withForm({
         <ProofField
           form={form}
           fields="discounts.roofReceipt"
-          leadId={leadId}
+          uploadScope={uploadScope}
           label="New roof / hail resistant roof"
           proofPrompt="Attach the roof receipt or inspection."
         />
@@ -161,8 +165,11 @@ const PropertyDiscounts = withForm({
 /** Auto / Auto - Special / Motorcycle. */
 const AutoDiscounts = withForm({
   defaultValues: emptyPolicy(),
-  props: { leadId: "", contacts: [] as SoldHouseholdContact[] },
-  render: function Render({ form, leadId, contacts }) {
+  props: {
+    uploadScope: { kind: "lead", leadId: "" } as UploadScope,
+    contacts: [] as SoldHouseholdContact[],
+  },
+  render: function Render({ form, uploadScope, contacts }) {
     const defensiveDriver = useStore(
       form.store,
       (s) => s.values.discounts.defensiveDriver.selected,
@@ -178,7 +185,7 @@ const AutoDiscounts = withForm({
         <ProofField
           form={form}
           fields="discounts.drivewise"
-          leadId={leadId}
+          uploadScope={uploadScope}
           label="Drivewise"
           proofPrompt="Attach proof of Drivewise enrolment."
         />
@@ -260,7 +267,7 @@ const AutoDiscounts = withForm({
                       */}
                     <DriverCertificateField
                       form={form}
-                      leadId={leadId}
+                      uploadScope={uploadScope}
                       index={index}
                     />
                   </div>
@@ -291,7 +298,7 @@ const AutoDiscounts = withForm({
         <ProofField
           form={form}
           fields="discounts.studentDiscount"
-          leadId={leadId}
+          uploadScope={uploadScope}
           label="Good student / student away from home"
           proofPrompt="Do you have the report card or transcript?"
         />
@@ -309,13 +316,13 @@ const AutoDiscounts = withForm({
  */
 const EscrowStatementField = withForm({
   defaultValues: emptyPolicy(),
-  props: { leadId: "" },
-  render: function Render({ form, leadId }) {
+  props: { uploadScope: { kind: "lead", leadId: "" } as UploadScope },
+  render: function Render({ form, uploadScope }) {
     return (
       <form.Field name="escrow.attachment">
         {(field) => (
           <SoldDocumentUpload
-            leadId={leadId}
+            uploadScope={uploadScope}
             value={field.state.value}
             onChange={(meta) => {
               field.handleChange(meta);
@@ -339,15 +346,15 @@ const EscrowStatementField = withForm({
  */
 const DriverCertificateField = withForm({
   defaultValues: emptyPolicy(),
-  props: { leadId: "", index: 0 },
-  render: function Render({ form, leadId, index }) {
+  props: { uploadScope: { kind: "lead", leadId: "" } as UploadScope, index: 0 },
+  render: function Render({ form, uploadScope, index }) {
     return (
       <form.Field
         name={`discounts.defensiveDriver.drivers[${index}].attachment`}
       >
         {(field) => (
           <SoldDocumentUpload
-            leadId={leadId}
+            uploadScope={uploadScope}
             value={field.state.value}
             onChange={(meta) => {
               field.handleChange(meta);

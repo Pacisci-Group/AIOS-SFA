@@ -110,6 +110,12 @@ export function useUpdateLead(leadId: string) {
       // The list's status/temperature/source columns and its `lastActivityAt`
       // sort are both stale now — the row will have moved to the top.
       void queryClient.invalidateQueries({ queryKey: ["leads"] });
+      // A terminal status resolves the lead's quote service ticket server-side,
+      // so the CSR queue behind this page is stale too. Invalidated
+      // unconditionally rather than only on a terminal status: this hook cannot
+      // see which statuses the server treats as terminal without duplicating
+      // that rule, and the queue is a cheap refetch.
+      void queryClient.invalidateQueries({ queryKey: ["service-tickets"] });
       // Deliberately NOT invalidating the detail query: `onSuccess` already
       // wrote the server's own values, and a refetch would restart the
       // ten-collection assembly on every dropdown change.

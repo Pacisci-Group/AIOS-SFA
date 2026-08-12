@@ -1,9 +1,10 @@
 import {
   BarChart3,
-  Building2,
   KeyRound,
   LayoutDashboard,
+  Mail,
   Ticket,
+  TrendingUp,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -40,6 +41,18 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Users,
         module: ModuleKey.Leads,
       },
+      {
+        to: "/mailers",
+        label: "Mailer",
+        icon: Mail,
+        module: ModuleKey.Mailers,
+      },
+      {
+        to: "/performance",
+        label: "My Performance",
+        icon: TrendingUp,
+        module: ModuleKey.Performance,
+      },
     ],
   },
   {
@@ -72,32 +85,16 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Ticket,
         module: ModuleKey.CrmService,
       },
-      {
-        to: "/crm/tickets",
-        label: "Ticket Workspace",
-        icon: Ticket,
-        module: ModuleKey.CrmService,
-      },
-      {
-        to: "/clients/demo",
-        label: "Households",
-        icon: Building2,
-        /*
-         * Gated on `crm_service`, not `clients` (PAC-38).
-         *
-         * `/clients/demo` is still the unwired Household Details mockup. PAC-38
-         * added `clients:write` to the Producer template so a producer can edit
-         * their own lead's contact — which, under the original `clients` gate,
-         * would have put a fake "Cobb Household" page in every producer's
-         * sidebar as a side effect of an unrelated grant.
-         *
-         * `crm_service` preserves exactly today's audience: Agency Owner (via
-         * `grantsAllEnabledModules`), Branch Manager and CRM all hold it, and no
-         * producer does. Move this back to `ModuleKey.Clients` once the page is
-         * real (PAC-19).
-         */
-        module: ModuleKey.CrmService,
-      },
+      /*
+       * No "Ticket Workspace" or "Households" entry here.
+       *
+       * The workspace is reached by opening a ticket from the Service
+       * Dashboard, so a second top-level entry to the same page only
+       * duplicated the queue. `/clients/demo` is still the unwired Household
+       * Details mockup and is deliberately kept out of the sidebar — it is
+       * reachable from the dev Screen Navigator at `/`. Add it back (gated on
+       * `ModuleKey.Clients`) once the real list view lands (PAC-57).
+       */
     ],
   },
   {

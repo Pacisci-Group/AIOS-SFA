@@ -1,0 +1,111 @@
+meta {
+  name: Presign Transfer Document
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/crm/service-tickets/{{ticketId}}/policy-transfer/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "kind": "new_business_application",
+    "filename": "application.pdf",
+    "contentType": "application/pdf",
+    "size": 2048
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("transferDocumentKey", res.getBody().key);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns an upload URL and its key", function () {
+    const body = res.getBody();
+    expect(body.uploadUrl).to.be.a("string");
+    expect(body.key).to.be.a("string");
+    expect(body.expiresIn).to.be.a("number");
+  });
+
+  test("keys the object under the household, not a lead", function () {
+    expect(res.getBody().key).to.contain("/policy-transfers/");
+  });
+
+  test("puts a new business application under its own prefix", function () {
+    expect(res.getBody().key).to.contain("/nba/");
+  });
+}
+
+docs {
+  # POST /crm/service-tickets/:id/policy-transfer/presign
+
+  A presigned PUT for a document on an **in-progress** policy transfer — the
+  household-anchored sibling of `POST /sold-deals/documents/presign`.
+
+  - **Module:** `crm_service`
+  - **Permission:** `crm_service:write`
+  - **Data scope:** the ticket, exactly as on `…/policy-transfer`. The household
+    is read off it server-side, so the body names no anchor at all.
+
+  ## Why a separate endpoint
+
+  The sold presign is keyed on a **lead**, which a transfer does not have. The
+  key prefix is not cosmetic: `assertKeyOwnership` re-checks it at submit, so it
+  *is* the ownership check. The two id spaces are kept disjoint —
+  `sold-deals/{leadId}/…` and `policy-transfers/{householdId}/…` — precisely so
+  a key presigned against one cannot be replayed against the other.
+
+  ## Body
+
+  | field | type | notes |
+  |---|---|---|
+  | `kind` | `discount_proof` \| `new_business_application` | Defaults to `discount_proof`. Decides both the allowed content types **and** the key prefix. |
+  | `filename` | string, 1–255 | |
+  | `contentType` | `application/pdf` \| `image/jpeg` \| `image/png` | **`new_business_application` is PDF-only** — it is a signed application, not a photographed receipt. |
+  | `size` | int, ≤ 10MB | A *claim*, not evidence: the presigned PUT signs only the content type. `…/policy-transfer` re-derives the real size from storage with `HeadObject`, and that is what actually enforces the limit. |
+
+  ## Upload flow
+
+  1. `POST` here → `{ key, uploadUrl, requiredHeaders, expiresIn }`.
+  2. `PUT` the bytes **straight to `uploadUrl`** with `requiredHeaders`. Use a
+     bare fetch — an `Authorization` header invalidates the S3 signature. This
+     is the single easiest thing to get wrong.
+  3. Send `key` (plus filename/contentType/size) as the policy row's
+     `newBusinessApplication` or discount-proof `attachment`.
+
+  The bytes never pass through the API.
+
+  ## Response `201`
+
+  ```json
+  {
+    "key": "agencies/665f…/policy-transfers/665f…/nba/2026/application.pdf",
+    "uploadUrl": "https://…",
+    "requiredHeaders": { "Content-Type": "application/pdf" },
+    "expiresIn": 900
+  }
+  ```
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | Content type not allowed for the `kind`; ticket has no linked household |
+  | 401 | Missing/expired bearer token |
+  | 403 | `crm_service` disabled, or the caller lacks `crm_service:write` |
+  | 404 | No such ticket, or out of scope |
+}

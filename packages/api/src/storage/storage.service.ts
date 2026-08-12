@@ -13,6 +13,7 @@ import {
   Injectable,
   Logger,
   OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -140,6 +141,20 @@ export class StorageService implements OnModuleInit {
         ? { credentials: { accessKeyId, secretAccessKey } }
         : {};
 
+    // Omitting credentials hands the SDK to its default provider chain (env
+    // AWS_*, ~/.aws, instance role). That is legitimate for a role-based
+    // deployment, but MinIO and DigitalOcean Spaces both need explicit keys —
+    // and when the chain comes up empty the failure surfaces at *presign* time
+    // as an opaque "Could not load credentials from any providers", far from
+    // the actual cause. Say so at boot instead.
+    if (endpoint && !(accessKeyId && secretAccessKey)) {
+      this.logger.warn(
+        'STORAGE_ENDPOINT is set but STORAGE_ACCESS_KEY_ID / ' +
+          'STORAGE_SECRET_ACCESS_KEY are not — falling back to the AWS default ' +
+          'credential chain. Set both unless this deployment uses an instance role.',
+      );
+    }
+
     this.client = new S3Client({
       region,
       forcePathStyle,
@@ -230,6 +245,7 @@ export class StorageService implements OnModuleInit {
     key: string,
     contentType: string,
   ): Promise<PresignedUpload> {
+    this.assertConfigured();
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
@@ -247,6 +263,27 @@ export class StorageService implements OnModuleInit {
   }
 
   /**
+   * Presigning is offline — it signs a URL and never calls the provider — so
+   * without credentials it fails deep inside the AWS SDK's provider chain with
+   * `CredentialsProviderError: Could not load credentials from any providers`,
+   * a 500 that says nothing about the actual cause. `onModuleInit` already
+   * warns when storage is unconfigured; this makes the request-time failure say
+   * the same thing instead of surfacing an SDK stack trace to the user.
+   */
+  private assertConfigured(): void {
+    if (this.configured) {
+      return;
+    }
+    this.logger.error(
+      'Object storage is not configured — set STORAGE_ENDPOINT and the ' +
+        'STORAGE_ACCESS_KEY_ID / STORAGE_SECRET_ACCESS_KEY pair (see .env.example).',
+    );
+    throw new ServiceUnavailableException(
+      'Document uploads are unavailable: object storage is not configured.',
+    );
+  }
+
+  /**
    * Presigned GET URL for viewing a stored object.
    *
    * Defaults to an **inline** disposition — following the URL opens the file in
@@ -257,6 +294,7 @@ export class StorageService implements OnModuleInit {
     key: string,
     options: PresignedDownloadOptions = {},
   ): Promise<string> {
+    this.assertConfigured();
     const { disposition = 'inline', filename, contentType } = options;
 
     const command = new GetObjectCommand({

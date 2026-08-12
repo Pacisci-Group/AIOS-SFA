@@ -76,6 +76,22 @@ export interface IntakeInput {
   quoteControlNumber?: string;
   /** Raw client token; the orchestrator namespaces it before use. */
   submissionToken?: string;
+  /**
+   * Pin the whole intake to an existing household instead of deriving one from
+   * the resolved contact (the Household page's "Start Quote" flow).
+   *
+   * **Authenticated path only** — `publicCreateLeadSchema` does not accept it,
+   * so a share-link submission can never name the household it lands in.
+   *
+   * When set it changes three steps, each for the same reason — the household
+   * is known, so nothing may be inferred that could contradict it:
+   * 1. `ResolveHouseholdStep` uses it verbatim (404 if it is not in the agency).
+   * 2. `ResolveContactStep` matches only against contacts **in** that household,
+   *    so a name collision elsewhere cannot drag a stranger's contact across.
+   * 3. `ResolveLeadStep`'s address dedupe is confined to it, so a lead at the
+   *    same street in a different household is not returned as this one.
+   */
+  householdId?: string;
 }
 
 /** Threaded through every step so they share one session and one registry. */

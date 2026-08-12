@@ -318,5 +318,6 @@ Chakra, etc.).
   Two API traps are written up in `docs/tanstack-form-spike-findings.md` —
   read it before touching the Sold wizard's per-card validation.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
+- **Changing the *options* of an existing index needs a migration script.** Mongoose's `autoIndex` only creates indexes that are missing — it never rebuilds one whose options changed. Editing the schema therefore fixes only collections created *afterwards*, and silently leaves existing ones on the old definition (this is how the `agencyId + legacySmartSuiteId` dedupe index stayed `sparse` on three collections after being corrected to a partial filter, breaking lead creation with E11000). Copy `src/migration/backfill/fix-legacy-dedupe-indexes.ts`: discover affected collections by index name rather than hard-coding them, check for conflicting data *before* dropping, and keep it idempotent.
 - Run each package's `lint` (`npm run lint -w @sfa/api` / `-w @sfa/web`) before finishing.
 - Prefer real Mongoose schemas + services over extending the mock data / stubs when wiring a dashboard.

@@ -1,0 +1,130 @@
+meta {
+  name: List Household Tickets
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/crm/service-tickets/household/{{householdId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns an array of tickets", function () {
+    expect(res.getBody()).to.be.an("array");
+  });
+
+  test("every ticket belongs to the requested household", function () {
+    // Tolerant of an empty result: a household with no tickets is a valid
+    // steady state, and an unknown or malformed id returns [] rather than 404.
+    for (const ticket of res.getBody()) {
+      expect(ticket.householdId).to.equal(bru.getVar("householdId"));
+    }
+  });
+
+  test("every ticket carries the fields the household feed renders", function () {
+    for (const ticket of res.getBody()) {
+      expect(ticket).to.have.property("id");
+      expect(ticket).to.have.property("ticketNumber");
+      expect(ticket).to.have.property("category");
+      expect(ticket).to.have.property("status");
+      expect(ticket).to.have.property("priority");
+      expect(ticket).to.have.property("assignedRep");
+      expect(ticket).to.have.property("lastActivityAt");
+      expect(ticket).to.have.property("isArchived");
+      expect(ticket).to.have.property("leadId");
+      expect(ticket).to.have.property("isStatusLocked");
+      expect(ticket).to.have.property("allowsPolicyTransfer");
+      expect(ticket).to.have.property("policyTransfer");
+      expect(ticket.timeline).to.be.an("array");
+    }
+  });
+
+  test("only Quote tickets are status-locked", function () {
+    for (const ticket of res.getBody()) {
+      expect(ticket.isStatusLocked).to.equal(ticket.leadId !== null);
+      if (ticket.isStatusLocked) {
+        expect(ticket.category).to.equal("Quote");
+      }
+    }
+  });
+
+  test("leadStatus is null on list responses", function () {
+    for (const ticket of res.getBody()) {
+      expect(ticket.leadStatus).to.equal(null);
+    }
+  });
+}
+
+docs {
+  # GET /crm/service-tickets/household/:householdId
+
+  Every service ticket a household owns, most recently touched first. Backs the
+  **Activity & Tickets** column on the Household Details page (`/clients/:id`).
+
+  - **Module:** `crm_service`
+  - **Permission:** `crm_service:read`
+  - **Data scope:** applied as everywhere else — `own` sees only the tickets of
+    this household assigned to the caller, `branch` sees the caller's branch,
+    `agency` sees the whole agency.
+
+  ## Params
+  | Param | In | Notes |
+  |---|---|---|
+  | `householdId` | path | Mongo ObjectId. A malformed id returns `[]`, not a 400. |
+
+  ## Response
+  `ServiceTicketView[]` (the same shape as `GET /crm/service-tickets`), sorted
+  by `lastActivityAt` descending.
+
+  Two differences from the queue list at `GET /crm/service-tickets`:
+
+  - **Archived tickets are included.** A client's history is the whole history;
+    a ticket resolved beyond the archive window still belongs on the 360 view.
+    Use `isArchived` on each ticket to tell them apart.
+  - **No status / category / archived query params.** The household feed filters
+    client-side over the full set.
+
+  Scheduled onboarding and renewal calls whose `availableAt` is still in the
+  future are excluded, matching every other list — they are not work yet, and
+  the household page shows upcoming onboarding calls in its own block.
+
+  ## Lead-linked (`Quote`) tickets
+
+  A ticket opened by **Start Quote** carries three extra fields:
+
+  | field | meaning |
+  |---|---|
+  | `leadId` | the lead it was opened for; `null` on every other ticket |
+  | `isStatusLocked` | `true` exactly when `leadId` is set — the status pickers must render a static badge, and `PATCH /crm/service-tickets/:id/status` returns `400` |
+  | `leadStatus` | the lead's current status. **`null` on every list response**, including this one — populated only by `GET /crm/service-tickets/:id` and `POST /leads/:id/service-ticket`, since filling it per row would cost a lead read each |
+
+  `isStatusLocked` is server-computed rather than left to each surface to derive
+  from `leadId !== null`, for the same reason `OnboardingStepRef.isActionable`
+  is: the rule lives on the server. See `Leads/Open Lead Service Ticket.bru` for
+  how these tickets are created and what resolves them.
+
+  ## Policy-transfer fields
+
+  | field | meaning |
+  |---|---|
+  | `allowsPolicyTransfer` | `true` on the four categories a transfer can be recorded from (Renewal Review, Policy Change, Payment, Company Transfer). Server-computed for the same reason as `isStatusLocked` — read it rather than re-deriving the category list. |
+  | `policyTransfer` | The transfer already booked from this ticket, or `null`. Non-null replaces the "Policy Transfer" action with the read-only summary — one per ticket. **`null` on list responses**, like `leadStatus`; populated only by `GET /crm/service-tickets/:id`. |
+
+  See `CRM Service/Record Policy Transfer.bru`.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | `crm_service` disabled for the agency, or the caller lacks `crm_service:read` |
+}

@@ -3,6 +3,7 @@ import type {
   HotLeadRow,
   LeadDetail,
   LeadTemperature,
+  ServiceTicketView,
   UpdateLeadInput,
   UpdateLeadResult,
 } from '@sfa/shared';
@@ -54,6 +55,12 @@ export interface ListLeadsParams {
   temperature?: string[];
   leadSource?: string;
   producerId?: string;
+  /**
+   * Every lead on one household — the Household page's "Start Quote" lead
+   * picker. Narrows within the caller's data scope, so a producer still sees
+   * only their own leads for that household.
+   */
+  householdId?: string;
   /** `YYYY-MM-DD` */
   dateFrom?: string;
   /** `YYYY-MM-DD` */
@@ -99,6 +106,25 @@ export function updateLead(leadId: string, input: UpdateLeadInput) {
     method: 'PATCH',
     body: JSON.stringify(input),
   });
+}
+
+/**
+ * `POST /leads/:id/service-ticket` — open the CRM service ticket for a lead, or
+ * return the one it already has.
+ *
+ * Called by the Start Quote dialog once a lead is chosen, for a freshly created
+ * lead and for one picked off the list alike. **Idempotent**, so the caller does
+ * not check first: the server arbitrates on a unique index, which is the only
+ * thing that can settle two dialogs racing on the same lead.
+ *
+ * Gated on `leads:write`, not `crm_service:write` — see the handler's docblock
+ * for why the endpoint hangs off `/leads`.
+ */
+export function openLeadServiceTicket(leadId: string) {
+  return apiFetch<ServiceTicketView>(
+    `/leads/${encodeURIComponent(leadId)}/service-ticket`,
+    { method: "POST" },
+  );
 }
 
 export interface ListHotLeadsParams {

@@ -1,7 +1,45 @@
-import type { UpdatePolicyInput, UpdatePolicyResult } from "@sfa/shared";
-import { apiFetch } from "@/lib/api-client";
+import type {
+  PolicySearchResult,
+  PolicyView,
+  UpdatePolicyInput,
+  UpdatePolicyResult,
+} from '@sfa/shared';
+import { apiFetch } from '@/lib/api-client';
 
-export type { UpdatePolicyInput, UpdatePolicyResult };
+export type {
+  PolicySearchResult,
+  PolicyView,
+  UpdatePolicyInput,
+  UpdatePolicyResult,
+};
+
+const BASE = '/policies';
+
+export function getPolicy(id: string) {
+  return apiFetch<PolicyView>(`${BASE}/${id}`);
+}
+
+/**
+ * Typeahead for policy pickers. A blank term returns the first page.
+ *
+ * `householdId` narrows the search to one household's policies — pass it where
+ * the picker is opened from a household and must not offer another client's
+ * policy.
+ */
+export function searchPolicies(
+  term: string,
+  limit = 20,
+  householdId?: string | null,
+) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (term.trim()) {
+    params.set('q', term.trim());
+  }
+  if (householdId) {
+    params.set('householdId', householdId);
+  }
+  return apiFetch<PolicySearchResult[]>(`${BASE}/search?${params}`);
+}
 
 /**
  * `PATCH /policies/:id` — the Lead Detail Sold card's quick edit (PAC-56 #27).
@@ -13,7 +51,7 @@ export type { UpdatePolicyInput, UpdatePolicyResult };
  */
 export function updatePolicy(policyId: string, input: UpdatePolicyInput) {
   return apiFetch<UpdatePolicyResult>(
-    `/policies/${encodeURIComponent(policyId)}`,
-    { method: "PATCH", body: JSON.stringify(input) },
+    `${BASE}/${encodeURIComponent(policyId)}`,
+    { method: 'PATCH', body: JSON.stringify(input) },
   );
 }

@@ -64,10 +64,6 @@ export const DealAuditsController = createFeatureController(
   'deal-audits',
   ModuleKey.DealAudits,
 );
-export const CrmServiceController = createFeatureController(
-  'crm/service-tickets',
-  ModuleKey.CrmService,
-);
 /**
  * NOTE: there is no `PerformanceController` stub any more. PAC-10/PAC-11
  * replaced it with the real `PerformanceModule` (`src/performance`), which
@@ -77,7 +73,8 @@ export const CrmServiceController = createFeatureController(
  * depends on module import order.
  *
  * Likewise no `LeaderboardController` stub: PAC-13 replaced it with the real
- * `LeaderboardModule` (`src/leaderboard`).
+ * `LeaderboardModule` (`src/leaderboard`), and no `CrmServiceController` stub:
+ * the CSR work replaced it with the real `CrmModule` (`src/crm`).
  */
 export const MailersController = createFeatureController(
   'mailers',

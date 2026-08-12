@@ -1,9 +1,17 @@
 import { INestApplication } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import { Connection, Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { ModuleKey } from '@sfa/shared';
+import {
+  DataScope,
+  DEFAULT_ROLE_TEMPLATES,
+  ModuleKey,
+  SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
+  modulePermission,
+} from '@sfa/shared';
+import * as bcrypt from 'bcrypt';
+import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
 import type {
   ContactDetail,
   CreateActivityResponse,
@@ -22,6 +30,7 @@ import { TransactionRunner } from '../src/common/mongo/transaction.runner';
 import { Contact } from '../src/contacts/schemas/contact.schema';
 import { AuditTemplate } from '../src/audit-templates/schemas/audit-template.schema';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
+import { ServiceTicketsService } from '../src/crm/service-tickets.service';
 import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
 import { DealAuditItem } from '../src/deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
@@ -57,6 +66,7 @@ describe('SFA API (e2e)', () => {
   let superAdminToken: string;
   let ownerToken: string;
   let producerToken: string;
+  let csrToken: string;
   let readOnlyToken: string;
   let refreshToken: string;
 
@@ -74,6 +84,9 @@ describe('SFA API (e2e)', () => {
 
     const producer = await login(app, seed.producerEmail, TEST_PASSWORD);
     producerToken = producer.accessToken;
+
+    const csr = await login(app, seed.csrEmail, TEST_PASSWORD);
+    csrToken = csr.accessToken;
 
     const readOnly = await login(app, seed.readOnlyEmail, TEST_PASSWORD);
     readOnlyToken = readOnly.accessToken;
@@ -459,6 +472,157 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Client records (multi-permission OR gate)', () => {
+    // `GET /households/:id` and `GET /policies/:id` accept `clients:read` OR
+    // `crm_service:read`, because these records render both on the Clients
+    // pages and inside the CRM service-ticket detail. Gating is page-level:
+    // there is no per-record or ticket-linkage check.
+
+    it('GET /households/:id — agency owner (has clients:read)', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.householdId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(res.body.id).toBe(seed.householdId);
+      expect(res.body.name).toBe('Test Household');
+      expect(res.body.contacts).toHaveLength(1);
+      expect(res.body.contacts[0].roleInHousehold).toBe('Named Insured');
+      expect(res.body.policies).toHaveLength(1);
+      expect(res.body.policies[0].policyNumber).toBe('TEST-000-1');
+    });
+
+    it('GET /households/:id — CSR reaches it with only crm_service:read', async () => {
+      // Guards the premise of this suite: the CSR must NOT hold clients:read.
+      // The login response carries the resolved permission set.
+      const csrLogin = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: seed.csrEmail, password: TEST_PASSWORD })
+        .expect(201);
+      expect(csrLogin.body.user.permissions).toContain('crm_service:read');
+      expect(csrLogin.body.user.permissions).not.toContain('clients:read');
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.householdId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(res.body.id).toBe(seed.householdId);
+    });
+
+    it('GET /policies/:id — CSR, with the household summary attached', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/policies/${seed.policyId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+
+      expect(res.body.id).toBe(seed.policyId);
+      expect(res.body.policyNumber).toBe('TEST-000-1');
+      expect(res.body.household.id).toBe(seed.householdId);
+    });
+
+    /*
+     * The OR gate must still *deny* someone holding neither permission —
+     * otherwise it is an "always allow" and this whole suite proves nothing.
+     *
+     * This used to be asserted with `producerToken`, on the stated premise that
+     * "the producer role has neither". **PAC-38 invalidated that**: it granted
+     * Producer `clients:write` for contact editing on Lead Detail, and write
+     * implies read, so a producer now legitimately passes the gate. The test
+     * kept asserting 403 and started failing — the premise rotted, not the gate.
+     *
+     * No seeded role lacks both any more (the two test roles hold read on every
+     * module), so the negative case needs a purpose-built one rather than
+     * borrowing a persona whose permissions can drift again.
+     */
+    it('GET /households/:id — forbidden for a user with neither permission', async () => {
+      const roleModel = app.get<Model<AgencyRole>>(
+        getModelToken(AgencyRole.name),
+      );
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+
+      const narrowRole = await roleModel.create({
+        agencyId: new Types.ObjectId(seed.agencyId),
+        name: 'Neither Clients Nor CRM',
+        slug: 'neither_clients_nor_crm',
+        // Deliberately one unrelated page: enough to authenticate and pass the
+        // tenant guard, nothing that reaches a client record.
+        permissions: [`${ModuleKey.Leads}:read`],
+        dataScope: DataScope.Agency,
+        isSystemTemplate: false,
+      });
+      const email = 'test-neither@sfa.local';
+      await userModel.updateOne(
+        { email },
+        {
+          $set: {
+            email,
+            passwordHash: await bcrypt.hash(TEST_PASSWORD, 12),
+            firstName: 'Neither',
+            lastName: 'Permission',
+            agencyId: new Types.ObjectId(seed.agencyId),
+            branchId: new Types.ObjectId(seed.branchId),
+            roleIds: [narrowRole._id],
+            isActive: true,
+          },
+        },
+        { upsert: true },
+      );
+
+      const { accessToken } = await login(app, email, TEST_PASSWORD);
+      await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.householdId}`)
+        .set(authHeader(accessToken))
+        .expect(403);
+    });
+
+    /*
+     * The other half of what PAC-38 changed, now pinned so the next reader does
+     * not mistake it for the regression above: a producer *does* reach a
+     * household, through `clients:write` implying `clients:read`.
+     */
+    it('GET /households/:id — producer reaches it via clients:write (PAC-38)', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.householdId}`)
+        .set(authHeader(producerToken))
+        .expect(200);
+    });
+
+    it('GET /households/:id — unauthenticated', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.householdId}`)
+        .expect(401);
+    });
+
+    it('GET /households/:id — malformed id is 404, not 500', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/households/not-an-object-id')
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    it('GET /households/:id — another agency’s record is 404', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.otherAgencyHouseholdId}`)
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    it('GET /households/:id — out-of-branch record is 404 for the CSR', async () => {
+      // CSR has `own` scope, which collapses to branch for client records.
+      await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.otherBranchHouseholdId}`)
+        .set(authHeader(csrToken))
+        .expect(404);
+    });
+
+    it('GET /households/:id — the same record IS visible to the agency-scoped owner', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.otherBranchHouseholdId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+    });
+  });
+
   describe('Feature modules', () => {
     const featureRoutes = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
@@ -466,13 +630,13 @@ describe('SFA API (e2e)', () => {
       { path: 'deals', module: ModuleKey.Clients },
       // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14), `leads`
       // (LeadsModule / PAC-36), `quote-recaps` (QuoteRecapsModule / PAC-39),
-      // `contacts` (ContactsModule / PAC-38) and `performance`
-      // (PerformanceModule / PAC-10+11) are real modules, not
+      // `contacts` (ContactsModule / PAC-38), `performance`
+      // (PerformanceModule / PAC-10+11), `leaderboard` (LeaderboardModule /
+      // PAC-13) and `crm/service-tickets` (CrmModule) are real modules, not
       // `{status:'ready'}` stubs — each is covered by its own describe block
       // below. The `files` stub was removed with PAC-39: it borrowed the
       // `quote_recaps` gate and the real file API is now
       // `POST /quote-recaps/quote-document/presign`.
-      { path: 'crm/service-tickets', module: ModuleKey.CrmService },
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
@@ -547,6 +711,169 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('CSR role access matrix', () => {
+    // CSR = dashboard:read, leads:write, mailers:write, performance:read,
+    // crm_service:write, quote_recaps:write. Scoped to exactly these 6 pages.
+    //
+    // `quote_recaps` was added for Start Quote on the Household page: step 1
+    // creates the lead, step 2 writes the recap, and the CSR runs both and
+    // takes the quote ticket that comes out. It adds no nav entry — there is no
+    // `quote_recaps` item in `nav-items.ts` — so it widens the API surface
+    // without widening the CSR's visible app.
+    /*
+     * Pages still served by a `createFeatureController` stub, which echoes
+     * `{ module }` — so the echo is worth asserting: it proves *which*
+     * controller answered, not merely that something did.
+     */
+    const csrStubReads = [
+      { path: 'dashboard', module: ModuleKey.Dashboard },
+      { path: 'mailers', module: ModuleKey.Mailers },
+    ];
+
+    it.each(csrStubReads)(
+      'GET /api/v1/$path — CSR can read',
+      async ({ path, module }) => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        expect(res.body.module).toBe(module);
+      },
+    );
+
+    /*
+     * Pages whose stub has been replaced by a real controller (PAC-10/11 for
+     * performance, PAC-36 for leads). There is no `{ module }` echo to assert
+     * any more — a real payload came back instead, which is the point.
+     *
+     * Kept in this block deliberately: what is under test here is the *access
+     * matrix*, not the payload. A 200 says the guard chain let the CSR through;
+     * the shape of what it returned is covered by those features' own suites.
+     */
+    it.each(['leads', 'performance'])(
+      'GET /api/v1/%s — CSR can read (real module)',
+      async (path) => {
+        await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(200);
+      },
+    );
+
+    it('GET /api/v1/crm/service-tickets — CSR can read (real module)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .expect(200);
+
+      expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    // Still a stub, so the bare `PATCH /mailers` write probe still answers.
+    it('PATCH /api/v1/mailers — CSR can write', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/mailers')
+        .set(authHeader(csrToken))
+        .expect(200);
+    });
+
+    /*
+     * Leads has a real controller now, so there is no bare `PATCH /leads` to
+     * probe — the write route is `PATCH /leads/:id`.
+     *
+     * **404, not 403, is the assertion that matters.** A 403 would mean the
+     * guard chain rejected the CSR for lacking `leads:write`; a 404 means it let
+     * them through and the *lead* was not found — which is exactly what
+     * `LeadAccessService.loadOwnedLead` returns for an id outside the caller's
+     * scope, deliberately, so that whether it exists is not disclosed. So this
+     * pins the permission while asserting nothing about any particular lead.
+     */
+    it('PATCH /api/v1/leads/:id — CSR passes the write gate (real module)', async () => {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/leads/${new Types.ObjectId().toString()}`)
+        .set(authHeader(csrToken))
+        .send({ status: 'Contacted' })
+        .expect(404);
+    });
+
+    it('POST /api/v1/crm/service-tickets — CSR can write (real module)', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({ clientName: 'CSR Write Check', category: 'Policy Change' })
+        .expect(201);
+    });
+
+    it('CSR holds quote_recaps write — Start Quote step 2 is reachable', () => {
+      const csr = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === 'csr');
+      expect(csr!.permissions).toContain(
+        modulePermission(ModuleKey.QuoteRecaps, 'write'),
+      );
+      // Both halves of Start Quote, in one assertion — step 1 is a `leads`
+      // write and step 2 a `quote_recaps` write, and the button on the
+      // Household page is gated on holding both.
+      expect(csr!.permissions).toContain(
+        modulePermission(ModuleKey.Leads, 'write'),
+      );
+    });
+
+    /*
+     * Performance is read-only, and since PAC-10/11 replaced its stub that is
+     * now structural rather than permission-enforced: the real controller
+     * declares no mutating handler at all, so there is nothing to be forbidden
+     * from and the router answers 404.
+     *
+     * A stronger guarantee than the 403 this used to assert — a route that does
+     * not exist cannot be reached by anyone, whatever they hold.
+     */
+    it('PATCH /api/v1/performance — no write route exists', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/performance')
+        .set(authHeader(csrToken))
+        .expect(404);
+    });
+
+    const csrDeniedFeatureRoutes = [
+      // `quote-recaps` is deliberately absent — the CSR now holds it (see the
+      // note at the top of this block).
+      'deal-audits',
+      'leaderboard',
+      'management',
+      'owner-dashboard',
+      'command-center',
+    ];
+    it.each(csrDeniedFeatureRoutes)(
+      'GET /api/v1/%s — forbidden for CSR',
+      async (path) => {
+        await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(403);
+      },
+    );
+
+    const csrDeniedAdminRoutes = ['roles', 'users', 'branches'];
+    it.each(csrDeniedAdminRoutes)(
+      'GET /api/v1/%s — owner-only admin forbidden for CSR',
+      async (path) => {
+        await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(403);
+      },
+    );
+
+    it('CSR access token carries own data scope (no permissions in JWT)', () => {
+      const [, payload] = csrToken.split('.');
+      const claims = JSON.parse(
+        Buffer.from(payload, 'base64').toString('utf8'),
+      );
+      expect(claims.scope).toBe('branch');
+      expect(claims.permissions).toBeUndefined();
+    });
+  });
+
   describe('Page-level permission guardrails', () => {
     // Every feature controller: GET requires `{module}:read`, and every mutating
     // handler (PATCH) requires `{module}:write`.
@@ -561,8 +888,8 @@ describe('SFA API (e2e)', () => {
       // id-scoped rather than a bare PATCH on the collection.
       // `performance` (PAC-10/11) and `leaderboard` (PAC-13) are real read-only
       // modules now, with no mutating handler at all, so neither can appear in
-      // this list.
-      { path: 'crm/service-tickets', module: ModuleKey.CrmService },
+      // this list. `crm/service-tickets` is a real module (CrmModule) with its
+      // own describe block too.
       { path: 'mailers', module: ModuleKey.Mailers },
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
@@ -1467,6 +1794,857 @@ describe('SFA API (e2e)', () => {
         .patch('/api/v1/leaderboard')
         .set(authHeader(ownerToken))
         .expect(404);
+    });
+  });
+
+  describe('CRM Service tickets', () => {
+    let ownerTicketId: string;
+    let csrTicketId: string;
+
+    it('POST /api/v1/crm/service-tickets — owner creates a ticket', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .send({
+          clientName: 'Acme Owner Client',
+          category: 'Renewal Review',
+          priority: 'high',
+          policyNumber: 'POL-1001',
+          policyType: 'Auto',
+        })
+        .expect(201);
+
+      expect(res.body.id).toBeDefined();
+      expect(res.body.ticketNumber).toMatch(/^RENEW-/);
+      expect(res.body.status).toBe('open');
+      expect(res.body.timeline.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.timeline[0].type).toBe('created');
+      ownerTicketId = res.body.id;
+    });
+
+    it('GET /api/v1/crm/service-tickets — owner lists tickets', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.some((t: { id: string }) => t.id === ownerTicketId)).toBe(
+        true,
+      );
+    });
+
+    it('GET /api/v1/crm/service-tickets/stats — returns ticket-derived stats', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets/stats')
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(typeof res.body.openTickets).toBe('number');
+      expect(res.body.openTickets).toBeGreaterThanOrEqual(1);
+    });
+
+    it('GET /api/v1/crm/service-tickets/:id — owner reads one', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ownerTicketId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(res.body.id).toBe(ownerTicketId);
+      expect(res.body.clientName).toBe('Acme Owner Client');
+    });
+
+    it('PATCH /api/v1/crm/service-tickets/:id/status — records a status change', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ownerTicketId}/status`)
+        .set(authHeader(ownerToken))
+        .send({ status: 'waiting' })
+        .expect(200);
+
+      expect(res.body.status).toBe('waiting');
+      expect(
+        res.body.timeline.some((e: { type: string }) => e.type === 'status'),
+      ).toBe(true);
+    });
+
+    it('POST /api/v1/crm/service-tickets/:id/notes — appends a note', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/crm/service-tickets/${ownerTicketId}/notes`)
+        .set(authHeader(ownerToken))
+        .send({ content: 'Called client, left voicemail.' })
+        .expect(201);
+
+      const notes = res.body.timeline.filter(
+        (e: { type: string }) => e.type === 'note',
+      );
+      expect(notes.length).toBeGreaterThanOrEqual(1);
+      expect(notes[notes.length - 1].content).toContain('voicemail');
+    });
+
+    it('validates the create payload', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .send({ clientName: '', category: 'Not A Category' })
+        .expect(400);
+    });
+
+    it('own-scope: CSR only sees their own tickets', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({ clientName: 'CSR Own Client', category: 'Billing' })
+        .expect(201);
+      csrTicketId = created.body.id;
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .expect(200);
+
+      const ids = res.body.map((t: { id: string }) => t.id);
+      expect(ids).toContain(csrTicketId);
+      // The owner's ticket is assigned to the owner — out of the CSR's own scope.
+      expect(ids).not.toContain(ownerTicketId);
+    });
+
+    it('own-scope: CSR cannot read a ticket outside their scope', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ownerTicketId}`)
+        .set(authHeader(csrToken))
+        .expect(404);
+    });
+
+    it('agency-scope: owner sees tickets created by others', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      const ids = res.body.map((t: { id: string }) => t.id);
+      expect(ids).toContain(csrTicketId);
+      expect(ids).toContain(ownerTicketId);
+    });
+
+    it('read-only user cannot mutate tickets', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(readOnlyToken))
+        .send({ clientName: 'Nope', category: 'Policy Change' })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ownerTicketId}/status`)
+        .set(authHeader(readOnlyToken))
+        .send({ status: 'resolved' })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/crm/service-tickets/${ownerTicketId}/notes`)
+        .set(authHeader(readOnlyToken))
+        .send({ content: 'should fail' })
+        .expect(403);
+    });
+
+    it('producer (no crm_service) is denied entirely', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(producerToken))
+        .expect(403);
+    });
+
+    it('CSR can populate the create form pickers', async () => {
+      const assignees = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets/assignees')
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(Array.isArray(assignees.body)).toBe(true);
+      expect(
+        assignees.body.some(
+          (a: { email: string }) => a.email === seed.csrEmail,
+        ),
+      ).toBe(true);
+
+      const households = await request(app.getHttpServer())
+        .get('/api/v1/households/search?q=Test')
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(households.body.map((h: { id: string }) => h.id)).toContain(
+        seed.householdId,
+      );
+
+      const policies = await request(app.getHttpServer())
+        .get('/api/v1/policies/search?q=TEST-000')
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(policies.body.map((p: { id: string }) => p.id)).toContain(
+        seed.policyId,
+      );
+    });
+
+    it('scopes the policy picker to one household when asked', async () => {
+      // Unfiltered, the picker offers both in-scope households' policies.
+      const all = await request(app.getHttpServer())
+        .get('/api/v1/policies/search?q=TEST-000')
+        .set(authHeader(csrToken))
+        .expect(200);
+      const allIds = (all.body as { id: string }[]).map((p) => p.id);
+      expect(allIds).toContain(seed.policyId);
+      expect(allIds).toContain(seed.secondPolicyId);
+
+      // Opened from a household page it must offer only that household's — the
+      // other one is fully in scope, so only the filter can exclude it.
+      const scoped = await request(app.getHttpServer())
+        .get(
+          `/api/v1/policies/search?q=TEST-000&householdId=${seed.householdId}`,
+        )
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect((scoped.body as { id: string }[]).map((p) => p.id)).toEqual([
+        seed.policyId,
+      ]);
+    });
+
+    it('never widens to the whole book on a bad householdId', async () => {
+      // Malformed: 400 from validation rather than an unfiltered list.
+      await request(app.getHttpServer())
+        .get('/api/v1/policies/search?householdId=not-an-id')
+        .set(authHeader(csrToken))
+        .expect(400);
+
+      // Well-formed but another agency's: empty, not everything.
+      const foreign = await request(app.getHttpServer())
+        .get(
+          `/api/v1/policies/search?householdId=${seed.otherAgencyHouseholdId}`,
+        )
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(foreign.body).toEqual([]);
+    });
+
+    it('creates a ticket from the linked records, stamping created-by', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({
+          category: 'Onboarding',
+          status: 'in_progress',
+          householdId: seed.householdId,
+          policyId: seed.policyId,
+          openingNote: 'Welcome call scheduled.',
+        })
+        .expect(201);
+
+      // Client / policy display fields come off the linked records.
+      //
+      // NOTE: the requested `status: 'in_progress'` is deliberately ignored on
+      // an Onboarding ticket. Onboarding status is *derived* from its step
+      // timing, and a freshly created onboarding has its first step available
+      // immediately, so it reads as `open`. Every other category still honours
+      // the status sent on create.
+      expect(res.body.status).toBe('open');
+      expect(res.body.category).toBe('Onboarding');
+      expect(res.body.householdId).toBe(seed.householdId);
+      expect(res.body.policyId).toBe(seed.policyId);
+      expect(res.body.policyNumber).toBe('TEST-000-1');
+      expect(res.body.clientName).toBeTruthy();
+      expect(res.body.createdByUserId).toBeTruthy();
+      expect(res.body.createdByName).toBeTruthy();
+      expect(res.body.isArchived).toBe(false);
+      expect(res.body.timeline[0].content).toContain('Welcome call');
+    });
+
+    it('rejects a ticket whose linked household is out of scope', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({
+          category: 'Other',
+          householdId: seed.otherAgencyHouseholdId,
+        })
+        .expect(404);
+    });
+
+    it('resolved tickets move to the archive after the archive window', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .send({ clientName: 'Archive Window Client', category: 'Billing' })
+        .expect(201);
+      const ticketId = created.body.id as string;
+
+      const resolved = await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+        .set(authHeader(ownerToken))
+        .send({ status: 'resolved' })
+        .expect(200);
+      expect(resolved.body.resolvedAt).toBeTruthy();
+      expect(resolved.body.isArchived).toBe(false);
+
+      // Freshly resolved: still in the active queue, not yet archived.
+      const active = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(active.body.map((t: { id: string }) => t.id)).toContain(ticketId);
+
+      const archivedBefore = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets?archived=true')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(
+        archivedBefore.body.map((t: { id: string }) => t.id),
+      ).not.toContain(ticketId);
+
+      // Backdate the resolve past the window.
+      const connection = app.get<Connection>(getConnectionToken());
+      await connection.collection('service_tickets').updateOne(
+        { _id: new Types.ObjectId(ticketId) },
+        {
+          $set: {
+            resolvedAt: new Date(
+              Date.now() -
+                (SERVICE_TICKET_ARCHIVE_AFTER_DAYS + 1) * 24 * 60 * 60 * 1000,
+            ),
+          },
+        },
+      );
+
+      const activeAfter = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(activeAfter.body.map((t: { id: string }) => t.id)).not.toContain(
+        ticketId,
+      );
+
+      const archivedAfter = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets?archived=true')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const archivedTicket = archivedAfter.body.find(
+        (t: { id: string }) => t.id === ticketId,
+      );
+      expect(archivedTicket).toBeDefined();
+      expect(archivedTicket.isArchived).toBe(true);
+
+      // Reopening clears the archive clock and returns it to the queue.
+      const reopened = await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+        .set(authHeader(ownerToken))
+        .send({ status: 'open' })
+        .expect(200);
+      expect(reopened.body.resolvedAt).toBeNull();
+      expect(reopened.body.isArchived).toBe(false);
+
+      const queueAgain = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(queueAgain.body.map((t: { id: string }) => t.id)).toContain(
+        ticketId,
+      );
+    });
+  });
+
+  /**
+   * Onboarding is a chain of service tickets — one per call — tied together by
+   * a per-client `Onboarding` record. Everything below is reached with the
+   * `crm_service` permissions that `csr` and `crm` already hold, with no
+   * role-template change.
+   */
+  describe('Onboarding (chained tickets, tracked per client)', () => {
+    let welcomeTicketId: string;
+    let threeDayTicketId: string;
+    let onboardingId: string;
+    let billingId: string;
+
+    interface StepPayload {
+      onboardingId: string;
+      stepKey: string;
+      sequence: number;
+      totalSteps: number;
+      availableAt: string | null;
+      dueAt: string | null;
+      completedAt: string | null;
+      completedByName: string;
+      isActionable: boolean;
+      isOverdue: boolean;
+    }
+    interface TicketBody {
+      id: string;
+      status: string;
+      ticketNumber: string;
+      onboarding: StepPayload | null;
+      timeline: { type: string; content: string }[];
+    }
+    interface ChainLink {
+      stepKey: string;
+      sequence: number;
+      ticketId: string | null;
+      availableAt: string | null;
+      completedAt: string | null;
+    }
+    interface OnboardingBody {
+      id: string;
+      householdId: string;
+      currentStepKey: string | null;
+      completedAt: string | null;
+      isComplete: boolean;
+      checklist: Record<string, boolean>;
+      emailMilestones: Record<string, string | null>;
+      chain: ChainLink[];
+    }
+
+    const ids = (body: { id: string }[]) => body.map((t) => t.id);
+
+    it('starts a chain with only the welcome call', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({ category: 'Onboarding', householdId: seed.householdId })
+        .expect(201);
+
+      const body = res.body as TicketBody;
+      welcomeTicketId = body.id;
+      onboardingId = body.onboarding!.onboardingId;
+
+      expect(body.ticketNumber).toMatch(/^ONBD-/);
+      expect(body.onboarding!.stepKey).toBe('welcome_call');
+      expect(body.onboarding!.sequence).toBe(1);
+      expect(body.onboarding!.totalSteps).toBe(3);
+      expect(body.onboarding!.isActionable).toBe(true);
+      expect(body.status).toBe('open');
+
+      // Exactly one ticket exists — the rest are created as calls complete.
+      const chain = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/onboardings/${onboardingId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      const onboarding = chain.body as OnboardingBody;
+      expect(onboarding.chain).toHaveLength(3);
+      expect(onboarding.chain.filter((s) => s.ticketId)).toHaveLength(1);
+      expect(onboarding.currentStepKey).toBe('welcome_call');
+      expect(onboarding.isComplete).toBe(false);
+    });
+
+    it('requires a household — onboarding is tracked per client', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({ category: 'Onboarding', clientName: 'No Household' })
+        .expect(400);
+    });
+
+    it('non-onboarding tickets carry no onboarding payload', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({ clientName: 'Billing Client', category: 'Billing' })
+        .expect(201);
+
+      billingId = (res.body as TicketBody).id;
+      expect(res.body.onboarding).toBeNull();
+    });
+
+    /**
+     * The core of the redesign: completing one call creates the ticket for the
+     * next, three days out, measured from the completion instant.
+     */
+    it('completing the welcome call creates the 3-day ticket', async () => {
+      const res = await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${welcomeTicketId}/onboarding/steps/welcome_call/complete`,
+        )
+        .set(authHeader(csrToken))
+        .expect(201);
+
+      const body = res.body as TicketBody;
+      expect(body.onboarding!.completedAt).toBeTruthy();
+      expect(body.onboarding!.completedByName).toBeTruthy();
+      expect(body.status).toBe('resolved');
+      expect(
+        body.timeline.some(
+          (e) => e.type === 'system' && e.content.includes('Welcome Call'),
+        ),
+      ).toBe(true);
+
+      const chain = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/onboardings/${onboardingId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      const onboarding = chain.body as OnboardingBody;
+
+      const threeDay = onboarding.chain.find(
+        (s) => s.stepKey === 'checkin_3day',
+      )!;
+      expect(threeDay.ticketId).toBeTruthy();
+      threeDayTicketId = threeDay.ticketId!;
+      expect(onboarding.currentStepKey).toBe('checkin_3day');
+
+      // Opens exactly 3 days after the welcome call closed, same clock time.
+      const completedAt = new Date(body.onboarding!.completedAt!).getTime();
+      expect(new Date(threeDay.availableAt!).getTime()).toBe(
+        completedAt + 3 * 24 * 60 * 60 * 1000,
+      );
+
+      // The 30-day call is not created until the 3-day one closes.
+      expect(
+        onboarding.chain.find((s) => s.stepKey === 'checkin_30day')!.ticketId,
+      ).toBeNull();
+    });
+
+    it('completing twice does not create a second next ticket', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${welcomeTicketId}/onboarding/steps/welcome_call/complete`,
+        )
+        .set(authHeader(csrToken))
+        .expect(400);
+
+      const connection = app.get<Connection>(getConnectionToken());
+      const count = await connection
+        .collection('service_tickets')
+        .countDocuments({
+          'onboarding.onboardingId': new Types.ObjectId(onboardingId),
+          'onboarding.stepKey': 'checkin_3day',
+        });
+      expect(count).toBe(1);
+    });
+
+    /** The visibility rule the owner asked for: not on the plate until it opens. */
+    it('hides a scheduled ticket from every list but serves it by id', async () => {
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(ids(list.body)).not.toContain(threeDayTicketId);
+
+      const filtered = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets?category=Onboarding')
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(ids(filtered.body)).not.toContain(threeDayTicketId);
+
+      // Reachable directly, so the chain view and deep links still work.
+      const direct = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${threeDayTicketId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect((direct.body as TicketBody).onboarding!.stepKey).toBe(
+        'checkin_3day',
+      );
+      expect(direct.body.status).toBe('waiting');
+      expect(direct.body.onboarding.isActionable).toBe(false);
+    });
+
+    it('refuses to complete a call that has not opened', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${threeDayTicketId}/onboarding/steps/checkin_3day/complete`,
+        )
+        .set(authHeader(csrToken))
+        .expect(400);
+    });
+
+    it('refuses a step key that is not this ticket', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${threeDayTicketId}/onboarding/steps/welcome_call/complete`,
+        )
+        .set(authHeader(csrToken))
+        .expect(400);
+    });
+
+    /**
+     * The status picker is the CSR's everyday control, so resolving an
+     * onboarding ticket through it has to mean the same thing as pressing
+     * "complete the call" — otherwise the write lands on the stored status and
+     * is silently discarded by the derived read.
+     */
+    it('resolving via the status picker completes the call', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        // A hand-started onboarding is never deduplicated, so this opens a
+        // second, independent chain for the same client.
+        .send({ category: 'Onboarding', householdId: seed.householdId })
+        .expect(201);
+      const ticketId = (created.body as TicketBody).id;
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+        .set(authHeader(csrToken))
+        .send({ status: 'resolved' })
+        .expect(200);
+
+      const body = res.body as TicketBody;
+      expect(body.status).toBe('resolved');
+      expect(body.onboarding!.completedAt).toBeTruthy();
+
+      // And the chain advanced, exactly as the explicit complete does.
+      const chain = await request(app.getHttpServer())
+        .get(
+          `/api/v1/crm/service-tickets/onboardings/${body.onboarding!.onboardingId}`,
+        )
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect((chain.body as OnboardingBody).currentStepKey).toBe(
+        'checkin_3day',
+      );
+    });
+
+    /**
+     * The picker offers the same four statuses on an onboarding ticket as
+     * anywhere else, so a hand-picked one has to stick — the derived value
+     * would otherwise overwrite it on the way back out.
+     */
+    it('a hand-set status overrides the call schedule', async () => {
+      // Scheduled, so the schedule alone would derive `waiting`.
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${threeDayTicketId}/status`)
+        .set(authHeader(csrToken))
+        .send({ status: 'overdue' })
+        .expect(200);
+      expect((res.body as TicketBody).status).toBe('overdue');
+
+      // And it survives a re-read rather than snapping back.
+      const reread = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${threeDayTicketId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect((reread.body as TicketBody).status).toBe('overdue');
+
+      // Put it back so the later step-timing assertions still hold.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${threeDayTicketId}/status`)
+        .set(authHeader(csrToken))
+        .send({ status: 'waiting' })
+        .expect(200);
+    });
+
+    it('rejects onboarding mutations on a non-onboarding ticket', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${billingId}/onboarding/steps/welcome_call/complete`,
+        )
+        .set(authHeader(csrToken))
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${billingId}/onboarding/checklist`)
+        .set(authHeader(csrToken))
+        .send({ loanNumberVerified: true })
+        .expect(400);
+    });
+
+    it('stores the checklist and emails on the client, not the ticket', async () => {
+      await request(app.getHttpServer())
+        .patch(
+          `/api/v1/crm/service-tickets/${threeDayTicketId}/onboarding/checklist`,
+        )
+        .set(authHeader(csrToken))
+        .send({ loanNumberVerified: true, googleReviewRequested: true })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(
+          `/api/v1/crm/service-tickets/${threeDayTicketId}/onboarding/emails`,
+        )
+        .set(authHeader(csrToken))
+        .send({ milestone: 'welcomeSent' })
+        .expect(200);
+
+      // Written through one ticket, readable from the client record.
+      const chain = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/onboardings/${onboardingId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      const onboarding = chain.body as OnboardingBody;
+      expect(onboarding.checklist.loanNumberVerified).toBe(true);
+      expect(onboarding.checklist.googleReviewRequested).toBe(true);
+      expect(onboarding.checklist.mortgageeClauseVerified).toBe(false);
+      expect(onboarding.emailMilestones.welcomeSent).toBeTruthy();
+      expect(onboarding.emailMilestones.day3Sent).toBeNull();
+    });
+
+    it('rejects an unknown email milestone', async () => {
+      await request(app.getHttpServer())
+        .patch(
+          `/api/v1/crm/service-tickets/${threeDayTicketId}/onboarding/emails`,
+        )
+        .set(authHeader(csrToken))
+        .send({ milestone: 'day99Sent' })
+        .expect(400);
+    });
+
+    it('completes the onboarding when the final call closes', async () => {
+      const connection = app.get<Connection>(getConnectionToken());
+
+      // Open the 3-day call by backdating it, then complete it.
+      await connection.collection('service_tickets').updateOne(
+        { _id: new Types.ObjectId(threeDayTicketId) },
+        {
+          $set: {
+            'onboarding.availableAt': new Date(Date.now() - 60_000),
+            'onboarding.dueAt': new Date(Date.now() + 60_000),
+          },
+        },
+      );
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${threeDayTicketId}/onboarding/steps/checkin_3day/complete`,
+        )
+        .set(authHeader(csrToken))
+        .expect(201);
+
+      let chain = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/onboardings/${onboardingId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      const thirtyDay = (chain.body as OnboardingBody).chain.find(
+        (s) => s.stepKey === 'checkin_30day',
+      )!;
+      expect(thirtyDay.ticketId).toBeTruthy();
+      expect((chain.body as OnboardingBody).isComplete).toBe(false);
+
+      // Same for the 30-day call, which is 30 days out by design.
+      await connection.collection('service_tickets').updateOne(
+        { _id: new Types.ObjectId(thirtyDay.ticketId!) },
+        {
+          $set: {
+            'onboarding.availableAt': new Date(Date.now() - 60_000),
+            'onboarding.dueAt': new Date(Date.now() + 60_000),
+          },
+        },
+      );
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${thirtyDay.ticketId}/onboarding/steps/checkin_30day/complete`,
+        )
+        .set(authHeader(csrToken))
+        .expect(201);
+
+      chain = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/onboardings/${onboardingId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      const finished = chain.body as OnboardingBody;
+      expect(finished.isComplete).toBe(true);
+      expect(finished.completedAt).toBeTruthy();
+      expect(finished.currentStepKey).toBeNull();
+      expect(finished.chain.every((s) => s.completedAt)).toBe(true);
+    });
+
+    it('reconciles a chain whose next ticket went missing', async () => {
+      const connection = app.get<Connection>(getConnectionToken());
+
+      // Start a fresh chain and complete its welcome call.
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(csrToken))
+        .send({ category: 'Onboarding', householdId: seed.householdId })
+        .expect(201);
+      const ticket = created.body as TicketBody;
+      const repairId = ticket.onboarding!.onboardingId;
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${ticket.id}/onboarding/steps/welcome_call/complete`,
+        )
+        .set(authHeader(csrToken))
+        .expect(201);
+
+      // Simulate the chain breaking between writes.
+      const removed = await connection.collection('service_tickets').deleteOne({
+        'onboarding.onboardingId': new Types.ObjectId(repairId),
+        'onboarding.stepKey': 'checkin_3day',
+      });
+      expect(removed.deletedCount).toBe(1);
+
+      // Reading the onboarding repairs it.
+      const chain = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/onboardings/${repairId}`)
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(
+        (chain.body as OnboardingBody).chain.find(
+          (s) => s.stepKey === 'checkin_3day',
+        )!.ticketId,
+      ).toBeTruthy();
+    });
+
+    it('lists a client onboardings and is denied to a producer', async () => {
+      const byHousehold = await request(app.getHttpServer())
+        .get(
+          `/api/v1/crm/service-tickets/onboardings/household/${seed.householdId}`,
+        )
+        .set(authHeader(csrToken))
+        .expect(200);
+      expect(byHousehold.body.length).toBeGreaterThanOrEqual(1);
+      expect(
+        (byHousehold.body as OnboardingBody[]).every(
+          (o) => o.householdId === seed.householdId,
+        ),
+      ).toBe(true);
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/onboardings/${onboardingId}`)
+        .set(authHeader(producerToken))
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/crm/service-tickets/${welcomeTicketId}/onboarding/steps/welcome_call/complete`,
+        )
+        .set(authHeader(producerToken))
+        .expect(403);
+    });
+
+    it('denies onboarding writes to a read-only user', async () => {
+      await request(app.getHttpServer())
+        .patch(
+          `/api/v1/crm/service-tickets/${welcomeTicketId}/onboarding/checklist`,
+        )
+        .set(authHeader(readOnlyToken))
+        .send({ loanNumberVerified: true })
+        .expect(403);
+    });
+
+    it('starts one onboarding per deal, however many times it is called', async () => {
+      const service = app.get(ServiceTicketsService);
+      const dealId = new Types.ObjectId().toString();
+
+      const input = {
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: seed.householdId,
+        clientName: 'Audit Approved Client',
+        salesProducerName: 'Pat Producer',
+        dealId,
+      };
+
+      const first = await service.startOnboarding(input);
+      const second = await service.startOnboarding(input);
+      expect(second.id).toBe(first.id);
+      expect(first.dealId).toBe(dealId);
+      expect(first.salesProducerName).toBe('Pat Producer');
+
+      const connection = app.get<Connection>(getConnectionToken());
+      // One parent record...
+      expect(
+        await connection
+          .collection('onboardings')
+          .countDocuments({ dealId: new Types.ObjectId(dealId) }),
+      ).toBe(1);
+      // ...and one welcome ticket, whose tenancy survived the string -> ObjectId
+      // hop from Deal/Household. A bad cast would leave it unreadable.
+      const welcome = first.chain.find((s) => s.stepKey === 'welcome_call')!;
+      const readBack = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${welcome.ticketId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(readBack.body.householdId).toBe(seed.householdId);
     });
   });
 
@@ -3007,6 +4185,194 @@ describe('SFA API (e2e)', () => {
 
     it('a read-only user is forbidden (403)', async () => {
       await patchAs(readOnlyToken, leadId, { status: 'Contacted' }).expect(403);
+    });
+  });
+
+  /**
+   * The Start Quote tie between a lead and its service ticket.
+   *
+   * The rule under test is that the two share one lifecycle: the ticket has no
+   * status of its own, and the lead is the only thing that can end it. Both
+   * halves are asserted — the refusal *and* the automatic resolution — because
+   * either alone would leave the ticket in a state nobody can clear.
+   */
+  describe('Lead service tickets (Start Quote)', () => {
+    let leadModel: Model<Lead>;
+
+    const newLead = async (key: string) => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/leads')
+        .set(authHeader(producerToken))
+        .send({
+          primaryContact: {
+            firstName: 'Quinn',
+            lastName: key,
+            dateOfBirth: '1990-06-02',
+            phone: '(555) 909-1010',
+            email: `quinn.${key}@example.com`,
+          },
+          address: {
+            street: `12 ${key} Way`,
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74101',
+          },
+          members: [],
+          leadSourceCode: 'WCO7l',
+        })
+        .expect(201);
+      return res.body.id as string;
+    };
+
+    const openTicket = (token: string, id: string, expected = 201) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/leads/${id}/service-ticket`)
+        .set(authHeader(token))
+        .expect(expected);
+
+    beforeAll(() => {
+      leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+    });
+
+    it('opens a QTE- ticket linked to the lead and assigned to the caller', async () => {
+      const leadId = await newLead('Ashby');
+      const res = await openTicket(producerToken, leadId);
+
+      expect(res.body.category).toBe('Quote');
+      expect(res.body.ticketNumber).toMatch(/^QTE-/);
+      expect(res.body.status).toBe('open');
+      expect(res.body.resolvedAt).toBeNull();
+      expect(res.body.leadId).toBe(leadId);
+      expect(res.body.isStatusLocked).toBe(true);
+      expect(res.body.assignedUserId).toBeTruthy();
+      expect(res.body.timeline[0].type).toBe('created');
+    });
+
+    it('is idempotent — a second call returns the same ticket', async () => {
+      const leadId = await newLead('Brixton');
+      const first = await openTicket(producerToken, leadId);
+      const second = await openTicket(producerToken, leadId);
+
+      expect(second.body.id).toBe(first.body.id);
+      expect(second.body.ticketNumber).toBe(first.body.ticketNumber);
+    });
+
+    it('refuses a manual status change on a lead-linked ticket (400)', async () => {
+      const leadId = await newLead('Calder');
+      const ticket = await openTicket(producerToken, leadId);
+
+      // The owner holds `crm_service:write` and agency scope — the refusal is
+      // the ticket's own rule, not a permission or scope miss.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ticket.body.id}/status`)
+        .set(authHeader(ownerToken))
+        .send({ status: 'resolved' })
+        .expect(400);
+
+      const after = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ticket.body.id}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(after.body.status).toBe('open');
+      expect(after.body.resolvedAt).toBeNull();
+    });
+
+    it('a non-terminal lead status leaves the ticket open', async () => {
+      const leadId = await newLead('Danby');
+      const ticket = await openTicket(producerToken, leadId);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/leads/${leadId}`)
+        .set(authHeader(producerToken))
+        .send({ status: 'Contacted' })
+        .expect(200);
+
+      const after = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ticket.body.id}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(after.body.status).toBe('open');
+    });
+
+    it.each(['Sold', 'Closed', 'Lost'])(
+      'marking the lead %s resolves the ticket',
+      async (status) => {
+        const leadId = await newLead(`Everly${status}`);
+        const ticket = await openTicket(producerToken, leadId);
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/leads/${leadId}`)
+          .set(authHeader(producerToken))
+          .send({ status })
+          .expect(200);
+
+        const after = await request(app.getHttpServer())
+          .get(`/api/v1/crm/service-tickets/${ticket.body.id}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(after.body.status).toBe('resolved');
+        expect(after.body.resolvedAt).not.toBeNull();
+        expect(
+          after.body.timeline.some(
+            (e: { type: string; content: string }) =>
+              e.type === 'system' && e.content.includes(status),
+          ),
+        ).toBe(true);
+      },
+    );
+
+    it('reports the lead status on the single-ticket read only', async () => {
+      const leadId = await newLead('Fenwick');
+      const ticket = await openTicket(producerToken, leadId);
+
+      const one = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ticket.body.id}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(one.body.leadStatus).toBe('New');
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const row = list.body.find(
+        (t: { id: string }) => t.id === ticket.body.id,
+      );
+      expect(row.leadStatus).toBeNull();
+      expect(row.isStatusLocked).toBe(true);
+    });
+
+    it("a ticket with no lead still accepts a manual status change", async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .send({ clientName: 'Unlinked Client', category: 'Billing' })
+        .expect(201);
+      expect(created.body.isStatusLocked).toBe(false);
+      expect(created.body.leadId).toBeNull();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${created.body.id}/status`)
+        .set(authHeader(ownerToken))
+        .send({ status: 'resolved' })
+        .expect(200);
+      expect(res.body.status).toBe('resolved');
+    });
+
+    it("another producer's lead is a 404, and opens no ticket", async () => {
+      const leadId = await newLead('Garrick');
+      await leadModel.updateOne(
+        { _id: leadId },
+        { $set: { producerId: new Types.ObjectId() } },
+      );
+
+      await openTicket(producerToken, leadId, 404);
+    });
+
+    it('a read-only user is forbidden (403)', async () => {
+      const leadId = await newLead('Halloway');
+      await openTicket(readOnlyToken, leadId, 403);
     });
   });
 
@@ -6760,6 +8126,354 @@ describe('SFA API (e2e)', () => {
         // is what this pins.
         await patchPolicy(orphan._id.toString(), { premium: 250 }, 404);
       });
+    });
+  });
+
+  /**
+   * Policy Transfer — the Sold pipeline, minus the lead, booked as company
+   * transfer.
+   *
+   * Two things are load-bearing enough to be worth stating: the from-policy is
+   * *retired* rather than edited (both rows survive, linked), and the premium
+   * must land on the Transfers scorecard **without** moving Sold. The
+   * absent-`businessType` case below is the guard for the one mistake that
+   * would silently zero every historic sale.
+   */
+  describe('Policy transfers (company transfer)', () => {
+    const TICKETS = '/api/v1/crm/service-tickets';
+
+    let xferDealModel: Model<Deal>;
+    let xferPolicyModel: Model<Policy>;
+    let xferHouseholdModel: Model<Household>;
+    let statSpy: jest.SpyInstance;
+
+    const uploaded = new Map<string, { size: number; contentType: string }>();
+    let counter = 0;
+    const nextNumber = () =>
+      `XFER-${(counter += 1).toString().padStart(6, '0')}`;
+
+    /** A key under the transfer's own `/nba/` prefix, which the server enforces. */
+    const nba = (householdId: string) => {
+      const key = `agencies/${seed.agencyId}/policy-transfers/${householdId}/nba/app.pdf`;
+      uploaded.set(key, { size: 2048, contentType: 'application/pdf' });
+      return {
+        key,
+        filename: 'app.pdf',
+        contentType: 'application/pdf',
+        size: 2048,
+      };
+    };
+
+    /** A household with one active policy — the thing a transfer moves within. */
+    const makeHousehold = async (premium = 1400) => {
+      const household = await xferHouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: `Transfer HH ${counter}`,
+        totalActivePolicies: 1,
+      });
+      const policy = await xferPolicyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: household._id,
+        policyNumber: nextNumber(),
+        policyType: 'Auto',
+        premium,
+        items: 1,
+        active: true,
+        policyStatus: 'Active',
+      });
+      return { household, policy };
+    };
+
+    const makeTicket = async (
+      householdId: string,
+      category = 'Policy Change',
+    ) => {
+      const res = await request(app.getHttpServer())
+        .post(TICKETS)
+        .set(authHeader(csrToken))
+        .send({ clientName: 'Transfer Client', category, householdId })
+        .expect(201);
+      return res.body as { id: string };
+    };
+
+    const transferBody = (
+      householdId: string,
+      fromPolicyId: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      transferDate: '2026-03-10',
+      policies: [
+        {
+          fromPolicyId,
+          policyType: 'Auto',
+          effectiveDate: '2026-03-15',
+          carrier: 'Allstate',
+          policyNumber: nextNumber(),
+          premium: 900,
+          itemCount: 1,
+          newBusinessApplication: nba(householdId),
+        },
+      ],
+      ...overrides,
+    });
+
+    const record = (ticketId: string, body: unknown, expected = 201) =>
+      request(app.getHttpServer())
+        .post(`${TICKETS}/${ticketId}/policy-transfer`)
+        .set(authHeader(csrToken))
+        .send(body)
+        .expect(expected);
+
+    beforeAll(() => {
+      xferDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      xferPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      xferHouseholdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      // Storage isn't running under test; report only what this block declared.
+      const storage = app.get(StorageService);
+      statSpy = jest
+        .spyOn(storage, 'statObject')
+        .mockImplementation((key: string) =>
+          Promise.resolve(uploaded.get(key) ?? null),
+        );
+    });
+
+    afterAll(() => statSpy?.mockRestore());
+
+    it.each([
+      'Renewal Review',
+      'Policy Change',
+      'Payment',
+      'Company Transfer',
+    ])('records a transfer from a %s ticket', async (category) => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id), category);
+
+      const res = await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      expect(res.body.policyTransfer).not.toBeNull();
+      expect(res.body.policyTransfer.pairs).toHaveLength(1);
+      expect(res.body.policyTransfer.pairs[0].fromPolicyId).toBe(
+        String(policy._id),
+      );
+      expect(res.body.allowsPolicyTransfer).toBe(true);
+    });
+
+    it('is refused from a category that does not allow it', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id), 'Billing');
+
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+        400,
+      );
+      expect(
+        await xferDealModel.countDocuments({
+          ticketId: new Types.ObjectId(ticket.id),
+        }),
+      ).toBe(0);
+    });
+
+    it('retires the old policy and links both ways', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      const res = await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      const from = await xferPolicyModel.findById(policy._id);
+      expect(from!.active).toBe(false);
+      expect(from!.policyStatus).toBe('Cancelled');
+
+      const toId = res.body.policyTransfer.pairs[0].toPolicyId;
+      expect(String(from!.transferredToPolicyId)).toBe(toId);
+
+      const to = await xferPolicyModel.findById(toId);
+      expect(to!.active).toBe(true);
+      expect(String(to!.transferredFromPolicyId)).toBe(String(policy._id));
+    });
+
+    it('books a company-transfer deal with no lead', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      const res = await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      const deal = await xferDealModel.findById(
+        res.body.policyTransfer.dealId as string,
+      );
+      expect(deal!.businessType).toBe('company_transfer');
+      expect(deal!.leadId ?? null).toBeNull();
+      expect(String(deal!.ticketId)).toBe(ticket.id);
+    });
+
+    it('recomputes the household active-policy count', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      // One retired, one activated — still one, but recounted rather than
+      // assumed, which is what makes a re-run correct too.
+      const after = await xferHouseholdModel.findById(household._id);
+      expect(after!.totalActivePolicies).toBe(1);
+    });
+
+    it('allows only one transfer per ticket', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+        409,
+      );
+    });
+
+    it("refuses a from-policy on another household, and writes nothing", async () => {
+      const { household } = await makeHousehold();
+      const other = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(other.policy._id)),
+        400,
+      );
+
+      const untouched = await xferPolicyModel.findById(other.policy._id);
+      expect(untouched!.active).toBe(true);
+      expect(
+        await xferDealModel.countDocuments({
+          ticketId: new Types.ObjectId(ticket.id),
+        }),
+      ).toBe(0);
+    });
+
+    it('logs the transfer on the ticket timeline', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      const res = await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      expect(
+        (res.body.timeline as { type: string; content: string }[]).some(
+          (e) => e.type === 'system' && e.content.includes('Policy transfer'),
+        ),
+      ).toBe(true);
+    });
+
+    /* ─── The reporting split ─────────────────────────────────────────────── */
+
+    describe('scorecard split', () => {
+      const PERFORMANCE = '/api/v1/performance';
+
+      const performance = async (token: string) => {
+        const res = await request(app.getHttpServer())
+          .get(`${PERFORMANCE}?range=custom&from=2026-03-01&to=2026-03-31`)
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as {
+          sold: { premium: number };
+          transfers: { premium: number };
+        };
+      };
+
+      it('counts the transfer under transfers, never under sold', async () => {
+        const before = await performance(ownerToken);
+
+        const { household, policy } = await makeHousehold();
+        const ticket = await makeTicket(String(household._id));
+        await record(
+          ticket.id,
+          transferBody(String(household._id), String(policy._id)),
+        );
+
+        const after = await performance(ownerToken);
+        expect(after.transfers.premium).toBeCloseTo(
+          before.transfers.premium + 900,
+          2,
+        );
+        expect(after.sold.premium).toBeCloseTo(before.sold.premium, 2);
+      });
+
+      /**
+       * The regression guard for the one mistake that breaks existing
+       * reporting.
+       *
+       * Every deal written before `businessType` existed has **no such field**
+       * — a Mongoose default applies on write, never to stored documents. A
+       * read filtering on `businessType: 'new_business'` would therefore match
+       * none of them and report $0 sold. Absent must count as new business,
+       * which is what `NEW_BUSINESS_MATCH`'s `$ne` does.
+       */
+      it('still counts a deal that has no businessType field at all', async () => {
+        const before = await performance(ownerToken);
+
+        // Inserted through the driver so no Mongoose default is applied — this
+        // is exactly the shape of every pre-existing row.
+        await xferDealModel.collection.insertOne({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          premium: 777,
+          itemCount: 1,
+          policyCount: 1,
+          soldDateYmd: 20260310,
+          soldDate: new Date('2026-03-10T00:00:00.000Z'),
+          isTestRecord: false,
+        });
+
+        const after = await performance(ownerToken);
+        expect(after.sold.premium).toBeCloseTo(before.sold.premium + 777, 2);
+        expect(after.transfers.premium).toBeCloseTo(before.transfers.premium, 2);
+      });
+    });
+
+    it('keeps transfers off the producer leaderboard', async () => {
+      const month = '2026-03';
+      const read = async () => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/leaderboard?month=${month}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+        return res.body as { officeTotalPremium: number };
+      };
+
+      const before = await read();
+
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      expect((await read()).officeTotalPremium).toBeCloseTo(
+        before.officeTotalPremium,
+        2,
+      );
     });
   });
 });

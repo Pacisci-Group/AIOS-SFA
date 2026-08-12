@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -10,7 +11,7 @@ import { Model, Types } from 'mongoose';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
 import { normalizePolicyNumber } from '../../policies/policy-number';
 import { Policy, PolicyDocument } from '../../policies/schemas/policy.schema';
-import type { CreateSoldDealDto } from '../dto/create-sold-deal.dto';
+import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import { parseFormDate } from './sold.normalize';
 import { SoldStepDeps, sessionOptions } from './sold-intake.types';
 
@@ -49,7 +50,7 @@ export class UpsertPoliciesStep {
   ) {}
 
   async run(
-    dto: CreateSoldDealDto,
+    dto: SoldIntakeDto,
     dealId: Types.ObjectId,
     access: AccessContext,
     deps: SoldStepDeps,
@@ -58,6 +59,13 @@ export class UpsertPoliciesStep {
     const results: UpsertedPolicy[] = [];
 
     for (const [sourceIndex, row] of dto.policies.entries()) {
+      // On the transfer path the row names the policy it replaces. Retire it
+      // *before* writing the replacement so a failed retire aborts the whole
+      // transaction rather than leaving two active policies for one coverage.
+      const retiredId = row.fromPolicyId
+        ? await this.retireTransferred(row.fromPolicyId, deps)
+        : null;
+
       const shared = {
         policyNumber: row.policyNumber,
         policyNumberKey: normalizePolicyNumber(row.policyNumber) ?? undefined,
@@ -76,6 +84,7 @@ export class UpsertPoliciesStep {
         },
         householdId: ctx.householdId,
         dealId,
+        transferredFromPolicyId: retiredId,
       };
 
       if (row.existingPolicyId) {
@@ -85,6 +94,7 @@ export class UpsertPoliciesStep {
           access,
           deps,
         );
+        await this.linkRetired(retiredId, policyId, deps);
         results.push({
           policyId,
           policyType: row.policyType,
@@ -106,6 +116,7 @@ export class UpsertPoliciesStep {
         sessionOptions(deps.session),
       );
       deps.created.track(this.policyModel, policy._id);
+      await this.linkRetired(retiredId, policy._id, deps);
       results.push({
         policyId: policy._id,
         policyType: row.policyType,
@@ -115,6 +126,66 @@ export class UpsertPoliciesStep {
     }
 
     return results;
+  }
+
+  /**
+   * Retire the policy a transfer replaces.
+   *
+   * Deactivated rather than deleted: the client genuinely held it, and the
+   * household's history — and any audit or ticket that referenced it — has to
+   * survive the move. `active: false` is also what keeps the household's
+   * premium total and active-policy count honest once the replacement lands.
+   *
+   * The household check is the real gate. `fromPolicyId` comes straight from the
+   * client, and the transfer's only scope clamp is the *ticket*; without this a
+   * CSR could retire any policy in the agency by naming its id.
+   */
+  private async retireTransferred(
+    fromPolicyId: string,
+    deps: SoldStepDeps,
+  ): Promise<Types.ObjectId> {
+    const { ctx } = deps;
+
+    const existing = await this.policyModel
+      .findOne({
+        _id: new Types.ObjectId(fromPolicyId),
+        agencyId: ctx.agencyId,
+      })
+      .session(deps.session);
+
+    if (!existing) {
+      throw new NotFoundException('That policy could not be found.');
+    }
+
+    if (String(existing.householdId ?? '') !== ctx.householdId.toString()) {
+      throw new BadRequestException(
+        'That policy belongs to a different household and cannot be transferred here.',
+      );
+    }
+
+    await this.policyModel.updateOne(
+      { _id: existing._id, agencyId: ctx.agencyId },
+      { $set: { active: false, policyStatus: 'Cancelled' } },
+      sessionOptions(deps.session),
+    );
+
+    // Deliberately NOT tracked in `created` — the compensating-delete fallback
+    // would destroy a policy that existed long before this submission.
+    return existing._id;
+  }
+
+  /** Close the loop: point the retired policy forward at its replacement. */
+  private async linkRetired(
+    retiredId: Types.ObjectId | null,
+    replacementId: Types.ObjectId,
+    deps: SoldStepDeps,
+  ): Promise<void> {
+    if (!retiredId) return;
+    await this.policyModel.updateOne(
+      { _id: retiredId, agencyId: deps.ctx.agencyId },
+      { $set: { transferredToPolicyId: replacementId } },
+      sessionOptions(deps.session),
+    );
   }
 
   /**

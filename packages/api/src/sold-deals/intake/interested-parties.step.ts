@@ -5,7 +5,7 @@ import {
   InterestedParty,
   InterestedPartyDocument,
 } from '../../interested-parties/schemas/interested-party.schema';
-import type { CreateSoldDealDto } from '../dto/create-sold-deal.dto';
+import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import type { UpsertedPolicy } from './upsert-policies.step';
 import { SoldStepDeps, sessionOptions } from './sold-intake.types';
 
@@ -30,7 +30,7 @@ export class InterestedPartiesStep {
   ) {}
 
   async run(
-    dto: CreateSoldDealDto,
+    dto: SoldIntakeDto,
     policies: UpsertedPolicy[],
     deps: SoldStepDeps,
   ): Promise<void> {

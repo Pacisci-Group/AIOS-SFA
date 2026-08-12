@@ -1,4 +1,5 @@
 import { CARRIER_OTHER, POLICY_TYPES } from '@sfa/shared';
+import type { SoldPolicyDiscounts } from '@sfa/shared';
 import { z } from 'zod';
 import { policyNumberKey } from '../../policies/policy-number';
 import { findCrossBranchDiscounts } from '../intake/sold.normalize';
@@ -157,45 +158,93 @@ const escrowDetails = z.object({
   attachment: attachment.optional(),
 });
 
-/** One iteration of the wizard's per-policy loop. */
-const soldPolicySchema = z
-  .object({
-    // Canonical labels only. `normalizePolicyType` exists for *reading*
-    // legacy data, not for laundering input on a write path.
-    policyType: z.enum(POLICY_TYPES),
-    effectiveDate: ymd,
-    carrier: carrierName(120).min(1, 'Enter the carrier'),
-    policyNumber: z.string().trim().min(1, 'Enter the policy number').max(60),
-    /**
-     * Set when `GET /policies/check` matched and the producer confirmed "this
-     * is the same policy". Re-validated server-side against the caller's agency
-     * *and* data scope — without that this field is a cross-producer write
-     * primitive.
-     */
-    existingPolicyId: objectId.optional(),
-    premium: z.coerce
-      .number()
-      .nonnegative('Premium must be 0 or greater')
-      .max(1_000_000, 'Too large'),
-    itemCount: z.coerce
-      .number()
-      .int('Whole numbers only')
-      .min(1, 'At least 1 item')
-      .max(99, 'Too many'),
-    /**
-     * The signed new business application for this policy (PAC-56 #23).
-     *
-     * **Required, and PDF-only** — the one exception to the sold form's
-     * PDF-or-image rule. Per policy rather than the five type-keyed columns
-     * legacy kept on the Deal (`Auto_`/`Home_`/…): our wizard already loops per
-     * policy, legacy's own Policies table carried the same field
-     * (`sd61f05a5f`), and two Landlord policies on one deal each need their own
-     * application rather than sharing a slot.
-     */
-    newBusinessApplication: attachment,
-    // Discounts & documentation
-    discounts,
-    escrow: escrowDetails.optional(),
+/**
+ * Everything one policy row carries on **both** write paths — the Sold form and
+ * the Policy Transfer.
+ *
+ * Split out from `soldPolicySchema` so the transfer can reuse the shape without
+ * copying it. Prior insurance and cancellation are deliberately *not* here: they
+ * are the one part of a sold policy a transfer never asks for, since the policy
+ * being replaced is already in our own book rather than at another carrier.
+ */
+export const policyBaseSchema = z.object({
+  // Canonical labels only. `normalizePolicyType` exists for *reading*
+  // legacy data, not for laundering input on a write path.
+  policyType: z.enum(POLICY_TYPES),
+  effectiveDate: ymd,
+  carrier: carrierName(120).min(1, 'Enter the carrier'),
+  policyNumber: z.string().trim().min(1, 'Enter the policy number').max(60),
+  /**
+   * Set when `GET /policies/check` matched and the producer confirmed "this
+   * is the same policy". Re-validated server-side against the caller's agency
+   * *and* data scope — without that this field is a cross-producer write
+   * primitive.
+   */
+  existingPolicyId: objectId.optional(),
+  premium: z.coerce
+    .number()
+    .nonnegative('Premium must be 0 or greater')
+    .max(1_000_000, 'Too large'),
+  itemCount: z.coerce
+    .number()
+    .int('Whole numbers only')
+    .min(1, 'At least 1 item')
+    .max(99, 'Too many'),
+  /**
+   * The signed new business application for this policy (PAC-56 #23).
+   *
+   * **Required, and PDF-only** — the one exception to the sold form's
+   * PDF-or-image rule. Per policy rather than the five type-keyed columns
+   * legacy kept on the Deal (`Auto_`/`Home_`/…): our wizard already loops per
+   * policy, legacy's own Policies table carried the same field
+   * (`sd61f05a5f`), and two Landlord policies on one deal each need their own
+   * application rather than sharing a slot.
+   */
+  newBusinessApplication: attachment,
+  // Discounts & documentation
+  discounts,
+  escrow: escrowDetails.optional(),
+});
+
+/**
+ * The escrow rules, shared by both write paths.
+ *
+ * Extracted rather than duplicated because a transfer carries escrow exactly as
+ * a sale does — the discount and its statement travel with the client, not with
+ * the fact that money changed hands.
+ */
+function refineEscrow(
+  policy: { discounts: { escrow: boolean }; escrow?: { attachment?: unknown } },
+  ctx: z.RefinementCtx,
+): void {
+  // Escrow's sub-card is required *because* it was ticked — the audit item it
+  // generates is "verify loan number, company and address", which is
+  // unanswerable without them.
+  if (policy.discounts.escrow && !policy.escrow) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Escrow details are required when escrow is selected.',
+      path: ['escrow'],
+    });
+  }
+
+  // …and its statement, on the same footing as every other discount proof
+  // (PAC-56 #21). Reported separately from the details above so the message
+  // lands on the field that is actually missing.
+  if (policy.discounts.escrow && policy.escrow && !policy.escrow.attachment) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Attach the escrow statement.',
+      path: ['escrow', 'attachment'],
+    });
+  }
+}
+
+export { refineEscrow };
+
+/** One iteration of the Sold wizard's per-policy loop. */
+const soldPolicySchema = policyBaseSchema
+  .extend({
     priorInsurance: z
       .object({
         /** The "No prior [Type] insurance" toggle. */
@@ -249,27 +298,7 @@ const soldPolicySchema = z
       });
     }
 
-    // Escrow's sub-card is required *because* it was ticked — the audit item it
-    // generates is "verify loan number, company and address", which is
-    // unanswerable without them.
-    if (policy.discounts.escrow && !policy.escrow) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Escrow details are required when escrow is selected.',
-        path: ['escrow'],
-      });
-    }
-
-    // …and its statement, on the same footing as every other discount proof
-    // (PAC-56 #21). Reported separately from the details above so the message
-    // lands on the field that is actually missing.
-    if (policy.discounts.escrow && policy.escrow && !policy.escrow.attachment) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Attach the escrow statement.',
-        path: ['escrow', 'attachment'],
-      });
-    }
+    refineEscrow(policy, ctx);
   });
 
 export const createSoldDealSchema = z
@@ -290,40 +319,80 @@ export const createSoldDealSchema = z
       .max(10, 'At most 10 policies per submission'),
     submissionToken: z.string().trim().min(8).max(200).optional(),
   })
-  .superRefine((dto, ctx) => {
-    // Cross-branch discounts are rejected rather than stripped: a Home policy
-    // claiming Drivewise would otherwise generate an auto audit item for a deal
-    // with no auto line, and nothing downstream could tell it was bogus.
-    for (const problem of findCrossBranchDiscounts(dto.policies)) {
+  .superRefine(refinePolicyBatch);
+
+/**
+ * The two whole-submission rules, shared by both write paths.
+ *
+ * A transfer loops over policies exactly as a sale does, so both traps apply
+ * unchanged — this is factored out rather than duplicated so they cannot drift.
+ */
+export function refinePolicyBatch(
+  dto: {
+    policies: {
+      policyNumber: string;
+      policyType: string;
+      discounts?: SoldPolicyDiscounts;
+    }[];
+  },
+  ctx: z.RefinementCtx,
+): void {
+  // Cross-branch discounts are rejected rather than stripped: a Home policy
+  // claiming Drivewise would otherwise generate an auto audit item for a deal
+  // with no auto line, and nothing downstream could tell it was bogus.
+  for (const problem of findCrossBranchDiscounts(dto.policies)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: problem,
+      path: ['policies'],
+    });
+  }
+
+  // Two rows claiming the same number in one submission would race each other
+  // through the upsert and leave one silently overwriting the other.
+  const seen = new Set<string>();
+  dto.policies.forEach((policy, index) => {
+    // `policyNumberKey`, not `normalizePolicyNumber`: the 4-character floor
+    // exists to keep the *duplicate warning* meaningful, and does not belong
+    // on a write-time collision check. Was a hand-rolled copy of the same
+    // expression until PAC-56 #20 split the normalizer.
+    const key = policyNumberKey(policy.policyNumber);
+    if (!key) return;
+    if (seen.has(key)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: problem,
-        path: ['policies'],
+        message: 'This policy number is already on this submission.',
+        path: ['policies', index, 'policyNumber'],
       });
     }
-
-    // Two rows claiming the same number in one submission would race each other
-    // through the upsert and leave one silently overwriting the other.
-    const seen = new Set<string>();
-    dto.policies.forEach((policy, index) => {
-      // `policyNumberKey`, not `normalizePolicyNumber`: the 4-character floor
-      // exists to keep the *duplicate warning* meaningful, and does not belong
-      // on a write-time collision check. Was a hand-rolled copy of the same
-      // expression until PAC-56 #20 split the normalizer.
-      const key = policyNumberKey(policy.policyNumber);
-      if (!key) return;
-      if (seen.has(key)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'This policy number is already on this submission.',
-          path: ['policies', index, 'policyNumber'],
-        });
-      }
-      seen.add(key);
-    });
+    seen.add(key);
   });
+}
 
 export type CreateSoldDealDto = z.infer<typeof createSoldDealSchema>;
+
+/**
+ * One policy row as the **intake steps** see it, from either write path.
+ *
+ * `fromPolicyId` is optional here and set only by the transfer: the steps are
+ * shared, so their input type is the union of what the two schemas produce
+ * rather than either one of them.
+ */
+export type SoldIntakePolicy = CreateSoldDealDto['policies'][number] & {
+  fromPolicyId?: string;
+};
+
+/**
+ * What the intake pipeline actually consumes.
+ *
+ * **`leadId` is deliberately absent.** No step reads it off the DTO — it comes
+ * from `SoldIntakeContext`, where it is now optional — so typing the steps on
+ * this rather than on `CreateSoldDealDto` is what lets a leadless transfer run
+ * the identical pipeline. `CreateSoldDealDto` is assignable to it.
+ */
+export type SoldIntakeDto = Omit<CreateSoldDealDto, 'leadId' | 'policies'> & {
+  policies: SoldIntakePolicy[];
+};
 
 /** Query DTO for `GET /sold-deals/context`. */
 export const soldDealContextSchema = z.object({ leadId: objectId });

@@ -144,4 +144,31 @@ export class LeadsController {
   ) {
     return this.leadDetailService.update(access, branchId, id, body);
   }
+
+  /**
+   * Open the CRM service ticket for this lead, or return the one it already has.
+   *
+   * Called by the Start Quote dialog on the Household page once a lead is
+   * chosen — for a lead it just created *and* for one picked off the list, so a
+   * quote in flight always shows up on the CSR desk.
+   *
+   * **Why this lives on the leads controller** rather than under
+   * `/crm/service-tickets`: the caller is the producer or CSR who pressed Start
+   * Quote, holding `leads:write` and — for a producer — no `crm_service:write`
+   * at all, so routing it through the CRM controller would 403 the very people
+   * it exists for. The verb belongs to the lead ("open a ticket for this
+   * enquiry"); only the record it writes belongs to CRM, the same way
+   * `QuoteRecapsService` writes to `leadModel` from the other direction.
+   *
+   * Idempotent, so the dialog can call it on every run without checking first.
+   */
+  @Post(':id/service-ticket')
+  @RequireWrite(ModuleKey.Leads)
+  openServiceTicket(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+  ) {
+    return this.leadsService.openServiceTicket(access, branchId, id);
+  }
 }

@@ -105,6 +105,21 @@ export const leadIntakeBaseSchema = z.object({
  */
 export const createLeadSchema = leadIntakeBaseSchema.extend({
   leadSourceCode: z.enum(SELECTABLE_LEAD_SOURCE_CODES),
+  /**
+   * Pin the lead to a household the caller already has on screen — the
+   * Household page's "Start Quote" flow, where the household is a fact rather
+   * than something to infer from the typed name.
+   *
+   * Deliberately absent from `publicCreateLeadSchema` (which is the bare base):
+   * an outside submitter naming a household id would be choosing whose record
+   * their submission lands on. Only the authenticated form may pin, and the
+   * service still checks the household is inside the caller's agency.
+   */
+  householdId: z
+    .string()
+    .trim()
+    .regex(/^[a-f0-9]{24}$/i, 'householdId must be a record id')
+    .optional(),
 });
 
 export type CreateLeadDto = z.infer<typeof createLeadSchema>;

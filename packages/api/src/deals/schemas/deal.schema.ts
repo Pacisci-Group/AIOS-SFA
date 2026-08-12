@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import type { NormalizedLeadSource } from '@sfa/shared';
+import { BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE } from '@sfa/shared';
+import type { BusinessType, NormalizedLeadSource } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
@@ -83,6 +84,42 @@ export class Deal extends TenantRecord {
 
   @Prop({ default: 'Other', index: true })
   dealType: DealType;
+
+  /**
+   * New business, or an intra-book company transfer.
+   *
+   * `dealType` above is the **line of business** (Auto / Home / Bundle); this is
+   * the *kind of production*, and it is the first such dimension on the sold
+   * log. The Sold scorecard and the leaderboard both exclude transfers — a CSR
+   * moving a client to a cheaper package is real work, but it is not a sale.
+   *
+   * ⚠ Every deal written before this field existed has **no `businessType` at
+   * all** — a Mongoose default applies on write, never to stored documents. Read
+   * paths must therefore match on `NEW_BUSINESS_MATCH` (`$ne: 'company_transfer'`)
+   * rather than on equality, or they will see zero historic deals. See that
+   * constant's docblock.
+   */
+  @Prop({
+    type: String,
+    enum: BUSINESS_TYPES,
+    required: true,
+    default: DEFAULT_BUSINESS_TYPE,
+    index: true,
+  })
+  businessType: BusinessType;
+
+  /**
+   * The CRM service ticket a transfer was recorded from. **Null on every sold
+   * deal** — the Sold form has no ticket, and this is what makes a transfer
+   * reachable from the ticket it was booked on.
+   */
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'ServiceTicket',
+    index: true,
+    default: null,
+  })
+  ticketId: Types.ObjectId | null;
 
   @Prop({ default: false })
   isBundle: boolean;
@@ -230,6 +267,30 @@ DealSchema.index({ agencyId: 1, producerId: 1, soldDateYmd: -1 });
  * query shape.
  */
 DealSchema.index({ agencyId: 1, soldDateYmd: -1 });
+
+/**
+ * The scorecards' business-type split. Both the Sold card (`$ne` transfer) and
+ * the Transfers card (`$eq` transfer) filter on `businessType` *before* the
+ * `soldDateYmd` range, so it leads the range key here.
+ */
+DealSchema.index({ agencyId: 1, businessType: 1, soldDateYmd: -1 });
+
+/**
+ * One policy transfer per service ticket — the uniqueness rule *and* the
+ * idempotency guard for `POST /crm/service-tickets/:id/policy-transfer`.
+ *
+ * Partial, never `sparse`, for the same reason as every other index in this
+ * file: `agencyId` is always present, so a sparse compound index would still
+ * index the `null` and every ordinary sold deal (all of which have
+ * `ticketId: null`) would collide on the second one.
+ */
+DealSchema.index(
+  { agencyId: 1, ticketId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { ticketId: { $type: 'objectId' } },
+  },
+);
 
 /**
  * The Lead Detail deal lookup (PAC-38) — "the sale this lead became". Only a

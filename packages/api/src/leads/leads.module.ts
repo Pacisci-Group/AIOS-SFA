@@ -5,6 +5,7 @@ import {
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { CrmModule } from '../crm/crm.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 import {
   Household,
@@ -53,6 +54,11 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
       { name: PriorPolicy.name, schema: PriorPolicySchema },
       { name: User.name, schema: UserSchema },
     ]),
+    // `LeadTicketsService` — opens a lead's quote ticket from Start Quote, and
+    // resolves it when the lead reaches a terminal status. The dependency runs
+    // one way only: `CrmModule` registers the `Lead` *schema* rather than
+    // importing this module back.
+    CrmModule,
   ],
   controllers: [LeadsController],
   providers: [

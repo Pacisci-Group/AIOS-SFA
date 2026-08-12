@@ -52,6 +52,7 @@ export interface GenerateAuditInput {
 
 export interface GenerateAuditResult {
   status: 'generated' | 'no_templates' | 'failed';
+  /** The deal's whole checklist, not this run's inserts — see `generate`. */
   itemCount: number;
   /** Titles the agency has no active template for — logged, not created. */
   unresolved: string[];
@@ -188,22 +189,27 @@ export class AuditGenerationService {
       );
     }
 
-    let created = 0;
     if (writes.length) {
-      const result = await this.itemModel.bulkWrite(writes, {
-        ordered: false,
-      });
-      created = result.upsertedCount ?? 0;
+      await this.itemModel.bulkWrite(writes, { ordered: false });
     }
+
+    // Count the deal's items rather than this run's inserts. The two agree on
+    // a first run and diverge on every later one: the upserts are deliberately
+    // `$setOnInsert`, so a re-run inserts nothing and reporting the insert
+    // count would stamp `auditItemCount: 0` on a deal with a full checklist.
+    const itemCount = await this.itemModel.countDocuments({
+      agencyId: input.agencyId,
+      dealId: input.dealId,
+    });
 
     await this.stamp(input.dealId, {
       auditGeneratedAt: new Date(),
       auditGenerationStatus: 'generated',
-      auditItemCount: created,
+      auditItemCount: itemCount,
       dealAuditStatus: 'Not Submitted',
     });
 
-    return { status: 'generated', itemCount: created, unresolved };
+    return { status: 'generated', itemCount, unresolved };
   }
 
   /**

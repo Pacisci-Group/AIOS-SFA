@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
+import { MongoDuplicateKeyFilter } from './common/filters/mongo-duplicate-key.filter';
 import { AccessContextGuard } from './common/guards/access-context.guard';
 import { BranchGuard } from './common/guards/branch.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
@@ -23,6 +24,8 @@ import { ActivitiesModule } from './activities/activities.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { CarriersModule } from './carriers/carriers.module';
+import { ClientsModule } from './clients/clients.module';
+import { CrmModule } from './crm/crm.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { LeaderboardModule } from './leaderboard/leaderboard.module';
@@ -69,6 +72,27 @@ import { ENV_FILE_PATH } from './config/env.config';
     BranchesModule,
     RolesModule,
     UsersModule,
+    /*
+     * Must precede **CrmModule**, not merely ClientsModule, so `/policies/check`
+     * is registered ahead of `/policies/:id`. "check" is not a valid ObjectId,
+     * so while `:id` won the duplicate check answered 404 for every caller and
+     * the Sold wizard silently lost its duplicate warning.
+     *
+     * Third instance of the same hazard — see ShareLinksModule and ClientsModule
+     * below — with the twist that made it hard to spot: **a module is
+     * instantiated when it is first reached, including transitively.**
+     * `CrmModule` imports `ClientsModule`, so ClientsModule's routes register at
+     * CrmModule's position, not at its own. Ordering against the module that
+     * *declares* the colliding controller is not enough; it has to precede
+     * whatever pulls it in first.
+     *
+     * Pinned by the "Policies (PAC-40 duplicate check)" e2e block.
+     */
+    PoliciesModule,
+    CrmModule,
+    // Registered before FeatureModulesModule so the real `/households/:id`
+    // read is matched ahead of the `/households` stub controller.
+    ClientsModule,
     StorageModule,
     DealAuditsModule,
     // Before LeadsModule so `/leads/share-links` is registered ahead of
@@ -78,7 +102,6 @@ import { ENV_FILE_PATH } from './config/env.config';
     LeadsModule,
     ContactsModule,
     QuoteRecapsModule,
-    PoliciesModule,
     // The Sold wizard's carrier vocabulary (PAC-56 #19). Also registers the
     // `carriers` model so its indexes build and the core seed can inject it.
     CarriersModule,
@@ -103,6 +126,10 @@ import { ENV_FILE_PATH } from './config/env.config';
     { provide: APP_GUARD, useClass: BranchGuard },
     { provide: APP_GUARD, useClass: ModuleGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    // A duplicate key is a caller-visible conflict (409), not a 500. Without
+    // this the driver's raw error — which echoes the stored values that
+    // collided — reaches the default handler.
+    { provide: APP_FILTER, useClass: MongoDuplicateKeyFilter },
   ],
 })
 export class AppModule {}

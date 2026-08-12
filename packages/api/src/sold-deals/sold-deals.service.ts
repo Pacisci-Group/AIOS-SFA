@@ -1,31 +1,21 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import {
-  carrierPolicyNumberMatches,
-  carrierSlug,
-  normalizeLeadStatus,
-} from '@sfa/shared';
+import { normalizeLeadStatus } from '@sfa/shared';
 import type {
   AccessContext,
   CreateSoldDealResponse,
   SoldDealLeadContext,
-  SoldDocumentMeta,
   SoldDocumentPresignResponse,
   SoldHouseholdContact,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { AuditGenerationService } from '../audit-generation/audit-generation.service';
-import { CarriersService } from '../carriers/carriers.service';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CrmAssignmentService } from '../crm-rotations/crm-assignment.service';
+import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { LeadAccessService } from '../leads/lead-access.service';
-import { policyNumberKey } from '../policies/policy-number';
 import {
   QuoteRecap,
   QuoteRecapDocument,
@@ -38,31 +28,14 @@ import type {
   SoldDealContextDto,
 } from './dto/create-sold-deal.dto';
 import {
-  MAX_SOLD_DOCUMENT_BYTES,
-  SOLD_UPLOAD_KINDS,
   soldDocumentPurpose,
   type PresignSoldDocumentDto,
-  type SoldUploadKind,
 } from './dto/presign-sold-document.dto';
 import { auditAttachmentsByItem } from './intake/sold-audit-attachments';
-import { collectAttachments } from './intake/sold.normalize';
 import { SoldDealIntakeService } from './intake/sold-deal-intake.service';
+import { SoldSubmissionValidator } from './intake/sold-submission.validator';
 import { buildSoldSubmissionToken } from './intake/sold.normalize';
 import type { SoldIntakeContext } from './intake/sold-intake.types';
-
-/**
- * The allow-list per upload kind, as `HeadObject` enforces it.
- *
- * Derived from `SOLD_UPLOAD_KINDS` rather than re-listed, so the presign
- * narrowing and this verification can never disagree — the presign is a
- * fast-fail, this is the gate.
- */
-const ALLOWED_CONTENT_TYPES = Object.fromEntries(
-  Object.entries(SOLD_UPLOAD_KINDS).map(([kind, types]) => [
-    kind,
-    new Set<string>(types),
-  ]),
-) as Record<SoldUploadKind, Set<string>>;
 
 @Injectable()
 export class SoldDealsService {
@@ -74,12 +47,13 @@ export class SoldDealsService {
     @InjectModel(QuoteRecap.name)
     private readonly quoteRecapModel: Model<QuoteRecapDocument>,
     private readonly tenancy: TenantContextResolver,
-    private readonly carriers: CarriersService,
     private readonly leadAccess: LeadAccessService,
     private readonly storage: StorageService,
     private readonly intake: SoldDealIntakeService,
+    private readonly submissions: SoldSubmissionValidator,
     private readonly auditGeneration: AuditGenerationService,
     private readonly crmAssignment: CrmAssignmentService,
+    private readonly leadTickets: LeadTicketsService,
   ) {}
 
   /**
@@ -181,14 +155,21 @@ export class SoldDealsService {
     );
     const household = await this.leadAccess.resolveHousehold(lead, access);
 
-    await this.assertPolicyNumberFormats(dto, tenant.agencyId);
-    await this.verifyAttachments(dto, tenant.agencyId, lead._id.toString());
+    await this.submissions.assertPolicyNumberFormats(dto, tenant.agencyId);
+    // The lead is the key anchor on this path; a policy transfer passes its
+    // household instead. Same verification, different prefix.
+    await this.submissions.verifyAttachments(dto, tenant.agencyId, (kind) =>
+      soldDocumentPurpose(lead._id.toString(), kind),
+    );
 
     const ctx: SoldIntakeContext = {
       agencyId: tenant.agencyId,
       branchId: tenant.branchId,
       producerId: new Types.ObjectId(access.userId),
       leadId: lead._id,
+      // The Sold form is, by definition, the new-business path. A company
+      // transfer reaches the same pipeline through the CRM ticket instead.
+      businessType: 'new_business',
       householdId: household._id,
       quoteRecapId: dto.quoteRecapId
         ? new Types.ObjectId(dto.quoteRecapId)
@@ -198,8 +179,22 @@ export class SoldDealsService {
       submissionToken: token,
     };
 
-    const outcome = await this.intake.process(ctx, dto, access, lead);
+    const outcome = await this.intake.process(
+      ctx,
+      dto,
+      access,
+      lead.leadSource,
+    );
     const { leadStatus } = await this.intake.recordSideEffects(ctx, outcome);
+
+    /*
+     * The sale just advanced the lead to Sold, which finishes any quote service
+     * ticket opened for it from Start Quote. Idempotent and best-effort like the
+     * two below, and deliberately keyed off the status `recordSideEffects`
+     * actually landed on rather than assuming Sold — a lead already terminal is
+     * left exactly as it was.
+     */
+    await this.leadTickets.resolveForLead(lead._id, ctx.agencyId, leadStatus);
 
     /*
      * The hand-off. Both run **post-commit and best-effort**: the deal is
@@ -234,7 +229,7 @@ export class SoldDealsService {
 
     return {
       id: outcome.dealId.toString(),
-      leadId: ctx.leadId.toString(),
+      leadId: lead._id.toString(),
       premium: outcome.premium,
       itemCount: outcome.itemCount,
       policyCount: outcome.policyCount,
@@ -242,7 +237,10 @@ export class SoldDealsService {
       dealType: outcome.dealType,
       isBundle: outcome.isBundle,
       soldDate: outcome.soldDate.toISOString(),
-      leadStatus,
+      // Non-null on this path: the Sold form always carries a lead, so
+      // `recordSideEffects` always ran the advance. The nullable return exists
+      // for the leadless policy-transfer path, which does not use this response.
+      leadStatus: leadStatus ?? '',
       auditItemCount: audit.itemCount,
       crmAssigned:
         crm.status === 'assigned' || crm.status === 'skipped_existing',
@@ -282,113 +280,6 @@ export class SoldDealsService {
       isTestRecord: { $ne: true },
     });
     return Boolean(byLegacy);
-  }
-
-  /**
-   * Enforce each carrier's policy-number format (PAC-56 #20).
-   *
-   * **This is the enforcement point.** The wizard validates live off the same
-   * catalog rows, but that is an assist — it can be bypassed by a stale bundle,
-   * a direct API call, or a carriers fetch that failed open.
-   *
-   * Three deliberate choices:
-   *
-   * - Tested against the **normalized key**, so `123-456` satisfies a
-   *   digits-only rule. That is the form the number is stored and looked up in;
-   *   rejecting punctuation nobody persists would be a rule about typing.
-   * - A carrier **absent from the catalog** carries no pattern and passes. That
-   *   is the "Other" escape and migrated data, both of which must keep working.
-   * - The message quotes the carrier's own hint, because "invalid policy
-   *   number" tells a producer nothing about how to fix it.
-   */
-  private async assertPolicyNumberFormats(
-    dto: CreateSoldDealDto,
-    agencyId: string,
-  ): Promise<void> {
-    // Only reach for the catalog if some row could actually be constrained.
-    if (dto.policies.length === 0) return;
-
-    const bySlug = await this.carriers.optionsBySlug(agencyId);
-    if (bySlug.size === 0) return;
-
-    dto.policies.forEach((policy, index) => {
-      const carrier = bySlug.get(carrierSlug(policy.carrier));
-      if (!carrier?.policyNumberPattern) return;
-
-      const key = policyNumberKey(policy.policyNumber);
-      if (carrierPolicyNumberMatches(carrier.policyNumberPattern, key)) return;
-
-      throw new BadRequestException(
-        `Policy ${index + 1}: ${
-          carrier.policyNumberHint ??
-          `"${policy.policyNumber}" is not a valid ${carrier.name} policy number.`
-        }`,
-      );
-    });
-  }
-
-  /**
-   * Verify every uploaded document actually landed, and replace the client's claimed
-   * `contentType` / `size` with what storage reports.
-   *
-   * The presigned PUT signs only the content type, so the declared size in the
-   * body is a claim rather than evidence — a caller holding a valid URL can
-   * upload a 5 GB file. `HeadObject` is the only server-side proof of what was
-   * really stored, which is what makes the limits enforced rather than
-   * advisory.
-   *
-   * Mutates the DTO in place so the steps downstream persist the verified
-   * values; anything else would leave the client's numbers in the database.
-   */
-  private async verifyAttachments(
-    dto: CreateSoldDealDto,
-    agencyId: string,
-    leadId: string,
-  ): Promise<void> {
-    for (const { attachment, kind } of collectAttachments(dto.policies)) {
-      /*
-       * Reject a key this agency and lead did not produce, before touching
-       * storage — otherwise a caller could attach any object they knew of,
-       * including another agency's.
-       *
-       * The purpose now carries the **kind** (PAC-56 #23), so this also rejects
-       * a JPEG presigned as a discount proof and then declared as the New
-       * Business Application: its key sits under the wrong prefix. The
-       * content-type check below is the second, independent gate.
-       */
-      this.storage.assertKeyOwnership(attachment.key, {
-        agencyId,
-        purpose: soldDocumentPurpose(leadId, kind),
-      });
-
-      const stored = await this.storage.statObject(attachment.key);
-      if (!stored) {
-        throw new NotFoundException(
-          'An uploaded document was not found in storage.',
-        );
-      }
-      if (stored.size > MAX_SOLD_DOCUMENT_BYTES) {
-        throw new BadRequestException('A document is larger than 10MB.');
-      }
-      const allowed = ALLOWED_CONTENT_TYPES[kind];
-      if (!stored.contentType || !allowed.has(stored.contentType)) {
-        throw new BadRequestException(
-          kind === 'new_business_application'
-            ? 'The new business application must be a PDF.'
-            : 'Documents must be a PDF, JPEG or PNG.',
-        );
-      }
-
-      this.applyVerifiedMeta(attachment, stored);
-    }
-  }
-
-  private applyVerifiedMeta(
-    attachment: SoldDocumentMeta,
-    stored: { contentType: string | null; size: number },
-  ): void {
-    attachment.contentType = stored.contentType ?? attachment.contentType;
-    attachment.size = stored.size;
   }
 
   /**

@@ -1,40 +1,16 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import {
-  Activity,
-  ActivitySchema,
-} from '../activities/schemas/activity.schema';
 import { AuditGenerationModule } from '../audit-generation/audit-generation.module';
-import { CarriersModule } from '../carriers/carriers.module';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { CrmRotationsModule } from '../crm-rotations/crm-rotations.module';
-import { Deal, DealSchema } from '../deals/schemas/deal.schema';
-import {
-  InterestedParty,
-  InterestedPartySchema,
-} from '../interested-parties/schemas/interested-party.schema';
+import { CrmModule } from '../crm/crm.module';
 import { LeadsModule } from '../leads/leads.module';
-import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
-import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
 import {
   QuoteRecap,
   QuoteRecapSchema,
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
-import {
-  PriorInsurance,
-  PriorInsuranceSchema,
-} from '../prior-insurance/schemas/prior-insurance.schema';
-import {
-  PriorPolicy,
-  PriorPolicySchema,
-} from '../prior-policies/schemas/prior-policy.schema';
-import { AdvanceLeadStep } from './intake/advance-lead.step';
-import { InterestedPartiesStep } from './intake/interested-parties.step';
-import { PriorInsuranceStep } from './intake/prior-insurance.step';
-import { ResolveDealStep } from './intake/resolve-deal.step';
-import { SoldDealIntakeService } from './intake/sold-deal-intake.service';
-import { UpsertPoliciesStep } from './intake/upsert-policies.step';
+import { SoldIntakeModule } from './intake/sold-intake.module';
 import { SoldDealsController } from './sold-deals.controller';
 import { SoldDealsService } from './sold-deals.service';
 
@@ -48,39 +24,25 @@ import { SoldDealsService } from './sold-deals.service';
  */
 @Module({
   imports: [
-    // The intake pipeline writes across six collections in one transaction.
     MongooseModule.forFeature([
-      { name: Deal.name, schema: DealSchema },
-      { name: Policy.name, schema: PolicySchema },
-      { name: PriorInsurance.name, schema: PriorInsuranceSchema },
-      { name: PriorPolicy.name, schema: PriorPolicySchema },
-      { name: InterestedParty.name, schema: InterestedPartySchema },
-      { name: Lead.name, schema: LeadSchema },
       { name: Contact.name, schema: ContactSchema },
-      { name: Activity.name, schema: ActivitySchema },
       { name: User.name, schema: UserSchema },
       // Read-only, for the "has a quote been given?" gate (PAC-56 #17).
       { name: QuoteRecap.name, schema: QuoteRecapSchema },
     ]),
+    // The pipeline itself, shared with `CrmModule`'s Policy Transfer. It writes
+    // across six collections in one transaction and owns their schemas.
+    SoldIntakeModule,
     LeadsModule,
-    // The carrier catalog supplies each carrier's policy-number rule, enforced
-    // before the transaction opens (PAC-56 #20).
-    CarriersModule,
-    // The submission's server-side side-effects. Both run post-commit and
-    // best-effort, so neither can fail a sale that is already booked.
+    // The submission's server-side side-effects. All run post-commit and
+    // best-effort, so none can fail a sale that is already booked.
     AuditGenerationModule,
     CrmRotationsModule,
+    // `LeadTicketsService` — resolves the lead's quote service ticket once the
+    // sale has advanced it to Sold.
+    CrmModule,
   ],
   controllers: [SoldDealsController],
-  providers: [
-    SoldDealsService,
-    SoldDealIntakeService,
-    ResolveDealStep,
-    UpsertPoliciesStep,
-    PriorInsuranceStep,
-    InterestedPartiesStep,
-    AdvanceLeadStep,
-  ],
-  exports: [SoldDealIntakeService],
+  providers: [SoldDealsService],
 })
 export class SoldDealsModule {}

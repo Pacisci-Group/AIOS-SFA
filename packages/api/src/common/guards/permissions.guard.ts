@@ -5,7 +5,10 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { REQUIRE_PERMISSIONS_KEY } from '../decorators/access.decorators';
+import {
+  REQUIRE_ANY_PERMISSIONS_KEY,
+  REQUIRE_PERMISSIONS_KEY,
+} from '../decorators/access.decorators';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { isPublicRoute } from './guard.utils';
 
@@ -18,11 +21,19 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
+    // AND-set: every listed permission is required.
     const requiredPermissions = this.reflector.getAllAndOverride<string[]>(
       REQUIRE_PERMISSIONS_KEY,
       [context.getHandler(), context.getClass()],
     );
-    if (!requiredPermissions?.length) {
+    // OR-set: at least one listed permission is required. Used for data that
+    // renders on more than one page (see `@RequireAnyPermission`).
+    const anyPermissions = this.reflector.getAllAndOverride<string[]>(
+      REQUIRE_ANY_PERMISSIONS_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+
+    if (!requiredPermissions?.length && !anyPermissions?.length) {
       return true;
     }
 
@@ -33,10 +44,21 @@ export class PermissionsGuard implements CanActivate {
     }
 
     const userPermissions = new Set(access.permissions ?? []);
-    const hasAll = requiredPermissions.every((permission) =>
-      userPermissions.has(permission),
-    );
-    if (!hasAll) {
+
+    // When both sets are declared, both must be satisfied.
+    if (
+      requiredPermissions?.length &&
+      !requiredPermissions.every((permission) =>
+        userPermissions.has(permission),
+      )
+    ) {
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    if (
+      anyPermissions?.length &&
+      !anyPermissions.some((permission) => userPermissions.has(permission))
+    ) {
       throw new ForbiddenException('Insufficient permissions');
     }
 

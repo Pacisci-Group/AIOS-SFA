@@ -10,6 +10,7 @@ import { Model } from 'mongoose';
 import { Agency, AgencyDocument } from '../../platform/schemas/agency.schema';
 import {
   SKIP_MODULE_KEY,
+  REQUIRE_ANY_MODULE_KEY,
   REQUIRE_MODULE_KEY,
 } from '../decorators/access.decorators';
 import { AuthenticatedRequest } from '../types/authenticated-request';
@@ -35,11 +36,19 @@ export class ModuleGuard implements CanActivate {
       return true;
     }
 
+    // AND-set: every listed module must be enabled.
     const requiredModules = this.reflector.getAllAndOverride<string[]>(
       REQUIRE_MODULE_KEY,
       [context.getHandler(), context.getClass()],
     );
-    if (!requiredModules?.length) {
+    // OR-set: at least one listed module must be enabled. Pairs with
+    // `@RequireAnyPermission` for data that renders on more than one page.
+    const anyModules = this.reflector.getAllAndOverride<string[]>(
+      REQUIRE_ANY_MODULE_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+
+    if (!requiredModules?.length && !anyModules?.length) {
       return true;
     }
 
@@ -62,11 +71,17 @@ export class ModuleGuard implements CanActivate {
       throw new ForbiddenException('Agency not found');
     }
 
-    for (const moduleKey of requiredModules) {
-      const entitlement = agency.modules?.[moduleKey];
-      if (!entitlement?.enabled) {
+    const isEnabled = (moduleKey: string) =>
+      agency.modules?.[moduleKey]?.enabled === true;
+
+    for (const moduleKey of requiredModules ?? []) {
+      if (!isEnabled(moduleKey)) {
         throw new ForbiddenException('Module Disabled');
       }
+    }
+
+    if (anyModules?.length && !anyModules.some(isEnabled)) {
+      throw new ForbiddenException('Module Disabled');
     }
 
     return true;

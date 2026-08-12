@@ -1,0 +1,88 @@
+meta {
+  name: Search Policies
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/policies/search?q=&limit=20
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~q:
+  limit: 20
+  ~householdId: {{householdId}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a list of PolicySearchResult", function () {
+    const body = res.getBody();
+    expect(body).to.be.an("array");
+    if (body.length) {
+      expect(body[0]).to.have.property("id");
+      expect(body[0]).to.have.property("policyNumber");
+      expect(body[0]).to.have.property("householdId");
+      expect(body[0]).to.have.property("householdName");
+    }
+  });
+
+  test("householdId, when sent, returns only that household's policies", function () {
+    const householdId = bru.getVar("householdId") || bru.getEnvVar("householdId");
+    if (!householdId || !req.getUrl().includes("householdId")) return;
+    res.getBody().forEach(function (policy) {
+      expect(policy.householdId).to.equal(householdId);
+    });
+  });
+}
+
+docs {
+  # GET /policies/search
+
+  Typeahead behind the **Policy** picker in the *New Service Ticket* dialog.
+
+  - **Module:** `clients` **OR** `crm_service` (class-level `@RequireAnyModule`).
+  - **Permission:** `clients:read` **OR** `crm_service:read` — policies render
+    both on the Clients pages and inside the CRM ticket detail.
+  - **Data scope:** `agency` sees the agency; `branch` **and `own`** both
+    collapse to the caller's branch, because client records are shared and carry
+    no per-user owner.
+
+  ## Query params
+  | Param | Required | Notes |
+  |---|---|---|
+  | `q` | no | Case-insensitive match on `policyNumber`, `policyType`, or `carrier`. Blank/omitted returns the first page unfiltered, so the picker has rows before the user types. Regex-escaped — a term is never compiled as a pattern |
+  | `limit` | no | 1–50, default 20 |
+  | `householdId` | no | Mongo id. Restricts results to that household's policies |
+
+  ### `householdId` — who sends it, and why
+  The New Ticket dialog opened from a **household page** (`/clients/:id`) sends
+  it; opened from the Service Dashboard it does not. On a client's own page the
+  ticket is being filed *for that client*, so offering the whole agency's book
+  is both noise and a chance to link someone else's policy to the ticket.
+
+  A well-formed id that is out of the caller's scope (another agency or branch)
+  returns `[]` — **never** the unfiltered list. Silently widening on an id the
+  caller cannot see would defeat the filter exactly when it matters.
+
+  ## Response
+  `PolicySearchResult[]` — `PolicySummary` plus `householdId` / `householdName`,
+  resolved in one extra round-trip so the picker can show the owning client as a
+  row hint. Sorted `active` first, then by policy number.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | `limit` outside 1–50, `q` over 120 chars, or a malformed `householdId` |
+  | 401 | Missing/expired bearer token |
+  | 403 | Both `clients` and `crm_service` disabled, or the caller holds neither read permission |
+}

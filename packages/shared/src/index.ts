@@ -1,5 +1,6 @@
 export * from './domain/activity';
 export * from './domain/address';
+export * from './domain/business-type';
 export * from './domain/carrier';
 export * from './domain/contact';
 export * from './domain/hot-lead';
@@ -28,3 +29,6 @@ export * from './permissions/default-role-templates';
 export * from './permissions/resolve-permissions';
 export * from './types/jwt-payload.type';
 export * from './types/module-entitlement.type';
+export * from './service/renewal';
+export * from './service/service-ticket';
+export * from './clients/client-records';

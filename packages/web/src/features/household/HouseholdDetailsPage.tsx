@@ -1,109 +1,251 @@
+import { useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getHousehold } from "@/lib/households-api";
+import {
+  CreateTicketDialog,
+  type CreateTicketPrefill,
+} from "@/features/service/components/CreateTicketDialog";
+import { usePermissions } from "@/hooks/usePermissions";
+import { DEMO_HOUSEHOLD } from "./demo-household";
+import { AddMemberDialog } from "./components/AddMemberDialog";
 import { QuickActionBar } from "./components/QuickActionBar";
+import { StartQuoteDialog } from "./components/StartQuoteDialog";
 import { HouseholdProfile } from "./components/HouseholdProfile";
 import { PolicyPortfolio } from "./components/PolicyPortfolio";
 import { ActivityFeed } from "./components/ActivityFeed";
+import { HouseholdOnboarding } from "./components/HouseholdOnboarding";
+/**
+ * Household detail. `/clients/:id` renders a live record; the legacy
+ * `/clients/demo` route renders `DEMO_HOUSEHOLD` through the *same* components.
+ *
+ * The child components take a required `household`/`policies` prop precisely so
+ * there is no mock fallback for a live record to fall into — a household with a
+ * null phone shows an em dash, not the demo household's number.
+ *
+ * `isDemo` is threaded down separately for the blocks that have no backing data
+ * at all (retention score, tags, cross-sell opportunities). Those render only
+ * in the demo; on a live record they are omitted rather than fabricated.
+ * Removing each gate is the acceptance criterion for wiring the corresponding
+ * block to real data. The activity feed reads live tickets and takes `isDemo`
+ * only because `/clients/demo` has no household id to query.
+ *
+ * The page renders inside the app shell, so it has no top nav of its own.
+ */
+export default function HouseholdDetailsPage() {
+  const { id } = useParams<{ id: string }>();
+  const isDemo = !id || id === "demo";
+  const queryClient = useQueryClient();
+  const { canRead, canWrite } = usePermissions();
+  const [createTicketOpen, setCreateTicketOpen] = useState(false);
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [startQuoteOpen, setStartQuoteOpen] = useState(false);
 
-export default function App() {
+  /**
+   * Start Quote spans two modules, so it needs both: step 1 lists and creates
+   * leads, step 2 writes the recap. A CSR holding `crm_service:read` can reach
+   * this page (see `HouseholdRecordsController`) without holding either, and an
+   * enabled button that 403s on submit is worse than one that is not offered.
+   */
+  const canStartQuote = canRead("leads") && canWrite("quote_recaps");
+
+  /**
+   * Why "+ Start Quote" is unavailable, when it is — the tooltip on the
+   * disabled button.
+   *
+   * Both cases were previously a live-looking button that silently did nothing,
+   * with no console error to find because nothing had gone wrong. The demo one
+   * is the common case: `/clients/demo` is the only Household link in the nav,
+   * so it is where anyone tries the button first.
+   */
+  const startQuoteDisabledReason = isDemo
+    ? "The demo household isn't a real record — open a live client to start a quote."
+    : !canStartQuote
+      ? "Needs Leads read and Quote Recaps write."
+      : undefined;
+
+  /** The demo household has no record to write against, so neither can these. */
+  const demoReason = isDemo
+    ? "Not available on the demo household."
+    : undefined;
+
+  const query = useQuery({
+    queryKey: ["household", id],
+    queryFn: () => getHousehold(id as string),
+    enabled: !isDemo,
+  });
+
+  const household = isDemo ? DEMO_HOUSEHOLD : query.data;
+
+  /**
+   * What the New Ticket dialog can fill in from this page.
+   *
+   * The policy is only prefilled when there is exactly one active policy —
+   * with two, picking either would be a guess, and a ticket filed against the
+   * wrong policy is worse than one filed against none.
+   */
+  const ticketPrefill = useMemo<CreateTicketPrefill | undefined>(() => {
+    if (!household || isDemo) return undefined;
+
+    const activePolicies = household.policies.filter((p) => p.active);
+    const onlyPolicy = activePolicies.length === 1 ? activePolicies[0] : null;
+
+    return {
+      householdId: household.id,
+      householdLabel:
+        household.name ?? household.primaryContactName ?? "This household",
+      policyId: onlyPolicy?.id ?? null,
+      policyLabel: onlyPolicy
+        ? [onlyPolicy.policyNumber ?? "No number", onlyPolicy.policyType]
+            .filter(Boolean)
+            .join(" · ")
+        : undefined,
+      assignedUserId: household.assignedCrmId,
+    };
+  }, [household, isDemo]);
+
   return (
     <div
-      className="flex flex-col"
+      className="flex h-full min-h-0 flex-col overflow-hidden"
       style={{
-        height: "100vh",
         background: "var(--background)",
         color: "var(--foreground)",
-        overflow: "hidden",
       }}
     >
-      {/* Top Nav Bar */}
-      <div
-        className="flex items-center justify-between px-6 py-2.5 shrink-0 border-b"
-        style={{ background: "#060c18", borderColor: "var(--border)" }}
-      >
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded flex items-center justify-center" style={{ background: "#1d4ed8" }}>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <rect x="1" y="1" width="5" height="5" rx="1" fill="white" fillOpacity="0.9" />
-                <rect x="8" y="1" width="5" height="5" rx="1" fill="white" fillOpacity="0.5" />
-                <rect x="1" y="8" width="5" height="5" rx="1" fill="white" fillOpacity="0.5" />
-                <rect x="8" y="8" width="5" height="5" rx="1" fill="white" fillOpacity="0.9" />
-              </svg>
-            </div>
-            <span className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>AgencyOS</span>
-            <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "#1d4ed820", color: "#3b82f6", border: "1px solid #1d4ed840" }}>
-              Producer
-            </span>
+      {!isDemo && query.isPending && (
+        <div className="px-6 py-4 text-sm" style={{ color: "var(--muted-foreground)" }}>
+          Loading household…
+        </div>
+      )}
+
+      {!isDemo && query.isError && (
+        <div className="px-6 py-4">
+          <p className="text-sm text-red-400">Household not found.</p>
+          <p className="text-xs mt-1" style={{ color: "var(--muted-foreground)" }}>
+            It may have been removed, or it is outside your branch.
+          </p>
+        </div>
+      )}
+
+      {household && (
+        <>
+          {/* Quick Action Bar */}
+          <div className="shrink-0">
+            <QuickActionBar
+              householdName={household.name ?? "Unnamed household"}
+              // The demo household is not a real record, so there is nothing to
+              // write against — both buttons stay inert there.
+              onNewTicket={
+                isDemo ? undefined : () => setCreateTicketOpen(true)
+              }
+              onAddMember={isDemo ? undefined : () => setAddMemberOpen(true)}
+              onStartQuote={
+                startQuoteDisabledReason
+                  ? undefined
+                  : () => setStartQuoteOpen(true)
+              }
+              disabledReasons={{
+                addMember: demoReason,
+                newTicket: demoReason,
+                startQuote: startQuoteDisabledReason,
+              }}
+            />
           </div>
 
-          <div className="w-px h-4 mx-1" style={{ background: "var(--border)" }} />
-
-          {["Dashboard", "Households", "Policies", "Claims", "Reports"].map((item, i) => (
-            <button
-              key={item}
-              className="text-xs px-2 py-1 rounded transition-colors hover:bg-white/5"
-              style={{ color: i === 1 ? "#3b82f6" : "var(--muted-foreground)" }}
+          {/* 3-Column Layout.
+              Each column is its own scroll container: `min-h-0` on the row and
+              on every column is what lets them scroll independently instead of
+              growing the page — without it a flex child's min-height is its
+              content, so the tallest column silently sets the row's height. */}
+          <div className="flex flex-1 min-h-0 overflow-hidden">
+            {/* Left Column — Household Profile (25%) */}
+            <div
+              className="flex flex-col shrink-0 min-h-0 overflow-hidden border-r"
+              style={{
+                width: "25%",
+                minWidth: "260px",
+                maxWidth: "320px",
+                borderColor: "var(--border)",
+              }}
             >
-              {item}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="w-px h-4" style={{ background: "var(--border)" }} />
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold" style={{ background: "#1e3a5f", color: "#3b82f6", border: "1px solid #3b82f640" }}>
-              MT
+              <HouseholdProfile household={household} isDemo={isDemo} />
             </div>
-            <div className="hidden sm:block">
-              <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>M. Torres</p>
-              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>Producer · ATL-07</p>
+
+            {/* Middle Column — Policy Portfolio (50%) */}
+            <div
+              className="flex flex-1 flex-col min-h-0 overflow-hidden border-r"
+              style={{ borderColor: "var(--border)" }}
+            >
+              <PolicyPortfolio policies={household.policies} isDemo={isDemo} />
+            </div>
+
+            {/* Right Column — Onboarding + Activity Feed (25%) */}
+            <div
+              className="flex flex-col shrink-0 min-h-0 overflow-hidden"
+              style={{ width: "25%", minWidth: "260px", maxWidth: "340px" }}
+            >
+              {/* Onboarding is tracked per client, so its progress belongs on
+                  the client — and it is the only place a scheduled call is
+                  visible before it opens in the ticket queue.
+
+                  Capped and scrollable in its own right: a client with several
+                  onboardings would otherwise push the ticket feed off the
+                  bottom. It renders nothing when there are none, and an empty
+                  box has no height, so no gap appears above the feed. */}
+              <div className="shrink-0 max-h-[40%] overflow-y-auto">
+                <HouseholdOnboarding householdId={isDemo ? undefined : household.id} />
+              </div>
+              <div className="flex-1 min-h-0">
+                <ActivityFeed
+                  householdId={isDemo ? undefined : household.id}
+                  isDemo={isDemo}
+                />
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Quick Action Bar */}
-      <div className="shrink-0">
-        <QuickActionBar householdName="The Cobb Household" />
-      </div>
+          {/* Mounted only for a live record the caller may quote: the demo
+              household is not a real record, so there is nothing to attach a
+              lead or a recap to. `household` is a `HouseholdView` here — the
+              dialog prefills the New Lead form from it. */}
+          {!isDemo && canStartQuote && (
+            <StartQuoteDialog
+              household={household}
+              open={startQuoteOpen}
+              onOpenChange={setStartQuoteOpen}
+            />
+          )}
 
-      {/* 3-Column Layout */}
-      <div className="flex flex-1 min-h-0">
-        {/* Left Column — Household Profile (25%) */}
-        <div
-          className="flex flex-col border-r shrink-0"
-          style={{
-            width: "25%",
-            minWidth: "260px",
-            maxWidth: "320px",
-            borderColor: "var(--border)",
-            overflow: "hidden",
-          }}
-        >
-          <HouseholdProfile />
-        </div>
+          <AddMemberDialog
+            householdId={household.id}
+            householdName={household.name ?? "this household"}
+            open={addMemberOpen}
+            onOpenChange={setAddMemberOpen}
+          />
 
-        {/* Middle Column — Policy Portfolio (50%) */}
-        <div
-          className="flex flex-col flex-1 border-r"
-          style={{ borderColor: "var(--border)", overflow: "hidden" }}
-        >
-          <PolicyPortfolio />
-        </div>
-
-        {/* Right Column — Activity Feed (25%) */}
-        <div
-          className="flex flex-col shrink-0"
-          style={{
-            width: "25%",
-            minWidth: "260px",
-            maxWidth: "340px",
-            overflow: "hidden",
-          }}
-        >
-          <ActivityFeed />
-        </div>
-      </div>
+          {/* Stays on the household rather than jumping to the workspace: the
+              new ticket appears at the top of the feed on the right, which is
+              the confirmation, and the CSR is usually still reading the client. */}
+          <CreateTicketDialog
+            open={createTicketOpen}
+            onOpenChange={setCreateTicketOpen}
+            prefill={ticketPrefill}
+            // Opened from a client, the ticket is for that client: the policy
+            // picker offers only this household's policies rather than the
+            // whole agency's book.
+            restrictPolicyToHousehold
+            onCreated={() => {
+              queryClient.invalidateQueries({
+                queryKey: ["household-tickets", household.id],
+              });
+              // An Onboarding ticket creates the whole chain, not just itself.
+              queryClient.invalidateQueries({
+                queryKey: ["household-onboardings", household.id],
+              });
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }

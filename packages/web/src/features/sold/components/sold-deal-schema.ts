@@ -159,6 +159,15 @@ const soldPolicyShape = z
       .max(60, "Too long"),
     /** Set when the producer confirmed the duplicate check's match. */
     existingPolicyId: z.string().optional(),
+    /**
+     * The policy this one replaces — **transfer variant only**, where the
+     * `transferFrom` card requires it (see `buildSoldPolicySchema`).
+     *
+     * Optional in the shape because the sale variant never shows that card and
+     * a required field nobody can fill would block Continue with no message
+     * anywhere on screen.
+     */
+    fromPolicyId: z.string().optional(),
     // Strings in form state; see `numericString` for why not coercion.
     premium: numericString({
       required: "Enter the premium",
@@ -216,10 +225,24 @@ export type SoldPolicyFormValues = z.infer<typeof soldPolicyShape>;
  * are enforced in `SoldDealsService.create`, which is what a stale bundle or a
  * direct API call still has to satisfy.
  */
-export function buildSoldPolicySchema(carriers: readonly CarrierOption[]) {
+export function buildSoldPolicySchema(
+  carriers: readonly CarrierOption[],
+  variant: WizardVariant = "sale",
+) {
   const bySlug = new Map(carriers.map((c) => [carrierSlug(c.name), c]));
 
   return soldPolicyShape.superRefine((policy, ctx) => {
+    // Required on a transfer and meaningless on a sale, so it is enforced here
+    // rather than in the shape — the sale variant never renders the card that
+    // would let anyone satisfy it.
+    if (variant === "transfer" && !policy.fromPolicyId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Choose the policy being replaced.",
+        path: ["fromPolicyId"],
+      });
+    }
+
     if (policy.carrier === CARRIER_OTHER && !policy.carrierOther?.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -313,7 +336,9 @@ export interface SoldDealFormValues {
  * write immutably, and a landmine for anything that does not. With nested
  * attachments and a per-driver array now in the tree, build the whole thing.
  */
-export function emptyPolicy(): SoldPolicyFormValues {
+export function emptyPolicy(
+  variant: WizardVariant = "sale",
+): SoldPolicyFormValues {
   return {
     policyType: "Auto",
     effectiveDate: "",
@@ -327,8 +352,12 @@ export function emptyPolicy(): SoldPolicyFormValues {
     itemCount: "1",
     newBusinessApplication: undefined,
     discounts: emptyDiscounts(),
+    fromPolicyId: "",
     priorInsurance: {
-      none: false,
+      // A transfer never shows the prior-insurance card, so it defaults to the
+      // answer that card would have produced: the policy being replaced is
+      // already ours, so there is no prior coverage at another carrier.
+      none: variant === "transfer",
       carrier: "",
       carrierOther: "",
       agentName: "",
@@ -365,6 +394,9 @@ export function emptyDiscounts(): SoldPolicyFormValues["discounts"] {
  */
 export const WIZARD_CARDS = [
   "soldDate",
+  // Transfer variant only, and first in the loop: you say which policy is being
+  // replaced before describing its replacement.
+  "transferFrom",
   "policyType",
   "policyDetails",
   "financials",
@@ -383,8 +415,39 @@ export const WIZARD_CARDS = [
 
 export type WizardCard = (typeof WIZARD_CARDS)[number];
 
+/**
+ * Which flow the wizard is running.
+ *
+ * A `transfer` is the same form recording the same information — a policy needs
+ * the same fields to exist however it came about — with two differences:
+ *   - it asks which policy each new one **replaces** (`transferFrom`);
+ *   - it does **not** ask for prior insurance, because the policy being
+ *     replaced is already in our own book. There is no other carrier to name
+ *     and nothing to cancel.
+ */
+export type WizardVariant = "sale" | "transfer";
+
+/**
+ * The ordered cards for a variant.
+ *
+ * The `WizardCard` **union stays whole** so `CARD_TITLES` and `CARD_FIELDS`
+ * remain exhaustive — only the ordered array differs, which is what keeps a new
+ * card from silently skipping validation in either flow.
+ */
+export function cardsFor(variant: WizardVariant): readonly WizardCard[] {
+  return variant === "transfer"
+    ? WIZARD_CARDS.filter((card) => card !== "priorInsurance")
+    : WIZARD_CARDS.filter((card) => card !== "transferFrom");
+}
+
+/** Where each variant's loop restarts. */
+export function firstLoopCard(variant: WizardVariant): WizardCard {
+  return variant === "transfer" ? "transferFrom" : "policyType";
+}
+
 export const CARD_TITLES: Record<WizardCard, string> = {
   soldDate: "Sold date",
+  transferFrom: "Policy being replaced",
   policyType: "Policy type",
   policyDetails: "Policy details",
   financials: "Financials",
@@ -416,6 +479,7 @@ export const CARD_FIELDS: Record<
   Array<DeepKeys<SoldPolicyFormValues>>
 > = {
   soldDate: [],
+  transferFrom: ["fromPolicyId"],
   policyType: ["policyType"],
   // `carrierOther` must be listed explicitly: `owns()` matches a root exactly or
   // followed by `.`/`[`, so `"carrier"` does **not** own `"carrierOther"`, and a
@@ -458,6 +522,9 @@ export function toPolicyInput(values: SoldPolicyFormValues): SoldPolicyInput {
     carrier: resolveCarrier(values.carrier, values.carrierOther),
     policyNumber: values.policyNumber,
     existingPolicyId: values.existingPolicyId || undefined,
+    // Transfer only; the transfer endpoint requires it and the sold one ignores
+    // it, so an empty string must not be sent as a malformed id either way.
+    fromPolicyId: values.fromPolicyId || undefined,
     premium: Number(values.premium),
     itemCount: Number(values.itemCount),
     priorInsurance: values.priorInsurance.none

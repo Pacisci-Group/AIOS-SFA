@@ -27,8 +27,14 @@ const ServiceDashboardPage = lazy(
 const TicketWorkspacePage = lazy(
   () => import('@/features/tickets/TicketWorkspacePage'),
 );
+const ArchivedTicketsPage = lazy(
+  () => import('@/features/tickets/ArchivedTicketsPage'),
+);
 const HouseholdDetailsPage = lazy(
   () => import('@/features/household/HouseholdDetailsPage'),
+);
+const PolicyDetailPage = lazy(
+  () => import('@/features/policy/PolicyDetailPage'),
 );
 const LeadsPage = lazy(() => import('@/features/lead/LeadsPage'));
 const NewLeadPage = lazy(() => import('@/features/lead/NewLeadPage'));
@@ -39,6 +45,9 @@ const EditQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/EditQuoteRecapPage'),
 );
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
+const PolicyTransferPage = lazy(
+  () => import('@/features/sold/PolicyTransferPage'),
+);
 const PublicLeadFormPage = lazy(
   () => import('@/features/lead/PublicLeadFormPage'),
 );
@@ -121,21 +130,108 @@ export function App() {
               <Route path="/" element={<RoleLanding />} />
               <Route path="/nav" element={<DevNavPage />} />
 
-              {/* Feature pages gated by per-page read access */}
-              <Route
-                element={
-                  <RequirePermission permission={`${ModuleKey.Dashboard}:read`} />
-                }
-              >
+              {/*
+                No layout route here: the shell is `AppShell`, which each page
+                renders itself so it can put `MobileNav` inside its own header
+                instead of stacking a second app bar above it. A layout route
+                would render `AppSidebar` a second time around pages that
+                already have one. Each page still declares its own per-page
+                `RequirePermission` gate.
+              */}
+              <>
                 <Route
-                  path="/dashboard/producer"
                   element={
-                    <LazyPage>
-                      <ProducerDashboardPage />
-                    </LazyPage>
+                    <RequirePermission permission={`${ModuleKey.Dashboard}:read`} />
                   }
-                />
-              </Route>
+                >
+                  <Route
+                    path="/dashboard/producer"
+                    element={
+                      <LazyPage>
+                        <ProducerDashboardPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+
+                <Route
+                  element={
+                    <RequirePermission permission={`${ModuleKey.CrmService}:read`} />
+                  }
+                >
+                  <Route
+                    path="/crm/service"
+                    element={
+                      <LazyPage>
+                        <ServiceDashboardPage />
+                      </LazyPage>
+                    }
+                  />
+                  <Route
+                    path="/crm/tickets"
+                    element={
+                      <LazyPage>
+                        <TicketWorkspacePage />
+                      </LazyPage>
+                    }
+                  />
+                  <Route
+                    path="/crm/tickets/archived"
+                    element={
+                      <LazyPage>
+                        <ArchivedTicketsPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+
+                <Route
+                  element={
+                    <RequirePermission permission={`${ModuleKey.Leads}:read`} />
+                  }
+                >
+                  <Route
+                    path="/leads"
+                    element={
+                      <LazyPage>
+                        <LeadsPage />
+                      </LazyPage>
+                    }
+                  />
+                  {/* Static segment, so it wins over `/leads/:id` regardless of
+                      order — declared first for readability. Needs `leads:write`,
+                      which is stricter than the surrounding read gate. */}
+                  <Route
+                    element={
+                      <RequirePermission
+                        permission={`${ModuleKey.Leads}:write`}
+                        redirectTo="/leads"
+                      />
+                    }
+                  >
+                    <Route
+                      path="/leads/new"
+                      element={
+                        <LazyPage>
+                          <NewLeadPage />
+                        </LazyPage>
+                      }
+                    />
+                  </Route>
+                  {/* `/leads/demo` was removed with PAC-38: the page renders real
+                      data now, so a route that could only ever show the mockup was
+                      dead weight. It had no inbound links, and the `*` catch-all
+                      below handles a stale bookmark. */}
+                  <Route
+                    path="/leads/:id"
+                    element={
+                      <LazyPage>
+                        <LeadDetailsPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+              </>
 
               <Route
                 element={
@@ -160,32 +256,35 @@ export function App() {
                 />
               </Route>
 
+              {/* The mock demo page stays behind the Clients page permission.
+                  No sidebar entry points here any more (see AppSidebar) — it is
+                  reachable from the dev Screen Navigator at `/`.
+                  Declared before `/clients/:id` so the literal segment wins. */}
               <Route
                 element={
-                  <RequirePermission permission={`${ModuleKey.CrmService}:read`} />
+                  <RequirePermission permission={`${ModuleKey.Clients}:read`} />
                 }
               >
                 <Route
-                  path="/crm/service"
+                  path="/clients/demo"
                   element={
                     <LazyPage>
-                      <ServiceDashboardPage />
-                    </LazyPage>
-                  }
-                />
-                <Route
-                  path="/crm/tickets"
-                  element={
-                    <LazyPage>
-                      <TicketWorkspacePage />
+                      <HouseholdDetailsPage />
                     </LazyPage>
                   }
                 />
               </Route>
 
+              {/* Household and policy records also render inside the CRM
+                  ticket detail, so either page permission grants access. */}
               <Route
                 element={
-                  <RequirePermission permission={`${ModuleKey.Clients}:read`} />
+                  <RequirePermission
+                    anyOf={[
+                      `${ModuleKey.Clients}:read`,
+                      `${ModuleKey.CrmService}:read`,
+                    ]}
+                  />
                 }
               >
                 <Route
@@ -197,57 +296,10 @@ export function App() {
                   }
                 />
                 <Route
-                  path="/clients/demo"
+                  path="/policies/:id"
                   element={
                     <LazyPage>
-                      <HouseholdDetailsPage />
-                    </LazyPage>
-                  }
-                />
-              </Route>
-
-              <Route
-                element={
-                  <RequirePermission permission={`${ModuleKey.Leads}:read`} />
-                }
-              >
-                <Route
-                  path="/leads"
-                  element={
-                    <LazyPage>
-                      <LeadsPage />
-                    </LazyPage>
-                  }
-                />
-                {/* Static segment, so it wins over `/leads/:id` regardless of
-                    order — declared first for readability. Needs `leads:write`,
-                    which is stricter than the surrounding read gate. */}
-                <Route
-                  element={
-                    <RequirePermission
-                      permission={`${ModuleKey.Leads}:write`}
-                      redirectTo="/leads"
-                    />
-                  }
-                >
-                  <Route
-                    path="/leads/new"
-                    element={
-                      <LazyPage>
-                        <NewLeadPage />
-                      </LazyPage>
-                    }
-                  />
-                </Route>
-                {/* `/leads/demo` was removed with PAC-38: the page renders real
-                    data now, so a route that could only ever show the mockup was
-                    dead weight. It had no inbound links, and the `*` catch-all
-                    below handles a stale bookmark. */}
-                <Route
-                  path="/leads/:id"
-                  element={
-                    <LazyPage>
-                      <LeadDetailsPage />
+                      <PolicyDetailPage />
                     </LazyPage>
                   }
                 />
@@ -309,6 +361,34 @@ export function App() {
                   element={
                     <LazyPage>
                       <SoldDealPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Policy transfer — the same wizard, recorded from a CRM ticket
+                  rather than a lead, and booked as company transfer so it never
+                  counts as new business.
+
+                  Gated on `crm_service:write` for the same reason the Sold form
+                  is gated on `deal_audits:write`: it is what
+                  POST /crm/service-tickets/:id/policy-transfer itself requires,
+                  so the route and the API agree. A producer never reaches this;
+                  a CSR — who holds no `deal_audits` at all — is exactly who
+                  does. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.CrmService}:write`}
+                    redirectTo="/crm/tickets"
+                  />
+                }
+              >
+                <Route
+                  path="/policy-transfers/new"
+                  element={
+                    <LazyPage>
+                      <PolicyTransferPage />
                     </LazyPage>
                   }
                 />

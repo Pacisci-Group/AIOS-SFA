@@ -76,22 +76,38 @@ export class LeadIntakeService {
       const outcome = await this.transactions.run(async (session, created) => {
         const deps: StepDeps = { ctx, session, created };
 
+        /*
+         * A pinned household is resolved FIRST, inverting the usual
+         * contact → household order: it is what narrows contact matching, so it
+         * has to exist before step 1 runs. See `IntakeInput.householdId`.
+         */
+        const pinned = input.householdId
+          ? await this.households.pin(input.householdId, deps)
+          : null;
+
         const contact = await this.contacts.run(
           input.primaryContact,
           'primary',
           deps,
+          pinned?.householdId,
         );
-        const household = await this.households.run(contact, input, deps);
+        const household =
+          pinned ?? (await this.households.run(contact, input, deps));
         const lead = await this.leads.run(
           input,
           {
             contactId: contact.contactId,
             householdId: household.householdId,
             token,
+            householdPinned: pinned !== null,
           },
           deps,
         );
-        const members = await this.resolveMembers(input, deps);
+        const members = await this.resolveMembers(
+          input,
+          deps,
+          pinned?.householdId,
+        );
 
         await this.links.run(
           {
@@ -138,10 +154,17 @@ export class LeadIntakeService {
     }
   }
 
-  /** Resolve additional household members, each as its own contact. */
+  /**
+   * Resolve additional household members, each as its own contact.
+   *
+   * `householdId` is the pin, threaded through for the same reason the primary
+   * contact gets it: a spouse named "Sam Rivera" must match the Sam already in
+   * *this* household, not one in someone else's.
+   */
   private async resolveMembers(
     input: IntakeInput,
     deps: StepDeps,
+    householdId?: Types.ObjectId,
   ): Promise<Types.ObjectId[]> {
     const resolved: Types.ObjectId[] = [];
     for (const member of input.members) {
@@ -149,6 +172,7 @@ export class LeadIntakeService {
         member,
         member.role,
         deps,
+        householdId,
       );
       resolved.push(contact.contactId);
     }
