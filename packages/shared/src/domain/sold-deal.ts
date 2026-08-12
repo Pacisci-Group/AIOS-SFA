@@ -165,6 +165,16 @@ export interface SoldPolicyInput {
    * duplicate. Re-validated server-side against the caller's agency and scope.
    */
   existingPolicyId?: string;
+  /**
+   * The policy this one replaces. **Set only on the Policy Transfer path** —
+   * absent on every sale.
+   *
+   * Distinct from `existingPolicyId`, which means "the row I am describing
+   * already exists, update it in place". This means "a *different* policy is
+   * being retired and this new one takes over from it", so both rows survive
+   * and are linked in both directions.
+   */
+  fromPolicyId?: string;
   premium: number;
   itemCount: number;
   /**

@@ -105,6 +105,16 @@ interface LeadRefs {
   householdId: Types.ObjectId;
   /** Already namespaced by channel; null when the client sent none. */
   token: string | null;
+  /**
+   * True when the caller named {@link householdId} rather than the pipeline
+   * deriving it — see `IntakeInput.householdId`.
+   *
+   * It confines the address dedupe (signal 3) to that household. Without it,
+   * "start a quote for the Rivera household" could return a lead belonging to
+   * whoever else lives at that street and zip — two households at one address
+   * is exactly the case address matching is documented as unable to tell apart.
+   */
+  householdPinned: boolean;
 }
 
 /** Step 3 — dedupe in strict signal order, then create. */
@@ -161,6 +171,8 @@ export class ResolveLeadStep {
         isTestRecord: { $ne: true },
         status: { $nin: TERMINAL_STATUS_VALUES },
         createdAt: { $gte: cutoff },
+        // See `LeadRefs.householdPinned`.
+        ...(refs.householdPinned ? { householdId: refs.householdId } : {}),
       };
       const byAddress = await this.leadModel
         .findOne(filter)

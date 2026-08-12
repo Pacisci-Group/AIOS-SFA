@@ -36,6 +36,19 @@ export const QUOTED_ACCENT: ScorecardAccent = {
   badge: "bg-sky-400/12 text-sky-400",
 };
 
+/**
+ * Company transfers. Violet — deliberately neither the Sold emerald nor the
+ * Quoted sky, because a transfer is a third kind of production rather than a
+ * variation on either, and reading it as "more sold" is the exact confusion
+ * this card exists to prevent.
+ */
+export const TRANSFER_ACCENT: ScorecardAccent = {
+  bar: "bg-violet-500",
+  text: "text-violet-500",
+  border: "border-violet-500/20",
+  badge: "bg-violet-500/12 text-violet-500",
+};
+
 export interface ScorecardStat {
   label: string;
   value: string;

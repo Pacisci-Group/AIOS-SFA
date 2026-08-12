@@ -2,8 +2,8 @@ import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
-  RequireModule,
-  RequirePermissions,
+  RequireAnyModule,
+  RequireAnyPermission,
   RequireWrite,
 } from '../common/decorators/access.decorators';
 import { Access, BranchId } from '../common/decorators/user.decorators';
@@ -39,9 +39,22 @@ import { PoliciesService } from './policies.service';
  * ⚠ Consequence worth knowing: disabling the `deal_audits` module for an
  * agency also disables the duplicate check and sold submission.
  */
+/*
+ * The **read** gate is now an OR (PAC-32/33), because the duplicate check serves
+ * two wizards: the Sold form (`deal_audits`) and the CSR's Policy Transfer
+ * (`crm_service`), which enters a genuinely new policy number and wants the
+ * warning just as much.
+ *
+ * `PATCH :id` is unaffected — its own `@RequireWrite(ModuleKey.DealAudits)`
+ * overrides this at the handler level, so correcting a sold policy stays with
+ * the roles that can record a sale. A CSR reaching it gets a 403, as before.
+ */
 @Controller('policies')
-@RequireModule(ModuleKey.DealAudits)
-@RequirePermissions(modulePermission(ModuleKey.DealAudits, 'read'))
+@RequireAnyModule(ModuleKey.DealAudits, ModuleKey.CrmService)
+@RequireAnyPermission(
+  modulePermission(ModuleKey.DealAudits, 'read'),
+  modulePermission(ModuleKey.CrmService, 'read'),
+)
 export class PoliciesController {
   constructor(private readonly policiesService: PoliciesService) {}
 

@@ -150,6 +150,21 @@ export function terminalLeadStatusValues(): string[] {
   return [...new Set(TERMINAL_LEAD_STATUSES.flatMap(leadStatusQueryValues))];
 }
 
+/**
+ * Is this lead finished? Normalizes first, so a migrated lead stored as a raw
+ * choice code (`jp76g` for Lost) answers correctly.
+ *
+ * The predicate form of {@link TERMINAL_LEAD_STATUSES}, for the callers holding
+ * one status rather than building a Mongo clause — chiefly
+ * `LeadTicketsService.resolveForLead`, which resolves a lead's quote ticket the
+ * moment the lead reaches any terminal status.
+ */
+export function isTerminalLeadStatus(status?: string | null): boolean {
+  return (TERMINAL_LEAD_STATUSES as readonly string[]).includes(
+    normalizeLeadStatus(status),
+  );
+}
+
 /** Where a submitted sold deal moves the lead (PAC-40). */
 export const SOLD_ADVANCE_TARGET: LeadStatus = 'Sold';
 

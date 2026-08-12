@@ -247,6 +247,20 @@ export class ServiceTicket {
   @Prop({ type: Types.ObjectId, ref: 'Household', index: true, default: null })
   householdId: Types.ObjectId | null;
 
+  /**
+   * The lead this ticket was opened for — set only on `Quote` tickets, which
+   * "Start Quote" creates alongside the lead itself.
+   *
+   * This is the one link that changes how the ticket *behaves* rather than just
+   * what it displays: a ticket with a `leadId` has no status of its own.
+   * `updateStatus` refuses to write one, and the ticket resolves when the lead
+   * reaches a terminal status (`LeadTicketsService.resolveForLead`). That is
+   * the point — a quote's service work is finished exactly when the quote is,
+   * and letting the two disagree is what this prevents.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'Lead', index: true, default: null })
+  leadId: Types.ObjectId | null;
+
   @Prop({ trim: true, default: '' })
   phone: string;
 
@@ -293,6 +307,23 @@ ServiceTicketSchema.index({ agencyId: 1, ticketNumber: 1 }, { unique: true });
 ServiceTicketSchema.index({ agencyId: 1, branchId: 1, status: 1 });
 ServiceTicketSchema.index({ assignedUserId: 1, status: 1 });
 ServiceTicketSchema.index({ agencyId: 1, status: 1, resolvedAt: 1 });
+
+// One quote ticket per lead, ever. This is the idempotency guard for
+// `LeadTicketsService.ensureForLead`, which the Start Quote dialog calls on
+// every run — including when the producer picks a lead that already has one.
+//
+// PARTIAL, not sparse, for the same reason spelled out on the onboarding index
+// below: a sparse index still indexes explicit nulls, and every ticket that is
+// not a quote carries `leadId: null`, so a sparse index would collide them all
+// on the first pair. Filtering on `$type: 'objectId'` indexes only real quote
+// tickets.
+ServiceTicketSchema.index(
+  { agencyId: 1, leadId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { leadId: { $type: 'objectId' } },
+  },
+);
 
 // Onboarding status is derived from step timing rather than the `status`
 // field, so the queue filters on these instead. `availableAt` also drives the

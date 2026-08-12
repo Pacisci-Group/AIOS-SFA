@@ -34,6 +34,19 @@ export const listLeadsSchema = z.object({
   leadSource: z.string().trim().max(80).optional(),
   /** Narrow to one producer. Ignored for `own` scope; clamped otherwise. */
   producerId: z.string().trim().optional(),
+  /**
+   * Narrow to one household — the Household page's "Start Quote" lead picker.
+   *
+   * Shape-checked here rather than in the service so a malformed id is a `400`
+   * instead of a Mongoose `CastError` surfacing as a 500. It narrows *within*
+   * the scope clamp and never widens it: a producer still sees only their own
+   * leads for that household.
+   */
+  householdId: z
+    .string()
+    .trim()
+    .regex(/^[a-f0-9]{24}$/i, 'householdId must be a record id')
+    .optional(),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
   scope: z.enum(['own', 'agency']).optional(),

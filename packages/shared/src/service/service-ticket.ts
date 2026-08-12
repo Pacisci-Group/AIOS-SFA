@@ -99,11 +99,88 @@ export const SERVICE_TICKET_CATEGORIES = [
   'Save',
   'Termination',
   'Renewal Taken',
+  // A quote in flight for a lead. Opened by "Start Quote" on the Household
+  // page, never by hand — see `SERVICE_TICKET_CREATE_CATEGORIES`.
+  'Quote',
 ] as const;
 export type ServiceTicketCategory = (typeof SERVICE_TICKET_CATEGORIES)[number];
 
+/**
+ * Categories the "New Service Ticket" form offers — everything except `Quote`.
+ *
+ * A `Quote` ticket belongs to a lead and is opened by the Start Quote flow. A
+ * hand-filed one would carry no `leadId`, and since a `Quote` ticket's status
+ * follows its lead, one without a lead could never be resolved.
+ *
+ * `Onboarding` deliberately stays on the list: filing one by hand starts the
+ * whole chain through `ServiceTicketsService.startOnboarding`, which is the
+ * interim entry point until deal-audit approval calls it directly.
+ */
+export const SERVICE_TICKET_CREATE_CATEGORIES = SERVICE_TICKET_CATEGORIES.filter(
+  (category): category is Exclude<ServiceTicketCategory, 'Quote'> =>
+    category !== 'Quote',
+);
+
 export const SERVICE_TICKET_PRIORITIES = ['high', 'medium', 'low'] as const;
 export type ServiceTicketPriority = (typeof SERVICE_TICKET_PRIORITIES)[number];
+
+/**
+ * Categories from which a CSR can record a **policy transfer** — a client
+ * moving package or tier without any new business being written.
+ *
+ * These four are the conversations a transfer actually comes out of: a renewal
+ * that came back too expensive, an explicit policy change, a payment problem
+ * that ends in a cheaper tier, or a company transfer proper. Every other
+ * category (Claims Assist, Onboarding, Billing…) either has nothing to do with
+ * the policy line-up or is a chain that owns its own workflow.
+ */
+export const POLICY_TRANSFER_CATEGORIES = [
+  'Renewal Review',
+  'Policy Change',
+  'Payment',
+  'Company Transfer',
+] as const satisfies readonly ServiceTicketCategory[];
+
+export function allowsPolicyTransfer(category: ServiceTicketCategory): boolean {
+  return (POLICY_TRANSFER_CATEGORIES as readonly string[]).includes(category);
+}
+
+/** One policy replaced by another, as summarized on the ticket. */
+export interface PolicyTransferPair {
+  fromPolicyId: string;
+  fromPolicyNumber: string | null;
+  fromPolicyType: string | null;
+  fromPremium: number;
+  toPolicyId: string;
+  toPolicyNumber: string | null;
+  toPolicyType: string | null;
+  toPremium: number;
+}
+
+/**
+ * The transfer booked from this ticket, summarizing the `Deal` it produced.
+ *
+ * Carried on the ticket rather than fetched separately because the panel needs
+ * nothing else — unlike onboarding and renewal, whose panels read a parent
+ * aggregate that keeps changing, a transfer is written once and never edited.
+ */
+export interface PolicyTransferRef {
+  dealId: string;
+  transferDate: string | null;
+  /** Total premium of the new policies — what the Transfers scorecard counts. */
+  premium: number;
+  policyCount: number;
+  /**
+   * New premium minus old, so negative is a saving for the client. Null when a
+   * from-policy no longer resolves.
+   */
+  premiumDelta: number | null;
+  recordedByName: string;
+  recordedAt: string;
+  /** The generated hand-off checklist, or null if generation found no templates. */
+  dealAuditId: string | null;
+  pairs: PolicyTransferPair[];
+}
 
 /* -------------------------------------------------------------------------- *
  * Onboarding
@@ -403,6 +480,31 @@ export interface ServiceTicketView {
   policyId: string | null;
   /** Linked `Household` record id, or null for display-string-only tickets. */
   householdId: string | null;
+  /**
+   * The `Lead` this ticket was opened for, or null for every ticket that is not
+   * a quote in flight. Non-null is what makes `isStatusLocked` true.
+   */
+  leadId: string | null;
+  /**
+   * True when this ticket's status is owned by its lead rather than by the
+   * person looking at it: the pickers must render a static badge, and
+   * `PATCH /crm/service-tickets/:id/status` rejects with 400.
+   *
+   * Server-computed on purpose, for the same reason as
+   * `OnboardingStepRef.isActionable` — the rule lives on the server and the UI
+   * renders it, rather than each surface re-deriving `leadId !== null` and
+   * drifting when the rule changes.
+   */
+  isStatusLocked: boolean;
+  /**
+   * The linked lead's status, so the workspace can say *why* the ticket is
+   * still open without a second fetch.
+   *
+   * Only populated by the single-ticket read (`GET /crm/service-tickets/:id`).
+   * List responses leave it null — filling it there would cost one lead read
+   * per row, and no list surface displays it.
+   */
+  leadStatus: string | null;
   phone: string;
   email: string;
   /** Whole days since the ticket was opened. */
@@ -431,6 +533,20 @@ export interface ServiceTicketView {
    * non-null — and a ticket never carries both.
    */
   renewal: RenewalStepRef | null;
+  /**
+   * Whether this ticket's category allows a policy transfer to be recorded from
+   * it — see {@link POLICY_TRANSFER_CATEGORIES}.
+   *
+   * Server-computed rather than re-derived per surface, for the same reason as
+   * `isStatusLocked` above: the rule lives on the server and the UI renders it.
+   */
+  allowsPolicyTransfer: boolean;
+  /**
+   * The transfer already booked from this ticket, or null. Non-null is what
+   * replaces the "Policy Transfer" action with the read-only summary panel —
+   * one transfer per ticket, enforced by a unique index on the deal.
+   */
+  policyTransfer: PolicyTransferRef | null;
 }
 
 /**

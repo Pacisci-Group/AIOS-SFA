@@ -8,7 +8,9 @@ import {
   MessageSquare,
   CheckCircle2,
   AlertCircle,
+  ArrowLeftRight,
   ChevronDown,
+  Lock,
   Send,
   Plus,
   User,
@@ -25,7 +27,10 @@ import {
 } from "@sfa/shared";
 import { HouseholdDrawer } from "@/features/clients/components/HouseholdDrawer";
 import { PolicyDrawer } from "@/features/clients/components/PolicyDrawer";
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import { OnboardingPanel } from "./OnboardingPanel";
+import { PolicyTransferPanel } from "./PolicyTransferPanel";
 import { RenewalPanel } from "./RenewalPanel";
 import {
   TICKET_STATUS_CONFIG as STATUS_CONFIG,
@@ -151,6 +156,19 @@ export function WorkspacePanel({
   const status: DropStatus = ticket?.status ?? "open";
   const sc = STATUS_CONFIG[status];
 
+  /**
+   * Why the status picker is missing on a quote ticket.
+   *
+   * `leadStatus` comes back only on the single-ticket read, which is exactly
+   * what this panel does — but it is still guarded, so the sentence degrades to
+   * the rule alone rather than rendering "currently null".
+   */
+  const leadLockHint = ticket?.isStatusLocked
+    ? `Status follows the linked lead${
+        ticket.leadStatus ? ` (currently ${ticket.leadStatus})` : ""
+      } — it resolves when the lead is marked Sold or Closed.`
+    : undefined;
+
   if (!ticket) {
     return (
       <div className="flex flex-col items-center justify-center h-full bg-background text-center px-8">
@@ -187,7 +205,47 @@ export function WorkspacePanel({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* Status dropdown */}
+            {/*
+              A quote ticket's status belongs to its lead, so there is nothing
+              to pick here — a static badge plus the one route that *can* move
+              it. Without that link the panel would state a rule the CSR has no
+              way to act on. The server enforces the same thing (400 on
+              `PATCH …/status`); this is the affordance, not the gate.
+            */}
+            {/*
+              A policy transfer is recorded in the full Sold wizard, so this
+              navigates rather than opening a dialog. Hidden once one exists —
+              one transfer per ticket, and the panel below then shows it.
+            */}
+            {ticket?.allowsPolicyTransfer &&
+              !ticket.policyTransfer &&
+              canWrite && (
+                <Button asChild size="sm" variant="outline" className="h-7">
+                  <Link to={`/policy-transfers/new?ticketId=${ticket.id}`}>
+                    <ArrowLeftRight className="w-3 h-3" />
+                    Policy Transfer
+                  </Link>
+                </Button>
+              )}
+            {ticket?.isStatusLocked ? (
+              <div className="flex items-center gap-2">
+                <span
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border ${sc.bg} ${sc.text} border-current/20`}
+                  title={leadLockHint}
+                >
+                  <Lock className="w-3 h-3 opacity-70" />
+                  {sc.label}
+                </span>
+                <a
+                  href={`/leads/${ticket.leadId}`}
+                  className="flex items-center gap-1 text-xs text-primary hover:underline"
+                  title={leadLockHint}
+                >
+                  Open lead
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            ) : (
             <div className="relative">
               <button
                 onClick={() => setStatusDropdown(!statusDropdown)}
@@ -225,8 +283,12 @@ export function WorkspacePanel({
                 </div>
               )}
             </div>
+            )}
           </div>
         </div>
+        {ticket?.isStatusLocked && (
+          <p className="mt-2 text-xs text-muted-foreground">{leadLockHint}</p>
+        )}
       </div>
 
       <div
@@ -347,6 +409,10 @@ export function WorkspacePanel({
 
         {/* Renewal outreach — the sibling category panel. A ticket never
             carries both payloads, but nothing here assumes that. */}
+        {ticket.policyTransfer ? (
+          <PolicyTransferPanel transfer={ticket.policyTransfer} />
+        ) : null}
+
         {ticket.renewal && onCompleteRenewalStep ? (
           <RenewalPanel
             step={ticket.renewal}

@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import type { NormalizedLeadSource } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
-import type { CreateSoldDealDto } from '../dto/create-sold-deal.dto';
+import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import {
   buildDealTitle,
   deriveAuditTriggers,
@@ -28,7 +28,7 @@ export class ResolveDealStep {
   ) {}
 
   async run(
-    dto: CreateSoldDealDto,
+    dto: SoldIntakeDto,
     leadSource: NormalizedLeadSource | undefined,
     deps: SoldStepDeps,
   ): Promise<{
@@ -43,7 +43,13 @@ export class ResolveDealStep {
         {
           agencyId: ctx.agencyId,
           branchId: ctx.branchId,
-          title: buildDealTitle(ctx.clientName, ctx.leadId.toString()),
+          // A transfer has no lead, so the id fallback becomes the household —
+          // still stable and still unique, just anchored on what this deal
+          // actually hangs off.
+          title: buildDealTitle(
+            ctx.clientName,
+            (ctx.leadId ?? ctx.householdId).toString(),
+          ),
           soldDate: aggregates.soldDate,
           soldDateYmd: aggregates.soldDateYmd,
           premium: aggregates.premium,
@@ -58,7 +64,11 @@ export class ResolveDealStep {
           leadSource: resolveLeadSource(leadSource),
           clientName: ctx.clientName,
           producerId: ctx.producerId,
-          leadId: ctx.leadId,
+          // Both null on a policy transfer, which is anchored on the household
+          // and the ticket instead.
+          leadId: ctx.leadId ?? null,
+          ticketId: ctx.ticketId ?? null,
+          businessType: ctx.businessType,
           householdId: ctx.householdId,
           quoteRecapId: ctx.quoteRecapId,
           primaryContactId: ctx.primaryContactId,

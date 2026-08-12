@@ -28,6 +28,20 @@ export const MAX_SOLD_UPLOAD_BYTES = 10 * 1024 * 1024;
 /** Mirrors the API's `SOLD_UPLOAD_KINDS`. */
 export type SoldUploadKind = "discount_proof" | "new_business_application";
 
+/**
+ * What an in-progress upload hangs off.
+ *
+ * The wizard uploads while it is still being filled in, so there is no deal yet
+ * to scope a document to — it is anchored on whatever the flow *does* have. A
+ * sale has a lead; a policy transfer has a ticket (and, through it, a
+ * household). The two use different key prefixes on the server, and that prefix
+ * is the ownership check, so this has to be explicit rather than a bare id
+ * whose meaning depends on the caller.
+ */
+export type UploadScope =
+  | { kind: "lead"; leadId: string }
+  | { kind: "ticket"; ticketId: string };
+
 /** `GET /sold-deals/context?leadId=` — the header and driver picker source. */
 export function getSoldDealContext(
   leadId: string,
@@ -66,16 +80,21 @@ export function checkPolicyNumber(
  * business application at verification time rather than trusting the presign.
  */
 export async function uploadSoldDocument(
-  leadId: string,
+  scope: UploadScope,
   file: File,
   kind: SoldUploadKind = "discount_proof",
 ): Promise<SoldDocumentMeta> {
   const presigned = await apiFetch<SoldDocumentPresignResponse>(
-    "/sold-deals/documents/presign",
+    scope.kind === "lead"
+      ? "/sold-deals/documents/presign"
+      : `/crm/service-tickets/${encodeURIComponent(scope.ticketId)}/policy-transfer/presign`,
     {
       method: "POST",
       body: JSON.stringify({
-        leadId,
+        // The lead endpoint takes its anchor in the body; the ticket one takes
+        // it in the path and reads the household off it server-side, so a
+        // caller cannot name a household it does not own.
+        ...(scope.kind === "lead" ? { leadId: scope.leadId } : {}),
         kind,
         filename: file.name,
         contentType: file.type,

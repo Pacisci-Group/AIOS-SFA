@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronsUpDown, Loader2 } from "lucide-react";
 import {
-  SERVICE_TICKET_CATEGORIES,
+  SERVICE_TICKET_CREATE_CATEGORIES,
   SERVICE_TICKET_CREATE_STATUSES,
   SERVICE_TICKET_STATUS_LABELS,
   type ServiceTicketCategory,
@@ -476,7 +476,7 @@ export function CreateTicketDialog({
                 <SelectValue placeholder="Pick a category" />
               </SelectTrigger>
               <SelectContent>
-                {SERVICE_TICKET_CATEGORIES.map((c) => (
+                {SERVICE_TICKET_CREATE_CATEGORIES.map((c) => (
                   <SelectItem key={c} value={c}>
                     {c}
                   </SelectItem>

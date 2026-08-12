@@ -114,6 +114,7 @@ docs {
   | policiesOfInterest[].sameAsHousehold | bool | no | defaults `true`; property rows only. When set, `address` is copied onto **this row** |
   | policiesOfInterest[].propertyAddress | object | cond. | required when the row is a property type **and** `sameAsHousehold` is false |
   | leadSourceCode          | string | yes      | canonical code; `ENEJP` (Test) is rejected   |
+  | householdId             | string | no       | ObjectId (24 hex); pins the lead to an existing household — see below |
   | quoteControlNumber      | string | no       | dedupe signal 2                              |
   | submissionToken         | string | no       | 8–200 chars; per-form-session idempotency key |
 
@@ -129,11 +130,40 @@ docs {
   that is what stops an existing client acquiring a second household. Migrated
   contacts carrying only `legacyHouseholdId` are self-healed on first touch.
 
+  **Pinning a household (`householdId`).** The Household page's "Start Quote"
+  dialog creates the lead from a household the producer already has open, so
+  the household is a fact rather than something to infer. Sending it inverts the
+  usual step order — the household resolves *first* — and changes three things,
+  all for the one reason that nothing may be inferred which could contradict it:
+
+  1. The household is taken verbatim, scoped to the caller's agency. A household
+     that does not exist there is a `404`, never a quiet fall back to deriving
+     one; "create this lead on household X" landing somewhere else is the one
+     outcome nobody could detect afterwards.
+  2. **Contact matching is confined to that household's contacts.** An
+     agency-wide name hit would be wrong twice over: linking moves the matched
+     contact into this household, and the household they came from silently
+     loses them. Confining it can at worst create a duplicate contact — the
+     recoverable half of the trade this endpoint makes everywhere.
+  3. **Address dedupe (signal 3) is confined to that household**, so a lead at
+     the same street and zip belonging to *different* people — the apartment
+     building and house-share case address matching is documented as unable to
+     tell apart — is not returned as this one.
+
+  It is accepted on this route only. `POST /public/leads/:token` uses the bare
+  base schema, so an outside submitter can never name the household their
+  submission lands in.
+
   **Lead dedupe**, in strict order: (1) `submissionToken` — an exact hit returns
   the existing lead untouched; (2) `quoteControlNumber`; (3) `addressKey`
   (`street|zip`, both lowercased) restricted to non-terminal leads created in the
-  last 90 days. Signals 2 and 3 merge additively and never change `producerId`,
-  `status` or `temperature`.
+  last 90 days (and to `householdId` when pinned). Signals 2 and 3 merge
+  additively and never change `producerId`, `status` or `temperature`.
+
+  > Worth knowing on the pinned path: because the dialog prefills the form from
+  > the household, a second "new" lead for a household that already has an open
+  > one at the same address dedupes onto it and returns its id. That is the
+  > intended answer — the dialog lists those leads first — not a failure.
 
   **Policies of interest (PAC-56 #2).** What the submitter wants quoted — the
   Quote Recap's policy rows **minus premium**, since no quote exists yet. Same
@@ -192,4 +222,5 @@ docs {
   - `401 Unauthorized` — missing/expired access token.
   - `403 Forbidden` — `leads` module disabled, missing `leads:write`, a
     platform-admin caller with no agency, or an agency with no default branch.
+  - `404 Not Found` — `householdId` names no household in the caller's agency.
 }

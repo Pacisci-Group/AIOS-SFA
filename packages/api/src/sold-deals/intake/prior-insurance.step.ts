@@ -9,7 +9,7 @@ import {
   PriorPolicy,
   PriorPolicyDocument,
 } from '../../prior-policies/schemas/prior-policy.schema';
-import type { CreateSoldDealDto } from '../dto/create-sold-deal.dto';
+import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import { derivePriorCarriers, parseFormDate, yesNo } from './sold.normalize';
 import { SoldStepDeps, sessionOptions } from './sold-intake.types';
 
@@ -38,7 +38,7 @@ export class PriorInsuranceStep {
   ) {}
 
   async run(
-    dto: CreateSoldDealDto,
+    dto: SoldIntakeDto,
     dealId: Types.ObjectId,
     deps: SoldStepDeps,
   ): Promise<void> {

@@ -9,6 +9,7 @@ import { withForm } from "@/hooks/form";
 import {
   ALLOWED_NBA_UPLOAD_TYPES,
   checkPolicyNumber,
+  type UploadScope,
 } from "@/lib/sold-deals-api";
 import { DuplicatePolicyNotice } from "./DuplicatePolicyNotice";
 import { SoldDocumentUpload } from "./SoldDocumentUpload";
@@ -292,8 +293,8 @@ export const PolicyFinancialsCard = withForm({
  */
 export const NewBusinessApplicationCard = withForm({
   defaultValues: emptyPolicy(),
-  props: { leadId: "" },
-  render: function Render({ form, leadId }) {
+  props: { uploadScope: { kind: "lead", leadId: "" } as UploadScope },
+  render: function Render({ form, uploadScope }) {
     const policyType = useStore(form.store, (s) => s.values.policyType);
 
     return (
@@ -305,7 +306,7 @@ export const NewBusinessApplicationCard = withForm({
         <form.Field name="newBusinessApplication">
           {(field) => (
             <SoldDocumentUpload
-              leadId={leadId}
+              uploadScope={uploadScope}
               kind="new_business_application"
               accept={ALLOWED_NBA_UPLOAD_TYPES}
               hint="PDF up to 10MB"

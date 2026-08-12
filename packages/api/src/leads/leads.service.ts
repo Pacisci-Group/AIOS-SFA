@@ -5,13 +5,16 @@ import {
   CreateLeadResponse,
   LEAD_SOURCE_NONE,
   NormalizedLeadSource,
+  ServiceTicketView,
   leadStatusQueryValues,
   normalizeLeadSource,
   normalizeLeadStatus,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
+import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
+import { LeadAccessService } from './lead-access.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { ListLeadsDto } from './dto/list-leads.dto';
 import { LeadIntakeService } from './intake/lead-intake.service';
@@ -46,6 +49,8 @@ export class LeadsService {
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
     private readonly tenancy: TenantContextResolver,
     private readonly intake: LeadIntakeService,
+    private readonly leadAccess: LeadAccessService,
+    private readonly leadTickets: LeadTicketsService,
   ) {}
 
   /**
@@ -68,8 +73,31 @@ export class LeadsService {
       policiesOfInterest: dto.policiesOfInterest,
       quoteControlNumber: dto.quoteControlNumber,
       submissionToken: dto.submissionToken,
+      // Set only by the Household page's "Start Quote" flow, where the caller
+      // already has the household open. Absent everywhere else, including the
+      // public route, whose schema does not accept it.
+      householdId: dto.householdId,
     });
     return { id: outcome.leadId.toString() };
+  }
+
+  /**
+   * Open the CRM service ticket for a lead, or return the one it already has —
+   * `POST /leads/:id/service-ticket`, called by the Start Quote dialog.
+   *
+   * Scope is clamped here, by the same `loadOwnedLead` every other lead-scoped
+   * write goes through: a producer cannot open a ticket against someone else's
+   * lead, and asking 404s rather than 403s. `LeadTicketsService` then does the
+   * work without a second permission check, which is why that clamp has to
+   * happen on this side of the call.
+   */
+  async openServiceTicket(
+    access: AccessContext,
+    branchId: string | null,
+    leadId: string,
+  ): Promise<ServiceTicketView> {
+    const lead = await this.leadAccess.loadOwnedLead(access, branchId, leadId);
+    return this.leadTickets.ensureForLead(access, lead);
   }
 
   /**
@@ -148,6 +176,11 @@ export class LeadsService {
       branchId,
       { requestedScope: query.scope, producerId: query.producerId },
     );
+
+    if (query.householdId) {
+      // The DTO has already shape-checked it, so the cast cannot throw.
+      filter.householdId = new Types.ObjectId(query.householdId);
+    }
 
     if (query.status?.length) {
       // Each selected label expands to itself plus any raw SmartSuite code that

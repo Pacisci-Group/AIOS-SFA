@@ -1,0 +1,166 @@
+meta {
+  name: Open Lead Service Ticket
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/leads/{{leadId}}/service-ticket
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("quoteTicketId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("opens a Quote ticket linked to the lead", function () {
+    const body = res.getBody();
+    expect(body.category).to.equal("Quote");
+    expect(body.leadId).to.equal(bru.getEnvVar("leadId") || bru.getVar("leadId"));
+    expect(body.ticketNumber).to.match(/^QTE-\d+$/);
+  });
+
+  test("opens as `open`, never resolved", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("open");
+    expect(body.resolvedAt).to.equal(null);
+  });
+
+  test("is status-locked", function () {
+    expect(res.getBody().isStatusLocked).to.equal(true);
+  });
+
+  test("is assigned to the caller", function () {
+    expect(res.getBody().assignedUserId).to.not.equal(null);
+  });
+
+  test("records an opening timeline entry", function () {
+    const timeline = res.getBody().timeline;
+    expect(timeline).to.have.length.of.at.least(1);
+    expect(timeline[0].type).to.equal("created");
+  });
+}
+
+docs {
+  # POST /leads/:id/service-ticket — open the lead's quote ticket
+
+  Opens the CRM service ticket for a lead, or returns the one it already has.
+  Called by the **Start Quote** dialog on the Household page once a lead is
+  chosen, so a quote in flight is visible on the CSR's desk.
+
+  - **Module:** `leads`
+  - **Permission:** `leads:write`
+  - **Data scope:** `LeadAccessService.loadOwnedLead` runs first, so another
+    producer's lead is a `404` and no ticket is written.
+
+  ## Path params
+  | param | type   | notes                                               |
+  |-------|--------|-----------------------------------------------------|
+  | id    | string | Lead ObjectId. A malformed id is a `404`, not a `500`. |
+
+  No body.
+
+  ## Why this endpoint is under `/leads`
+
+  The caller is the producer or CSR who pressed Start Quote. They hold
+  `leads:write`; a producer holds **no** `crm_service:write` at all, so routing
+  this through `POST /crm/service-tickets` would `403` the very people it exists
+  for. The verb belongs to the lead ("open a ticket for this enquiry") and only
+  the record it writes belongs to CRM — the mirror image of
+  `QuoteRecapsService` writing to `leadModel`.
+
+  `CreateServiceTicketDto` deliberately has **no** `leadId` field, which makes
+  "a lead-linked ticket can only come from here" a schema-level invariant rather
+  than a convention.
+
+  ## Idempotency
+
+  Safe to call on every Start Quote run, including when the user picks a lead
+  from the list that was already quoted once. Two guards, because neither alone
+  is enough:
+
+  1. A read on `{agencyId, leadId}` catches the common case cheaply.
+  2. The partial-unique `{agencyId, leadId}` index arbitrates two concurrent
+     runs; on `E11000` the loser re-reads and returns the winner's ticket.
+
+  So there is **one quote ticket per lead, ever** — a second call returns the
+  same `id`, not a second ticket.
+
+  ## The ticket it creates
+
+  | field            | value                                                     |
+  |------------------|-----------------------------------------------------------|
+  | `category`       | `Quote`                                                    |
+  | `ticketNumber`   | `QTE-<n>`                                                  |
+  | `status`         | `open`                                                     |
+  | `priority`       | `medium`                                                   |
+  | `assignedUserId` | **the caller** — under `own` data scope this is what puts the ticket on their desk at all |
+  | `leadId`         | the lead                                                   |
+  | `householdId`    | the lead's household, when it has one                      |
+  | `clientName` / `phone` / `email` | from the household's primary contact, falling back to the lead's own fields |
+
+  ## The status lock — the reason this ticket exists as its own kind
+
+  A quote ticket has **no status of its own**. It is finished exactly when its
+  lead is, and letting the two disagree — a ticket resolved under a live lead, a
+  sold lead trailing an open ticket forever — is what the link prevents.
+
+  - `PATCH /crm/service-tickets/:id/status` on this ticket returns **`400`**,
+    for every status, for every role. The UI renders a locked badge instead of
+    the picker; this is the server-side half of the same rule.
+  - It resolves when the lead reaches **any terminal status** — `Sold`,
+    `Closed`, `Converted`, `Lost`, `Not Qualified` — via
+    `LeadTicketsService.resolveForLead`, fired from `PATCH /leads/:id` and from
+    `POST /sold-deals`. The resolution appends a `system` timeline entry and
+    starts the 7-day archive clock.
+
+  Consequence worth knowing: a lead abandoned without being moved to a terminal
+  status leaves its ticket in the queue with no way to clear it.
+
+  ## Response `201`
+
+  A full `ServiceTicketView` — the same shape `GET /crm/service-tickets/:id`
+  returns, including the fields this feature added:
+
+  ```json
+  {
+    "id": "665f...9b2",
+    "ticketNumber": "QTE-104",
+    "category": "Quote",
+    "status": "open",
+    "leadId": "665f...ac1",
+    "isStatusLocked": true,
+    "leadStatus": "New",
+    "householdId": "665f...77c",
+    "assignedRep": "Casey Rep",
+    "resolvedAt": null,
+    "timeline": [
+      {
+        "type": "created",
+        "content": "Quote started. This ticket resolves when the lead is marked Sold or Closed."
+      }
+    ]
+  }
+  ```
+
+  `leadStatus` is populated here and by the single-ticket read only. List
+  responses leave it `null` — filling it there would cost one lead read per row
+  for a field no list displays.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, or missing `leads:write`.
+  - `404 Not Found` — no such lead, a malformed id, or a lead outside scope.
+}

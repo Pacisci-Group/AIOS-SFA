@@ -1,5 +1,6 @@
 export * from './domain/activity';
 export * from './domain/address';
+export * from './domain/business-type';
 export * from './domain/carrier';
 export * from './domain/contact';
 export * from './domain/hot-lead';

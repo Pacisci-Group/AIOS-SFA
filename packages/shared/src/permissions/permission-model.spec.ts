@@ -79,7 +79,9 @@ describe('page-level permission model', () => {
         [ModuleKey.Mailers]: 'write',
         [ModuleKey.Performance]: 'read',
         [ModuleKey.CrmService]: 'write',
-        [ModuleKey.QuoteRecaps]: 'none',
+        // Start Quote on the Household page: step 1 is a `leads` write, step 2
+        // a `quote_recaps` write, and the CSR runs both.
+        [ModuleKey.QuoteRecaps]: 'write',
         [ModuleKey.Clients]: 'none',
         [ModuleKey.DealAudits]: 'none',
         [ModuleKey.Onboardings]: 'none',
@@ -102,6 +104,7 @@ describe('page-level permission model', () => {
         ModuleKey.Leads,
         ModuleKey.Mailers,
         ModuleKey.CrmService,
+        ModuleKey.QuoteRecaps,
       ]) {
         expect(resolved.has(`${moduleKey}:write`)).toBe(true);
         expect(resolved.has(`${moduleKey}:read`)).toBe(true);

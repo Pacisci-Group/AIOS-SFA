@@ -1,3 +1,4 @@
+import type { UploadScope } from "@/lib/sold-deals-api";
 import type { CarrierOption, SoldDealLeadContext } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { ArrowLeft, ArrowRight, Loader2, Plus, Send } from "lucide-react";
@@ -21,10 +22,12 @@ import { DiscountsCard } from "./DiscountsCard";
 import {
   CARD_FIELDS,
   buildSoldPolicySchema,
+  cardsFor,
   emptyPolicy,
   type SoldDealFormValues,
   type SoldPolicyFormValues,
   type WizardCard,
+  type WizardVariant,
 } from "./sold-deal-schema";
 import { useWizardNavigation } from "./useWizardNavigation";
 import {
@@ -35,6 +38,7 @@ import {
   PriorInsuranceCard,
   SoldDateCard,
 } from "./WizardCards";
+import { TransferFromCard } from "./TransferFromCard";
 import { WizardProgress } from "./WizardProgress";
 
 interface SoldDealWizardProps {
@@ -44,6 +48,22 @@ interface SoldDealWizardProps {
   submitting: boolean;
   errorMessage: string | null;
   onSubmit: (values: SoldDealFormValues) => void;
+  /**
+   * Which flow this is. Defaults to `sale`, so every existing caller is
+   * unchanged.
+   *
+   * A `transfer` records the same information against a household and a CRM
+   * ticket instead of a lead: it asks which policy each new one replaces, and
+   * skips prior insurance entirely.
+   */
+  variant?: WizardVariant;
+  /**
+   * The household whose policies the from-policy picker searches. Required by
+   * the transfer variant and unused by the sale.
+   */
+  householdId?: string | null;
+  /** The ticket a transfer is recorded from; also its upload anchor. */
+  ticketId?: string;
 }
 
 /**
@@ -64,8 +84,11 @@ export function SoldDealWizard({
   submitting,
   errorMessage,
   onSubmit,
+  variant = "sale",
+  householdId,
+  ticketId,
 }: SoldDealWizardProps) {
-  const nav = useWizardNavigation();
+  const nav = useWizardNavigation(variant);
   const [soldDate, setSoldDate] = useState("");
   const [soldDateError, setSoldDateError] = useState<string>();
   const [policies, setPolicies] = useState<SoldPolicyFormValues[]>([]);
@@ -109,7 +132,25 @@ export function SoldDealWizard({
    * the policy-number rule off it). `useForm` re-applies its options on every
    * render, so the new validator is live on the next validation run.
    */
-  const schema = useMemo(() => buildSoldPolicySchema(carriers), [carriers]);
+  /**
+   * Where in-progress documents are uploaded.
+   *
+   * The two flows anchor keys differently on the server — a sale on its lead, a
+   * transfer on the ticket's household — and that prefix is the ownership
+   * check, so the scope travels with the upload rather than being inferred.
+   */
+  const uploadScope: UploadScope = useMemo(
+    () =>
+      variant === "transfer" && ticketId
+        ? { kind: "ticket", ticketId }
+        : { kind: "lead", leadId: context.leadId },
+    [variant, ticketId, context.leadId],
+  );
+  const cards = useMemo(() => cardsFor(variant), [variant]);
+  const schema = useMemo(
+    () => buildSoldPolicySchema(carriers, variant),
+    [carriers, variant],
+  );
 
   /**
    * Hoisted out of the `useAppForm` call deliberately.
@@ -120,7 +161,7 @@ export function SoldDealWizard({
    * `effectiveDate` to today's date, every render would silently wipe the form.
    * Memoizing turns that from an emergent property into a guaranteed one.
    */
-  const defaults = useMemo(emptyPolicy, []);
+  const defaults = useMemo(() => emptyPolicy(variant), [variant]);
 
   const draft = useAppForm({
     defaultValues: defaults,
@@ -262,7 +303,7 @@ export function SoldDealWizard({
    * touched-state, without which policy 2 opens showing policy 1's errors.
    */
   const startFreshDraft = () => {
-    draft.reset(emptyPolicy());
+    draft.reset(emptyPolicy(variant));
     setDraftKey((key) => key + 1);
     setEditingIndex(null);
     setDraftCommitted(false);
@@ -305,7 +346,11 @@ export function SoldDealWizard({
   return (
     <div className="space-y-4">
       <FormSection>
-        <WizardProgress card={nav.card} policyCount={policies.length} />
+        <WizardProgress
+          card={nav.card}
+          cards={cards}
+          policyCount={policies.length}
+        />
 
         <p className="text-xs text-muted-foreground">
           Recording a sale for{" "}
@@ -330,6 +375,9 @@ export function SoldDealWizard({
                 }}
               />
             )}
+            {nav.card === "transferFrom" && (
+              <TransferFromCard form={draft} householdId={householdId ?? null} />
+            )}
             {nav.card === "policyType" && <PolicyTypeCard form={draft} />}
             {nav.card === "policyDetails" && (
               <PolicyDetailsCard form={draft} carriers={carriers} />
@@ -338,13 +386,13 @@ export function SoldDealWizard({
             {nav.card === "application" && (
               <NewBusinessApplicationCard
                 form={draft}
-                leadId={context.leadId}
+                uploadScope={uploadScope}
               />
             )}
             {nav.card === "discounts" && (
               <DiscountsCard
                 form={draft}
-                leadId={context.leadId}
+                uploadScope={uploadScope}
                 contacts={context.contacts}
               />
             )}

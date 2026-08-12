@@ -1,12 +1,14 @@
 import { Progress } from "@/components/ui/progress";
-import {
-  CARD_TITLES,
-  WIZARD_CARDS,
-  type WizardCard,
-} from "./sold-deal-schema";
+import { CARD_TITLES, type WizardCard } from "./sold-deal-schema";
 
 interface WizardProgressProps {
   card: WizardCard;
+  /**
+   * This variant's ordered cards. Passed in rather than read off the module
+   * constant, so "Step 4 of 9" counts the steps the user will actually see —
+   * a transfer's sequence is not the sale's.
+   */
+  cards: readonly WizardCard[];
   /** How many policies are already committed to the submission. */
   policyCount: number;
 }
@@ -20,10 +22,14 @@ interface WizardProgressProps {
  * times in one session. The policy count is what actually tells them where they
  * are, so it is shown alongside.
  */
-export function WizardProgress({ card, policyCount }: WizardProgressProps) {
-  const index = WIZARD_CARDS.indexOf(card);
+export function WizardProgress({
+  card,
+  cards,
+  policyCount,
+}: WizardProgressProps) {
+  const index = cards.indexOf(card);
   const step = index + 1;
-  const total = WIZARD_CARDS.length;
+  const total = cards.length;
 
   return (
     <div className="space-y-2">

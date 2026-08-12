@@ -45,6 +45,9 @@ const EditQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/EditQuoteRecapPage'),
 );
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
+const PolicyTransferPage = lazy(
+  () => import('@/features/sold/PolicyTransferPage'),
+);
 const PublicLeadFormPage = lazy(
   () => import('@/features/lead/PublicLeadFormPage'),
 );
@@ -358,6 +361,34 @@ export function App() {
                   element={
                     <LazyPage>
                       <SoldDealPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Policy transfer — the same wizard, recorded from a CRM ticket
+                  rather than a lead, and booked as company transfer so it never
+                  counts as new business.
+
+                  Gated on `crm_service:write` for the same reason the Sold form
+                  is gated on `deal_audits:write`: it is what
+                  POST /crm/service-tickets/:id/policy-transfer itself requires,
+                  so the route and the API agree. A producer never reaches this;
+                  a CSR — who holds no `deal_audits` at all — is exactly who
+                  does. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.CrmService}:write`}
+                    redirectTo="/crm/tickets"
+                  />
+                }
+              >
+                <Route
+                  path="/policy-transfers/new"
+                  element={
+                    <LazyPage>
+                      <PolicyTransferPage />
                     </LazyPage>
                   }
                 />

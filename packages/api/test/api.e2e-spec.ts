@@ -3,7 +3,12 @@ import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Connection, Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { ModuleKey, SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from '@sfa/shared';
+import {
+  DEFAULT_ROLE_TEMPLATES,
+  ModuleKey,
+  SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
+  modulePermission,
+} from '@sfa/shared';
 import type {
   ContactDetail,
   CreateActivityResponse,
@@ -646,7 +651,13 @@ describe('SFA API (e2e)', () => {
 
   describe('CSR role access matrix', () => {
     // CSR = dashboard:read, leads:write, mailers:write, performance:read,
-    // crm_service:write. Scoped to exactly these 5 pages.
+    // crm_service:write, quote_recaps:write. Scoped to exactly these 6 pages.
+    //
+    // `quote_recaps` was added for Start Quote on the Household page: step 1
+    // creates the lead, step 2 writes the recap, and the CSR runs both and
+    // takes the quote ticket that comes out. It adds no nav entry — there is no
+    // `quote_recaps` item in `nav-items.ts` — so it widens the API surface
+    // without widening the CSR's visible app.
     const csrAllowedReads = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
       { path: 'leads', module: ModuleKey.Leads },
@@ -694,6 +705,19 @@ describe('SFA API (e2e)', () => {
         .expect(201);
     });
 
+    it('CSR holds quote_recaps write — Start Quote step 2 is reachable', () => {
+      const csr = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === 'csr');
+      expect(csr!.permissions).toContain(
+        modulePermission(ModuleKey.QuoteRecaps, 'write'),
+      );
+      // Both halves of Start Quote, in one assertion — step 1 is a `leads`
+      // write and step 2 a `quote_recaps` write, and the button on the
+      // Household page is gated on holding both.
+      expect(csr!.permissions).toContain(
+        modulePermission(ModuleKey.Leads, 'write'),
+      );
+    });
+
     it('PATCH /api/v1/performance — CSR is read-only (no write)', async () => {
       await request(app.getHttpServer())
         .patch('/api/v1/performance')
@@ -702,7 +726,8 @@ describe('SFA API (e2e)', () => {
     });
 
     const csrDeniedFeatureRoutes = [
-      'quote-recaps',
+      // `quote-recaps` is deliberately absent — the CSR now holds it (see the
+      // note at the top of this block).
       'deal-audits',
       'leaderboard',
       'management',
@@ -4051,6 +4076,194 @@ describe('SFA API (e2e)', () => {
 
     it('a read-only user is forbidden (403)', async () => {
       await patchAs(readOnlyToken, leadId, { status: 'Contacted' }).expect(403);
+    });
+  });
+
+  /**
+   * The Start Quote tie between a lead and its service ticket.
+   *
+   * The rule under test is that the two share one lifecycle: the ticket has no
+   * status of its own, and the lead is the only thing that can end it. Both
+   * halves are asserted — the refusal *and* the automatic resolution — because
+   * either alone would leave the ticket in a state nobody can clear.
+   */
+  describe('Lead service tickets (Start Quote)', () => {
+    let leadModel: Model<Lead>;
+
+    const newLead = async (key: string) => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/leads')
+        .set(authHeader(producerToken))
+        .send({
+          primaryContact: {
+            firstName: 'Quinn',
+            lastName: key,
+            dateOfBirth: '1990-06-02',
+            phone: '(555) 909-1010',
+            email: `quinn.${key}@example.com`,
+          },
+          address: {
+            street: `12 ${key} Way`,
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74101',
+          },
+          members: [],
+          leadSourceCode: 'WCO7l',
+        })
+        .expect(201);
+      return res.body.id as string;
+    };
+
+    const openTicket = (token: string, id: string, expected = 201) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/leads/${id}/service-ticket`)
+        .set(authHeader(token))
+        .expect(expected);
+
+    beforeAll(() => {
+      leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+    });
+
+    it('opens a QTE- ticket linked to the lead and assigned to the caller', async () => {
+      const leadId = await newLead('Ashby');
+      const res = await openTicket(producerToken, leadId);
+
+      expect(res.body.category).toBe('Quote');
+      expect(res.body.ticketNumber).toMatch(/^QTE-/);
+      expect(res.body.status).toBe('open');
+      expect(res.body.resolvedAt).toBeNull();
+      expect(res.body.leadId).toBe(leadId);
+      expect(res.body.isStatusLocked).toBe(true);
+      expect(res.body.assignedUserId).toBeTruthy();
+      expect(res.body.timeline[0].type).toBe('created');
+    });
+
+    it('is idempotent — a second call returns the same ticket', async () => {
+      const leadId = await newLead('Brixton');
+      const first = await openTicket(producerToken, leadId);
+      const second = await openTicket(producerToken, leadId);
+
+      expect(second.body.id).toBe(first.body.id);
+      expect(second.body.ticketNumber).toBe(first.body.ticketNumber);
+    });
+
+    it('refuses a manual status change on a lead-linked ticket (400)', async () => {
+      const leadId = await newLead('Calder');
+      const ticket = await openTicket(producerToken, leadId);
+
+      // The owner holds `crm_service:write` and agency scope — the refusal is
+      // the ticket's own rule, not a permission or scope miss.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${ticket.body.id}/status`)
+        .set(authHeader(ownerToken))
+        .send({ status: 'resolved' })
+        .expect(400);
+
+      const after = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ticket.body.id}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(after.body.status).toBe('open');
+      expect(after.body.resolvedAt).toBeNull();
+    });
+
+    it('a non-terminal lead status leaves the ticket open', async () => {
+      const leadId = await newLead('Danby');
+      const ticket = await openTicket(producerToken, leadId);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/leads/${leadId}`)
+        .set(authHeader(producerToken))
+        .send({ status: 'Contacted' })
+        .expect(200);
+
+      const after = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ticket.body.id}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(after.body.status).toBe('open');
+    });
+
+    it.each(['Sold', 'Closed', 'Lost'])(
+      'marking the lead %s resolves the ticket',
+      async (status) => {
+        const leadId = await newLead(`Everly${status}`);
+        const ticket = await openTicket(producerToken, leadId);
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/leads/${leadId}`)
+          .set(authHeader(producerToken))
+          .send({ status })
+          .expect(200);
+
+        const after = await request(app.getHttpServer())
+          .get(`/api/v1/crm/service-tickets/${ticket.body.id}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(after.body.status).toBe('resolved');
+        expect(after.body.resolvedAt).not.toBeNull();
+        expect(
+          after.body.timeline.some(
+            (e: { type: string; content: string }) =>
+              e.type === 'system' && e.content.includes(status),
+          ),
+        ).toBe(true);
+      },
+    );
+
+    it('reports the lead status on the single-ticket read only', async () => {
+      const leadId = await newLead('Fenwick');
+      const ticket = await openTicket(producerToken, leadId);
+
+      const one = await request(app.getHttpServer())
+        .get(`/api/v1/crm/service-tickets/${ticket.body.id}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(one.body.leadStatus).toBe('New');
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const row = list.body.find(
+        (t: { id: string }) => t.id === ticket.body.id,
+      );
+      expect(row.leadStatus).toBeNull();
+      expect(row.isStatusLocked).toBe(true);
+    });
+
+    it("a ticket with no lead still accepts a manual status change", async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/crm/service-tickets')
+        .set(authHeader(ownerToken))
+        .send({ clientName: 'Unlinked Client', category: 'Billing' })
+        .expect(201);
+      expect(created.body.isStatusLocked).toBe(false);
+      expect(created.body.leadId).toBeNull();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/crm/service-tickets/${created.body.id}/status`)
+        .set(authHeader(ownerToken))
+        .send({ status: 'resolved' })
+        .expect(200);
+      expect(res.body.status).toBe('resolved');
+    });
+
+    it("another producer's lead is a 404, and opens no ticket", async () => {
+      const leadId = await newLead('Garrick');
+      await leadModel.updateOne(
+        { _id: leadId },
+        { $set: { producerId: new Types.ObjectId() } },
+      );
+
+      await openTicket(producerToken, leadId, 404);
+    });
+
+    it('a read-only user is forbidden (403)', async () => {
+      const leadId = await newLead('Halloway');
+      await openTicket(readOnlyToken, leadId, 403);
     });
   });
 
@@ -7804,6 +8017,354 @@ describe('SFA API (e2e)', () => {
         // is what this pins.
         await patchPolicy(orphan._id.toString(), { premium: 250 }, 404);
       });
+    });
+  });
+
+  /**
+   * Policy Transfer — the Sold pipeline, minus the lead, booked as company
+   * transfer.
+   *
+   * Two things are load-bearing enough to be worth stating: the from-policy is
+   * *retired* rather than edited (both rows survive, linked), and the premium
+   * must land on the Transfers scorecard **without** moving Sold. The
+   * absent-`businessType` case below is the guard for the one mistake that
+   * would silently zero every historic sale.
+   */
+  describe('Policy transfers (company transfer)', () => {
+    const TICKETS = '/api/v1/crm/service-tickets';
+
+    let xferDealModel: Model<Deal>;
+    let xferPolicyModel: Model<Policy>;
+    let xferHouseholdModel: Model<Household>;
+    let statSpy: jest.SpyInstance;
+
+    const uploaded = new Map<string, { size: number; contentType: string }>();
+    let counter = 0;
+    const nextNumber = () =>
+      `XFER-${(counter += 1).toString().padStart(6, '0')}`;
+
+    /** A key under the transfer's own `/nba/` prefix, which the server enforces. */
+    const nba = (householdId: string) => {
+      const key = `agencies/${seed.agencyId}/policy-transfers/${householdId}/nba/app.pdf`;
+      uploaded.set(key, { size: 2048, contentType: 'application/pdf' });
+      return {
+        key,
+        filename: 'app.pdf',
+        contentType: 'application/pdf',
+        size: 2048,
+      };
+    };
+
+    /** A household with one active policy — the thing a transfer moves within. */
+    const makeHousehold = async (premium = 1400) => {
+      const household = await xferHouseholdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: `Transfer HH ${counter}`,
+        totalActivePolicies: 1,
+      });
+      const policy = await xferPolicyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: household._id,
+        policyNumber: nextNumber(),
+        policyType: 'Auto',
+        premium,
+        items: 1,
+        active: true,
+        policyStatus: 'Active',
+      });
+      return { household, policy };
+    };
+
+    const makeTicket = async (
+      householdId: string,
+      category = 'Policy Change',
+    ) => {
+      const res = await request(app.getHttpServer())
+        .post(TICKETS)
+        .set(authHeader(csrToken))
+        .send({ clientName: 'Transfer Client', category, householdId })
+        .expect(201);
+      return res.body as { id: string };
+    };
+
+    const transferBody = (
+      householdId: string,
+      fromPolicyId: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      transferDate: '2026-03-10',
+      policies: [
+        {
+          fromPolicyId,
+          policyType: 'Auto',
+          effectiveDate: '2026-03-15',
+          carrier: 'Allstate',
+          policyNumber: nextNumber(),
+          premium: 900,
+          itemCount: 1,
+          newBusinessApplication: nba(householdId),
+        },
+      ],
+      ...overrides,
+    });
+
+    const record = (ticketId: string, body: unknown, expected = 201) =>
+      request(app.getHttpServer())
+        .post(`${TICKETS}/${ticketId}/policy-transfer`)
+        .set(authHeader(csrToken))
+        .send(body)
+        .expect(expected);
+
+    beforeAll(() => {
+      xferDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      xferPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      xferHouseholdModel = app.get<Model<Household>>(
+        getModelToken(Household.name),
+      );
+      // Storage isn't running under test; report only what this block declared.
+      const storage = app.get(StorageService);
+      statSpy = jest
+        .spyOn(storage, 'statObject')
+        .mockImplementation((key: string) =>
+          Promise.resolve(uploaded.get(key) ?? null),
+        );
+    });
+
+    afterAll(() => statSpy?.mockRestore());
+
+    it.each([
+      'Renewal Review',
+      'Policy Change',
+      'Payment',
+      'Company Transfer',
+    ])('records a transfer from a %s ticket', async (category) => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id), category);
+
+      const res = await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      expect(res.body.policyTransfer).not.toBeNull();
+      expect(res.body.policyTransfer.pairs).toHaveLength(1);
+      expect(res.body.policyTransfer.pairs[0].fromPolicyId).toBe(
+        String(policy._id),
+      );
+      expect(res.body.allowsPolicyTransfer).toBe(true);
+    });
+
+    it('is refused from a category that does not allow it', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id), 'Billing');
+
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+        400,
+      );
+      expect(
+        await xferDealModel.countDocuments({
+          ticketId: new Types.ObjectId(ticket.id),
+        }),
+      ).toBe(0);
+    });
+
+    it('retires the old policy and links both ways', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      const res = await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      const from = await xferPolicyModel.findById(policy._id);
+      expect(from!.active).toBe(false);
+      expect(from!.policyStatus).toBe('Cancelled');
+
+      const toId = res.body.policyTransfer.pairs[0].toPolicyId;
+      expect(String(from!.transferredToPolicyId)).toBe(toId);
+
+      const to = await xferPolicyModel.findById(toId);
+      expect(to!.active).toBe(true);
+      expect(String(to!.transferredFromPolicyId)).toBe(String(policy._id));
+    });
+
+    it('books a company-transfer deal with no lead', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      const res = await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      const deal = await xferDealModel.findById(
+        res.body.policyTransfer.dealId as string,
+      );
+      expect(deal!.businessType).toBe('company_transfer');
+      expect(deal!.leadId ?? null).toBeNull();
+      expect(String(deal!.ticketId)).toBe(ticket.id);
+    });
+
+    it('recomputes the household active-policy count', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      // One retired, one activated — still one, but recounted rather than
+      // assumed, which is what makes a re-run correct too.
+      const after = await xferHouseholdModel.findById(household._id);
+      expect(after!.totalActivePolicies).toBe(1);
+    });
+
+    it('allows only one transfer per ticket', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+        409,
+      );
+    });
+
+    it("refuses a from-policy on another household, and writes nothing", async () => {
+      const { household } = await makeHousehold();
+      const other = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(other.policy._id)),
+        400,
+      );
+
+      const untouched = await xferPolicyModel.findById(other.policy._id);
+      expect(untouched!.active).toBe(true);
+      expect(
+        await xferDealModel.countDocuments({
+          ticketId: new Types.ObjectId(ticket.id),
+        }),
+      ).toBe(0);
+    });
+
+    it('logs the transfer on the ticket timeline', async () => {
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+
+      const res = await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      expect(
+        (res.body.timeline as { type: string; content: string }[]).some(
+          (e) => e.type === 'system' && e.content.includes('Policy transfer'),
+        ),
+      ).toBe(true);
+    });
+
+    /* ─── The reporting split ─────────────────────────────────────────────── */
+
+    describe('scorecard split', () => {
+      const PERFORMANCE = '/api/v1/performance';
+
+      const performance = async (token: string) => {
+        const res = await request(app.getHttpServer())
+          .get(`${PERFORMANCE}?range=custom&from=2026-03-01&to=2026-03-31`)
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as {
+          sold: { premium: number };
+          transfers: { premium: number };
+        };
+      };
+
+      it('counts the transfer under transfers, never under sold', async () => {
+        const before = await performance(ownerToken);
+
+        const { household, policy } = await makeHousehold();
+        const ticket = await makeTicket(String(household._id));
+        await record(
+          ticket.id,
+          transferBody(String(household._id), String(policy._id)),
+        );
+
+        const after = await performance(ownerToken);
+        expect(after.transfers.premium).toBeCloseTo(
+          before.transfers.premium + 900,
+          2,
+        );
+        expect(after.sold.premium).toBeCloseTo(before.sold.premium, 2);
+      });
+
+      /**
+       * The regression guard for the one mistake that breaks existing
+       * reporting.
+       *
+       * Every deal written before `businessType` existed has **no such field**
+       * — a Mongoose default applies on write, never to stored documents. A
+       * read filtering on `businessType: 'new_business'` would therefore match
+       * none of them and report $0 sold. Absent must count as new business,
+       * which is what `NEW_BUSINESS_MATCH`'s `$ne` does.
+       */
+      it('still counts a deal that has no businessType field at all', async () => {
+        const before = await performance(ownerToken);
+
+        // Inserted through the driver so no Mongoose default is applied — this
+        // is exactly the shape of every pre-existing row.
+        await xferDealModel.collection.insertOne({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          premium: 777,
+          itemCount: 1,
+          policyCount: 1,
+          soldDateYmd: 20260310,
+          soldDate: new Date('2026-03-10T00:00:00.000Z'),
+          isTestRecord: false,
+        });
+
+        const after = await performance(ownerToken);
+        expect(after.sold.premium).toBeCloseTo(before.sold.premium + 777, 2);
+        expect(after.transfers.premium).toBeCloseTo(before.transfers.premium, 2);
+      });
+    });
+
+    it('keeps transfers off the producer leaderboard', async () => {
+      const month = '2026-03';
+      const read = async () => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/leaderboard?month=${month}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+        return res.body as { officeTotalPremium: number };
+      };
+
+      const before = await read();
+
+      const { household, policy } = await makeHousehold();
+      const ticket = await makeTicket(String(household._id));
+      await record(
+        ticket.id,
+        transferBody(String(household._id), String(policy._id)),
+      );
+
+      expect((await read()).officeTotalPremium).toBeCloseTo(
+        before.officeTotalPremium,
+        2,
+      );
     });
   });
 });

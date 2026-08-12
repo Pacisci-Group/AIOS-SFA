@@ -43,6 +43,15 @@ interface LeadIntakePayload {
 
 export interface CreateLeadPayload extends LeadIntakePayload {
   leadSourceCode: string;
+  /**
+   * Pin the lead to a household the producer already has open — the Household
+   * page's "Start Quote" dialog.
+   *
+   * On `CreateLeadPayload` rather than `LeadIntakePayload` on purpose: the
+   * public route's schema does not accept it, so it must not be reachable from
+   * `submitPublicLead`, which takes the base type.
+   */
+  householdId?: string;
 }
 
 /** `POST /leads` — authenticated New Lead form. */

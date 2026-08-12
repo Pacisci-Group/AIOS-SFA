@@ -8,6 +8,7 @@ import {
   Filter,
   FileCheck,
   FileSignature,
+  FileText,
   MessageSquare,
   Mail,
   Phone,
@@ -258,6 +259,8 @@ const CATEGORY_ICONS: Record<
   "Company Transfer": { icon: ArrowLeftRight, color: "#8b5cf6", bg: "#1e1b4b" },
   Save: { icon: ShieldCheck, color: "#10b981", bg: "#052e16" },
   Termination: { icon: ShieldX, color: "#ef4444", bg: "#2d0a0a" },
+  // Violet, matching the "Start Quote" quick action this ticket comes from.
+  Quote: { icon: FileText, color: "#8b5cf6", bg: "#1e1b4b" },
   Other: { icon: MessageSquare, color: "#94a3b8", bg: "#1e293b" },
 };
 

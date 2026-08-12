@@ -6,6 +6,7 @@ import {
 import type {
   NormalizedLeadSource,
   SoldDocumentMeta,
+  SoldPolicyDiscounts,
   SoldPolicyInput,
 } from '@sfa/shared';
 import { deriveDealType } from '../../common/domain/deal-derive';
@@ -289,7 +290,10 @@ function isProofBacked(value: unknown): value is {
  * a deal with no auto line, and nothing downstream could tell it was bogus.
  */
 export function findCrossBranchDiscounts(
-  policies: SoldPolicyInput[],
+  // Narrowed to the two fields actually read, so both write paths' schemas can
+  // call it during validation — where the row is not yet a full
+  // `SoldPolicyInput` — without either one casting.
+  policies: { policyType: string; discounts?: SoldPolicyDiscounts }[],
 ): string[] {
   const problems: string[] = [];
 

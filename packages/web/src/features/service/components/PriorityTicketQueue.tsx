@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2 } from "lucide-react";
+import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2, Lock } from "lucide-react";
 import {
   SERVICE_TICKET_PICKER_STATUSES,
   isTerminalTicketStatus,
@@ -30,6 +30,8 @@ interface QueueTicket {
   daysOpen: number;
   policyNumber: string;
   isWaiting: boolean;
+  /** Quote tickets take their status from their lead — no picker on the row. */
+  isStatusLocked: boolean;
 }
 
 /** Every flavour of "blocked on someone else" feeds the Waiting filter. */
@@ -59,6 +61,7 @@ function toQueueTicket(t: ServiceTicketView): QueueTicket {
     daysOpen: t.daysOpen,
     policyNumber: t.policyNumber,
     isWaiting,
+    isStatusLocked: t.isStatusLocked,
   };
 }
 
@@ -210,7 +213,21 @@ export function PriorityTicketQueue({
                       <MessageSquarePlus size={11} />
                       <span>Note</span>
                     </button>
-                    {/* Status picker — same options as the ticket workspace */}
+                    {/*
+                      Status picker — same options as the ticket workspace, and
+                      the same exception: a quote ticket's status is owned by
+                      its lead, so the row shows a locked badge instead of a
+                      menu. "Open" alongside is the way through to the lead.
+                    */}
+                    {ticket.isStatusLocked ? (
+                      <span
+                        className={`flex items-center gap-1.5 px-2 py-1 rounded-md border border-current/20 text-xs font-medium ${statusCfg.bg} ${statusCfg.text}`}
+                        title="Status follows the linked lead — it resolves when the lead is marked Sold or Closed."
+                      >
+                        <Lock size={11} className="opacity-70" />
+                        <span>{statusCfg.label}</span>
+                      </span>
+                    ) : (
                     <div className="relative">
                       <button
                         aria-haspopup="listbox"
@@ -262,6 +279,7 @@ export function PriorityTicketQueue({
                         </div>
                       )}
                     </div>
+                    )}
                     <button
                       className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#0076A8]/20 text-xs text-[#0076A8] hover:bg-[#0076A8]/30 transition-colors"
                       onClick={(e) => {

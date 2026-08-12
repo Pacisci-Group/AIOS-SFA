@@ -5,6 +5,7 @@ import { MotivationHub } from "./MotivationHub";
 import {
   QUOTED_ACCENT,
   SOLD_ACCENT,
+  TRANSFER_ACCENT,
   ScorecardShell,
 } from "./ScorecardShell";
 import type { ScorecardAccent, ScorecardStat } from "./ScorecardShell";
@@ -30,19 +31,22 @@ export function usePerformance(range: DashboardRange) {
 }
 
 /**
- * The scorecard row: Sold, Quoted, and the Motivation Hub.
+ * The scorecard row: Sold, Quoted, Company Transfer, and the Motivation Hub.
  *
- * Sold and Quoted share one `performance` query — they always show the same
- * window, and splitting them would let the two halves of a single visual row
- * disagree mid-refresh. The Motivation Hub owns its own query (see its
- * docblock): it is month-scoped rather than range-scoped, and a leaderboard
- * failure must not blank the two cards beside it.
+ * All three metric cards share one `performance` query — they always show the
+ * same window, and splitting them would let parts of a single visual row
+ * disagree mid-refresh. It also matters that they reconcile: **Sold is new
+ * business only**, with transfers broken out beside it rather than folded in,
+ * so the two numbers have to come from the same request to be comparable. The
+ * Motivation Hub owns its own query (see its docblock): it is month-scoped
+ * rather than range-scoped, and a leaderboard failure must not blank the cards
+ * beside it.
  */
 export function ScoreCards({ range }: ScoreCardsProps) {
   const { data, isPending, isError, refetch } = usePerformance(range);
 
   return (
-    <div className="grid grid-cols-1 gap-4 px-4 py-4 md:px-6 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 px-4 py-4 md:px-6 lg:grid-cols-2 xl:grid-cols-4">
       <ScorecardShell
         label="Sold"
         accent={SOLD_ACCENT}
@@ -62,6 +66,18 @@ export function ScoreCards({ range }: ScoreCardsProps) {
         value={formatCurrency(data?.quoted.premium ?? 0)}
         caption="Total Quoted Premium"
         stats={metricStats(data?.quoted, "Avg Quoted / HH")}
+        isPending={isPending}
+        isError={isError}
+        onRetry={() => void refetch()}
+      />
+
+      <ScorecardShell
+        label="Company Transfer"
+        accent={TRANSFER_ACCENT}
+        badge={formatItems(data?.transfers.itemCount ?? 0)}
+        value={formatCurrency(data?.transfers.premium ?? 0)}
+        caption="Not counted as new business"
+        stats={metricStats(data?.transfers, "Avg Transfer / HH")}
         isPending={isPending}
         isError={isError}
         onRetry={() => void refetch()}

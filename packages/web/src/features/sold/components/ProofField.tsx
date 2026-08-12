@@ -1,3 +1,4 @@
+import type { UploadScope } from "@/lib/sold-deals-api";
 import { useStore } from "@tanstack/react-form";
 import { FormSubPanel } from "@/components/form";
 import { useFieldError } from "@/components/form/fields";
@@ -37,8 +38,12 @@ const proofDefaults: ProofValues = { selected: false };
  */
 export const ProofField = withFieldGroup({
   defaultValues: proofDefaults,
-  props: { leadId: "", label: "", proofPrompt: "" },
-  render: function Render({ group, leadId, label, proofPrompt }) {
+  props: {
+    uploadScope: { kind: "lead", leadId: "" } as UploadScope,
+    label: "",
+    proofPrompt: "",
+  },
+  render: function Render({ group, uploadScope, label, proofPrompt }) {
     const selected = useStore(group.store, (s) => s.values.selected);
 
     // `content-start`: the anti-stretch fix `FieldShell` documents.
@@ -70,7 +75,7 @@ export const ProofField = withFieldGroup({
             <group.Field name="attachment">
               {(field) => (
                 <SoldDocumentUpload
-                  leadId={leadId}
+                  uploadScope={uploadScope}
                   value={field.state.value}
                   onChange={(meta) => {
                     field.handleChange(meta);

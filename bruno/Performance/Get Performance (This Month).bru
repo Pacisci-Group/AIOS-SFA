@@ -37,13 +37,14 @@ tests {
     const body = res.getBody();
     expect(body).to.have.property("sold");
     expect(body).to.have.property("quoted");
+    expect(body).to.have.property("transfers");
   });
 
   test("averages are a number or null, never NaN", function () {
     // The contract the UI depends on: `null` means "no households to divide
     // by", which renders as an em dash rather than as $0.
     const body = res.getBody();
-    for (const card of [body.sold, body.quoted]) {
+    for (const card of [body.sold, body.quoted, body.transfers]) {
       for (const key of ["avgPremiumPerHousehold", "avgItemsPerHousehold"]) {
         const value = card[key];
         expect(value === null || typeof value === "number").to.equal(true);
@@ -89,6 +90,26 @@ docs {
   | `lastMonth` | the whole previous calendar month |
   | `custom` | `from` → `to`, both inclusive, max **366 days** |
 
+  ## The three cards
+
+  | card | source | counts |
+  |---|---|---|
+  | `sold` | `deals` | **New business only.** Company transfers are excluded — the `$ne: 'company_transfer'` match, not an equality on `new_business`. |
+  | `quoted` | `quoteRecaps` | Every recap in the window |
+  | `transfers` | `deals` | Company transfers only — the intra-book package changes a CSR records from a service ticket |
+
+  ⚠ **Why `sold` filters with `$ne` rather than `businessType: 'new_business'`.**
+  `businessType` was added after the fact, so every deal already stored has no
+  such field at all — a Mongoose default applies on write, never to existing
+  documents. An equality match would therefore return **zero** historic deals
+  and read this card as $0. Absent must count as new business. There is an e2e
+  case pinning exactly this ("still counts a deal that has no businessType field
+  at all"); do not "tidy" the filter.
+
+  `sold` and `transfers` come from one request on purpose: they have to
+  reconcile, and splitting them would let the two halves of a single row
+  disagree mid-refresh.
+
   ## Response `200`
   ```json
   {
@@ -101,7 +122,8 @@ docs {
       "avgPremiumPerHousehold": 3957.75,
       "avgItemsPerHousehold": 3.38
     },
-    "quoted": { "…": "same shape" }
+    "quoted": { "…": "same shape" },
+    "transfers": { "…": "same shape" }
   }
   ```
 

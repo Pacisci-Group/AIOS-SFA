@@ -7,10 +7,11 @@ import {
   MAX_SOLD_UPLOAD_BYTES,
   uploadSoldDocument,
   type SoldUploadKind,
+  type UploadScope,
 } from "@/lib/sold-deals-api";
 
 interface SoldDocumentUploadProps {
-  leadId: string;
+  uploadScope: UploadScope;
   value: SoldDocumentMeta | undefined;
   onChange: (meta: SoldDocumentMeta | undefined) => void;
   /** Accessible name, e.g. "Upload proof for Fire subscription". */
@@ -44,7 +45,7 @@ interface SoldDocumentUploadProps {
  * like a failed sale.
  */
 export function SoldDocumentUpload({
-  leadId,
+  uploadScope,
   value,
   onChange,
   ariaLabel,
@@ -68,7 +69,7 @@ export function SoldDocumentUpload({
 
     setUploading(true);
     try {
-      const meta = await uploadSoldDocument(leadId, candidate, kind);
+      const meta = await uploadSoldDocument(uploadScope, candidate, kind);
       onChange(meta);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");

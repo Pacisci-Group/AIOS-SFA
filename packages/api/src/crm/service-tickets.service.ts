@@ -23,6 +23,8 @@ import {
   ServiceTicketStats,
   ServiceTicketView,
   isTerminalTicketStatus,
+  normalizeLeadStatus,
+  allowsPolicyTransfer,
 } from '@sfa/shared';
 import type {
   OnboardingStepDefinition,
@@ -31,6 +33,7 @@ import type {
   RenewalCycleView,
   RenewalDeskRow,
   RenewalStepDefinition,
+  PolicyTransferRef,
   RenewalStepKey,
   RenewalTrack,
   ServiceTicketStatus,
@@ -40,6 +43,16 @@ import {
   ClientsService,
   type PolicyRenewalCandidate,
 } from '../clients/clients.service';
+import { Deal, DealDocument } from '../deals/schemas/deal.schema';
+import {
+  DealAudit,
+  DealAuditDocument,
+} from '../deal-audits/schemas/deal-audit.schema';
+import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
+import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
+import { PolicyTransfersService } from './policy-transfers.service';
+import type { PresignTransferDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
+import type { CreatePolicyTransferDto } from './dto/policy-transfer.dto';
 import {
   AgencyRole,
   AgencyRoleDocument,
@@ -114,7 +127,17 @@ export class ServiceTicketsService {
     private cycleModel: Model<RenewalCycleDocument>,
     @InjectModel(RenewalScanState.name)
     private scanStateModel: Model<RenewalScanStateDocument>,
+    // Read-only, for the linked lead's status on a quote ticket. The schema is
+    // registered on `CrmModule`; `LeadsModule` itself is deliberately not
+    // imported here — it imports `CrmModule`, and the dependency runs that way.
+    @InjectModel(Lead.name) private leadModel: Model<LeadDocument>,
+    // Read-only, for the policy transfer a ticket may carry.
+    @InjectModel(Deal.name) private dealModel: Model<DealDocument>,
+    @InjectModel(Policy.name) private policyModel: Model<PolicyDocument>,
+    @InjectModel(DealAudit.name)
+    private dealAuditModel: Model<DealAuditDocument>,
     private readonly clientsService: ClientsService,
+    private readonly policyTransfers: PolicyTransfersService,
   ) {}
 
   /**
@@ -288,7 +311,141 @@ export class ServiceTicketsService {
 
   async findOne(access: AccessContext, id: string): Promise<ServiceTicketView> {
     const ticket = await this.getScopedOrThrow(access, id);
-    return serializeTicket(ticket);
+    return serializeTicket(
+      ticket.toObject(),
+      await this.leadStatus(ticket),
+      await this.policyTransfer(ticket),
+    );
+  }
+
+  /**
+   * A presigned PUT for a policy-transfer document.
+   *
+   * The scope clamp lives here, not in `PolicyTransfersService`: the ticket is
+   * the transfer's only anchor, so `getScopedOrThrow` — which 404s an
+   * out-of-scope ticket — is what stands in for the sold path's
+   * `loadOwnedLead`. Everything downstream reads the household off the ticket
+   * it has already been handed, so nothing the client sends can widen it.
+   */
+  async presignPolicyTransferDocument(
+    access: AccessContext,
+    id: string,
+    dto: PresignTransferDocumentDto,
+  ) {
+    const ticket = await this.getScopedOrThrow(access, id);
+    return this.policyTransfers.presign(ticket, dto);
+  }
+
+  /** Record a policy transfer and return the refreshed ticket. */
+  async recordPolicyTransfer(
+    access: AccessContext,
+    id: string,
+    dto: CreatePolicyTransferDto,
+  ): Promise<ServiceTicketView> {
+    const ticket = await this.getScopedOrThrow(access, id);
+    await this.policyTransfers.record(access, ticket, dto);
+    return this.findOne(access, id);
+  }
+
+  /**
+   * The transfer booked from this ticket, or null.
+   *
+   * Read from the `Deal` and its policies rather than a record of its own —
+   * with a per-row from-policy the existing graph already expresses a transfer
+   * completely, and a parallel collection would only duplicate it.
+   *
+   * Single-ticket read only, like `leadStatus`: this is three queries, and no
+   * list surface renders it.
+   */
+  private async policyTransfer(
+    ticket: ServiceTicketDocument,
+  ): Promise<PolicyTransferRef | null> {
+    const deal = await this.dealModel
+      .findOne({ agencyId: String(ticket.agencyId), ticketId: ticket._id })
+      .lean();
+    if (!deal) return null;
+
+    const policies = await this.policyModel
+      .find({ dealId: deal._id })
+      .select(
+        'policyNumber policyType premium transferredFromPolicyId createdAt',
+      )
+      .lean();
+
+    const fromIds = policies
+      .map((p) => p.transferredFromPolicyId)
+      .filter((id): id is Types.ObjectId => id != null);
+    const fromPolicies = fromIds.length
+      ? await this.policyModel
+          .find({ _id: { $in: fromIds } })
+          .select('policyNumber policyType premium')
+          .lean()
+      : [];
+    const fromById = new Map(fromPolicies.map((p) => [String(p._id), p]));
+
+    const pairs = policies.flatMap((to) => {
+      if (!to.transferredFromPolicyId) return [];
+      const from = fromById.get(String(to.transferredFromPolicyId));
+      if (!from) return [];
+      return [
+        {
+          fromPolicyId: String(from._id),
+          fromPolicyNumber: from.policyNumber ?? null,
+          fromPolicyType: from.policyType ?? null,
+          fromPremium: from.premium ?? 0,
+          toPolicyId: String(to._id),
+          toPolicyNumber: to.policyNumber ?? null,
+          toPolicyType: to.policyType ?? null,
+          toPremium: to.premium ?? 0,
+        },
+      ];
+    });
+
+    // Null rather than 0 when a from-policy no longer resolves: an unknown
+    // saving is not a saving of nothing.
+    const premiumDelta =
+      pairs.length === policies.length
+        ? pairs.reduce((sum, p) => sum + (p.toPremium - p.fromPremium), 0)
+        : null;
+
+    const audit = await this.dealAuditModel
+      .findOne({ agencyId: String(ticket.agencyId), dealId: deal._id })
+      .select('_id')
+      .lean();
+
+    return {
+      dealId: String(deal._id),
+      transferDate: deal.soldDate ? deal.soldDate.toISOString() : null,
+      premium: deal.premium ?? 0,
+      policyCount: deal.policyCount ?? policies.length,
+      premiumDelta,
+      recordedByName: deal.producerId
+        ? await this.resolveUserName(String(deal.producerId))
+        : 'System',
+      recordedAt: (deal.createdAt ?? new Date()).toISOString(),
+      dealAuditId: audit ? String(audit._id) : null,
+      pairs,
+    };
+  }
+
+  /**
+   * The linked lead's status, for the workspace header's "resolves when the
+   * lead closes" line. Null for every ticket that is not a quote.
+   *
+   * Read unscoped by design: the CSR is being told why the ticket in front of
+   * them cannot be resolved, and the ticket is already scope-checked. Clamping
+   * this to the CSR's own leads would blank the explanation on exactly the
+   * tickets that need it — a lead whose producer is someone else.
+   */
+  private async leadStatus(
+    ticket: Pick<ServiceTicket, 'leadId'>,
+  ): Promise<string | null> {
+    if (!ticket.leadId) return null;
+    const lead = await this.leadModel
+      .findById(ticket.leadId)
+      .select('status')
+      .lean();
+    return lead ? normalizeLeadStatus(lead.status) : null;
   }
 
   async create(
@@ -445,6 +602,18 @@ export class ServiceTicketsService {
     dto: UpdateStatusDto,
   ): Promise<ServiceTicketView> {
     const ticket = await this.getScopedOrThrow(access, id);
+
+    // A quote ticket has no status of its own. It exists because a lead is
+    // being quoted, and it is finished exactly when that lead is — so the lead
+    // owns the transition and `resolveForLead` performs it. Letting a CSR
+    // resolve this by hand is the disagreement the link exists to prevent, and
+    // the picker already renders a static badge; this is the server-side half
+    // of the same rule, for anyone calling the API directly.
+    if (ticket.leadId) {
+      throw new BadRequestException(
+        "This ticket's status follows its lead — mark the lead Sold or Closed to resolve it.",
+      );
+    }
 
     // An onboarding ticket's status is normally derived from its call step's
     // timing, so a plain write to `ticket.status` would be discarded on the way
@@ -1113,9 +1282,8 @@ export class ServiceTicketsService {
     return ticket;
   }
 
-  private async resolveUserName(
-    userId: string | null | undefined,
-  ): Promise<string> {
+  /** Public for `LeadTicketsService`, which stamps the same author fields. */
+  async resolveUserName(userId: string | null | undefined): Promise<string> {
     if (!userId || !Types.ObjectId.isValid(userId)) {
       return 'System';
     }
@@ -1154,8 +1322,12 @@ export class ServiceTicketsService {
    * the duplicate-key error is cheaper and less invasive than a counter
    * collection; each retry both re-counts *and* walks the number forward, so a
    * number that is simply already taken is skipped rather than retried.
+   *
+   * Public for `LeadTicketsService`: a quote ticket needs the same `QTE-nnn`
+   * allocation and the same clash retry, and duplicating either would be how
+   * the two drift apart.
    */
-  private async createTicketWithNumber(
+  async createTicketWithNumber(
     agencyId: string,
     doc: Record<string, unknown>,
   ): Promise<ServiceTicketDocument> {
@@ -2109,6 +2281,7 @@ const CATEGORY_PREFIX: Record<string, string> = {
   'Claims Assist': 'CLAIM',
   'Renewal Review': 'RENEW',
   Other: 'TKT',
+  Quote: 'QTE',
   'Policy Change': 'PCHG',
   Payment: 'PAY',
   'Company Transfer': 'XFER',
@@ -2279,8 +2452,19 @@ function archivedMatch(cutoff: Date): FilterQuery<ServiceTicketDocument> {
   };
 }
 
-function serializeTicket(
+/**
+ * Exported so `LeadTicketsService` returns the identical shape — a quote ticket
+ * opened from Start Quote must serialize exactly like one read back from the
+ * queue, `isStatusLocked` included.
+ *
+ * `leadStatus` is passed in rather than looked up here: the single-ticket read
+ * has the lead in hand, and every list path would otherwise pay a lead read per
+ * row for a field no list displays.
+ */
+export function serializeTicket(
   ticket: ServiceTicket & { _id: unknown },
+  leadStatus: string | null = null,
+  policyTransfer: PolicyTransferRef | null = null,
 ): ServiceTicketView {
   const now = new Date();
   const openedAt = new Date(ticket.openedAt);
@@ -2339,6 +2523,11 @@ function serializeTicket(
     household: ticket.household,
     policyId: ticket.policyId ? String(ticket.policyId) : null,
     householdId: ticket.householdId ? String(ticket.householdId) : null,
+    leadId: ticket.leadId ? String(ticket.leadId) : null,
+    // A quote ticket's status belongs to its lead. The pickers render a static
+    // badge off this rather than re-deriving `leadId !== null` per surface.
+    isStatusLocked: ticket.leadId != null,
+    leadStatus,
     phone: ticket.phone,
     email: ticket.email,
     daysOpen: daysBetween(openedAt, new Date()),
@@ -2350,6 +2539,11 @@ function serializeTicket(
     timeline: (ticket.timeline ?? []).map((e) =>
       serializeActivity(e as ServiceTicketActivityEntry & { _id?: unknown }),
     ),
+    // Category-driven, so the button appears on a fresh ticket before any
+    // transfer exists. `policyTransfer` non-null is what then replaces it with
+    // the read-only summary.
+    allowsPolicyTransfer: allowsPolicyTransfer(ticket.category),
+    policyTransfer,
     onboarding,
     renewal: ticket.renewal
       ? serializeRenewalStep(

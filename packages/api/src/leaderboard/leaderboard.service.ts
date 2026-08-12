@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { NEW_BUSINESS_MATCH } from '@sfa/shared';
 import type {
   AccessContext,
   LeaderboardEntry,
@@ -198,6 +199,18 @@ export class LeaderboardService {
           agencyId,
           isTestRecord: { $ne: true },
           producerId: { $ne: null },
+          /*
+           * New business only. A company transfer is attributed to the CSR who
+           * recorded it, so without this a CSR would rank on the *producer*
+           * leaderboard the moment they moved a client to a cheaper package —
+           * and every transfer would inflate `attainmentPct`, which moves
+           * everyone's rank, not just theirs.
+           *
+           * Spelled out here rather than inherited: this service deliberately
+           * does not use `buildScopeFilter` (see the docblock above), so it gets
+           * no exclusion for free.
+           */
+          ...NEW_BUSINESS_MATCH,
           soldDateYmd: { $gte: startYmd, $lt: endYmd },
         },
       },

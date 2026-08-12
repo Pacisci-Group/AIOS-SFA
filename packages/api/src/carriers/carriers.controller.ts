@@ -2,8 +2,8 @@ import { Controller, Get } from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
-  RequireModule,
-  RequirePermissions,
+  RequireAnyModule,
+  RequireAnyPermission,
 } from '../common/decorators/access.decorators';
 import { Access } from '../common/decorators/user.decorators';
 import { CarriersService } from './carriers.service';
@@ -28,9 +28,24 @@ import { CarriersService } from './carriers.service';
  * under `platform:*` and agency-owner CRUD under `agency:*`; the schema already
  * accommodates both. See `carrier.schema.ts`.
  */
+/*
+ * Reachable from **either** policy-writing surface (PAC-32/33's OR gate).
+ *
+ * The Sold form is `deal_audits`; the CSR's Policy Transfer is `crm_service`,
+ * and a CSR holds no `deal_audits` at all. Both wizards hard-block when this
+ * list fails to load — deliberately, since there is no free-text carrier
+ * fallback — so without the second permission the transfer is unusable by the
+ * one role it exists for.
+ *
+ * Widening the gate rather than the CSR role, per the PAC-32/33 write-up: this
+ * is a catalog read behind two pages, not a new page.
+ */
 @Controller('carriers')
-@RequireModule(ModuleKey.DealAudits)
-@RequirePermissions(modulePermission(ModuleKey.DealAudits, 'read'))
+@RequireAnyModule(ModuleKey.DealAudits, ModuleKey.CrmService)
+@RequireAnyPermission(
+  modulePermission(ModuleKey.DealAudits, 'read'),
+  modulePermission(ModuleKey.CrmService, 'read'),
+)
 export class CarriersController {
   constructor(private readonly carriersService: CarriersService) {}
 

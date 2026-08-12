@@ -29,6 +29,7 @@ import {
   resolveHouseholdAddress,
 } from '../common/address/household-address';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
+import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import { HouseholdDocument } from '../households/schemas/household.schema';
 import { toLeadDetailPolicy } from '../policies/policy-view';
@@ -120,6 +121,7 @@ export class LeadDetailService {
     private readonly activityModel: Model<ActivityDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly leadAccess: LeadAccessService,
+    private readonly leadTickets: LeadTicketsService,
   ) {}
 
   /**
@@ -241,6 +243,14 @@ export class LeadDetailService {
    * No `Activity` row is written. None of the `ACTIVITY_TYPES` members means
    * "status changed", and adding one ripples through the migration, the demo
    * seed and the shared union — a follow-up, not a side effect of this ticket.
+   *
+   * One cross-entity side effect *does* fire: moving the lead to a terminal
+   * status resolves its quote service ticket, if it has one. This is the only
+   * path that can set `Closed`, `Lost` or `Not Qualified` — the automatic
+   * advances only ever write `Quoted` and `Sold` — so without the call here a
+   * lead the producer closed by hand would leave its ticket on the CSR's desk
+   * with no way to clear it. Post-save and best-effort, for the reason spelled
+   * out on `LeadTicketsService.resolveForLead`.
    */
   async update(
     access: AccessContext,
@@ -270,6 +280,14 @@ export class LeadDetailService {
 
     lead.lastActivityAt = new Date();
     await lead.save();
+
+    if (dto.status !== undefined) {
+      await this.leadTickets.resolveForLead(
+        lead._id,
+        String(lead.agencyId),
+        lead.status,
+      );
+    }
 
     return {
       id: lead._id.toString(),

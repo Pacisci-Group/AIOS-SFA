@@ -1,6 +1,7 @@
+import type { BusinessType } from '@sfa/shared';
 import { ClientSession, Types } from 'mongoose';
 import type { CreatedRegistry } from '../../common/mongo/transaction.runner';
-import type { CreateSoldDealDto } from '../dto/create-sold-deal.dto';
+import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 
 /**
  * Tenancy + actor for one sold submission.
@@ -16,12 +17,24 @@ export interface SoldIntakeContext {
   branchId: string;
   /** The authenticated caller; becomes `Deal.producerId`. */
   producerId: Types.ObjectId;
-  leadId: Types.ObjectId;
+  /**
+   * The lead this sale came from — **absent on a policy transfer**, which is
+   * anchored on a household and a ticket instead.
+   *
+   * Optional rather than forked because everything downstream of the deal
+   * already keys off `householdId`; the lead is load-bearing only for the lead
+   * status advance and the deal title fallback, both of which now check.
+   */
+  leadId?: Types.ObjectId;
+  /** The service ticket a transfer was recorded from. Absent on a sale. */
+  ticketId?: Types.ObjectId;
+  /** New business, or an intra-book company transfer. */
+  businessType: BusinessType;
   householdId: Types.ObjectId;
   quoteRecapId?: Types.ObjectId;
   primaryContactId?: Types.ObjectId;
   clientName?: string;
-  /** Namespaced (`SOLD|…`) or null when the client sent no token. */
+  /** Namespaced (`SOLD|…` / `XFER|…`) or null when the client sent no token. */
   submissionToken: string | null;
 }
 
@@ -33,7 +46,7 @@ export interface SoldStepDeps {
 }
 
 export interface SoldIntakeInput {
-  dto: CreateSoldDealDto;
+  dto: SoldIntakeDto;
 }
 
 export interface SoldIntakeOutcome {

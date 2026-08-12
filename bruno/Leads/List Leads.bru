@@ -18,6 +18,7 @@ params:query {
   ~temperature: Hot,Warm
   ~leadSource: Mailer
   ~producerId: {{producerId}}
+  ~householdId: {{householdId}}
   ~dateFrom: 2026-01-01
   ~dateTo: 2026-12-31
   ~scope: own
@@ -107,6 +108,7 @@ docs {
   | temperature | multi   | —       | `Hot` \| `Warm` \| `Cold` \| `Unknown`; max 4     |
   | leadSource  | string  | —       | canonical label, e.g. `Mailer`                    |
   | producerId  | string  | —       | ObjectId; ignored for `own` scope                 |
+  | householdId | string  | —       | ObjectId (24 hex); narrows to one household       |
   | dateFrom    | date    | —       | filters `createdDate` (inclusive)                 |
   | dateTo      | date    | —       | filters `createdDate` (inclusive, whole day)      |
   | scope       | enum    | —       | `own` \| `agency`; clamped to the caller's scope  |
@@ -123,6 +125,17 @@ docs {
   impossible one — clearing the UI filter never returns an empty list. Each
   element of `temperature` must be a valid enum member; one bad value rejects
   the whole request (`400`).
+
+  ### `householdId`
+  Every lead attached to one household — the lead picker in the Household
+  page's "Start Quote" dialog, which offers the household's existing leads
+  before offering to create one.
+
+  It narrows *within* the data-scope clamp and never widens it: a producer
+  (`own`) still sees only their own leads for that household, so a colleague's
+  lead on the same household is simply absent rather than forbidden. A value
+  that is not 24 hex characters is a `400`, not a `500` — the shape is checked
+  in the DTO so a malformed id never reaches Mongoose as a `CastError`.
 
   ### How `search` is interpreted
   One branch is chosen by the shape of the query:
@@ -185,7 +198,7 @@ docs {
   - `403 Forbidden` — `leads` module disabled, or missing `leads:read`.
   - `400 Bad Request` — invalid query params (e.g. `pageSize` > 100, `page` < 1,
     an unknown `temperature`, more than 10 `status` values, an unparseable
-    `dateFrom`/`dateTo`).
+    `dateFrom`/`dateTo`, a `householdId` that is not a record id).
 
   > **Tip:** the seeded producer (`producer@smithfamily.local`) is the
   > data-rich user for this list. Log in as them to get non-empty results.

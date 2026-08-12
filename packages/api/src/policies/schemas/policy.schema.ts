@@ -101,6 +101,23 @@ export class Policy extends TenantRecord {
   @Prop()
   legacyDealId?: string;
 
+  /*
+   * Policy transfer links — the two ends of "this package replaced that one".
+   *
+   * Set as a pair by `UpsertPoliciesStep` when a row carries `fromPolicyId`, so
+   * the move is legible from either policy: the retired one points forward, the
+   * new one points back. Both null on every policy written by the Sold form.
+   *
+   * Deliberately *not* `existingPolicyId`'s behaviour, which updates one row in
+   * place — a transfer keeps both rows, because the client genuinely had two
+   * policies over time and the old one's history has to survive.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  transferredToPolicyId: Types.ObjectId | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  transferredFromPolicyId: Types.ObjectId | null;
+
   /**
    * The discount selections this specific policy carried (PAC-40).
    *

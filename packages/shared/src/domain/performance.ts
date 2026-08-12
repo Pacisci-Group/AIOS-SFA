@@ -48,6 +48,17 @@ export interface PerformanceMetric {
 
 export interface PerformanceResponse {
   range: PerformanceRange;
+  /**
+   * New business only. Company transfers are excluded and reported below —
+   * a package change is production, but it is not a sale, and rolling the two
+   * together is what this split exists to prevent.
+   */
   sold: PerformanceMetric;
   quoted: PerformanceMetric;
+  /**
+   * Company transfers over the same range — the intra-book moves a CSR records
+   * from a service ticket. Same shape as the other two: a transfer has a
+   * premium, an item count and a household exactly like a sale does.
+   */
+  transfers: PerformanceMetric;
 }

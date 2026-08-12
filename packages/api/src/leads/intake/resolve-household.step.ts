@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { SequenceService } from '../../common/mongo/sequence.service';
 import {
   Contact,
@@ -39,6 +39,9 @@ import {
  * would silently join unrelated people: apartment buildings without unit
  * numbers, house shares, and previous occupants all collide on `street|zip`.
  * Legacy agrees in practice — it writes `address_key` and never queries it.
+ *
+ * {@link pin} is the one exception, and it is not an inference at all: the
+ * authenticated caller names a household they already have on screen.
  */
 @Injectable()
 export class ResolveHouseholdStep {
@@ -49,6 +52,35 @@ export class ResolveHouseholdStep {
     private readonly contactModel: Model<ContactDocument>,
     private readonly sequences: SequenceService,
   ) {}
+
+  /**
+   * The caller already knows the household — take it as given.
+   *
+   * Scoped to the caller's agency, and a miss is a `404` rather than a silent
+   * fallback to derivation: "create this lead on household X" failing quietly
+   * onto some other household is the one outcome nobody could detect.
+   *
+   * Runs **before** contact resolution (unlike {@link run}), because the pinned
+   * household is what narrows the contact search.
+   */
+  async pin(householdId: string, deps: StepDeps): Promise<ResolvedHousehold> {
+    if (!Types.ObjectId.isValid(householdId)) {
+      throw new NotFoundException('Household not found');
+    }
+
+    const household = await this.householdModel
+      .findOne({
+        _id: new Types.ObjectId(householdId),
+        agencyId: deps.ctx.agencyId,
+      })
+      .select('_id')
+      .session(deps.session);
+    if (!household) {
+      throw new NotFoundException('Household not found');
+    }
+
+    return { householdId: household._id, isNew: false };
+  }
 
   async run(
     contact: ResolvedContact,

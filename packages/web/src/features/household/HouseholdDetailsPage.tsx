@@ -6,9 +6,11 @@ import {
   CreateTicketDialog,
   type CreateTicketPrefill,
 } from "@/features/service/components/CreateTicketDialog";
+import { usePermissions } from "@/hooks/usePermissions";
 import { DEMO_HOUSEHOLD } from "./demo-household";
 import { AddMemberDialog } from "./components/AddMemberDialog";
 import { QuickActionBar } from "./components/QuickActionBar";
+import { StartQuoteDialog } from "./components/StartQuoteDialog";
 import { HouseholdProfile } from "./components/HouseholdProfile";
 import { PolicyPortfolio } from "./components/PolicyPortfolio";
 import { ActivityFeed } from "./components/ActivityFeed";
@@ -34,8 +36,38 @@ export default function HouseholdDetailsPage() {
   const { id } = useParams<{ id: string }>();
   const isDemo = !id || id === "demo";
   const queryClient = useQueryClient();
+  const { canRead, canWrite } = usePermissions();
   const [createTicketOpen, setCreateTicketOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [startQuoteOpen, setStartQuoteOpen] = useState(false);
+
+  /**
+   * Start Quote spans two modules, so it needs both: step 1 lists and creates
+   * leads, step 2 writes the recap. A CSR holding `crm_service:read` can reach
+   * this page (see `HouseholdRecordsController`) without holding either, and an
+   * enabled button that 403s on submit is worse than one that is not offered.
+   */
+  const canStartQuote = canRead("leads") && canWrite("quote_recaps");
+
+  /**
+   * Why "+ Start Quote" is unavailable, when it is — the tooltip on the
+   * disabled button.
+   *
+   * Both cases were previously a live-looking button that silently did nothing,
+   * with no console error to find because nothing had gone wrong. The demo one
+   * is the common case: `/clients/demo` is the only Household link in the nav,
+   * so it is where anyone tries the button first.
+   */
+  const startQuoteDisabledReason = isDemo
+    ? "The demo household isn't a real record — open a live client to start a quote."
+    : !canStartQuote
+      ? "Needs Leads read and Quote Recaps write."
+      : undefined;
+
+  /** The demo household has no record to write against, so neither can these. */
+  const demoReason = isDemo
+    ? "Not available on the demo household."
+    : undefined;
 
   const query = useQuery({
     queryKey: ["household", id],
@@ -107,6 +139,16 @@ export default function HouseholdDetailsPage() {
                 isDemo ? undefined : () => setCreateTicketOpen(true)
               }
               onAddMember={isDemo ? undefined : () => setAddMemberOpen(true)}
+              onStartQuote={
+                startQuoteDisabledReason
+                  ? undefined
+                  : () => setStartQuoteOpen(true)
+              }
+              disabledReasons={{
+                addMember: demoReason,
+                newTicket: demoReason,
+                startQuote: startQuoteDisabledReason,
+              }}
             />
           </div>
 
@@ -161,6 +203,18 @@ export default function HouseholdDetailsPage() {
               </div>
             </div>
           </div>
+
+          {/* Mounted only for a live record the caller may quote: the demo
+              household is not a real record, so there is nothing to attach a
+              lead or a recap to. `household` is a `HouseholdView` here — the
+              dialog prefills the New Lead form from it. */}
+          {!isDemo && canStartQuote && (
+            <StartQuoteDialog
+              household={household}
+              open={startQuoteOpen}
+              onOpenChange={setStartQuoteOpen}
+            />
+          )}
 
           <AddMemberDialog
             householdId={household.id}

@@ -86,6 +86,15 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       ...permissionsForModule(ModuleKey.Mailers),
       modulePermission(ModuleKey.Performance, 'read'),
       ...permissionsForModule(ModuleKey.CrmService),
+      // "Start Quote" on the Household page spans two modules — step 1 creates
+      // the lead, step 2 writes the recap — and it is the CSR who runs it and
+      // takes the resulting quote ticket. Without this the button is disabled
+      // for exactly the role the flow was built around.
+      //
+      // A narrow widening, unlike the `clients:read` grant rejected under
+      // PAC-32/33: `quote_recaps` has no entry in `nav-items.ts`, so it opens
+      // `/quote-recaps/new` and this button and surfaces no new page.
+      ...permissionsForModule(ModuleKey.QuoteRecaps),
     ],
   },
   {

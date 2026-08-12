@@ -8,8 +8,8 @@ import {
 } from '../../activities/schemas/activity.schema';
 import { TransactionRunner } from '../../common/mongo/transaction.runner';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
-import type { LeadDocument } from '../../leads/schemas/lead.schema';
-import type { CreateSoldDealDto } from '../dto/create-sold-deal.dto';
+import type { NormalizedLeadSource } from '@sfa/shared';
+import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import { AdvanceLeadStep } from './advance-lead.step';
 import { InterestedPartiesStep } from './interested-parties.step';
 import { PriorInsuranceStep } from './prior-insurance.step';
@@ -64,11 +64,17 @@ export class SoldDealIntakeService {
     private readonly leads: AdvanceLeadStep,
   ) {}
 
+  /**
+   * `leadSource` rather than the lead document: it is the only field of the
+   * lead this pipeline ever read, and taking the narrower input is what lets a
+   * leadless policy transfer run the identical steps. A transfer passes
+   * `undefined`, which `resolveLeadSource` already renders as the empty source.
+   */
   async process(
     ctx: SoldIntakeContext,
-    dto: CreateSoldDealDto,
+    dto: SoldIntakeDto,
     access: AccessContext,
-    lead: LeadDocument,
+    leadSource: NormalizedLeadSource | undefined,
   ): Promise<SoldIntakeOutcome> {
     // Probe BEFORE opening a transaction, the same reasoning as lead intake: a
     // replay should not re-run policy upserts or re-derive anything.
@@ -83,7 +89,7 @@ export class SoldDealIntakeService {
 
         const { dealId, aggregates } = await this.deals.run(
           dto,
-          lead.leadSource,
+          leadSource,
           deps,
         );
         const policies = await this.policies.run(dto, dealId, access, deps);
@@ -131,12 +137,22 @@ export class SoldDealIntakeService {
    * irreplaceable thing in the request, and rolling it back because a timeline
    * row failed would fail in the wrong direction. Same precedent as
    * `LeadIntakeService.recordCreatedActivity`.
+   *
+   * **Both effects are lead-scoped, so a policy transfer skips both.** There is
+   * no lead to advance, and `ACTIVITY_TYPES` has no member meaning
+   * "transferred" — `Activity.leadId` is required by every reader of the feed,
+   * and writing a `sold` row for something that was not sold would be worse
+   * than writing nothing. The transfer's ticket timeline carries it instead.
    */
   async recordSideEffects(
     ctx: SoldIntakeContext,
     outcome: SoldIntakeOutcome,
-  ): Promise<{ leadStatus: string }> {
-    const leadStatus = await this.leads.run(ctx.leadId, ctx.agencyId);
+  ): Promise<{ leadStatus: string | null }> {
+    if (!ctx.leadId) {
+      return { leadStatus: null };
+    }
+    const leadId = ctx.leadId;
+    const leadStatus = await this.leads.run(leadId, ctx.agencyId);
 
     if (outcome.dealIsNew) {
       try {
@@ -145,7 +161,7 @@ export class SoldDealIntakeService {
           branchId: ctx.branchId,
           type: 'sold',
           subjectType: 'deal',
-          leadId: ctx.leadId,
+          leadId,
           dealId: outcome.dealId,
           producerId: ctx.producerId,
           occurredAt: outcome.soldDate,
