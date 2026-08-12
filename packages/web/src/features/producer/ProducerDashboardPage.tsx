@@ -20,11 +20,14 @@ export default function ProducerDashboardPage() {
             because the hand-off board needs ~500px before its four columns
             read; at 1024px, three fifths of what is left beside the sidebar is
             not that.
+            The row floor keeps the contact list readable when the hand-off
+            board is short or empty — the board sizes the row, and the contact
+            list fills it rather than collapsing with it.
             Page-level permission rule: access is all-or-nothing per page.
             Reaching this route already requires `dashboard:read`, so every
             panel the dashboard shows is part of the dashboard page and is
             visible to anyone with `dashboard:read`. */}
-        <div className="grid grid-cols-1 gap-4 px-4 pb-6 md:px-6 xl:grid-cols-[3fr_2fr]">
+        <div className="grid grid-cols-1 gap-4 px-4 pb-6 md:px-6 xl:min-h-[420px] xl:grid-cols-[3fr_2fr]">
           <DealsAuditBoard />
           <HotLeadsPanel />
         </div>

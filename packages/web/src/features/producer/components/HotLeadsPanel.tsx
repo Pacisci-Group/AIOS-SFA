@@ -30,8 +30,14 @@ export function HotLeadsPanel() {
   const items = data?.items ?? [];
 
   return (
-    <Card className="flex flex-col rounded-xl overflow-hidden p-0 gap-0 bg-card border-border">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
+    // `xl:h-0 xl:min-h-full`: beside the hand-off board this card must fill the
+    // grid row without *driving* it. The board is structurally taller (column
+    // headers + pagination around the same body height), so a stretched card
+    // with a fixed-height body left dead space below the list. Zero height
+    // contributes nothing to the row; `min-h-full` then fills whatever the
+    // board sized it to.
+    <Card className="flex flex-col rounded-xl overflow-hidden p-0 gap-0 bg-card border-border xl:h-0 xl:min-h-full">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
         <div className="flex items-center gap-2">
           <div className="w-1.5 h-5 rounded-full bg-red-400" />
           <h2 className="text-sm text-foreground font-semibold">
@@ -44,10 +50,9 @@ export function HotLeadsPanel() {
         </Badge>
       </div>
 
-      <div
-        className="flex flex-col gap-0 overflow-y-auto"
-        style={{ maxHeight: "360px" }}
-      >
+      {/* Stacked (below `xl`) the card is content-sized, so the list keeps its
+          own cap; side-by-side it flexes to the bottom of the card instead. */}
+      <div className="flex flex-col gap-0 overflow-y-auto max-h-[360px] xl:max-h-none xl:flex-1 xl:min-h-0">
         {isPending ? (
           Array.from({ length: PANEL_SIZE }).map((_, i) => (
             <div
