@@ -72,6 +72,23 @@ import { ENV_FILE_PATH } from './config/env.config';
     BranchesModule,
     RolesModule,
     UsersModule,
+    /*
+     * Must precede **CrmModule**, not merely ClientsModule, so `/policies/check`
+     * is registered ahead of `/policies/:id`. "check" is not a valid ObjectId,
+     * so while `:id` won the duplicate check answered 404 for every caller and
+     * the Sold wizard silently lost its duplicate warning.
+     *
+     * Third instance of the same hazard — see ShareLinksModule and ClientsModule
+     * below — with the twist that made it hard to spot: **a module is
+     * instantiated when it is first reached, including transitively.**
+     * `CrmModule` imports `ClientsModule`, so ClientsModule's routes register at
+     * CrmModule's position, not at its own. Ordering against the module that
+     * *declares* the colliding controller is not enough; it has to precede
+     * whatever pulls it in first.
+     *
+     * Pinned by the "Policies (PAC-40 duplicate check)" e2e block.
+     */
+    PoliciesModule,
     CrmModule,
     // Registered before FeatureModulesModule so the real `/households/:id`
     // read is matched ahead of the `/households` stub controller.
@@ -85,7 +102,6 @@ import { ENV_FILE_PATH } from './config/env.config';
     LeadsModule,
     ContactsModule,
     QuoteRecapsModule,
-    PoliciesModule,
     // The Sold wizard's carrier vocabulary (PAC-56 #19). Also registers the
     // `carriers` model so its indexes build and the core seed can inject it.
     CarriersModule,

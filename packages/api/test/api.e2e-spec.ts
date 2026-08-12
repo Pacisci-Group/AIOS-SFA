@@ -4,11 +4,14 @@ import { Connection, Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import {
+  DataScope,
   DEFAULT_ROLE_TEMPLATES,
   ModuleKey,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
+import * as bcrypt from 'bcrypt';
+import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
 import type {
   ContactDetail,
   CreateActivityResponse,
@@ -517,12 +520,71 @@ describe('SFA API (e2e)', () => {
       expect(res.body.household.id).toBe(seed.householdId);
     });
 
+    /*
+     * The OR gate must still *deny* someone holding neither permission —
+     * otherwise it is an "always allow" and this whole suite proves nothing.
+     *
+     * This used to be asserted with `producerToken`, on the stated premise that
+     * "the producer role has neither". **PAC-38 invalidated that**: it granted
+     * Producer `clients:write` for contact editing on Lead Detail, and write
+     * implies read, so a producer now legitimately passes the gate. The test
+     * kept asserting 403 and started failing — the premise rotted, not the gate.
+     *
+     * No seeded role lacks both any more (the two test roles hold read on every
+     * module), so the negative case needs a purpose-built one rather than
+     * borrowing a persona whose permissions can drift again.
+     */
     it('GET /households/:id — forbidden for a user with neither permission', async () => {
-      // The producer role has neither clients nor crm_service.
+      const roleModel = app.get<Model<AgencyRole>>(
+        getModelToken(AgencyRole.name),
+      );
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+
+      const narrowRole = await roleModel.create({
+        agencyId: new Types.ObjectId(seed.agencyId),
+        name: 'Neither Clients Nor CRM',
+        slug: 'neither_clients_nor_crm',
+        // Deliberately one unrelated page: enough to authenticate and pass the
+        // tenant guard, nothing that reaches a client record.
+        permissions: [`${ModuleKey.Leads}:read`],
+        dataScope: DataScope.Agency,
+        isSystemTemplate: false,
+      });
+      const email = 'test-neither@sfa.local';
+      await userModel.updateOne(
+        { email },
+        {
+          $set: {
+            email,
+            passwordHash: await bcrypt.hash(TEST_PASSWORD, 12),
+            firstName: 'Neither',
+            lastName: 'Permission',
+            agencyId: new Types.ObjectId(seed.agencyId),
+            branchId: new Types.ObjectId(seed.branchId),
+            roleIds: [narrowRole._id],
+            isActive: true,
+          },
+        },
+        { upsert: true },
+      );
+
+      const { accessToken } = await login(app, email, TEST_PASSWORD);
+      await request(app.getHttpServer())
+        .get(`/api/v1/households/${seed.householdId}`)
+        .set(authHeader(accessToken))
+        .expect(403);
+    });
+
+    /*
+     * The other half of what PAC-38 changed, now pinned so the next reader does
+     * not mistake it for the regression above: a producer *does* reach a
+     * household, through `clients:write` implying `clients:read`.
+     */
+    it('GET /households/:id — producer reaches it via clients:write (PAC-38)', async () => {
       await request(app.getHttpServer())
         .get(`/api/v1/households/${seed.householdId}`)
         .set(authHeader(producerToken))
-        .expect(403);
+        .expect(200);
     });
 
     it('GET /households/:id — unauthenticated', async () => {
@@ -658,14 +720,17 @@ describe('SFA API (e2e)', () => {
     // takes the quote ticket that comes out. It adds no nav entry — there is no
     // `quote_recaps` item in `nav-items.ts` — so it widens the API surface
     // without widening the CSR's visible app.
-    const csrAllowedReads = [
+    /*
+     * Pages still served by a `createFeatureController` stub, which echoes
+     * `{ module }` — so the echo is worth asserting: it proves *which*
+     * controller answered, not merely that something did.
+     */
+    const csrStubReads = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
-      { path: 'leads', module: ModuleKey.Leads },
       { path: 'mailers', module: ModuleKey.Mailers },
-      { path: 'performance', module: ModuleKey.Performance },
     ];
 
-    it.each(csrAllowedReads)(
+    it.each(csrStubReads)(
       'GET /api/v1/$path — CSR can read',
       async ({ path, module }) => {
         const res = await request(app.getHttpServer())
@@ -674,6 +739,25 @@ describe('SFA API (e2e)', () => {
           .expect(200);
 
         expect(res.body.module).toBe(module);
+      },
+    );
+
+    /*
+     * Pages whose stub has been replaced by a real controller (PAC-10/11 for
+     * performance, PAC-36 for leads). There is no `{ module }` echo to assert
+     * any more — a real payload came back instead, which is the point.
+     *
+     * Kept in this block deliberately: what is under test here is the *access
+     * matrix*, not the payload. A 200 says the guard chain let the CSR through;
+     * the shape of what it returned is covered by those features' own suites.
+     */
+    it.each(['leads', 'performance'])(
+      'GET /api/v1/%s — CSR can read (real module)',
+      async (path) => {
+        await request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set(authHeader(csrToken))
+          .expect(200);
       },
     );
 
@@ -686,16 +770,32 @@ describe('SFA API (e2e)', () => {
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    const csrWritablePages = ['leads', 'mailers'];
-    it.each(csrWritablePages)(
-      'PATCH /api/v1/%s — CSR can write',
-      async (path) => {
-        await request(app.getHttpServer())
-          .patch(`/api/v1/${path}`)
-          .set(authHeader(csrToken))
-          .expect(200);
-      },
-    );
+    // Still a stub, so the bare `PATCH /mailers` write probe still answers.
+    it('PATCH /api/v1/mailers — CSR can write', async () => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/mailers')
+        .set(authHeader(csrToken))
+        .expect(200);
+    });
+
+    /*
+     * Leads has a real controller now, so there is no bare `PATCH /leads` to
+     * probe — the write route is `PATCH /leads/:id`.
+     *
+     * **404, not 403, is the assertion that matters.** A 403 would mean the
+     * guard chain rejected the CSR for lacking `leads:write`; a 404 means it let
+     * them through and the *lead* was not found — which is exactly what
+     * `LeadAccessService.loadOwnedLead` returns for an id outside the caller's
+     * scope, deliberately, so that whether it exists is not disclosed. So this
+     * pins the permission while asserting nothing about any particular lead.
+     */
+    it('PATCH /api/v1/leads/:id — CSR passes the write gate (real module)', async () => {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/leads/${new Types.ObjectId().toString()}`)
+        .set(authHeader(csrToken))
+        .send({ status: 'Contacted' })
+        .expect(404);
+    });
 
     it('POST /api/v1/crm/service-tickets — CSR can write (real module)', async () => {
       await request(app.getHttpServer())
@@ -718,11 +818,20 @@ describe('SFA API (e2e)', () => {
       );
     });
 
-    it('PATCH /api/v1/performance — CSR is read-only (no write)', async () => {
+    /*
+     * Performance is read-only, and since PAC-10/11 replaced its stub that is
+     * now structural rather than permission-enforced: the real controller
+     * declares no mutating handler at all, so there is nothing to be forbidden
+     * from and the router answers 404.
+     *
+     * A stronger guarantee than the 403 this used to assert — a route that does
+     * not exist cannot be reached by anyone, whatever they hold.
+     */
+    it('PATCH /api/v1/performance — no write route exists', async () => {
       await request(app.getHttpServer())
         .patch('/api/v1/performance')
         .set(authHeader(csrToken))
-        .expect(403);
+        .expect(404);
     });
 
     const csrDeniedFeatureRoutes = [
