@@ -14,7 +14,7 @@ import {
 import { DuplicatePolicyNotice } from "./DuplicatePolicyNotice";
 import { SoldDocumentUpload } from "./SoldDocumentUpload";
 import type { CarrierOption, PolicyCheckMatch } from "@sfa/shared";
-import { emptyPolicy } from "./sold-deal-schema";
+import { clearInapplicableDiscounts, emptyPolicy } from "./sold-deal-schema";
 
 /**
  * The wizard's individual cards.
@@ -45,18 +45,15 @@ import { emptyPolicy } from "./sold-deal-schema";
  */
 export function SoldDateCard({
   value,
-  error,
   onChange,
 }: {
   value: string;
-  error?: string;
   onChange: (value: string) => void;
 }) {
   return (
     <FieldShell
       label="Sold date"
       description="One date for the whole sale, however many policies it covers."
-      error={error}
     >
       {({ id, describedBy, invalid }) => (
         <Input
@@ -72,7 +69,17 @@ export function SoldDateCard({
   );
 }
 
-/** The loop's entry point. */
+/**
+ * The loop's entry point.
+ *
+ * Changing the type **clears the discounts that no longer apply**. The
+ * Discounts card renders one branch or the other, but `discountsSchema`
+ * validates every key regardless, so a discount ticked as Auto and then
+ * switched to Home used to keep failing from behind a control that was no
+ * longer on screen — Continue silently refused to advance with no message
+ * anywhere. Clearing here is also what keeps the sale submittable: the API
+ * rejects a cross-branch selection rather than stripping it.
+ */
 export const PolicyTypeCard = withForm({
   defaultValues: emptyPolicy(),
   render: function Render({ form }) {
@@ -83,6 +90,14 @@ export const PolicyTypeCard = withForm({
             label="Policy type"
             options={POLICY_TYPE_OPTIONS}
             placeholder="Select a policy type"
+            onChanged={(policyType) => {
+              const { discounts, escrow } = clearInapplicableDiscounts(
+                policyType,
+                form.state.values,
+              );
+              form.setFieldValue("discounts", discounts);
+              form.setFieldValue("escrow", escrow);
+            }}
           />
         )}
       </form.AppField>

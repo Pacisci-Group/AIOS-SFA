@@ -22,6 +22,13 @@ interface SelectFieldProps<V extends string> {
   className?: string;
   /** On the trigger. Sites differ — some use `w-full bg-card border-border`. */
   triggerClassName?: string;
+  /**
+   * Runs after the value changes — the same escape hatch {@link CheckboxField}
+   * carries, for a select whose choice invalidates other state. The Sold
+   * wizard's policy type uses it to clear the discount branch that no longer
+   * applies.
+   */
+  onChanged?: (value: V) => void;
 }
 
 const optionValue = <V extends string>(o: SelectOption<V>): V =>
@@ -49,6 +56,7 @@ export function SelectField<V extends string>({
   disabled,
   className,
   triggerClassName,
+  onChanged,
 }: SelectFieldProps<V>) {
   const field = useFieldContext<V | undefined>();
   const error = useFieldError(field.state.meta);
@@ -69,6 +77,7 @@ export function SelectField<V extends string>({
             // moment it is made, so mark it touched now or its error would
             // never show.
             field.handleBlur();
+            onChanged?.(v as V);
           }}
           disabled={disabled}
         >

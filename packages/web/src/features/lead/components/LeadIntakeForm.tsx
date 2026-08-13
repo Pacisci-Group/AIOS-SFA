@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { FormError, FormGrid, FormSection } from "@/components/form";
 import { PolicyList } from "@/components/policies/PolicyList";
 import { Button } from "@/components/ui/button";
+import { ownsPath } from "@/lib/field-paths";
 import { useAppForm } from "@/hooks/form";
 import {
   HouseholdMembersShell,
@@ -107,27 +108,18 @@ export function LeadIntakeForm({
   const step = steps[stepIndex];
   const atLastStep = stepIndex === steps.length - 1;
 
-  /** Does `path` sit at or under one of `roots`? */
-  const owns = (roots: readonly string[], path: string) =>
-    roots.some(
-      (root) =>
-        path === root ||
-        path.startsWith(`${root}.`) ||
-        path.startsWith(`${root}[`),
-    );
-
   const stepHasErrors = (target: IntakeStep) =>
     Object.entries(form.state.fieldMeta).some(
       ([path, meta]) =>
-        owns(target.fields, path) && (meta?.errors.length ?? 0) > 0,
+        ownsPath(target.fields, path) && (meta?.errors.length ?? 0) > 0,
     );
 
   /**
    * Is this card's slice of the form valid — and, if not, showing why?
    *
-   * The same shape as `SoldDealWizard.validateCard`, for the same two reasons,
-   * both recorded in `docs/tanstack-form-spike-findings.md` and both silent if
-   * you get them wrong:
+   * The shape the Sold wizard used to share, for the same two reasons, both
+   * recorded in `docs/tanstack-form-spike-findings.md` and both silent if you
+   * get them wrong:
    *
    * 1. **`validateField`'s return value is unreliable** on a mounted field — it
    *    reports `[]` even when the field is invalid. The verdict has to be read
@@ -140,6 +132,18 @@ export function LeadIntakeForm({
    * `members[0].firstName`, which no static list can name. `validateField` also
    * marks each path touched, which is what lets a blocked step show its errors
    * at all (see `useFieldError`).
+   *
+   * ⚠ This scan can only *see* an error whose field is mounted — form-level
+   * errors land on unmounted paths too, so a rule failing behind a hidden
+   * control would block Next while rendering nothing. It does not bite here:
+   * every conditional rule in `makeLeadIntakeSchema` is guarded by the same
+   * condition that hides its control (`requirePolicyPropertyAddress` mirrors
+   * `PolicyFields`' `needsAddress`), and policy rows are committed by
+   * `LeadPolicySheet` only after its own schema passes, so the array can never
+   * hold an invalid row. The Sold wizard could not hold that line — its
+   * discounts branch on policy type while the schema does not — and reads the
+   * schema directly instead (`blockingIssues`). Move this the same way if a
+   * rule here ever stops matching what is on screen.
    */
   const validateStep = async (target: IntakeStep) => {
     const registered = Object.keys(form.state.fieldMeta) as Array<
@@ -147,7 +151,7 @@ export function LeadIntakeForm({
     >;
     const paths = new Set([
       ...target.fields,
-      ...registered.filter((path) => owns(target.fields, String(path))),
+      ...registered.filter((path) => ownsPath(target.fields, String(path))),
     ]);
     await Promise.all([...paths].map((p) => form.validateField(p, "submit")));
     // One authoritative form-level run, so a path that errors without a mounted

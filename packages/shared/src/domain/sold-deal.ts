@@ -117,6 +117,51 @@ export interface SoldPolicyDiscounts {
   studentDiscount: ProofBackedDiscount;
 }
 
+/**
+ * Which branch of {@link SoldPolicyDiscounts} each key belongs to.
+ *
+ * ⚠ **The one source for the split.** It was previously restated three times —
+ * the two halves of the web `DiscountsCard`, and the server's
+ * `findCrossBranchDiscounts` — with nothing tying them together, and the web
+ * form had no notion of the split at all beyond which controls it rendered.
+ * That is what let a discount ticked on an Auto policy survive a switch to
+ * Home: invisible in the UI, still failing the schema, and rejected by the
+ * server if it ever reached it. Anything that clears, validates or rejects a
+ * cross-branch selection reads these.
+ */
+export const AUTO_DISCOUNT_KEYS = [
+  'drivewise',
+  'defensiveDriver',
+  'studentDiscount',
+] as const satisfies readonly (keyof SoldPolicyDiscounts)[];
+
+/** @see AUTO_DISCOUNT_KEYS */
+export const PROPERTY_DISCOUNT_KEYS = [
+  'escrow',
+  'inspection',
+  'fireSubscription',
+  'roofReceipt',
+  'acvPersonalProperty',
+  'acvDwellingProtection',
+] as const satisfies readonly (keyof SoldPolicyDiscounts)[];
+
+export type AutoDiscountKey = (typeof AUTO_DISCOUNT_KEYS)[number];
+export type PropertyDiscountKey = (typeof PROPERTY_DISCOUNT_KEYS)[number];
+
+/**
+ * Is this discount claimed?
+ *
+ * Normalises the two shapes a discount takes — `escrow` and the two ACV keys
+ * are bare booleans, the rest are `{ selected }` — so callers iterating
+ * {@link AUTO_DISCOUNT_KEYS} / {@link PROPERTY_DISCOUNT_KEYS} do not each have
+ * to re-derive which is which.
+ */
+export function isDiscountSelected(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'object' || value === null) return false;
+  return (value as { selected?: unknown }).selected === true;
+}
+
 /** The escrow sub-card, required when `discounts.escrow` is set. */
 export interface SoldEscrowDetails {
   loanNumber: string;

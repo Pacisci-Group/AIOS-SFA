@@ -20,13 +20,13 @@ import { PolicyReviewList } from "./PolicyReviewList";
 import { PolicySummaryList } from "./PolicySummaryList";
 import { DiscountsCard } from "./DiscountsCard";
 import {
-  CARD_FIELDS,
+  blockingIssues,
   buildSoldPolicySchema,
   cardsFor,
   emptyPolicy,
+  type CardIssue,
   type SoldDealFormValues,
   type SoldPolicyFormValues,
-  type WizardCard,
   type WizardVariant,
 } from "./sold-deal-schema";
 import { useWizardNavigation } from "./useWizardNavigation";
@@ -66,18 +66,6 @@ interface SoldDealWizardProps {
   ticketId?: string;
 }
 
-/**
- * The field paths the form has registered, with their key type recovered.
- *
- * `Object.keys` is typed `string[]` even over a `Partial<Record<DeepKeys<T>, …>>`
- * — a TypeScript soundness gap, not a modelling one. Unlike the hardcoded paths
- * this refactor removed, every key here came from the form itself, so there is
- * no path here for the compiler to be wrong about.
- */
-function fieldPaths<T extends object>(fieldMeta: T): Array<keyof T> {
-  return Object.keys(fieldMeta) as Array<keyof T>;
-}
-
 export function SoldDealWizard({
   context,
   carriers,
@@ -90,7 +78,6 @@ export function SoldDealWizard({
 }: SoldDealWizardProps) {
   const nav = useWizardNavigation(variant);
   const [soldDate, setSoldDate] = useState("");
-  const [soldDateError, setSoldDateError] = useState<string>();
   const [policies, setPolicies] = useState<SoldPolicyFormValues[]>([]);
   const [discardOpen, setDiscardOpen] = useState(false);
   /**
@@ -191,69 +178,41 @@ export function SoldDealWizard({
   }, [dirty, submitting]);
 
   /**
-   * Is this card's slice of the draft valid?
+   * Why the current card will not let the producer move on — empty when it will.
    *
-   * Two traps, both found by the spike (`docs/tanstack-form-spike-findings.md`)
-   * and both silent if you get them wrong:
+   * ## Read off the schema, not off field meta
    *
-   * 1. **`validateField`'s return value is unreliable.** On a *mounted* field it
-   *    reports `[]` even when the field is invalid. The validation does run; the
-   *    verdict has to be read back out of field meta, which is what the final
-   *    scan below does.
-   * 2. **`validateAllFields` only walks mounted fields**, so it can never stand
-   *    in for a whole-form check in a wizard that mounts one card at a time.
+   * This replaced a scan of `draft.state.fieldMeta` for errors under the card's
+   * roots, which was answering the wrong question. `FormApi.validateSync` writes
+   * form-level errors onto **every** path in the schema's error map with no
+   * mount check, so a rule failing behind a control the current card does not
+   * render blocked Continue while displaying nothing — and the wizard had no way
+   * to tell that had happened. Three ways in, all confirmed: a discount ticked
+   * on one policy-type branch and then switched to the other, a half-typed
+   * escrow block left behind by un-ticking the box, and the escrow rule's own
+   * message, which was reported at a path nothing is bound to.
+   *
+   * Both of those causes are fixed at the source now (`clearInapplicableDiscounts`
+   * and the escrow lifecycle in `DiscountsCard`), but the gate should not have
+   * been able to fail invisibly in the first place. Parsing the values makes the
+   * verdict independent of what happens to be mounted **and** hands back the
+   * reasons, which is what the footer shows — so a blocked card can always say
+   * what it is waiting for.
+   *
+   * It also retires both traps in `docs/tanstack-form-spike-findings.md`: with
+   * nothing read back out of meta, `validateField`'s unreliable return value and
+   * `validateAllFields`' mounted-only walk stop being relevant here.
    */
-  const validateCard = async (card: WizardCard) => {
-    const roots = CARD_FIELDS[card];
-    if (roots.length === 0) return true;
-
-    const owns = (path: string) =>
-      roots.some(
-        (root) =>
-          path === root ||
-          path.startsWith(`${root}.`) ||
-          path.startsWith(`${root}[`),
-      );
-
-    /*
-     * `CARD_FIELDS` entries are prefixes, and touching only those would leave a
-     * blank driver row blocking Continue with no message against it: zod reports
-     * that at `…drivers[0].name`, which no static list can name. So the declared
-     * roots are joined by every path the form has actually registered beneath
-     * them. `validateField` marks each one touched, which is what lets a blocked
-     * step show its errors at all.
-     */
-    const paths = new Set([
-      ...roots,
-      ...fieldPaths(draft.state.fieldMeta).filter(owns),
-    ]);
-    await Promise.all(
-      [...paths].map((path) => draft.validateField(path, "submit")),
-    );
-
-    // One authoritative form-level run, so a path that errors without a mounted
-    // field still lands in meta before the scan.
-    await draft.validate("submit");
-
-    return !Object.entries(draft.state.fieldMeta).some(
-      ([path, meta]) => owns(path) && (meta?.errors.length ?? 0) > 0,
-    );
-  };
-
-  const advanceFromCard = async () => {
+  const draftValues = useStore(draft.store, (s) => s.values);
+  const blocking = useMemo<CardIssue[]>(() => {
+    // The one field outside the draft form, so it is checked outside the schema.
     if (nav.card === "soldDate") {
-      if (!soldDate) {
-        setSoldDateError("Enter the sold date");
-        return;
-      }
-      setSoldDateError(undefined);
-      nav.advance();
-      return;
+      return soldDate ? [] : [{ path: "soldDate", message: "Enter the sold date" }];
     }
+    return blockingIssues(schema, nav.card, draftValues);
+  }, [nav.card, soldDate, schema, draftValues]);
 
-    // The card→field map means adding a card cannot forget to validate it.
-    if (await validateCard(nav.card)) nav.advance();
-  };
+  const blocked = blocking.length > 0;
 
   /**
    * Fold the draft into the committed list.
@@ -366,14 +325,7 @@ export function SoldDealWizard({
            */}
           <div key={draftKey} className="space-y-4">
             {nav.card === "soldDate" && (
-              <SoldDateCard
-                value={soldDate}
-                error={soldDateError}
-                onChange={(value) => {
-                  setSoldDate(value);
-                  setSoldDateError(undefined);
-                }}
-              />
+              <SoldDateCard value={soldDate} onChange={setSoldDate} />
             )}
             {nav.card === "transferFrom" && (
               <TransferFromCard form={draft} householdId={householdId ?? null} />
@@ -444,6 +396,21 @@ export function SoldDealWizard({
 
         <FormError icon>{errorMessage}</FormError>
 
+        {/*
+         * Why the button below is greyed out.
+         *
+         * Load-bearing, not decoration. Disabling the only way forward without
+         * saying why is the trap this replaces: the old button was always
+         * enabled and clicking it was what marked fields touched, so the reasons
+         * appeared *because* you pressed it. Nothing marks them touched now, so
+         * an untouched card would grey the button and show nothing at all.
+         *
+         * Messages come from the schema, so a rule whose field is not on the
+         * current card still surfaces here instead of jamming the wizard
+         * silently — which is what the whole class of bug looked like.
+         */}
+        <BlockedReasons issues={blocking} />
+
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border">
           <Button
             type="button"
@@ -464,11 +431,17 @@ export function SoldDealWizard({
 
           {nav.card === "loop" && (
             <div className="flex flex-wrap gap-2">
+              {/*
+               * Both commit the draft, and `commitDraft` returning `null` was
+               * the same dead-button failure one step further on — so they are
+               * disabled on the *whole* draft rather than on this card's own
+               * fields, which it has none of.
+               */}
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={submitting}
+                disabled={submitting || blocked}
                 onClick={() => void addAnother()}
               >
                 <Plus size={14} />
@@ -477,7 +450,7 @@ export function SoldDealWizard({
               <Button
                 type="button"
                 size="sm"
-                disabled={submitting}
+                disabled={submitting || blocked}
                 onClick={() => void reviewSale()}
               >
                 Review &amp; book
@@ -506,8 +479,8 @@ export function SoldDealWizard({
             <Button
               type="button"
               size="sm"
-              disabled={submitting}
-              onClick={() => void advanceFromCard()}
+              disabled={submitting || blocked}
+              onClick={() => nav.advance()}
             >
               Continue
               <ArrowRight size={14} />
@@ -550,6 +523,49 @@ export function SoldDealWizard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+/** How many reasons to spell out before collapsing the rest into a count. */
+const MAX_LISTED_REASONS = 4;
+
+/**
+ * What the card is still waiting for.
+ *
+ * Muted rather than destructive: nothing has gone *wrong* on a card the
+ * producer has not filled in yet, and painting a blank Financials card red on
+ * arrival would be scolding them for not having typed yet. The per-field
+ * messages still turn red on blur, which is where the failure actually is.
+ */
+function BlockedReasons({ issues }: { issues: CardIssue[] }) {
+  if (issues.length === 0) return null;
+  const listed = issues.slice(0, MAX_LISTED_REASONS);
+  const hidden = issues.length - listed.length;
+
+  return (
+    <div
+      // Polite, not assertive: it updates on every keystroke as the producer
+      // works through the card, and an assertive region would interrupt them
+      // each time.
+      aria-live="polite"
+      className="rounded-md border border-border bg-sunken px-3 py-2"
+    >
+      <p className="text-xs font-medium text-foreground">
+        Still needed before you can continue
+      </p>
+      <ul className="mt-1 list-disc space-y-0.5 pl-4">
+        {listed.map((issue) => (
+          <li key={issue.path} className="text-xs text-muted-foreground">
+            {issue.message}
+          </li>
+        ))}
+        {hidden > 0 && (
+          <li className="text-xs text-muted-foreground">
+            …and {hidden} more
+          </li>
+        )}
+      </ul>
     </div>
   );
 }

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { withForm } from "@/hooks/form";
 import { ProofField } from "./ProofField";
 import { SoldDocumentUpload } from "./SoldDocumentUpload";
-import { emptyPolicy } from "./sold-deal-schema";
+import { emptyEscrow, emptyPolicy } from "./sold-deal-schema";
 
 /**
  * The Discounts & Required Documentation card.
@@ -76,6 +76,25 @@ const PropertyDiscounts = withForm({
             <f.CheckboxField
               label="Escrow / mortgagee"
               hint="The lender pays the premium. Generates a mortgagee verification item."
+              onChanged={(on) => {
+                /*
+                 * The details block lives and dies with the tick — the same
+                 * cleanup `ProofField` does for its attachment, which this
+                 * control was the only discount to be missing.
+                 *
+                 * Un-ticking used to leave a half-typed `escrow` object behind.
+                 * `escrow` is `escrowSchema.optional()`, so a *present* object
+                 * is validated whatever the checkbox says: the leftover failed
+                 * on the fields the producer never filled, those fields were no
+                 * longer rendered, and Continue went dead with nothing to read.
+                 *
+                 * Seeding a complete blank on the way in matters too — it is
+                 * what makes the five "Required" messages land on the five
+                 * inputs on screen instead of collapsing into one issue at the
+                 * bare `escrow` root, which nothing is bound to.
+                 */
+                form.setFieldValue("escrow", on ? emptyEscrow() : undefined);
+              }}
             />
           )}
         </form.AppField>

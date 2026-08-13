@@ -1,5 +1,8 @@
 import {
+  AUTO_DISCOUNT_KEYS,
+  PROPERTY_DISCOUNT_KEYS,
   isAutoPolicyType,
+  isDiscountSelected,
   isPropertyPolicyType,
   normalizePolicyType,
 } from '@sfa/shared';
@@ -306,21 +309,19 @@ export function findCrossBranchDiscounts(
     const isAuto = isAutoPolicyType(type);
     const isProperty = isPropertyPolicyType(type);
 
-    const autoSelections =
-      d.drivewise?.selected === true ||
-      d.defensiveDriver?.selected === true ||
-      d.studentDiscount?.selected === true;
+    // Both lists come from `@sfa/shared` so this rule and the web form's
+    // "clear the branch that no longer applies" reset cannot drift — the drift
+    // is what let a stale selection block the form invisibly. Note
+    // `inspection` is a property key: an Auto policy ticking it would
+    // otherwise be accepted, generate nothing (inspection items come from the
+    // policy type) and lose the proof silently.
+    const autoSelections = AUTO_DISCOUNT_KEYS.some((key) =>
+      isDiscountSelected(d[key]),
+    );
 
-    const propertySelections =
-      d.escrow === true ||
-      // ⚠ Listed, or an Auto policy ticking inspection would be accepted,
-      // generate nothing (inspection items come from the policy type) and lose
-      // the proof silently.
-      d.inspection?.selected === true ||
-      d.fireSubscription?.selected === true ||
-      d.roofReceipt?.selected === true ||
-      d.acvPersonalProperty === true ||
-      d.acvDwellingProtection === true;
+    const propertySelections = PROPERTY_DISCOUNT_KEYS.some((key) =>
+      isDiscountSelected(d[key]),
+    );
 
     if (autoSelections && !isAuto) {
       problems.push(

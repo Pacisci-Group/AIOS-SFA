@@ -1,13 +1,18 @@
-import type { CarrierOption, SoldPolicyInput } from "@sfa/shared";
+import type { CarrierOption, PolicyType, SoldPolicyInput } from "@sfa/shared";
 import {
+  AUTO_DISCOUNT_KEYS,
   CARRIER_OTHER,
   POLICY_TYPES,
+  PROPERTY_DISCOUNT_KEYS,
   carrierPolicyNumberMatches,
   carrierSlug,
+  isAutoPolicyType,
+  isPropertyPolicyType,
   policyNumberKey,
 } from "@sfa/shared";
 import type { DeepKeys } from "@tanstack/react-form";
 import { z } from "zod";
+import { issuePath, ownsPath } from "@/lib/field-paths";
 import { numericString } from "@/lib/zod-helpers";
 
 /**
@@ -30,6 +35,11 @@ import { numericString } from "@/lib/zod-helpers";
 const ymd = z
   .string()
   .trim()
+  // Ahead of the format rule so an *empty* date reads as "Enter the date"
+  // rather than "Use YYYY-MM-DD". Both issues are raised, and the wizard's
+  // blocked-reason hint shows the first — which is now the one that describes
+  // what to do rather than what went wrong.
+  .min(1, "Enter the date")
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
   .refine((value) => !Number.isNaN(Date.parse(value)), "Not a real date");
 
@@ -47,21 +57,28 @@ const attachmentSchema = z.object({
  * The old "do you have proof? / no — send it to audit" fork is gone: David
  * asked for the document up front. `hasProof` went with it, and is absent from
  * form state entirely — the API drops the key too.
+ *
+ * A factory taking the document's name rather than one shared schema, because
+ * the message has to stand on its own: the wizard lists blocking messages in
+ * its footer, where five identical "Attach the document for this discount."
+ * lines name nothing the producer can act on. It reads correctly under the
+ * upload control too.
  */
-const proofSchema = z
-  .object({
-    selected: z.boolean(),
-    attachment: attachmentSchema.optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (value.selected && !value.attachment) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Attach the document for this discount.",
-        path: ["attachment"],
-      });
-    }
-  });
+const proofSchema = (document: string) =>
+  z
+    .object({
+      selected: z.boolean(),
+      attachment: attachmentSchema.optional(),
+    })
+    .superRefine((value, ctx) => {
+      if (value.selected && !value.attachment) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Attach ${document}.`,
+          path: ["attachment"],
+        });
+      }
+    });
 
 const discountsSchema = z.object({
   /**
@@ -70,13 +87,13 @@ const discountsSchema = z.object({
    */
   escrow: z.boolean(),
   /** New in #21 — legacy's `Passed Home Inspection` was never ported. */
-  inspection: proofSchema,
-  fireSubscription: proofSchema,
-  roofReceipt: proofSchema,
+  inspection: proofSchema("the inspection report"),
+  fireSubscription: proofSchema("proof of the fire subscription"),
+  roofReceipt: proofSchema("the roof receipt or inspection"),
   acvPersonalProperty: z.boolean(),
   acvDwellingProtection: z.boolean(),
   /** Proof-backed since #21; unlike escrow it has no details object. */
-  drivewise: proofSchema,
+  drivewise: proofSchema("proof of Drivewise enrolment"),
   defensiveDriver: z
     .object({
       selected: z.boolean(),
@@ -105,7 +122,9 @@ const discountsSchema = z.object({
         if (!driver.attachment) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: "Attach this driver's certificate.",
+            // Numbered, because the wizard's footer lists blocking messages
+            // together and "this driver" names nobody once it is out of the row.
+            message: `Attach the certificate for driver ${index + 1}.`,
             // Under `discounts`, which is a declared `CARD_FIELDS` root, and at
             // a path with a mounted field — an issue at neither is invisible.
             path: ["drivers", index, "attachment"],
@@ -113,17 +132,20 @@ const discountsSchema = z.object({
         }
       });
     }),
-  studentDiscount: proofSchema,
+  studentDiscount: proofSchema("the report card or transcript"),
 });
 
 const escrowSchema = z.object({
   loanNumber: z.string().trim().min(1, "Enter the loan number").max(60),
   companyName: z.string().trim().min(1, "Enter the escrow company").max(160),
+  // Named rather than a bare "Required", so each one still means something in
+  // the wizard's list of blocking messages — four identical "Required" lines
+  // tell the producer nothing.
   address: z.object({
-    street: z.string().trim().min(1, "Required").max(200),
-    city: z.string().trim().min(1, "Required").max(120),
-    state: z.string().trim().min(1, "Required").max(60),
-    zip: z.string().trim().min(1, "Required").max(20),
+    street: z.string().trim().min(1, "Enter the escrow street").max(200),
+    city: z.string().trim().min(1, "Enter the escrow city").max(120),
+    state: z.string().trim().min(1, "Enter the escrow state").max(60),
+    zip: z.string().trim().min(1, "Enter the escrow ZIP").max(20),
   }),
   /** The escrow statement (#21). Required by the policy-level rule below. */
   attachment: attachmentSchema.optional(),
@@ -303,11 +325,19 @@ export function buildSoldPolicySchema(
     }
     // Ticking escrow is what makes its sub-card required: the audit item it
     // generates asks the service team to verify exactly these three things.
+    //
+    // ⚠ The path is `escrow.loanNumber`, **not** `escrow`. Nothing is ever bound
+    // to the bare `escrow` root — the panel binds `escrow.loanNumber`,
+    // `escrow.companyName` and the four address parts — so an issue reported
+    // there could never be rendered, and blocked Continue with no message
+    // anywhere on screen. Unreachable in practice now that ticking the box
+    // seeds `emptyEscrow()`, but a rule whose message cannot be displayed is
+    // not a rule worth keeping either way.
     if (policy.discounts.escrow && !policy.escrow) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Enter the escrow details.",
-        path: ["escrow"],
+        path: ["escrow", "loanNumber"],
       });
     }
     // …and its statement, on the same footing as every other proof (#21).
@@ -320,6 +350,9 @@ export function buildSoldPolicySchema(
     }
   });
 }
+
+/** The built draft-policy schema — see {@link buildSoldPolicySchema}. */
+export type SoldPolicySchema = ReturnType<typeof buildSoldPolicySchema>;
 
 export interface SoldDealFormValues {
   soldDate: string;
@@ -363,6 +396,67 @@ export function emptyPolicy(
       agentName: "",
     },
     cancellation: { cancelled: false, effectiveDate: "" },
+  };
+}
+
+/**
+ * A blank escrow details block.
+ *
+ * Seeded the moment the escrow box is ticked, and cleared to `undefined` the
+ * moment it is un-ticked — see `DiscountsCard`. Holding a *complete* object
+ * while the panel is open is what makes `escrowSchema` report all five missing
+ * fields against the five inputs on screen; holding **nothing** while it is
+ * closed is what stops a half-typed leftover failing `escrowSchema.optional()`
+ * from behind a hidden panel, which is how un-ticking escrow used to jam
+ * Continue with no message anywhere.
+ */
+export function emptyEscrow(): NonNullable<SoldPolicyFormValues["escrow"]> {
+  return {
+    loanNumber: "",
+    companyName: "",
+    address: { street: "", city: "", state: "", zip: "" },
+  };
+}
+
+/**
+ * Drop every discount that cannot belong to `policyType`, and the escrow block
+ * with it.
+ *
+ * Called when the policy type changes. `discountsSchema` validates all ten
+ * keys unconditionally while `DiscountsCard` renders only the branch matching
+ * the type, so a discount ticked as Auto and then switched to Home kept failing
+ * the schema from behind a control that was no longer on screen — Continue went
+ * dead with nothing to read. Clearing at the point the branch stops applying is
+ * also what keeps the submission acceptable: the API **rejects** a cross-branch
+ * selection (`findCrossBranchDiscounts`) rather than stripping it.
+ *
+ * Keyed off the same `AUTO_DISCOUNT_KEYS` / `PROPERTY_DISCOUNT_KEYS` the server
+ * rejects by, so the two cannot drift. A type in neither branch (nothing today,
+ * but the enum is open to one) correctly clears both.
+ */
+export function clearInapplicableDiscounts(
+  policyType: PolicyType,
+  values: SoldPolicyFormValues,
+): Pick<SoldPolicyFormValues, "discounts" | "escrow"> {
+  const blank = emptyDiscounts();
+  const keep = isAutoPolicyType(policyType)
+    ? AUTO_DISCOUNT_KEYS
+    : isPropertyPolicyType(policyType)
+      ? PROPERTY_DISCOUNT_KEYS
+      : [];
+
+  const discounts = { ...blank };
+  for (const key of keep) {
+    // `as never` only because a union of two key sets indexing one object is
+    // beyond what TS narrows here; every key is a real key of `discounts`.
+    discounts[key] = values.discounts[key] as never;
+  }
+
+  return {
+    discounts,
+    // Details without their selection are exactly the leftover the schema then
+    // fails on invisibly, so they leave together.
+    escrow: discounts.escrow ? values.escrow : undefined,
   };
 }
 
@@ -496,6 +590,64 @@ export const CARD_FIELDS: Record<
   // the card that owns it.
   review: [],
 };
+
+/** One reason the current card will not let the producer move on. */
+export interface CardIssue {
+  /** The field path, named the way TanStack Form registers it. */
+  path: string;
+  message: string;
+}
+
+/**
+ * Everything blocking `card`, read straight off the schema.
+ *
+ * ## Why this and not the form's field meta
+ *
+ * The previous gate scanned `form.state.fieldMeta` for errors under the card's
+ * roots. That answered a subtly different question — "does any field the form
+ * has *registered* under these roots carry an error?" — and `FormApi` writes
+ * form-level errors onto **unmounted** fields too (`validateSync` walks every
+ * path in the schema's error map, with no mount check). So a rule failing
+ * behind a hidden control blocked Continue while rendering nothing, and there
+ * was no way for the wizard to know it had happened.
+ *
+ * Parsing here instead makes the verdict a pure function of the values, and —
+ * the point — hands back the **reasons**, so a blocked card can always say what
+ * it is waiting for even when the offending field is not on screen. The two
+ * traps in `docs/tanstack-form-spike-findings.md` stop applying: nothing is
+ * read back out of meta, and nothing depends on what is mounted.
+ *
+ * The `loop` card owns no fields of its own and is checked against **all** of
+ * them, because its buttons commit the whole draft — `commitDraft` returning
+ * `null` was the same dead-button failure one step further on.
+ *
+ * One issue per path: zod raises `min` and `regex` together on an empty date,
+ * and the first is the one that says what to do.
+ */
+export function blockingIssues(
+  schema: SoldPolicySchema,
+  card: WizardCard,
+  values: SoldPolicyFormValues,
+): CardIssue[] {
+  const roots = card === "loop" ? ALL_CARD_FIELDS : CARD_FIELDS[card];
+  if (roots.length === 0) return [];
+
+  const result = schema.safeParse(values);
+  if (result.success) return [];
+
+  const seen = new Set<string>();
+  const issues: CardIssue[] = [];
+  for (const issue of result.error.issues) {
+    const path = issuePath(issue.path, values);
+    if (!ownsPath(roots, path) || seen.has(path)) continue;
+    seen.add(path);
+    issues.push({ path, message: issue.message });
+  }
+  return issues;
+}
+
+/** Every root any card owns — see {@link blockingIssues} on the `loop` card. */
+const ALL_CARD_FIELDS = Object.values(CARD_FIELDS).flat();
 
 /**
  * Resolve the "Other" sentinel to the name the producer typed.
