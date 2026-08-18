@@ -1,5 +1,9 @@
 import type { UploadScope } from "@/lib/sold-deals-api";
-import type { CarrierOption, SoldDealLeadContext } from "@sfa/shared";
+import type {
+  CarrierOption,
+  SoldDealLeadContext,
+  SoldStaffOption,
+} from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { ArrowLeft, ArrowRight, Loader2, Plus, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -45,6 +49,14 @@ interface SoldDealWizardProps {
   context: SoldDealLeadContext;
   /** The carrier catalog. The page waits for it, so it is never mid-flight here. */
   carriers: CarrierOption[];
+  /**
+   * Agency staff for the "Cancelled by" picker (PAC-65 #11).
+   *
+   * Optional because `cardsFor` drops the prior-insurance card on the transfer
+   * variant entirely — a transfer replaces a policy already in our own book, so
+   * there is no prior carrier to cancel and no picker to fill.
+   */
+  staff?: SoldStaffOption[];
   submitting: boolean;
   errorMessage: string | null;
   onSubmit: (values: SoldDealFormValues) => void;
@@ -69,6 +81,7 @@ interface SoldDealWizardProps {
 export function SoldDealWizard({
   context,
   carriers,
+  staff = [],
   submitting,
   errorMessage,
   onSubmit,
@@ -352,6 +365,7 @@ export function SoldDealWizard({
               <PriorInsuranceCard
             form={draft}
             carriers={carriers}
+            staff={staff}
             uploadScope={uploadScope}
           />
             )}

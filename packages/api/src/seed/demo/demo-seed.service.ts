@@ -1137,7 +1137,10 @@ export class DemoSeedService {
           branchId: deal.producer.branchId,
           legacySmartSuiteId: legacyId,
           title: `${deal.clientName} — Prior Insurance`,
-          cancellationResponsibility: rng.pick(['Agent', 'Client']),
+          // PAC-65's vocabulary, not legacy's `Agent` / `Client` — the demo
+          // tenant stands in for what the app writes today. The migration still
+          // writes the legacy pair, which `LeadDetailService` normalizes on read.
+          cancellationResponsibility: rng.pick(['SFA staff', 'Customer']),
           cancelledPreviousInsurance: rng.pick(['Yes', 'No', 'Pending']),
           cancellationDate: this.addDays(deal.occurredAt, rng.int(1, 10)),
           autoHomeSameCarrier: rng.pick(['Yes', 'No']),

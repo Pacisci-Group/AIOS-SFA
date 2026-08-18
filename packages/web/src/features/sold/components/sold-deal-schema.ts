@@ -1,6 +1,7 @@
 import type { CarrierOption, PolicyType, SoldPolicyInput } from "@sfa/shared";
 import {
   AUTO_DISCOUNT_KEYS,
+  CANCELLED_BY_OPTIONS,
   CARRIER_OTHER,
   POLICY_TYPES,
   PROPERTY_DISCOUNT_KEYS,
@@ -216,6 +217,9 @@ const soldPolicyShape = z
     cancellation: z.object({
       cancelled: z.boolean(),
       effectiveDate: z.union([ymd, z.literal("")]).optional(),
+      /** "" until answered — the select's empty state (PAC-65 #11). */
+      cancelledBy: z.union([z.enum(CANCELLED_BY_OPTIONS), z.literal("")]),
+      cancelledByUserId: z.string().optional(),
     }),
   });
 
@@ -308,6 +312,46 @@ export function buildSoldPolicySchema(
         code: z.ZodIssueCode.custom,
         message: "Enter the cancellation effective date.",
         path: ["cancellation", "effectiveDate"],
+      });
+    }
+
+    // Who cancelled it (PAC-65 #11) — required whenever there *was* a
+    // cancellation. A dropdown nobody has to answer is one nobody answers, and
+    // the point is knowing who to ask about it later.
+    if (
+      !policy.priorInsurance.none &&
+      policy.cancellation.cancelled &&
+      !policy.cancellation.cancelledBy
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Say who cancelled the prior insurance.",
+        path: ["cancellation", "cancelledBy"],
+      });
+    }
+    if (
+      !policy.priorInsurance.none &&
+      policy.cancellation.cancelledBy === "SFA staff" &&
+      !policy.cancellation.cancelledByUserId
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Name the staff member who cancelled it.",
+        path: ["cancellation", "cancelledByUserId"],
+      });
+    }
+
+    // The prior agent (PAC-65 #10). Required now — the service team calls this
+    // person to chase the cancellation and the declarations page, so "Optional"
+    // was costing them the one contact that makes the rest actionable.
+    if (
+      !policy.priorInsurance.none &&
+      !policy.priorInsurance.agentName?.trim()
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Name the prior agent.",
+        path: ["priorInsurance", "agentName"],
       });
     }
     /*
@@ -410,7 +454,12 @@ export function emptyPolicy(
       carrierOther: "",
       agentName: "",
     },
-    cancellation: { cancelled: false, effectiveDate: "" },
+    cancellation: {
+      cancelled: false,
+      effectiveDate: "",
+      cancelledBy: "",
+      cancelledByUserId: "",
+    },
   };
 }
 
@@ -726,6 +775,14 @@ export function toPolicyInput(values: SoldPolicyFormValues): SoldPolicyInput {
         : {
             cancelled: true,
             effectiveDate: values.cancellation.effectiveDate || undefined,
+            cancelledBy: values.cancellation.cancelledBy || undefined,
+            // Collapsed unless the answer was "SFA staff", the same way the
+            // whole cancellation collapses under "no prior insurance": a user
+            // id left behind by a changed mind would name the wrong person.
+            cancelledByUserId:
+              values.cancellation.cancelledBy === "SFA staff"
+                ? values.cancellation.cancelledByUserId || undefined
+                : undefined,
           },
   };
 }

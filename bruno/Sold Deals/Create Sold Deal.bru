@@ -81,7 +81,12 @@ body:json {
             "size": 2048
           }
         },
-        "cancellation": { "cancelled": false }
+        "cancellation": {
+          "cancelled": true,
+          "effectiveDate": "2026-02-10",
+          "cancelledBy": "SFA staff",
+          "cancelledByUserId": "{{soldStaffUserId}}"
+        }
       },
       {
         "policyType": "Home",
@@ -275,6 +280,15 @@ docs {
     `Common` category *and* lost `alwaysInclude`, because `isBaselineTemplate`
     matches either one. A deal with no prior coverage no longer carries an item
     telling the service team to obtain a declarations page that does not exist.
+  - **Prior agent is required, and so is "who cancelled it" (PAC-65 #10/#11).**
+    `priorInsurance.agentName` 400s when blank on a policy that declares prior
+    coverage — the service team calls that person to chase the cancellation and
+    the declarations page. When `cancellation.cancelled` is true,
+    `cancelledBy` (`Customer` | `SFA staff`) is required, and `SFA staff`
+    additionally requires `cancelledByUserId`. ⚠ That id is **re-verified
+    against the caller's agency** before it is stored — unchecked it would be a
+    cross-agency write primitive, the same trap `existingPolicyId` documents.
+    Populate it from `GET /sold-deals/staff`.
   - **`inspection` and the Drivewise proof no longer exist (PAC-65).** Both keys
     are simply absent from the schema — a stale client sending either is
     stripped, not rejected. `Home Inspection` / `Landlord Inspection` still come

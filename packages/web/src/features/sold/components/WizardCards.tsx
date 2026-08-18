@@ -1,4 +1,5 @@
 import {
+  CANCELLED_BY_OPTIONS,
   CARRIER_OTHER,
   POLICY_TYPE_OPTIONS,
   itemCountLabel,
@@ -17,7 +18,11 @@ import {
 } from "@/lib/sold-deals-api";
 import { DuplicatePolicyNotice } from "./DuplicatePolicyNotice";
 import { SoldDocumentUpload } from "./SoldDocumentUpload";
-import type { CarrierOption, PolicyCheckMatch } from "@sfa/shared";
+import type {
+  CarrierOption,
+  PolicyCheckMatch,
+  SoldStaffOption,
+} from "@sfa/shared";
 import { clearInapplicableDiscounts, emptyPolicy } from "./sold-deal-schema";
 
 /**
@@ -264,6 +269,12 @@ export const PolicyDetailsCard = withForm({
   },
 });
 
+/** One list for the select, derived from the shared vocabulary. */
+const CANCELLED_BY_SELECT = CANCELLED_BY_OPTIONS.map((value) => ({
+  value,
+  label: value,
+}));
+
 /**
  * Premium and item count.
  *
@@ -369,8 +380,9 @@ export const PriorInsuranceCard = withForm({
   props: {
     carriers: [] as CarrierOption[],
     uploadScope: { kind: "lead", leadId: "" } as UploadScope,
+    staff: [] as SoldStaffOption[],
   },
-  render: function Render({ form, carriers, uploadScope }) {
+  render: function Render({ form, carriers, uploadScope, staff }) {
     const policyType = useStore(form.store, (s) => s.values.policyType);
     const none = useStore(form.store, (s) => s.values.priorInsurance.none);
     const claimed = useStore(
@@ -385,7 +397,15 @@ export const PriorInsuranceCard = withForm({
       form.store,
       (s) => s.values.cancellation.cancelled,
     );
+    const cancelledBy = useStore(
+      form.store,
+      (s) => s.values.cancellation.cancelledBy,
+    );
     const carrierOptions = useCarrierOptions(carriers);
+    const staffOptions = useMemo(
+      () => staff.map((person) => ({ value: person.id, label: person.name })),
+      [staff],
+    );
 
     return (
       <div className="space-y-4">
@@ -445,8 +465,16 @@ export const PriorInsuranceCard = withForm({
                 )}
               </form.AppField>
             )}
+            {/*
+              * Required since PAC-65 #10 — it used to be free text with an
+              * "Optional" placeholder. The service team calls this person to
+              * chase the cancellation and the declarations page, so it is the
+              * contact that makes the rest of this card actionable.
+              */}
             <form.AppField name="priorInsurance.agentName">
-              {(f) => <f.TextField label="Prior agent" placeholder="Optional" />}
+              {(f) => (
+                <f.TextField label="Prior agent" placeholder="Name the agent" />
+              )}
             </form.AppField>
 
             {/*
@@ -495,14 +523,52 @@ export const PriorInsuranceCard = withForm({
               </form.AppField>
 
               {cancelled && (
-                <form.AppField name="cancellation.effectiveDate">
-                  {(f) => (
-                    <f.TextField
-                      label="Effective date of cancellation"
-                      type="date"
-                    />
+                <>
+                  <form.AppField name="cancellation.effectiveDate">
+                    {(f) => (
+                      <f.TextField
+                        label="Effective date of cancellation"
+                        type="date"
+                      />
+                    )}
+                  </form.AppField>
+
+                  {/* Who did it (PAC-65 #11). */}
+                  <form.AppField name="cancellation.cancelledBy">
+                    {(f) => (
+                      <f.SelectField
+                        label="Cancelled by"
+                        options={CANCELLED_BY_SELECT}
+                        placeholder="Who cancelled it?"
+                        onChanged={(next) => {
+                          // Drop a stale name when the answer moves off "SFA
+                          // staff" — a changed mind would otherwise leave the
+                          // wrong person recorded as responsible.
+                          if (next !== "SFA staff") {
+                            form.setFieldValue(
+                              "cancellation.cancelledByUserId",
+                              "",
+                            );
+                          }
+                        }}
+                      />
+                    )}
+                  </form.AppField>
+
+                  {cancelledBy === "SFA staff" && (
+                    <form.AppField name="cancellation.cancelledByUserId">
+                      {(f) => (
+                        <f.SelectField
+                          label="Which staff member?"
+                          options={staffOptions}
+                          placeholder={
+                            staff.length ? "Select a staff member" : "Loading…"
+                          }
+                        />
+                      )}
+                    </form.AppField>
                   )}
-                </form.AppField>
+                </>
               )}
             </FormSubPanel>
           </>

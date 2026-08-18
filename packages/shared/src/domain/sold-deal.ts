@@ -260,6 +260,39 @@ export interface SoldCancellation {
   cancelled: boolean;
   /** ISO date (YYYY-MM-DD). Required when `cancelled`. */
   effectiveDate?: string;
+  /**
+   * Who cancelled the prior policy (PAC-65 #11). Required when `cancelled`.
+   *
+   * Persisted onto the existing (previously unwritten) `cancellationResponsibility`
+   * column on `priorInsurance`, whose legacy vocabulary is `Agent` / `Client`.
+   * Those are normalized to these values on read rather than migrated, so a
+   * SmartSuite import keeps its own bytes.
+   */
+  cancelledBy?: CancelledBy;
+  /**
+   * The staff member responsible, when `cancelledBy` is `SFA staff`.
+   *
+   * ⚠ Verified against the caller's agency server-side before it is stored.
+   * Unchecked, a client-supplied user id is a cross-agency write primitive —
+   * the same trap `existingPolicyId` documents.
+   */
+  cancelledByUserId?: string;
+}
+
+/**
+ * Who cancelled the prior policy.
+ *
+ * One list so the zod enum, the API DTO and the `<SelectField>` options cannot
+ * drift into three spellings of the same two answers.
+ */
+export const CANCELLED_BY_OPTIONS = ['Customer', 'SFA staff'] as const;
+export type CancelledBy = (typeof CANCELLED_BY_OPTIONS)[number];
+
+/** One agency staff member, for the "Cancelled by" picker (PAC-65 #11). */
+export interface SoldStaffOption {
+  id: string;
+  name: string;
+  email?: string;
 }
 
 /** One iteration of the wizard's per-policy loop. */

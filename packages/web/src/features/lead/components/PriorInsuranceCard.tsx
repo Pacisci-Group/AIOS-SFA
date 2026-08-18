@@ -44,6 +44,12 @@ export function PriorInsuranceCard({ priorInsurance }: PriorInsuranceCardProps) 
       label: "Cancellation handled by",
       value: priorInsurance.cancellationResponsibility,
     },
+    // Only ever set when the answer above was "SFA staff", and dropped by the
+    // `Boolean(cell.value)` filter below otherwise.
+    {
+      label: "Cancelled by (staff)",
+      value: priorInsurance.cancellationHandledByName,
+    },
   ].filter((cell): cell is { label: string; value: string } =>
     Boolean(cell.value),
   );

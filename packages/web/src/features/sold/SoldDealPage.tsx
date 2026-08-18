@@ -9,7 +9,12 @@ import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { carriersKey, getCarriers } from "@/lib/carriers-api";
-import { createSoldDeal, getSoldDealContext } from "@/lib/sold-deals-api";
+import {
+  createSoldDeal,
+  getSoldDealContext,
+  getSoldStaff,
+  soldStaffKey,
+} from "@/lib/sold-deals-api";
 import { newSubmissionToken } from "@/lib/submission-token";
 import { SoldDealWizard } from "./components/SoldDealWizard";
 import {
@@ -58,6 +63,19 @@ export default function SoldDealPage() {
   const carriersQuery = useQuery({
     queryKey: carriersKey,
     queryFn: getCarriers,
+    staleTime: 30 * 60_000,
+  });
+
+  /**
+   * Agency staff for the "Cancelled by → SFA staff" picker (PAC-65 #11).
+   *
+   * Same shape as the carrier catalog above and for the same reason: reference
+   * data that barely changes, so a long `staleTime` keeps it off the wire while
+   * a producer works through several leads.
+   */
+  const staffQuery = useQuery({
+    queryKey: soldStaffKey,
+    queryFn: getSoldStaff,
     staleTime: 30 * 60_000,
   });
 
@@ -216,6 +234,7 @@ export default function SoldDealPage() {
               <SoldDealWizard
                 context={contextQuery.data}
                 carriers={carriersQuery.data}
+                staff={staffQuery.data ?? []}
                 submitting={mutation.isPending}
                 errorMessage={error}
                 onSubmit={(values) => {

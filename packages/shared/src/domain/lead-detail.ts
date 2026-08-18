@@ -201,7 +201,16 @@ export interface LeadDetailPriorPolicy {
  */
 export interface LeadDetailPriorInsurance {
   id: string;
+  /**
+   * Who cancelled the prior policy, in **one** vocabulary.
+   *
+   * The stored column holds two: legacy's `Agent` / `Client` from the SmartSuite
+   * migration, and PAC-65's `SFA staff` / `Customer` from the sold form. The
+   * read path normalizes rather than a migration rewriting history.
+   */
   cancellationResponsibility: string | null;
+  /** The named staff member, when the answer was `SFA staff` (PAC-65 #11). */
+  cancellationHandledByName: string | null;
   cancelledPreviousInsurance: string | null;
   cancellationDate: string | null;
   autoHomeSameCarrier: string | null;

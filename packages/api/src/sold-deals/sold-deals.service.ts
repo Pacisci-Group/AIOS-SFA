@@ -1,14 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { normalizeLeadStatus } from '@sfa/shared';
+import { DataScope, normalizeLeadStatus } from '@sfa/shared';
 import type {
   AccessContext,
   CreateSoldDealResponse,
   SoldDealLeadContext,
   SoldDocumentPresignResponse,
   SoldHouseholdContact,
+  SoldStaffOption,
 } from '@sfa/shared';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import { AuditGenerationService } from '../audit-generation/audit-generation.service';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -130,6 +131,98 @@ export class SoldDealsService {
   }
 
   /** Record the sale. Every total is derived server-side from the policy rows. */
+  /**
+   * The agency's staff, for the "Cancelled by → SFA staff" picker (PAC-65 #11).
+   *
+   * Served from this controller rather than reusing `GET /users`, which is
+   * gated on `agency:users:read` — a permission the Producer role does not
+   * hold, so the producer filling in this very form would 403 on it. Riding the
+   * `deal_audits` read gate they already passed to reach the wizard is the same
+   * move `GET /crm/service-tickets/assignees` makes for a CSR.
+   *
+   * Unlike that endpoint this does **not** filter by role: "who cancelled the
+   * policy" can be anyone in the agency, and a role-filtered list would quietly
+   * make the true answer unpickable.
+   */
+  async listStaff(
+    access: AccessContext,
+    branchId: string | null,
+  ): Promise<SoldStaffOption[]> {
+    const tenant = await this.tenancy.resolve(access, branchId);
+
+    const filter: FilterQuery<UserDocument> = {
+      agencyId: new Types.ObjectId(tenant.agencyId),
+      isPlatformAdmin: { $ne: true },
+      isActive: { $ne: false },
+    };
+    // Agency-wide scopes see everyone; narrower scopes stay inside the branch.
+    if (access.dataScope !== DataScope.Agency && tenant.branchId) {
+      filter.branchId = new Types.ObjectId(tenant.branchId);
+    }
+
+    const users = await this.userModel
+      .find(filter)
+      .select('firstName lastName email')
+      .sort({ firstName: 1, lastName: 1 })
+      .lean();
+
+    return users.map((user) => ({
+      id: String(user._id),
+      name:
+        [user.firstName, user.lastName].filter(Boolean).join(' ').trim() ||
+        user.email ||
+        'Unknown',
+      email: user.email,
+    }));
+  }
+
+  /**
+   * Check every `cancellation.cancelledByUserId` belongs to this agency.
+   *
+   * ⚠ Without this the field is a **cross-agency write primitive**: the id is
+   * client-supplied and lands on a stored record, so an attacker could name a
+   * user from another tenant as having cancelled a policy. Exactly the trap
+   * `existingPolicyId` documents, and the reason `listStaff` above is scoped.
+   */
+  private async resolveCancelledBy(
+    dto: CreateSoldDealDto,
+    agencyId: string,
+  ): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(
+        dto.policies
+          .map((policy) => policy.cancellation?.cancelledByUserId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (!ids.length) return new Map();
+
+    // Agency-scoped by the query, so an id from another tenant simply is not
+    // found and the count check below rejects the whole submission.
+    const users = await this.userModel
+      .find({
+        _id: { $in: ids.map((id) => new Types.ObjectId(id)) },
+        agencyId: new Types.ObjectId(agencyId),
+      })
+      .select('firstName lastName email')
+      .lean();
+
+    if (users.length !== ids.length) {
+      throw new BadRequestException('Unknown staff member on a cancellation.');
+    }
+
+    // The names come back from the same round trip, so the intake step can
+    // denormalize them without a second query inside the transaction.
+    return new Map(
+      users.map((user) => [
+        String(user._id),
+        [user.firstName, user.lastName].filter(Boolean).join(' ').trim() ||
+          user.email ||
+          'Unknown',
+      ]),
+    );
+  }
+
   async create(
     access: AccessContext,
     branchId: string | null,
@@ -156,6 +249,7 @@ export class SoldDealsService {
     const household = await this.leadAccess.resolveHousehold(lead, access);
 
     await this.submissions.assertPolicyNumberFormats(dto, tenant.agencyId);
+    const staffNameById = await this.resolveCancelledBy(dto, tenant.agencyId);
     // The lead is the key anchor on this path; a policy transfer passes its
     // household instead. Same verification, different prefix.
     await this.submissions.verifyAttachments(dto, tenant.agencyId, (kind) =>
@@ -171,6 +265,9 @@ export class SoldDealsService {
       // transfer reaches the same pipeline through the CRM ticket instead.
       businessType: 'new_business',
       householdId: household._id,
+      // Resolved and agency-checked above; the prior-insurance step reads it
+      // rather than querying users inside the transaction.
+      staffNameById,
       quoteRecapId: dto.quoteRecapId
         ? new Types.ObjectId(dto.quoteRecapId)
         : undefined,

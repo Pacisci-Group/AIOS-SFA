@@ -65,6 +65,22 @@ export class SoldDealsController {
   }
 
   /**
+   * The agency's staff, for the "Cancelled by → SFA staff" picker (PAC-65 #11).
+   *
+   * Rides this controller's own `deal_audits:read` gate. `GET /users` would be
+   * the obvious home, but it is gated on `agency:users:read`, which a Producer
+   * does not hold — so the producer filling this form would 403 on their own
+   * picker. Declared with the other static segments, above any future `:id`.
+   */
+  @Get('staff')
+  listStaff(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+  ) {
+    return this.soldDealsService.listStaff(access, branchId);
+  }
+
+  /**
    * Issue a presigned URL for a sold-form document (a discount proof, or the
    * receipt, student transcript).
    *

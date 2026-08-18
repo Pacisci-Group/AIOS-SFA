@@ -1,4 +1,4 @@
-import { CARRIER_OTHER, POLICY_TYPES } from '@sfa/shared';
+import { CANCELLED_BY_OPTIONS, CARRIER_OTHER, POLICY_TYPES } from '@sfa/shared';
 import type { SoldPolicyDiscounts } from '@sfa/shared';
 import { z } from 'zod';
 import { policyNumberKey } from '../../policies/policy-number';
@@ -238,6 +238,9 @@ const soldPolicySchema = policyBaseSchema
       .object({
         cancelled: z.boolean().default(false),
         effectiveDate: ymd.optional(),
+        cancelledBy: z.enum(CANCELLED_BY_OPTIONS).optional(),
+        /** Resolved and agency-checked in the service — never trusted as sent. */
+        cancelledByUserId: objectId.optional(),
       })
       .default({ cancelled: false }),
   })
@@ -255,6 +258,40 @@ const soldPolicySchema = policyBaseSchema
         code: z.ZodIssueCode.custom,
         message: 'Enter the cancellation effective date.',
         path: ['cancellation', 'effectiveDate'],
+      });
+    }
+
+    // Who cancelled it (PAC-65 #11). Required whenever there *was* a
+    // cancellation — a dropdown nobody has to answer is a dropdown nobody
+    // answers, and the whole point is knowing who to ask about it later.
+    if (policy.cancellation.cancelled && !policy.cancellation.cancelledBy) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Say who cancelled the prior insurance.',
+        path: ['cancellation', 'cancelledBy'],
+      });
+    }
+
+    // "SFA staff" without a name is the answer that helps nobody.
+    if (
+      policy.cancellation.cancelledBy === 'SFA staff' &&
+      !policy.cancellation.cancelledByUserId
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Name the staff member who cancelled it.',
+        path: ['cancellation', 'cancelledByUserId'],
+      });
+    }
+
+    // The prior agent (PAC-65 #10). Required now, where it used to be an
+    // "Optional"-placeholdered free-text — the service team calls this person
+    // to chase the cancellation and the declarations page.
+    if (!policy.priorInsurance.none && !policy.priorInsurance.agentName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Name the prior agent.',
+        path: ['priorInsurance', 'agentName'],
       });
     }
 
