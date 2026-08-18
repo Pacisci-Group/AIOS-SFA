@@ -38,6 +38,7 @@ import {
   normalizeLeadSource,
   POLICY_TYPES,
 } from '@sfa/shared';
+import { AUDIT_ITEM_DUE_DAYS } from '../../audit-generation/audit-generation.service';
 import { seedAuditTemplates } from '../audit-templates.seed';
 import {
   AUDIT_TEMPLATES,
@@ -1026,6 +1027,10 @@ export class DemoSeedService {
             producerId: deal.producer.userId,
             daysOpen: daysSince(deal.occurredAt),
             firstCreatedAt: deal.occurredAt,
+            // The soft 7-day deadline (PAC-65), from when the item was raised
+            // rather than from now — so a demo tenant has a realistic mix of
+            // overdue and upcoming for the board's `due` filter to show.
+            dueAt: this.addDays(deal.occurredAt, AUDIT_ITEM_DUE_DAYS),
             isTestRecord: false,
           },
         );
