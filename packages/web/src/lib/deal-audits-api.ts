@@ -2,6 +2,15 @@ import { apiFetch } from '@/lib/api-client';
 
 export type DealAuditType = 'Auto' | 'Home' | 'Bundle' | 'Other';
 
+/** A document already on the item (mirrors the API `DealAuditRowAttachment`). */
+export interface DealAuditRowAttachment {
+  /** Position in the item's `attachments` array — what the download route takes. */
+  index: number;
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
 /** One pending hand-off row (mirrors the API `DealAuditRow`). */
 export interface DealAuditRow {
   id: string;
@@ -11,7 +20,14 @@ export interface DealAuditRow {
   type: DealAuditType;
   missing: string;
   daysOpen: number;
+  /** Soft deadline, ISO. `null` for items generated before the field existed. */
+  dueAt: string | null;
+  /** Empty means "no document on file" — the auditor has to call the client. */
+  attachments: DealAuditRowAttachment[];
 }
+
+/** The soft-deadline filter. `all` is the default and adds no clause. */
+export type DealAuditDueFilter = 'all' | 'overdue' | 'due_soon';
 
 export interface DealAuditListResponse {
   page: number;
@@ -24,15 +40,29 @@ export interface DealAuditListResponse {
 export interface ListDealAuditsParams {
   page?: number;
   pageSize?: number;
+  due?: DealAuditDueFilter;
 }
 
 export function listDealAudits(params: ListDealAuditsParams = {}) {
   const search = new URLSearchParams();
   if (params.page != null) search.set('page', String(params.page));
   if (params.pageSize != null) search.set('pageSize', String(params.pageSize));
+  if (params.due != null && params.due !== 'all') search.set('due', params.due);
   const qs = search.toString();
   return apiFetch<DealAuditListResponse>(
     `/deal-audits${qs ? `?${qs}` : ''}`,
+  );
+}
+
+/**
+ * A short-lived URL for a document already on the item (PAC-65 #16).
+ *
+ * Fetched on click rather than served with the row: presigned URLs expire, and
+ * a board that sat open for ten minutes would hand out dead links.
+ */
+export function getAuditAttachmentUrl(itemId: string, index: number) {
+  return apiFetch<{ downloadUrl: string }>(
+    `/deal-audits/${itemId}/attachments/${index}/download`,
   );
 }
 

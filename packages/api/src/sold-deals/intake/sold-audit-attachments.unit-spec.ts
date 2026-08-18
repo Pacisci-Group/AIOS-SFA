@@ -4,14 +4,14 @@ import { auditAttachmentsByItem } from './sold-audit-attachments';
 
 const EMPTY_DISCOUNTS: SoldPolicyInput['discounts'] = {
   escrow: false,
-  inspection: { selected: false },
   fireSubscription: { selected: false },
   roofReceipt: { selected: false },
   acvPersonalProperty: false,
   acvDwellingProtection: false,
-  drivewise: { selected: false },
+  drivewise: false,
   defensiveDriver: { selected: false, drivers: [] },
   studentDiscount: { selected: false },
+  priorInsuranceDiscount: false,
 };
 
 const proof = (name: string): SoldDocumentMeta => ({
@@ -42,17 +42,30 @@ const keyFor = (title: string, subjectName?: string) =>
 
 describe('auditAttachmentsByItem (PAC-56 #21b)', () => {
   it('maps a flat auto discount onto its item', () => {
-    const file = proof('drivewise');
+    const file = proof('transcript');
     const map = auditAttachmentsByItem([
       policy({
         discounts: {
           ...structuredClone(EMPTY_DISCOUNTS),
-          drivewise: { selected: true, attachment: file },
+          studentDiscount: { selected: true, attachment: file },
         },
       }),
     ]);
 
-    expect(map.get(keyFor('Drivewise'))?.[0].key).toBe(file.key);
+    expect(map.get(keyFor('Good Student'))?.[0].key).toBe(file.key);
+  });
+
+  it('maps nothing for Drivewise, which generates no item (PAC-65)', () => {
+    // A bare boolean since PAC-65, with no attachment slot and no audit item to
+    // attach one to. Asserted rather than assumed: the old mapping existed, and
+    // reviving it would key a file to an item generation never creates.
+    const map = auditAttachmentsByItem([
+      policy({
+        discounts: { ...structuredClone(EMPTY_DISCOUNTS), drivewise: true },
+      }),
+    ]);
+
+    expect(map.size).toBe(0);
   });
 
   it('uses the audit vocabulary, not the form control name', () => {
@@ -150,8 +163,10 @@ describe('auditAttachmentsByItem (PAC-56 #21b)', () => {
     );
   });
 
-  it('maps the escrow statement onto the Mortgagee item', () => {
-    const statement = proof('escrow');
+  it('maps nothing onto the Mortgagee item — escrow has no upload (PAC-65)', () => {
+    // The statement dropzone was removed outright. David: *"the audit is going
+    // to be based on the information"* — the `Home Mortgagee` item asks the
+    // service team to verify the loan detail keyed in below, not a file.
     const map = auditAttachmentsByItem([
       policy({
         policyType: 'Home',
@@ -165,29 +180,11 @@ describe('auditAttachmentsByItem (PAC-56 #21b)', () => {
             state: 'OK',
             zip: '74101',
           },
-          attachment: statement,
         },
       }),
     ]);
 
-    expect(map.get(keyFor('Home Mortgagee'))?.[0].key).toBe(statement.key);
-  });
-
-  it('maps the inspection report onto the deterministic Inspection item', () => {
-    // The control generates no trigger of its own — `Home Inspection` comes
-    // from the policy type. Its only job is to carry this file.
-    const report = proof('inspection');
-    const map = auditAttachmentsByItem([
-      policy({
-        policyType: 'Home',
-        discounts: {
-          ...structuredClone(EMPTY_DISCOUNTS),
-          inspection: { selected: true, attachment: report },
-        },
-      }),
-    ]);
-
-    expect(map.get(keyFor('Home Inspection'))?.[0].key).toBe(report.key);
+    expect(map.has(keyFor('Home Mortgagee'))).toBe(false);
   });
 
   it('is empty when nothing was uploaded', () => {
@@ -195,13 +192,14 @@ describe('auditAttachmentsByItem (PAC-56 #21b)', () => {
   });
 
   it('ignores a selected discount with no attachment', () => {
-    // Unreachable through the API — the DTO rejects it — but this must not
-    // put an `undefined` into an item's attachment array if it ever is.
+    // The normal case since PAC-65: the discount is claimed, no document came
+    // with it, and the audit item is generated regardless — it just carries no
+    // attachment, so the auditor is told to call the client for it.
     const map = auditAttachmentsByItem([
       policy({
         discounts: {
           ...structuredClone(EMPTY_DISCOUNTS),
-          drivewise: { selected: true },
+          studentDiscount: { selected: true },
         },
       }),
     ]);

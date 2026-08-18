@@ -43,7 +43,7 @@ export const policyFormSchema = z.object({
   ]),
   items: z.union([
     numericString({
-      required: "Enter an item count",
+      required: "Enter a count",
       min: 0,
       max: 100,
       tooSmall: "Cannot be negative",

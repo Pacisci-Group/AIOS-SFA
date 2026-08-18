@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/deal-audits?page=1&pageSize=8
+  url: {{baseUrl}}/deal-audits?page=1&pageSize=8&due=all
   body: none
   auth: inherit
 }
@@ -13,6 +13,7 @@ get {
 params:query {
   page: 1
   pageSize: 8
+  due: all
 }
 
 headers {
@@ -51,6 +52,28 @@ tests {
       expect(items[0].ref).to.match(/^AUD-\d{4}-\d{4}$/);
     }
   });
+
+  test("rows carry the soft deadline and any evidence on file", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      expect(items[0]).to.have.property("dueAt");
+      expect(items[0].attachments).to.be.an("array");
+    }
+  });
+
+  test("attachments expose an index, never the storage key", function () {
+    // The key's prefix is what `assertKeyOwnership` treats as a security
+    // property, so it must not leave the server. `index` is what the download
+    // route takes and is all the client needs.
+    const items = res.getBody().items;
+    const withFiles = items.filter((i) => i.attachments.length > 0);
+    if (withFiles.length > 0) {
+      const file = withFiles[0].attachments[0];
+      expect(file).to.have.property("index");
+      expect(file).to.have.property("filename");
+      expect(file).to.not.have.property("key");
+    }
+  });
 }
 
 docs {
@@ -68,10 +91,28 @@ docs {
     - `agency` → all items in the agency
 
   ## Query params
-  | param    | type | default | rules            |
-  |----------|------|---------|------------------|
-  | page     | int  | 1       | min 1 (1-based)  |
-  | pageSize | int  | 8       | min 1, max 50    |
+  | param    | type | default | rules                              |
+  |----------|------|---------|------------------------------------|
+  | page     | int  | 1       | min 1 (1-based)                    |
+  | pageSize | int  | 8       | min 1, max 50                      |
+  | due      | enum | `all`   | `all` \| `overdue` \| `due_soon`    |
+
+  ### `due` — the soft 7-day deadline (PAC-65)
+
+  ⚠ **A filter, not enforcement.** Generated items carry a `dueAt` of
+  `generated + 7 days`. Nothing reads it to change state: no cron, no auto-fail,
+  no escalation, no expiry, and no status that flips itself at day 7. An item
+  past its `dueAt` is still `in_progress` / failed until a human resolves it.
+  The team pulls an overdue list, and that is the whole of it.
+
+  - `all` — adds no clause. Byte-identical to the pre-PAC-65 response.
+  - `overdue` — `dueAt < now`.
+  - `due_soon` — `dueAt` within the next 3 days.
+
+  Both narrowing values **require `dueAt` to exist**, so items generated before
+  the field was added match neither and are never overdue. There is no backfill:
+  retro-stamping deadlines onto old items would manufacture a backlog nobody
+  agreed to.
 
   ## Headers
   - `Authorization: Bearer <accessToken>` — inherited from the collection.
@@ -93,7 +134,16 @@ docs {
         "client": "Jane Homeowner",
         "type": "Home",
         "missing": "Wind/Hail Inspection Report",
-        "daysOpen": 9
+        "daysOpen": 9,
+        "dueAt": "2026-08-24T10:15:00.000Z",
+        "attachments": [
+          {
+            "index": 0,
+            "filename": "roof-receipt.pdf",
+            "contentType": "application/pdf",
+            "size": 20480
+          }
+        ]
       }
     ]
   }
@@ -108,6 +158,21 @@ docs {
   | type     | enum   | linked deal type: `Auto` \| `Home` \| `Bundle` \| `Other` |
   | missing  | string | the failed/missing requirement (audit item name)        |
   | daysOpen | number | days the item has been open (oldest first)              |
+  | dueAt    | string \| null | soft deadline, ISO. `null` for items generated before the field existed |
+  | attachments | array | proofs uploaded at sale time (PAC-56 #21b), surfaced by PAC-65 #16 |
+
+  ### `attachments` — evidence, or the instruction to go get it
+
+  Producers have been uploading discount proofs since PAC-56 #21b and the board
+  never read them, so the service team was chasing documents already sitting in
+  storage. Each entry is `{ index, filename, contentType, size }` — **never the
+  storage key**, whose prefix is a security property `assertKeyOwnership`
+  relies on. Fetch a short-lived URL with
+  `GET /deal-audits/:itemId/attachments/:index/download`.
+
+  ⚠ **An empty array is meaningful**, not missing data: it is what makes the row
+  read "no document on file — call the client and obtain it". Uploads are
+  optional across Card 5 as of PAC-65, so this is the common case.
 
   ## Errors
   - `401 Unauthorized` — missing/expired access token.

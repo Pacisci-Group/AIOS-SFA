@@ -492,7 +492,10 @@ export class LeadDetailService {
 
     return {
       id: record._id.toString(),
-      cancellationResponsibility: record.cancellationResponsibility ?? null,
+      cancellationResponsibility: normalizeCancelledBy(
+        record.cancellationResponsibility,
+      ),
+      cancellationHandledByName: record.cancellationHandledByName ?? null,
       cancelledPreviousInsurance: record.cancelledPreviousInsurance ?? null,
       cancellationDate: dateOnly(record.cancellationDate),
       autoHomeSameCarrier: record.autoHomeSameCarrier ?? null,
@@ -774,4 +777,21 @@ export class LeadDetailService {
     if (activity.subjectType === 'dealAuditItem') return 'audit';
     return 'lead';
   }
+}
+
+/**
+ * One vocabulary out of two (PAC-65 #11).
+ *
+ * The SmartSuite migration writes legacy's `Agent` / `Client`; the sold form
+ * writes `SFA staff` / `Customer`. Normalized here rather than by a backfill:
+ * imported rows keep their own bytes, the card reads one set of words, and
+ * there is no migration script to get wrong. Anything unrecognized passes
+ * through — an unfamiliar value is still better shown than blanked.
+ */
+function normalizeCancelledBy(value?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (trimmed.toLowerCase() === 'agent') return 'SFA staff';
+  if (trimmed.toLowerCase() === 'client') return 'Customer';
+  return trimmed || null;
 }

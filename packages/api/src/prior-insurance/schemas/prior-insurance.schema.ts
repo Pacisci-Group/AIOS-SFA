@@ -15,8 +15,33 @@ export class PriorInsurance extends TenantRecord {
   @Prop({ trim: true })
   title?: string;
 
+  /**
+   * Who cancelled the prior policy.
+   *
+   * ⚠ **Two vocabularies live in this column.** The SmartSuite migration writes
+   * legacy's `Agent` / `Client`; the sold form writes PAC-65's `SFA staff` /
+   * `Customer`. Normalized on read in `LeadDetailService` rather than migrated,
+   * so an import keeps its own bytes and there is no backfill to get wrong.
+   */
   @Prop()
   cancellationResponsibility?: string;
+
+  /**
+   * The staff member who cancelled it, when the answer was `SFA staff`
+   * (PAC-65 #11).
+   *
+   * ⚠ Verified against the caller's agency before it is written — see
+   * `SoldDealsService.assertCancelledByOwned`. The id arrives from the client.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  cancellationHandledByUserId?: Types.ObjectId;
+
+  /**
+   * That person's display name, denormalized at write time so Lead Detail
+   * renders without a join — the same shape `producerName` takes on audit items.
+   */
+  @Prop({ trim: true })
+  cancellationHandledByName?: string;
 
   @Prop()
   cancelledPreviousInsurance?: string;

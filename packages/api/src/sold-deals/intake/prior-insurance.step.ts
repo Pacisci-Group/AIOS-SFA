@@ -60,6 +60,12 @@ export class PriorInsuranceStep {
       ? new Date(Math.min(...cancellations.map((d) => d.getTime())))
       : undefined;
 
+    // The first declared policy that named someone. One deal, one answer — the
+    // wizard asks per policy because the cancellation date can differ per line.
+    const cancelledBy = declared.find(
+      (p) => p.cancellation?.cancelled && p.cancellation.cancelledBy,
+    )?.cancellation;
+
     const [summary] = await this.priorInsuranceModel.create(
       [
         {
@@ -76,6 +82,16 @@ export class PriorInsuranceStep {
           // Legacy stores these yes/no answers as strings, not booleans.
           cancelledPreviousInsurance: yesNo(cancellations.length > 0),
           cancellationDate: earliestCancellation,
+          // Who cancelled it (PAC-65 #11). Taken from the first declared policy
+          // that answered, exactly as `previousAgentName` above is — this
+          // summary row is per deal, and the wizard asks per policy.
+          cancellationResponsibility: cancelledBy?.cancelledBy,
+          cancellationHandledByUserId: cancelledBy?.cancelledByUserId
+            ? new Types.ObjectId(cancelledBy.cancelledByUserId)
+            : undefined,
+          cancellationHandledByName: cancelledBy?.cancelledByUserId
+            ? ctx.staffNameById?.get(cancelledBy.cancelledByUserId)
+            : undefined,
           autoHomeSameCarrier: yesNo(carriers.sameCarrier),
           dealId,
           householdId: ctx.householdId,

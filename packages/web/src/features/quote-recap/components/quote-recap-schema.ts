@@ -37,10 +37,10 @@ export const quotedPolicySchema = z
       tooLarge: "Too large",
     }),
     itemCount: numericString({
-      required: "Enter an item count",
+      required: "Enter a count",
       min: 1,
       max: 99,
-      tooSmall: "At least 1 item",
+      tooSmall: "At least 1",
       tooLarge: "Too many",
       integer: "Whole numbers only",
     }),
