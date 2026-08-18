@@ -1,7 +1,7 @@
 meta {
   name: List Sold Staff
   type: http
-  seq: 13
+  seq: 1
 }
 
 get {
@@ -50,6 +50,11 @@ tests {
 
 docs {
   # GET /sold-deals/staff — the "Cancelled by" picker (PAC-65 #11)
+
+  ⚠ **Runs first in this folder on purpose.** `Create Sold Deal` sends a
+  `cancelledByUserId` captured here, and Bruno runs a folder in `seq` order —
+  placed after it, the variable is unresolved and the create 400s on an invalid
+  ObjectId, cascading into every request that chains off the new deal.
 
   The agency's staff, so the Sold wizard can name **who** cancelled a client's
   prior insurance when the answer is `SFA staff`.
