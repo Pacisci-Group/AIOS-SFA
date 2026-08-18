@@ -1,6 +1,8 @@
 import {
   Upload,
   Phone,
+  ExternalLink,
+  PhoneCall,
   MessageSquare,
   CheckCircle2,
   FileText,
@@ -23,8 +25,10 @@ import { cn } from "@/lib/utils";
 import {
   ALLOWED_UPLOAD_TYPES,
   MAX_UPLOAD_BYTES,
+  getAuditAttachmentUrl,
   resolveWithOptionalUpload,
   type DealAuditRow,
+  type DealAuditRowAttachment,
 } from "@/lib/deal-audits-api";
 
 interface ResolvePanelProps {
@@ -44,12 +48,117 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** "Due in 3 days" / "Due today" / "Overdue by 2 days" — display only. */
+function formatDue(iso: string): string {
+  const dueDate = new Date(iso);
+  if (Number.isNaN(dueDate.getTime())) return "";
+  const days = Math.round(
+    (dueDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000),
+  );
+  if (days === 0) return "due today";
+  if (days > 0) return `due in ${days} day${days === 1 ? "" : "s"}`;
+  const over = Math.abs(days);
+  return `overdue by ${over} day${over === 1 ? "" : "s"}`;
+}
+
+/**
+ * What the auditor is actually working from (PAC-65 #16).
+ *
+ * Two presentations of one item, and which one shows is the whole point of the
+ * ticket's rule that the audit fires whether or not a document was uploaded:
+ *
+ *  - **A document is attached** — surface it here so they verify it in place.
+ *    Producers have uploaded these since PAC-56 #21b and nothing ever read
+ *    them, so the service team was chasing files already sitting in storage.
+ *  - **Nothing attached** — say so, and say what to do instead. An absent
+ *    evidence block would read as "no evidence needed".
+ *
+ * The URL is fetched on click because presigned links expire; a panel left open
+ * would otherwise hand out dead ones.
+ */
+function EvidenceBlock({ deal }: { deal: DealAuditRow }) {
+  const [opening, setOpening] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const open = async (file: DealAuditRowAttachment) => {
+    setOpening(file.index);
+    setError(null);
+    try {
+      const { downloadUrl } = await getAuditAttachmentUrl(deal.id, file.index);
+      window.open(downloadUrl, "_blank", "noopener");
+    } catch {
+      setError("Could not open that document. Try again.");
+    } finally {
+      setOpening(null);
+    }
+  };
+
+  if (deal.attachments.length === 0) {
+    return (
+      <div className="flex gap-3 rounded-xl border border-amber-500/20 bg-amber-500/8 p-4">
+        <PhoneCall size={16} className="mt-0.5 shrink-0 text-amber-500" />
+        <div>
+          <p className="text-sm font-medium text-foreground">
+            No document on file
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Call the client and obtain it, then upload it below.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="mb-3 text-xs uppercase tracking-wider text-muted-foreground">
+        Evidence on file
+      </p>
+      <div className="flex flex-col gap-2">
+        {deal.attachments.map((file) => (
+          <Button
+            key={file.index}
+            type="button"
+            variant="outline"
+            onClick={() => void open(file)}
+            disabled={opening === file.index}
+            className="h-auto justify-start gap-3 rounded-lg px-3 py-2.5 text-left"
+          >
+            {opening === file.index ? (
+              <Loader2 size={16} className="shrink-0 animate-spin" />
+            ) : (
+              <FileText size={16} className="shrink-0 text-muted-foreground" />
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm text-foreground">
+                {file.filename}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {formatSize(file.size)} · uploaded at sale
+              </span>
+            </span>
+            <ExternalLink size={14} className="shrink-0 text-muted-foreground" />
+          </Button>
+        ))}
+      </div>
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
 export function ResolvePanel({ deal, onClose, onResolved }: ResolvePanelProps) {
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [note, setNote] = useState("");
   const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /*
+   * Text only, and deliberately. The deadline is a written target — nothing in
+   * the product changes state when it passes, and this line must not imply
+   * otherwise (PAC-65).
+   */
+  const dueLabel = deal?.dueAt ? formatDue(deal.dueAt) : null;
 
   const resolveMutation = useMutation({
     mutationFn: (id: string) =>
@@ -119,9 +228,12 @@ export function ResolvePanel({ deal, onClose, onResolved }: ResolvePanelProps) {
                   </p>
                   <p className="text-xs text-amber-500 mt-0.5">
                     Open for {deal.daysOpen} day{deal.daysOpen !== 1 ? "s" : ""}
+                    {dueLabel ? ` · ${dueLabel}` : ""}
                   </p>
                 </div>
               </div>
+
+              <EvidenceBlock deal={deal} />
 
               {/* Upload zone */}
               <div>

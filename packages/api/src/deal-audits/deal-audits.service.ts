@@ -19,7 +19,7 @@ import {
   DealAuditItemDocument,
 } from '../deal-audit-items/schemas/deal-audit-item.schema';
 import { StorageService } from '../storage/storage.service';
-import { ListDealAuditsDto } from './dto/list-deal-audits.dto';
+import { DUE_SOON_DAYS, ListDealAuditsDto } from './dto/list-deal-audits.dto';
 import { PresignAttachmentDto } from './dto/presign-attachment.dto';
 import { ResolveDealAuditDto } from './dto/resolve-deal-audit.dto';
 import {
@@ -36,7 +36,12 @@ const RESOLVED_UPDATE_STATUS_LABEL = 'Verified - Complete';
 /** Lean projection of the fields the board reads (incl. timestamp). */
 type DealAuditItemLean = Pick<
   DealAuditItem,
-  'clientName' | 'itemName' | 'daysOpen' | 'firstCreatedAt'
+  | 'clientName'
+  | 'itemName'
+  | 'daysOpen'
+  | 'firstCreatedAt'
+  | 'dueAt'
+  | 'attachments'
 > & {
   _id: Types.ObjectId;
   dealId?: Types.ObjectId;
@@ -66,12 +71,15 @@ export class DealAuditsService {
     branchId: string | null,
     query: ListDealAuditsDto,
   ): Promise<DealAuditListResponse> {
-    const { page, pageSize } = query;
+    const { page, pageSize, due } = query;
 
     const filter: FilterQuery<DealAuditItemDocument> = {
       ...buildScopeFilter<DealAuditItemDocument>(access, branchId),
       isFailed: true,
       isResolved: false,
+      // The soft deadline is a *filter*, never a state change — see `dueAt` on
+      // the schema. `all` adds nothing, so the default query is unchanged.
+      ...this.dueFilter(due),
     };
 
     const total = await this.dealAuditItemModel.countDocuments(filter);
@@ -110,6 +118,21 @@ export class DealAuditsService {
         // displayed figure is derived. A nightly recompute to fix cross-cohort
         // drift is a follow-up.
         daysOpen: daysSince(record.firstCreatedAt ?? record.createdAt),
+        dueAt: record.dueAt ? record.dueAt.toISOString() : null,
+        /*
+         * The proofs attached at sale time (PAC-56 #21b), finally surfaced
+         * (PAC-65 #16). They were written onto the item and read by nobody, so
+         * the service team was chasing documents already sitting in storage.
+         *
+         * Index, filename and size only — never the storage key. See
+         * `DealAuditRowAttachment`.
+         */
+        attachments: (record.attachments ?? []).map((file, index) => ({
+          index,
+          filename: file.filename,
+          contentType: file.contentType,
+          size: file.size,
+        })),
       };
     });
 
@@ -119,6 +142,28 @@ export class DealAuditsService {
       total,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
       items,
+    };
+  }
+
+  /**
+   * The `due` query's Mongo clause.
+   *
+   * ⚠ Both narrowing values require `dueAt` to exist. An item generated before
+   * the field was added has no deadline, so it is neither overdue nor due soon
+   * — treating a missing date as "overdue" would manufacture a backlog out of
+   * the entire pre-PAC-65 history.
+   */
+  private dueFilter(
+    due: ListDealAuditsDto['due'],
+  ): FilterQuery<DealAuditItemDocument> {
+    if (due === 'all') return {};
+    const now = new Date();
+    if (due === 'overdue') return { dueAt: { $lt: now } };
+    return {
+      dueAt: {
+        $gte: now,
+        $lte: new Date(now.getTime() + DUE_SOON_DAYS * 24 * 60 * 60 * 1000),
+      },
     };
   }
 
