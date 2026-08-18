@@ -113,6 +113,10 @@ const discounts = z
         }
       }),
     studentDiscount: proofBackedDiscount,
+    // Every policy type — see UNIVERSAL_DISCOUNT_KEYS. Deliberately outside
+    // both branch lists, so `findCrossBranchDiscounts` never rejects it on a
+    // Life or Umbrella line.
+    priorInsuranceDiscount: z.boolean().default(false),
   })
   // A policy the wizard sent no discount answers for means "no discounts", not
   // "unknown" — so the shape is always present and audit generation can read it
@@ -126,6 +130,7 @@ const discounts = z
     drivewise: false,
     defensiveDriver: { selected: false, drivers: [] },
     studentDiscount: { selected: false },
+    priorInsuranceDiscount: false,
   }));
 
 const escrowDetails = z.object({
@@ -224,6 +229,8 @@ const soldPolicySchema = policyBaseSchema
         none: z.boolean().default(false),
         carrier: carrierName(120).optional(),
         agentName: z.string().trim().max(120).optional(),
+        /** "Proof of Insurance" — the declarations page. See the refine below. */
+        attachment: attachment.optional(),
       })
       .default({ none: false }),
     // Asked inside the prior-insurance card since #24.
@@ -268,6 +275,47 @@ const soldPolicySchema = policyBaseSchema
         code: z.ZodIssueCode.custom,
         message: 'A policy with no prior insurance cannot have a cancellation.',
         path: ['cancellation'],
+      });
+    }
+
+    /*
+     * The second cross-card invariant, of exactly the same kind (PAC-65 #18).
+     * Ticking "prior insurance" on the discounts card and "no prior insurance"
+     * here is a contradiction; David: *"if they select prior insurance, that
+     * top button should not be a selection."*
+     *
+     * The UI disables the toggle, but this is **rejected, not stripped** —
+     * picking a winner server-side means silently discarding one of two answers
+     * the producer gave, and neither is safe to drop: clearing `none` invents
+     * prior coverage, clearing the discount loses the declarations page and the
+     * audit item that chases it.
+     */
+    if (policy.discounts.priorInsuranceDiscount && policy.priorInsurance.none) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Prior insurance was claimed on the discounts card, so this policy cannot have none.',
+        path: ['priorInsurance', 'none'],
+      });
+    }
+
+    /*
+     * ⚠ The one upload on this form that is **required** (PAC-65 #18).
+     *
+     * Every Card 5 proof became optional, but this is not a discount proof: the
+     * declarations page is what Allstate wants to see for the coverage period
+     * the producer keyed in, and failing to supply it in time gets the policy
+     * cancelled or repriced. Optional here would be a different, worse rule.
+     */
+    if (
+      policy.discounts.priorInsuranceDiscount &&
+      !policy.priorInsurance.none &&
+      !policy.priorInsurance.attachment
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Attach the proof of insurance (the declarations page).',
+        path: ['priorInsurance', 'attachment'],
       });
     }
 

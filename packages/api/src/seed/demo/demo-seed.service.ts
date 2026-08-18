@@ -1595,6 +1595,9 @@ export class DemoSeedService {
       if (t.category === 'Auto') return isAuto && rng.chance(0.5);
       if (t.category === 'Home') return isHome && rng.chance(0.6);
       if (t.category === 'Landlord') return isLandlord && rng.chance(0.6);
+      // Applies to any line, so no policy-type gate — just how often a demo
+      // deal was sold to someone with prior coverage (PAC-65 #15).
+      if (t.category === 'Prior Insurance') return rng.chance(0.6);
       return rng.chance(0.5);
     });
   }

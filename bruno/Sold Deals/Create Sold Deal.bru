@@ -36,6 +36,7 @@ body:json {
         },
         "discounts": {
           "drivewise": true,
+          "priorInsuranceDiscount": true,
           "defensiveDriver": {
             "selected": true,
             "drivers": [
@@ -69,7 +70,17 @@ body:json {
             }
           }
         },
-        "priorInsurance": { "none": false, "carrier": "Geico" },
+        "priorInsurance": {
+          "none": false,
+          "carrier": "Geico",
+          "agentName": "Jamie Prior",
+          "attachment": {
+            "key": "{{soldDocumentKey}}",
+            "filename": "declarations-page.pdf",
+            "contentType": "application/pdf",
+            "size": 2048
+          }
+        },
         "cancellation": { "cancelled": false }
       },
       {
@@ -251,6 +262,19 @@ docs {
     it generates asks the service team to verify exactly those fields. There is
     no statement upload (PAC-65 removed it) — David: *"the audit is going to be
     based on the information"*, meaning the keyed-in loan detail.
+  - **Prior insurance is a discount now, and its proof is the one that is
+    required.** `discounts.priorInsuranceDiscount` applies to **every** policy
+    type — it sits in `UNIVERSAL_DISCOUNT_KEYS`, so the cross-branch rule never
+    touches it and an Umbrella policy can carry it. Ticking it does three
+    things: generates the `Prior Insurance` audit item (no longer baseline —
+    see below), makes `priorInsurance.attachment` **required** (400 without it),
+    and makes `priorInsurance.none` a 400. That last pair is a **cross-card
+    invariant of the same kind as `none && cancelled`** — rejected, not
+    stripped, because neither answer is safe to silently discard.
+  - **`Prior Insurance` is no longer generated on every deal.** It left the
+    `Common` category *and* lost `alwaysInclude`, because `isBaselineTemplate`
+    matches either one. A deal with no prior coverage no longer carries an item
+    telling the service team to obtain a declarations page that does not exist.
   - **`inspection` and the Drivewise proof no longer exist (PAC-65).** Both keys
     are simply absent from the schema — a stale client sending either is
     stripped, not rejected. `Home Inspection` / `Landlord Inspection` still come

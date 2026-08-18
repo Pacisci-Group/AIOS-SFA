@@ -35,21 +35,59 @@ export const DiscountsCard = withForm({
     const isProperty = isPropertyPolicyType(policyType);
     const isAuto = isAutoPolicyType(policyType);
 
-    if (!isProperty && !isAuto) {
-      return (
-        <p className="text-sm text-muted-foreground">
-          No discounts apply to a {policyType} policy. Continue to prior insurance.
-        </p>
-      );
-    }
-
     return (
       <div className="space-y-5">
+        <PriorInsuranceDiscountField form={form} />
+
         {isProperty && <PropertyDiscounts form={form} uploadScope={uploadScope} />}
         {isAuto && (
           <AutoDiscounts form={form} uploadScope={uploadScope} contacts={contacts} />
         )}
+        {/*
+          * A sibling, not an early return: PAC-65 added a discount that applies
+          * to every policy type, so Umbrella / Life / Boat Owners / Valuable
+          * Item Protection are no longer cards with nothing on them.
+          */}
+        {!isProperty && !isAuto && (
+          <p className="text-sm text-muted-foreground">
+            No other discounts apply to a {policyType} policy.
+          </p>
+        )}
       </div>
+    );
+  },
+});
+
+/**
+ * "The client has prior insurance" — every policy type (PAC-65 #15).
+ *
+ * Outside the property/auto split because prior coverage is not a property of
+ * the line sold. Public records do not always show existing coverage, so the
+ * producer keys it in by hand; ticking this generates the `Prior Insurance`
+ * audit item and makes the prior-insurance card mandatory downstream.
+ *
+ * Un-ticking does **not** clear `priorInsurance.none` back on: the producer may
+ * have legitimately set it, and silently re-answering a question on a card they
+ * are not looking at is worse than leaving their answer alone.
+ */
+const PriorInsuranceDiscountField = withForm({
+  defaultValues: emptyPolicy(),
+  render: function Render({ form }) {
+    return (
+      <form.AppField name="discounts.priorInsuranceDiscount">
+        {(f) => (
+          <f.CheckboxField
+            label="Prior insurance"
+            hint="The client already had coverage. Requires the declarations page on the next card."
+            onChanged={(on) => {
+              // Ticking resolves the contradiction rather than leaving the
+              // producer to walk forward into a disabled control and a
+              // validation error explaining a card they have left behind.
+              if (on) form.setFieldValue("priorInsurance.none", false);
+            }}
+          />
+        )}
+      </form.AppField>
     );
   },
 });

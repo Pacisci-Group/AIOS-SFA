@@ -11,6 +11,7 @@ const EMPTY_DISCOUNTS: SoldPolicyInput['discounts'] = {
   drivewise: false,
   defensiveDriver: { selected: false, drivers: [] },
   studentDiscount: { selected: false },
+  priorInsuranceDiscount: false,
 };
 
 const proof = (name: string): SoldDocumentMeta => ({

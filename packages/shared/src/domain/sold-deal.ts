@@ -111,6 +111,23 @@ export interface SoldPolicyDiscounts {
   };
   /** Legacy calls the resulting audit item `Good Student`. */
   studentDiscount: ProofBackedDiscount;
+
+  // --- Every policy type ---
+  /**
+   * "The client has prior insurance" (PAC-65).
+   *
+   * Public records do not always show existing coverage, so producers key it in
+   * by hand while quoting — and Allstate then wants the declarations page
+   * proving coverage for the period entered.
+   *
+   * Two consequences, both cross-card: it generates the `Prior Insurance` audit
+   * item (which stopped being unconditional to make room for it), and it makes
+   * the prior-insurance step mandatory — `priorInsurance.none` becomes
+   * unreachable. David on why it is asked *here* rather than left to that step:
+   * *"if we're not aware that they need prior insurance and they fail to put it
+   * in… we miss something and we're not doing a complete audit."*
+   */
+  priorInsuranceDiscount: boolean;
 }
 
 /**
@@ -140,8 +157,44 @@ export const PROPERTY_DISCOUNT_KEYS = [
   'acvDwellingProtection',
 ] as const satisfies readonly (keyof SoldPolicyDiscounts)[];
 
+/**
+ * Keys that apply to **every** policy type, auto and property alike.
+ *
+ * `findCrossBranchDiscounts` iterates only the two branch lists, so a key here
+ * is deliberately never cross-branch-checked — which is exactly right for an
+ * option a Life or Umbrella policy can carry.
+ *
+ * ⚠ But `clearInapplicableDiscounts` is the mirror image: it rebuilds from
+ * `emptyDiscounts()` and copies forward only the keys it is given. A key in
+ * *none* of the three lists is therefore silently wiped every time the producer
+ * changes the policy type — ticked, invisible, gone. That is what
+ * {@link UniversalDiscountKey} and the guard below exist to prevent.
+ */
+export const UNIVERSAL_DISCOUNT_KEYS = [
+  'priorInsuranceDiscount',
+] as const satisfies readonly (keyof SoldPolicyDiscounts)[];
+
 export type AutoDiscountKey = (typeof AUTO_DISCOUNT_KEYS)[number];
 export type PropertyDiscountKey = (typeof PROPERTY_DISCOUNT_KEYS)[number];
+export type UniversalDiscountKey = (typeof UNIVERSAL_DISCOUNT_KEYS)[number];
+
+/**
+ * Every discount key must be classified into exactly one of the three lists.
+ *
+ * A compile error here means a key was added to {@link SoldPolicyDiscounts}
+ * without saying which policy types it applies to. Left unclassified it would
+ * escape the server's cross-branch rejection *and* be wiped by the web form's
+ * branch reset — two silent failures, neither of which surfaces as an error the
+ * producer or the reviewer would see. The error names the key.
+ */
+type _EveryDiscountKeyIsClassified = Exclude<
+  keyof SoldPolicyDiscounts,
+  AutoDiscountKey | PropertyDiscountKey | UniversalDiscountKey
+> extends never
+  ? true
+  : ['Unclassified discount key — add it to one of the three key lists'];
+/** Referenced so the guard above is not elided as unused. */
+export type DiscountKeysAreClassified = _EveryDiscountKeyIsClassified;
 
 /**
  * Is this discount claimed?
@@ -172,10 +225,28 @@ export interface SoldEscrowDetails {
 
 /** Prior insurance, per policy. Labels track the policy type. */
 export interface SoldPriorInsurance {
-  /** The "No prior [Type] insurance" toggle; suppresses the other fields. */
+  /**
+   * The "No prior [Type] insurance" toggle; suppresses the other fields.
+   *
+   * ⚠ Unreachable when `discounts.priorInsuranceDiscount` is ticked — David:
+   * *"if they select prior insurance, that top button should not be a
+   * selection."* Rejected server-side as well as disabled in the UI, following
+   * the same house rule as `none && cancelled`.
+   */
   none: boolean;
   carrier?: string;
   agentName?: string;
+  /**
+   * "Proof of Insurance" — the declarations page showing the coverage period
+   * (PAC-65). Required when `discounts.priorInsuranceDiscount` is ticked, which
+   * makes it the one upload on the sold form that is **not** optional: failing
+   * to supply it in time gets the policy cancelled or repriced.
+   *
+   * Lives here rather than in a generic proof slot for the same reason the
+   * escrow statement used to live on the escrow details — it evidences the
+   * carrier and period keyed in beside it.
+   */
+  attachment?: SoldDocumentMeta;
 }
 
 /**

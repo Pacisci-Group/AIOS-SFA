@@ -191,6 +191,7 @@ export function deriveAuditTriggers(
     // from it (PAC-65) — Drivewise is provenance only.
     triggers.drivewise ||= d.drivewise === true;
     triggers.goodStudent ||= d.studentDiscount?.selected === true;
+    triggers.priorInsurance ||= d.priorInsuranceDiscount === true;
     triggers.defensiveDriver ||= d.defensiveDriver?.selected === true;
 
     if (d.defensiveDriver?.selected) {
@@ -257,6 +258,13 @@ export function collectAttachments(
     for (const driver of d.defensiveDriver?.drivers ?? []) {
       add(driver.attachment);
     }
+
+    // ⚠ **Explicitly**, because the structural sweep above cannot see it:
+    // `priorInsurance` is `{ none, carrier?, agentName?, attachment? }` and has
+    // no `selected` key, so `isProofBacked` returns false for it. A slot missed
+    // here is a key `assertKeyOwnership` never runs on — i.e. a cross-agency
+    // read. It lives outside `discounts` for the same reason.
+    add(policy.priorInsurance?.attachment);
   }
 
   return found;

@@ -353,10 +353,17 @@ export const NewBusinessApplicationCard = withForm({
  */
 export const PriorInsuranceCard = withForm({
   defaultValues: emptyPolicy(),
-  props: { carriers: [] as CarrierOption[] },
-  render: function Render({ form, carriers }) {
+  props: {
+    carriers: [] as CarrierOption[],
+    uploadScope: { kind: "lead", leadId: "" } as UploadScope,
+  },
+  render: function Render({ form, carriers, uploadScope }) {
     const policyType = useStore(form.store, (s) => s.values.policyType);
     const none = useStore(form.store, (s) => s.values.priorInsurance.none);
+    const claimed = useStore(
+      form.store,
+      (s) => s.values.discounts.priorInsuranceDiscount,
+    );
     const priorCarrier = useStore(
       form.store,
       (s) => s.values.priorInsurance.carrier,
@@ -369,9 +376,28 @@ export const PriorInsuranceCard = withForm({
 
     return (
       <div className="space-y-4">
-        {/* The spec's "No prior [Type] insurance" toggle. */}
+        {/*
+          * The spec's "No prior [Type] insurance" toggle.
+          *
+          * ⚠ **Disabled, not hidden**, once prior insurance was claimed on the
+          * discounts card (PAC-65 #18) — David: *"if they select prior
+          * insurance, that top button should not be a selection."* Disabled
+          * because the control still applies and is being *prevented*; hiding
+          * it would leave the producer unable to see why the card they expected
+          * to skip is now mandatory. The hint names the remedy and where it is.
+          */}
         <form.AppField name="priorInsurance.none">
-          {(f) => <f.CheckboxField label={`No prior ${policyType} insurance`} />}
+          {(f) => (
+            <f.CheckboxField
+              label={`No prior ${policyType} insurance`}
+              disabled={claimed}
+              hint={
+                claimed
+                  ? "Unavailable — prior insurance was ticked on the discounts card. Untick it there to enable this."
+                  : undefined
+              }
+            />
+          )}
         </form.AppField>
 
         {/*
@@ -409,6 +435,36 @@ export const PriorInsuranceCard = withForm({
             <form.AppField name="priorInsurance.agentName">
               {(f) => <f.TextField label="Prior agent" placeholder="Optional" />}
             </form.AppField>
+
+            {/*
+              * "Proof of Insurance" — David's wording, meaning the declarations
+              * page showing the coverage period (PAC-65 #18).
+              *
+              * ⚠ The **only required upload on this form**. Every Card 5 proof
+              * became optional in this same ticket; this one did not, because
+              * failing to supply it in time gets the policy cancelled or
+              * repriced. Shown only when the discount was claimed — otherwise
+              * there is no coverage period to evidence.
+              */}
+            {claimed && (
+              <FormSubPanel title="Proof of insurance">
+                <form.Field name="priorInsurance.attachment">
+                  {(field) => (
+                    <SoldDocumentUpload
+                      uploadScope={uploadScope}
+                      value={field.state.value}
+                      onChange={(meta) => {
+                        field.handleChange(meta);
+                        field.handleBlur();
+                      }}
+                      ariaLabel="Upload the proof of insurance"
+                      hint="The declarations page showing the coverage period. PDF, JPEG or PNG."
+                      error={useFieldError(field.state.meta)}
+                    />
+                  )}
+                </form.Field>
+              </FormSubPanel>
+            )}
 
             {/*
               * Was its own card until PAC-56 #24. Inside the `!none` branch so

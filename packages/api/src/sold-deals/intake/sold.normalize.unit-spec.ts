@@ -6,6 +6,7 @@ import {
   deriveMortgagee,
   derivePersistedDealAggregates,
   derivePriorCarriers,
+  collectAttachments,
   findCrossBranchDiscounts,
   parseFormDate,
   soldDateYmd,
@@ -21,6 +22,7 @@ const EMPTY_DISCOUNTS: SoldPolicyInput['discounts'] = {
   drivewise: false,
   defensiveDriver: { selected: false, drivers: [] },
   studentDiscount: { selected: false },
+  priorInsuranceDiscount: false,
 };
 
 function policy(overrides: Partial<SoldPolicyInput> = {}): SoldPolicyInput {
@@ -214,6 +216,7 @@ describe('deriveAuditTriggers', () => {
       defensiveDriver: false,
       goodStudent: false,
       drivewise: false,
+      priorInsurance: false,
       fireSubscription: false,
       actualCashValue: false,
       hailResistantRoof: false,
@@ -338,6 +341,26 @@ describe('findCrossBranchDiscounts', () => {
     expect(findCrossBranchDiscounts([auto, home])).toEqual([]);
   });
 
+  it('accepts a universal discount on any line, including neither branch', () => {
+    /*
+     * `priorInsuranceDiscount` is in `UNIVERSAL_DISCOUNT_KEYS`, so it is in
+     * neither branch list and is never cross-branch-checked — which is the
+     * point: prior coverage is not a property of the line sold. Umbrella is the
+     * case that matters, since it is neither auto nor property and would
+     * otherwise have no discounts card at all.
+     */
+    const rows = (['Auto', 'Home', 'Umbrella'] as const).map((policyType) =>
+      policy({
+        policyType,
+        discounts: {
+          ...structuredClone(EMPTY_DISCOUNTS),
+          priorInsuranceDiscount: true,
+        },
+      }),
+    );
+    expect(findCrossBranchDiscounts(rows)).toEqual([]);
+  });
+
   it('rejects auto discounts on a property policy', () => {
     const bogus = policy({
       policyType: 'Home',
@@ -457,5 +480,85 @@ describe('derivePriorCarriers', () => {
   it('trims stored carrier names', () => {
     const result = derivePriorCarriers([prior('Auto', '  Geico  ')]);
     expect(result.auto).toBe('Geico');
+  });
+});
+
+describe('collectAttachments (the upload ownership boundary)', () => {
+  const file = (name: string) => ({
+    key: `agencies/a1/sold-deals/lead1/${name}`,
+    filename: `${name}.pdf`,
+    contentType: 'application/pdf',
+    size: 10,
+  });
+
+  /*
+   * ⚠ **An enumeration test, deliberately.**
+   *
+   * `verifyAttachments` is the only place `assertKeyOwnership` runs on a sold
+   * upload, and it iterates exactly what this returns — so a slot missed here
+   * is a key the server never checks belongs to this agency and lead. Asserting
+   * the exact count is what catches the *next* slot somebody adds without
+   * wiring it in; asserting "the ones I remembered" would not.
+   */
+  it('finds every upload slot on a policy, and knows how many there are', () => {
+    const found = collectAttachments([
+      policy({
+        policyType: 'Home',
+        newBusinessApplication: file('nba'),
+        discounts: {
+          ...structuredClone(EMPTY_DISCOUNTS),
+          fireSubscription: { selected: true, attachment: file('fire') },
+          roofReceipt: { selected: true, attachment: file('roof') },
+          priorInsuranceDiscount: true,
+        },
+        priorInsurance: { none: false, attachment: file('declarations') },
+      }),
+      policy({
+        discounts: {
+          ...structuredClone(EMPTY_DISCOUNTS),
+          studentDiscount: { selected: true, attachment: file('transcript') },
+          defensiveDriver: {
+            selected: true,
+            drivers: [
+              { name: 'Dana', attachment: file('dana') },
+              { name: 'Sam', attachment: file('sam') },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    expect(found.map((f) => f.attachment.filename).sort()).toEqual([
+      'dana.pdf',
+      'declarations.pdf',
+      'fire.pdf',
+      'nba.pdf',
+      'roof.pdf',
+      'sam.pdf',
+      'transcript.pdf',
+    ]);
+  });
+
+  it('tags the new business application with its own upload kind', () => {
+    // It is PDF-only and sits under a distinct key prefix, so the kind is what
+    // picks the right allow-list and purpose (PAC-56 #23).
+    const found = collectAttachments([
+      policy({ newBusinessApplication: file('nba') }),
+    ]);
+    expect(found).toEqual([
+      { attachment: expect.anything(), kind: 'new_business_application' },
+    ]);
+  });
+
+  it('finds the declarations page, which the structural sweep cannot see', () => {
+    // `priorInsurance` has no `selected` key, so `isProofBacked` returns false
+    // for it and only the explicit line in `collectAttachments` catches it.
+    // Without that line this file is never ownership-checked.
+    const found = collectAttachments([
+      policy({ priorInsurance: { none: false, attachment: file('dec-page') } }),
+    ]);
+    expect(found).toEqual([
+      { attachment: expect.anything(), kind: 'discount_proof' },
+    ]);
   });
 });

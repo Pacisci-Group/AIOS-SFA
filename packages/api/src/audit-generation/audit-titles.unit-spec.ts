@@ -16,10 +16,22 @@ import {
  * silently hands the service team the wrong checklist — or none at all.
  */
 
+/*
+ * Mirrors the real seed's shape, including the one template that is *not*
+ * baseline. `Prior Insurance` left `Common` in PAC-65 so it could be driven by
+ * the discounts-card checkbox; keeping a baseline copy of it here would let the
+ * conditional rule regress with this spec still green.
+ */
 const BASELINE: AuditTemplateLike[] = [
   { name: 'Correct Sold Date', category: 'Common', alwaysInclude: true },
-  { name: 'Prior Insurance', category: 'Common', alwaysInclude: true },
+  { name: 'Accord Cancellation', category: 'Common', alwaysInclude: true },
 ];
+
+const PRIOR_INSURANCE: AuditTemplateLike = {
+  name: 'Prior Insurance',
+  category: 'Prior Insurance',
+  alwaysInclude: false,
+};
 
 function triggers(overrides: Partial<DealAuditTriggers> = {}) {
   return { ...emptyAuditTriggers(), ...overrides };
@@ -67,7 +79,7 @@ describe('isBaselineTemplate', () => {
 describe('computeRequiredTitles — baseline', () => {
   it('includes every baseline template on any deal', () => {
     expect(titlesFor(['Auto'])).toEqual(
-      expect.arrayContaining(['Correct Sold Date', 'Prior Insurance']),
+      expect.arrayContaining(['Correct Sold Date', 'Accord Cancellation']),
     );
   });
 
@@ -81,6 +93,32 @@ describe('computeRequiredTitles — baseline', () => {
     expect(titlesFor(['Auto'], {}, false, templates)).not.toContain(
       'Home Inspection',
     );
+  });
+});
+
+describe('computeRequiredTitles — prior insurance (PAC-65 #15)', () => {
+  const templates = [...BASELINE, PRIOR_INSURANCE];
+
+  it('generates the item only when the discount was ticked', () => {
+    expect(
+      titlesFor(['Auto'], { priorInsurance: true }, false, templates),
+    ).toContain('Prior Insurance');
+  });
+
+  it('omits it entirely for a client with no prior coverage', () => {
+    // The whole point of making it conditional: a deal with no prior insurance
+    // used to carry an item asking the service team to obtain a declarations
+    // page that does not exist.
+    expect(titlesFor(['Auto'], {}, false, templates)).not.toContain(
+      'Prior Insurance',
+    );
+  });
+
+  it('stays out of the baseline even though its neighbours are in it', () => {
+    // Two independent routes make a template baseline — `alwaysInclude` and a
+    // category of exactly `Common`. This asserts both were changed; setting
+    // only the flag would look right and generate the item anyway.
+    expect(isBaselineTemplate(PRIOR_INSURANCE)).toBe(false);
   });
 });
 

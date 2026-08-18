@@ -349,7 +349,11 @@ export function SoldDealWizard({
               />
             )}
             {nav.card === "priorInsurance" && (
-              <PriorInsuranceCard form={draft} carriers={carriers} />
+              <PriorInsuranceCard
+            form={draft}
+            carriers={carriers}
+            uploadScope={uploadScope}
+          />
             )}
             {nav.card === "loop" && (
               <div className="space-y-2">

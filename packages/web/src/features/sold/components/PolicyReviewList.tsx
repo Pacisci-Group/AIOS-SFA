@@ -186,6 +186,7 @@ function discountSummary(policy: SoldPolicyFormValues): string {
   const d = policy.discounts;
   const selected: string[] = [];
 
+  if (d.priorInsuranceDiscount) selected.push("Prior insurance");
   if (d.escrow) selected.push("Escrow");
   if (d.fireSubscription.selected) selected.push("Fire subscription");
   if (d.roofReceipt.selected) selected.push("Roof receipt");

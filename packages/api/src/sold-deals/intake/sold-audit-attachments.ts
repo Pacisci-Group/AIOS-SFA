@@ -37,6 +37,7 @@ import type { DealAuditAttachment } from '../../deal-audit-items/schemas/deal-au
  * | `roofReceipt` | `Home` / `Landlord Hail Resistant Roof` |
  * | `studentDiscount` | `Good Student` |
  * | `defensiveDriver.drivers[]` | `Defensive Driver` — one per driver name |
+ * | `priorInsurance.attachment` | `Prior Insurance` |
  *
  * Everything else on the card carries no document to map. `acvPersonalProperty`
  * / `acvDwellingProtection` never did. PAC-65 removed the other three: escrow's
@@ -99,6 +100,13 @@ export function auditAttachmentsByItem(
         const name = driver.name?.trim();
         if (name) add('Defensive Driver', name, driver.attachment);
       }
+    }
+
+    // The declarations page (PAC-65 #18). Read off `priorInsurance`, not
+    // `discounts` — the flag is on the discounts card, the document is on the
+    // prior-insurance card beside the carrier it evidences.
+    if (d.priorInsuranceDiscount) {
+      add('Prior Insurance', undefined, policy.priorInsurance?.attachment);
     }
   }
 

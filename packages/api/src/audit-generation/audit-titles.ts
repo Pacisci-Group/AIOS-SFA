@@ -119,6 +119,11 @@ export function computeRequiredTitles(
   // The trigger is still written on the deal as provenance; do not "restore"
   // this line on the strength of the field existing.
   if (triggers.goodStudent) add('Good Student');
+  // Conditional since PAC-65 #15 — see the template's own note. Public records
+  // do not always show existing coverage, so the producer ticking the box on
+  // the discounts card is what tells the audit there is a declarations page to
+  // verify. A deal with no prior coverage no longer carries the item at all.
+  if (triggers.priorInsurance) add('Prior Insurance');
 
   // 2b. Defensive Driver fans out per named driver — the spec wants one
   // certificate each, where legacy created a single item for all of them.

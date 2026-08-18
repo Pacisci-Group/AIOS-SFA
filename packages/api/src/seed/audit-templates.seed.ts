@@ -37,8 +37,13 @@ export interface CoreAuditTemplateSpec {
    * baseline when `alwaysInclude` is true **or** the category is exactly
    * `Common` (case-insensitively). Auto / Home / Landlord gate the
    * policy-type-driven and discount-driven items.
+   *
+   * `Prior Insurance` exists because of that first rule: PAC-65 made the item
+   * conditional, and it could not stay in `Common` and be conditional. It is
+   * the one category that is neither baseline nor tied to a policy line — it
+   * applies to any line, driven purely by the discount selection.
    */
-  category: 'Common' | 'Auto' | 'Home' | 'Landlord';
+  category: 'Common' | 'Auto' | 'Home' | 'Landlord' | 'Prior Insurance';
   required: boolean;
   blocking: boolean;
   alwaysInclude: boolean;
@@ -63,12 +68,21 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     alwaysInclude: true,
     task: 'Verify each policy effective date matches what was bound.',
   },
+  /*
+   * ⚠ **Not baseline, unlike its neighbours** (PAC-65 #15). Generated only when
+   * the producer ticks "prior insurance" on the discounts card.
+   *
+   * Note it takes **two** changes to leave the baseline, not one:
+   * `isBaselineTemplate` matches `alwaysInclude === true` **or** a category of
+   * exactly `Common`, so the category has to move as well. Setting only
+   * `alwaysInclude: false` here would look correct and change nothing.
+   */
   {
     name: 'Prior Insurance',
-    category: 'Common',
+    category: 'Prior Insurance',
     required: true,
     blocking: false,
-    alwaysInclude: true,
+    alwaysInclude: false,
     task: 'Obtain the declarations page proving continuous prior coverage.',
   },
   {

@@ -4,6 +4,7 @@ import {
   CARRIER_OTHER,
   POLICY_TYPES,
   PROPERTY_DISCOUNT_KEYS,
+  UNIVERSAL_DISCOUNT_KEYS,
   carrierPolicyNumberMatches,
   carrierSlug,
   isAutoPolicyType,
@@ -112,6 +113,11 @@ const discountsSchema = z.object({
       }
     }),
   studentDiscount: proofSchema,
+  /**
+   * Applies to every policy type — see `UNIVERSAL_DISCOUNT_KEYS`. Ticking it
+   * makes the prior-insurance card mandatory and its "none" toggle unreachable.
+   */
+  priorInsuranceDiscount: z.boolean(),
 });
 
 const escrowSchema = z.object({
@@ -203,6 +209,8 @@ const soldPolicyShape = z
       /** Only used when `priorInsurance.carrier` is the "Other" sentinel. */
       carrierOther: z.string().trim().max(120, "Too long").optional(),
       agentName: z.string().trim().max(120, "Too long").optional(),
+      /** "Proof of Insurance" — the declarations page (PAC-65 #18). */
+      attachment: attachmentSchema.optional(),
     }),
     // Asked inside the prior-insurance card since #24.
     cancellation: z.object({
@@ -302,6 +310,40 @@ export function buildSoldPolicySchema(
         path: ["cancellation", "effectiveDate"],
       });
     }
+    /*
+     * The cross-card invariant (PAC-65 #18), mirroring the server. Reported at
+     * `priorInsurance.none` rather than at the discounts checkbox because that
+     * is the control the producer is looking at when they hit it — the
+     * discounts card is several steps back by then.
+     *
+     * The toggle is rendered disabled, so this should be unreachable; it is
+     * here because "should be unreachable" is not the same as "is", and the
+     * server rejects the pair outright.
+     */
+    if (policy.discounts.priorInsuranceDiscount && policy.priorInsurance.none) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Prior insurance was claimed on the discounts card. Untick it there, or untick "no prior insurance" here.',
+        path: ["priorInsurance", "none"],
+      });
+    }
+
+    // ⚠ The one **required** upload on this form (PAC-65 #18). Every discount
+    // proof became optional; the declarations page did not, because failing to
+    // supply it in time gets the policy cancelled or repriced.
+    if (
+      policy.discounts.priorInsuranceDiscount &&
+      !policy.priorInsurance.none &&
+      !policy.priorInsurance.attachment
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Attach the proof of insurance (the declarations page).",
+        path: ["priorInsurance", "attachment"],
+      });
+    }
+
     // Ticking escrow is what makes its sub-card required: the audit item it
     // generates asks the service team to verify exactly these three things.
     //
@@ -404,19 +446,25 @@ export function emptyEscrow(): NonNullable<SoldPolicyFormValues["escrow"]> {
  * selection (`findCrossBranchDiscounts`) rather than stripping it.
  *
  * Keyed off the same `AUTO_DISCOUNT_KEYS` / `PROPERTY_DISCOUNT_KEYS` the server
- * rejects by, so the two cannot drift. A type in neither branch (nothing today,
- * but the enum is open to one) correctly clears both.
+ * rejects by, so the two cannot drift. A type in neither branch (Umbrella,
+ * Life, Boat Owners, Valuable Item Protection) correctly clears both — and
+ * still keeps `UNIVERSAL_DISCOUNT_KEYS`, which apply to every line.
  */
 export function clearInapplicableDiscounts(
   policyType: PolicyType,
   values: SoldPolicyFormValues,
 ): Pick<SoldPolicyFormValues, "discounts" | "escrow"> {
   const blank = emptyDiscounts();
-  const keep = isAutoPolicyType(policyType)
+  const branch = isAutoPolicyType(policyType)
     ? AUTO_DISCOUNT_KEYS
     : isPropertyPolicyType(policyType)
       ? PROPERTY_DISCOUNT_KEYS
       : [];
+  // ⚠ The universal keys are kept on **every** switch. Omitting them is not a
+  // no-op: this function rebuilds from `emptyDiscounts()`, so a key it does not
+  // copy forward is silently un-ticked the moment the producer changes the
+  // policy type — with the box still on screen and nothing to explain it.
+  const keep = [...UNIVERSAL_DISCOUNT_KEYS, ...branch];
 
   const discounts = { ...blank };
   for (const key of keep) {
@@ -444,6 +492,7 @@ export function emptyDiscounts(): SoldPolicyFormValues["discounts"] {
     drivewise: false,
     defensiveDriver: { selected: false, drivers: [] },
     studentDiscount: { selected: false },
+    priorInsuranceDiscount: false,
   };
 }
 
@@ -661,6 +710,10 @@ export function toPolicyInput(values: SoldPolicyFormValues): SoldPolicyInput {
               values.priorInsurance.carrierOther,
             ) || undefined,
           agentName: values.priorInsurance.agentName?.trim() || undefined,
+          // Dropped in the `none` branch above with the rest of the card — a
+          // declarations page for coverage the client does not have is the same
+          // kind of leftover the cancellation collapse below guards against.
+          attachment: values.priorInsurance.attachment,
         },
     // Normalized, not just collapsed: with no prior insurance there is nothing
     // to cancel, and the API rejects the contradiction rather than stripping it
