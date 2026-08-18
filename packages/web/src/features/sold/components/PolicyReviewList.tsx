@@ -1,4 +1,4 @@
-import { CARRIER_OTHER } from "@sfa/shared";
+import { CARRIER_OTHER, itemCountLabel } from "@sfa/shared";
 import { FileText, Pencil, Trash2 } from "lucide-react";
 import { FormSubPanel } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
@@ -91,7 +91,7 @@ export function PolicyReviewList({
                 value={currency.format(Number(policy.premium) || 0)}
               />
               <Row
-                label="Items"
+                label={itemCountLabel(policy.policyType)}
                 value={String(Number(policy.itemCount) || 0)}
               />
               <Row

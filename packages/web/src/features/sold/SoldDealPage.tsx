@@ -4,6 +4,7 @@ import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { celebrate } from "@/lib/celebrate";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,16 @@ export default function SoldDealPage() {
           deal.policyCount === 1 ? "policy" : "policies"
         }`,
       );
+      /*
+       * PAC-65 #12. The scrum notes said "on lead review completion", but there
+       * is no such thing in this product — the moment meant is this one, which
+       * is also where the Aug-4 sold-notification precedent points.
+       *
+       * Fired before the navigate on purpose: `canvas-confetti` renders into
+       * its own canvas on `document.body`, outside React's tree, so the burst
+       * outlives the route change instead of being unmounted mid-animation.
+       */
+      celebrate();
       navigate(`/leads/${leadId}`, { replace: true });
     },
     onError: (err: Error) => setError(err.message),

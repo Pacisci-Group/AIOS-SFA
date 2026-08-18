@@ -1,4 +1,8 @@
-import { CARRIER_OTHER, POLICY_TYPE_OPTIONS } from "@sfa/shared";
+import {
+  CARRIER_OTHER,
+  POLICY_TYPE_OPTIONS,
+  itemCountLabel,
+} from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FormSubPanel } from "@/components/form";
@@ -260,10 +264,19 @@ export const PolicyDetailsCard = withForm({
   },
 });
 
-/** Premium and item count. */
+/**
+ * Premium and item count.
+ *
+ * The count's label follows the policy type (PAC-65 #7) — "Number of Vehicles"
+ * on the auto family, "Number of Boats" on Boat Owners. The `policyType` card
+ * comes earlier in the loop, so the type is always known by the time this
+ * renders.
+ */
 export const PolicyFinancialsCard = withForm({
   defaultValues: emptyPolicy(),
   render: function Render({ form }) {
+    const policyType = useStore(form.store, (s) => s.values.policyType);
+
     return (
       <div className="space-y-4">
         <form.AppField name="premium">
@@ -282,7 +295,7 @@ export const PolicyFinancialsCard = withForm({
         <form.AppField name="itemCount">
           {(f) => (
             <f.NumberField
-              label="Number of items"
+              label={itemCountLabel(policyType)}
               inputMode="numeric"
               min="1"
               step="1"

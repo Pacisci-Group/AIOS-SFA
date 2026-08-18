@@ -1,3 +1,4 @@
+import { itemCountNoun } from "@sfa/shared";
 import type { LeadDetailQuoteRecap } from "@sfa/shared";
 import {
   CalendarClock,
@@ -56,7 +57,9 @@ function QuoteTotals({ recap }: { recap: LeadDetailQuoteRecap }) {
             {" · "}
           </>
         )}
-        {recap.itemCount} item{recap.itemCount === 1 ? "" : "s"}
+        {recap.itemCount}{" "}
+        {/* A recap can span policy types, so the total stays generic. */}
+        {recap.itemCount === 1 ? "item" : "items"}
       </p>
     </div>
   );
@@ -133,7 +136,7 @@ function QuoteRecapBody({ recap }: { recap: LeadDetailQuoteRecap }) {
               </span>
               <span className="flex shrink-0 items-center gap-3">
                 <span className="text-sm tabular-nums text-muted-foreground">
-                  {policy.itemCount} item{policy.itemCount === 1 ? "" : "s"}
+                  {policy.itemCount} {itemCountNoun(policy.policyType, policy.itemCount)}
                 </span>
                 <span className="text-base font-medium tabular-nums text-card-foreground">
                   {formatCurrency(policy.premium)}
