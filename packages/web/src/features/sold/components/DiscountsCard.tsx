@@ -119,31 +119,17 @@ const PropertyDiscounts = withForm({
                 </form.AppField>
               ))}
             </FormGrid>
-
-            {/*
-              * The escrow statement (PAC-56 #21). Inside the details panel
-              * rather than as a `ProofField`, because it evidences the loan
-              * number sitting directly above it.
-              */}
-            <EscrowStatementField form={form} uploadScope={uploadScope} />
           </FormSubPanel>
         )}
 
         {/*
-          * New in PAC-56 #21 — legacy's `Passed Home Inspection` (`sqmmybna`)
-          * was never ported, so the control had to exist before it could be
-          * made conditional. It generates no audit item of its own: `Home
-          * Inspection` / `Landlord Inspection` already come from the policy
-          * type, and this only carries the report onto them.
+          * ⚠ There is deliberately no "Passed home inspection" control here.
+          * PAC-56 #21 added one; PAC-65 removed it — David: there is no
+          * document a producer can attach, and the item is *"only audit no
+          * matter what"*. `Home Inspection` / `Landlord Inspection` are emitted
+          * unconditionally from the policy type, so removing the checkbox
+          * removed a control, not a requirement.
           */}
-        <ProofField
-          form={form}
-          fields="discounts.inspection"
-          uploadScope={uploadScope}
-          label="Passed home inspection"
-          proofPrompt="Attach the inspection report."
-        />
-
         <ProofField
           form={form}
           fields="discounts.fireSubscription"
@@ -197,17 +183,20 @@ const AutoDiscounts = withForm({
     return (
       <div className="space-y-5">
         {/*
-          * Proof-backed since PAC-56 #21 — it was a bare checkbox, and the
-          * generated item told the service team to chase an enrolment nobody
-          * had evidenced.
+          * ⚠ Back to a bare checkbox in PAC-65, and the **only** option on this
+          * card that generates no audit item. Drivewise is a phone app that
+          * monitors driving — there is no document that could prove enrolment,
+          * so both the upload (#21) and the item (#21b) came out. The service
+          * department works it from the renewal.
           */}
-        <ProofField
-          form={form}
-          fields="discounts.drivewise"
-          uploadScope={uploadScope}
-          label="Drivewise"
-          proofPrompt="Attach proof of Drivewise enrolment."
-        />
+        <form.AppField name="discounts.drivewise">
+          {(f) => (
+            <f.CheckboxField
+              label="Drivewise"
+              hint="Recorded on the policy. Generates no audit item."
+            />
+          )}
+        </form.AppField>
 
         <form.AppField name="discounts.defensiveDriver.selected">
           {(f) => (
@@ -280,9 +269,10 @@ const AutoDiscounts = withForm({
                       </Button>
                     </div>
                     {/*
-                      * Per driver, not one for the group (PAC-56 #21): the
-                      * certificates are per person, and the audit generator
-                      * already fans out one item per name.
+                      * Per driver, not one for the group: the certificates are
+                      * per person, and the audit generator already fans out one
+                      * item per name. Optional since PAC-65 — naming the driver
+                      * is what is required.
                       */}
                     <DriverCertificateField
                       form={form}
@@ -319,7 +309,7 @@ const AutoDiscounts = withForm({
           fields="discounts.studentDiscount"
           uploadScope={uploadScope}
           label="Good student / student away from home"
-          proofPrompt="Do you have the report card or transcript?"
+          proofPrompt="Attach the report card or transcript."
         />
       </div>
     );
@@ -327,37 +317,7 @@ const AutoDiscounts = withForm({
 });
 
 /**
- * The escrow statement (PAC-56 #21).
- *
- * A `form.AppField` binding rather than a `ProofField`, because escrow's
- * selection is a bare boolean and its document belongs inside the details panel
- * beside the loan number it evidences — not in a generic proof slot.
- */
-const EscrowStatementField = withForm({
-  defaultValues: emptyPolicy(),
-  props: { uploadScope: { kind: "lead", leadId: "" } as UploadScope },
-  render: function Render({ form, uploadScope }) {
-    return (
-      <form.Field name="escrow.attachment">
-        {(field) => (
-          <SoldDocumentUpload
-            uploadScope={uploadScope}
-            value={field.state.value}
-            onChange={(meta) => {
-              field.handleChange(meta);
-              field.handleBlur();
-            }}
-            ariaLabel="Upload the escrow statement"
-            error={useFieldError(field.state.meta)}
-          />
-        )}
-      </form.Field>
-    );
-  },
-});
-
-/**
- * One driver's defensive-driver certificate (PAC-56 #21).
+ * One driver's defensive-driver certificate. Optional since PAC-65.
  *
  * Per driver rather than one for the group: the certificates are issued per
  * person, and `computeRequiredTitles` already fans out one audit item per name,
@@ -380,7 +340,7 @@ const DriverCertificateField = withForm({
               field.handleBlur();
             }}
             ariaLabel={`Upload the certificate for driver ${index + 1}`}
-            hint="Their defensive-driver certificate. PDF, JPEG or PNG."
+            hint="Their defensive-driver certificate, if you have it. PDF, JPEG or PNG."
             error={useFieldError(field.state.meta)}
           />
         )}

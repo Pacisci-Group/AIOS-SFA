@@ -14,12 +14,11 @@ import {
 
 const EMPTY_DISCOUNTS: SoldPolicyInput['discounts'] = {
   escrow: false,
-  inspection: { selected: false },
   fireSubscription: { selected: false },
   roofReceipt: { selected: false },
   acvPersonalProperty: false,
   acvDwellingProtection: false,
-  drivewise: { selected: false },
+  drivewise: false,
   defensiveDriver: { selected: false, drivers: [] },
   studentDiscount: { selected: false },
 };
@@ -226,7 +225,7 @@ describe('deriveAuditTriggers', () => {
     const withDrivewise = policy({
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
       },
     });
     expect(deriveAuditTriggers([policy(), withDrivewise]).drivewise).toBe(true);
@@ -256,7 +255,7 @@ describe('deriveAuditTriggers', () => {
       policyType: 'Home',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        roofReceipt: { selected: true, hasProof: false },
+        roofReceipt: { selected: true },
       },
     });
     // The form says "Roof Receipt"; the checklist says "Hail Resistant Roof".
@@ -265,7 +264,7 @@ describe('deriveAuditTriggers', () => {
     const student = policy({
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        studentDiscount: { selected: true, hasProof: false },
+        studentDiscount: { selected: true },
       },
     });
     // The form says "Student Discount"; the checklist says "Good Student".
@@ -329,7 +328,7 @@ describe('findCrossBranchDiscounts', () => {
     const auto = policy({
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
       },
     });
     const home = policy({
@@ -344,7 +343,7 @@ describe('findCrossBranchDiscounts', () => {
       policyType: 'Home',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
       },
     });
     // Stripping silently would generate a Drivewise audit item for a deal with
@@ -366,7 +365,7 @@ describe('findCrossBranchDiscounts', () => {
       policyType: 'Umbrella',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
         escrow: true,
       },
     });
@@ -379,7 +378,7 @@ describe('findCrossBranchDiscounts', () => {
       policyType: 'Home',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
       },
     });
     const problems = findCrossBranchDiscounts([ok, bad, bad]);

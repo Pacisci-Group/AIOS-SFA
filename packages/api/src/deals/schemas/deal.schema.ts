@@ -24,6 +24,11 @@ export type PremiumSource = 'rollup' | 'snapshot' | 'none';
 export interface DealAuditTriggers {
   defensiveDriver: boolean;
   goodStudent: boolean;
+  /**
+   * ⚠ Written, but **not read by audit generation** since PAC-65 — Drivewise
+   * generates no audit item. Kept as provenance: "this deal has Drivewise" is
+   * what the service department works the renewal from.
+   */
   drivewise: boolean;
   fireSubscription: boolean;
   actualCashValue: boolean;

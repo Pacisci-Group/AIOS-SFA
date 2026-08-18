@@ -49,42 +49,39 @@ const attachment = z.object({
 });
 
 /**
- * Selected + the proof for it.
+ * Selected, plus the proof for it if the producer has one.
  *
- * ⚠ `hasProof` is **deliberately absent** (PAC-56 #21). The "no — send it to
- * the audit" fork is gone: selecting a discount now requires its document. The
- * key is dropped rather than rejected — zod strips unknown keys on `z.object`
- * — so a stale SPA bundle still sending it is silently ignored during a
- * rollout instead of 400-ing, and nothing new is ever persisted with it.
+ * ⚠ **The attachment is optional** (PAC-65, reversing PAC-56 #21). Ticking the
+ * box generates the audit item either way — the upload only decides whether the
+ * auditor verifies a document in place or is told to call the client and obtain
+ * it. Requiring it up front blocked producers on paperwork they may not hold,
+ * which is what David asked us to undo.
+ *
+ * There is deliberately no `hasProof` flag: `selected && !attachment` already
+ * *is* the "no proof, chase it" state, and a second stored boolean could
+ * disagree with the attachment. A stale client still sending the key is
+ * ignored rather than rejected — zod strips unknown keys on `z.object`.
  */
 const proofBackedDiscount = z
   .object({
     selected: z.boolean().default(false),
     attachment: attachment.optional(),
   })
-  .default(() => ({ selected: false }))
-  .superRefine((value, ctx) => {
-    if (value.selected && !value.attachment) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Attach the proof document for this discount.',
-        path: ['attachment'],
-      });
-    }
-  });
+  .default(() => ({ selected: false }));
 
 const discounts = z
   .object({
     // Home / Renters / Condominium / Landlord
     escrow: z.boolean().default(false),
-    // New in PAC-56 #21 — legacy's `Passed Home Inspection` was never ported.
-    inspection: proofBackedDiscount,
     fireSubscription: proofBackedDiscount,
     roofReceipt: proofBackedDiscount,
     acvPersonalProperty: z.boolean().default(false),
     acvDwellingProtection: z.boolean().default(false),
     // Auto / Auto - Special / Motorcycle
-    drivewise: proofBackedDiscount,
+    // ⚠ A bare boolean, and the one option here generating **no audit item**
+    // (PAC-65): there is no document that proves enrolment in a driving app,
+    // and knowing Drivewise is on the policy is all the service team needs.
+    drivewise: z.boolean().default(false),
     defensiveDriver: z
       .object({
         selected: z.boolean().default(false),
@@ -102,6 +99,9 @@ const discounts = z
       // A factory, not a literal: `{ drivers: [] }` reused across policies
       // would hand every one the same array instance.
       .default(() => ({ selected: false, drivers: [] }))
+      // Naming the drivers is still required — the audit generator emits one
+      // item per name, so an unnamed selection produces a single item nobody
+      // can act on. Their certificates are optional (PAC-65).
       .superRefine((value, ctx) => {
         if (!value.selected) return;
         if (value.drivers.length === 0) {
@@ -110,19 +110,7 @@ const discounts = z
             message: 'Select at least one driver.',
             path: ['drivers'],
           });
-          return;
         }
-        // Per driver, because the certificates are per person and the audit
-        // generator emits one item per name (PAC-56 #21).
-        value.drivers.forEach((driver, index) => {
-          if (!driver.attachment) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: "Attach this driver's certificate.",
-              path: ['drivers', index, 'attachment'],
-            });
-          }
-        });
       }),
     studentDiscount: proofBackedDiscount,
   })
@@ -131,12 +119,11 @@ const discounts = z
   // without null-checks.
   .default(() => ({
     escrow: false,
-    inspection: { selected: false },
     fireSubscription: { selected: false },
     roofReceipt: { selected: false },
     acvPersonalProperty: false,
     acvDwellingProtection: false,
-    drivewise: { selected: false },
+    drivewise: false,
     defensiveDriver: { selected: false, drivers: [] },
     studentDiscount: { selected: false },
   }));
@@ -150,12 +137,6 @@ const escrowDetails = z.object({
     state: z.string().trim().min(1, 'Required').max(60),
     zip: z.string().trim().min(1, 'Required').max(20),
   }),
-  /**
-   * The escrow statement (PAC-56 #21). Optional in the shape but required by
-   * the policy-level rule whenever `discounts.escrow` is ticked — the same
-   * place that already requires this whole object.
-   */
-  attachment: attachment.optional(),
 });
 
 /**
@@ -214,7 +195,7 @@ export const policyBaseSchema = z.object({
  * the fact that money changed hands.
  */
 function refineEscrow(
-  policy: { discounts: { escrow: boolean }; escrow?: { attachment?: unknown } },
+  policy: { discounts: { escrow: boolean }; escrow?: unknown },
   ctx: z.RefinementCtx,
 ): void {
   // Escrow's sub-card is required *because* it was ticked — the audit item it
@@ -228,16 +209,8 @@ function refineEscrow(
     });
   }
 
-  // …and its statement, on the same footing as every other discount proof
-  // (PAC-56 #21). Reported separately from the details above so the message
-  // lands on the field that is actually missing.
-  if (policy.discounts.escrow && policy.escrow && !policy.escrow.attachment) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Attach the escrow statement.',
-      path: ['escrow', 'attachment'],
-    });
-  }
+  // The statement itself is **not** required (PAC-65). David: the audit is
+  // based on the keyed-in loan detail above, not on an attachment.
 }
 
 export { refineEscrow };

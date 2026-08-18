@@ -24,25 +24,23 @@ export interface SoldDocumentMeta {
 }
 
 /**
- * A discount that has to be evidenced.
+ * A discount that can be evidenced.
  *
- * ⚠ **Selecting one now requires the document** (PAC-56 #21). It used to offer
- * a "no — send it to the audit" fork, which is what {@link
- * ProofBackedDiscount.hasProof} was for; David asked for the proof up front, so
- * the fork is gone and `attachment` is required whenever `selected`.
+ * ⚠ **The document is optional** (PAC-65, reversing PAC-56 #21). Ticking the
+ * box generates the audit item either way — David: *"even if the details are
+ * provided, you're still gonna audit it because we have to make sure."* So the
+ * upload is never the gate; it only changes how much work the audit is. With a
+ * document the auditor verifies what is in front of them; without one the item
+ * tells them to call the client and obtain it.
+ *
+ * That is why there is no `hasProof` flag: `selected && !attachment` **is** the
+ * "no proof, go and chase it" state. A stored boolean saying the same thing
+ * could disagree with the attachment, and then two code paths disagree about
+ * what happened.
  */
 export interface ProofBackedDiscount {
   selected: boolean;
-  /**
-   * @deprecated PAC-56 #21 removed the "do you have proof?" fork; nothing
-   * writes this any more and nothing reads it. Kept **optional** rather than
-   * deleted because deals booked before that still carry it on
-   * `Policy.discounts`, and removing the property would make those documents
-   * un-typeable on read for no gain. The API DTO drops the key on the way in,
-   * so a stale client sending `true` is ignored rather than 400'd.
-   */
-  hasProof?: boolean;
-  /** Required when `selected`. */
+  /** Optional — see the note above. Its absence is meaningful, not an error. */
   attachment?: SoldDocumentMeta;
 }
 
@@ -53,9 +51,10 @@ export interface DefensiveDriverSelection {
   /** Set when the driver was picked from the household rather than typed. */
   contactId?: string;
   /**
-   * That driver's certificate (PAC-56 #21). Required per row when the discount
-   * is selected — the certificates are per person, and the audit generator
-   * already emits one item per name, so they map 1:1.
+   * That driver's certificate. **Optional** since PAC-65 — naming the driver is
+   * still required, their certificate is not. The audit generator emits one
+   * item per name either way, so certificate and item still map 1:1 when the
+   * producer does have it to hand.
    */
   attachment?: SoldDocumentMeta;
 }
@@ -66,7 +65,7 @@ export interface DefensiveDriverSelection {
  * Split by branch: the property fields are only meaningful for a policy where
  * `isPropertyPolicyType` holds, the auto fields only where `isAutoPolicyType`
  * does. The server **rejects** a cross-branch selection rather than stripping
- * it — a Home policy claiming `drivewise` is a client bug, and silently
+ * it — a Home policy claiming `studentDiscount` is a client bug, and silently
  * dropping it would let a client conjure audit items for a deal that has no
  * auto line.
  */
@@ -75,25 +74,19 @@ export interface SoldPolicyDiscounts {
   /**
    * Implies a mortgagee, which drives the `Home/Landlord Mortgagee` audit items.
    *
-   * Stays a plain boolean rather than becoming a {@link ProofBackedDiscount}
-   * for symmetry: its evidence belongs beside the loan number and the
-   * mortgagee's address, so it lives on {@link SoldEscrowDetails.attachment}.
-   * Converting it would ripple through `deriveMortgagee`,
-   * `findCrossBranchDiscounts`, `InterestedPartiesStep` and every fixture, to
-   * make one control look like its neighbours.
+   * A plain boolean, and it stays one: what the audit reads is the keyed-in
+   * loan detail on {@link SoldEscrowDetails}, not a document (PAC-65 removed
+   * the escrow upload outright). Converting it to a {@link ProofBackedDiscount}
+   * would ripple through `deriveMortgagee`, `findCrossBranchDiscounts`,
+   * `InterestedPartiesStep` and every fixture to no end.
+   *
+   * ⚠ PAC-65 also deleted the sibling `inspection` key. There is no document a
+   * producer can attach to a passed home inspection, and the
+   * `Home Inspection` / `Landlord Inspection` audit items were never driven by
+   * it — they come from the policy type, unconditionally. Do not reintroduce
+   * the control believing it generates something.
    */
   escrow: boolean;
-  /**
-   * "Passed home inspection", with its report (PAC-56 #21).
-   *
-   * New — legacy's `Passed Home Inspection` (`sqmmybna`) was never ported, so
-   * the control had to exist before it could be made conditional.
-   *
-   * ⚠ Generates **no audit item of its own**. `Home Inspection` /
-   * `Landlord Inspection` are already emitted deterministically from the policy
-   * type, so this only carries the proof onto the item that exists.
-   */
-  inspection: ProofBackedDiscount;
   fireSubscription: ProofBackedDiscount;
   /** Legacy calls the resulting audit item `Hail Resistant Roof`. */
   roofReceipt: ProofBackedDiscount;
@@ -102,12 +95,15 @@ export interface SoldPolicyDiscounts {
 
   // --- Auto / Auto - Special / Motorcycle ---
   /**
-   * Always generates an audit item: service must mention registration.
+   * ⚠ **The one option on this card that generates no audit item** (PAC-65).
    *
-   * Proof-backed since PAC-56 #21. Unlike escrow it has no details object to
-   * hang a document off, so it takes the standard shape.
+   * Drivewise is a phone app that monitors driving — there is no document that
+   * could prove enrolment, so the upload came out, and David asked for the
+   * audit item to go with it: knowing Drivewise is on the policy is enough, and
+   * the service department works it from the renewal. Recorded here, and on
+   * `Deal.auditTriggers.drivewise`, purely as provenance.
    */
-  drivewise: ProofBackedDiscount;
+  drivewise: boolean;
   defensiveDriver: {
     selected: boolean;
     /** One audit item is generated per driver, each carrying their name. */
@@ -138,7 +134,6 @@ export const AUTO_DISCOUNT_KEYS = [
 /** @see AUTO_DISCOUNT_KEYS */
 export const PROPERTY_DISCOUNT_KEYS = [
   'escrow',
-  'inspection',
   'fireSubscription',
   'roofReceipt',
   'acvPersonalProperty',
@@ -162,17 +157,17 @@ export function isDiscountSelected(value: unknown): boolean {
   return (value as { selected?: unknown }).selected === true;
 }
 
-/** The escrow sub-card, required when `discounts.escrow` is set. */
+/**
+ * The escrow sub-card, required when `discounts.escrow` is set.
+ *
+ * ⚠ PAC-65 removed the statement upload that used to sit here. David: *"the
+ * audit is going to be based on the information"* — these three keyed-in fields
+ * are what the `Home/Landlord Mortgagee` item asks the service team to verify.
+ */
 export interface SoldEscrowDetails {
   loanNumber: string;
   companyName: string;
   address: StructuredAddress;
-  /**
-   * The escrow / mortgagee statement (PAC-56 #21). Required whenever
-   * `discounts.escrow` is ticked — here rather than on the discount flag
-   * because it belongs with the loan number it evidences.
-   */
-  attachment?: SoldDocumentMeta;
 }
 
 /** Prior insurance, per policy. Labels track the policy type. */

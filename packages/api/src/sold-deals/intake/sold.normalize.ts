@@ -187,11 +187,10 @@ export function deriveAuditTriggers(
     triggers.actualCashValue ||=
       d.acvPersonalProperty === true || d.acvDwellingProtection === true;
 
-    triggers.drivewise ||= d.drivewise?.selected === true;
+    // Still recorded, but `computeRequiredTitles` no longer generates an item
+    // from it (PAC-65) — Drivewise is provenance only.
+    triggers.drivewise ||= d.drivewise === true;
     triggers.goodStudent ||= d.studentDiscount?.selected === true;
-    // `inspection` is deliberately absent: `Home Inspection` /
-    // `Landlord Inspection` are already emitted from the policy type, and
-    // adding a trigger would generate the item twice (PAC-56 #21).
     triggers.defensiveDriver ||= d.defensiveDriver?.selected === true;
 
     if (d.defensiveDriver?.selected) {
@@ -220,7 +219,8 @@ export function deriveMortgagee(policies: SoldPolicyInput[]): boolean {
  * is the only place `assertKeyOwnership` runs on a sold upload, and it iterates
  * exactly what this returns — so a file-carrying field missed here is a key the
  * server never checks belongs to this agency and lead. It walked three hard-coded
- * discounts before PAC-56 #21; there are now seven places a document can hang.
+ * discounts before PAC-56 #21; PAC-65 then removed the escrow statement and the
+ * inspection and Drivewise proofs, leaving four places a document can hang.
  *
  * Structured as one pass over a **derived** list rather than a literal so that
  * adding a proof-backed discount cannot forget it: the discount keys come from
@@ -257,9 +257,6 @@ export function collectAttachments(
     for (const driver of d.defensiveDriver?.drivers ?? []) {
       add(driver.attachment);
     }
-
-    // Escrow's statement lives on the details object, not on the flag.
-    add(policy.escrow?.attachment);
   }
 
   return found;
@@ -289,8 +286,9 @@ function isProofBacked(value: unknown): value is {
  *
  * Returned as a list of human-readable problems so the DTO can surface all of
  * them at once. Stripping silently would be worse than rejecting: a Home
- * policy claiming `drivewise` would otherwise generate an auto audit item for
- * a deal with no auto line, and nothing downstream could tell it was bogus.
+ * policy claiming `studentDiscount` would otherwise generate a `Good Student`
+ * item for a deal with no auto line, and nothing downstream could tell it was
+ * bogus.
  */
 export function findCrossBranchDiscounts(
   // Narrowed to the two fields actually read, so both write paths' schemas can
@@ -311,10 +309,7 @@ export function findCrossBranchDiscounts(
 
     // Both lists come from `@sfa/shared` so this rule and the web form's
     // "clear the branch that no longer applies" reset cannot drift — the drift
-    // is what let a stale selection block the form invisibly. Note
-    // `inspection` is a property key: an Auto policy ticking it would
-    // otherwise be accepted, generate nothing (inspection items come from the
-    // policy type) and lose the proof silently.
+    // is what let a stale selection block the form invisibly.
     const autoSelections = AUTO_DISCOUNT_KEYS.some((key) =>
       isDiscountSelected(d[key]),
     );

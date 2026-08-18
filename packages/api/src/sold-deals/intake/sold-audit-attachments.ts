@@ -33,17 +33,15 @@ import type { DealAuditAttachment } from '../../deal-audit-items/schemas/deal-au
  *
  * | discount | audit title(s) |
  * |---|---|
- * | `escrow.attachment` | `Home` / `Landlord Mortgagee` |
- * | `inspection` | `Home` / `Landlord Inspection` |
  * | `fireSubscription` | `Home` / `Landlord Fire Subscription` |
  * | `roofReceipt` | `Home` / `Landlord Hail Resistant Roof` |
- * | `drivewise` | `Drivewise` |
  * | `studentDiscount` | `Good Student` |
  * | `defensiveDriver.drivers[]` | `Defensive Driver` — one per driver name |
  *
- * `acvPersonalProperty` / `acvDwellingProtection` carry no document, and the
- * inspection item is generated from the policy type rather than from the
- * control — the control exists only to carry this proof.
+ * Everything else on the card carries no document to map. `acvPersonalProperty`
+ * / `acvDwellingProtection` never did. PAC-65 removed the other three: escrow's
+ * statement and the inspection control are gone entirely, and `drivewise`
+ * generates no audit item to attach anything to.
  */
 export function auditAttachmentsByItem(
   policies: SoldPolicyInput[],
@@ -87,18 +85,11 @@ export function auditAttachmentsByItem(
     const d = policy.discounts;
     if (!d) continue;
 
-    if (d.escrow) addVariants('Mortgagee', policy.escrow?.attachment);
-    if (d.inspection?.selected) {
-      addVariants('Inspection', d.inspection.attachment);
-    }
     if (d.fireSubscription?.selected) {
       addVariants('Fire Subscription', d.fireSubscription.attachment);
     }
     if (d.roofReceipt?.selected) {
       addVariants('Hail Resistant Roof', d.roofReceipt.attachment);
-    }
-    if (d.drivewise?.selected) {
-      add('Drivewise', undefined, d.drivewise.attachment);
     }
     if (d.studentDiscount?.selected) {
       add('Good Student', undefined, d.studentDiscount.attachment);

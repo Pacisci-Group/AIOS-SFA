@@ -129,14 +129,6 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     alwaysInclude: false,
     task: 'Collect the report card or transcript supporting the discount.',
   },
-  {
-    name: 'Drivewise',
-    category: 'Auto',
-    required: true,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Mention Drivewise registration to the client and confirm enrollment.',
-  },
 
   // --- Home: policy-type driven (Inspection, Mortgagee) + discount-driven ---
   {

@@ -141,7 +141,13 @@ describe('computeRequiredTitles — flat discount triggers', () => {
     expect(titlesFor(['Auto'], { goodStudent: true })).toContain(
       'Good Student',
     );
-    expect(titlesFor(['Auto'], { drivewise: true })).toContain('Drivewise');
+  });
+
+  it('generates no item for Drivewise, trigger or not (PAC-65)', () => {
+    // The one Card 5 option that produces nothing. `triggers.drivewise` is
+    // still written to the deal as provenance, which is exactly why this is
+    // asserted: the field's existence invites the generator line back.
+    expect(titlesFor(['Auto'], { drivewise: true })).not.toContain('Drivewise');
   });
 
   it('adds nothing when no discount was taken', () => {
