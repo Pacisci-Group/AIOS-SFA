@@ -10,6 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
+import { InviteRowActions } from './InviteRowActions';
+import { InviteUserDialog } from './InviteUserDialog';
 
 function displayName(user: AgencyUser): string {
   const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
@@ -72,11 +74,16 @@ export default function UsersPage() {
             </p>
           </div>
         </div>
-        {!usersQuery.isLoading && (
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {totalUsers} users
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-3">
+          {!usersQuery.isLoading && (
+            <span className="hidden text-xs text-muted-foreground sm:inline">
+              {totalUsers} users
+            </span>
+          )}
+          {/* Self-gates on `agency:users:write` and renders nothing without it,
+              so a user who can only read the directory sees no invite button. */}
+          <InviteUserDialog />
+        </div>
       </header>
 
       <main className="mx-auto w-full max-w-3xl px-4 py-8 md:px-6">
@@ -107,22 +114,35 @@ export default function UsersPage() {
           <div className="overflow-hidden rounded-xl border border-border bg-card">
             {/* The four-column table only exists from `md` up; below that each
                 row stacks into a card, so its header would label nothing. */}
-            <div className="hidden grid-cols-[1.4fr_1fr_90px_20px] gap-3 border-b border-border px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground uppercase md:grid">
+            <div className="hidden grid-cols-[1.4fr_1fr_90px_auto] gap-3 border-b border-border px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground uppercase md:grid">
               <span>User</span>
               <span>Roles</span>
               <span>Status</span>
               <span />
             </div>
 
+            {/*
+              The row is a plain container with a *stretched* link over it
+              rather than a `<Link>` wrapping everything, because pending invites
+              carry Resend/Revoke buttons — and a `<button>` inside an `<a>` is
+              invalid HTML that browsers and screen readers each recover from
+              differently. The overlay keeps the whole row clickable; the
+              controls sit above it on `z-10`.
+            */}
             {users.map((user, i) => (
-              <Link
+              <div
                 key={user._id}
-                to={`/settings/users/${user._id}/permissions`}
                 className={cn(
-                  'flex flex-col gap-2 px-4 py-3.5 transition-colors hover:bg-muted/50 md:grid md:grid-cols-[1.4fr_1fr_90px_20px] md:items-center md:gap-3 md:px-5',
+                  'relative flex flex-col gap-2 px-4 py-3.5 transition-colors hover:bg-muted/50 md:grid md:grid-cols-[1.4fr_1fr_90px_auto] md:items-center md:gap-3 md:px-5',
                   i < users.length - 1 && 'border-b border-border',
                 )}
               >
+                <Link
+                  to={`/settings/users/${user._id}/permissions`}
+                  className="absolute inset-0 rounded-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  aria-label={`Permissions for ${displayName(user)}`}
+                />
+
                 <div className="flex min-w-0 items-center gap-3">
                   <Avatar className="size-8">
                     <AvatarFallback className="bg-sidebar-accent text-xs font-bold text-sidebar-accent-foreground dark:bg-blue-900 dark:text-foreground">
@@ -178,11 +198,18 @@ export default function UsersPage() {
                   </Badge>
                 </div>
 
-                <ChevronRight
-                  size={16}
-                  className="hidden justify-self-end text-muted-foreground md:block"
-                />
-              </Link>
+                {/* Actions sit above the stretched link so their clicks don't
+                    navigate. `InviteRowActions` renders nothing for an active
+                    user or a caller without `agency:users:write`, leaving just
+                    the chevron. */}
+                <div className="relative z-10 flex items-center gap-2 justify-self-end">
+                  <InviteRowActions user={user} />
+                  <ChevronRight
+                    size={16}
+                    className="hidden text-muted-foreground md:block"
+                  />
+                </div>
+              </div>
             ))}
           </div>
         )}

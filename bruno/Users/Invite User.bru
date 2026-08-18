@@ -1,0 +1,116 @@
+meta {
+  name: Invite User
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/users/invite
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  // A fresh address every run. `User.email` is unique and this endpoint answers
+  // a repeat with 409 by design, so a hard-coded email would pass once and then
+  // fail on every subsequent `bru run`. **Revoke Invite** deletes this row again
+  // at the end of the folder, so the collection leaves no residue either way.
+  bru.setVar("inviteEmail", `pac58-invite-${Date.now()}@sfa.local`);
+}
+
+body:json {
+  {
+    "email": "{{inviteEmail}}",
+    "roleIds": ["{{inviteRoleId}}"],
+    "firstName": "Pending",
+    "lastName": "Invitee"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    const body = res.getBody();
+    bru.setVar("invitedUserId", body.userId);
+    // Dev/test only — absent in production, where the email is the only
+    // delivery channel. See the docs block.
+    bru.setVar("inviteToken", body.inviteToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the invite URL is absolute", function () {
+    // Regression guard: this used to return the relative
+    // `/auth/accept-invite?token=…`, which is unusable from an email client.
+    expect(res.getBody().inviteUrl).to.match(/^https?:\/\//);
+    expect(res.getBody().inviteUrl).to.contain("/auth/accept-invite?token=");
+  });
+
+  test("expires in the future", function () {
+    expect(new Date(res.getBody().expiresAt).getTime()).to.be.greaterThan(Date.now());
+  });
+}
+
+docs {
+  # POST /users/invite
+
+  Create an inactive user, mint a 32-byte invite token, and email them a link to
+  set their own password.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:users:write`
+  (Agency Owner). A producer or CSR gets `403`.
+
+  **Body**
+  | field     | type     | rules                                        |
+  |-----------|----------|----------------------------------------------|
+  | email     | string   | valid email; trimmed + lowercased server-side |
+  | roleIds   | string[] | non-empty; each a valid id belonging to the agency |
+  | branchId  | string?  | valid id                                      |
+  | firstName | string?  | ≤ 100 chars                                   |
+  | lastName  | string?  | ≤ 100 chars                                   |
+
+  The UI assigns exactly one role, but the contract stays an array to match
+  `PATCH /users/:userId/roles`.
+
+  **Response `201`**
+  ```json
+  {
+    "userId": "...",
+    "inviteUrl": "http://localhost:5173/auth/accept-invite?token=<hex>",
+    "expiresAt": "2026-08-24T09:00:00.000Z",
+    "inviteToken": "<hex>"
+  }
+  ```
+
+  > ⚠ `inviteToken` is returned **only when `NODE_ENV` is not `production`**.
+  > It is a bearer credential and the email is its delivery channel. It is
+  > exposed outside production purely because delivery is still a stub — the API
+  > logs the rendered email instead of sending it (see `MailService`), so this is
+  > the only way to walk the flow locally. It disappears when a real transport
+  > lands.
+
+  **Errors**
+  - `400` — no roles, a role outside the agency, or a malformed email/id.
+  - `403` — caller lacks `agency:users:write`.
+  - `409` — the address is taken. The message distinguishes **already a member**
+    from **already has a pending invite**, because the owner's next action
+    differs (nothing vs. resend).
+
+  ## Chaining
+  `inviteRoleId` comes from **List Roles (for the invite picker)**, which runs
+  first. The email is generated per run in the pre-request script, and
+  **Revoke Invite** deletes the row at the end of the folder — so a repeated
+  `bru run` neither collides on the unique `email` index nor accumulates
+  half-invited users.
+}

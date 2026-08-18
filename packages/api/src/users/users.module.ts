@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { MailModule } from '../mail/mail.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import {
@@ -13,6 +14,7 @@ import { UsersService } from './users.service';
 @Module({
   imports: [
     PermissionsModule,
+    MailModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: AgencyRole.name, schema: AgencyRoleSchema },

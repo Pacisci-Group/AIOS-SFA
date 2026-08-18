@@ -49,6 +49,14 @@ export class User {
   @Prop()
   inviteTokenExpiresAt?: Date;
 
+  /**
+   * When the invite email was last dispatched. Backs the per-user resend
+   * cooldown (PAC-58) — the global throttler is per-IP, which would not stop one
+   * owner mailbombing one invitee from a single session.
+   */
+  @Prop()
+  inviteLastSentAt?: Date;
+
   @Prop()
   passwordResetToken?: string;
 

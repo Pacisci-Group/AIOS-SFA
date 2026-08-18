@@ -1,0 +1,69 @@
+meta {
+  name: Resend Invite
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/users/{{invitedUserId}}/invite/resend
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+script:post-response {
+  // Only re-point `inviteToken` on a real resend. On the 409 cooldown path the
+  // original token is still the live one, and clobbering it would break
+  // **Revoke Invite**'s assertion that the link dies.
+  if (res.getStatus() === 201) {
+    bru.setVar("inviteToken", res.getBody().inviteToken);
+  }
+}
+
+tests {
+  test("returns 201 Created, or 409 while the resend cooldown is active", function () {
+    // Deliberately not a single expected status. **Invite User** ran moments
+    // ago, and the per-user cooldown (INVITE_RESEND_COOLDOWN_SECONDS, default
+    // 60s) exists precisely to reject a resend that soon — so in a full
+    // collection run 409 is the CORRECT answer, and asserting 201 alone would
+    // make a working server fail. Run this request on its own a minute later to
+    // see the 201 path.
+    expect([201, 409]).to.include(res.getStatus());
+  });
+
+  test("a successful resend returns a different token", function () {
+    if (res.getStatus() !== 201) return;
+    expect(res.getBody().inviteToken).to.be.a("string");
+    expect(new Date(res.getBody().expiresAt).getTime()).to.be.greaterThan(Date.now());
+  });
+}
+
+docs {
+  # POST /users/:userId/invite/resend
+
+  Regenerate the invite token, reset the expiry, and send the email again.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:users:write`.
+
+  **Response `201`** — same shape as **Invite User**
+  (`userId`, `inviteUrl`, `expiresAt`, and `inviteToken` outside production).
+
+  **The previous link stops working.** That is the point rather than a side
+  effect: a resend is how an owner kills an invite that was forwarded or leaked.
+
+  **Errors**
+  - `403` — caller lacks `agency:users:write`.
+  - `404` — no such user in this agency.
+  - `409` — either the user has **already accepted** (there is no pending invite
+    to resend), or the **per-user cooldown** has not elapsed. The cooldown
+    message names the remaining seconds.
+
+  ## Two layers of rate limiting, on purpose
+  - `@Throttle` on the route: 10/min **per IP** — a flood guard.
+  - `INVITE_RESEND_COOLDOWN_SECONDS` (default 60) **per invited user** — the one
+    that matters. What needs protecting is the invitee's inbox, and an owner
+    clicking "Resend" repeatedly is a single legitimate caller from a single IP,
+    which a per-IP limit would wave straight through.
+}

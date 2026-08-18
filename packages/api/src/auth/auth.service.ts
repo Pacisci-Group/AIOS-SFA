@@ -1,4 +1,9 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  GoneException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
@@ -6,13 +11,16 @@ import * as bcrypt from 'bcrypt';
 import { Model } from 'mongoose';
 import { JwtPayload } from '@sfa/shared';
 import { PermissionsService } from '../permissions/permissions.service';
+import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { AcceptInviteDto, LoginDto } from './dto/auth.dto';
+import { InvitePreview } from './auth.types';
 
 @Injectable()
 export class AuthService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
     private permissionsService: PermissionsService,
     private jwtService: JwtService,
     private configService: ConfigService,
@@ -47,6 +55,46 @@ export class AuthService {
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
+  }
+
+  /**
+   * Public preview of an invite, so the accept page can greet the invitee before
+   * they have any credentials.
+   *
+   * **Discloses only what the holder of the token already knows**: the address
+   * the email was sent to, the agency, and the role. No user id, no name, no
+   * anything that would turn a guessed token into a directory lookup. The token
+   * is 32 random bytes, so guessing is not the threat model — leaking extra
+   * fields to a forwarded link is.
+   *
+   * Expired and unknown are answered differently on purpose (410 vs 404): the
+   * page tells an expired invitee to ask for a resend, which is actionable,
+   * while an unknown token gets a generic failure.
+   */
+  async getInvitePreview(token: string): Promise<InvitePreview> {
+    const user = await this.userModel.findOne({ inviteToken: token });
+    if (!user || user.isActive) {
+      throw new NotFoundException('Invite not found');
+    }
+
+    const expiresAt = user.inviteTokenExpiresAt;
+    if (!expiresAt || expiresAt.getTime() <= Date.now()) {
+      throw new GoneException('This invite has expired');
+    }
+
+    const [agency, roleNames] = await Promise.all([
+      user.agencyId
+        ? this.agencyModel.findById(user.agencyId).select('name').lean()
+        : null,
+      this.permissionsService.resolveRoleNames(user),
+    ]);
+
+    return {
+      email: user.email,
+      agencyName: agency?.name ?? 'your agency',
+      roleNames,
+      expiresAt: expiresAt.toISOString(),
+    };
   }
 
   async acceptInvite(dto: AcceptInviteDto) {

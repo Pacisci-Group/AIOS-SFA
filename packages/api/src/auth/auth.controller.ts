@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { Public } from '../common/decorators/access.decorators';
 import { AuthService } from './auth.service';
 import { AcceptInviteDto, LoginDto, RefreshTokenDto } from './dto/auth.dto';
@@ -17,6 +17,16 @@ export class AuthController {
   @Post('refresh')
   refresh(@Body() dto: RefreshTokenDto) {
     return this.authService.refresh(dto.refreshToken);
+  }
+
+  /**
+   * Public invite preview for the accept page. `200` valid · `410` expired ·
+   * `404` unknown or already accepted.
+   */
+  @Public()
+  @Get('invite/:token')
+  getInvite(@Param('token') token: string) {
+    return this.authService.getInvitePreview(token);
   }
 
   @Public()

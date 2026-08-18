@@ -12,6 +12,14 @@ process.env.JWT_REFRESH_SECRET =
 process.env.JWT_ACCESS_EXPIRES = '15m';
 process.env.JWT_REFRESH_EXPIRES = '7d';
 
+// Invites (PAC-58). Pinned so the "inviteUrl is absolute" assertion has a known
+// origin to compare against rather than depending on the developer's `.env`.
+//
+// The resend cooldown is deliberately left at its default: the suite exercises
+// it for real (immediate resend → 409) and then clears `inviteLastSentAt`
+// directly in Mongo to test the success path, so no test has to sleep.
+process.env.APP_BASE_URL = 'http://localhost:5173';
+
 // Throttler storage is in-memory and process-wide, so a tight public-intake
 // limit would bleed 429s into unrelated describe blocks. Raise the limits for
 // the suite; the rate-limit block spins up its own app with tight values.
