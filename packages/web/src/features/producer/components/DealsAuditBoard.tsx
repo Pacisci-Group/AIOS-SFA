@@ -1,5 +1,5 @@
-import { Car, Home, Package, Clock, AlertCircle } from "lucide-react";
-import { useState } from "react";
+import { Car, Home, Package, Clock, AlertCircle, Paperclip } from "lucide-react";
+import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Card } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   listDealAudits,
+  type DealAuditDueFilter,
   type DealAuditListResponse,
   type DealAuditRow,
   type DealAuditType,
@@ -25,6 +26,12 @@ const PAGE_SIZE = 8;
 const GRID_COLS =
   "grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[1fr_1.3fr_90px_80px]";
 
+const DUE_FILTERS: { value: DealAuditDueFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "due_soon", label: "Due soon" },
+  { value: "overdue", label: "Overdue" },
+];
+
 const typeStyles: Record<DealAuditType, string> = {
   Auto: "bg-sky-400/10 text-sky-400",
   Home: "bg-emerald-500/10 text-emerald-500",
@@ -40,14 +47,23 @@ const TypeIcon = ({ type }: { type: DealAuditType }) => {
 
 export function DealsAuditBoard() {
   const [page, setPage] = useState(1);
+  const [due, setDue] = useState<DealAuditDueFilter>("all");
   const [selectedDeal, setSelectedDeal] = useState<DealAuditRow | null>(null);
   const { canWrite } = usePermissions();
   const canResolve = canWrite("deal_audits");
   const queryClient = useQueryClient();
 
+  /*
+   * ⚠ `due` belongs in the key, and in `handleResolved`'s `setQueryData` key
+   * below. Miss the second and the optimistic removal writes to a cache entry
+   * nothing is reading — no error, no test, just a row that stays on screen
+   * until the refetch lands.
+   */
+  const listKey = ["deal-audits", page, due] as const;
+
   const { data, isPending, isError, isFetching, refetch } = useQuery({
-    queryKey: ["deal-audits", page],
-    queryFn: () => listDealAudits({ page, pageSize: PAGE_SIZE }),
+    queryKey: listKey,
+    queryFn: () => listDealAudits({ page, pageSize: PAGE_SIZE, due }),
     placeholderData: keepPreviousData,
   });
 
@@ -55,21 +71,41 @@ export function DealsAuditBoard() {
   const total = data?.total ?? 0;
   const totalPages = data?.totalPages ?? 1;
 
+  /*
+   * Resolving the last row of the last page used to strand the user: `items`
+   * emptied, the server returned `totalPages: 1` for a `page=2` request, the
+   * board rendered "No deals pending hand-off" over a set that still had a full
+   * page 1 — and the pagination footer is gated on `totalPages > 1`, so Prev
+   * was gone too. Clamp instead of trusting `page` to stay in range.
+   */
+  useEffect(() => {
+    if (!data) return;
+    if (page > data.totalPages) setPage(data.totalPages);
+  }, [data, page]);
+
+  const changeDue = (next: DealAuditDueFilter) => {
+    setDue(next);
+    // A narrower set almost never has the page the wider one was on.
+    setPage(1);
+  };
+
   const handleResolved = (id: string) => {
     // The item was persisted as resolved by the API and now drops off the board.
     // Optimistically remove the row for instant feedback, then invalidate so the
     // list (and pagination/counts) reconciles with the server.
-    queryClient.setQueryData<DealAuditListResponse>(
-      ["deal-audits", page],
-      (prev) =>
-        prev
-          ? {
-              ...prev,
-              items: prev.items.filter((d) => d.id !== id),
-              total: Math.max(0, prev.total - 1),
-            }
-          : prev,
-    );
+    queryClient.setQueryData<DealAuditListResponse>(listKey, (prev) => {
+      if (!prev) return prev;
+      const remaining = prev.items.filter((d) => d.id !== id);
+      const nextTotal = Math.max(0, prev.total - 1);
+      return {
+        ...prev,
+        items: remaining,
+        total: nextTotal,
+        // Recomputed with `total`, not left behind: the footer reads this, and
+        // a stale value showed "Page 1 of 2" for a set that now fits on one.
+        totalPages: Math.max(1, Math.ceil(nextTotal / prev.pageSize)),
+      };
+    });
     void queryClient.invalidateQueries({ queryKey: ["deal-audits"] });
   };
 
@@ -84,11 +120,40 @@ export function DealsAuditBoard() {
               Deals Pending Service Hand-off
             </h2>
           </div>
-          {!isPending && !isError && (
-            <Badge className="bg-amber-500/15 text-amber-500 border-transparent rounded-full text-xs font-bold">
-              {total} Outstanding
-            </Badge>
-          )}
+          <div className="flex items-center gap-2">
+            {/*
+              * The soft deadline, as a filter and nothing more (PAC-65). The
+              * team pulls an overdue list; no status changes on its own at day
+              * 7, and nothing here should suggest it does.
+              */}
+            {!isPending && !isError && (
+              <div className="flex items-center rounded-full border border-border p-0.5">
+                {DUE_FILTERS.map(({ value, label }) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => changeDue(value)}
+                    aria-pressed={due === value}
+                    className={cn(
+                      "h-6 rounded-full px-2.5 text-xs font-medium",
+                      due === value
+                        ? "bg-muted text-foreground"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            )}
+            {!isPending && !isError && (
+              <Badge className="bg-amber-500/15 text-amber-500 border-transparent rounded-full text-xs font-bold">
+                {total} Outstanding
+              </Badge>
+            )}
+          </div>
         </div>
 
         {/* Column Headers */}
@@ -175,13 +240,28 @@ export function DealsAuditBoard() {
                           under the name rather than dropped. */}
                       <span className="mt-1 block truncate text-xs text-muted-foreground lg:hidden">
                         {deal.missing} · {deal.daysOpen}d open
+                        {deal.attachments.length > 0 ? " · has evidence" : ""}
                       </span>
                     </div>
                   </div>
 
                   {/* Missing */}
-                  <span className="hidden truncate text-xs text-muted-foreground lg:block">
-                    {deal.missing}
+                  <span className="hidden items-center gap-1.5 truncate text-xs text-muted-foreground lg:flex">
+                    <span className="truncate">{deal.missing}</span>
+                    {/*
+                      * A proof uploaded at sale time is already on the item
+                      * (PAC-56 #21b) — the clip says the auditor is verifying,
+                      * not chasing. Folded in here rather than given a column:
+                      * `GRID_COLS`, the header and the mobile collapse are all
+                      * tuned to four.
+                      */}
+                    {deal.attachments.length > 0 && (
+                      <Paperclip
+                        size={11}
+                        className="shrink-0 text-muted-foreground"
+                        aria-label={`${deal.attachments.length} document${deal.attachments.length === 1 ? "" : "s"} on file`}
+                      />
+                    )}
                   </span>
 
                   {/* Days */}

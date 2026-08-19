@@ -1,4 +1,9 @@
-import { CARRIER_OTHER, POLICY_TYPE_OPTIONS } from "@sfa/shared";
+import {
+  CANCELLED_BY_OPTIONS,
+  CARRIER_OTHER,
+  POLICY_TYPE_OPTIONS,
+  itemCountLabel,
+} from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FormSubPanel } from "@/components/form";
@@ -13,7 +18,11 @@ import {
 } from "@/lib/sold-deals-api";
 import { DuplicatePolicyNotice } from "./DuplicatePolicyNotice";
 import { SoldDocumentUpload } from "./SoldDocumentUpload";
-import type { CarrierOption, PolicyCheckMatch } from "@sfa/shared";
+import type {
+  CarrierOption,
+  PolicyCheckMatch,
+  SoldStaffOption,
+} from "@sfa/shared";
 import { clearInapplicableDiscounts, emptyPolicy } from "./sold-deal-schema";
 
 /**
@@ -260,10 +269,25 @@ export const PolicyDetailsCard = withForm({
   },
 });
 
-/** Premium and item count. */
+/** One list for the select, derived from the shared vocabulary. */
+const CANCELLED_BY_SELECT = CANCELLED_BY_OPTIONS.map((value) => ({
+  value,
+  label: value,
+}));
+
+/**
+ * Premium and item count.
+ *
+ * The count's label follows the policy type (PAC-65 #7) — "Number of Vehicles"
+ * on the auto family, "Number of Boats" on Boat Owners. The `policyType` card
+ * comes earlier in the loop, so the type is always known by the time this
+ * renders.
+ */
 export const PolicyFinancialsCard = withForm({
   defaultValues: emptyPolicy(),
   render: function Render({ form }) {
+    const policyType = useStore(form.store, (s) => s.values.policyType);
+
     return (
       <div className="space-y-4">
         <form.AppField name="premium">
@@ -282,7 +306,7 @@ export const PolicyFinancialsCard = withForm({
         <form.AppField name="itemCount">
           {(f) => (
             <f.NumberField
-              label="Number of items"
+              label={itemCountLabel(policyType)}
               inputMode="numeric"
               min="1"
               step="1"
@@ -353,10 +377,18 @@ export const NewBusinessApplicationCard = withForm({
  */
 export const PriorInsuranceCard = withForm({
   defaultValues: emptyPolicy(),
-  props: { carriers: [] as CarrierOption[] },
-  render: function Render({ form, carriers }) {
+  props: {
+    carriers: [] as CarrierOption[],
+    uploadScope: { kind: "lead", leadId: "" } as UploadScope,
+    staff: [] as SoldStaffOption[],
+  },
+  render: function Render({ form, carriers, uploadScope, staff }) {
     const policyType = useStore(form.store, (s) => s.values.policyType);
     const none = useStore(form.store, (s) => s.values.priorInsurance.none);
+    const claimed = useStore(
+      form.store,
+      (s) => s.values.discounts.priorInsuranceDiscount,
+    );
     const priorCarrier = useStore(
       form.store,
       (s) => s.values.priorInsurance.carrier,
@@ -365,13 +397,40 @@ export const PriorInsuranceCard = withForm({
       form.store,
       (s) => s.values.cancellation.cancelled,
     );
+    const cancelledBy = useStore(
+      form.store,
+      (s) => s.values.cancellation.cancelledBy,
+    );
     const carrierOptions = useCarrierOptions(carriers);
+    const staffOptions = useMemo(
+      () => staff.map((person) => ({ value: person.id, label: person.name })),
+      [staff],
+    );
 
     return (
       <div className="space-y-4">
-        {/* The spec's "No prior [Type] insurance" toggle. */}
+        {/*
+          * The spec's "No prior [Type] insurance" toggle.
+          *
+          * ⚠ **Disabled, not hidden**, once prior insurance was claimed on the
+          * discounts card (PAC-65 #18) — David: *"if they select prior
+          * insurance, that top button should not be a selection."* Disabled
+          * because the control still applies and is being *prevented*; hiding
+          * it would leave the producer unable to see why the card they expected
+          * to skip is now mandatory. The hint names the remedy and where it is.
+          */}
         <form.AppField name="priorInsurance.none">
-          {(f) => <f.CheckboxField label={`No prior ${policyType} insurance`} />}
+          {(f) => (
+            <f.CheckboxField
+              label={`No prior ${policyType} insurance`}
+              disabled={claimed}
+              hint={
+                claimed
+                  ? "Unavailable — prior insurance was ticked on the discounts card. Untick it there to enable this."
+                  : undefined
+              }
+            />
+          )}
         </form.AppField>
 
         {/*
@@ -406,9 +465,47 @@ export const PriorInsuranceCard = withForm({
                 )}
               </form.AppField>
             )}
+            {/*
+              * Required since PAC-65 #10 — it used to be free text with an
+              * "Optional" placeholder. The service team calls this person to
+              * chase the cancellation and the declarations page, so it is the
+              * contact that makes the rest of this card actionable.
+              */}
             <form.AppField name="priorInsurance.agentName">
-              {(f) => <f.TextField label="Prior agent" placeholder="Optional" />}
+              {(f) => (
+                <f.TextField label="Prior agent" placeholder="Name the agent" />
+              )}
             </form.AppField>
+
+            {/*
+              * "Proof of Insurance" — David's wording, meaning the declarations
+              * page showing the coverage period (PAC-65 #18).
+              *
+              * ⚠ The **only required upload on this form**. Every Card 5 proof
+              * became optional in this same ticket; this one did not, because
+              * failing to supply it in time gets the policy cancelled or
+              * repriced. Shown only when the discount was claimed — otherwise
+              * there is no coverage period to evidence.
+              */}
+            {claimed && (
+              <FormSubPanel title="Proof of insurance">
+                <form.Field name="priorInsurance.attachment">
+                  {(field) => (
+                    <SoldDocumentUpload
+                      uploadScope={uploadScope}
+                      value={field.state.value}
+                      onChange={(meta) => {
+                        field.handleChange(meta);
+                        field.handleBlur();
+                      }}
+                      ariaLabel="Upload the proof of insurance"
+                      hint="The declarations page showing the coverage period. PDF, JPEG or PNG."
+                      error={useFieldError(field.state.meta)}
+                    />
+                  )}
+                </form.Field>
+              </FormSubPanel>
+            )}
 
             {/*
               * Was its own card until PAC-56 #24. Inside the `!none` branch so
@@ -426,14 +523,52 @@ export const PriorInsuranceCard = withForm({
               </form.AppField>
 
               {cancelled && (
-                <form.AppField name="cancellation.effectiveDate">
-                  {(f) => (
-                    <f.TextField
-                      label="Effective date of cancellation"
-                      type="date"
-                    />
+                <>
+                  <form.AppField name="cancellation.effectiveDate">
+                    {(f) => (
+                      <f.TextField
+                        label="Effective date of cancellation"
+                        type="date"
+                      />
+                    )}
+                  </form.AppField>
+
+                  {/* Who did it (PAC-65 #11). */}
+                  <form.AppField name="cancellation.cancelledBy">
+                    {(f) => (
+                      <f.SelectField
+                        label="Cancelled by"
+                        options={CANCELLED_BY_SELECT}
+                        placeholder="Who cancelled it?"
+                        onChanged={(next) => {
+                          // Drop a stale name when the answer moves off "SFA
+                          // staff" — a changed mind would otherwise leave the
+                          // wrong person recorded as responsible.
+                          if (next !== "SFA staff") {
+                            form.setFieldValue(
+                              "cancellation.cancelledByUserId",
+                              "",
+                            );
+                          }
+                        }}
+                      />
+                    )}
+                  </form.AppField>
+
+                  {cancelledBy === "SFA staff" && (
+                    <form.AppField name="cancellation.cancelledByUserId">
+                      {(f) => (
+                        <f.SelectField
+                          label="Which staff member?"
+                          options={staffOptions}
+                          placeholder={
+                            staff.length ? "Select a staff member" : "Loading…"
+                          }
+                        />
+                      )}
+                    </form.AppField>
                   )}
-                </form.AppField>
+                </>
               )}
             </FormSubPanel>
           </>

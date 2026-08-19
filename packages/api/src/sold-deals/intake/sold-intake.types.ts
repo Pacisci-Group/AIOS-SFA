@@ -34,6 +34,15 @@ export interface SoldIntakeContext {
   quoteRecapId?: Types.ObjectId;
   primaryContactId?: Types.ObjectId;
   clientName?: string;
+  /**
+   * Display names for every `cancellation.cancelledByUserId` in the submission
+   * (PAC-65 #11), keyed by id.
+   *
+   * Resolved *and agency-checked* before the transaction opens, so the step can
+   * denormalize a name without a query of its own — and so an id from another
+   * tenant has already been rejected by the time anything is written.
+   */
+  staffNameById?: Map<string, string>;
   /** Namespaced (`SOLD|…` / `XFER|…`) or null when the client sent no token. */
   submissionToken: string | null;
 }

@@ -1,0 +1,104 @@
+meta {
+  name: List Sold Staff
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/sold-deals/staff
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // Capture a staff id so Create Sold Deal can send a `cancelledByUserId`
+  // that actually resolves. Runtime-only var (never persisted to disk).
+  if (res.getStatus() === 200) {
+    const staff = res.getBody();
+    if (staff && staff.length > 0) {
+      bru.setVar("soldStaffUserId", staff[0].id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns id + name for each staff member", function () {
+    const staff = res.getBody();
+    expect(staff).to.be.an("array");
+    if (staff.length > 0) {
+      expect(staff[0]).to.have.property("id");
+      expect(staff[0]).to.have.property("name");
+    }
+  });
+
+  test("never leaks a password hash", function () {
+    const staff = res.getBody();
+    if (staff.length > 0) {
+      expect(staff[0]).to.not.have.property("passwordHash");
+      expect(staff[0]).to.not.have.property("roleIds");
+    }
+  });
+}
+
+docs {
+  # GET /sold-deals/staff — the "Cancelled by" picker (PAC-65 #11)
+
+  ⚠ **Runs first in this folder on purpose.** `Create Sold Deal` sends a
+  `cancelledByUserId` captured here, and Bruno runs a folder in `seq` order —
+  placed after it, the variable is unresolved and the create 400s on an invalid
+  ObjectId, cascading into every request that chains off the new deal.
+
+  The agency's staff, so the Sold wizard can name **who** cancelled a client's
+  prior insurance when the answer is `SFA staff`.
+
+  - **Module:** `deal_audits` (the same gate as the rest of this controller)
+  - **Permission:** `deal_audits:read`
+  - **Data scope:** agency-wide callers see every active user; narrower scopes
+    are clamped to the caller's branch.
+
+  ## Why not `GET /users`
+
+  `/users` is gated on `agency:users:read`, which only Agency Owner and Branch
+  Manager hold — so a **Producer would 403 on their own picker** while filling
+  in the form that needs it. Riding the `deal_audits:read` gate they already
+  passed to reach the wizard is the same move
+  `GET /crm/service-tickets/assignees` makes for a CSR.
+
+  ⚠ Unlike that endpoint this does **not** filter by role. "Who cancelled the
+  policy" can be anyone in the agency, and a role-filtered list would quietly
+  make the true answer unpickable.
+
+  ## Response `200`
+  ```json
+  [
+    { "id": "665f…a01", "name": "Pat Producer", "email": "producer@smithfamily.local" },
+    { "id": "665f…b12", "name": "Casey Manager", "email": "manager@smithfamily.local" }
+  ]
+  ```
+
+  Excludes platform admins and users flagged inactive. Sorted by first name,
+  then last. Only `id` / `name` / `email` are returned — never role ids or any
+  credential field.
+
+  ## How it is used
+
+  Send the chosen `id` as `policies[].cancellation.cancelledByUserId` on
+  `POST /sold-deals`, alongside `cancelledBy: "SFA staff"`. The server
+  **re-verifies that id against the caller's agency** before storing it —
+  without that check the field would be a cross-agency write primitive, the
+  same trap `existingPolicyId` documents. An id from another tenant is a
+  `400 Unknown staff member on a cancellation.`
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `deal_audits` module disabled, or missing
+    `deal_audits:read`.
+}

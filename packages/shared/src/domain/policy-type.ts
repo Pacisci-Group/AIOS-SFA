@@ -170,3 +170,42 @@ const AUTO_SET = new Set<string>(AUTO_POLICY_TYPES);
 export function isAutoPolicyType(value?: string | null): boolean {
   return AUTO_SET.has(normalizePolicyType(value));
 }
+
+/**
+ * What one "item" on a policy actually is (PAC-65 #7).
+ *
+ * David asked for "Item Count" → **"Number of Vehicles"**, then noted the field
+ * is also shown for Boat and Motorcycle. A blanket rename would put "Number of
+ * Vehicles" on a boat policy, so the label follows the policy type instead:
+ * the auto family are vehicles ({@link isAutoPolicyType} is exactly Auto,
+ * Auto - Special and Motorcycle), Boat Owners are boats, and everything else
+ * keeps the generic wording — an Umbrella or Life policy counts neither.
+ *
+ * ⚠ Labels only. The stored field stays `itemCount` (and `items` on `Policy`);
+ * renaming it across five collections and four DTOs would be a migration, and
+ * is not what was asked for.
+ */
+export function itemCountLabel(policyType?: string | null): string {
+  if (isAutoPolicyType(policyType)) return 'Number of Vehicles';
+  if (normalizePolicyType(policyType) === 'Boat Owners') return 'Number of Boats';
+  return 'Item count';
+}
+
+/**
+ * The same vocabulary as {@link itemCountLabel}, as a noun for inline copy —
+ * "2 vehicles", "1 boat", "5 items".
+ *
+ * Shares the label's rules rather than restating them, so a policy type cannot
+ * read "Number of Vehicles" on the form and "3 items" on the summary.
+ */
+export function itemCountNoun(
+  policyType: string | null | undefined,
+  count: number,
+): string {
+  const singular = isAutoPolicyType(policyType)
+    ? 'vehicle'
+    : normalizePolicyType(policyType) === 'Boat Owners'
+      ? 'boat'
+      : 'item';
+  return count === 1 ? singular : `${singular}s`;
+}

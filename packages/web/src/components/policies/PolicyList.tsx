@@ -1,4 +1,4 @@
-import { isPropertyPolicyType } from "@sfa/shared";
+import { isPropertyPolicyType, itemCountNoun } from "@sfa/shared";
 import { Home, Pencil, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -88,7 +88,7 @@ export function PolicyList({
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="secondary">{policy.policyType}</Badge>
                     <span className="text-xs text-muted-foreground">
-                      {count} {count === 1 ? "item" : "items"}
+                      {count} {itemCountNoun(policy.policyType, count)}
                       {premium ? ` · ${premium}` : ""}
                     </span>
                   </div>

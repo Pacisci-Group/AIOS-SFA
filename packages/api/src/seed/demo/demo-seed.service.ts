@@ -38,6 +38,7 @@ import {
   normalizeLeadSource,
   POLICY_TYPES,
 } from '@sfa/shared';
+import { AUDIT_ITEM_DUE_DAYS } from '../../audit-generation/audit-generation.service';
 import { seedAuditTemplates } from '../audit-templates.seed';
 import {
   AUDIT_TEMPLATES,
@@ -1026,6 +1027,10 @@ export class DemoSeedService {
             producerId: deal.producer.userId,
             daysOpen: daysSince(deal.occurredAt),
             firstCreatedAt: deal.occurredAt,
+            // The soft 7-day deadline (PAC-65), from when the item was raised
+            // rather than from now — so a demo tenant has a realistic mix of
+            // overdue and upcoming for the board's `due` filter to show.
+            dueAt: this.addDays(deal.occurredAt, AUDIT_ITEM_DUE_DAYS),
             isTestRecord: false,
           },
         );
@@ -1137,7 +1142,10 @@ export class DemoSeedService {
           branchId: deal.producer.branchId,
           legacySmartSuiteId: legacyId,
           title: `${deal.clientName} — Prior Insurance`,
-          cancellationResponsibility: rng.pick(['Agent', 'Client']),
+          // PAC-65's vocabulary, not legacy's `Agent` / `Client` — the demo
+          // tenant stands in for what the app writes today. The migration still
+          // writes the legacy pair, which `LeadDetailService` normalizes on read.
+          cancellationResponsibility: rng.pick(['SFA staff', 'Customer']),
           cancelledPreviousInsurance: rng.pick(['Yes', 'No', 'Pending']),
           cancellationDate: this.addDays(deal.occurredAt, rng.int(1, 10)),
           autoHomeSameCarrier: rng.pick(['Yes', 'No']),
@@ -1595,6 +1603,9 @@ export class DemoSeedService {
       if (t.category === 'Auto') return isAuto && rng.chance(0.5);
       if (t.category === 'Home') return isHome && rng.chance(0.6);
       if (t.category === 'Landlord') return isLandlord && rng.chance(0.6);
+      // Applies to any line, so no policy-type gate — just how often a demo
+      // deal was sold to someone with prior coverage (PAC-65 #15).
+      if (t.category === 'Prior Insurance') return rng.chance(0.6);
       return rng.chance(0.5);
     });
   }

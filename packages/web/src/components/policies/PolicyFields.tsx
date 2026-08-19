@@ -1,5 +1,10 @@
 import type { QuoteRecapPropertyAddress } from "@sfa/shared";
-import { POLICY_TYPE_OPTIONS, isPropertyPolicyType, type PolicyType } from "@sfa/shared";
+import {
+  POLICY_TYPE_OPTIONS,
+  isPropertyPolicyType,
+  itemCountLabel,
+  type PolicyType,
+} from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { useEffect } from "react";
 import { FormGrid, FormSubPanel } from "@/components/form";
@@ -109,7 +114,7 @@ export const PolicyFields = withFieldGroup({
           <group.AppField name="itemCount">
             {(f) => (
               <f.NumberField
-                label="Item count"
+                label={itemCountLabel(policyType)}
                 inputMode="numeric"
                 min="1"
                 inputClassName="bg-card border-border"

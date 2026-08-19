@@ -1,5 +1,6 @@
 import type { LeadDetailPolicy } from "@sfa/shared";
-import { ModuleKey, POLICY_TYPE_OPTIONS } from "@sfa/shared";
+import { ModuleKey, POLICY_TYPE_OPTIONS, itemCountLabel } from "@sfa/shared";
+import { useStore } from "@tanstack/react-form";
 import { Loader2, Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
 import { FormGrid } from "@/components/form";
@@ -65,6 +66,11 @@ export function EditPolicyDialog({ leadId, policy }: EditPolicyDialogProps) {
     // need to be a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, policy]);
+
+  // Subscribed, not read off the prop: the type is editable in this dialog, so
+  // the count's label has to follow the pending choice rather than the saved
+  // one — switching Home to Auto should say "Number of Vehicles" immediately.
+  const policyType = useStore(form.store, (s) => s.values.policyType);
 
   if (!canWrite(ModuleKey.DealAudits)) return null;
 
@@ -148,7 +154,7 @@ export function EditPolicyDialog({ leadId, policy }: EditPolicyDialogProps) {
               <form.AppField name="items">
                 {(f) => (
                   <f.NumberField
-                    label="Items"
+                    label={itemCountLabel(policyType)}
                     inputMode="numeric"
                     min="0"
                     step="1"

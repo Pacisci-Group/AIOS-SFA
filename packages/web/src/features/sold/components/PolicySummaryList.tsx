@@ -1,3 +1,4 @@
+import { itemCountNoun } from "@sfa/shared";
 import { Trash2 } from "lucide-react";
 import { FormSection } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
@@ -54,7 +55,7 @@ export function PolicySummaryList({
                 {policy.carrier} ·{" "}
                 {currency.format(Number(policy.premium) || 0)} ·{" "}
                 {policy.itemCount}{" "}
-                {Number(policy.itemCount) === 1 ? "item" : "items"}
+                {itemCountNoun(policy.policyType, Number(policy.itemCount) || 0)}
               </p>
             </div>
             <Button

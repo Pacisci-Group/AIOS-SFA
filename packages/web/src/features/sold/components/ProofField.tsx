@@ -19,19 +19,26 @@ type ProofValues = SoldPolicyFormValues["discounts"]["fireSubscription"];
 const proofDefaults: ProofValues = { selected: false };
 
 /**
- * A discount whose proof is **required** to claim it (PAC-56 #21).
+ * A discount that can carry its proof — but does not have to (PAC-65).
  *
  * ## What changed
  *
- * This used to offer a yes/no fork: "no, I don't have it" was a valid answer
- * that handed the chase to the service team. David asked for the document up
- * front, so selecting a discount now requires attaching its proof — there is no
- * "no" branch, and `hasProof` is gone from form state entirely.
+ * PAC-56 #21 made the document mandatory whenever the box was ticked. PAC-65
+ * reverses that: **ticking the box always generates the audit item, uploaded
+ * document or not.** David, asked whether the audit fires only when details are
+ * missing: *"No, even if the details are provided, you're still gonna audit it
+ * because we have to make sure — they have to check it for accuracy."*
  *
- * The proof does not merely sit in storage: `auditAttachmentsByItem` maps it
- * onto the audit item it evidences, so the service team opens the hand-off
- * board and finds the file already there. The item still opens as **outstanding**
- * — a document is evidence for the auditor, not a resolution.
+ * So the upload is never the gate; it only decides how much work the audit is.
+ * `auditAttachmentsByItem` maps an attached file onto the audit item it
+ * evidences, so the service team opens the hand-off board and verifies it in
+ * place. With nothing attached, the same item tells them to call the client and
+ * obtain it. Either way the item opens as **outstanding** — a document is
+ * evidence for the auditor, not a resolution.
+ *
+ * `proofPrompt` therefore names the document as a request, not a requirement:
+ * it is the only place that copy lives now that the schema has no per-document
+ * message to carry.
  *
  * Which discount this is comes from `fields` at the call site, so a schema
  * rename is a compile error rather than a runtime miss.
@@ -65,12 +72,16 @@ export const ProofField = withFieldGroup({
 
         {selected && (
           <FormSubPanel>
-            <p className="text-sm text-foreground">{proofPrompt}</p>
+            <p className="text-sm text-foreground">
+              {proofPrompt}{" "}
+              <span className="text-muted-foreground">
+                Optional — without it the audit team will call the client for it.
+              </span>
+            </p>
             {/*
-              * Bound through the field rather than `group.setFieldValue`, so the
-              * schema's "attach the document" error — which zod reports against
-              * `attachment` — is readable here, and `handleBlur` clears it the
-              * moment an upload satisfies it rather than at the next Continue.
+              * Bound through the field rather than `group.setFieldValue` so an
+              * upload error is readable here, and `handleBlur` runs the moment
+              * the upload lands rather than at the next Continue.
               */}
             <group.Field name="attachment">
               {(field) => (

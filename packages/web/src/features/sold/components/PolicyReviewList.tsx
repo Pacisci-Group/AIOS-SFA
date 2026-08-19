@@ -1,4 +1,4 @@
-import { CARRIER_OTHER } from "@sfa/shared";
+import { CARRIER_OTHER, itemCountLabel } from "@sfa/shared";
 import { FileText, Pencil, Trash2 } from "lucide-react";
 import { FormSubPanel } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
@@ -91,7 +91,7 @@ export function PolicyReviewList({
                 value={currency.format(Number(policy.premium) || 0)}
               />
               <Row
-                label="Items"
+                label={itemCountLabel(policy.policyType)}
                 value={String(Number(policy.itemCount) || 0)}
               />
               <Row
@@ -186,13 +186,13 @@ function discountSummary(policy: SoldPolicyFormValues): string {
   const d = policy.discounts;
   const selected: string[] = [];
 
+  if (d.priorInsuranceDiscount) selected.push("Prior insurance");
   if (d.escrow) selected.push("Escrow");
-  if (d.inspection.selected) selected.push("Passed inspection");
   if (d.fireSubscription.selected) selected.push("Fire subscription");
   if (d.roofReceipt.selected) selected.push("Roof receipt");
   if (d.acvPersonalProperty) selected.push("ACV — personal property");
   if (d.acvDwellingProtection) selected.push("ACV — dwelling");
-  if (d.drivewise.selected) selected.push("Drivewise");
+  if (d.drivewise) selected.push("Drivewise");
   if (d.defensiveDriver.selected) {
     const names = d.defensiveDriver.drivers
       .map((driver) => driver.name.trim())

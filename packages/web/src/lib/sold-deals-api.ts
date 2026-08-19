@@ -5,6 +5,7 @@ import type {
   SoldDealLeadContext,
   SoldDocumentMeta,
   SoldDocumentPresignResponse,
+  SoldStaffOption,
 } from "@sfa/shared";
 import { apiFetch } from "./api-client";
 import { uploadToPresignedUrl } from "./quote-recaps-api";
@@ -127,4 +128,18 @@ export function createSoldDeal(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+/** Query key for the agency staff picker (PAC-65 #11). */
+export const soldStaffKey = ["sold-deals", "staff"] as const;
+
+/**
+ * The agency's staff, for "Cancelled by → SFA staff".
+ *
+ * Served by `GET /sold-deals/staff` rather than `GET /users`, which is gated on
+ * `agency:users:read` — a permission a Producer does not hold, so the person
+ * filling this form would 403 on their own picker.
+ */
+export function getSoldStaff() {
+  return apiFetch<SoldStaffOption[]>("/sold-deals/staff");
 }

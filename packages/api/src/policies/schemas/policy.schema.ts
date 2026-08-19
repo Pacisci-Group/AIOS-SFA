@@ -126,15 +126,14 @@ export class Policy extends TenantRecord {
    * policy triggered this audit item?" answerable — on a bundled Auto + Home
    * sale the union alone cannot say.
    *
-   * ⚠ **Two historical shapes live in here**, and there is no backfill:
-   *   - `drivewise` is a bare `true`/`false` on deals booked before PAC-56 #21,
-   *     and `{ selected, attachment? }` after it.
-   *   - `hasProof` is present on the proof-backed discounts before #21 and
-   *     absent after; it is deprecated and no longer read anywhere.
-   *
-   * Nothing reads either today (the field is provenance, not a read path). The
-   * first thing that does must handle both — hence `type: Object` staying
-   * untyped at the schema layer.
+   * ⚠ **The shape has moved twice.** `drivewise` was a bare boolean, became
+   * `{ selected, attachment? }` in PAC-56 #21, and is a bare boolean again
+   * after PAC-65; `inspection` and `escrow.attachment` existed only between
+   * those two. Nothing reads this field today (it is provenance, not a read
+   * path), and the seeded data it holds is reseeded rather than migrated — but
+   * `type: Object` stays untyped so a real SmartSuite import cannot fail on a
+   * shape we did not anticipate. Use `isDiscountSelected`, which normalizes
+   * boolean and object forms, rather than reading a key directly.
    */
   @Prop({ type: Object })
   discounts?: SoldPolicyDiscounts;

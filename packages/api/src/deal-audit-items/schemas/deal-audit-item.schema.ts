@@ -145,6 +145,23 @@ export class DealAuditItem extends TenantRecord {
   @Prop({ type: Date })
   firstCreatedAt?: Date;
 
+  /**
+   * The soft 7-day deadline (PAC-65).
+   *
+   * ⚠ **A written target, not enforcement.** Nothing reads this to change
+   * state: no cron, no auto-fail, no escalation, no expiry, and no status that
+   * flips itself at day 7. It exists so the team can see a date on the board
+   * and pull an overdue list — and that is the whole of it. An item past its
+   * `dueAt` is still `in_progress` / failed until a human resolves it.
+   *
+   * Optional with no default: items generated before this field existed simply
+   * have none, match neither board filter, and are never overdue. There is no
+   * backfill, because retro-stamping a deadline onto old items would
+   * manufacture an overdue backlog nobody agreed to.
+   */
+  @Prop({ type: Date })
+  dueAt?: Date;
+
   /** Free-text note captured when the producer resolves the item. */
   @Prop({ trim: true })
   notes?: string;
@@ -184,6 +201,23 @@ DealAuditItemSchema.index({
   isResolved: 1,
   daysOpen: -1,
   _id: 1,
+});
+
+/**
+ * The same board query, filtered by due date (PAC-65).
+ *
+ * ⚠ A **separate** index rather than adding `dueAt` to the one above. Mongoose
+ * `autoIndex` only creates indexes that are *missing* — it never rebuilds one
+ * whose definition changed — so editing the existing key pattern would leave
+ * every existing collection on the old definition and silently need a migration
+ * script. A brand-new key pattern is created normally, and needs none.
+ */
+DealAuditItemSchema.index({
+  agencyId: 1,
+  producerId: 1,
+  isFailed: 1,
+  isResolved: 1,
+  dueAt: 1,
 });
 
 /**

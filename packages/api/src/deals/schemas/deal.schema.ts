@@ -24,10 +24,20 @@ export type PremiumSource = 'rollup' | 'snapshot' | 'none';
 export interface DealAuditTriggers {
   defensiveDriver: boolean;
   goodStudent: boolean;
+  /**
+   * ⚠ Written, but **not read by audit generation** since PAC-65 — Drivewise
+   * generates no audit item. Kept as provenance: "this deal has Drivewise" is
+   * what the service department works the renewal from.
+   */
   drivewise: boolean;
   fireSubscription: boolean;
   actualCashValue: boolean;
   hailResistantRoof: boolean;
+  /**
+   * Drives the `Prior Insurance` audit item, which stopped being unconditional
+   * in PAC-65 so this could drive it (#15).
+   */
+  priorInsurance: boolean;
   /** One audit item is generated per name, so N drivers give N certificates. */
   defensiveDriverNames: string[];
 }
@@ -46,6 +56,7 @@ export function emptyAuditTriggers(): DealAuditTriggers {
     fireSubscription: false,
     actualCashValue: false,
     hailResistantRoof: false,
+    priorInsurance: false,
     defensiveDriverNames: [],
   };
 }

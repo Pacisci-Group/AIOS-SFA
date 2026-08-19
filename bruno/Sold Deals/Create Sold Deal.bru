@@ -1,7 +1,7 @@
 meta {
   name: Create Sold Deal
   type: http
-  seq: 6
+  seq: 7
 }
 
 post {
@@ -35,15 +35,8 @@ body:json {
           "size": 2048
         },
         "discounts": {
-          "drivewise": {
-            "selected": true,
-            "attachment": {
-              "key": "{{soldDocumentKey}}",
-              "filename": "drivewise.pdf",
-              "contentType": "application/pdf",
-              "size": 2048
-            }
-          },
+          "drivewise": true,
+          "priorInsuranceDiscount": true,
           "defensiveDriver": {
             "selected": true,
             "drivers": [
@@ -77,8 +70,23 @@ body:json {
             }
           }
         },
-        "priorInsurance": { "none": false, "carrier": "Geico" },
-        "cancellation": { "cancelled": false }
+        "priorInsurance": {
+          "none": false,
+          "carrier": "Geico",
+          "agentName": "Jamie Prior",
+          "attachment": {
+            "key": "{{soldDocumentKey}}",
+            "filename": "declarations-page.pdf",
+            "contentType": "application/pdf",
+            "size": 2048
+          }
+        },
+        "cancellation": {
+          "cancelled": true,
+          "effectiveDate": "2026-02-10",
+          "cancelledBy": "SFA staff",
+          "cancelledByUserId": "{{soldStaffUserId}}"
+        }
       },
       {
         "policyType": "Home",
@@ -95,15 +103,6 @@ body:json {
         },
         "discounts": {
           "escrow": true,
-          "inspection": {
-            "selected": true,
-            "attachment": {
-              "key": "{{soldDocumentKey}}",
-              "filename": "inspection-report.pdf",
-              "contentType": "application/pdf",
-              "size": 2048
-            }
-          },
           "roofReceipt": {
             "selected": true,
             "attachment": {
@@ -117,13 +116,7 @@ body:json {
         "escrow": {
           "loanNumber": "LN-99887766",
           "companyName": "First National Escrow",
-          "address": { "street": "1 Lender Way", "city": "Austin", "state": "TX", "zip": "78745" },
-          "attachment": {
-            "key": "{{soldDocumentKey}}",
-            "filename": "escrow-statement.pdf",
-            "contentType": "application/pdf",
-            "size": 2048
-          }
+          "address": { "street": "1 Lender Way", "city": "Austin", "state": "TX", "zip": "78745" }
         },
         "priorInsurance": { "none": true },
         "cancellation": { "cancelled": false }
@@ -252,29 +245,55 @@ docs {
   lead still 404s rather than leaking its existence through a format error.
 
   ## Discount rules worth knowing
-  - **Every selected discount requires its proof (PAC-56 #21).** The old
-    "do you have proof? / no — send it to the audit" fork is gone, and `hasProof`
-    with it: escrow, inspection, fire subscription, roof receipt, Drivewise,
-    each defensive driver, and the student transcript all 400 without a
-    document. `hasProof` is *dropped* rather than rejected if still sent, so a
-    stale client degrades quietly during a rollout.
+  - **Proofs are optional (PAC-65, reversing PAC-56 #21).** Ticking a discount
+    generates its audit item whether or not a document came with it — the upload
+    only decides whether the auditor verifies a file in place or is told to call
+    the client for it. Nothing on this card 400s for a missing attachment. The
+    dead `hasProof` key is gone; a stale client still sending it is *dropped*
+    rather than rejected, since zod strips unknown keys.
+  - **Naming a defensive driver is still required.** `defensiveDriver.selected`
+    with an empty `drivers[]` is a 400: the generator emits one item per name, so
+    an unnamed selection produces a single item nobody can act on. Their
+    certificates are optional.
   - **The proof reaches the audit item, not just storage (#21b).** Each upload is
     mapped onto the item it evidences, so the service team opens the hand-off
     board and finds the file already attached. ⚠ The item still opens as
     `in_progress` / failed — a document is evidence *for* the auditor, not a
     resolution.
   - **Cross-branch discounts are rejected (400), not stripped.** A Home policy
-    claiming `drivewise` would otherwise generate an auto audit item for a deal
-    with no auto line, and nothing downstream could tell it was bogus.
-    `inspection` counts as a property selection for this rule.
+    claiming `studentDiscount` would otherwise generate an auto audit item for a
+    deal with no auto line, and nothing downstream could tell it was bogus.
   - **Escrow ticked ⇒ the escrow sub-card is required**, because the audit item
-    it generates asks the service team to verify exactly those fields — plus its
-    statement, on `escrow.attachment` rather than on the discount flag, because
-    it evidences the loan number beside it.
-  - **`inspection` is new and generates nothing of its own.** `Home Inspection`
-    / `Landlord Inspection` already come from the policy type; the control
-    exists to carry the report. Legacy's `Passed Home Inspection` (`sqmmybna`)
-    was never ported, so it had to be added before it could be conditional.
+    it generates asks the service team to verify exactly those fields. There is
+    no statement upload (PAC-65 removed it) — David: *"the audit is going to be
+    based on the information"*, meaning the keyed-in loan detail.
+  - **Prior insurance is a discount now, and its proof is the one that is
+    required.** `discounts.priorInsuranceDiscount` applies to **every** policy
+    type — it sits in `UNIVERSAL_DISCOUNT_KEYS`, so the cross-branch rule never
+    touches it and an Umbrella policy can carry it. Ticking it does three
+    things: generates the `Prior Insurance` audit item (no longer baseline —
+    see below), makes `priorInsurance.attachment` **required** (400 without it),
+    and makes `priorInsurance.none` a 400. That last pair is a **cross-card
+    invariant of the same kind as `none && cancelled`** — rejected, not
+    stripped, because neither answer is safe to silently discard.
+  - **`Prior Insurance` is no longer generated on every deal.** It left the
+    `Common` category *and* lost `alwaysInclude`, because `isBaselineTemplate`
+    matches either one. A deal with no prior coverage no longer carries an item
+    telling the service team to obtain a declarations page that does not exist.
+  - **Prior agent is required, and so is "who cancelled it" (PAC-65 #10/#11).**
+    `priorInsurance.agentName` 400s when blank on a policy that declares prior
+    coverage — the service team calls that person to chase the cancellation and
+    the declarations page. When `cancellation.cancelled` is true,
+    `cancelledBy` (`Customer` | `SFA staff`) is required, and `SFA staff`
+    additionally requires `cancelledByUserId`. ⚠ That id is **re-verified
+    against the caller's agency** before it is stored — unchecked it would be a
+    cross-agency write primitive, the same trap `existingPolicyId` documents.
+    Populate it from `GET /sold-deals/staff`.
+  - **`inspection` and the Drivewise proof no longer exist (PAC-65).** Both keys
+    are simply absent from the schema — a stale client sending either is
+    stripped, not rejected. `Home Inspection` / `Landlord Inspection` still come
+    from the policy type unconditionally; `drivewise` is now a bare boolean that
+    generates **no audit item at all**.
   - Attachment `contentType`/`size` are **re-derived from storage** via
     `HeadObject`; the declared values are ignored.
 

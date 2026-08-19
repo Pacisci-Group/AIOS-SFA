@@ -1,5 +1,22 @@
 import { DealType } from '../deals/schemas/deal.schema';
 
+/**
+ * A document already attached to a hand-off item (PAC-56 #21b, surfaced by
+ * PAC-65 #16).
+ *
+ * ⚠ The storage `key` is deliberately **not** here. Its prefix is what
+ * `assertKeyOwnership` treats as a security property, and this service already
+ * masks record ids for the same reason. `index` is what the download route
+ * takes, and is all the client needs.
+ */
+export interface DealAuditRowAttachment {
+  /** Position in the item's `attachments` array — the download route's param. */
+  index: number;
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
 /** A single pending hand-off row for the Producer Dashboard board. */
 export interface DealAuditRow {
   /** Raw record id (opaque; UI shows `ref` instead). */
@@ -14,6 +31,18 @@ export interface DealAuditRow {
   missing: string;
   /** Days the item has been open (oldest first). */
   daysOpen: number;
+  /**
+   * The soft 7-day deadline, ISO — or `null` for items generated before the
+   * field existed, which are never overdue. Display and filtering only; nothing
+   * changes state when it passes (PAC-65).
+   */
+  dueAt: string | null;
+  /**
+   * Proof the producer already uploaded, so the auditor can verify it in place
+   * rather than chasing it. An **empty array is meaningful**: it is what makes
+   * the row read "call the client and obtain it" (PAC-65 #16).
+   */
+  attachments: DealAuditRowAttachment[];
 }
 
 /** Paginated envelope returned by `GET /deal-audits`. */
