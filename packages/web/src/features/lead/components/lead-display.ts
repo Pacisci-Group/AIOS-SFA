@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   FileText,
   MessageSquare,
+  PenLine,
   Phone,
   Send,
   Settings,
@@ -114,11 +115,13 @@ export function statusTextClass(status: string): string {
 /**
  * Timeline icon + tint per activity type.
  *
- * All eight `ACTIVITY_TYPES` are mapped. `lead_created`, `quoted`, `sold` and
+ * Every `ACTIVITY_TYPES` member is mapped. `lead_created`, `quoted`, `sold` and
  * `audit_resolved` are written by their own pipelines; `call`, `text`, `email`
- * and `note` are written by clients through `POST /activities` (PAC-16). The
- * map stays exhaustive because an unmapped type would render as a blank circle
- * rather than fail loudly.
+ * and `note` are written by clients through `POST /activities` (PAC-16); and
+ * `field_changed` is the quote/sold edit log (PAC-65 #9). The map stays
+ * exhaustive because an unmapped type would render as a blank circle rather
+ * than fail loudly — the `Record<ActivityType, …>` is what turns a new union
+ * member into a compile error here.
  */
 export const activityDisplay: Record<
   ActivityType,
@@ -164,6 +167,16 @@ export const activityDisplay: Record<
     tone: "text-amber-600 dark:text-amber-500",
     tint: "bg-amber-500/15",
   },
+  /*
+   * The quote/sold edit log (PAC-65 #9). Deliberately the quietest row on the
+   * timeline — slate rather than a brand hue — because an edit is a record of
+   * housekeeping, not a milestone, and only owners and managers ever see it.
+   */
+  field_changed: {
+    icon: PenLine,
+    tone: "text-slate-600 dark:text-slate-400",
+    tint: "bg-slate-400/12",
+  },
 };
 
 /** Human label for an activity type, used when a row carries no `summary`. */
@@ -176,6 +189,7 @@ export const activityLabel: Record<ActivityType, string> = {
   text: "Text logged",
   email: "Email logged",
   note: "Note added",
+  field_changed: "Record edited",
 };
 
 /** Up to two initials for an avatar; `?` when there is no name to work with. */
@@ -220,6 +234,24 @@ export function formatCurrency(value: number): string {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
+  });
+}
+
+/**
+ * Currency to the cent — for the edit log only (PAC-65 #9).
+ *
+ * {@link formatCurrency} rounds to whole dollars, which is right everywhere it
+ * is used and wrong here: a change row exists precisely to say a value moved,
+ * and `900 → 900.40` rendered through it reads `$900 → $900` — an audit entry
+ * asserting that nothing happened. Cents are shown only when there are any, so
+ * the common whole-dollar correction still reads as `$1,200 → $1,400`.
+ */
+export function formatCurrencyExact(value: number): string {
+  return value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
   });
 }
 

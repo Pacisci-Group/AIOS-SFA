@@ -26,7 +26,7 @@ tests {
     const body = res.getBody();
     expect(body.activity.type).to.equal("call");
     expect(body.activity).to.have.property("occurredAt");
-    expect(body.activity).to.have.property("producerName");
+    expect(body.activity).to.have.property("userName");
   });
 
   test("defaults the summary — a call stands on its own", function () {
@@ -84,11 +84,14 @@ docs {
       "type": "call",
       "summary": "Call logged",
       "occurredAt": "2026-08-06T09:56:53.463Z",
-      "producerName": "Pat Producer"
+      "userName": "Pat Producer"
     },
     "leadLastActivityAt": "2026-08-06T09:56:53.463Z"
   }
   ```
+  `userName` is whoever wrote the row, not the lead's producer — this endpoint
+  needs only `leads:write`, which a Branch Manager and a CSR both hold. The
+  field was `producerName` (over `Activity.producerId`) until PAC-65 renamed it.
   `activity` is the same `LeadDetailActivity` shape `GET /leads/:id` returns, so
   the timeline splices it in with no mapping layer.
 

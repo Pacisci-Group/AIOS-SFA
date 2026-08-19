@@ -1403,7 +1403,7 @@ export class DemoSeedService {
         type: 'lead_created',
         subjectType: 'lead',
         leadId: lead.id,
-        producerId: lead.producer.userId,
+        userId: lead.producer.userId,
         occurredAt: lead.occurredAt,
         summary: 'Lead created',
       });
@@ -1422,7 +1422,7 @@ export class DemoSeedService {
               type: touches[t],
               subjectType: 'lead',
               leadId: lead.id,
-              producerId: lead.producer.userId,
+              userId: lead.producer.userId,
               // Clamped to the lead's own lifetime — a follow-up cannot have
               // happened before the lead was created.
               occurredAt: this.daysAgo(
@@ -1446,7 +1446,7 @@ export class DemoSeedService {
         // The Lead Detail timeline reads `{ agencyId, leadId }`, so without
         // this the row exists but never renders on the lead it belongs to.
         leadId: quote.lead.id,
-        producerId: quote.producer.userId,
+        userId: quote.producer.userId,
         occurredAt: quote.occurredAt,
         summary: 'Quote recap created',
       });
@@ -1459,7 +1459,7 @@ export class DemoSeedService {
         subjectType: 'deal',
         dealId: deal.id,
         leadId: deal.lead.id,
-        producerId: deal.producer.userId,
+        userId: deal.producer.userId,
         occurredAt: deal.occurredAt,
         summary: `Deal sold: ${deal.clientName}`,
       });

@@ -394,12 +394,16 @@ export class DealAuditsService {
       type: 'audit_resolved',
       subjectType: 'dealAuditItem',
       dealId: item.dealId,
-      producerId: new Types.ObjectId(access.userId),
+      userId: new Types.ObjectId(access.userId),
       occurredAt: resolvedAt,
       summary: `Resolved audit item "${
         item.itemName ?? 'requirement'
       }" for ${item.clientName ?? 'client'}`,
-      source: 'app',
+      // Was `'app'` — the lone dissenter among five writers, corrected with the
+      // PAC-65 rename. `source` is only ever read as "is this migrated data",
+      // so the stray value was harmless, but it made the field look like it
+      // carried more meaning than it does.
+      source: 'internal',
     });
   }
 }
