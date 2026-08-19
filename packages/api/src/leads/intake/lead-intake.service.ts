@@ -230,7 +230,7 @@ export class LeadIntakeService {
         type: 'lead_created',
         subjectType: 'lead',
         leadId: outcome.leadId,
-        producerId: ctx.producerId,
+        userId: ctx.producerId,
         occurredAt: new Date(),
         summary:
           ctx.channel === 'share_link'

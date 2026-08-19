@@ -102,6 +102,24 @@ docs {
   formula pointing at Fillout form `cusXRDS52ous`. The rebuild shipped
   create-only, so a mistyped premium was permanent. This is parity work.
 
+  ## Every edit is logged (PAC-65 #9)
+
+  A patch that changes at least one value writes a `field_changed` activity on
+  the recap's lead, carrying a `changes` list of `{ field, label, kind, from, to }`.
+  Editing stays open to everyone who can write a recap — the answer to the
+  transparency concern is a log, not a lock — but **reading** the log needs
+  `agency:changelogs:read`, held by the Agency Owner and Branch Manager only.
+  This collection logs in as a producer, so the row will not appear in
+  `GET /leads/:id` here.
+
+  Logged: the three server-derived totals (`premium`, `itemCount`,
+  `productsQuoted`), the policy row count, `insuranceRenewalMonth`, `notes` and
+  the quote document's filename. The `policies` rows themselves are **not**
+  diffed row-by-row — they are an `_id: false` array with no per-row identity, so
+  a positional diff would report every row as changed on an insert or a reorder.
+
+  A patch that sets every field to what it already held writes nothing.
+
   ## Body — every field optional, at least one required
 
   | field         | type   | semantics                                             |

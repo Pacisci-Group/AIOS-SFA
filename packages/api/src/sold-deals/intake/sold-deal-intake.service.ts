@@ -163,7 +163,7 @@ export class SoldDealIntakeService {
           subjectType: 'deal',
           leadId,
           dealId: outcome.dealId,
-          producerId: ctx.producerId,
+          userId: ctx.producerId,
           occurredAt: outcome.soldDate,
           summary: 'Deal marked as sold',
           // Explicit: `source` defaults to 'migration', so omitting it would

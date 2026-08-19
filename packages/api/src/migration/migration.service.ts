@@ -1723,7 +1723,7 @@ export class MigrationService {
         subjectType: 'lead',
         legacySubjectId: lead.legacyId,
         leadId: lead.id,
-        producerId: lead.producerId,
+        userId: lead.producerId,
         occurredAt: lead.occurredAt,
         summary: 'Lead created',
       });
@@ -1738,7 +1738,7 @@ export class MigrationService {
         // timeline reads `{ agencyId, leadId }`, so before recaps carried a
         // resolved lead ref only `lead_created` ever appeared on migrated data.
         leadId: quote.leadId,
-        producerId: quote.producerId,
+        userId: quote.producerId,
         occurredAt: quote.occurredAt,
         summary: 'Quote recap created',
       });
@@ -1751,7 +1751,7 @@ export class MigrationService {
         legacySubjectId: deal.legacyId,
         dealId: deal.dealId,
         leadId: deal.leadId,
-        producerId: deal.producerId,
+        userId: deal.producerId,
         occurredAt: deal.occurredAt,
         summary: deal.clientName
           ? `Deal sold: ${deal.clientName}`

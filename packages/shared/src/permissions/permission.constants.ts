@@ -18,6 +18,29 @@ export const AgencyPermission = {
   UsersPermissions: 'agency:users:permissions',
   BranchesRead: 'agency:branches:read',
   BranchesWrite: 'agency:branches:write',
+  /**
+   * See field-level edit history on the activity timeline (PAC-65 #9).
+   *
+   * Editing a recorded quote or a booked policy stays open to everyone who can
+   * write one — the product owner was explicit that a lock is the wrong answer
+   * to the transparency concern. This is the log that answers it instead, and
+   * producers must not see it.
+   *
+   * **Why it lives in the `agency:` namespace rather than as a third verb on a
+   * module.** It is a capability, not a page, and the machinery only tolerates
+   * `read`/`write` as a module's second segment:
+   * - `permission-model.spec.ts` asserts every page permission is `{m}:read|write`;
+   * - `RolesService.updateLevels` preserves only `agency:`/`platform:` strings
+   *   when an owner edits the role matrix, so a `leads:changelog:read` would be
+   *   **silently dropped** the first time someone touched that screen;
+   * - `resolvePermissionSet`'s enabled-module filter would read `changelogs:` as
+   *   a module key and drop a standalone string entirely.
+   *
+   * ⚠ `grantsAllEnabledModules` expands only `{m}:read`/`{m}:write`, so this
+   * reaches the Agency Owner through `DEFAULT_ROLE_TEMPLATES` — not through
+   * that flag — and an already-seeded agency needs `npm run api:sync:roles`.
+   */
+  ChangeLogsRead: 'agency:changelogs:read',
 } as const;
 
 export type ModuleAction = 'read' | 'write';

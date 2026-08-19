@@ -26,6 +26,13 @@ import type { LeadDetailActivity } from './lead-detail';
  * (PAC-16) — the dashboard's lead quick actions and the Lead Detail note
  * composer. The timeline renders whatever exists rather than assuming a type
  * appears.
+ *
+ * `field_changed` is the quote/sold edit log (PAC-65 #9), written by
+ * `PATCH /quote-recaps/:id` and `PATCH /policies/:id`. Unlike every other
+ * member it is **not visible to everyone who can read the lead** — see
+ * `AgencyPermission.ChangeLogsRead`. `LeadDetailService` filters it out of the
+ * query for a caller without that permission, and `HotLeadsService` excludes it
+ * from the narrative line for everyone.
  */
 export const ACTIVITY_TYPES = [
   'lead_created',
@@ -36,6 +43,7 @@ export const ACTIVITY_TYPES = [
   'email',
   'note',
   'audit_resolved',
+  'field_changed',
 ] as const;
 
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
@@ -80,6 +88,52 @@ export const LOGGABLE_ACTIVITY_LABELS: Record<LoggableActivityType, string> = {
 export interface CreateActivityResponse {
   activity: LeadDetailActivity;
   leadLastActivityAt: string;
+}
+
+/**
+ * How the client should format an {@link ActivityChange}'s `from`/`to`.
+ *
+ * The server sends values, not sentences. The alternative — a pre-rendered
+ * `"Premium changed: $1,200 → $1,400"` string, which is what
+ * `ServiceTicket.timeline` stores — cannot be re-labelled, re-formatted for a
+ * locale, or filtered on, and bakes today's wording into the database forever.
+ */
+export const ACTIVITY_CHANGE_KINDS = [
+  'text',
+  'number',
+  'currency',
+  'date',
+  'list',
+] as const;
+
+export type ActivityChangeKind = (typeof ACTIVITY_CHANGE_KINDS)[number];
+
+/**
+ * One field's before/after on a `field_changed` row (PAC-65 #9).
+ *
+ * Value rules the writer must hold to, because nothing normalizes a stored
+ * change row on read — unlike every other field on the Lead Detail surface,
+ * this is a one-way door:
+ *
+ * - **`date` is a `YYYY-MM-DD` string, never a `Date`.** Policy dates are
+ *   calendar dates; storing an instant re-introduces the off-by-one-day bug
+ *   that `dateOnly` exists to prevent.
+ * - **`currency` is a raw number with cents preserved.** The client formats it.
+ * - **`list` is `string[]`**, already run through the domain normalizer.
+ * - **Codes are resolved before storage.** A migrated policy holds raw
+ *   SmartSuite select codes (`carrier: 'B4tEH'`); snapshot the normalized
+ *   label or the log preserves gibberish permanently.
+ * - **Absent and cleared are both `null`**, never `undefined` — the stored
+ *   shape is Mixed, and Mongo drops an `undefined`.
+ */
+export interface ActivityChange {
+  /** Stable key, e.g. `premium`. Not shown to the user. */
+  field: string;
+  /** What the user sees, e.g. `Total premium`. The server owns the wording. */
+  label: string;
+  kind: ActivityChangeKind;
+  from: string | number | string[] | null;
+  to: string | number | string[] | null;
 }
 
 /** What an activity row hangs off. */

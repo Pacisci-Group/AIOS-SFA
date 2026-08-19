@@ -1331,6 +1331,32 @@ describe('SFA API (e2e)', () => {
       expect(row?.isTestRecord).toBe(false);
     });
 
+    it('records the author as `userId`, with no stray `producerId`', async () => {
+      /*
+       * The guard for the PAC-65 rename. Two of the activity write paths take
+       * an untyped bag — `migration.service.ts`'s `emit(key, doc)` and the demo
+       * seed's `activity(ctx, key, fields)` — and Mongoose's `create()` accepts
+       * excess keys, so a writer left on the old field name compiles clean and
+       * silently persists a dead `producerId`. Nothing but a database read
+       * catches that.
+       */
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'call' })
+        .expect(201);
+
+      const { activity } = res.body as CreateActivityResponse;
+      const row = await activityModel.findById(activity.id).lean();
+      expect(row).not.toBeNull();
+      expect(row).toHaveProperty('userId');
+      expect(row).not.toHaveProperty('producerId');
+    });
+
     it('surfaces the logged activity on the lead timeline', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/activities')
@@ -1355,7 +1381,15 @@ describe('SFA API (e2e)', () => {
      * `sold` row could invent a sale on the Sold scorecard and the Leaderboard.
      */
     it('refuses a system-generated type', async () => {
-      for (const type of ['sold', 'quoted', 'lead_created', 'audit_resolved']) {
+      for (const type of [
+        'sold',
+        'quoted',
+        'lead_created',
+        'audit_resolved',
+        // The edit log (PAC-65 #9). A client able to post one could fabricate
+        // an audit trail — or bury a real edit under noise.
+        'field_changed',
+      ]) {
         await request(app.getHttpServer())
           .post('/api/v1/activities')
           .set(authHeader(producerToken))
@@ -1484,7 +1518,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           leadId: stale._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           type: 'note',
           subjectType: 'lead',
           summary: 'Waiting on premium approval',
@@ -1495,7 +1529,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           leadId: stale._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           type: 'lead_created',
           subjectType: 'lead',
           summary: 'Lead created',
@@ -3805,7 +3839,7 @@ describe('SFA API (e2e)', () => {
           type: 'lead_created',
           subjectType: 'lead',
           leadId: lead._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           occurredAt: new Date('2026-07-01T00:00:00.000Z'),
           summary: 'Lead created',
           source: 'internal',
@@ -3816,7 +3850,7 @@ describe('SFA API (e2e)', () => {
           subjectType: 'quoteRecap',
           leadId: lead._id,
           quoteRecapId: newer._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           occurredAt: new Date('2026-07-24T00:00:00.000Z'),
           summary: 'Quote recap created',
           source: 'internal',
@@ -3827,7 +3861,7 @@ describe('SFA API (e2e)', () => {
           subjectType: 'deal',
           leadId: lead._id,
           dealId: deal._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           occurredAt: new Date('2026-07-30T00:00:00.000Z'),
           summary: 'Deal marked as sold',
           source: 'internal',
@@ -3983,7 +4017,7 @@ describe('SFA API (e2e)', () => {
       expect(body.priorInsurance).not.toHaveProperty('deductible');
     });
 
-    it('returns the activity timeline newest-first with the producer resolved', async () => {
+    it('returns the activity timeline newest-first with the author resolved', async () => {
       const body = await getAs(producerToken, leadId);
 
       expect(body.activities.map((a) => a.type)).toEqual([
@@ -3991,7 +4025,7 @@ describe('SFA API (e2e)', () => {
         'quoted',
         'lead_created',
       ]);
-      expect(body.activities[0].producerName).toBeTruthy();
+      expect(body.activities[0].userName).toBeTruthy();
     });
 
     it('finds a migrated recap linked only by legacyLeadId, then self-heals the ref', async () => {
@@ -4343,7 +4377,7 @@ describe('SFA API (e2e)', () => {
       expect(row.isStatusLocked).toBe(true);
     });
 
-    it("a ticket with no lead still accepts a manual status change", async () => {
+    it('a ticket with no lead still accepts a manual status change', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/v1/crm/service-tickets')
         .set(authHeader(ownerToken))
@@ -5193,6 +5227,156 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(producerToken))
         .send({ notes: 'Corrected the premium.' })
         .expect(200);
+    });
+
+    /*
+     * PAC-65 #9 — every edit is logged, and the log is for owners and managers.
+     *
+     * The product owner was explicit that editing stays open (users complain
+     * about friction) and that the answer to the transparency concern is a log
+     * rather than a lock, with price changes the case he named. So the
+     * behaviour under test is two-sided: the row must exist, and the producer
+     * who made the edit must not be able to see it.
+     */
+    describe('edit log (PAC-65 #9)', () => {
+      /** Edit a producer-owned recap's premium, and return its lead id. */
+      const editPremium = async (): Promise<string> => {
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead } = await seedLead(producer!._id);
+        const leadId = lead._id.toString();
+        upload(leadId);
+
+        const created = await createAs(producerToken, payload(leadId));
+        await request(app.getHttpServer())
+          .patch(`/api/v1/quote-recaps/${created.id}`)
+          .set(authHeader(producerToken))
+          .send({
+            policies: [{ policyType: 'Auto', premium: 1400.5, itemCount: 2 }],
+          })
+          .expect(200);
+
+        return leadId;
+      };
+
+      const timelineAs = async (token: string, leadId: string) => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/leads/${leadId}`)
+          .set(authHeader(token))
+          .expect(200);
+        return (res.body as LeadDetail).activities;
+      };
+
+      it('records the premium change for a reader who holds the permission', async () => {
+        const leadId = await editPremium();
+
+        const row = (await timelineAs(ownerToken, leadId)).find(
+          (activity) => activity.type === 'field_changed',
+        );
+        expect(row).toBeDefined();
+        // Origin comes from the row's own `quoteRecapId`, so the chip already
+        // says which record was edited — no new `ACTIVITY_ORIGINS` member.
+        expect(row!.origin).toBe('quote_recap');
+
+        const premium = row!.changes?.find((c) => c.field === 'premium');
+        expect(premium).toBeDefined();
+        expect(premium!.kind).toBe('currency');
+        // Cents survive the round trip on both sides. Whole-dollar rounding
+        // anywhere on this path turns a real correction into a row asserting
+        // that nothing changed.
+        expect(premium!.from).toBe(1200.1);
+        expect(premium!.to).toBe(1400.5);
+      });
+
+      it('keeps the values out of `summary`', async () => {
+        /*
+         * `summary` is the one field that escapes the permission gate —
+         * `HotLeadsService` renders the newest activity's summary onto the
+         * producer's own dashboard. Keeping it value-free means a missed filter
+         * degrades to a bland heading rather than leaking a premium.
+         */
+        const leadId = await editPremium();
+        const row = (await timelineAs(ownerToken, leadId)).find(
+          (activity) => activity.type === 'field_changed',
+        );
+        expect(row!.summary).toBe('Quote recap edited');
+        expect(row!.summary).not.toMatch(/1400|1200|\$/);
+      });
+
+      it('hides the row from the producer who made the edit', async () => {
+        const leadId = await editPremium();
+        const types = (await timelineAs(producerToken, leadId)).map(
+          (activity) => activity.type,
+        );
+        expect(types).not.toContain('field_changed');
+      });
+
+      it('hides the row from a reader with agency scope but no permission', async () => {
+        // `readOnlyToken` holds every `{module}:read` and no `agency:*`, so this
+        // is the assertion that proves the gate is permission-driven rather
+        // than a side effect of data scope.
+        const leadId = await editPremium();
+        const types = (await timelineAs(readOnlyToken, leadId)).map(
+          (activity) => activity.type,
+        );
+        expect(types).not.toContain('field_changed');
+      });
+
+      it("does not spend the producer's 50-row timeline budget", async () => {
+        /*
+         * The regression guard for filtering in the query rather than after
+         * `.limit(ACTIVITY_LIMIT)`. A post-filter would let a burst of edits
+         * push a producer's own notes out of the window entirely — the
+         * timeline would go silently empty, which is a correctness bug rather
+         * than a slow query.
+         */
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead } = await seedLead(producer!._id);
+        const leadId = lead._id.toString();
+        upload(leadId);
+        const created = await createAs(producerToken, payload(leadId));
+
+        await request(app.getHttpServer())
+          .post('/api/v1/activities')
+          .set(authHeader(producerToken))
+          .send({ leadId, type: 'note', summary: 'Call back Tuesday' })
+          .expect(201);
+
+        // Comfortably past ACTIVITY_LIMIT (50).
+        for (let i = 0; i < 55; i += 1) {
+          await request(app.getHttpServer())
+            .patch(`/api/v1/quote-recaps/${created.id}`)
+            .set(authHeader(producerToken))
+            .send({ notes: `Revision ${i}` })
+            .expect(200);
+        }
+
+        const summaries = (await timelineAs(producerToken, leadId)).map(
+          (activity) => activity.summary,
+        );
+        expect(summaries).toContain('Call back Tuesday');
+      });
+
+      it('writes nothing when the patch changed no value', async () => {
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead } = await seedLead(producer!._id);
+        const leadId = lead._id.toString();
+        upload(leadId);
+        const created = await createAs(
+          producerToken,
+          payload(leadId, { insuranceRenewalMonth: 'September' }),
+        );
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/quote-recaps/${created.id}`)
+          .set(authHeader(producerToken))
+          .send({ insuranceRenewalMonth: 'September' })
+          .expect(200);
+
+        const types = (await timelineAs(ownerToken, leadId)).map(
+          (activity) => activity.type,
+        );
+        expect(types).not.toContain('field_changed');
+      });
     });
   });
 
@@ -8243,27 +8427,25 @@ describe('SFA API (e2e)', () => {
 
     afterAll(() => statSpy?.mockRestore());
 
-    it.each([
-      'Renewal Review',
-      'Policy Change',
-      'Payment',
-      'Company Transfer',
-    ])('records a transfer from a %s ticket', async (category) => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id), category);
+    it.each(['Renewal Review', 'Policy Change', 'Payment', 'Company Transfer'])(
+      'records a transfer from a %s ticket',
+      async (category) => {
+        const { household, policy } = await makeHousehold();
+        const ticket = await makeTicket(String(household._id), category);
 
-      const res = await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
+        const res = await record(
+          ticket.id,
+          transferBody(String(household._id), String(policy._id)),
+        );
 
-      expect(res.body.policyTransfer).not.toBeNull();
-      expect(res.body.policyTransfer.pairs).toHaveLength(1);
-      expect(res.body.policyTransfer.pairs[0].fromPolicyId).toBe(
-        String(policy._id),
-      );
-      expect(res.body.allowsPolicyTransfer).toBe(true);
-    });
+        expect(res.body.policyTransfer).not.toBeNull();
+        expect(res.body.policyTransfer.pairs).toHaveLength(1);
+        expect(res.body.policyTransfer.pairs[0].fromPolicyId).toBe(
+          String(policy._id),
+        );
+        expect(res.body.allowsPolicyTransfer).toBe(true);
+      },
+    );
 
     it('is refused from a category that does not allow it', async () => {
       const { household, policy } = await makeHousehold();
@@ -8349,7 +8531,7 @@ describe('SFA API (e2e)', () => {
       );
     });
 
-    it("refuses a from-policy on another household, and writes nothing", async () => {
+    it('refuses a from-policy on another household, and writes nothing', async () => {
       const { household } = await makeHousehold();
       const other = await makeHousehold();
       const ticket = await makeTicket(String(household._id));
@@ -8447,7 +8629,10 @@ describe('SFA API (e2e)', () => {
 
         const after = await performance(ownerToken);
         expect(after.sold.premium).toBeCloseTo(before.sold.premium + 777, 2);
-        expect(after.transfers.premium).toBeCloseTo(before.transfers.premium, 2);
+        expect(after.transfers.premium).toBeCloseTo(
+          before.transfers.premium,
+          2,
+        );
       });
     });
 

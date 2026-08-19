@@ -2,6 +2,7 @@ import type { ActivityOrigin, LeadDetailActivity } from "@sfa/shared";
 import { ACTIVITY_ORIGIN_LABELS } from "@sfa/shared";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { ActivityChanges } from "./ActivityChanges";
 import { ActivityComposer } from "./ActivityComposer";
 import { activityDisplay, activityLabel } from "./lead-display";
 
@@ -50,7 +51,15 @@ function formatWhen(value: string | null): string {
  *
  * Renders whatever types exist rather than assuming a set. `lead_created`,
  * `quoted`, `sold` and `audit_resolved` come from their own pipelines; `call`,
- * `text`, `email` and `note` are client-written.
+ * `text`, `email` and `note` are client-written; `field_changed` is the
+ * quote/sold edit log (PAC-65 #9).
+ *
+ * ## The edit log is absent, not hidden, for most readers
+ *
+ * `field_changed` rows are excluded from the `GET /leads/:id` **query** for any
+ * caller without `agency:changelogs:read` — owners and managers hold it,
+ * producers do not. So there is no permission check in this component, and the
+ * entry count in the header legitimately differs by role.
  *
  * ## Notes read as notes (PAC-56 #29)
  *
@@ -92,6 +101,7 @@ export function ActivityTimeline({
             const { icon: Icon, tone, tint } = activityDisplay[activity.type];
             const isLast = index === activities.length - 1;
             const isNote = activity.type === "note";
+            const isChange = activity.type === "field_changed";
             // `POST /activities` defaults an untyped touch's summary to the
             // type's own label, so a bare "Call logged" would otherwise render
             // twice — once as the heading, once as the body.
@@ -128,14 +138,27 @@ export function ActivityTimeline({
                         isNote ? "text-muted-foreground" : "text-card-foreground",
                       )}
                     >
-                      {isNote ? "Note" : activityLabel[activity.type]}
+                      {isNote
+                        ? "Note"
+                        : /*
+                           * A change row's summary is its heading. It is
+                           * deliberately value-free server-side ("Quote recap
+                           * edited" / "Policy edited"), so it says which record
+                           * was touched without duplicating the before/after
+                           * list below it — and it beats the generic
+                           * "Record edited" fallback.
+                           */
+                          (isChange && activity.summary) ||
+                          activityLabel[activity.type]}
                     </p>
                     <span className="shrink-0 whitespace-nowrap text-sm text-muted-foreground">
                       {formatWhen(activity.occurredAt)}
                     </span>
                   </div>
 
-                  {isNote
+                  {isChange && activity.changes ? (
+                    <ActivityChanges changes={activity.changes} />
+                  ) : isNote
                     ? /*
                        * The note's own words, set apart from the surrounding
                        * event rows. `whitespace-pre-line` because the composer
@@ -154,7 +177,7 @@ export function ActivityTimeline({
                       )}
 
                   <Provenance
-                    producerName={activity.producerName}
+                    userName={activity.userName}
                     origin={activity.origin}
                     tone={tone}
                   />
@@ -184,20 +207,20 @@ export function ActivityTimeline({
  * the kind of thing a producer needs to know before trusting a summary.
  */
 function Provenance({
-  producerName,
+  userName,
   origin,
   tone,
 }: {
-  producerName: string | null;
+  userName: string | null;
   origin: ActivityOrigin;
   tone: string;
 }) {
   const showOrigin = origin !== "lead";
-  if (!producerName && !showOrigin) return null;
+  if (!userName && !showOrigin) return null;
 
   return (
     <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-      {producerName && <span className={tone}>{producerName}</span>}
+      {userName && <span className={tone}>{userName}</span>}
       {showOrigin && (
         <Badge size="sm" variant="secondary" className="text-muted-foreground">
           {ACTIVITY_ORIGIN_LABELS[origin]}

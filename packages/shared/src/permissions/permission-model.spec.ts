@@ -46,6 +46,38 @@ describe('page-level permission model', () => {
     }
   });
 
+  /**
+   * PAC-65 #9. The edit log is restricted to owners and managers, and the roles
+   * that do the editing must not hold it. Asserted here rather than trusted to
+   * review, because widening it is a one-line change in a file nobody re-reads.
+   */
+  describe('change-log permission', () => {
+    const holder = (slug: string) =>
+      DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === slug)!;
+
+    it('is held by the Branch Manager', () => {
+      expect(holder('branch_manager').permissions).toContain(
+        'agency:changelogs:read',
+      );
+    });
+
+    it('reaches the Agency Owner through the admin spread', () => {
+      // Not via `grantsAllEnabledModules`, which only expands `{m}:read|write`.
+      expect(holder('agency_owner').permissions).toContain(
+        'agency:changelogs:read',
+      );
+    });
+
+    it.each(['producer', 'csr', 'crm', 'data_team'])(
+      'is withheld from %s',
+      (slug) => {
+        expect(holder(slug).permissions).not.toContain(
+          'agency:changelogs:read',
+        );
+      },
+    );
+  });
+
   it('grantsAllEnabledModules templates rely on modules, not extra strings', () => {
     // A template that auto-grants every enabled module must not also hardcode
     // page permission strings (those are derived from enabled modules instead).
