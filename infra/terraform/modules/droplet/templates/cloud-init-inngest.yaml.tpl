@@ -27,7 +27,11 @@
 # REPLACES the running app droplet. Keeping the two apart means work on one can
 # never destroy the other.
 package_update: true
-package_upgrade: true
+# Deliberately NOT package_upgrade. On this image it pulls a kernel update,
+# which opens an interactive whiptail dialog that nothing can answer on an
+# unattended boot - it stalled runcmd for minutes and printed "Failed to open
+# terminal". Security updates are handled by unattended-upgrades; a first-boot
+# full upgrade buys little and delays the droplet becoming usable.
 
 users:
   - name: deploy
@@ -62,6 +66,18 @@ write_files:
       losing it loses scheduled-function state and run history.
 
 runcmd:
+  # FIRST, before anything slow or failure-prone. write_files created
+  # /opt/sfa-inngest as root during cloud-init's init stage; until this line
+  # runs, the deploy user cannot write to its own deploy target.
+  #
+  # This used to sit at the END of runcmd, behind apt and the Docker install.
+  # A deploy that landed during those few minutes failed with
+  # "tar: docker-compose.inngest.yml: Cannot open: Permission denied" - a race,
+  # not a permissions bug, and one that re-running would appear to "fix".
+  # Ordering it first shrinks the window to nothing.
+  - install -d -o deploy -g deploy /opt/sfa-inngest
+  - chown -R deploy:deploy /opt/sfa-inngest
+  - export DEBIAN_FRONTEND=noninteractive
   - apt-get install -y ca-certificates curl gnupg ufw
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -70,8 +86,6 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   - usermod -aG docker deploy
-  - mkdir -p /opt/sfa-inngest
-  - chown -R deploy:deploy /opt/sfa-inngest
   # Host firewall as a second layer behind the DO firewall. 8288 is allowed only
   # from inside the VPC - the DO firewall narrows that further to the app
   # droplet specifically, but if that rule is ever loosened by accident this
