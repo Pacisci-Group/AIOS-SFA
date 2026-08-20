@@ -43,6 +43,28 @@ variable "allowed_droplet_ids" {
   default     = []
 }
 
+variable "allowed_ip_addresses" {
+  description = <<-EOT
+    Individual IPs or CIDRs allowed to connect, for developer machines reaching
+    the cluster directly (Compass, mongosh, running a migration from a laptop).
+
+    The application does NOT need an entry here — it connects from the droplet
+    and is covered by `allowed_droplet_ids`.
+
+    Declare access here rather than adding it in the DigitalOcean console. The
+    firewall resource owns the whole rule set, so a console-added rule is deleted
+    by the next apply — which is exactly what happened to two entries added on
+    2026-08-12 and surfaced as unexplained drift in every plan afterwards.
+
+    Each entry is a standing hole in the database's network perimeter, so keep
+    the list short, comment who each one belongs to, and remove them when people
+    leave.
+  EOT
+
+  type    = list(string)
+  default = []
+}
+
 variable "enable_backups" {
   description = "Enable automated backups"
   type        = bool

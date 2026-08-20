@@ -55,17 +55,86 @@ module "firewall" {
   droplet_ids      = [module.droplet.id]
   ssh_allowed_ips  = var.ssh_allowed_ips
   allow_http_https = true
+
+  # Inngest invokes our functions over HTTP, so it needs to reach the API's
+  # /api/inngest on port 4000. Deliberately NOT routed through nginx: the nginx
+  # config is baked into this droplet's cloud-init `user_data`, which cannot be
+  # changed in place, and putting the endpoint behind the public vhost would
+  # expose it to the internet for no reason.
+  #
+  # `docker-compose.prod.yml` binds the api container to the droplet's private
+  # IP (API_INNGEST_BIND), and this rule is what makes that address reachable —
+  # sharing a VPC is not enough, a DO firewall filters neighbours too.
+  internal_rules = var.enable_inngest ? [
+    {
+      port               = "4000"
+      source_droplet_ids = [module.inngest_droplet[0].id]
+    }
+  ] : []
+}
+
+# ─── Inngest ──────────────────────────────────────────────────────────────────
+# The durable event bus, scheduler and executor for all asynchronous work.
+# Its own droplet running one upstream container; nothing of ours is built for
+# it. See docker-compose.inngest.yml.
+module "inngest_droplet" {
+  count  = var.enable_inngest ? 1 : 0
+  source = "../../modules/droplet"
+
+  name                 = "${local.name_prefix}-inngest"
+  region               = var.region
+  size                 = var.inngest_droplet_size
+  vpc_uuid             = module.vpc.id
+  ssh_key_fingerprints = [digitalocean_ssh_key.deploy.fingerprint]
+  enable_monitoring    = true
+  # Nothing reaches this droplet from the internet, so a stable public address
+  # buys nothing. The app droplet finds it by private IP.
+  enable_reserved_ip = false
+  tags               = concat(local.all_tags, ["inngest"])
+
+  # A separate template, NOT a conditional inside the app's. `user_data` is not
+  # changeable in place — making the shared template conditional would replace
+  # the running app droplet, which is what the presets warn about in capitals.
+  user_data = templatefile("${path.module}/../../modules/droplet/templates/cloud-init-inngest.yaml.tpl", {
+    ssh_public_key = var.ssh_public_key
+    vpc_ip_range   = module.vpc.ip_range
+  })
+}
+
+# ⚠ `allow_http_https = false` is load-bearing, not a default worth changing.
+#
+# Port 8288 serves Inngest's Event API, its REST/GraphQL API *and* its dashboard
+# UI, and the self-hosted build ships with NO AUTHENTICATION on any of them.
+# This firewall is the only thing between that dashboard and the internet.
+module "inngest_firewall" {
+  count  = var.enable_inngest ? 1 : 0
+  source = "../../modules/firewall"
+
+  name             = "${local.name_prefix}-inngest-fw"
+  droplet_ids      = [module.inngest_droplet[0].id]
+  ssh_allowed_ips  = var.ssh_allowed_ips
+  allow_http_https = false
+
+  internal_rules = [
+    {
+      port               = "8288"
+      source_droplet_ids = [module.droplet.id]
+    }
+  ]
 }
 
 module "mongo" {
   source = "../../modules/managed_mongo"
 
-  name                = "${local.name_prefix}-mongo"
-  region              = var.region
-  size                = var.mongo_size
-  node_count          = var.mongo_node_count
-  allowed_droplet_ids = [module.droplet.id]
-  enable_backups      = var.enable_backups
+  name       = "${local.name_prefix}-mongo"
+  region     = var.region
+  size       = var.mongo_size
+  node_count = var.mongo_node_count
+  // Deliberately NOT the Inngest droplet: it is an event bus and executor, and
+  // never touches MongoDB. Our functions run on the app droplet.
+  allowed_droplet_ids  = [module.droplet.id]
+  allowed_ip_addresses = var.mongo_allowed_ip_addresses
+  enable_backups       = var.enable_backups
 }
 
 module "dns" {
@@ -98,6 +167,7 @@ resource "digitalocean_project_resources" "sfa" {
       module.droplet.urn,
       module.mongo.cluster_urn,
     ],
+    var.enable_inngest ? [module.inngest_droplet[0].urn] : [],
     var.enable_spaces ? [module.spaces[0].urn] : [],
   )
 }

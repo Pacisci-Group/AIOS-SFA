@@ -7,6 +7,7 @@ on:
     paths:
       - "packages/**"
       - "docker-compose.prod.yml"
+      - "docker-compose.inngest.yml"
       - ".github/workflows/deploy-dev.yml"
       - ".github/workflows/deploy.reusable.yml"
   workflow_dispatch:

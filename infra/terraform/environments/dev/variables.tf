@@ -105,3 +105,21 @@ variable "tags" {
   type    = list(string)
   default = []
 }
+
+variable "enable_inngest" {
+  description = "Provision the Inngest droplet (self-hosted async event bus/scheduler)"
+  type        = bool
+  default     = false
+}
+
+variable "inngest_droplet_size" {
+  description = "Size of the Inngest droplet"
+  type        = string
+  default     = "s-1vcpu-1gb"
+}
+
+variable "mongo_allowed_ip_addresses" {
+  description = "Developer IPs/CIDRs allowed to reach Managed MongoDB directly. Declare here, never in the DO console."
+  type        = list(string)
+  default     = []
+}

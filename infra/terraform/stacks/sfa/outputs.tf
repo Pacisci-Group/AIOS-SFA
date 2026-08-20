@@ -96,3 +96,41 @@ output "deploy_notes" {
        needs it. A "NOT a replica set" warning means degraded atomicity.
   EOT
 }
+
+# ─── Inngest ──────────────────────────────────────────────────────────────────
+
+output "inngest_droplet_id" {
+  value = var.enable_inngest ? module.inngest_droplet[0].id : null
+}
+
+output "inngest_droplet_ip" {
+  description = "Public IP of the Inngest droplet. SSH only — no service is served publicly. Use as INNGEST_SSH_HOST in the deploy workflow, and to tunnel the dashboard: ssh -L 8288:localhost:8288 deploy@<ip>"
+  value       = var.enable_inngest ? module.inngest_droplet[0].public_ip : null
+}
+
+output "inngest_droplet_private_ip" {
+  description = "VPC address of the Inngest droplet. The API sends events here: INNGEST_BASE_URL=http://<this>:8288"
+  value       = var.enable_inngest ? module.inngest_droplet[0].ipv4_address_private : null
+}
+
+# Every Inngest-related GitHub Environment secret that comes from infrastructure,
+# already assembled and labelled:
+#
+#   terraform output inngest_github_secrets
+#
+# One output rather than three raw ones because two of the three are easy to get
+# subtly wrong by hand — INNGEST_BASE_URL needs the PRIVATE address with a scheme
+# and port, while APP_PRIVATE_IP is a bare address with neither. Assembling them
+# here removes the chance of pasting a public IP into one or a port into the other.
+#
+# The remaining Inngest secrets are NOT infrastructure and are not here:
+# INNGEST_EVENT_KEY / INNGEST_SIGNING_KEY are generated with `openssl rand -hex 32`,
+# and RESEND_API_KEY / MAIL_DEFAULT_FROM come from Resend.
+output "inngest_github_secrets" {
+  description = "Inngest GitHub Environment secrets derived from infrastructure. Null until enable_inngest = true has been applied."
+  value = var.enable_inngest ? {
+    INNGEST_SSH_HOST = module.inngest_droplet[0].public_ip
+    INNGEST_BASE_URL = "http://${module.inngest_droplet[0].ipv4_address_private}:8288"
+    APP_PRIVATE_IP   = module.droplet.ipv4_address_private
+  } : null
+}

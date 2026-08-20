@@ -105,14 +105,39 @@ jobs:
           STORAGE_ACCESS_KEY_ID: ${{ secrets.STORAGE_ACCESS_KEY_ID }}
           STORAGE_SECRET_ACCESS_KEY: ${{ secrets.STORAGE_SECRET_ACCESS_KEY }}
           PUBLIC_FORM_BASE_URL: ${{ secrets.PUBLIC_FORM_BASE_URL }}
+          # Async work. RESEND_API_KEY belongs in this list for exactly the
+          # reason STORAGE_ENDPOINT does: unset, the worker falls back to a
+          # transport that logs instead of sending. The app boots, the health
+          # check passes, Inngest runs complete successfully — and not one email
+          # is delivered. Nothing downstream would ever surface that.
+          INNGEST_BASE_URL: ${{ secrets.INNGEST_BASE_URL }}
+          INNGEST_EVENT_KEY: ${{ secrets.INNGEST_EVENT_KEY }}
+          INNGEST_SIGNING_KEY: ${{ secrets.INNGEST_SIGNING_KEY }}
+          APP_PRIVATE_IP: ${{ secrets.APP_PRIVATE_IP }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_DEFAULT_FROM: ${{ secrets.MAIL_DEFAULT_FROM }}
+          INNGEST_ENABLED: ${{ vars.INNGEST_ENABLED }}
         run: |
           set -uo pipefail
+
+          required="SSH_HOST SSH_KEY MONGODB_URI JWT_ACCESS_SECRET
+                    JWT_REFRESH_SECRET CORS_ORIGIN GHCR_PULL_USER
+                    GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION
+                    STORAGE_BUCKET STORAGE_ACCESS_KEY_ID
+                    STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL"
+
+          # The async secrets are required only where Inngest is turned on, so
+          # an environment that predates async work keeps deploying unchanged.
+          # Gated on the same INNGEST_ENABLED variable as the deploy-inngest job
+          # and terraform's enable_inngest, so the three cannot disagree.
+          if [ "${INNGEST_ENABLED}" = "true" ]; then
+            required="${required}
+                      INNGEST_BASE_URL INNGEST_EVENT_KEY INNGEST_SIGNING_KEY
+                      APP_PRIVATE_IP RESEND_API_KEY MAIL_DEFAULT_FROM"
+          fi
+
           missing=""
-          for name in SSH_HOST SSH_KEY MONGODB_URI JWT_ACCESS_SECRET \
-                      JWT_REFRESH_SECRET CORS_ORIGIN GHCR_PULL_USER \
-                      GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION \
-                      STORAGE_BUCKET STORAGE_ACCESS_KEY_ID \
-                      STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL; do
+          for name in $required; do
             if [ -z "${!name}" ]; then
               missing="${missing} ${name}"
             fi
@@ -200,6 +225,27 @@ jobs:
             PUBLIC_FORM_RATE_LIMIT=${{ secrets.PUBLIC_FORM_RATE_LIMIT }}
             PUBLIC_INTAKE_RATE_LIMIT=${{ secrets.PUBLIC_INTAKE_RATE_LIMIT }}
             PUBLIC_INTAKE_HOURLY_LIMIT=${{ secrets.PUBLIC_INTAKE_HOURLY_LIMIT }}
+
+            # Async work. Every outbound email and every scheduled job runs as
+            # an Inngest function served from this container at /api/inngest.
+            #
+            # Binds the api container to the droplet's PRIVATE IP so the Inngest
+            # droplet can invoke functions over the VPC. Never 0.0.0.0: that
+            # endpoint is raw Express middleware none of the seven global guards
+            # see, and its only authentication is the Inngest request signature.
+            API_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4000
+            INNGEST_BASE_URL=${{ secrets.INNGEST_BASE_URL }}
+            INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
+            INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
+            # Must be "0". Left unset the SDK infers dev mode from NODE_ENV and
+            # stops verifying request signatures.
+            INNGEST_DEV=0
+
+            # Outbound email. RESEND_API_KEY unset means the worker silently
+            # falls back to a logging transport — see the preflight note.
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            MAIL_DEFAULT_FROM=${{ secrets.MAIL_DEFAULT_FROM }}
+            MAIL_REPLY_TO=${{ secrets.MAIL_REPLY_TO }}
             EOF
 
             docker compose -f docker-compose.prod.yml pull
@@ -224,4 +270,89 @@ jobs:
             done
             echo "Health check failed."
             docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100
+            exit 1
+
+  # Self-hosted Inngest, on its own droplet. Nothing of ours is built for it —
+  # this pulls an upstream image and hands it a config file.
+  #
+  # Gated on an Environment *variable* rather than the presence of a secret, so
+  # "this environment has no Inngest" is an explicit statement someone made in
+  # the GitHub UI rather than something inferred from an omission. The same flag
+  # gates the preflight secrets above and terraform's `enable_inngest`.
+  #
+  # Runs AFTER the app deploy on purpose: Inngest syncs function definitions
+  # from the API's /api/inngest at boot, so deploying it against an already-
+  # running app makes the sync verification below deterministic instead of a
+  # race against the poll interval.
+  deploy-inngest:
+    needs: deploy
+    if: ${{ vars.INNGEST_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy compose file to the Inngest droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.INNGEST_SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          source: "docker-compose.inngest.yml"
+          target: "/opt/sfa-inngest"
+
+      - name: Deploy Inngest
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.INNGEST_SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/sfa-inngest
+
+            # Rewritten in full every deploy, same as /opt/sfa/.env — anything
+            # hand-edited on the droplet is lost. Every variable Inngest needs
+            # has to be listed here and backed by an Environment secret.
+            umask 077
+            cat > /opt/sfa-inngest/.env <<EOF
+            INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
+            INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
+            # Where our functions are served: the app droplet's PRIVATE address.
+            APP_PRIVATE_IP=${{ secrets.APP_PRIVATE_IP }}
+            EOF
+
+            docker compose -f docker-compose.inngest.yml pull
+            docker compose -f docker-compose.inngest.yml up -d --remove-orphans
+            docker image prune -f
+
+      # A health check alone is not enough here. Inngest can be perfectly
+      # healthy while having synced zero functions — because the app was
+      # unreachable, the URL was wrong, or the signing keys disagree. That state
+      # is invisible: every check passes and no async work ever runs. So assert
+      # the thing we actually care about, which is that it found our functions.
+      - name: Verify Inngest synced our functions
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.INNGEST_SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -uo pipefail
+            for i in $(seq 1 20); do
+              body=$(curl -fsS http://127.0.0.1:8288/v0/apps 2>/dev/null || true)
+              # A synced app reports a non-empty `functions` array. Both the
+              # "no apps at all" and "app present, zero functions" cases have to
+              # fail, and only the second is subtle.
+              if echo "$body" | grep -q '"functions":[[:space:]]*\[[[:space:]]*{'; then
+                echo "Inngest has synced our functions."
+                exit 0
+              fi
+              echo "Waiting for function sync... ($i)"
+              sleep 5
+            done
+            echo "::error::Inngest is running but synced no functions from ${{ secrets.APP_PRIVATE_IP }}:4000/api/inngest."
+            echo "Check: the app droplet firewall admits port 4000 from this droplet;"
+            echo "INNGEST_SIGNING_KEY matches on both sides; the API has WORKER_INLINE unset or true."
+            docker compose -f /opt/sfa-inngest/docker-compose.inngest.yml logs --tail=100
             exit 1

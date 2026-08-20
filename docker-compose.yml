@@ -119,6 +119,44 @@ services:
       retries: 10
       start_period: 5s
 
+  # Inngest, in DEV-SERVER mode — deliberately not the `inngest start` that runs
+  # in deployed environments.
+  #
+  # The dev server needs no event key, no signing key and no persistence: it
+  # keeps everything in memory and wipes on restart, which is what you want
+  # locally. Production runs `inngest start` on its own droplet with a SQLite
+  # volume (docker-compose.inngest.yml).
+  #
+  # Carries no profile, so `make dev` starts it alongside Mongo/MinIO/Redis and
+  # the host-mode `npm run api:dev` is picked up automatically.
+  inngest:
+    image: inngest/inngest
+    container_name: sfa-inngest
+    restart: unless-stopped
+    # `-u` points at the API's serve handler. `host.docker.internal` because in
+    # the default dev loop the API runs on the HOST, not in compose — `localhost`
+    # inside this container is Inngest itself. `--no-discovery` stops it probing
+    # a list of common ports and registering something unexpected.
+    command:
+      [
+        "inngest",
+        "dev",
+        "-u",
+        "http://host.docker.internal:4000/api/inngest",
+        "--no-discovery",
+      ]
+    # Docker Desktop provides host.docker.internal automatically; Linux does not.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8288:8288"
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
   api:
     profiles: ["app"]
     build:
@@ -156,6 +194,15 @@ services:
       # this container is the API itself. Keeps both run modes on the same
       # caching behaviour from a single switch.
       REDIS_URL: ${REDIS_URL:+redis://redis:6379}
+      # Inngest, translated to the compose network. `.env` holds the host-mode
+      # value (or none at all, since the SDK finds a local dev server itself),
+      # and `localhost` inside this container is the API.
+      #
+      # INNGEST_DEV=1 keeps the SDK in dev mode: it skips request-signature
+      # verification, which is correct here because the dev server has no signing
+      # key. Deployed environments set it to "0".
+      INNGEST_DEV: "1"
+      INNGEST_BASE_URL: http://inngest:8288
     depends_on:
       mongo:
         condition: service_healthy
@@ -181,6 +228,57 @@ services:
       start_period: 30s
     command: >
       sh -c "node packages/api/dist/seed/seed.js && node packages/api/dist/main.js"
+
+  # The worker as its own container — the shape it will take in production when
+  # traffic justifies scaling it separately. NOT started by `make up`.
+  #
+  # ⚠ Exactly one process may serve the functions. Before starting this, set
+  # WORKER_INLINE=false on the api service (a real env var, not a .env line —
+  # it is read while the module graph is built, before dotenv runs), otherwise
+  # both register under the same Inngest app id and whichever synced last wins.
+  #
+  #   docker compose --profile app --profile worker up -d
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    container_name: sfa-worker
+    command: ["node", "packages/api/dist/worker.js"]
+    restart: unless-stopped
+    ports:
+      - "4001:4001"
+    env_file:
+      - .env
+    environment:
+      WORKER_PORT: 4001
+      MONGODB_URI: mongodb://mongo:27017/sfa?directConnection=true
+      INNGEST_DEV: "1"
+      INNGEST_BASE_URL: http://inngest:8288
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_PUBLIC_URL: http://localhost:9000
+      STORAGE_REGION: us-east-1
+      STORAGE_BUCKET: sfa-uploads
+      STORAGE_ACCESS_KEY_ID: minioadmin
+      STORAGE_SECRET_ACCESS_KEY: minioadmin
+      STORAGE_FORCE_PATH_STYLE: "true"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4001/api/inngest').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   web:
     profiles: ["app"]

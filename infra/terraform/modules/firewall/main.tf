@@ -27,6 +27,18 @@ resource "digitalocean_firewall" "this" {
     }
   }
 
+  # Droplet-to-droplet access. See `internal_rules` in variables.tf: the VPC
+  # alone does not make these reachable — the firewall filters at the edge, so
+  # neighbours need an explicit rule just as the public internet does.
+  dynamic "inbound_rule" {
+    for_each = var.internal_rules
+    content {
+      protocol           = "tcp"
+      port_range         = inbound_rule.value.port
+      source_droplet_ids = inbound_rule.value.source_droplet_ids
+    }
+  }
+
   outbound_rule {
     protocol              = "tcp"
     port_range            = "1-65535"
