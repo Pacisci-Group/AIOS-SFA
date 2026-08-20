@@ -8,6 +8,7 @@
     "api:dev": "npm run dev -w @sfa/api",
     "api:build": "npm run build -w @sfa/api",
     "api:start": "npm run start:prod -w @sfa/api",
+    "worker:dev": "npm run worker:dev -w @sfa/api",
     "api:seed": "npm run seed -w @sfa/api",
     "api:seed:dev": "npm run seed:dev -w @sfa/api",
     "api:seed:demo": "npm run seed:demo -w @sfa/api",
