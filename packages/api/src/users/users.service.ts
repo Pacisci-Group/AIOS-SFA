@@ -206,7 +206,22 @@ export class UsersService {
       this.resolveUserName(invitedByUserId),
     ]);
 
+    // `agencyId` is optional on the schema (a platform super admin has none)
+    // but is guaranteed on both paths into here: `inviteUser` sets it from a
+    // required input, and `resendInvite` loads the user scoped by it. Asserting
+    // rather than defaulting keeps that guarantee visible — the event schema
+    // would otherwise reject an empty string with a message about hex digits,
+    // which says nothing about what actually went wrong.
+    if (!user.agencyId) {
+      throw new Error(
+        `Cannot invite user ${user._id.toString()}: no agencyId on the record.`,
+      );
+    }
+
     await this.mailService.sendInviteEmail({
+      userId: user._id.toString(),
+      agencyId: user.agencyId.toString(),
+      branchId: user.branchId?.toString() ?? null,
       to: user.email,
       recipientName: fullName(user.firstName, user.lastName),
       agencyName,

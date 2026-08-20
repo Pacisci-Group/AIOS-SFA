@@ -1,76 +1,66 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { InngestService } from '../inngest/inngest.service';
+import { inviteRequested } from '../inngest/events';
 import { InviteEmailPayload } from './mail.types';
 
 /**
  * The single seam every outbound email goes through.
  *
- * ## Status: delivery is NOT implemented (PAC-58 Scope 1 deferred)
+ * ## What this now does
+ * It **emits an event**; it does not send. Rendering, the provider call and the
+ * delivery record all happen in `src/worker/mail/`, driven by Inngest. That is
+ * what buys retries with backoff, a dead-letter view, one-click replay, and
+ * per-function rate limiting without any of it being written here.
  *
- * The provider and the overall email architecture are still undecided, so this
- * service currently **logs** what it would send instead of sending it. That is a
- * deliberate placeholder, not an oversight — the rest of the invite flow
- * (PAC-58 Scopes 2–4) is built against this interface so that landing a real
- * transport is a change to {@link deliver} alone.
+ * The class kept its name, location and method signature deliberately, exactly
+ * as the previous docblock promised: *"Nothing outside this file needs to
+ * change: callers already `await` the send and let failures propagate."*
  *
- * ### What "implement it later" means concretely
- * Replace the body of {@link deliver} with a provider call (Resend / SendGrid /
- * SES / SMTP), most likely by injecting a `MailTransport` interface so the
- * provider stays swappable and tests can assert against a fake. Nothing outside
- * this file needs to change: callers already `await` the send and let failures
- * propagate.
+ * ## Failure contract callers rely on — unchanged
+ * A failure **throws**. It is never swallowed. `UsersService.inviteUser` creates
+ * the user *before* calling here, so a throw leaves a pending invite the owner
+ * can resend rather than a half-created account.
  *
- * ### Failure contract callers rely on
- * A send that fails **throws**. It is never swallowed. `UsersService.inviteUser`
- * creates the user *before* calling here, so a throw leaves a pending invite the
- * owner can resend from the users list rather than a half-created account — see
- * the note on that method.
+ * ## What did change, and it matters
+ * The throw now means *"the event was not accepted"*, not *"the message was not
+ * delivered"*. A resolved promise means the send **will** happen, not that it
+ * has. So a bad address no longer surfaces synchronously to the owner — it
+ * surfaces as a failed run and a `failed` row in `emailMessages`. Until the
+ * users list reads that status back, a bounced invite is invisible in the UI.
+ * That is a known gap, not an oversight; it is why `exposeInviteToken()` in
+ * `UsersService` is deliberately still in place.
  */
 @Injectable()
 export class MailService {
-  private readonly logger = new Logger(MailService.name);
+  constructor(private readonly inngest: InngestService) {}
 
-  /**
-   * Send the "you've been invited" email.
-   *
-   * The rendered link is logged at `log` level on purpose while delivery is
-   * stubbed: taking the URL out of the API console is the only way to walk the
-   * accept-invite flow locally. Once a real transport lands, drop the URL from
-   * the log line — an invite token is a bearer credential and does not belong in
-   * production logs.
-   */
+  /** Request the "you've been invited" email. */
   async sendInviteEmail(payload: InviteEmailPayload): Promise<void> {
-    const roles = payload.roleNames.join(', ') || 'no role';
-    const inviter = payload.inviterName ?? 'Someone';
-
-    await this.deliver({
-      to: payload.to,
-      subject: `${inviter} invited you to ${payload.agencyName} on AgencyOps`,
-      body: [
-        `Hi ${payload.recipientName ?? 'there'},`,
-        '',
-        `${inviter} has invited you to join ${payload.agencyName} as ${roles}.`,
-        '',
-        `Set your password: ${payload.inviteUrl}`,
-        '',
-        `This link expires on ${payload.expiresAt.toISOString()}.`,
-      ].join('\n'),
-    });
+    await this.deliver(payload);
   }
 
   /**
-   * The transport boundary. **Currently a no-op that logs.**
+   * The transport boundary.
    *
-   * This is the one method to replace when the email architecture is settled;
-   * see the class docblock.
+   * Still the one method to replace if the async architecture ever changes —
+   * the shape the previous stub established has been kept for exactly that
+   * reason.
    */
-  private deliver(message: {
-    to: string;
-    subject: string;
-    body: string;
-  }): Promise<void> {
-    this.logger.log(
-      `[MAIL NOT SENT — transport not implemented] to=${message.to} subject="${message.subject}"\n${message.body}`,
-    );
-    return Promise.resolve();
+  private async deliver(payload: InviteEmailPayload): Promise<void> {
+    await this.inngest.send(inviteRequested, {
+      userId: payload.userId,
+      agencyId: payload.agencyId,
+      branchId: payload.branchId,
+      to: payload.to,
+      recipientName: payload.recipientName,
+      agencyName: payload.agencyName,
+      inviterName: payload.inviterName,
+      roleNames: payload.roleNames,
+      inviteUrl: payload.inviteUrl,
+      // The catalog carries instants as ISO strings, never `Date` — Inngest
+      // rejects schemas with transforms, and an event is JSON on the wire
+      // regardless. See `inngest/events/email.events.ts`.
+      expiresAt: payload.expiresAt.toISOString(),
+    });
   }
 }

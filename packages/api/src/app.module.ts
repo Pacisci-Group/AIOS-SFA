@@ -43,6 +43,28 @@ import { SoldDealsModule } from './sold-deals/sold-deals.module';
 import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
 import { ENV_FILE_PATH } from './config/env.config';
+import { InngestModule } from './inngest/inngest.module';
+import { WorkerModule } from './worker/worker.module';
+
+/**
+ * Whether async work runs inside this process.
+ *
+ * True today because traffic is low and one container is simpler to operate.
+ * Set `WORKER_INLINE=false` and start the `worker` compose profile to move it
+ * to its own process — `dist/worker.js` boots the identical module set.
+ *
+ * ⚠ Exactly one of the two must serve the functions. If the API runs them
+ * inline *and* a worker container is up, both register with Inngest under the
+ * same app id and the last one to sync wins — so events land on whichever
+ * process happens to have synced most recently. Hence a single flag rather than
+ * two independent switches.
+ *
+ * Read from `process.env` rather than `ConfigService` because it is needed to
+ * build the module graph, which happens before DI exists. It must therefore be
+ * a real environment variable (compose `environment:`), not a line in the repo
+ * `.env` — the same constraint `config/rate-limit.config.ts` documents.
+ */
+const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
 
 @Module({
   imports: [
@@ -66,6 +88,9 @@ import { ENV_FILE_PATH } from './config/env.config';
     }),
     MongoModule,
     TenancyModule,
+    // Global. Every producer sends through InngestService; nothing imports the
+    // worker directly.
+    InngestModule,
     AuthModule,
     PermissionsModule,
     PlatformModule,
@@ -113,6 +138,9 @@ import { ENV_FILE_PATH } from './config/env.config';
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,
     FeatureModulesModule,
+    // Last: it registers no controllers, so it has no bearing on the route
+    // ordering the comments above are careful about.
+    ...(WORKER_INLINE ? [WorkerModule] : []),
   ],
   controllers: [HealthController],
   providers: [
