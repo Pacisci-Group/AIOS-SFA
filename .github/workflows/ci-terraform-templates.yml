@@ -1,0 +1,41 @@
+name: CI terraform templates
+
+# cloud-init parses user_data as YAML before applying any of it. One non-ASCII
+# byte anywhere in the file - including in a comment - fails the parse, and
+# cloud-init silently applies NOTHING: no users, no packages, no directories.
+#
+# The droplet still boots and sshd still answers, so the symptom shows up much
+# later as an SSH key that "does not work", and nothing in that error points at
+# the template. This check exists because that cost a day.
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/modules/droplet/templates/**"
+  push:
+    branches: [dev, staging, main]
+    paths:
+      - "infra/terraform/modules/droplet/templates/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ascii-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cloud-init templates must be pure ASCII
+        run: |
+          set -uo pipefail
+          failed=0
+          for f in infra/terraform/modules/droplet/templates/*.tpl; do
+            # [^ -~\t] is "outside printable ASCII, and not a tab".
+            if LC_ALL=C grep -nP '[^\x09\x20-\x7e]' "$f"; then
+              echo "::error file=$f::Non-ASCII characters found. cloud-init will fail to parse this file and will apply NOTHING to the droplet - no deploy user, no Docker. Replace em dashes with '-', warning signs with '!!', and curly quotes with straight ones."
+              failed=1
+            fi
+          done
+          if [ "$failed" -eq 1 ]; then exit 1; fi
+          echo "All cloud-init templates are pure ASCII."
