@@ -32,7 +32,14 @@
 services:
   inngest:
     image: inngest/inngest
-    command: "inngest start"
+    # ⚠ The serve URL and poll interval MUST be flags, not env vars.
+    #
+    # INNGEST_URLS / INNGEST_POLL_INTERVAL are ignored by the binary. It
+    # starts perfectly happily, reports healthy, and simply never syncs any
+    # app — so every check passes while no async work exists. Verified
+    # locally: with the env vars the GraphQL `apps` list stays empty; with
+    # these flags the app appears with functionCount > 0.
+    command: "inngest start -u http://${APP_PRIVATE_IP}:4000/api/inngest --poll-interval 30"
     restart: unless-stopped
     environment:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
@@ -40,14 +47,6 @@ services:
       # Persist to the mounted volume rather than the default ./.inngest/main.db
       # inside the container, which a `docker compose down` would take with it.
       INNGEST_SQLITE_DIR: /data
-      # Where our functions are served. The app droplet's private IP — never its
-      # public hostname, which would route the invocation through nginx and out
-      # over the internet for no reason.
-      INNGEST_URLS: http://${APP_PRIVATE_IP}:4000/api/inngest
-      # Re-sync function definitions every 30s. The default is 0, meaning the
-      # server syncs once and never again — so a deploy that adds a function
-      # would leave it unregistered until someone restarted Inngest.
-      INNGEST_POLL_INTERVAL: 30
     ports:
       # Bound to all interfaces so the app droplet can reach it over the VPC.
       # See the warning above: the firewall is what makes this safe, and it
