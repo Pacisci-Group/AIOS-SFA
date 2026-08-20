@@ -38,6 +38,18 @@ export interface DealAuditTriggers {
    * in PAC-65 so this could drive it (#15).
    */
   priorInsurance: boolean;
+  /**
+   * "At least one policy on this deal declares prior coverage" —
+   * `!priorInsurance.none`, which is a **different question** from the
+   * `priorInsurance` trigger above and deliberately not folded into it.
+   *
+   * That one is the discounts-card checkbox and chases the declarations page.
+   * This one drives `Accord Cancellation`, the ACORD 35 sent to the prior
+   * carrier, and so has to follow the carrier the producer actually named: a
+   * producer who declares prior coverage on the prior-insurance card without
+   * ticking the discount still has a carrier to send the form to.
+   */
+  priorPolicyDeclared: boolean;
   /** One audit item is generated per name, so N drivers give N certificates. */
   defensiveDriverNames: string[];
 }
@@ -57,6 +69,7 @@ export function emptyAuditTriggers(): DealAuditTriggers {
     actualCashValue: false,
     hailResistantRoof: false,
     priorInsurance: false,
+    priorPolicyDeclared: false,
     defensiveDriverNames: [],
   };
 }

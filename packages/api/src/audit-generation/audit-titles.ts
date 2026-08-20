@@ -124,6 +124,16 @@ export function computeRequiredTitles(
   // the discounts card is what tells the audit there is a declarations page to
   // verify. A deal with no prior coverage no longer carries the item at all.
   if (triggers.priorInsurance) add('Prior Insurance');
+  // Conditional since PAC-65 — David confirmed a client with no prior
+  // insurance must not get one. It was baseline, so every deal carried an item
+  // telling the service team to send an ACORD 35 to a carrier that does not
+  // exist.
+  //
+  // ⚠ Driven by `priorPolicyDeclared` (`!priorInsurance.none`), **not** by the
+  // `priorInsurance` trigger on the line above — that one is the discounts-card
+  // checkbox. A producer who names a prior carrier without ticking that box
+  // genuinely has prior insurance and genuinely needs the form sent.
+  if (triggers.priorPolicyDeclared) add('Accord Cancellation');
 
   // 2b. Defensive Driver fans out per named driver — the spec wants one
   // certificate each, where legacy created a single item for all of them.

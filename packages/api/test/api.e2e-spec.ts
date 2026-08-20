@@ -7049,14 +7049,16 @@ describe('SFA API (e2e)', () => {
      * this list lacks is silently dropped (logged as "unresolved"), so a stale
      * fixture makes a real item look like it was never generated.
      *
-     * `Prior Insurance` is deliberately **not** baseline here (PAC-65 #15): it
-     * left `Common` *and* lost `alwaysInclude`, because `isBaselineTemplate`
-     * matches either. `Drivewise` is kept in the catalog only to prove nothing
-     * generates from it any more.
+     * `Prior Insurance` and `Accord Cancellation` are deliberately **not**
+     * baseline here (PAC-65): each left `Common` *and* lost `alwaysInclude`,
+     * because `isBaselineTemplate` matches either. They share a category but
+     * not a trigger — see the generation tests below. `Drivewise` is kept in
+     * the catalog only to prove nothing generates from it any more.
      */
     const TEMPLATES = [
       { name: 'Correct Sold Date', category: 'Common', alwaysInclude: true },
       { name: 'Prior Insurance', category: 'Prior Insurance' },
+      { name: 'Accord Cancellation', category: 'Prior Insurance' },
       { name: 'Drivers Verified', category: 'Auto' },
       { name: 'Defensive Driver', category: 'Auto' },
       { name: 'Good Student', category: 'Auto' },
@@ -7221,6 +7223,9 @@ describe('SFA API (e2e)', () => {
       // prior coverage no longer carries an item telling the service team to
       // obtain a declarations page that does not exist.
       expect(names).not.toContain('Prior Insurance');
+      // Same story, second pass: `autoPolicy` declares no prior insurance, so
+      // there is no carrier to send an ACORD cancellation to.
+      expect(names).not.toContain('Accord Cancellation');
     });
 
     it('creates the parent roll-up audit record', async () => {
@@ -7444,6 +7449,53 @@ describe('SFA API (e2e)', () => {
       expect(item).toBeTruthy();
       // The declarations page rides onto it, so the auditor verifies in place.
       expect(item!.attachments[0]?.key).toBe(declarations.key);
+    });
+
+    it('generates Accord Cancellation only when prior coverage was declared (PAC-65)', async () => {
+      /*
+       * David: do not raise an ACORD cancellation for a client with no prior
+       * insurance. It was baseline, so every deal carried one — telling the
+       * service team to send an ACORD 35 to a carrier that does not exist.
+       *
+       * ⚠ Two changes were needed to leave the baseline, as with its
+       * neighbour: `isBaselineTemplate` matches `alwaysInclude === true` *or* a
+       * category of exactly `Common`.
+       *
+       * Note the "with" case ticks **no discount** and attaches nothing: the
+       * trigger is `!priorInsurance.none`, not the discounts checkbox. A
+       * producer who names a prior carrier without ticking that box still has a
+       * carrier to send the form to.
+       */
+      const { lead: without } = await seedLead();
+      const noPrior = await sell(without._id.toString(), [
+        autoPolicy(without._id.toString()),
+      ]);
+      expect(
+        await genItemModel.countDocuments({
+          dealId: new Types.ObjectId(noPrior.id),
+          title: 'Accord Cancellation',
+        }),
+      ).toBe(0);
+
+      const { lead: with_ } = await seedLead();
+      const declared = await sell(with_._id.toString(), [
+        autoPolicy(with_._id.toString(), {
+          priorInsurance: {
+            none: false,
+            carrier: 'Geico',
+            agentName: 'Jamie Prior',
+          },
+        }),
+      ]);
+
+      const items = await genItemModel.find({
+        dealId: new Types.ObjectId(declared.id),
+      });
+      const names = items.map((i) => i.itemName);
+      expect(names).toContain('Accord Cancellation');
+      // The two conditional items are driven apart: no discount was ticked, so
+      // nothing asks for a declarations page.
+      expect(names).not.toContain('Prior Insurance');
     });
 
     it('stamps a soft 7-day due date, and enforces nothing (PAC-65)', async () => {
