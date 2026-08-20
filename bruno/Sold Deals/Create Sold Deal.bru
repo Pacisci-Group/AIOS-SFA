@@ -280,6 +280,33 @@ docs {
     `Common` category *and* lost `alwaysInclude`, because `isBaselineTemplate`
     matches either one. A deal with no prior coverage no longer carries an item
     telling the service team to obtain a declarations page that does not exist.
+  - **Nor is `Accord Cancellation` (PAC-65).** Same change, same two routes out
+    of the baseline — David confirmed a client with no prior insurance must not
+    get one, since it told the service team to send an ACORD 35 cancellation
+    form to a carrier that does not exist.
+    ⚠ It is driven by **`priorInsurance.none === false` on any policy**, *not*
+    by `discounts.priorInsuranceDiscount`. The two conditional items answer
+    different questions: the discount checkbox says "there is a declarations
+    page to verify", while naming a prior carrier says "there is a policy to
+    cancel". Declaring a carrier without ticking the discount therefore
+    generates the ACORD item and **not** `Prior Insurance` — see the
+    asymmetry note below.
+    The template name is misspelled (`Accord`, not `ACORD`) and stays that way:
+    the title is the join key between the seed catalog and the generator, and it
+    came in from SmartSuite that way. Renaming it without a data migration would
+    silently orphan every migrated item.
+  - **⚠ Known asymmetry on `Prior Insurance`, unchanged here.** Its *records*
+    (`priorInsurance` / `priorPolicies`) are written from
+    `priorInsurance.none === false`, but its *audit item* comes from the
+    discounts checkbox. So a producer who declares a prior carrier without
+    ticking that box gets the records and no audit item, and is never asked for
+    the declarations page. That gap is the reason the checkbox exists; closing
+    it is a separate decision.
+  - **⚠ Still open: the already-cancelled case.** The wizard writes
+    `needsCancellation: "No"` when the producer says the prior policy is already
+    cancelled, but `Accord Cancellation` is still generated — the rule above
+    only looks at whether prior coverage exists. David answered the
+    no-prior-insurance case only.
   - **Prior agent is required, and so is "who cancelled it" (PAC-65 #10/#11).**
     `priorInsurance.agentName` 400s when blank on a policy that declares prior
     coverage — the service team calls that person to chase the cancellation and

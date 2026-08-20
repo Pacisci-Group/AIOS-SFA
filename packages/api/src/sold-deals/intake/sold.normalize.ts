@@ -179,6 +179,13 @@ export function deriveAuditTriggers(
   const driverNames = new Set<string>();
 
   for (const policy of policies) {
+    // ⚠ **Before** the `continue` below, not after it. This one is read off
+    // `policy`, not `policy.discounts`, so gating it on a discounts object
+    // being present would silently drop it for a policy that carries no
+    // discounts at all — which is exactly the plain sale that still needs an
+    // ACORD cancellation sent to the carrier it is replacing.
+    triggers.priorPolicyDeclared ||= policy.priorInsurance?.none === false;
+
     const d = policy.discounts;
     if (!d) continue;
 

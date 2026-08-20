@@ -17,18 +17,26 @@ import {
  */
 
 /*
- * Mirrors the real seed's shape, including the one template that is *not*
- * baseline. `Prior Insurance` left `Common` in PAC-65 so it could be driven by
- * the discounts-card checkbox; keeping a baseline copy of it here would let the
- * conditional rule regress with this spec still green.
+ * Mirrors the real seed's shape, including the two templates that are *not*
+ * baseline. `Prior Insurance` and `Accord Cancellation` both left `Common` in
+ * PAC-65 so they could be driven by the sale's own answers; keeping a baseline
+ * copy of either here would let the conditional rule regress with this spec
+ * still green. `Accord Cancellation` was in this list until PAC-65's second
+ * pass — which is exactly the trap, so it is called out rather than deleted.
  */
 const BASELINE: AuditTemplateLike[] = [
   { name: 'Correct Sold Date', category: 'Common', alwaysInclude: true },
-  { name: 'Accord Cancellation', category: 'Common', alwaysInclude: true },
+  { name: 'Quote Recap', category: 'Common', alwaysInclude: true },
 ];
 
 const PRIOR_INSURANCE: AuditTemplateLike = {
   name: 'Prior Insurance',
+  category: 'Prior Insurance',
+  alwaysInclude: false,
+};
+
+const ACCORD_CANCELLATION: AuditTemplateLike = {
+  name: 'Accord Cancellation',
   category: 'Prior Insurance',
   alwaysInclude: false,
 };
@@ -79,7 +87,7 @@ describe('isBaselineTemplate', () => {
 describe('computeRequiredTitles — baseline', () => {
   it('includes every baseline template on any deal', () => {
     expect(titlesFor(['Auto'])).toEqual(
-      expect.arrayContaining(['Correct Sold Date', 'Accord Cancellation']),
+      expect.arrayContaining(['Correct Sold Date', 'Quote Recap']),
     );
   });
 
@@ -119,6 +127,61 @@ describe('computeRequiredTitles — prior insurance (PAC-65 #15)', () => {
     // category of exactly `Common`. This asserts both were changed; setting
     // only the flag would look right and generate the item anyway.
     expect(isBaselineTemplate(PRIOR_INSURANCE)).toBe(false);
+  });
+});
+
+describe('computeRequiredTitles — accord cancellation (PAC-65)', () => {
+  const templates = [...BASELINE, ACCORD_CANCELLATION];
+
+  it('generates the item when a policy declares prior coverage', () => {
+    expect(
+      titlesFor(['Auto'], { priorPolicyDeclared: true }, false, templates),
+    ).toContain('Accord Cancellation');
+  });
+
+  it('omits it entirely for a client with no prior insurance', () => {
+    // David's decision, and the whole point of the change: it was baseline, so
+    // every deal carried an item telling the service team to send an ACORD 35
+    // cancellation form to a carrier that does not exist.
+    expect(titlesFor(['Auto'], {}, false, templates)).not.toContain(
+      'Accord Cancellation',
+    );
+  });
+
+  it('stays out of the baseline even though its neighbours are in it', () => {
+    // Two independent routes make a template baseline — `alwaysInclude` and a
+    // category of exactly `Common`. This asserts both were changed; setting
+    // only the flag would look right and generate the item anyway.
+    expect(isBaselineTemplate(ACCORD_CANCELLATION)).toBe(false);
+  });
+
+  it('follows the declared carrier, not the discounts checkbox', () => {
+    /*
+     * The two conditional items are driven by *different* answers, and this
+     * pins that apart. A producer who names a prior carrier on the
+     * prior-insurance card without ticking the discount still has a carrier to
+     * send the ACORD form to — so the cancellation is generated and the
+     * declarations-page item is not.
+     */
+    const both = [...BASELINE, PRIOR_INSURANCE, ACCORD_CANCELLATION];
+    const declaredOnly = titlesFor(
+      ['Auto'],
+      { priorPolicyDeclared: true },
+      false,
+      both,
+    );
+    expect(declaredOnly).toContain('Accord Cancellation');
+    expect(declaredOnly).not.toContain('Prior Insurance');
+
+    // And the mirror image: ticking the discount alone is not a declaration.
+    const discountOnly = titlesFor(
+      ['Auto'],
+      { priorInsurance: true },
+      false,
+      both,
+    );
+    expect(discountOnly).toContain('Prior Insurance');
+    expect(discountOnly).not.toContain('Accord Cancellation');
   });
 });
 

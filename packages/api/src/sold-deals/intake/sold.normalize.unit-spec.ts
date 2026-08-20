@@ -217,11 +217,49 @@ describe('deriveAuditTriggers', () => {
       goodStudent: false,
       drivewise: false,
       priorInsurance: false,
+      priorPolicyDeclared: false,
       fireSubscription: false,
       actualCashValue: false,
       hailResistantRoof: false,
       defensiveDriverNames: [],
     });
+  });
+
+  it('sets priorPolicyDeclared from the card, not the discounts checkbox', () => {
+    // The two prior-insurance triggers answer different questions and are read
+    // from different places (PAC-65). This one drives `Accord Cancellation`.
+    const declared = policy({
+      priorInsurance: { none: false, carrier: 'Geico', agentName: 'Jo Prior' },
+    });
+    const triggers = deriveAuditTriggers([declared]);
+    expect(triggers.priorPolicyDeclared).toBe(true);
+    // Declaring a carrier is not ticking the discount, so the declarations-page
+    // item stays off.
+    expect(triggers.priorInsurance).toBe(false);
+  });
+
+  it('sets it on a policy carrying no discounts object at all', () => {
+    /*
+     * ⚠ The regression this exists for. `deriveAuditTriggers` bails out of the
+     * loop body with `if (!d) continue` the moment a policy has no discounts,
+     * so reading `priorInsurance` after that line would drop the trigger for
+     * exactly the plainest sale — one with prior coverage and no discounts,
+     * which still needs an ACORD cancellation sent.
+     */
+    const bare = policy({
+      discounts: undefined,
+      priorInsurance: { none: false, carrier: 'Geico', agentName: 'Jo Prior' },
+    });
+    expect(deriveAuditTriggers([bare]).priorPolicyDeclared).toBe(true);
+  });
+
+  it('ORs it across policies, so one declared carrier is enough', () => {
+    const declared = policy({
+      priorInsurance: { none: false, carrier: 'Geico', agentName: 'Jo Prior' },
+    });
+    expect(deriveAuditTriggers([policy(), declared]).priorPolicyDeclared).toBe(
+      true,
+    );
   });
 
   it('ORs a selection across policies', () => {
