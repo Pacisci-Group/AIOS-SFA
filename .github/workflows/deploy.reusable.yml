@@ -324,6 +324,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Which key are we authenticating with, and does the target match the
+      # droplet Terraform built? Both values are PUBLIC — a fingerprint and a
+      # public key reveal nothing that a server does not already hand out.
+      #
+      # Added because `ssh: unable to authenticate` gives no clue whether the
+      # secret is wrong, the host is wrong, or the droplet never got the key,
+      # and none of those are diagnosable from a laptop that lacks the key.
+      #
+      # Compare the fingerprint below against:
+      #   terraform output -raw ... ; ssh-keygen -lf <the ssh_public_key in tfvars>
+      # A mismatch means SSH_KEY and infra/terraform tfvars have drifted apart.
+      - name: Diagnose SSH identity and target
+        run: |
+          set -uo pipefail
+          umask 077
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > /tmp/id_deploy
+          chmod 600 /tmp/id_deploy
+
+          echo "Target host: ${{ secrets.INNGEST_SSH_HOST }}"
+          echo "App droplet: ${{ secrets.SSH_HOST }}  (this key is known to work there)"
+          echo
+          echo "Public half of the SSH_KEY secret:"
+          ssh-keygen -y  -f /tmp/id_deploy || echo "  !! SSH_KEY is not a readable private key"
+          echo "Fingerprint:"
+          ssh-keygen -lf /tmp/id_deploy -E md5 || true
+
+          echo
+          echo "Host keys offered by the Inngest droplet (proves we reach the right box):"
+          ssh-keyscan -T 10 "${{ secrets.INNGEST_SSH_HOST }}" 2>/dev/null | ssh-keygen -lf - || \
+            echo "  !! could not reach ${{ secrets.INNGEST_SSH_HOST }} on port 22"
+
+          rm -f /tmp/id_deploy
+
       - name: Copy compose file to the Inngest droplet
         uses: appleboy/scp-action@v0.1.7
         with:
