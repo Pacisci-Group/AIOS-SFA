@@ -117,6 +117,7 @@ jobs:
           JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
           JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
           CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           STORAGE_ENDPOINT: ${{ secrets.STORAGE_ENDPOINT }}
@@ -141,7 +142,7 @@ jobs:
           set -uo pipefail
 
           required="SSH_HOST SSH_KEY MONGODB_URI JWT_ACCESS_SECRET
-                    JWT_REFRESH_SECRET CORS_ORIGIN GHCR_PULL_USER
+                    JWT_REFRESH_SECRET CORS_ORIGIN APP_BASE_URL GHCR_PULL_USER
                     GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION
                     STORAGE_BUCKET STORAGE_ACCESS_KEY_ID
                     STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL"
@@ -214,6 +215,11 @@ jobs:
             JWT_ACCESS_EXPIRES=15m
             JWT_REFRESH_EXPIRES=7d
             CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
+            # Base URL every invite / accept-invite link is built from
+            # (UsersService.buildInviteUrl). Unset, it falls back to
+            # http://localhost:5173 and every invite email ships a dead link
+            # while the API, the send and the delivery record all look healthy.
+            APP_BASE_URL=${{ secrets.APP_BASE_URL }}
 
             # Object storage (DigitalOcean Spaces) — document uploads.
             # Values come from the environment's terraform outputs:

@@ -63,6 +63,7 @@ All of these are **required** — the deploy fails preflight if any is empty.
 | `JWT_ACCESS_SECRET` | `openssl rand -base64 48` |
 | `JWT_REFRESH_SECRET` | `openssl rand -base64 48` |
 | `CORS_ORIGIN` | Public site URL (dev: `http://<droplet_ip>`) |
+| `APP_BASE_URL` | Public site URL again, as a **single** URL. Every invite / accept-invite link is built from it. Unset, links are generated pointing at `http://localhost:5173` and arrive dead while everything else looks healthy. |
 | `GHCR_PULL_USER` | GitHub username/bot with `read:packages` |
 | `GHCR_PULL_TOKEN` | PAT with `read:packages` (droplet pulls images) |
 | `PUBLIC_FORM_BASE_URL` | Public site URL; share links are built as `<base>/f/lead/{token}` |
