@@ -37,8 +37,18 @@ export interface CoreAuditTemplateSpec {
    * baseline when `alwaysInclude` is true **or** the category is exactly
    * `Common` (case-insensitively). Auto / Home / Landlord gate the
    * policy-type-driven and discount-driven items.
+   *
+   * `Prior Insurance` exists because of that first rule: PAC-65 made two items
+   * conditional, and neither could stay in `Common` and be conditional. It is
+   * the one category that is neither baseline nor tied to a policy line — it
+   * applies to any line, gated instead on the client having prior coverage.
+   *
+   * Both `Prior Insurance` and `Accord Cancellation` sit in it, on *different*
+   * triggers: the declarations page follows the discounts-card checkbox, the
+   * ACORD form follows the carrier actually declared. The category is the
+   * shared "not baseline, not a policy line" answer, not a shared condition.
    */
-  category: 'Common' | 'Auto' | 'Home' | 'Landlord';
+  category: 'Common' | 'Auto' | 'Home' | 'Landlord' | 'Prior Insurance';
   required: boolean;
   blocking: boolean;
   alwaysInclude: boolean;
@@ -63,20 +73,48 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     alwaysInclude: true,
     task: 'Verify each policy effective date matches what was bound.',
   },
+  /*
+   * ⚠ **Not baseline, unlike its neighbours** (PAC-65 #15). Generated only when
+   * the producer ticks "prior insurance" on the discounts card.
+   *
+   * Note it takes **two** changes to leave the baseline, not one:
+   * `isBaselineTemplate` matches `alwaysInclude === true` **or** a category of
+   * exactly `Common`, so the category has to move as well. Setting only
+   * `alwaysInclude: false` here would look correct and change nothing.
+   */
   {
     name: 'Prior Insurance',
-    category: 'Common',
+    category: 'Prior Insurance',
     required: true,
     blocking: false,
-    alwaysInclude: true,
+    alwaysInclude: false,
     task: 'Obtain the declarations page proving continuous prior coverage.',
   },
+  /*
+   * ⚠ **Not baseline either**, and for the same reason as its neighbour above
+   * (PAC-65). Generated only when a policy on the deal declares prior coverage.
+   *
+   * The same two-change rule applies — `alwaysInclude` *and* the category both
+   * had to move, because `isBaselineTemplate` matches either.
+   *
+   * It shares the `Prior Insurance` category rather than earning its own: the
+   * category exists to mean "gated on prior coverage, applies to any policy
+   * line", which is exactly this item too. The two are still driven by
+   * *different* triggers — this one by `!priorInsurance.none`, the declarations
+   * page by the discounts checkbox — see `computeRequiredTitles`.
+   *
+   * The name is misspelled: ACORD is an acronym. It is kept verbatim because
+   * the title is the join key between this catalog and the generator, and it
+   * came in that way from SmartSuite (`field-ids.ts` `m7FKN`). Correcting the
+   * spelling without a data migration would orphan every migrated item and
+   * stop generating new ones — silently, since an unresolved title is dropped.
+   */
   {
     name: 'Accord Cancellation',
-    category: 'Common',
+    category: 'Prior Insurance',
     required: true,
     blocking: false,
-    alwaysInclude: true,
+    alwaysInclude: false,
     task: 'Send the ACORD cancellation form to the prior carrier.',
   },
   {
@@ -128,14 +166,6 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     blocking: false,
     alwaysInclude: false,
     task: 'Collect the report card or transcript supporting the discount.',
-  },
-  {
-    name: 'Drivewise',
-    category: 'Auto',
-    required: true,
-    blocking: false,
-    alwaysInclude: false,
-    task: 'Mention Drivewise registration to the client and confirm enrollment.',
   },
 
   // --- Home: policy-type driven (Inspection, Mortgagee) + discount-driven ---

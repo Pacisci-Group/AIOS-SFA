@@ -38,10 +38,13 @@ export function useLogActivity(leadId: string) {
           type: input.type,
           summary: input.summary ?? null,
           occurredAt: new Date().toISOString(),
-          producerName: null,
+          userName: null,
           // This hook only ever logs against the lead itself, and the server
           // agrees — `ActivitiesService` returns a constant `lead` origin.
           origin: "lead",
+          // Always: `LOGGABLE_ACTIVITY_TYPES` cannot express `field_changed`,
+          // which only the quote and policy PATCH endpoints write.
+          changes: null,
         };
         queryClient.setQueryData<LeadDetail>(key, {
           ...previous,

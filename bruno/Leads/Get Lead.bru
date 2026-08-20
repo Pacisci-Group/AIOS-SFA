@@ -237,6 +237,28 @@ docs {
   this sale did not write. Empty on a migrated deal whose policies carry only
   `legacyDealId`.
 
+  **`activities[].userName` / `activities[].changes`** — who wrote the row, and
+  its before/after list.
+
+  `userName` (was `producerName` until PAC-65) is resolved from `Activity.userId`
+  and is **not** the lead's producer: `POST /activities` needs only
+  `leads:write`, which a Branch Manager and a CSR both hold, and an
+  `audit_resolved` row comes from whoever cleared the hand-off item.
+
+  `changes` is non-null only on `type: "field_changed"` — the quote/sold edit log
+  (PAC-65 #9), written by `PATCH /quote-recaps/:id` and `PATCH /policies/:id`.
+  Each entry is `{ field, label, kind, from, to }`, where `kind` is
+  `text | number | currency | date | list` and tells the client how to format the
+  two values. Dates are `YYYY-MM-DD`, currency is a raw number with cents, and a
+  cleared value is `null`.
+
+  > ⚠ **You will not see a `field_changed` row in this collection.** They are
+  > excluded from the query itself for any caller without
+  > `agency:changelogs:read` — owners and managers hold it, producers do not —
+  > and `Auth/Login.bru` authenticates as `producer@smithfamily.local`. The
+  > entry count legitimately differs by role. Log in as the agency owner to see
+  > them.
+
   **`activities[].origin`** — which surface the row was written from (#29):
   `lead` | `quote_recap` | `sold_deal` | `audit` | `system`. Derived on read from
   the activity's own refs, not stored: no writer has ever set a provenance
@@ -334,7 +356,7 @@ docs {
         "type": "quoted",
         "summary": "Quote recap created",
         "occurredAt": "2026-07-24T00:00:00.000Z",
-        "producerName": "Pat Producer",
+        "userName": "Pat Producer",
         "origin": "quote_recap"
       }
     ]

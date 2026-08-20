@@ -6,6 +6,7 @@ import {
   deriveMortgagee,
   derivePersistedDealAggregates,
   derivePriorCarriers,
+  collectAttachments,
   findCrossBranchDiscounts,
   parseFormDate,
   soldDateYmd,
@@ -14,14 +15,14 @@ import {
 
 const EMPTY_DISCOUNTS: SoldPolicyInput['discounts'] = {
   escrow: false,
-  inspection: { selected: false },
   fireSubscription: { selected: false },
   roofReceipt: { selected: false },
   acvPersonalProperty: false,
   acvDwellingProtection: false,
-  drivewise: { selected: false },
+  drivewise: false,
   defensiveDriver: { selected: false, drivers: [] },
   studentDiscount: { selected: false },
+  priorInsuranceDiscount: false,
 };
 
 function policy(overrides: Partial<SoldPolicyInput> = {}): SoldPolicyInput {
@@ -215,6 +216,8 @@ describe('deriveAuditTriggers', () => {
       defensiveDriver: false,
       goodStudent: false,
       drivewise: false,
+      priorInsurance: false,
+      priorPolicyDeclared: false,
       fireSubscription: false,
       actualCashValue: false,
       hailResistantRoof: false,
@@ -222,11 +225,48 @@ describe('deriveAuditTriggers', () => {
     });
   });
 
+  it('sets priorPolicyDeclared from the card, not the discounts checkbox', () => {
+    // The two prior-insurance triggers answer different questions and are read
+    // from different places (PAC-65). This one drives `Accord Cancellation`.
+    const declared = policy({
+      priorInsurance: { none: false, carrier: 'Geico', agentName: 'Jo Prior' },
+    });
+    const triggers = deriveAuditTriggers([declared]);
+    expect(triggers.priorPolicyDeclared).toBe(true);
+    // Declaring a carrier is not ticking the discount, so the declarations-page
+    // item stays off.
+    expect(triggers.priorInsurance).toBe(false);
+  });
+
+  it('sets it on a policy carrying no discounts object at all', () => {
+    /*
+     * ⚠ The regression this exists for. `deriveAuditTriggers` bails out of the
+     * loop body with `if (!d) continue` the moment a policy has no discounts,
+     * so reading `priorInsurance` after that line would drop the trigger for
+     * exactly the plainest sale — one with prior coverage and no discounts,
+     * which still needs an ACORD cancellation sent.
+     */
+    const bare = policy({
+      discounts: undefined,
+      priorInsurance: { none: false, carrier: 'Geico', agentName: 'Jo Prior' },
+    });
+    expect(deriveAuditTriggers([bare]).priorPolicyDeclared).toBe(true);
+  });
+
+  it('ORs it across policies, so one declared carrier is enough', () => {
+    const declared = policy({
+      priorInsurance: { none: false, carrier: 'Geico', agentName: 'Jo Prior' },
+    });
+    expect(deriveAuditTriggers([policy(), declared]).priorPolicyDeclared).toBe(
+      true,
+    );
+  });
+
   it('ORs a selection across policies', () => {
     const withDrivewise = policy({
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
       },
     });
     expect(deriveAuditTriggers([policy(), withDrivewise]).drivewise).toBe(true);
@@ -256,7 +296,7 @@ describe('deriveAuditTriggers', () => {
       policyType: 'Home',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        roofReceipt: { selected: true, hasProof: false },
+        roofReceipt: { selected: true },
       },
     });
     // The form says "Roof Receipt"; the checklist says "Hail Resistant Roof".
@@ -265,7 +305,7 @@ describe('deriveAuditTriggers', () => {
     const student = policy({
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        studentDiscount: { selected: true, hasProof: false },
+        studentDiscount: { selected: true },
       },
     });
     // The form says "Student Discount"; the checklist says "Good Student".
@@ -329,7 +369,7 @@ describe('findCrossBranchDiscounts', () => {
     const auto = policy({
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
       },
     });
     const home = policy({
@@ -339,12 +379,32 @@ describe('findCrossBranchDiscounts', () => {
     expect(findCrossBranchDiscounts([auto, home])).toEqual([]);
   });
 
+  it('accepts a universal discount on any line, including neither branch', () => {
+    /*
+     * `priorInsuranceDiscount` is in `UNIVERSAL_DISCOUNT_KEYS`, so it is in
+     * neither branch list and is never cross-branch-checked — which is the
+     * point: prior coverage is not a property of the line sold. Umbrella is the
+     * case that matters, since it is neither auto nor property and would
+     * otherwise have no discounts card at all.
+     */
+    const rows = (['Auto', 'Home', 'Umbrella'] as const).map((policyType) =>
+      policy({
+        policyType,
+        discounts: {
+          ...structuredClone(EMPTY_DISCOUNTS),
+          priorInsuranceDiscount: true,
+        },
+      }),
+    );
+    expect(findCrossBranchDiscounts(rows)).toEqual([]);
+  });
+
   it('rejects auto discounts on a property policy', () => {
     const bogus = policy({
       policyType: 'Home',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
       },
     });
     // Stripping silently would generate a Drivewise audit item for a deal with
@@ -366,7 +426,7 @@ describe('findCrossBranchDiscounts', () => {
       policyType: 'Umbrella',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
         escrow: true,
       },
     });
@@ -379,7 +439,7 @@ describe('findCrossBranchDiscounts', () => {
       policyType: 'Home',
       discounts: {
         ...structuredClone(EMPTY_DISCOUNTS),
-        drivewise: { selected: true },
+        drivewise: true,
       },
     });
     const problems = findCrossBranchDiscounts([ok, bad, bad]);
@@ -458,5 +518,85 @@ describe('derivePriorCarriers', () => {
   it('trims stored carrier names', () => {
     const result = derivePriorCarriers([prior('Auto', '  Geico  ')]);
     expect(result.auto).toBe('Geico');
+  });
+});
+
+describe('collectAttachments (the upload ownership boundary)', () => {
+  const file = (name: string) => ({
+    key: `agencies/a1/sold-deals/lead1/${name}`,
+    filename: `${name}.pdf`,
+    contentType: 'application/pdf',
+    size: 10,
+  });
+
+  /*
+   * ⚠ **An enumeration test, deliberately.**
+   *
+   * `verifyAttachments` is the only place `assertKeyOwnership` runs on a sold
+   * upload, and it iterates exactly what this returns — so a slot missed here
+   * is a key the server never checks belongs to this agency and lead. Asserting
+   * the exact count is what catches the *next* slot somebody adds without
+   * wiring it in; asserting "the ones I remembered" would not.
+   */
+  it('finds every upload slot on a policy, and knows how many there are', () => {
+    const found = collectAttachments([
+      policy({
+        policyType: 'Home',
+        newBusinessApplication: file('nba'),
+        discounts: {
+          ...structuredClone(EMPTY_DISCOUNTS),
+          fireSubscription: { selected: true, attachment: file('fire') },
+          roofReceipt: { selected: true, attachment: file('roof') },
+          priorInsuranceDiscount: true,
+        },
+        priorInsurance: { none: false, attachment: file('declarations') },
+      }),
+      policy({
+        discounts: {
+          ...structuredClone(EMPTY_DISCOUNTS),
+          studentDiscount: { selected: true, attachment: file('transcript') },
+          defensiveDriver: {
+            selected: true,
+            drivers: [
+              { name: 'Dana', attachment: file('dana') },
+              { name: 'Sam', attachment: file('sam') },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    expect(found.map((f) => f.attachment.filename).sort()).toEqual([
+      'dana.pdf',
+      'declarations.pdf',
+      'fire.pdf',
+      'nba.pdf',
+      'roof.pdf',
+      'sam.pdf',
+      'transcript.pdf',
+    ]);
+  });
+
+  it('tags the new business application with its own upload kind', () => {
+    // It is PDF-only and sits under a distinct key prefix, so the kind is what
+    // picks the right allow-list and purpose (PAC-56 #23).
+    const found = collectAttachments([
+      policy({ newBusinessApplication: file('nba') }),
+    ]);
+    expect(found).toEqual([
+      { attachment: expect.anything(), kind: 'new_business_application' },
+    ]);
+  });
+
+  it('finds the declarations page, which the structural sweep cannot see', () => {
+    // `priorInsurance` has no `selected` key, so `isProofBacked` returns false
+    // for it and only the explicit line in `collectAttachments` catches it.
+    // Without that line this file is never ownership-checked.
+    const found = collectAttachments([
+      policy({ priorInsurance: { none: false, attachment: file('dec-page') } }),
+    ]);
+    expect(found).toEqual([
+      { attachment: expect.anything(), kind: 'discount_proof' },
+    ]);
   });
 });

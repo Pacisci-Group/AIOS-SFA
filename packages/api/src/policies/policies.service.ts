@@ -20,6 +20,18 @@ import type {
   UpdatePolicyResult,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import {
+  Activity,
+  ActivityDocument,
+} from '../activities/schemas/activity.schema';
+import {
+  ChangeFieldSpec,
+  ChangeSnapshot,
+  changeDate,
+  changeText,
+  diffSnapshots,
+  snapshot,
+} from '../activities/change-log';
 import { CarriersService } from '../carriers/carriers.service';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
@@ -49,6 +61,73 @@ type PolicyLean = Pick<
   householdId?: Types.ObjectId;
 };
 
+/**
+ * The fields `PATCH /policies/:id` speaks about in the edit log (PAC-65 #9).
+ *
+ * The eight patchable fields, and nothing derived. `policyNumberKey` is
+ * excluded on purpose: the service keeps it in lockstep with `policyNumber`, so
+ * logging it would report the same correction twice under a name no producer
+ * has ever seen.
+ *
+ * **Every code-backed field is normalized here**, matching `toLeadDetailPolicy`.
+ * A migrated policy stores raw SmartSuite select values (`carrier: 'B4tEH'`,
+ * `policyType: 'eCEuV'`), and unlike every other read path nothing normalizes a
+ * change row after it is written — snapshot the raw value and the log preserves
+ * gibberish for good.
+ */
+const POLICY_CHANGE_FIELDS: ChangeFieldSpec<PolicyDocument>[] = [
+  {
+    field: 'policyNumber',
+    label: 'Policy number',
+    kind: 'text',
+    read: (policy) => policy.policyNumber ?? null,
+  },
+  {
+    field: 'policyType',
+    label: 'Policy type',
+    kind: 'text',
+    read: (policy) => normalizePolicyType(policy.policyType) || null,
+  },
+  {
+    field: 'carrier',
+    label: 'Carrier',
+    kind: 'text',
+    read: (policy) => normalizeCarrier(policy.carrier) || null,
+  },
+  {
+    field: 'premium',
+    label: 'Premium',
+    kind: 'currency',
+    read: (policy) => policy.premium ?? 0,
+  },
+  {
+    field: 'items',
+    label: 'Items',
+    kind: 'number',
+    read: (policy) => policy.items ?? 0,
+  },
+  {
+    field: 'effectiveDate',
+    label: 'Effective date',
+    kind: 'date',
+    read: (policy) => changeDate(policy.effectiveDate),
+  },
+  {
+    field: 'expirationDate',
+    label: 'Expiration date',
+    kind: 'date',
+    read: (policy) => changeDate(policy.expirationDate),
+  },
+  {
+    field: 'policyStatus',
+    label: 'Status',
+    kind: 'text',
+    // Free text — the platform has no canonical policy-status vocabulary, so
+    // there is nothing to normalize against, only length to bound.
+    read: (policy) => changeText(policy.policyStatus),
+  },
+];
+
 @Injectable()
 export class PoliciesService {
   private readonly logger = new Logger(PoliciesService.name);
@@ -59,6 +138,8 @@ export class PoliciesService {
     @InjectModel(Deal.name) private readonly dealModel: Model<DealDocument>,
     @InjectModel(Household.name)
     private readonly householdModel: Model<HouseholdDocument>,
+    @InjectModel(Activity.name)
+    private readonly activityModel: Model<ActivityDocument>,
     private readonly carriers: CarriersService,
   ) {}
 
@@ -173,7 +254,14 @@ export class PoliciesService {
     policyId: string,
     dto: UpdatePolicyDto,
   ): Promise<UpdatePolicyResult> {
-    const policy = await this.loadOwnedPolicy(access, branchId, policyId);
+    const { policy, leadId } = await this.loadOwnedPolicy(
+      access,
+      branchId,
+      policyId,
+    );
+
+    // Before the assignment block below overwrites the stored values.
+    const before = snapshot(POLICY_CHANGE_FIELDS, policy);
 
     if (dto.policyNumber) {
       // Against the *effective* carrier: the patched value if this request is
@@ -207,7 +295,77 @@ export class PoliciesService {
 
     await policy.save();
     await this.recomputeDealTotals(policy);
+    await this.recordFieldChanges(access, policy, leadId, before);
     return toLeadDetailPolicy(policy);
+  }
+
+  /**
+   * The edit log entry for `PATCH /policies/:id` (PAC-65 #9) — the only way to
+   * correct a booked sale, and so the "sold" half of the quote/sold edit log.
+   *
+   * Post-commit and best-effort like `recomputeDealTotals` above, but logged at
+   * `error`: a dropped row is a hole in an audit trail.
+   *
+   * ## A row with no `leadId` is written anyway
+   *
+   * `Policy` carries no lead ref; the only route is `dealId → deal.leadId`, and
+   * three real cases break it — a policy with no deal (migrated, or
+   * household-only), a migrated deal whose refs predate
+   * `backfill-deal-refs`, and a CRM policy transfer. Such a row can never
+   * appear on the Lead Detail timeline, which queries `{ agencyId, leadId }`.
+   *
+   * It is still recorded, because the alternative is an audit log that silently
+   * omits exactly the edits made to the oldest and least-verifiable records.
+   * `dealId` and `policyId` are enough for an agency-scoped changelog view to
+   * find it later. Note who can even reach these: `loadOwnedPolicy` treats a
+   * deal-less policy as out of scope under `own`, so only branch- and
+   * agency-scope callers get here — the same people the log is written for.
+   */
+  private async recordFieldChanges(
+    access: AccessContext,
+    policy: PolicyDocument,
+    leadId: Types.ObjectId | null,
+    before: ChangeSnapshot,
+  ): Promise<void> {
+    const changes = diffSnapshots(
+      POLICY_CHANGE_FIELDS,
+      before,
+      snapshot(POLICY_CHANGE_FIELDS, policy),
+    );
+    if (!changes.length) return;
+
+    try {
+      await this.activityModel.create({
+        agencyId: policy.agencyId,
+        // Off the record, not a tenant resolve: `branchId` is `required: true`,
+        // so a missing one throws inside this catch and loses the row silently.
+        branchId: policy.branchId,
+        type: 'field_changed',
+        // No `policy` member in `ACTIVITY_SUBJECT_TYPES`, and none is needed —
+        // `deal` is the surface the edit came from, and it is what makes
+        // `toActivityOrigin` render the "Sold deal" chip.
+        subjectType: 'deal',
+        ...(leadId ? { leadId } : {}),
+        ...(policy.dealId ? { dealId: policy.dealId } : {}),
+        // Which policy, since a deal can hold several and two edit rows would
+        // otherwise be indistinguishable.
+        policyId: policy._id,
+        userId: new Types.ObjectId(access.userId),
+        occurredAt: new Date(),
+        // Value-free on purpose — see the `summary` docblock on the schema.
+        summary: 'Policy edited',
+        // Explicit: the schema default is 'migration', which `toActivityOrigin`
+        // renders as the "Imported" chip.
+        source: 'internal',
+        isTestRecord: false,
+        changes,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to record the edit log for policy ${policy._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /**
@@ -315,12 +473,15 @@ export class PoliciesService {
    * `Policy` has no `producerId`. A policy with no deal is unattributable, so
    * under `own` scope it is treated as out of scope: this is the write path, and
    * masking something unattributable is the safe direction.
+   *
+   * Returns the deal's `leadId` alongside the policy — `null` when the policy
+   * has no deal, or the deal no lead. See {@link recordFieldChanges}.
    */
   private async loadOwnedPolicy(
     access: AccessContext,
     branchId: string | null,
     policyId: string,
-  ): Promise<PolicyDocument> {
+  ): Promise<{ policy: PolicyDocument; leadId: Types.ObjectId | null }> {
     if (!Types.ObjectId.isValid(policyId)) {
       throw new NotFoundException('Policy not found.');
     }
@@ -335,14 +496,17 @@ export class PoliciesService {
     const deal = policy.dealId
       ? await this.dealModel
           .findById(policy.dealId)
-          .select('producerId')
-          .lean<{ producerId?: Types.ObjectId }>()
+          .select('producerId leadId')
+          .lean<{ producerId?: Types.ObjectId; leadId?: Types.ObjectId }>()
       : null;
 
     if (!this.isInScope(access, branchId, policy, deal ?? undefined)) {
       throw new NotFoundException('Policy not found.');
     }
-    return policy;
+    // `leadId` rides along rather than being re-fetched: the edit log (PAC-65
+    // #9) needs it, this is the only read of the deal on the path, and it is
+    // already loaded for the scope check.
+    return { policy, leadId: deal?.leadId ?? null };
   }
 
   /**

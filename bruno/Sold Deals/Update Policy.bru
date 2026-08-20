@@ -1,7 +1,7 @@
 meta {
   name: Update Policy
   type: http
-  seq: 10
+  seq: 11
 }
 
 patch {
@@ -197,6 +197,28 @@ docs {
   - `404 Not Found` — unknown/malformed id, **or** a policy outside the caller's
     data scope. Both are the same answer on purpose. A policy with no deal
     cannot be attributed and is therefore a 404 under `own` scope.
+
+  ## Every edit is logged (PAC-65 #9)
+
+  This is the only way to correct a booked sale — `POST /sold-deals` is
+  create-only and there is no deal PATCH — so it is the "sold" half of the
+  quote/sold edit log. A patch that changes at least one of the eight fields
+  writes a `field_changed` activity carrying `{ field, label, kind, from, to }`
+  per change, with `policyId` recording **which** policy of the deal was touched.
+
+  Reading the log needs `agency:changelogs:read` (Agency Owner and Branch
+  Manager). This collection logs in as a producer, so the row will not surface
+  in `GET /leads/:id` here.
+
+  Code-backed fields are stored **normalized** (`carrier`, `policyType`): a
+  migrated policy holds raw SmartSuite select values, and nothing re-normalizes a
+  change row on read.
+
+  ⚠ The row is written even when the policy cannot be traced to a lead — no
+  `dealId`, or a migrated deal with no `leadId`. Such a row carries `dealId` and
+  `policyId` but no `leadId`, so it appears on **no** timeline today; it is
+  recorded anyway rather than letting the audit trail silently omit edits to the
+  oldest records.
 
   ## Why this lives in `Sold Deals/` and not `Policies/`
   Same reason as `Check Policy Number (Match)`: Bruno walks folders

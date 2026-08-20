@@ -19,7 +19,7 @@
  */
 
 import type { StructuredAddress } from './address';
-import type { ActivityOrigin, ActivityType } from './activity';
+import type { ActivityChange, ActivityOrigin, ActivityType } from './activity';
 import type { ContactDetail } from './contact';
 import type { IntakeChannel } from './lead-intake';
 import type { NormalizedLeadSource } from './lead-source';
@@ -201,7 +201,16 @@ export interface LeadDetailPriorPolicy {
  */
 export interface LeadDetailPriorInsurance {
   id: string;
+  /**
+   * Who cancelled the prior policy, in **one** vocabulary.
+   *
+   * The stored column holds two: legacy's `Agent` / `Client` from the SmartSuite
+   * migration, and PAC-65's `SFA staff` / `Customer` from the sold form. The
+   * read path normalizes rather than a migration rewriting history.
+   */
   cancellationResponsibility: string | null;
+  /** The named staff member, when the answer was `SFA staff` (PAC-65 #11). */
+  cancellationHandledByName: string | null;
   cancelledPreviousInsurance: string | null;
   cancellationDate: string | null;
   autoHomeSameCarrier: string | null;
@@ -234,8 +243,16 @@ export interface LeadDetailActivity {
   type: ActivityType;
   summary: string | null;
   occurredAt: string | null;
-  /** Resolved from `producerId`; `null` for system and migrated rows. */
-  producerName: string | null;
+  /**
+   * Who wrote the row. Resolved from `Activity.userId`; `null` for system and
+   * migrated rows.
+   *
+   * Not `producerName` (renamed in PAC-65): any role can write an activity —
+   * `POST /activities` needs only `leads:write`, and an `audit_resolved` row
+   * comes from whoever cleared the hand-off item, typically a CRM. Distinct
+   * from {@link LeadDetail.producerName}, the lead's owning producer.
+   */
+  userName: string | null;
   /**
    * Which surface the row was written from (PAC-56 #29).
    *
@@ -245,6 +262,18 @@ export interface LeadDetailActivity {
    * indistinguishable once they are all rows in the same list.
    */
   origin: ActivityOrigin;
+  /**
+   * The before/after list on a `field_changed` row (PAC-65 #9); `null` on every
+   * other type.
+   *
+   * Non-optional so each place that builds a `LeadDetailActivity` — including
+   * the optimistic row in `useLogActivity` — has to say what it means, matching
+   * how `summary` and `userName` are declared.
+   *
+   * A caller without `agency:changelogs:read` never receives a row carrying
+   * this: the rows are excluded in the Mongo query, not hidden client-side.
+   */
+  changes: ActivityChange[] | null;
 }
 
 /**

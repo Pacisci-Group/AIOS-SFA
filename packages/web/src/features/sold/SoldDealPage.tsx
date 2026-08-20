@@ -4,11 +4,17 @@ import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { celebrate } from "@/lib/celebrate";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { carriersKey, getCarriers } from "@/lib/carriers-api";
-import { createSoldDeal, getSoldDealContext } from "@/lib/sold-deals-api";
+import {
+  createSoldDeal,
+  getSoldDealContext,
+  getSoldStaff,
+  soldStaffKey,
+} from "@/lib/sold-deals-api";
 import { newSubmissionToken } from "@/lib/submission-token";
 import { SoldDealWizard } from "./components/SoldDealWizard";
 import {
@@ -60,6 +66,19 @@ export default function SoldDealPage() {
     staleTime: 30 * 60_000,
   });
 
+  /**
+   * Agency staff for the "Cancelled by → SFA staff" picker (PAC-65 #11).
+   *
+   * Same shape as the carrier catalog above and for the same reason: reference
+   * data that barely changes, so a long `staleTime` keeps it off the wire while
+   * a producer works through several leads.
+   */
+  const staffQuery = useQuery({
+    queryKey: soldStaffKey,
+    queryFn: getSoldStaff,
+    staleTime: 30 * 60_000,
+  });
+
   const mutation = useMutation({
     mutationFn: (values: SoldDealFormValues) =>
       createSoldDeal({
@@ -77,6 +96,16 @@ export default function SoldDealPage() {
           deal.policyCount === 1 ? "policy" : "policies"
         }`,
       );
+      /*
+       * PAC-65 #12. The scrum notes said "on lead review completion", but there
+       * is no such thing in this product — the moment meant is this one, which
+       * is also where the Aug-4 sold-notification precedent points.
+       *
+       * Fired before the navigate on purpose: `canvas-confetti` renders into
+       * its own canvas on `document.body`, outside React's tree, so the burst
+       * outlives the route change instead of being unmounted mid-animation.
+       */
+      celebrate();
       navigate(`/leads/${leadId}`, { replace: true });
     },
     onError: (err: Error) => setError(err.message),
@@ -205,6 +234,7 @@ export default function SoldDealPage() {
               <SoldDealWizard
                 context={contextQuery.data}
                 carriers={carriersQuery.data}
+                staff={staffQuery.data ?? []}
                 submitting={mutation.isPending}
                 errorMessage={error}
                 onSubmit={(values) => {

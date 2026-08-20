@@ -1610,6 +1610,32 @@ describe('SFA API (e2e)', () => {
       expect(row?.isTestRecord).toBe(false);
     });
 
+    it('records the author as `userId`, with no stray `producerId`', async () => {
+      /*
+       * The guard for the PAC-65 rename. Two of the activity write paths take
+       * an untyped bag — `migration.service.ts`'s `emit(key, doc)` and the demo
+       * seed's `activity(ctx, key, fields)` — and Mongoose's `create()` accepts
+       * excess keys, so a writer left on the old field name compiles clean and
+       * silently persists a dead `producerId`. Nothing but a database read
+       * catches that.
+       */
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/activities')
+        .set(authHeader(producerToken))
+        .send({ leadId: ownLeadId, type: 'call' })
+        .expect(201);
+
+      const { activity } = res.body as CreateActivityResponse;
+      const row = await activityModel.findById(activity.id).lean();
+      expect(row).not.toBeNull();
+      expect(row).toHaveProperty('userId');
+      expect(row).not.toHaveProperty('producerId');
+    });
+
     it('surfaces the logged activity on the lead timeline', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/activities')
@@ -1634,7 +1660,15 @@ describe('SFA API (e2e)', () => {
      * `sold` row could invent a sale on the Sold scorecard and the Leaderboard.
      */
     it('refuses a system-generated type', async () => {
-      for (const type of ['sold', 'quoted', 'lead_created', 'audit_resolved']) {
+      for (const type of [
+        'sold',
+        'quoted',
+        'lead_created',
+        'audit_resolved',
+        // The edit log (PAC-65 #9). A client able to post one could fabricate
+        // an audit trail — or bury a real edit under noise.
+        'field_changed',
+      ]) {
         await request(app.getHttpServer())
           .post('/api/v1/activities')
           .set(authHeader(producerToken))
@@ -1763,7 +1797,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           leadId: stale._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           type: 'note',
           subjectType: 'lead',
           summary: 'Waiting on premium approval',
@@ -1774,7 +1808,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           leadId: stale._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           type: 'lead_created',
           subjectType: 'lead',
           summary: 'Lead created',
@@ -4084,7 +4118,7 @@ describe('SFA API (e2e)', () => {
           type: 'lead_created',
           subjectType: 'lead',
           leadId: lead._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           occurredAt: new Date('2026-07-01T00:00:00.000Z'),
           summary: 'Lead created',
           source: 'internal',
@@ -4095,7 +4129,7 @@ describe('SFA API (e2e)', () => {
           subjectType: 'quoteRecap',
           leadId: lead._id,
           quoteRecapId: newer._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           occurredAt: new Date('2026-07-24T00:00:00.000Z'),
           summary: 'Quote recap created',
           source: 'internal',
@@ -4106,7 +4140,7 @@ describe('SFA API (e2e)', () => {
           subjectType: 'deal',
           leadId: lead._id,
           dealId: deal._id,
-          producerId: producer!._id,
+          userId: producer!._id,
           occurredAt: new Date('2026-07-30T00:00:00.000Z'),
           summary: 'Deal marked as sold',
           source: 'internal',
@@ -4262,7 +4296,7 @@ describe('SFA API (e2e)', () => {
       expect(body.priorInsurance).not.toHaveProperty('deductible');
     });
 
-    it('returns the activity timeline newest-first with the producer resolved', async () => {
+    it('returns the activity timeline newest-first with the author resolved', async () => {
       const body = await getAs(producerToken, leadId);
 
       expect(body.activities.map((a) => a.type)).toEqual([
@@ -4270,7 +4304,7 @@ describe('SFA API (e2e)', () => {
         'quoted',
         'lead_created',
       ]);
-      expect(body.activities[0].producerName).toBeTruthy();
+      expect(body.activities[0].userName).toBeTruthy();
     });
 
     it('finds a migrated recap linked only by legacyLeadId, then self-heals the ref', async () => {
@@ -5473,6 +5507,156 @@ describe('SFA API (e2e)', () => {
         .send({ notes: 'Corrected the premium.' })
         .expect(200);
     });
+
+    /*
+     * PAC-65 #9 — every edit is logged, and the log is for owners and managers.
+     *
+     * The product owner was explicit that editing stays open (users complain
+     * about friction) and that the answer to the transparency concern is a log
+     * rather than a lock, with price changes the case he named. So the
+     * behaviour under test is two-sided: the row must exist, and the producer
+     * who made the edit must not be able to see it.
+     */
+    describe('edit log (PAC-65 #9)', () => {
+      /** Edit a producer-owned recap's premium, and return its lead id. */
+      const editPremium = async (): Promise<string> => {
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead } = await seedLead(producer!._id);
+        const leadId = lead._id.toString();
+        upload(leadId);
+
+        const created = await createAs(producerToken, payload(leadId));
+        await request(app.getHttpServer())
+          .patch(`/api/v1/quote-recaps/${created.id}`)
+          .set(authHeader(producerToken))
+          .send({
+            policies: [{ policyType: 'Auto', premium: 1400.5, itemCount: 2 }],
+          })
+          .expect(200);
+
+        return leadId;
+      };
+
+      const timelineAs = async (token: string, leadId: string) => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/leads/${leadId}`)
+          .set(authHeader(token))
+          .expect(200);
+        return (res.body as LeadDetail).activities;
+      };
+
+      it('records the premium change for a reader who holds the permission', async () => {
+        const leadId = await editPremium();
+
+        const row = (await timelineAs(ownerToken, leadId)).find(
+          (activity) => activity.type === 'field_changed',
+        );
+        expect(row).toBeDefined();
+        // Origin comes from the row's own `quoteRecapId`, so the chip already
+        // says which record was edited — no new `ACTIVITY_ORIGINS` member.
+        expect(row!.origin).toBe('quote_recap');
+
+        const premium = row!.changes?.find((c) => c.field === 'premium');
+        expect(premium).toBeDefined();
+        expect(premium!.kind).toBe('currency');
+        // Cents survive the round trip on both sides. Whole-dollar rounding
+        // anywhere on this path turns a real correction into a row asserting
+        // that nothing changed.
+        expect(premium!.from).toBe(1200.1);
+        expect(premium!.to).toBe(1400.5);
+      });
+
+      it('keeps the values out of `summary`', async () => {
+        /*
+         * `summary` is the one field that escapes the permission gate —
+         * `HotLeadsService` renders the newest activity's summary onto the
+         * producer's own dashboard. Keeping it value-free means a missed filter
+         * degrades to a bland heading rather than leaking a premium.
+         */
+        const leadId = await editPremium();
+        const row = (await timelineAs(ownerToken, leadId)).find(
+          (activity) => activity.type === 'field_changed',
+        );
+        expect(row!.summary).toBe('Quote recap edited');
+        expect(row!.summary).not.toMatch(/1400|1200|\$/);
+      });
+
+      it('hides the row from the producer who made the edit', async () => {
+        const leadId = await editPremium();
+        const types = (await timelineAs(producerToken, leadId)).map(
+          (activity) => activity.type,
+        );
+        expect(types).not.toContain('field_changed');
+      });
+
+      it('hides the row from a reader with agency scope but no permission', async () => {
+        // `readOnlyToken` holds every `{module}:read` and no `agency:*`, so this
+        // is the assertion that proves the gate is permission-driven rather
+        // than a side effect of data scope.
+        const leadId = await editPremium();
+        const types = (await timelineAs(readOnlyToken, leadId)).map(
+          (activity) => activity.type,
+        );
+        expect(types).not.toContain('field_changed');
+      });
+
+      it("does not spend the producer's 50-row timeline budget", async () => {
+        /*
+         * The regression guard for filtering in the query rather than after
+         * `.limit(ACTIVITY_LIMIT)`. A post-filter would let a burst of edits
+         * push a producer's own notes out of the window entirely — the
+         * timeline would go silently empty, which is a correctness bug rather
+         * than a slow query.
+         */
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead } = await seedLead(producer!._id);
+        const leadId = lead._id.toString();
+        upload(leadId);
+        const created = await createAs(producerToken, payload(leadId));
+
+        await request(app.getHttpServer())
+          .post('/api/v1/activities')
+          .set(authHeader(producerToken))
+          .send({ leadId, type: 'note', summary: 'Call back Tuesday' })
+          .expect(201);
+
+        // Comfortably past ACTIVITY_LIMIT (50).
+        for (let i = 0; i < 55; i += 1) {
+          await request(app.getHttpServer())
+            .patch(`/api/v1/quote-recaps/${created.id}`)
+            .set(authHeader(producerToken))
+            .send({ notes: `Revision ${i}` })
+            .expect(200);
+        }
+
+        const summaries = (await timelineAs(producerToken, leadId)).map(
+          (activity) => activity.summary,
+        );
+        expect(summaries).toContain('Call back Tuesday');
+      });
+
+      it('writes nothing when the patch changed no value', async () => {
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead } = await seedLead(producer!._id);
+        const leadId = lead._id.toString();
+        upload(leadId);
+        const created = await createAs(
+          producerToken,
+          payload(leadId, { insuranceRenewalMonth: 'September' }),
+        );
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/quote-recaps/${created.id}`)
+          .set(authHeader(producerToken))
+          .send({ insuranceRenewalMonth: 'September' })
+          .expect(200);
+
+        const types = (await timelineAs(ownerToken, leadId)).map(
+          (activity) => activity.type,
+        );
+        expect(types).not.toContain('field_changed');
+      });
+    });
   });
 
   describe('Lead share links (PAC-37)', () => {
@@ -5994,14 +6178,14 @@ describe('SFA API (e2e)', () => {
 
     const EMPTY_DISCOUNTS = {
       escrow: false,
-      inspection: { selected: false },
       fireSubscription: { selected: false },
       roofReceipt: { selected: false },
       acvPersonalProperty: false,
       acvDwellingProtection: false,
-      drivewise: { selected: false },
+      drivewise: false,
       defensiveDriver: { selected: false, drivers: [] },
       studentDiscount: { selected: false },
+      priorInsuranceDiscount: false,
     };
 
     /** A key under the NBA prefix, which `assertKeyOwnership` enforces (#23). */
@@ -6563,7 +6747,7 @@ describe('SFA API (e2e)', () => {
           policies: [
             policyWith(lead._id.toString(), {
               policyType: 'Home',
-              discounts: { ...EMPTY_DISCOUNTS, drivewise: { selected: true } },
+              discounts: { ...EMPTY_DISCOUNTS, drivewise: true },
             }),
           ],
         },
@@ -6640,7 +6824,7 @@ describe('SFA API (e2e)', () => {
             policyType: 'Auto',
             discounts: {
               ...EMPTY_DISCOUNTS,
-              drivewise: { selected: true, attachment: proof },
+              drivewise: true,
               defensiveDriver: {
                 selected: true,
                 // The same driver twice — one certificate, not two.
@@ -6663,6 +6847,10 @@ describe('SFA API (e2e)', () => {
       const deal = await card5DealModel.findById(dealId);
       const triggers = deal!.auditTriggers;
 
+      // Recorded as provenance — but it generates no audit item (PAC-65); that
+      // is asserted in the generation suite, where the item models are in
+      // scope. Kept here because the trigger continuing to be written is
+      // exactly what would invite the generator line back.
       expect(triggers.drivewise).toBe(true);
       expect(triggers.defensiveDriver).toBe(true);
       // Either ACV option maps onto the one Actual Cash Value trigger.
@@ -6674,45 +6862,88 @@ describe('SFA API (e2e)', () => {
       ]);
     });
 
-    it('demands the document for every selected discount (PAC-56 #21)', async () => {
+    it('accepts every selected discount with no document (PAC-65)', async () => {
       /*
-       * The "no — send it to the audit" fork is gone: selecting a discount now
-       * requires its proof. Each of these was a legal submission before.
+       * The exact inverse of PAC-56 #21, which 400'd all of these. David
+       * reversed it on 08-13: ticking a box generates the audit item whether or
+       * not a document came with it — "even if the details are provided, you're
+       * still gonna audit it because we have to make sure." The upload only
+       * decides whether the auditor verifies a file or calls the client.
        */
       const lead = await seedLead();
-      const withDiscount = (discounts: Record<string, unknown>) => ({
+      const withDiscount = (
+        discounts: Record<string, unknown>,
+        policyType: string,
+      ) => ({
         leadId: lead._id.toString(),
         soldDate: '2026-02-15',
         policies: [
           policyWith(lead._id.toString(), {
-            policyType:
-              (discounts.drivewise ??
-              discounts.studentDiscount ??
-              discounts.defensiveDriver)
-                ? 'Auto'
-                : 'Home',
+            policyType,
             discounts: { ...EMPTY_DISCOUNTS, ...discounts },
           }),
         ],
       });
 
-      for (const discounts of [
-        { studentDiscount: { selected: true } },
-        { drivewise: { selected: true } },
-        { inspection: { selected: true } },
-        { fireSubscription: { selected: true } },
-        { roofReceipt: { selected: true } },
-      ]) {
-        await post(withDiscount(discounts), 400);
+      for (const [discounts, policyType] of [
+        [{ studentDiscount: { selected: true } }, 'Auto'],
+        [{ fireSubscription: { selected: true } }, 'Home'],
+        [{ roofReceipt: { selected: true } }, 'Home'],
+      ] as const) {
+        await post(withDiscount(discounts, policyType));
       }
     });
 
-    it('demands a certificate per defensive driver (PAC-56 #21)', async () => {
+    it('ignores a stale client still sending `inspection` (PAC-65)', async () => {
+      // The key left the schema entirely. `z.object` strips unknown keys, so a
+      // bundle from before the deploy degrades quietly instead of 400-ing.
+      const lead = await seedLead();
+      await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith(lead._id.toString(), {
+            policyType: 'Home',
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              inspection: { selected: true },
+            },
+          }),
+        ],
+      });
+    });
+
+    it('accepts a named driver with no certificate (PAC-65)', async () => {
       const lead = await seedLead();
       const attachment = upload(lead._id.toString());
 
-      // One driver evidenced, one not — still a 400, because the certificates
-      // are per person and the audit generator emits an item per name.
+      // One driver evidenced, one not — fine now. Both still get an audit item;
+      // only one of them arrives with the document already attached.
+      await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith(lead._id.toString(), {
+            discounts: {
+              ...EMPTY_DISCOUNTS,
+              defensiveDriver: {
+                selected: true,
+                drivers: [
+                  { name: 'Dana Driver', attachment },
+                  { name: 'Sam Second' },
+                ],
+              },
+            },
+          }),
+        ],
+      });
+    });
+
+    it('still demands a named driver (PAC-65 kept this rule)', async () => {
+      // Certificates became optional; naming the drivers did not. The generator
+      // emits one item per name, so an unnamed selection produces a single item
+      // nobody can act on.
+      const lead = await seedLead();
       await post(
         {
           leadId: lead._id.toString(),
@@ -6721,13 +6952,7 @@ describe('SFA API (e2e)', () => {
             policyWith(lead._id.toString(), {
               discounts: {
                 ...EMPTY_DISCOUNTS,
-                defensiveDriver: {
-                  selected: true,
-                  drivers: [
-                    { name: 'Dana Driver', attachment },
-                    { name: 'Sam Second' },
-                  ],
-                },
+                defensiveDriver: { selected: true, drivers: [] },
               },
             }),
           ],
@@ -6736,7 +6961,34 @@ describe('SFA API (e2e)', () => {
       );
     });
 
-    it('demands the escrow statement, not just the escrow details (PAC-56 #21)', async () => {
+    it('takes escrow details with no statement (PAC-65)', async () => {
+      // The statement upload was removed outright. David: "the audit is going
+      // to be based on the information" — these keyed-in fields are what the
+      // `Home Mortgagee` item asks the service team to verify.
+      const lead = await seedLead();
+      await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith(lead._id.toString(), {
+            policyType: 'Home',
+            discounts: { ...EMPTY_DISCOUNTS, escrow: true },
+            escrow: {
+              loanNumber: 'LN-1',
+              companyName: 'First National',
+              address: {
+                street: '1 Lender Way',
+                city: 'Tulsa',
+                state: 'Oklahoma',
+                zip: '74101',
+              },
+            },
+          }),
+        ],
+      });
+    });
+
+    it('still demands the escrow details themselves (PAC-65 kept this)', async () => {
       const lead = await seedLead();
       await post(
         {
@@ -6746,14 +6998,115 @@ describe('SFA API (e2e)', () => {
             policyWith(lead._id.toString(), {
               policyType: 'Home',
               discounts: { ...EMPTY_DISCOUNTS, escrow: true },
-              escrow: {
-                loanNumber: 'LN-1',
-                companyName: 'First National',
-                address: {
-                  street: '1 Lender Way',
-                  city: 'Tulsa',
-                  state: 'Oklahoma',
-                  zip: '74101',
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('rejects prior insurance claimed and denied at once (PAC-65 #18)', async () => {
+      /*
+       * The second cross-card invariant, alongside `none && cancelled`. David:
+       * "if they select prior insurance, that top button should not be a
+       * selection." The UI disables the toggle; this is the server saying so.
+       *
+       * ⚠ **Rejected, not stripped** — picking a winner would discard one of
+       * two answers the producer gave, and neither is safe to drop: clearing
+       * `none` invents prior coverage, clearing the discount loses the
+       * declarations page and the item that chases it.
+       */
+      const lead = await seedLead();
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              discounts: { ...EMPTY_DISCOUNTS, priorInsuranceDiscount: true },
+              priorInsurance: { none: true },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('demands the declarations page when prior insurance is claimed (PAC-65 #18)', async () => {
+      // ⚠ The one required upload on this form. Every Card 5 proof became
+      // optional in the same ticket; this did not, because failing to supply it
+      // in time gets the policy cancelled or repriced.
+      const lead = await seedLead();
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              discounts: { ...EMPTY_DISCOUNTS, priorInsuranceDiscount: true },
+              priorInsurance: {
+                none: false,
+                carrier: 'Geico',
+                agentName: 'Jamie Prior',
+              },
+            }),
+          ],
+        },
+        400,
+      );
+    });
+
+    it('accepts a universal discount on a line that is neither branch (PAC-65)', async () => {
+      // Umbrella is neither auto nor property, so before PAC-65 its discounts
+      // card had nothing on it. `priorInsuranceDiscount` is in
+      // `UNIVERSAL_DISCOUNT_KEYS`, so the cross-branch rule leaves it alone.
+      const lead = await seedLead();
+      const attachment = upload(lead._id.toString());
+      await post({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith(lead._id.toString(), {
+            policyType: 'Umbrella',
+            discounts: { ...EMPTY_DISCOUNTS, priorInsuranceDiscount: true },
+            priorInsurance: {
+              none: false,
+              carrier: 'Geico',
+              agentName: 'Jamie Prior',
+              attachment,
+            },
+          }),
+        ],
+      });
+    });
+
+    it('rejects a declarations page belonging to another agency (PAC-65)', async () => {
+      /*
+       * ⚠ The regression guard for the `collectAttachments` security boundary.
+       *
+       * `priorInsurance` has no `selected` key, so `isProofBacked`'s structural
+       * sweep cannot see it — only an explicit line in `collectAttachments`
+       * catches it, and `collectAttachments` is the *only* place
+       * `assertKeyOwnership` runs on a sold upload. Miss it and this key is
+       * never checked against the agency at all.
+       */
+      const lead = await seedLead();
+      await post(
+        {
+          leadId: lead._id.toString(),
+          soldDate: '2026-02-15',
+          policies: [
+            policyWith(lead._id.toString(), {
+              discounts: { ...EMPTY_DISCOUNTS, priorInsuranceDiscount: true },
+              priorInsurance: {
+                none: false,
+                carrier: 'Geico',
+                agentName: 'Jamie Prior',
+                attachment: {
+                  key: 'agencies/000000000000000000000099/sold-deals/x/2026/dec.pdf',
+                  filename: 'dec.pdf',
+                  contentType: 'application/pdf',
+                  size: 2048,
                 },
               },
             }),
@@ -6763,9 +7116,63 @@ describe('SFA API (e2e)', () => {
       );
     });
 
-    it('rejects an inspection selection on an auto policy', async () => {
-      // Cross-branch: without `inspection` in the property OR-list it would be
-      // accepted, generate nothing, and lose the proof silently.
+    it('demands the prior agent and who cancelled it (PAC-65 #10/#11)', async () => {
+      const lead = await seedLead();
+      const attachment = upload(lead._id.toString());
+      const withPrior = (priorInsurance: Record<string, unknown>, cancellation: Record<string, unknown>) => ({
+        leadId: lead._id.toString(),
+        soldDate: '2026-02-15',
+        policies: [
+          policyWith(lead._id.toString(), {
+            discounts: { ...EMPTY_DISCOUNTS, priorInsuranceDiscount: true },
+            priorInsurance: { none: false, carrier: 'Geico', attachment, ...priorInsurance },
+            cancellation,
+          }),
+        ],
+      });
+
+      // No prior agent — the person the service team calls to chase all of this.
+      await post(withPrior({}, { cancelled: false }), 400);
+      // Cancelled, but nobody said by whom.
+      await post(
+        withPrior(
+          { agentName: 'Jamie Prior' },
+          { cancelled: true, effectiveDate: '2026-02-10' },
+        ),
+        400,
+      );
+      // "SFA staff" with no name is the answer that helps nobody.
+      await post(
+        withPrior(
+          { agentName: 'Jamie Prior' },
+          {
+            cancelled: true,
+            effectiveDate: '2026-02-10',
+            cancelledBy: 'SFA staff',
+          },
+        ),
+        400,
+      );
+      // ⚠ A staff id from another agency — unchecked, this field would be a
+      // cross-agency write primitive, the trap `existingPolicyId` documents.
+      await post(
+        withPrior(
+          { agentName: 'Jamie Prior' },
+          {
+            cancelled: true,
+            effectiveDate: '2026-02-10',
+            cancelledBy: 'SFA staff',
+            cancelledByUserId: '000000000000000000000099',
+          },
+        ),
+        400,
+      );
+    });
+
+    it('rejects a property discount on an auto policy', async () => {
+      // Cross-branch, using `roofReceipt` now that `inspection` is gone: a Home
+      // discount on an Auto line would otherwise generate a property audit item
+      // for a deal with no property line.
       const lead = await seedLead();
       const attachment = upload(lead._id.toString());
       await post(
@@ -6777,7 +7184,7 @@ describe('SFA API (e2e)', () => {
               policyType: 'Auto',
               discounts: {
                 ...EMPTY_DISCOUNTS,
-                inspection: { selected: true, attachment },
+                roofReceipt: { selected: true, attachment },
               },
             }),
           ],
@@ -6914,12 +7321,26 @@ describe('SFA API (e2e)', () => {
     const nextNum = () =>
       `GEN-${(genCounter += 1).toString().padStart(6, '0')}`;
 
-    /** The production vocabulary the generator resolves titles against. */
+    /**
+     * The production vocabulary the generator resolves titles against.
+     *
+     * ⚠ Must track `CORE_AUDIT_TEMPLATES`. A title the generator asks for and
+     * this list lacks is silently dropped (logged as "unresolved"), so a stale
+     * fixture makes a real item look like it was never generated.
+     *
+     * `Prior Insurance` and `Accord Cancellation` are deliberately **not**
+     * baseline here (PAC-65): each left `Common` *and* lost `alwaysInclude`,
+     * because `isBaselineTemplate` matches either. They share a category but
+     * not a trigger — see the generation tests below. `Drivewise` is kept in
+     * the catalog only to prove nothing generates from it any more.
+     */
     const TEMPLATES = [
       { name: 'Correct Sold Date', category: 'Common', alwaysInclude: true },
-      { name: 'Prior Insurance', category: 'Common', alwaysInclude: true },
+      { name: 'Prior Insurance', category: 'Prior Insurance' },
+      { name: 'Accord Cancellation', category: 'Prior Insurance' },
       { name: 'Drivers Verified', category: 'Auto' },
       { name: 'Defensive Driver', category: 'Auto' },
+      { name: 'Good Student', category: 'Auto' },
       { name: 'Drivewise', category: 'Auto' },
       { name: 'Home Inspection', category: 'Home' },
       { name: 'Home Mortgagee', category: 'Home' },
@@ -7072,14 +7493,18 @@ describe('SFA API (e2e)', () => {
       });
       const names = items.map((i) => i.itemName);
       expect(names).toEqual(
-        expect.arrayContaining([
-          'Correct Sold Date',
-          'Prior Insurance',
-          'Drivers Verified',
-        ]),
+        expect.arrayContaining(['Correct Sold Date', 'Drivers Verified']),
       );
       // No discounts were taken, so nothing discount-driven should appear.
       expect(names).not.toContain('Drivewise');
+      // ⚠ `Prior Insurance` used to be here — it was baseline until PAC-65 #15
+      // made it conditional on the discounts-card checkbox. A client with no
+      // prior coverage no longer carries an item telling the service team to
+      // obtain a declarations page that does not exist.
+      expect(names).not.toContain('Prior Insurance');
+      // Same story, second pass: `autoPolicy` declares no prior insurance, so
+      // there is no carrier to send an ACORD cancellation to.
+      expect(names).not.toContain('Accord Cancellation');
     });
 
     it('creates the parent roll-up audit record', async () => {
@@ -7172,10 +7597,13 @@ describe('SFA API (e2e)', () => {
 
     it('carries the proof onto the generated audit item (PAC-56 #21b)', async () => {
       /*
-       * Without this, #21 would make the hand-off *worse*: the producer is
-       * forced to upload a document for every discount they claim, and the only
-       * person who needs it — the service team on the audit board — would never
-       * see it.
+       * The upload is optional as of PAC-65, but when there *is* one it has to
+       * reach the item: otherwise the only person who needs it — the service
+       * team on the audit board — never sees a document already in storage.
+       *
+       * ⚠ Uses `studentDiscount` → `Good Student`, not Drivewise. Drivewise
+       * generates no item at all now, so the original fixture would find
+       * nothing and pass for the wrong reason.
        */
       const { lead } = await seedLead();
       const attachment = genProof(lead._id.toString());
@@ -7183,21 +7611,21 @@ describe('SFA API (e2e)', () => {
         autoPolicy(lead._id.toString(), {
           discounts: {
             escrow: false,
-            inspection: { selected: false },
             fireSubscription: { selected: false },
             roofReceipt: { selected: false },
             acvPersonalProperty: false,
             acvDwellingProtection: false,
-            drivewise: { selected: true, attachment },
+            drivewise: false,
             defensiveDriver: { selected: false, drivers: [] },
-            studentDiscount: { selected: false },
+            studentDiscount: { selected: true, attachment },
+            priorInsuranceDiscount: false,
           },
         }),
       ]);
 
       const item = await genItemModel.findOne({
         dealId: new Types.ObjectId(deal.id),
-        title: 'Drivewise',
+        title: 'Good Student',
       });
 
       expect(item).toBeTruthy();
@@ -7213,18 +7641,233 @@ describe('SFA API (e2e)', () => {
       expect(item!.isResolved).toBe(false);
     });
 
+    it('generates no Drivewise item, trigger or not (PAC-65)', async () => {
+      /*
+       * The only Card 5 option that produces nothing. It is a phone app that
+       * monitors driving — there is no document that could prove enrolment, and
+       * David asked that knowing it is on the policy be enough; the service
+       * department works it from the renewal.
+       *
+       * ⚠ The trigger is still written to the deal as provenance, which is
+       * exactly why this is asserted: the field's continued existence is what
+       * would invite `if (triggers.drivewise) add('Drivewise')` back.
+       */
+      const { lead } = await seedLead();
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString(), {
+          discounts: {
+            escrow: false,
+            fireSubscription: { selected: false },
+            roofReceipt: { selected: false },
+            acvPersonalProperty: false,
+            acvDwellingProtection: false,
+            drivewise: true,
+            defensiveDriver: { selected: false, drivers: [] },
+            studentDiscount: { selected: false },
+            priorInsuranceDiscount: false,
+          },
+        }),
+      ]);
+
+      const items = await genItemModel.countDocuments({
+        dealId: new Types.ObjectId(deal.id),
+        title: 'Drivewise',
+      });
+      expect(items).toBe(0);
+    });
+
+    it('generates Prior Insurance only when the discount was ticked (PAC-65 #15)', async () => {
+      /*
+       * It used to be baseline — on every deal, including clients who have
+       * never held a policy, telling the service team to obtain a declarations
+       * page that does not exist.
+       *
+       * ⚠ It took **two** changes to leave the baseline: `isBaselineTemplate`
+       * matches `alwaysInclude === true` *or* a category of exactly `Common`.
+       * Setting only the flag would look right and generate the item anyway.
+       */
+      const { lead: without } = await seedLead();
+      const noPrior = await sell(without._id.toString(), [
+        autoPolicy(without._id.toString()),
+      ]);
+      expect(
+        await genItemModel.countDocuments({
+          dealId: new Types.ObjectId(noPrior.id),
+          title: 'Prior Insurance',
+        }),
+      ).toBe(0);
+
+      const { lead: with_ } = await seedLead();
+      const declarations = genProof(with_._id.toString());
+      const withPrior = await sell(with_._id.toString(), [
+        autoPolicy(with_._id.toString(), {
+          discounts: {
+            escrow: false,
+            fireSubscription: { selected: false },
+            roofReceipt: { selected: false },
+            acvPersonalProperty: false,
+            acvDwellingProtection: false,
+            drivewise: false,
+            defensiveDriver: { selected: false, drivers: [] },
+            studentDiscount: { selected: false },
+            priorInsuranceDiscount: true,
+          },
+          priorInsurance: {
+            none: false,
+            carrier: 'Geico',
+            agentName: 'Jamie Prior',
+            attachment: declarations,
+          },
+        }),
+      ]);
+
+      const item = await genItemModel.findOne({
+        dealId: new Types.ObjectId(withPrior.id),
+        title: 'Prior Insurance',
+      });
+      expect(item).toBeTruthy();
+      // The declarations page rides onto it, so the auditor verifies in place.
+      expect(item!.attachments[0]?.key).toBe(declarations.key);
+    });
+
+    it('generates Accord Cancellation only when prior coverage was declared (PAC-65)', async () => {
+      /*
+       * David: do not raise an ACORD cancellation for a client with no prior
+       * insurance. It was baseline, so every deal carried one — telling the
+       * service team to send an ACORD 35 to a carrier that does not exist.
+       *
+       * ⚠ Two changes were needed to leave the baseline, as with its
+       * neighbour: `isBaselineTemplate` matches `alwaysInclude === true` *or* a
+       * category of exactly `Common`.
+       *
+       * Note the "with" case ticks **no discount** and attaches nothing: the
+       * trigger is `!priorInsurance.none`, not the discounts checkbox. A
+       * producer who names a prior carrier without ticking that box still has a
+       * carrier to send the form to.
+       */
+      const { lead: without } = await seedLead();
+      const noPrior = await sell(without._id.toString(), [
+        autoPolicy(without._id.toString()),
+      ]);
+      expect(
+        await genItemModel.countDocuments({
+          dealId: new Types.ObjectId(noPrior.id),
+          title: 'Accord Cancellation',
+        }),
+      ).toBe(0);
+
+      const { lead: with_ } = await seedLead();
+      const declared = await sell(with_._id.toString(), [
+        autoPolicy(with_._id.toString(), {
+          priorInsurance: {
+            none: false,
+            carrier: 'Geico',
+            agentName: 'Jamie Prior',
+          },
+        }),
+      ]);
+
+      const items = await genItemModel.find({
+        dealId: new Types.ObjectId(declared.id),
+      });
+      const names = items.map((i) => i.itemName);
+      expect(names).toContain('Accord Cancellation');
+      // The two conditional items are driven apart: no discount was ticked, so
+      // nothing asks for a declarations page.
+      expect(names).not.toContain('Prior Insurance');
+    });
+
+    it('stamps a soft 7-day due date, and enforces nothing (PAC-65)', async () => {
+      const { lead } = await seedLead();
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString()),
+      ]);
+
+      const item = await genItemModel.findOne({
+        dealId: new Types.ObjectId(deal.id),
+      });
+      expect(item!.dueAt).toBeTruthy();
+      const days = Math.round(
+        (item!.dueAt!.getTime() - item!.firstCreatedAt!.getTime()) /
+          (24 * 60 * 60 * 1000),
+      );
+      expect(days).toBe(7);
+
+      /*
+       * ⚠ The anti-enforcement guard. Backdate the deadline and confirm the
+       * item is *unchanged*: nothing auto-fails, escalates, expires or flips
+       * status at day 7. It is a written target the team filters on, and a
+       * status that changes itself on a date is the wrong reading of it.
+       */
+      await genItemModel.updateOne(
+        { _id: item!._id },
+        { $set: { dueAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
+      );
+      await request(app.getHttpServer())
+        .get(`${BOARD}?page=1&pageSize=50`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const after = await genItemModel.findById(item!._id);
+      expect(after!.status).toBe('in_progress');
+      expect(after!.isFailed).toBe(true);
+      expect(after!.isResolved).toBe(false);
+    });
+
+    it('surfaces evidence on the board without leaking the storage key (PAC-65 #16)', async () => {
+      const { lead } = await seedLead();
+      const attachment = genProof(lead._id.toString());
+      await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString(), {
+          discounts: {
+            escrow: false,
+            fireSubscription: { selected: false },
+            roofReceipt: { selected: false },
+            acvPersonalProperty: false,
+            acvDwellingProtection: false,
+            drivewise: false,
+            defensiveDriver: { selected: false, drivers: [] },
+            studentDiscount: { selected: true, attachment },
+            priorInsuranceDiscount: false,
+          },
+        }),
+      ]);
+
+      const res = await request(app.getHttpServer())
+        .get(`${BOARD}?page=1&pageSize=50`)
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const body = res.body as {
+        items: Array<{
+          missing: string;
+          dueAt: string | null;
+          attachments: Array<Record<string, unknown>>;
+        }>;
+      };
+      const row = body.items.find((r) => r.missing === 'Good Student');
+      expect(row).toBeTruthy();
+      expect(row!.dueAt).toBeTruthy();
+      expect(row!.attachments).toHaveLength(1);
+      expect(row!.attachments[0].filename).toBe('gen-proof.pdf');
+      expect(row!.attachments[0].index).toBe(0);
+      // ⚠ The key's prefix is what `assertKeyOwnership` treats as a security
+      // property. It must not leave the server; `index` is what the download
+      // route takes and all the client needs.
+      expect(row!.attachments[0]).not.toHaveProperty('key');
+    });
+
     it('creates one certificate item per named defensive driver', async () => {
       const { lead } = await seedLead();
       const deal = await sell(lead._id.toString(), [
         autoPolicy(lead._id.toString(), {
           discounts: {
             escrow: false,
-            inspection: { selected: false },
             fireSubscription: { selected: false },
             roofReceipt: { selected: false },
             acvPersonalProperty: false,
             acvDwellingProtection: false,
-            drivewise: { selected: false },
+            drivewise: false,
             defensiveDriver: {
               selected: true,
               // A certificate each, since PAC-56 #21.
@@ -7268,12 +7911,11 @@ describe('SFA API (e2e)', () => {
           policyType: 'Home',
           discounts: {
             escrow: true,
-            inspection: { selected: false },
             fireSubscription: { selected: false },
             roofReceipt: { selected: false },
             acvPersonalProperty: false,
             acvDwellingProtection: false,
-            drivewise: { selected: false },
+            drivewise: false,
             defensiveDriver: { selected: false, drivers: [] },
             studentDiscount: { selected: false },
           },
@@ -7910,11 +8552,21 @@ describe('SFA API (e2e)', () => {
                 carrier: 'Geico',
                 agentName: 'A. Agent',
               },
-              cancellation: { cancelled: true, effectiveDate: '2026-01-31' },
+              // `cancelledBy` is required alongside a cancellation (PAC-65 #11).
+              cancellation: {
+                cancelled: true,
+                effectiveDate: '2026-01-31',
+                cancelledBy: 'Customer',
+              },
             }),
             soldPolicy({
               policyType: 'Home',
-              priorInsurance: { none: false, carrier: 'State Farm' },
+              // The prior agent is required now (PAC-65 #10).
+              priorInsurance: {
+                none: false,
+                carrier: 'State Farm',
+                agentName: 'H. Agent',
+              },
             }),
           ],
         }),
@@ -8189,7 +8841,7 @@ describe('SFA API (e2e)', () => {
                 policyType: 'Home',
                 // Silently stripping this would generate a Drivewise audit item
                 // for a deal with no auto line.
-                discounts: { drivewise: { selected: true } },
+                discounts: { drivewise: true },
               }),
             ],
           }),

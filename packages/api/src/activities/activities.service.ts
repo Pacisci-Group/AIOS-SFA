@@ -49,7 +49,7 @@ export class ActivitiesService {
     const tenant = await this.tenancy.resolve(access, branchId);
 
     const occurredAt = dto.occurredAt ?? new Date();
-    const producerId = new Types.ObjectId(access.userId);
+    const userId = new Types.ObjectId(access.userId);
 
     const activity = await this.activityModel.create({
       agencyId: tenant.agencyId,
@@ -57,7 +57,7 @@ export class ActivitiesService {
       type: dto.type,
       subjectType: 'lead',
       leadId: lead._id,
-      producerId,
+      userId,
       occurredAt,
       summary: dto.summary ?? LOGGABLE_ACTIVITY_LABELS[dto.type],
       // Explicit, because the schema default is `'migration'`. Omitting this
@@ -75,12 +75,15 @@ export class ActivitiesService {
         type: activity.type,
         summary: activity.summary ?? null,
         occurredAt: occurredAt.toISOString(),
-        producerName: await this.producerName(producerId),
+        userName: await this.userName(userId),
         // Constant, not derived: this endpoint only ever writes a row hung off
         // the lead itself. The quote-recap and sold pipelines write their own
         // activities with their own refs, and `LeadDetailService` derives the
         // origin for those on read.
         origin: 'lead',
+        // Always. `LOGGABLE_ACTIVITY_TYPES` cannot express `field_changed` —
+        // the edit log is written by the PATCH endpoints, never by a client.
+        changes: null,
       },
       leadLastActivityAt: leadLastActivityAt.toISOString(),
     };
@@ -118,11 +121,9 @@ export class ActivitiesService {
   }
 
   /** The caller's display name, for the timeline row we hand straight back. */
-  private async producerName(
-    producerId: Types.ObjectId,
-  ): Promise<string | null> {
+  private async userName(userId: Types.ObjectId): Promise<string | null> {
     const user = await this.userModel
-      .findById(producerId, { firstName: 1, lastName: 1 })
+      .findById(userId, { firstName: 1, lastName: 1 })
       .lean<{ firstName?: string; lastName?: string }>();
     if (!user) return null;
     const name = [user.firstName, user.lastName]

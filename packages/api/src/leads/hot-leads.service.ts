@@ -140,7 +140,26 @@ export class HotLeadsService {
     if (leadIds.length === 0) return new Map();
 
     const rows = await this.activityModel.aggregate<LatestActivity>([
-      { $match: { agencyId, leadId: { $in: leadIds } } },
+      {
+        $match: {
+          agencyId,
+          leadId: { $in: leadIds },
+          /*
+           * Edit-log rows never drive this line (PAC-65 #9), for **everyone** —
+           * not conditionally on `agency:changelogs:read` like the Lead Detail
+           * timeline.
+           *
+           * Two reasons. The panel answers "when did anyone last *touch* this
+           * lead", and correcting a typo on a recap is not an outreach touch —
+           * a manager wants the last real contact here as much as a producer
+           * does. And `$group: { $first }` takes the newest row outright, so an
+           * unfiltered edit would not merely appear, it would **displace** the
+           * genuine last touch and its summary, which `HotLeadRow` renders
+           * verbatim on the producer's own dashboard.
+           */
+          type: { $ne: 'field_changed' },
+        },
+      },
       // `_id` breaks ties between two activities stamped the same second.
       { $sort: { leadId: 1, occurredAt: -1, _id: -1 } },
       {

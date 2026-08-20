@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
   ActivityOrigin,
+  AgencyPermission,
   LeadDetail,
   LeadDetailActivity,
   LeadDetailContact,
@@ -156,12 +157,16 @@ export class LeadDetailService {
       this.loadPolicies(household, agencyId),
       this.loadQuoteRecaps(lead, household, agencyId),
       this.loadDeal(lead, household, agencyId),
-      this.loadActivities(lead, agencyId),
+      this.loadActivities(
+        lead,
+        agencyId,
+        access.permissions.includes(AgencyPermission.ChangeLogsRead),
+      ),
     ]);
 
-    const [priorInsurance, producerNames] = await Promise.all([
+    const [priorInsurance, userNames] = await Promise.all([
       this.loadPriorInsurance(deal, household, agencyId),
-      this.loadProducerNames(lead, activities, recaps),
+      this.loadUserNames(lead, activities, recaps),
     ]);
 
     const [latestRecap, ...earlierRecaps] = recaps;
@@ -203,22 +208,22 @@ export class LeadDetailService {
       lastActivityAt: iso(lead.lastActivityAt),
       intakeChannel: lead.intakeSource?.channel ?? null,
       producerName: lead.producerId
-        ? (producerNames.get(lead.producerId.toString()) ?? null)
+        ? (userNames.get(lead.producerId.toString()) ?? null)
         : null,
       primaryContact: this.findPrimaryContact(lead, household, contacts),
       household: this.toHousehold(household, lead, contacts, policies),
       latestQuoteRecap: latestRecap
-        ? this.toQuoteRecap(latestRecap, producerNames)
+        ? this.toQuoteRecap(latestRecap, userNames)
         : null,
       // Full recaps, not summaries (PAC-56 #11): the expander has to answer
       // "what changed since the last quote", which needs the rows.
       earlierQuoteRecaps: earlierRecaps.map((recap) =>
-        this.toQuoteRecap(recap, producerNames),
+        this.toQuoteRecap(recap, userNames),
       ),
       deal: deal ? this.toDeal(deal, policies) : null,
       priorInsurance,
       activities: activities.map((activity) =>
-        this.toActivity(activity, producerNames),
+        this.toActivity(activity, userNames),
       ),
     };
   }
@@ -492,7 +497,10 @@ export class LeadDetailService {
 
     return {
       id: record._id.toString(),
-      cancellationResponsibility: record.cancellationResponsibility ?? null,
+      cancellationResponsibility: normalizeCancelledBy(
+        record.cancellationResponsibility,
+      ),
+      cancellationHandledByName: record.cancellationHandledByName ?? null,
       cancelledPreviousInsurance: record.cancelledPreviousInsurance ?? null,
       cancellationDate: dateOnly(record.cancellationDate),
       autoHomeSameCarrier: record.autoHomeSameCarrier ?? null,
@@ -503,18 +511,45 @@ export class LeadDetailService {
     };
   }
 
+  /**
+   * The lead's timeline, newest first.
+   *
+   * ## The change-log exclusion is in the query, not applied afterwards
+   *
+   * `field_changed` rows (PAC-65 #9) are visible only to holders of
+   * `agency:changelogs:read` — owners and managers. Filtering them out *after*
+   * `.limit(ACTIVITY_LIMIT)` would be a correctness bug rather than a
+   * micro-optimisation: a lead corrected fifty times would hand a producer an
+   * empty timeline, silently hiding their own notes. Excluding them in the
+   * `find` spends the 50-row budget on rows the caller can actually see.
+   *
+   * Gating cannot live on the controller. The timeline is an embedded array on
+   * `GET /leads/:id`, so a `@RequirePermissions` there would 403 the whole page
+   * for every producer.
+   */
   private async loadActivities(
     lead: LeadDocument,
     agencyId: string,
+    canSeeChangeLogs: boolean,
   ): Promise<ActivityDocument[]> {
     return this.activityModel
-      .find({ agencyId, leadId: lead._id })
+      .find({
+        agencyId,
+        leadId: lead._id,
+        ...(canSeeChangeLogs ? {} : { type: { $ne: 'field_changed' } }),
+      })
       .sort({ occurredAt: -1, _id: -1 })
       .limit(ACTIVITY_LIMIT);
   }
 
-  /** One lookup for every producer referenced by the lead or its activities. */
-  private async loadProducerNames(
+  /**
+   * One lookup for every user referenced by the lead or its activities.
+   *
+   * Two different fields feed it: the lead's and the recaps' `producerId`, which
+   * really are producer refs, and each activity's `userId` — whoever wrote the
+   * row, which since PAC-65 is explicitly not assumed to be a producer.
+   */
+  private async loadUserNames(
     lead: LeadDocument,
     activities: ActivityDocument[],
     recaps: QuoteRecapDocument[],
@@ -522,7 +557,7 @@ export class LeadDetailService {
     const ids = new Set<string>();
     if (lead.producerId) ids.add(lead.producerId.toString());
     for (const activity of activities) {
-      if (activity.producerId) ids.add(activity.producerId.toString());
+      if (activity.userId) ids.add(activity.userId.toString());
     }
     // Recap authors too, for the notes attribution on the Quote Summary card.
     for (const recap of recaps) {
@@ -643,7 +678,7 @@ export class LeadDetailService {
 
   private toQuoteRecap(
     recap: QuoteRecapDocument,
-    producerNames: Map<string, string>,
+    userNames: Map<string, string>,
   ): LeadDetailQuoteRecap {
     return {
       ...this.toQuoteRecapSummary(recap),
@@ -651,7 +686,7 @@ export class LeadDetailService {
       // rather than a placeholder — a migrated recap genuinely has no author,
       // and "Unknown" would read as a person.
       producerName: recap.producerId
-        ? (producerNames.get(recap.producerId.toString()) ?? null)
+        ? (userNames.get(recap.producerId.toString()) ?? null)
         : null,
       createdAt: iso(recap.createdAt),
       policies: (recap.policies ?? []).map((policy) => ({
@@ -734,10 +769,10 @@ export class LeadDetailService {
 
   private toActivity(
     activity: ActivityDocument,
-    producerNames: Map<string, string>,
+    userNames: Map<string, string>,
   ): LeadDetailActivity {
-    const producerName = activity.producerId
-      ? (producerNames.get(activity.producerId.toString()) ?? null)
+    const userName = activity.userId
+      ? (userNames.get(activity.userId.toString()) ?? null)
       : null;
 
     return {
@@ -745,8 +780,20 @@ export class LeadDetailService {
       type: activity.type,
       summary: activity.summary ?? null,
       occurredAt: iso(activity.occurredAt),
-      producerName: producerName || null,
+      userName: userName || null,
       origin: this.toActivityOrigin(activity),
+      // Straight through, with no normalization: the writer already resolved
+      // every code to its display label and every date to `YYYY-MM-DD`, because
+      // a change row is written once and read forever. See `change-log.ts`.
+      changes: activity.changes?.length
+        ? activity.changes.map((change) => ({
+            field: change.field,
+            label: change.label,
+            kind: change.kind,
+            from: change.from ?? null,
+            to: change.to ?? null,
+          }))
+        : null,
     };
   }
 
@@ -774,4 +821,21 @@ export class LeadDetailService {
     if (activity.subjectType === 'dealAuditItem') return 'audit';
     return 'lead';
   }
+}
+
+/**
+ * One vocabulary out of two (PAC-65 #11).
+ *
+ * The SmartSuite migration writes legacy's `Agent` / `Client`; the sold form
+ * writes `SFA staff` / `Customer`. Normalized here rather than by a backfill:
+ * imported rows keep their own bytes, the card reads one set of words, and
+ * there is no migration script to get wrong. Anything unrecognized passes
+ * through — an unfamiliar value is still better shown than blanked.
+ */
+function normalizeCancelledBy(value?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (trimmed.toLowerCase() === 'agent') return 'SFA staff';
+  if (trimmed.toLowerCase() === 'client') return 'Customer';
+  return trimmed || null;
 }

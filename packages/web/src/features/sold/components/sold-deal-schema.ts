@@ -1,9 +1,11 @@
 import type { CarrierOption, PolicyType, SoldPolicyInput } from "@sfa/shared";
 import {
   AUTO_DISCOUNT_KEYS,
+  CANCELLED_BY_OPTIONS,
   CARRIER_OTHER,
   POLICY_TYPES,
   PROPERTY_DISCOUNT_KEYS,
+  UNIVERSAL_DISCOUNT_KEYS,
   carrierPolicyNumberMatches,
   carrierSlug,
   isAutoPolicyType,
@@ -52,48 +54,38 @@ const attachmentSchema = z.object({
 });
 
 /**
- * A discount whose proof is **required** to claim it (PAC-56 #21).
+ * A discount that can carry its proof — but does not have to (PAC-65).
  *
- * The old "do you have proof? / no — send it to audit" fork is gone: David
- * asked for the document up front. `hasProof` went with it, and is absent from
- * form state entirely — the API drops the key too.
+ * This reverses PAC-56 #21, which required the document up front. Ticking the
+ * box generates the audit item either way; the upload only decides whether the
+ * auditor verifies a document in place or is told to call the client for it.
  *
- * A factory taking the document's name rather than one shared schema, because
- * the message has to stand on its own: the wizard lists blocking messages in
- * its footer, where five identical "Attach the document for this discount."
- * lines name nothing the producer can act on. It reads correctly under the
- * upload control too.
+ * It is a plain schema rather than #21's `proofSchema(document)` factory: the
+ * factory existed only so each required-proof message could name its own
+ * document in the wizard's blocking-issues footer. With nothing to block on,
+ * the document's name belongs in `ProofField`'s `proofPrompt` — UI copy, not
+ * validation. Reintroducing the factory would invite the refine back with it.
  */
-const proofSchema = (document: string) =>
-  z
-    .object({
-      selected: z.boolean(),
-      attachment: attachmentSchema.optional(),
-    })
-    .superRefine((value, ctx) => {
-      if (value.selected && !value.attachment) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Attach ${document}.`,
-          path: ["attachment"],
-        });
-      }
-    });
+const proofSchema = z.object({
+  selected: z.boolean(),
+  attachment: attachmentSchema.optional(),
+});
 
 const discountsSchema = z.object({
   /**
-   * Stays a bare boolean: its document belongs beside the loan number, on
-   * `escrow.attachment`, not in a generic proof slot.
+   * A bare boolean: what the audit reads is the keyed-in loan detail on
+   * `escrow`, not a document. PAC-65 removed the statement upload, and the
+   * sibling `inspection` key with it — there is no document a producer can
+   * attach to a passed home inspection, and `Home`/`Landlord Inspection` come
+   * from the policy type regardless.
    */
   escrow: z.boolean(),
-  /** New in #21 — legacy's `Passed Home Inspection` was never ported. */
-  inspection: proofSchema("the inspection report"),
-  fireSubscription: proofSchema("proof of the fire subscription"),
-  roofReceipt: proofSchema("the roof receipt or inspection"),
+  fireSubscription: proofSchema,
+  roofReceipt: proofSchema,
   acvPersonalProperty: z.boolean(),
   acvDwellingProtection: z.boolean(),
-  /** Proof-backed since #21; unlike escrow it has no details object. */
-  drivewise: proofSchema("proof of Drivewise enrolment"),
+  /** ⚠ Bare boolean, and generates no audit item at all (PAC-65). */
+  drivewise: z.boolean(),
   defensiveDriver: z
     .object({
       selected: z.boolean(),
@@ -102,12 +94,15 @@ const discountsSchema = z.object({
           z.object({
             name: z.string().trim().min(1, "Name the driver").max(120),
             contactId: z.string().optional(),
-            /** Per driver — the certificates are per person (#21). */
+            /** Per driver, and optional since PAC-65. */
             attachment: attachmentSchema.optional(),
           }),
         )
         .max(10, "At most 10 drivers"),
     })
+    // Naming the drivers is still required — the audit generator emits one
+    // item per name, so an unnamed selection produces a single item nobody can
+    // act on. Their certificates are optional (PAC-65).
     .superRefine((value, ctx) => {
       if (!value.selected) return;
       if (value.drivers.length === 0) {
@@ -116,23 +111,14 @@ const discountsSchema = z.object({
           message: "Add at least one driver.",
           path: ["drivers"],
         });
-        return;
       }
-      value.drivers.forEach((driver, index) => {
-        if (!driver.attachment) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            // Numbered, because the wizard's footer lists blocking messages
-            // together and "this driver" names nobody once it is out of the row.
-            message: `Attach the certificate for driver ${index + 1}.`,
-            // Under `discounts`, which is a declared `CARD_FIELDS` root, and at
-            // a path with a mounted field — an issue at neither is invisible.
-            path: ["drivers", index, "attachment"],
-          });
-        }
-      });
     }),
-  studentDiscount: proofSchema("the report card or transcript"),
+  studentDiscount: proofSchema,
+  /**
+   * Applies to every policy type — see `UNIVERSAL_DISCOUNT_KEYS`. Ticking it
+   * makes the prior-insurance card mandatory and its "none" toggle unreachable.
+   */
+  priorInsuranceDiscount: z.boolean(),
 });
 
 const escrowSchema = z.object({
@@ -199,10 +185,10 @@ const soldPolicyShape = z
       tooLarge: "Too large",
     }),
     itemCount: numericString({
-      required: "Enter an item count",
+      required: "Enter a count",
       min: 1,
       max: 99,
-      tooSmall: "At least 1 item",
+      tooSmall: "At least 1",
       tooLarge: "Too many",
       integer: "Whole numbers only",
     }),
@@ -224,11 +210,16 @@ const soldPolicyShape = z
       /** Only used when `priorInsurance.carrier` is the "Other" sentinel. */
       carrierOther: z.string().trim().max(120, "Too long").optional(),
       agentName: z.string().trim().max(120, "Too long").optional(),
+      /** "Proof of Insurance" — the declarations page (PAC-65 #18). */
+      attachment: attachmentSchema.optional(),
     }),
     // Asked inside the prior-insurance card since #24.
     cancellation: z.object({
       cancelled: z.boolean(),
       effectiveDate: z.union([ymd, z.literal("")]).optional(),
+      /** "" until answered — the select's empty state (PAC-65 #11). */
+      cancelledBy: z.union([z.enum(CANCELLED_BY_OPTIONS), z.literal("")]),
+      cancelledByUserId: z.string().optional(),
     }),
   });
 
@@ -323,6 +314,80 @@ export function buildSoldPolicySchema(
         path: ["cancellation", "effectiveDate"],
       });
     }
+
+    // Who cancelled it (PAC-65 #11) — required whenever there *was* a
+    // cancellation. A dropdown nobody has to answer is one nobody answers, and
+    // the point is knowing who to ask about it later.
+    if (
+      !policy.priorInsurance.none &&
+      policy.cancellation.cancelled &&
+      !policy.cancellation.cancelledBy
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Say who cancelled the prior insurance.",
+        path: ["cancellation", "cancelledBy"],
+      });
+    }
+    if (
+      !policy.priorInsurance.none &&
+      policy.cancellation.cancelledBy === "SFA staff" &&
+      !policy.cancellation.cancelledByUserId
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Name the staff member who cancelled it.",
+        path: ["cancellation", "cancelledByUserId"],
+      });
+    }
+
+    // The prior agent (PAC-65 #10). Required now — the service team calls this
+    // person to chase the cancellation and the declarations page, so "Optional"
+    // was costing them the one contact that makes the rest actionable.
+    if (
+      !policy.priorInsurance.none &&
+      !policy.priorInsurance.agentName?.trim()
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Name the prior agent.",
+        path: ["priorInsurance", "agentName"],
+      });
+    }
+    /*
+     * The cross-card invariant (PAC-65 #18), mirroring the server. Reported at
+     * `priorInsurance.none` rather than at the discounts checkbox because that
+     * is the control the producer is looking at when they hit it — the
+     * discounts card is several steps back by then.
+     *
+     * The toggle is rendered disabled, so this should be unreachable; it is
+     * here because "should be unreachable" is not the same as "is", and the
+     * server rejects the pair outright.
+     */
+    if (policy.discounts.priorInsuranceDiscount && policy.priorInsurance.none) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Prior insurance was claimed on the discounts card. Untick it there, or untick "no prior insurance" here.',
+        path: ["priorInsurance", "none"],
+      });
+    }
+
+    // ⚠ The one **required** upload on this form (PAC-65 #18). Every discount
+    // proof became optional; the declarations page did not, because failing to
+    // supply it in time gets the policy cancelled or repriced.
+    if (
+      policy.discounts.priorInsuranceDiscount &&
+      !policy.priorInsurance.none &&
+      !policy.priorInsurance.attachment
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Attach the proof of insurance (the declarations page).",
+        path: ["priorInsurance", "attachment"],
+      });
+    }
+
     // Ticking escrow is what makes its sub-card required: the audit item it
     // generates asks the service team to verify exactly these three things.
     //
@@ -340,14 +405,8 @@ export function buildSoldPolicySchema(
         path: ["escrow", "loanNumber"],
       });
     }
-    // …and its statement, on the same footing as every other proof (#21).
-    if (policy.discounts.escrow && policy.escrow && !policy.escrow.attachment) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Attach the escrow statement.",
-        path: ["escrow", "attachment"],
-      });
-    }
+    // The statement itself is **not** required (PAC-65) — the audit reads the
+    // loan detail keyed in above, not an attachment.
   });
 }
 
@@ -395,7 +454,12 @@ export function emptyPolicy(
       carrierOther: "",
       agentName: "",
     },
-    cancellation: { cancelled: false, effectiveDate: "" },
+    cancellation: {
+      cancelled: false,
+      effectiveDate: "",
+      cancelledBy: "",
+      cancelledByUserId: "",
+    },
   };
 }
 
@@ -431,19 +495,25 @@ export function emptyEscrow(): NonNullable<SoldPolicyFormValues["escrow"]> {
  * selection (`findCrossBranchDiscounts`) rather than stripping it.
  *
  * Keyed off the same `AUTO_DISCOUNT_KEYS` / `PROPERTY_DISCOUNT_KEYS` the server
- * rejects by, so the two cannot drift. A type in neither branch (nothing today,
- * but the enum is open to one) correctly clears both.
+ * rejects by, so the two cannot drift. A type in neither branch (Umbrella,
+ * Life, Boat Owners, Valuable Item Protection) correctly clears both — and
+ * still keeps `UNIVERSAL_DISCOUNT_KEYS`, which apply to every line.
  */
 export function clearInapplicableDiscounts(
   policyType: PolicyType,
   values: SoldPolicyFormValues,
 ): Pick<SoldPolicyFormValues, "discounts" | "escrow"> {
   const blank = emptyDiscounts();
-  const keep = isAutoPolicyType(policyType)
+  const branch = isAutoPolicyType(policyType)
     ? AUTO_DISCOUNT_KEYS
     : isPropertyPolicyType(policyType)
       ? PROPERTY_DISCOUNT_KEYS
       : [];
+  // ⚠ The universal keys are kept on **every** switch. Omitting them is not a
+  // no-op: this function rebuilds from `emptyDiscounts()`, so a key it does not
+  // copy forward is silently un-ticked the moment the producer changes the
+  // policy type — with the box still on screen and nothing to explain it.
+  const keep = [...UNIVERSAL_DISCOUNT_KEYS, ...branch];
 
   const discounts = { ...blank };
   for (const key of keep) {
@@ -464,14 +534,14 @@ export function clearInapplicableDiscounts(
 export function emptyDiscounts(): SoldPolicyFormValues["discounts"] {
   return {
     escrow: false,
-    inspection: { selected: false },
     fireSubscription: { selected: false },
     roofReceipt: { selected: false },
     acvPersonalProperty: false,
     acvDwellingProtection: false,
-    drivewise: { selected: false },
+    drivewise: false,
     defensiveDriver: { selected: false, drivers: [] },
     studentDiscount: { selected: false },
+    priorInsuranceDiscount: false,
   };
 }
 
@@ -689,6 +759,10 @@ export function toPolicyInput(values: SoldPolicyFormValues): SoldPolicyInput {
               values.priorInsurance.carrierOther,
             ) || undefined,
           agentName: values.priorInsurance.agentName?.trim() || undefined,
+          // Dropped in the `none` branch above with the rest of the card — a
+          // declarations page for coverage the client does not have is the same
+          // kind of leftover the cancellation collapse below guards against.
+          attachment: values.priorInsurance.attachment,
         },
     // Normalized, not just collapsed: with no prior insurance there is nothing
     // to cancel, and the API rejects the contradiction rather than stripping it
@@ -701,6 +775,14 @@ export function toPolicyInput(values: SoldPolicyFormValues): SoldPolicyInput {
         : {
             cancelled: true,
             effectiveDate: values.cancellation.effectiveDate || undefined,
+            cancelledBy: values.cancellation.cancelledBy || undefined,
+            // Collapsed unless the answer was "SFA staff", the same way the
+            // whole cancellation collapses under "no prior insurance": a user
+            // id left behind by a changed mind would name the wrong person.
+            cancelledByUserId:
+              values.cancellation.cancelledBy === "SFA staff"
+                ? values.cancellation.cancelledByUserId || undefined
+                : undefined,
           },
   };
 }

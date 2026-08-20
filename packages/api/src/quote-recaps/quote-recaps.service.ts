@@ -32,6 +32,13 @@ import {
 } from '../common/address/household-address';
 import type { StructuredAddress } from '../common/address/household-address';
 import { resolvePolicyPropertyAddress } from '../common/address/policy-property-address';
+import {
+  ChangeFieldSpec,
+  ChangeSnapshot,
+  changeText,
+  diffSnapshots,
+  snapshot,
+} from '../activities/change-log';
 import { roundCents } from '../common/domain/money';
 import {
   ResolvedTenantContext,
@@ -130,6 +137,75 @@ function deriveTotals(policies: StoredQuotedPolicy[]) {
     productsQuoted: [...new Set(policies.map((p) => p.policyType))],
   };
 }
+
+/**
+ * The fields `PATCH /quote-recaps/:id` speaks about in the edit log (PAC-65 #9).
+ *
+ * Three notes on what is here and what is not:
+ *
+ * - **The three derived totals are logged; the `policies` rows are not.**
+ *   `QuotedPolicy` is an `_id: false` sub-document with no per-row identity, so
+ *   the patch replaces the whole array and a positional diff would report every
+ *   row as changed on an insert or a reorder. The totals are what the product
+ *   owner actually named ("price changes"), they are recomputed server-side, and
+ *   `policyCount` carries the shape change the totals alone would hide.
+ * - **`quoteDate` / `quoteDateYmd` are absent** because the patch cannot move
+ *   them — `quoteDateYmd`'s opportunistic backfill fires on the first touch of
+ *   every migrated recap and would report a change nobody made.
+ * - **`insuranceRenewalMonth` is normalized on read**, like every other display
+ *   of it: migrated recaps hold SmartSuite choice values, and a change row is
+ *   never re-normalized once written.
+ */
+const RECAP_CHANGE_FIELDS: ChangeFieldSpec<QuoteRecapDocument>[] = [
+  {
+    field: 'premium',
+    label: 'Total premium',
+    kind: 'currency',
+    read: (recap) => recap.premium ?? 0,
+  },
+  {
+    field: 'itemCount',
+    label: 'Total items',
+    kind: 'number',
+    read: (recap) => recap.itemCount ?? 0,
+  },
+  {
+    field: 'productsQuoted',
+    label: 'Policy types',
+    kind: 'list',
+    read: (recap) =>
+      (recap.productsQuoted ?? []).map((value) => normalizePolicyType(value)),
+  },
+  {
+    field: 'policyCount',
+    label: 'Policy rows',
+    kind: 'number',
+    read: (recap) => recap.policies?.length ?? 0,
+  },
+  {
+    field: 'insuranceRenewalMonth',
+    label: 'Renewal month',
+    kind: 'text',
+    read: (recap) =>
+      recap.insuranceRenewalMonth
+        ? normalizeInsuranceMonth(recap.insuranceRenewalMonth)
+        : null,
+  },
+  {
+    field: 'notes',
+    label: 'Notes',
+    kind: 'text',
+    read: (recap) => changeText(recap.notes),
+  },
+  {
+    field: 'quoteDocument',
+    label: 'Quote document',
+    kind: 'text',
+    // The filename, never the storage key — that is an internal path the rest
+    // of this surface withholds, and a change row is the last place to leak it.
+    read: (recap) => recap.quoteDocument?.filename ?? null,
+  },
+];
 
 /**
  * Quote Recap write path (PAC-39) — the native replacement for the legacy
@@ -383,6 +459,14 @@ export class QuoteRecapsService {
    * create-form flow already leaves the identical garbage. A bucket lifecycle
    * rule over unreferenced `agencies/*&#47;quote-recaps/**` keys is the right
    * fix, and is a follow-up rather than app code.
+   *
+   * ## What it does now do: leave a trail (PAC-65 #9)
+   *
+   * Every edit writes a `field_changed` activity, readable only by holders of
+   * `agency:changelogs:read` — owners and managers. The product owner was
+   * explicit that editing stays open (users complain about friction) and that
+   * the answer to the transparency concern is a log rather than a lock, with
+   * price changes the case he named.
    */
   async update(
     access: AccessContext,
@@ -403,6 +487,11 @@ export class QuoteRecapsService {
       branchId,
       recap.leadId.toString(),
     );
+
+    // Before anything is assigned — `deriveTotals` below overwrites `premium`,
+    // `itemCount` and `productsQuoted` in place, so there is no reading them
+    // back afterwards.
+    const before = snapshot(RECAP_CHANGE_FIELDS, recap);
 
     if (dto.policies) {
       const household = await this.leadAccess.findHousehold(lead, access);
@@ -460,7 +549,65 @@ export class QuoteRecapsService {
       );
     }
 
+    await this.recordFieldChanges(access, recap, lead._id, before);
+
     return this.toLeadDetailQuoteRecap(recap);
+  }
+
+  /**
+   * The edit log entry for `PATCH /quote-recaps/:id` (PAC-65 #9).
+   *
+   * Post-commit and best-effort, matching every other follow-up on this path —
+   * the correction is what the producer asked for, and failing the request
+   * after it committed would report the wrong outcome. But `logger.error`, not
+   * `warn`: a dropped row is a hole in an audit trail, which is worth an alert
+   * in a way a stale sort key is not.
+   *
+   * `branchId` comes off the recap rather than a tenant resolve. It is
+   * `required: true` on `TenantRecord`, so a missing one throws *inside* this
+   * try/catch and silently loses the row.
+   */
+  private async recordFieldChanges(
+    access: AccessContext,
+    recap: QuoteRecapDocument,
+    leadId: Types.ObjectId,
+    before: ChangeSnapshot,
+  ): Promise<void> {
+    const changes = diffSnapshots(
+      RECAP_CHANGE_FIELDS,
+      before,
+      snapshot(RECAP_CHANGE_FIELDS, recap),
+    );
+    // A patch that set every field to what it already held. Nothing happened,
+    // so the timeline should not claim otherwise.
+    if (!changes.length) return;
+
+    try {
+      await this.activityModel.create({
+        agencyId: recap.agencyId,
+        branchId: recap.branchId,
+        type: 'field_changed',
+        subjectType: 'quoteRecap',
+        leadId,
+        quoteRecapId: recap._id,
+        userId: new Types.ObjectId(access.userId),
+        occurredAt: new Date(),
+        // Deliberately value-free — see the `summary` docblock on the schema.
+        // `HotLeadsService` renders the newest activity's summary onto the
+        // producer's own dashboard, so the values live in `changes` alone.
+        summary: 'Quote recap edited',
+        // Explicit: `source` defaults to 'migration', and `toActivityOrigin`
+        // maps that to the "Imported" chip.
+        source: 'internal',
+        isTestRecord: false,
+        changes,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to record the edit log for quote recap ${recap._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /**
@@ -750,7 +897,7 @@ export class QuoteRecapsService {
         subjectType: 'quoteRecap',
         leadId: recap.leadId,
         quoteRecapId: recap._id,
-        producerId: recap.producerId,
+        userId: recap.producerId,
         occurredAt: recap.quoteDate,
         summary: 'Quote recap created',
         // Explicit: `source` defaults to 'migration', so omitting it would label

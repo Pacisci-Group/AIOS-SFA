@@ -1,3 +1,4 @@
+import { itemCountLabel } from '@sfa/shared';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ExternalLink } from 'lucide-react';
@@ -70,7 +71,10 @@ export function PolicyDrawer({
                   value={policy.policyStatus ?? (policy.active ? 'Active' : 'Inactive')}
                 />
                 <DrawerRow label="Premium" value={money(policy.premium)} />
-                <DrawerRow label="Items" value={policy.items} />
+                <DrawerRow
+                  label={itemCountLabel(policy.policyType)}
+                  value={policy.items}
+                />
                 <DrawerRow
                   label="Effective"
                   value={shortDate(policy.effectiveDate)}

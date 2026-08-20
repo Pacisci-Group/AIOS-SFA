@@ -24,6 +24,26 @@ import {
   type RequiredAuditItem,
 } from './audit-titles';
 
+/**
+ * How long the service team is given on a generated audit item (PAC-65).
+ *
+ * ⚠ Soft. See the note on `dueAt` in `buildItem` — nothing enforces it, and
+ * nothing should be built that does.
+ */
+export const AUDIT_ITEM_DUE_DAYS = 7;
+
+/**
+ * `date + n` days, as a plain `Date`.
+ *
+ * Local rather than reusing `performance.range`'s `addDays`, which walks
+ * `{ year, month, day }` calendar parts in the agency time zone — the right
+ * tool for scorecard buckets, the wrong one for a wall-clock deadline that is
+ * only ever compared against `new Date()`.
+ */
+function addDays(from: Date, days: number): Date {
+  return new Date(from.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
 export interface GenerateAuditInput {
   agencyId: string;
   branchId: string;
@@ -263,6 +283,23 @@ export class AuditGenerationService {
       producerId: input.producerId,
       daysOpen: 0,
       firstCreatedAt: now,
+      /*
+       * The soft 7-day deadline (PAC-65).
+       *
+       * ⚠ **Nothing enforces this.** There is no cron, no auto-fail, no
+       * escalation, no expiry, and no status that flips itself at day 7. It is
+       * a written target the auditor can see on the board and filter by — the
+       * team pulls an overdue list, and that is the whole of it. An item past
+       * its `dueAt` stays `in_progress` / failed until a human resolves it.
+       *
+       * This is the second thing someone will try to "fix" in this function.
+       * A status that changes itself on a date is exactly the wrong reading of
+       * what David asked for.
+       *
+       * Inside `$setOnInsert` with everything else here, so re-running
+       * generation for a deal never moves a deadline already promised.
+       */
+      dueAt: addDays(now, AUDIT_ITEM_DUE_DAYS),
       submissionToken: input.submissionToken ?? undefined,
       dedupeKey: buildDedupeKey(input.dealId.toString(), item),
       /*

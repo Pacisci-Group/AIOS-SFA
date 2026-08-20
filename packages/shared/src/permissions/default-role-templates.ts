@@ -39,6 +39,12 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
     permissions: [
       AgencyPermission.UsersRead,
       AgencyPermission.BranchesRead,
+      // PAC-65 #9. A manager is half the audience for the quote/sold edit log —
+      // the Agency Owner is the other half and gets it from the spread above.
+      // Producer, CSR, CRM and Data Team are excluded on purpose: the log exists
+      // because the people doing the editing should not be the only ones who
+      // can see what was edited.
+      AgencyPermission.ChangeLogsRead,
       ...permissionsForModule(ModuleKey.Leads),
       ...permissionsForModule(ModuleKey.Clients),
       ...permissionsForModule(ModuleKey.DealAudits),
