@@ -1,4 +1,8 @@
-import { CARRIER_OTHER, itemCountLabel } from "@sfa/shared";
+import {
+  CARRIER_OTHER,
+  itemCountLabel,
+  policyTypeHasItemCount,
+} from "@sfa/shared";
 import { FileText, Pencil, Trash2 } from "lucide-react";
 import { FormSubPanel } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
@@ -90,10 +94,14 @@ export function PolicyReviewList({
                 label="Premium"
                 value={currency.format(Number(policy.premium) || 0)}
               />
-              <Row
-                label={itemCountLabel(policy.policyType)}
-                value={String(Number(policy.itemCount) || 0)}
-              />
+              {/* Omitted for a type nobody was asked to count — "Item count 1"
+                  on a Home policy reads as data we collected. */}
+              {policyTypeHasItemCount(policy.policyType) && (
+                <Row
+                  label={itemCountLabel(policy.policyType)}
+                  value={String(Number(policy.itemCount) || 0)}
+                />
+              )}
               <Row
                 label="Prior insurance"
                 value={priorInsuranceSummary(policy)}

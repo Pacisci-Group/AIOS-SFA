@@ -89,7 +89,7 @@ docs {
   | policies[]       | array   | yes      | 1–12 rows                                          |
   | policies[].policyType | string | yes  | canonical label from `POLICY_TYPES`; raw SmartSuite codes are rejected |
   | policies[].premium    | number | yes  | ≥ 0, ≤ 1,000,000                                   |
-  | policies[].itemCount  | number | yes  | integer 1–99                                       |
+  | policies[].itemCount  | number | yes  | integer 1–99 — **stored as sent only for `Auto` / `Auto - Special` / `Motorcycle` / `Boat Owners`; every other type is stored as `1`** (nothing on a Home or Umbrella policy is countable, so the form no longer asks) |
   | policies[].sameAsHousehold | boolean | no | defaults `true`; property rows only. When set the server copies the household address onto **this row** and **discards** its `propertyAddress` |
   | policies[].propertyAddress | object | conditional | required (all four fields) when the row is a property type and `sameAsHousehold` is false |
   | insuranceRenewalMonth | string | **yes** | one of the twelve month labels (`January`…`December`) |

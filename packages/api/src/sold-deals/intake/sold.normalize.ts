@@ -5,6 +5,7 @@ import {
   isDiscountSelected,
   isPropertyPolicyType,
   normalizePolicyType,
+  resolveItemCount,
 } from '@sfa/shared';
 import type {
   NormalizedLeadSource,
@@ -91,7 +92,13 @@ export function deriveDealAggregates(
 
   return {
     premium: sumCents(policies.map((p) => p.premium)),
-    itemCount: policies.reduce((sum, p) => sum + p.itemCount, 0),
+    // Each row normalized before summing, exactly as `upsert-policies.step`
+    // normalizes it before storing — otherwise the deal total and the rows it
+    // is a total of would disagree.
+    itemCount: policies.reduce(
+      (sum, p) => sum + resolveItemCount(p.policyType, p.itemCount),
+      0,
+    ),
     policyCount: policies.length,
     policyTypes,
     isBundle,

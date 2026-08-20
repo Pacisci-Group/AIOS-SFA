@@ -3773,6 +3773,31 @@ describe('SFA API (e2e)', () => {
       expect(lead!.propertyAddress).toBeUndefined();
     });
 
+    it('stores an item count only for a vehicle policy; others hold 1', async () => {
+      // The public share-link form posts to this path too, so the rule cannot
+      // live only in the browser: a Home policy insures one house whatever a
+      // client sends.
+      const created = await createAs(
+        producerToken,
+        payload('Rowanbank', {
+          policiesOfInterest: [
+            { policyType: 'Auto', itemCount: 3 },
+            { policyType: 'Home', itemCount: 3, sameAsHousehold: true },
+            { policyType: 'Umbrella', itemCount: 3 },
+          ],
+        }),
+      );
+
+      const lead = await leadModel.findById(created.id);
+      expect(
+        lead!.policiesOfInterest.map((p) => [p.policyType, p.itemCount]),
+      ).toEqual([
+        ['Auto', 3],
+        ['Home', 1],
+        ['Umbrella', 1],
+      ]);
+    });
+
     it('stores no property address when policies of interest are not asked for', async () => {
       // The internal `/leads/new` form omits the section entirely — it never
       // asks what to quote. Nothing about a property must be inferred from that.
@@ -4990,6 +5015,33 @@ describe('SFA API (e2e)', () => {
     });
 
     afterAll(() => statSpy.mockRestore());
+
+    it('stores an item count only for a vehicle policy; others hold 1', async () => {
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const { lead } = await seedLead(producer!._id);
+      upload(lead._id.toString());
+
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            { policyType: 'Auto', premium: 1200, itemCount: 3 },
+            // The drawer hides the field for a Home policy and sends 1; the
+            // server is what makes that true of any client.
+            { policyType: 'Home', premium: 900, itemCount: 3 },
+          ],
+        }),
+      );
+
+      const recap = await quoteRecapModel.findById(body.id);
+      expect(recap!.policies?.map((p) => [p.policyType, p.itemCount])).toEqual([
+        ['Auto', 3],
+        ['Home', 1],
+      ]);
+      // The recap total sums the normalized rows, so the Quoted scorecard and
+      // the rows a producer is looking at cannot disagree.
+      expect(recap!.itemCount).toBe(4);
+    });
 
     it('persists real lead + household refs, per-policy rows and derived totals', async () => {
       const producer = await userModel.findOne({ email: seed.producerEmail });
@@ -8478,7 +8530,10 @@ describe('SFA API (e2e)', () => {
       // 1200.10 + 899.95 is 2100.0499999999997 in IEEE-754 — the rounding is
       // what keeps that out of the Sold scorecard.
       expect(body.premium).toBe(2100.05);
-      expect(body.itemCount).toBe(5);
+      // 2 vehicles + the Home row's implied 1. That row posts `itemCount: 3`
+      // on purpose: only the vehicle types are counted, and every other type is
+      // normalized to 1 server-side rather than trusted from the wire.
+      expect(body.itemCount).toBe(3);
       expect(body.policyCount).toBe(2);
       expect(body.policyTypes).toEqual(['Auto', 'Home']);
       expect(body.isBundle).toBe(true);
@@ -8537,6 +8592,33 @@ describe('SFA API (e2e)', () => {
       // The normalized key is what makes GET /policies/check able to find it.
       const stored = policies.find((p) => p.policyNumber === first);
       expect(stored!.policyNumberKey).toBe(first.replace(/[^A-Z0-9]/g, ''));
+    });
+
+    it('stores an item count only for a vehicle policy; others hold 1', async () => {
+      const { lead } = await seedSoldLead(producerId);
+      const auto = nextNumber();
+      const home = nextNumber();
+      const body = await createAs(
+        producerToken,
+        payload(lead._id.toString(), {
+          policies: [
+            soldPolicy({ policyNumber: auto, itemCount: 4 }),
+            // The wizard hides the field for a Home policy and sends 1, so a 4
+            // here can only come from a client that ignores the rule. The wire
+            // still accepts 1–99 for compatibility; the server is what makes
+            // the stored value honest.
+            soldPolicy({ policyType: 'Home', policyNumber: home, itemCount: 4 }),
+          ],
+        }),
+      );
+
+      const policies = await soldPolicyModel.find({ dealId: dealRef(body.id) });
+      const byNumber = new Map(policies.map((p) => [p.policyNumber, p.items]));
+      expect(byNumber.get(auto)).toBe(4);
+      expect(byNumber.get(home)).toBe(1);
+      // And the deal total sums the normalized rows, not the submitted ones —
+      // otherwise the footer would disagree with the rows beneath it.
+      expect(body.itemCount).toBe(5);
     });
 
     it('writes prior-insurance summary and per-line rows only when declared', async () => {
@@ -8981,6 +9063,71 @@ describe('SFA API (e2e)', () => {
         expect(deal!.premium).toBe(1750.5);
         expect(deal!.itemCount).toBe(3);
         expect(deal!.policyCount).toBe(2);
+      });
+
+      it('normalizes items against the policy type, and follows a re-type', async () => {
+        const { lead } = await seedSoldLead(producerId);
+        const created = await createAs(
+          producerToken,
+          payload(lead._id.toString(), {
+            policies: [soldPolicy({ premium: 1000, itemCount: 2 })],
+          }),
+        );
+        const policy = await soldPolicyModel.findOne({
+          dealId: dealRef(created.id),
+        });
+
+        // Still a vehicle policy: the count is taken as sent.
+        await patchPolicy(policy!._id.toString(), { items: 3 });
+        expect((await soldPolicyModel.findById(policy!._id))!.items).toBe(3);
+
+        // Re-typed to Home with no `items` in the body. The count has to come
+        // along, or the policy claims three houses.
+        await patchPolicy(policy!._id.toString(), { policyType: 'Home' });
+        const retyped = await soldPolicyModel.findById(policy!._id);
+        expect(retyped!.policyType).toBe('Home');
+        expect(retyped!.items).toBe(1);
+
+        // And an explicit count on a type that has none is corrected, not kept.
+        await patchPolicy(policy!._id.toString(), { items: 6 });
+        expect((await soldPolicyModel.findById(policy!._id))!.items).toBe(1);
+
+        // The deal's roll-up follows, so the footer cannot disagree with the row.
+        expect((await soldDealModel.findById(created.id))!.itemCount).toBe(1);
+      });
+
+      it('leaves an uncatalogued type\'s stored count alone', async () => {
+        // A migrated policy whose type normalizes to nothing we know. Forcing
+        // the implied 1 there would destroy a real count on the first
+        // unrelated save.
+        // Attached to a deal because a producer's data scope is clamped on the
+        // policy's deal — an orphan policy is a 404, not a rule this can test.
+        // `rollup` keeps the recompute off, so only `items` is in play here.
+        const deal = await soldDealModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId,
+          premium: 100,
+          itemCount: 5,
+          policyCount: 1,
+          premiumSource: 'rollup',
+          legacySmartSuiteId: 'legacy-deal-uncatalogued-type',
+        });
+        const policy = await soldPolicyModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          policyNumber: nextNumber(),
+          policyType: 'Flood',
+          premium: 100,
+          items: 5,
+          dealId: deal._id,
+        });
+
+        await patchPolicy(policy._id.toString(), { premium: 250 });
+        expect((await soldPolicyModel.findById(policy._id))!.items).toBe(5);
+
+        await patchPolicy(policy._id.toString(), { items: 7 });
+        expect((await soldPolicyModel.findById(policy._id))!.items).toBe(7);
       });
 
       it('never moves soldDateYmd — the Sold scorecard buckets on it', async () => {

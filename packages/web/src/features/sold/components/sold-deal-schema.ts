@@ -11,6 +11,7 @@ import {
   isAutoPolicyType,
   isPropertyPolicyType,
   policyNumberKey,
+  resolveItemCount,
 } from "@sfa/shared";
 import type { DeepKeys } from "@tanstack/react-form";
 import { z } from "zod";
@@ -748,7 +749,9 @@ export function toPolicyInput(values: SoldPolicyFormValues): SoldPolicyInput {
     // it, so an empty string must not be sent as a malformed id either way.
     fromPolicyId: values.fromPolicyId || undefined,
     premium: Number(values.premium),
-    itemCount: Number(values.itemCount),
+    // 1 for every type the Financials card does not ask about — see
+    // `resolveItemCount`.
+    itemCount: resolveItemCount(values.policyType, Number(values.itemCount)),
     priorInsurance: values.priorInsurance.none
       ? { none: true }
       : {

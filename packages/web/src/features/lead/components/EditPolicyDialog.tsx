@@ -1,5 +1,11 @@
 import type { LeadDetailPolicy } from "@sfa/shared";
-import { ModuleKey, POLICY_TYPE_OPTIONS, itemCountLabel } from "@sfa/shared";
+import {
+  ModuleKey,
+  POLICY_TYPE_OPTIONS,
+  isCanonicalPolicyType,
+  itemCountLabel,
+  policyTypeHasItemCount,
+} from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { Loader2, Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -71,6 +77,18 @@ export function EditPolicyDialog({ leadId, policy }: EditPolicyDialogProps) {
   // the count's label has to follow the pending choice rather than the saved
   // one — switching Home to Auto should say "Number of Vehicles" immediately.
   const policyType = useStore(form.store, (s) => s.values.policyType);
+
+  /*
+   * Asked only where the count is a real question — the vehicle types. A Home
+   * or Umbrella policy is one thing, so `toUpdatePolicyInput` sends 1 for it
+   * and the field is not shown.
+   *
+   * An **unrecognised** stored type seeds as `""` (see `policy-schema.ts`), and
+   * that keeps the field: we cannot claim the implied 1 for a type we cannot
+   * name, and this dialog is the only way to correct such a row.
+   */
+  const asksItemCount =
+    policyTypeHasItemCount(policyType) || !isCanonicalPolicyType(policyType);
 
   if (!canWrite(ModuleKey.DealAudits)) return null;
 
@@ -145,23 +163,27 @@ export function EditPolicyDialog({ leadId, policy }: EditPolicyDialogProps) {
                 {(f) => (
                   <f.NumberField
                     label="Annual premium"
+                    // Takes the count's cell when there is no count.
+                    className={!asksItemCount ? "sm:col-span-2" : undefined}
                     min="0"
                     step="1"
                     inputClassName="bg-card border-border"
                   />
                 )}
               </form.AppField>
-              <form.AppField name="items">
-                {(f) => (
-                  <f.NumberField
-                    label={itemCountLabel(policyType)}
-                    inputMode="numeric"
-                    min="0"
-                    step="1"
-                    inputClassName="bg-card border-border"
-                  />
-                )}
-              </form.AppField>
+              {asksItemCount && (
+                <form.AppField name="items">
+                  {(f) => (
+                    <f.NumberField
+                      label={itemCountLabel(policyType)}
+                      inputMode="numeric"
+                      min="0"
+                      step="1"
+                      inputClassName="bg-card border-border"
+                    />
+                  )}
+                </form.AppField>
+              )}
             </FormGrid>
 
             <FormGrid>

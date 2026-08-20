@@ -110,7 +110,7 @@ docs {
   | members[]               | array  | no       | max 10; role ∈ Spouse, Child, Driver, Additional Named Insured |
   | policiesOfInterest[]    | array  | no       | max 12; canonical labels, count 1–99; defaults to `[]` — see the row shape below |
   | policiesOfInterest[].policyType | string | yes | canonical label; a raw SmartSuite code is a `400` |
-  | policiesOfInterest[].itemCount  | number | yes | integer 1–99                          |
+  | policiesOfInterest[].itemCount  | number | yes | integer 1–99 — **stored as sent only for `Auto` / `Auto - Special` / `Motorcycle` / `Boat Owners`; every other type is stored as `1`** (nothing on a Home or Umbrella policy is countable, so the form no longer asks) |
   | policiesOfInterest[].sameAsHousehold | bool | no | defaults `true`; property rows only. When set, `address` is copied onto **this row** |
   | policiesOfInterest[].propertyAddress | object | cond. | required when the row is a property type **and** `sameAsHousehold` is false |
   | leadSourceCode          | string | yes      | canonical code; `ENEJP` (Test) is rejected   |

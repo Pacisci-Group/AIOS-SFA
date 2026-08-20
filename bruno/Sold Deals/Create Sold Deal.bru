@@ -156,7 +156,10 @@ tests {
     const body = res.getBody();
     // 1200.10 + 899.95 — rounded to cents, not 2100.0499999999997.
     expect(body.premium).to.equal(2100.05);
-    expect(body.itemCount).to.equal(5);
+    // 2 vehicles + the Home row's implied 1. The body sends `itemCount: 3` on
+    // that row on purpose: only a vehicle policy is counted, so anything else
+    // is stored as 1 whatever a client posts.
+    expect(body.itemCount).to.equal(3);
     expect(body.policyCount).to.equal(2);
   });
 
@@ -228,6 +231,15 @@ docs {
   `leadSource`. Legacy received these pre-aggregated from Fillout because
   SmartSuite maintained them as rollups; Mongo has none, so they are computed
   here — and a client-supplied total would corrupt the Sold scorecard (PAC-11).
+
+  ## `itemCount` is only asked of vehicle policies
+  A count is stored **as sent** for `Auto`, `Auto - Special`, `Motorcycle` and
+  `Boat Owners`, and as **1** for every other type. There is nothing on a Home,
+  Renters, Umbrella or Life policy to count, so the wizard no longer asks — and
+  the server normalizes rather than trusting the wire, because the field is
+  still required (integer 1–99) for backwards compatibility. The deal-level
+  `itemCount` sums the normalized rows, so it always matches the policies it is
+  a total of.
 
   ## Carrier and policy-number rules (PAC-56 #18/#20)
   `carrier` is still a free string on the wire — the catalog (`GET /carriers`)
@@ -333,7 +345,7 @@ docs {
   ```json
   {
     "id": "665f…d31", "leadId": "665f…ac1",
-    "premium": 2100.05, "itemCount": 5, "policyCount": 2,
+    "premium": 2100.05, "itemCount": 3, "policyCount": 2,
     "policyTypes": ["Auto", "Home"], "dealType": "Bundle", "isBundle": true,
     "soldDate": "2026-02-15T00:00:00.000Z", "leadStatus": "Sold",
     "auditItemCount": 0, "crmAssigned": false

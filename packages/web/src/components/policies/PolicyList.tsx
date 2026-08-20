@@ -1,4 +1,8 @@
-import { isPropertyPolicyType, itemCountNoun } from "@sfa/shared";
+import {
+  isPropertyPolicyType,
+  itemCountNoun,
+  policyTypeHasItemCount,
+} from "@sfa/shared";
 import { Home, Pencil, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -77,7 +81,11 @@ export function PolicyList({
             const premium = policy.premium?.trim()
               ? currency.format(Number(policy.premium) || 0)
               : null;
-            const count = Number(policy.itemCount) || 0;
+            // Only the vehicle types carry a meaningful count; everything
+            // else is one thing and was never asked.
+            const count = policyTypeHasItemCount(policy.policyType)
+              ? Number(policy.itemCount) || 0
+              : null;
 
             return (
               <li
@@ -88,8 +96,11 @@ export function PolicyList({
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="secondary">{policy.policyType}</Badge>
                     <span className="text-xs text-muted-foreground">
-                      {count} {itemCountNoun(policy.policyType, count)}
-                      {premium ? ` · ${premium}` : ""}
+                      {count !== null &&
+                        `${count} ${itemCountNoun(policy.policyType, count)}`}
+                      {premium
+                        ? `${count !== null ? " · " : ""}${premium}`
+                        : ""}
                     </span>
                   </div>
                   {/*

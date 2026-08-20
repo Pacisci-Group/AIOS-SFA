@@ -1,5 +1,10 @@
 import type { LeadDetailPolicy, PolicyType, UpdatePolicyInput } from "@sfa/shared";
-import { POLICY_TYPES } from "@sfa/shared";
+import {
+  IMPLIED_ITEM_COUNT,
+  POLICY_TYPES,
+  isCanonicalPolicyType,
+  policyTypeHasItemCount,
+} from "@sfa/shared";
 import { z } from "zod";
 import { numericString } from "@/lib/zod-helpers";
 
@@ -111,6 +116,13 @@ function orNull(value: string): string | null {
  * API has no way to clear a number (they default to 0 on the schema), and
  * sending 0 for an untouched field would overwrite a real premium with nothing.
  * Every other field is clearable, so `""` becomes an explicit `null`.
+ *
+ * `items` is the exception to that "omitted when blank" rule, in one direction:
+ * a policy type nobody is asked to count has an item count of exactly 1, so
+ * the patch **states** it rather than leaving whatever the row happened to
+ * carry. That is what lets correcting a Home policy's type also correct the
+ * stale count the old form collected for it. An unrecognised type (`""`) is
+ * left alone — see `EditPolicyDialog`, which keeps the field visible for it.
  */
 export function toUpdatePolicyInput(
   values: PolicyFormValues,
@@ -127,7 +139,15 @@ export function toUpdatePolicyInput(
   // migrated policy whose type never normalized should keep it.
   if (values.policyType) input.policyType = values.policyType;
   if (values.premium.trim()) input.premium = Number(values.premium);
-  if (values.items.trim()) input.items = Number(values.items);
+
+  if (
+    isCanonicalPolicyType(values.policyType) &&
+    !policyTypeHasItemCount(values.policyType)
+  ) {
+    input.items = IMPLIED_ITEM_COUNT;
+  } else if (values.items.trim()) {
+    input.items = Number(values.items);
+  }
 
   return input;
 }

@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { DataScope } from '@sfa/shared';
+import { DataScope, resolveItemCount } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
@@ -73,7 +73,9 @@ export class UpsertPoliciesStep {
         carrier: row.carrier,
         effectiveDate: parseFormDate(row.effectiveDate),
         premium: row.premium,
-        items: row.itemCount,
+        // A type nobody is asked to count is stored as 1 — see
+        // `resolveItemCount`. Kept in step with `deriveDealAggregates`.
+        items: resolveItemCount(row.policyType, row.itemCount),
         active: true,
         policyStatus: 'Active',
         discounts: row.discounts,

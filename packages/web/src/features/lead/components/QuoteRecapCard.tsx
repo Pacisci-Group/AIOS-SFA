@@ -1,4 +1,4 @@
-import { itemCountNoun } from "@sfa/shared";
+import { itemCountNoun, policyTypeHasItemCount } from "@sfa/shared";
 import type { LeadDetailQuoteRecap } from "@sfa/shared";
 import {
   CalendarClock,
@@ -135,9 +135,14 @@ function QuoteRecapBody({ recap }: { recap: LeadDetailQuoteRecap }) {
                 )}
               </span>
               <span className="flex shrink-0 items-center gap-3">
-                <span className="text-sm tabular-nums text-muted-foreground">
-                  {policy.itemCount} {itemCountNoun(policy.policyType, policy.itemCount)}
-                </span>
+                {/* A Home or Umbrella policy is one thing, so the count is
+                    not asked and not shown — see `policyTypeHasItemCount`. */}
+                {policyTypeHasItemCount(policy.policyType) && (
+                  <span className="text-sm tabular-nums text-muted-foreground">
+                    {policy.itemCount}{" "}
+                    {itemCountNoun(policy.policyType, policy.itemCount)}
+                  </span>
+                )}
                 <span className="text-base font-medium tabular-nums text-card-foreground">
                   {formatCurrency(policy.premium)}
                 </span>

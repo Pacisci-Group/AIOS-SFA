@@ -44,7 +44,7 @@ The pipeline relies on four primary data entities:
 
 * **Required Data Inputs:**  
   * **Policy Types Quoted:** Multi-select.  
-  * **Premium & Items:** Dollar amount per policy and item count.  
+  * **Premium & Items:** Dollar amount per policy, plus an item count on the **vehicle types only** (Auto, Auto - Special, Motorcycle, Boat Owners). A Home, Renters, Umbrella or Life policy insures one thing, so the field is not shown and the count is 1 — asking only ever collected a wrong answer.  
   * **Property Address (Conditional):** If Home/Renters/Landlord. Includes "Same as Household Address" toggle.  
   * **Documentation:** File upload blob/reference for the Quote Document.  
   * **Metadata:** Free-text Notes.  
@@ -65,7 +65,7 @@ The pipeline relies on four primary data entities:
   * Inputs: Start Date, Carrier, Policy Number.  
   * *System Action:* Must perform a GET /api/policies/check?number={policyNumber}. If a match is found, prompt user to select and edit existing policy to prevent duplicates.  
 * **Card 4: Policy Financials**  
-  * Inputs: Premium amount, Number of Items.  
+  * Inputs: Premium amount, plus Number of Vehicles / Boats where the policy type has one (see Phase 2 — every other type holds 1 and is not asked).  
 * **Card 5: Discounts & Required Documentation (Highly Conditional)**  
   * *If Home/Landlord:* Options for Escrow Payment, Fire Subscription, Roof Receipt.  
     * **Escrow:** If checked \-\> Display required Escrow Card (Loan Number, Escrow Company Name, Address).  

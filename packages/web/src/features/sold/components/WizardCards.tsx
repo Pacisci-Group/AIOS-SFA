@@ -3,6 +3,7 @@ import {
   CARRIER_OTHER,
   POLICY_TYPE_OPTIONS,
   itemCountLabel,
+  policyTypeHasItemCount,
 } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -276,17 +277,32 @@ const CANCELLED_BY_SELECT = CANCELLED_BY_OPTIONS.map((value) => ({
 }));
 
 /**
- * Premium and item count.
+ * Premium, plus an item count on the policy types that have one.
  *
  * The count's label follows the policy type (PAC-65 #7) — "Number of Vehicles"
  * on the auto family, "Number of Boats" on Boat Owners. The `policyType` card
  * comes earlier in the loop, so the type is always known by the time this
  * renders.
+ *
+ * Everything else — Home, Renters, Umbrella, Life — is not asked at all and
+ * holds `1`: there is nothing on such a policy to count, so the field only ever
+ * collected a wrong answer. The card is then premium alone, which is why it
+ * keeps the neutral title "Financials" rather than naming both fields.
  */
 export const PolicyFinancialsCard = withForm({
   defaultValues: emptyPolicy(),
   render: function Render({ form }) {
     const policyType = useStore(form.store, (s) => s.values.policyType);
+    const asksItemCount = policyTypeHasItemCount(policyType);
+
+    // The type card sits earlier in the loop, so a producer can go back and
+    // change it after typing a count. Reset rather than leave a stale 3 on a
+    // Home policy in a field that no longer renders.
+    useEffect(() => {
+      if (!asksItemCount) form.setFieldValue("itemCount", "1");
+      // `form` is a stable instance (held in `useState`), so it is not a dep.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [asksItemCount]);
 
     return (
       <div className="space-y-4">
@@ -303,16 +319,18 @@ export const PolicyFinancialsCard = withForm({
           )}
         </form.AppField>
 
-        <form.AppField name="itemCount">
-          {(f) => (
-            <f.NumberField
-              label={itemCountLabel(policyType)}
-              inputMode="numeric"
-              min="1"
-              step="1"
-            />
-          )}
-        </form.AppField>
+        {asksItemCount && (
+          <form.AppField name="itemCount">
+            {(f) => (
+              <f.NumberField
+                label={itemCountLabel(policyType)}
+                inputMode="numeric"
+                min="1"
+                step="1"
+              />
+            )}
+          </form.AppField>
+        )}
       </div>
     );
   },

@@ -3,6 +3,7 @@ import {
   POLICY_TYPE_OPTIONS,
   isPropertyPolicyType,
   itemCountLabel,
+  policyTypeHasItemCount,
   type PolicyType,
 } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
@@ -81,6 +82,21 @@ export const PolicyFields = withFieldGroup({
       (state) => state.values.sameAsHousehold,
     );
     const needsAddress = isPropertyPolicyType(policyType);
+    /*
+     * Only a vehicle policy insures a countable fleet. A Home or Umbrella
+     * policy is one thing, so the question has one answer and asking it only
+     * invites a wrong one — see `policyTypeHasItemCount`.
+     */
+    const asksItemCount = policyTypeHasItemCount(policyType);
+
+    // Switching Auto ×3 to Home must not leave 3 behind in a field nobody can
+    // see any more. Written back rather than dropped from the payload because
+    // the row schema still requires a valid count — see `toPolicyInputs`.
+    useEffect(() => {
+      if (!asksItemCount) group.setFieldValue("itemCount", "1");
+      // `group`/`setFieldValue` are stable; see the effect below.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [asksItemCount]);
 
     useEffect(() => {
       if (!needsAddress || !sameAsHousehold || !householdAddress) return;
@@ -107,20 +123,25 @@ export const PolicyFields = withFieldGroup({
               <f.SelectField
                 label="Policy type"
                 options={POLICY_TYPE_OPTIONS}
+                // Takes the count's cell when there is no count, rather than
+                // leaving a half-empty row above the premium field.
+                className={!asksItemCount ? "sm:col-span-2" : undefined}
                 triggerClassName="w-full bg-card border-border"
               />
             )}
           </group.AppField>
-          <group.AppField name="itemCount">
-            {(f) => (
-              <f.NumberField
-                label={itemCountLabel(policyType)}
-                inputMode="numeric"
-                min="1"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </group.AppField>
+          {asksItemCount && (
+            <group.AppField name="itemCount">
+              {(f) => (
+                <f.NumberField
+                  label={itemCountLabel(policyType)}
+                  inputMode="numeric"
+                  min="1"
+                  inputClassName="bg-card border-border"
+                />
+              )}
+            </group.AppField>
+          )}
           {/* Slot under type and count — where Quote Recap puts premium. */}
           {children}
         </FormGrid>

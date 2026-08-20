@@ -12,6 +12,7 @@ import {
   normalizeCarrier,
   normalizePolicyType,
   policyTypeQueryValues,
+  resolveItemCount,
 } from '@sfa/shared';
 import type {
   AccessContext,
@@ -285,6 +286,22 @@ export class PoliciesService {
     if (dto.carrier !== undefined) policy.carrier = dto.carrier ?? undefined;
     if (dto.premium !== undefined) policy.premium = dto.premium;
     if (dto.items !== undefined) policy.items = dto.items;
+
+    /*
+     * A policy type nobody is asked to count holds exactly 1 (`resolveItemCount`).
+     *
+     * Applied whenever the request touches **either** field: a patch that sets
+     * `items` is corrected, and a patch that only re-types an Auto policy as
+     * Home takes the count with it rather than leaving a stale 3 on a policy
+     * that insures one house. `resolveItemCount` leaves an uncatalogued
+     * migrated type alone, which is the case that must not be rewritten.
+     *
+     * Before `policy.save()` and after the `snapshot` above, so the edit log
+     * (PAC-65 #9) records the corrected count rather than the one sent.
+     */
+    if (dto.items !== undefined || dto.policyType !== undefined) {
+      policy.items = resolveItemCount(policy.policyType, policy.items ?? 1);
+    }
     if (dto.effectiveDate !== undefined) {
       policy.effectiveDate = dto.effectiveDate ?? undefined;
     }
