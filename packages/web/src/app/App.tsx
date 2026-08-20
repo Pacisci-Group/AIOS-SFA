@@ -56,6 +56,7 @@ const RolePermissionsPage = lazy(
   () => import('@/features/admin/RolePermissionsPage'),
 );
 const UsersPage = lazy(() => import('@/features/admin/UsersPage'));
+const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const UserPermissionsPage = lazy(
   () => import('@/features/admin/UserPermissionsPage'),
 );
@@ -440,6 +441,22 @@ export function App() {
               element={
                 <LazyPage>
                   <PublicLeadFormPage />
+                </LazyPage>
+              }
+            />
+
+            {/* Accept an employee invite (PAC-58). Outside BOTH guards, for the
+                same two reasons as the share-link form above: `ProtectedRoute`
+                would bounce an invitee who has no session yet to /login, and
+                `PublicOnlyRoute` would redirect away anyone who *does* have one
+                — an owner checking their own invite, or a new hire on a machine
+                where a colleague is still signed in. Must sit above the
+                catch-all. */}
+            <Route
+              path="/auth/accept-invite"
+              element={
+                <LazyPage>
+                  <AcceptInvitePage />
                 </LazyPage>
               }
             />

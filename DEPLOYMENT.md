@@ -90,6 +90,49 @@ Optional tuning knobs for the public intake routes, defaulted in
 > (`modules/spaces`), so a leak cannot reach the state bucket or another
 > environment's files.
 
+### Async work: Inngest + email
+
+Required **only in Environments where the variable `INNGEST_ENABLED` is `true`**
+(a GitHub Environment *variable*, not a secret — it mirrors terraform's
+`enable_inngest`, and the preflight, the `deploy-inngest` job and the
+infrastructure all read the same flag so they cannot disagree).
+
+| Secret | Description |
+|--------|-------------|
+| `INNGEST_SSH_HOST` | Inngest droplet public IP (`terraform output -raw inngest_droplet_ip`). SSH only — nothing is served publicly. |
+| `INNGEST_BASE_URL` | `http://<terraform output -raw inngest_droplet_private_ip>:8288` — where the API sends events |
+| `APP_PRIVATE_IP` | App droplet VPC address (`terraform output -raw droplet_private_ip`). Inngest invokes functions at `<this>:4000/api/inngest`. |
+| `INNGEST_EVENT_KEY` | Authenticates events the API sends. `openssl rand -hex 32` |
+| `INNGEST_SIGNING_KEY` | Signs Inngest's requests to `/api/inngest`. **Must be hex with an even number of characters** — `openssl rand -hex 32` |
+| `RESEND_API_KEY` | Resend API key for outbound email |
+| `MAIL_DEFAULT_FROM` | e.g. `AgencyOps <notifications@mail.example.com>` — a domain **verified in Resend** |
+| `MAIL_REPLY_TO` | Optional. Reply address surfaced to recipients. |
+
+> **`RESEND_API_KEY` fails silently, which is why preflight checks it.** Unset,
+> the worker falls back to a transport that logs instead of sending: the app
+> boots, the health check passes, Inngest runs complete successfully, and not one
+> email is delivered. Exactly the same failure shape as a missing
+> `STORAGE_ENDPOINT`.
+
+> **`INNGEST_SIGNING_KEY` is the only authentication on `/api/inngest`.** That
+> endpoint is mounted as raw Express middleware, so none of the seven global
+> guards see it. The droplet firewall (port 4000, Inngest droplet only) is the
+> second layer.
+
+> ⚠ **Never expose port 8288.** It serves Inngest's Event API, its REST/GraphQL
+> API *and* its dashboard UI, and the self-hosted build ships with **no
+> authentication on any of them**. The DigitalOcean firewall is the only thing
+> keeping it off the public internet. To view the dashboard, tunnel:
+> `ssh -L 8288:localhost:8288 deploy@<inngest_droplet_ip>`, then open
+> `http://localhost:8288`.
+
+> Inngest persists run state to a SQLite volume (`inngest_data`) with an
+> in-memory queue snapshotted to it periodically, so a hard crash can lose
+> in-flight run state and a single node cannot be scaled out. Fine at current
+> volume; the documented upgrade is `INNGEST_POSTGRES_URI` + `INNGEST_REDIS_URI`,
+> which is two environment variables rather than a rewrite. **Back the volume
+> up** — losing it loses scheduled-function state and run history.
+
 ### Repo-level secrets (Terraform in CI — only for plan-on-PR)
 
 These are account-wide, so keep them at repo level (Settings -> Secrets -> Actions):

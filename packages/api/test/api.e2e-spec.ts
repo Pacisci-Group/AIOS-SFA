@@ -472,6 +472,285 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  /**
+   * Employee invitation flow (PAC-58).
+   *
+   * Covers the whole lifecycle rather than each endpoint in isolation, because
+   * the guarantees that matter are relationships between calls: a resend must
+   * kill the previous link, a revoke must kill the current one, and an accepted
+   * token must not work twice. Testing them separately would pass while the flow
+   * was broken.
+   */
+  describe('Employee invitations (PAC-58)', () => {
+    const server = () => request(app.getHttpServer());
+    let userModel: Model<User>;
+
+    /** Unique per call so no two tests contend for the same unique email. */
+    let seq = 0;
+    const freshEmail = () => `pac58-invite-${++seq}@sfa.local`;
+
+    interface InviteBody {
+      userId: string;
+      inviteUrl: string;
+      expiresAt: string;
+      inviteToken?: string;
+    }
+
+    async function invite(email: string, token = ownerToken) {
+      const res = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(token))
+        .send({
+          email,
+          roleIds: [seed.producerRoleId],
+          branchId: seed.branchId,
+          firstName: 'Pending',
+          lastName: 'Invitee',
+        })
+        .expect(201);
+      return res.body as InviteBody;
+    }
+
+    /**
+     * Undo the per-user resend cooldown without sleeping. The cooldown is real —
+     * "resend is rejected inside the cooldown" below asserts it — so every test
+     * that needs a *successful* resend has to step past it explicitly.
+     */
+    async function clearResendCooldown(userId: string) {
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $unset: { inviteLastSentAt: 1 } },
+      );
+    }
+
+    beforeAll(() => {
+      userModel = app.get<Model<User>>(getModelToken(User.name));
+    });
+
+    it('POST /users/invite — owner invites, and the URL is absolute', async () => {
+      const email = freshEmail();
+      const body = await invite(email);
+
+      // Absolute, because the link is opened from an email client that has no
+      // origin to resolve a relative path against. This is the regression that
+      // motivated the change — it used to return `/auth/accept-invite?token=…`.
+      expect(body.inviteUrl.startsWith('http://localhost:5173/')).toBe(true);
+      expect(body.inviteUrl).toContain('/auth/accept-invite?token=');
+      expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+
+      const created = await userModel.findOne({ email }).lean();
+      expect(created?.isActive).toBe(false);
+      expect(created?.inviteToken).toBeTruthy();
+    });
+
+    it('POST /users/invite — forbidden for a CSR', async () => {
+      await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(csrToken))
+        .send({ email: freshEmail(), roleIds: [seed.producerRoleId] })
+        .expect(403);
+    });
+
+    it('POST /users/invite — rejects an empty role list', async () => {
+      await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({ email: freshEmail(), roleIds: [] })
+        .expect(400);
+    });
+
+    it('POST /users/invite — 409 distinguishes an existing member from a pending invite', async () => {
+      // Already a member: the owner's own address.
+      const member = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({ email: seed.ownerEmail, roleIds: [seed.producerRoleId] })
+        .expect(409);
+      expect((member.body as { message: string }).message).toMatch(/member/i);
+
+      // Already invited: a pending row.
+      const email = freshEmail();
+      await invite(email);
+      const pending = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({ email, roleIds: [seed.producerRoleId] })
+        .expect(409);
+      expect((pending.body as { message: string }).message).toMatch(/pending/i);
+    });
+
+    it('GET /auth/invite/:token — public preview for a valid token', async () => {
+      const email = freshEmail();
+      const { inviteToken } = await invite(email);
+
+      const res = await server()
+        .get(`/api/v1/auth/invite/${inviteToken}`)
+        .expect(200);
+
+      const body = res.body as {
+        email: string;
+        agencyName: string;
+        roleNames: string[];
+        expiresAt: string;
+      };
+      expect(body.email).toBe(email);
+      expect(body.agencyName).toBeTruthy();
+      expect(body.roleNames.length).toBeGreaterThan(0);
+
+      // The non-disclosure contract: an unauthenticated caller holding a
+      // forwarded link learns nothing beyond what the email already told them.
+      expect(Object.keys(body).sort()).toEqual([
+        'agencyName',
+        'email',
+        'expiresAt',
+        'roleNames',
+      ]);
+    });
+
+    it('GET /auth/invite/:token — 404 unknown, 410 expired', async () => {
+      await server().get('/api/v1/auth/invite/not-a-real-token').expect(404);
+
+      const { userId, inviteToken } = await invite(freshEmail());
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $set: { inviteTokenExpiresAt: new Date(Date.now() - 1000) } },
+      );
+
+      await server().get(`/api/v1/auth/invite/${inviteToken}`).expect(410);
+    });
+
+    it('POST /users/:id/invite/resend — rejected inside the per-user cooldown', async () => {
+      const { userId } = await invite(freshEmail());
+
+      // The invite was sent milliseconds ago, so the cooldown is live.
+      const res = await server()
+        .post(`/api/v1/users/${userId}/invite/resend`)
+        .set(authHeader(ownerToken))
+        .expect(409);
+      expect((res.body as { message: string }).message).toMatch(/try again/i);
+    });
+
+    it('POST /users/:id/invite/resend — issues a fresh token and kills the previous link', async () => {
+      const { userId, inviteToken: first } = await invite(freshEmail());
+      await clearResendCooldown(userId);
+
+      const res = await server()
+        .post(`/api/v1/users/${userId}/invite/resend`)
+        .set(authHeader(ownerToken))
+        .expect(201);
+      const second = (res.body as InviteBody).inviteToken;
+
+      expect(second).toBeTruthy();
+      expect(second).not.toBe(first);
+
+      // The old link is dead — this is the security property, not a detail.
+      await server().get(`/api/v1/auth/invite/${first}`).expect(404);
+      await server().get(`/api/v1/auth/invite/${second}`).expect(200);
+    });
+
+    it('POST /users/:id/invite/resend — 409 once the invite has been accepted', async () => {
+      const { userId, inviteToken } = await invite(freshEmail());
+      await server()
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: inviteToken, password: 'AcceptedPass123!' })
+        .expect(201);
+      await clearResendCooldown(userId);
+
+      await server()
+        .post(`/api/v1/users/${userId}/invite/resend`)
+        .set(authHeader(ownerToken))
+        .expect(409);
+    });
+
+    it('DELETE /users/:id/invite — revoking kills the link and removes the row', async () => {
+      const email = freshEmail();
+      const { userId, inviteToken } = await invite(email);
+
+      await server()
+        .delete(`/api/v1/users/${userId}/invite`)
+        .set(authHeader(ownerToken))
+        .expect(204);
+
+      await server().get(`/api/v1/auth/invite/${inviteToken}`).expect(404);
+      await server()
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: inviteToken, password: 'TooLatePass123!' })
+        .expect(401);
+      expect(await userModel.findOne({ email }).lean()).toBeNull();
+
+      // Revoking frees the address, so the owner can correct a typo'd invite by
+      // revoking and re-sending rather than being blocked by the unique index.
+      await invite(email);
+    });
+
+    it('DELETE /users/:id/invite — forbidden for a CSR', async () => {
+      const { userId } = await invite(freshEmail());
+      await server()
+        .delete(`/api/v1/users/${userId}/invite`)
+        .set(authHeader(csrToken))
+        .expect(403);
+    });
+
+    it('POST /auth/accept-invite — activates the user with the invited role, then cannot be replayed', async () => {
+      const email = freshEmail();
+      const { inviteToken } = await invite(email);
+
+      const accepted = await server()
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: inviteToken, password: 'BrandNewPass123!' })
+        .expect(201);
+
+      const body = accepted.body as {
+        accessToken: string;
+        refreshToken: string;
+        user: { email: string; permissions: string[] };
+      };
+      expect(body.user.email).toBe(email);
+      // The returned token pair is what lets the accept page land the user in
+      // the app already signed in, so it has to actually work.
+      expect(body.user.permissions).toContain('leads:read');
+      await server()
+        .get('/api/v1/leads')
+        .set(authHeader(body.accessToken))
+        .expect(200);
+
+      const activated = await userModel.findOne({ email }).lean();
+      expect(activated?.isActive).toBe(true);
+      expect(activated?.inviteToken).toBeUndefined();
+
+      // Single use. The token is cleared on accept, so a forwarded or
+      // browser-cached link cannot mint a second account.
+      await server()
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: inviteToken, password: 'SecondTryPass123!' })
+        .expect(401);
+
+      // ...and the preview endpoint agrees rather than leaking the address.
+      await server().get(`/api/v1/auth/invite/${inviteToken}`).expect(404);
+    });
+
+    it('POST /auth/accept-invite — 401 on an expired token', async () => {
+      const { userId, inviteToken } = await invite(freshEmail());
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $set: { inviteTokenExpiresAt: new Date(Date.now() - 1000) } },
+      );
+
+      await server()
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: inviteToken, password: 'ExpiredPass123!' })
+        .expect(401);
+    });
+
+    it('POST /auth/accept-invite — rejects a password under 8 characters', async () => {
+      const { inviteToken } = await invite(freshEmail());
+      await server()
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: inviteToken, password: 'short' })
+        .expect(400);
+    });
+  });
+
   describe('Client records (multi-permission OR gate)', () => {
     // `GET /households/:id` and `GET /policies/:id` accept `clients:read` OR
     // `crm_service:read`, because these records render both on the Clients

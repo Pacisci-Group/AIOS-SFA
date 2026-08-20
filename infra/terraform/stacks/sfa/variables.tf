@@ -131,3 +131,48 @@ variable "tags" {
   type        = list(string)
   default     = []
 }
+
+# ─── Inngest ──────────────────────────────────────────────────────────────────
+
+variable "enable_inngest" {
+  description = <<-EOT
+    Provision the Inngest droplet (self-hosted event bus, scheduler and executor
+    for all asynchronous work).
+
+    Defaults to false so environments created before async work existed continue
+    to plan clean. Turning it on also opens port 4000 on the app droplet's
+    firewall to the Inngest droplet, so Inngest can invoke functions.
+  EOT
+
+  type    = bool
+  default = false
+}
+
+variable "inngest_droplet_size" {
+  description = <<-EOT
+    Size of the Inngest droplet.
+
+    It runs a single Go binary plus SQLite, so the smallest size is genuinely
+    enough at current volume. Revisit if run history grows large — the docs warn
+    that large tables slow down loading and searching runs.
+  EOT
+
+  type    = string
+  default = "s-1vcpu-1gb"
+}
+
+variable "mongo_allowed_ip_addresses" {
+  description = <<-EOT
+    Developer IPs/CIDRs allowed to reach Managed MongoDB directly.
+
+    The app does not need an entry — it connects from the droplet. This is only
+    for people running Compass, mongosh, or a migration from their machine.
+
+    ⚠ Declare access here, never in the DigitalOcean console. The firewall
+    resource owns the entire rule set, so a console-added rule is silently
+    deleted by the next apply of unrelated work.
+  EOT
+
+  type    = list(string)
+  default = []
+}

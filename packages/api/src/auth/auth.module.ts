@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PermissionsModule } from '../permissions/permissions.module';
+import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -11,7 +12,11 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 @Module({
   imports: [
     PermissionsModule,
-    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    MongooseModule.forFeature([
+      { name: User.name, schema: UserSchema },
+      // For the agency name on the public invite preview (PAC-58).
+      { name: Agency.name, schema: AgencySchema },
+    ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
