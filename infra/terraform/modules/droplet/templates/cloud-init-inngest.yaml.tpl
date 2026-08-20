@@ -1,13 +1,28 @@
 #cloud-config
 #
+# !! THIS FILE MUST BE PURE ASCII. NON-ASCII CHARACTERS BREAK THE WHOLE DROPLET.
+#
+# cloud-init parses this as YAML before applying any of it. A single non-ASCII
+# byte - an em dash in a comment is enough - fails the parse, and cloud-init
+# then applies NOTHING: no deploy user, no Docker, no /opt directory. The
+# droplet boots, sshd answers, and every subsequent symptom points somewhere
+# else entirely. The log says only:
+#
+#   Failed loading yaml blob. unacceptable character #x0080 ... position 203
+#   Failed at merging in cloud config part from part-001: empty cloud config
+#
+# This happened: an em dash in the header comment below cost a day of chasing
+# an SSH key that was correct all along. `ci-terraform-templates` in
+# .github/workflows now fails the build on non-ASCII so it cannot recur.
+#
 # Bootstrap for the Inngest droplet.
 #
 # A deliberately stripped-down sibling of cloud-init.yaml.tpl: same deploy user,
-# same Docker install, but NO nginx, NO certbot and NO TLS script — this droplet
+# same Docker install, but NO nginx, NO certbot and NO TLS script - this droplet
 # serves nothing publicly. Its only inbound rules are SSH and port 8288 from the
 # app droplet, both enforced by the DigitalOcean firewall.
 #
-# ⚠ This is a SEPARATE FILE rather than conditionals inside the app template on
+# !! This is a SEPARATE FILE rather than conditionals inside the app template on
 # purpose. `user_data` cannot be changed in place: editing the app template
 # REPLACES the running app droplet. Keeping the two apart means work on one can
 # never destroy the other.
@@ -26,14 +41,14 @@ write_files:
   - path: /opt/sfa-inngest/README.txt
     permissions: "0644"
     content: |
-      Self-hosted Inngest — the durable event bus, scheduler and executor for
+      Self-hosted Inngest - the durable event bus, scheduler and executor for
       every asynchronous thing the SFA platform does.
 
       Deploy with: docker compose -f docker-compose.inngest.yml up -d
       /opt/sfa-inngest/.env is written in full by the deploy workflow on every
-      deploy — edit the GitHub Environment secrets, not the file on this box.
+      deploy - edit the GitHub Environment secrets, not the file on this box.
 
-      ⚠ THE DASHBOARD ON :8288 HAS NO AUTHENTICATION.
+      !! THE DASHBOARD ON :8288 HAS NO AUTHENTICATION.
       Port 8288 serves the Event API, the REST/GraphQL API and the dashboard UI
       with no login of any kind. The DigitalOcean firewall is the ONLY thing
       keeping it off the public internet. Never open it, and never add nginx
@@ -58,7 +73,7 @@ runcmd:
   - mkdir -p /opt/sfa-inngest
   - chown -R deploy:deploy /opt/sfa-inngest
   # Host firewall as a second layer behind the DO firewall. 8288 is allowed only
-  # from inside the VPC — the DO firewall narrows that further to the app
+  # from inside the VPC - the DO firewall narrows that further to the app
   # droplet specifically, but if that rule is ever loosened by accident this
   # still keeps the dashboard off the public internet.
   - ufw default deny incoming
