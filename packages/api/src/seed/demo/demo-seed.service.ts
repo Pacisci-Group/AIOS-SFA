@@ -37,6 +37,7 @@ import {
   INSURANCE_MONTHS,
   normalizeLeadSource,
   POLICY_TYPES,
+  resolveItemCount,
 } from '@sfa/shared';
 import { AUDIT_ITEM_DUE_DAYS } from '../../audit-generation/audit-generation.service';
 import { seedAuditTemplates } from '../audit-templates.seed';
@@ -646,9 +647,14 @@ export class DemoSeedService {
           // one submitted before PAC-56 #2 shipped, has none — so the Lead
           // Detail card's "omit when empty" path has data to exercise locally.
           policiesOfInterest: rng.chance(0.75)
-            ? rng
-                .sample(POLICY_TYPES, rng.int(1, 3))
-                .map((policyType) => ({ policyType, itemCount: rng.int(1, 3) }))
+            ? rng.sample(POLICY_TYPES, rng.int(1, 3)).map((policyType) => ({
+                policyType,
+                // Only the vehicle types carry a count the form asks for;
+                // everything else is one thing. Seeding 1–3 items on a Home
+                // policy would put data in the demo tenant that no form can
+                // produce — see `resolveItemCount`.
+                itemCount: resolveItemCount(policyType, rng.int(1, 3)),
+              }))
             : [],
           producerId: producer.userId,
           householdId: hh?.id,
@@ -744,7 +750,13 @@ export class DemoSeedService {
             // (PAC-10) without anyone having to run the backfill first.
             quoteDateYmd: quoteDateYmd(quoteDate),
             premium,
-            itemCount: products.length + rng.int(0, 2),
+            // Summed the way a real recap's rows sum: a vehicle line can
+            // carry several, every other line carries exactly one.
+            itemCount: products.reduce(
+              (total, product) =>
+                total + resolveItemCount(product, rng.int(1, 3)),
+              0,
+            ),
             productsQuoted: products,
             // PAC-56 #16 — seeded so the Quote Summary card and the edit form
             // have something to render locally.
@@ -837,7 +849,12 @@ export class DemoSeedService {
           soldDateYmd: this.ymd(soldDate),
           premium,
           premiumSource: 'rollup',
-          itemCount: policyTypes.length + rng.int(0, 3),
+          // Summed the way `deriveDealAggregates` sums the real thing.
+          itemCount: policyTypes.reduce(
+            (total, policyType) =>
+              total + resolveItemCount(policyType, rng.int(1, 3)),
+            0,
+          ),
           policyCount: policyTypes.length,
           dealType,
           isBundle,

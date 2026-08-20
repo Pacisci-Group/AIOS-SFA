@@ -107,7 +107,7 @@ docs {
   | policyType     | enum            | a canonical `POLICY_TYPES` label                  |
   | carrier        | string \| null  | ≤ 120 chars                                       |
   | premium        | number          | 0 – 1,000,000                                     |
-  | items          | integer         | 0 – 100                                           |
+  | items          | integer         | 0 – 100 — normalized; see below                    |
   | effectiveDate  | string \| null  | `YYYY-MM-DD` — a calendar date, not an instant     |
   | expirationDate | string \| null  | `YYYY-MM-DD`                                      |
   | status         | string \| null  | free text; there is no canonical status vocabulary |
@@ -115,6 +115,19 @@ docs {
   `null` **clears** an optional field; omitting it leaves the stored value
   alone. The two are different requests — a producer blanking a mistyped carrier
   is not one who only touched the premium.
+
+  ## `items` is normalized against the policy type
+  Only a vehicle policy has a countable item: `Auto`, `Auto - Special`,
+  `Motorcycle` and `Boat Owners` keep the number sent, and any other **canonical**
+  type is stored as `1`. There is nothing on a Home or Umbrella policy to count,
+  so the edit dialog does not show the field for one.
+
+  Applied whenever the request touches **`items` or `policyType`**, which is what
+  makes re-typing an `Auto ×3` policy as `Home` take the stale count with it. A
+  policy whose stored type is *uncatalogued* (a migrated value normalizing to
+  nothing we know) is left alone — forcing `1` there would destroy a real count
+  on the first unrelated save. The correction is recorded in the edit log
+  (PAC-65 #9) like any other field change.
 
   ## Deliberately not editable
   - **`active`** — `Household.totalActivePolicies` is a stored roll-up nothing

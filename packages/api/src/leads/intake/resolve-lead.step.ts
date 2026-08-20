@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { LEAD_STATUSES, leadStatusQueryValues } from '@sfa/shared';
+import {
+  LEAD_STATUSES,
+  leadStatusQueryValues,
+  resolveItemCount,
+} from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { normalizeStoredAddress } from '../../common/address/household-address';
 import { resolvePolicyPropertyAddress } from '../../common/address/policy-property-address';
@@ -71,7 +75,8 @@ function resolvePolicies(input: IntakeInput): LeadPolicyOfInterest[] {
     );
     return {
       policyType: policy.policyType,
-      itemCount: policy.itemCount,
+      // Never taken straight off the wire — the public form posts here too.
+      itemCount: resolveItemCount(policy.policyType, policy.itemCount),
       propertyAddress,
       // Only meaningful where an address exists — a non-property row is not
       // "same as household", it simply has no dwelling.

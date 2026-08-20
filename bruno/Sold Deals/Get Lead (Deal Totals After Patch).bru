@@ -28,8 +28,9 @@ tests {
   });
 
   test("item count followed too", function () {
-    // Auto patched from 2 items to 3; Home stays at 3.
-    expect(res.getBody().deal.itemCount).to.equal(6);
+    // Auto patched from 2 vehicles to 3; the Home row holds its implied 1,
+    // because only a vehicle policy is ever counted.
+    expect(res.getBody().deal.itemCount).to.equal(4);
   });
 
   test("policy count is unchanged — nothing was added or removed", function () {

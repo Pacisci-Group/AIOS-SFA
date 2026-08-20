@@ -4,7 +4,11 @@ import type {
   QuoteRecapPolicyInput,
   UpdateQuoteRecapInput,
 } from "@sfa/shared";
-import { INSURANCE_MONTHS, POLICY_TYPES } from "@sfa/shared";
+import {
+  INSURANCE_MONTHS,
+  POLICY_TYPES,
+  resolveItemCount,
+} from "@sfa/shared";
 import { z } from "zod";
 import {
   emptyPolicyAddress,
@@ -138,7 +142,8 @@ export function toPolicyInputs(
   return policies.map((p) => ({
     policyType: p.policyType,
     premium: Number(p.premium),
-    itemCount: Number(p.itemCount),
+    // 1 for every type the drawer does not ask about — see `resolveItemCount`.
+    itemCount: resolveItemCount(p.policyType, Number(p.itemCount)),
     sameAsHousehold: p.sameAsHousehold,
     // Dropped for a row that owns no address — see `policyAddressInput`.
     propertyAddress: policyAddressInput(p),

@@ -1,4 +1,4 @@
-import { itemCountNoun } from "@sfa/shared";
+import { itemCountNoun, policyTypeHasItemCount } from "@sfa/shared";
 import { Trash2 } from "lucide-react";
 import { FormSection } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
@@ -53,9 +53,19 @@ export function PolicySummaryList({
               </div>
               <p className="text-xs text-muted-foreground">
                 {policy.carrier} ·{" "}
-                {currency.format(Number(policy.premium) || 0)} ·{" "}
-                {policy.itemCount}{" "}
-                {itemCountNoun(policy.policyType, Number(policy.itemCount) || 0)}
+                {currency.format(Number(policy.premium) || 0)}
+                {/* Only where the count was a question — see
+                    `policyTypeHasItemCount`. */}
+                {policyTypeHasItemCount(policy.policyType) && (
+                  <>
+                    {" · "}
+                    {policy.itemCount}{" "}
+                    {itemCountNoun(
+                      policy.policyType,
+                      Number(policy.itemCount) || 0,
+                    )}
+                  </>
+                )}
               </p>
             </div>
             <Button

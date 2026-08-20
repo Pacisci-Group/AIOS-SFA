@@ -93,7 +93,7 @@ The client lifecycle is a **4-phase, session-isolated form pipeline** (forms com
 
 **Four canonical entities:**
 - **Household** — foundational: living address + **array of contacts** (Primary, Spouse, Child, Driver, Additional Named Insured; each has name/DOB/relationship). `POST /api/households → householdId`.
-- **Quote** — proposal linked to a Household: policy types (multi-select), premium + item count per policy, conditional property address ("Same as Household" toggle), quote document upload, notes. `POST /api/quotes → quoteId`.
+- **Quote** — proposal linked to a Household: policy types (multi-select), premium per policy (+ an item count on the vehicle types only — Auto/Auto - Special/Motorcycle/Boat Owners; every other type is 1 and is not asked), conditional property address ("Same as Household" toggle), quote document upload, notes. `POST /api/quotes → quoteId`.
 - **Sold Deal** — execution metrics linked to a Household; contains **multiple Sold Policies**. Multi-step wizard (8 "cards"): Sold Date → Policy Type → Basic Details (carrier, policy # with `GET /api/policies/check` dedupe) → Financials → **Discounts & Required Docs (Card 5, highly conditional)** → Prior Insurance → Cancellation → Loop control. `POST /api/sold-deals` → **auto-triggers audit**.
 - **Audit Record** — compliance checklist **auto-generated on Sold submission** (`POST /api/audit-records`). Dynamic flags from Card 5: Escrow verified, Inspection Passed/Waived, Fire Subscription receipt, New Roof receipt, Drivewise (mention registration), Defensive Driver certificates (per selected driver), Student report card/transcript.
 

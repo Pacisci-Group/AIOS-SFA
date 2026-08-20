@@ -1,12 +1,18 @@
 import {
   AUTO_POLICY_TYPES,
+  COUNTABLE_POLICY_TYPES,
+  IMPLIED_ITEM_COUNT,
   POLICY_TYPES,
   POLICY_TYPE_CODE_ALIASES,
   PROPERTY_POLICY_TYPES,
   isAutoPolicyType,
+  isCanonicalPolicyType,
   isPropertyPolicyType,
+  itemCountLabel,
   normalizePolicyType,
+  policyTypeHasItemCount,
   policyTypeQueryValues,
+  resolveItemCount,
 } from './policy-type';
 
 /**
@@ -118,6 +124,65 @@ describe('policy-type vocabulary', () => {
     }
     for (const label of PROPERTY_POLICY_TYPES) {
       expect(isAutoPolicyType(label)).toBe(false);
+    }
+  });
+
+  it('asks for an item count only on the vehicle types', () => {
+    for (const label of COUNTABLE_POLICY_TYPES) {
+      expect(policyTypeHasItemCount(label)).toBe(true);
+    }
+    // Raw codes answer too: Auto, Motorcycle, Boat Owners.
+    expect(policyTypeHasItemCount('PYgez')).toBe(true);
+    expect(policyTypeHasItemCount('gGKei')).toBe(true);
+    expect(policyTypeHasItemCount('NlLBc')).toBe(true);
+
+    // The types the field used to confuse producers on. There is nothing on a
+    // house or a life policy to count — the answer is always one.
+    for (const label of PROPERTY_POLICY_TYPES) {
+      expect(policyTypeHasItemCount(label)).toBe(false);
+    }
+    expect(policyTypeHasItemCount('Umbrella')).toBe(false);
+    expect(policyTypeHasItemCount('Life')).toBe(false);
+    expect(policyTypeHasItemCount('Valuable Item Protection')).toBe(false);
+    expect(policyTypeHasItemCount(undefined)).toBe(false);
+  });
+
+  it('is exactly the set that has a type-specific count noun', () => {
+    // The generic "Item count" wording is the tell: a type that needs it is a
+    // type with nothing to count, and so is a type we do not ask.
+    for (const label of POLICY_TYPES) {
+      expect(policyTypeHasItemCount(label)).toBe(
+        itemCountLabel(label) !== 'Item count',
+      );
+    }
+  });
+
+  it('stores the count sent for a vehicle policy and 1 for everything else', () => {
+    expect(resolveItemCount('Auto', 3)).toBe(3);
+    expect(resolveItemCount('Boat Owners', 2)).toBe(2);
+    // A raw code resolves the same way a label does.
+    expect(resolveItemCount('OMJjl', 4)).toBe(4);
+
+    expect(resolveItemCount('Home', 3)).toBe(IMPLIED_ITEM_COUNT);
+    expect(resolveItemCount('Umbrella', 7)).toBe(IMPLIED_ITEM_COUNT);
+    expect(resolveItemCount('sNMRK', 9)).toBe(IMPLIED_ITEM_COUNT);
+  });
+
+  it('leaves an uncatalogued type\'s stored count alone', () => {
+    // `PATCH /policies/:id` edits migrated rows whose type normalizes to
+    // nothing we know. Forcing 1 there would destroy a real count on the first
+    // unrelated save.
+    expect(isCanonicalPolicyType('Flood')).toBe(false);
+    expect(resolveItemCount('Flood', 5)).toBe(5);
+    expect(resolveItemCount('', 5)).toBe(5);
+    expect(resolveItemCount(undefined, 5)).toBe(5);
+
+    // Every canonical label and every code aliasing to one is recognised.
+    for (const label of POLICY_TYPES) {
+      expect(isCanonicalPolicyType(label)).toBe(true);
+    }
+    for (const code of Object.keys(POLICY_TYPE_CODE_ALIASES)) {
+      expect(isCanonicalPolicyType(code)).toBe(true);
     }
   });
 });

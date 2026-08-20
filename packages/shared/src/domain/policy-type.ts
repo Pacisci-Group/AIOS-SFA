@@ -171,6 +171,70 @@ export function isAutoPolicyType(value?: string | null): boolean {
   return AUTO_SET.has(normalizePolicyType(value));
 }
 
+/** True when the value is one of our canonical labels, or a code aliasing to one. */
+export function isCanonicalPolicyType(value?: string | null): boolean {
+  return CANONICAL_BY_LOWER.has(normalizePolicyType(value).toLowerCase());
+}
+
+/**
+ * Types where "how many?" is a real question — the only ones that ask for an
+ * item count (PAC-65 #7 follow-up).
+ *
+ * David: an item count on a Home, Renters, Umbrella or Life policy confuses
+ * producers, because there is nothing there to count — the answer is always
+ * one. Only a vehicle policy insures a countable fleet, so only a vehicle
+ * policy is asked. Boat Owners is in because a boat is a vehicle you can own
+ * two of; it is exactly the set {@link itemCountLabel} already gives a
+ * type-specific noun to ("Number of Vehicles" / "Number of Boats"), and the
+ * generic "Item count" wording it falls back to is precisely the question we
+ * are now not asking.
+ *
+ * ⚠ This is a *form* rule with a storage consequence: {@link resolveItemCount}
+ * is what makes the stored count 1 rather than whatever a client sent, so no
+ * write path may take `itemCount` straight off the wire.
+ */
+export const COUNTABLE_POLICY_TYPES: readonly PolicyType[] = [
+  ...AUTO_POLICY_TYPES,
+  'Boat Owners',
+];
+
+const COUNTABLE_SET = new Set<string>(COUNTABLE_POLICY_TYPES);
+
+/**
+ * Should this policy type be asked for an item count at all?
+ *
+ * Normalizes first, so this answers correctly for a raw code too. An
+ * unrecognized type answers `false` — see {@link resolveItemCount} for why that
+ * does *not* mean "overwrite it with 1".
+ */
+export function policyTypeHasItemCount(value?: string | null): boolean {
+  return COUNTABLE_SET.has(normalizePolicyType(value));
+}
+
+/** What a policy nobody is asked to count carries. Always one. */
+export const IMPLIED_ITEM_COUNT = 1;
+
+/**
+ * The count to store for a policy, given the count a client sent.
+ *
+ * The forms hide the field for a non-countable type and hold `1`, so this is
+ * belt-and-braces on the client — but it is the *only* guarantee on the server,
+ * where the public lead-intake form and the Bruno collection can both post
+ * whatever they like.
+ *
+ * An **unrecognized** type keeps its stored count. `PATCH /policies/:id` edits
+ * migrated rows whose type may normalize to nothing at all; forcing those to 1
+ * would destroy a real count on the first unrelated save, which is the same
+ * reasoning that makes `policy-schema.ts` seed an unknown type as `""`.
+ */
+export function resolveItemCount(
+  policyType: string | null | undefined,
+  count: number,
+): number {
+  if (policyTypeHasItemCount(policyType)) return count;
+  return isCanonicalPolicyType(policyType) ? IMPLIED_ITEM_COUNT : count;
+}
+
 /**
  * What one "item" on a policy actually is (PAC-65 #7).
  *
@@ -178,8 +242,12 @@ export function isAutoPolicyType(value?: string | null): boolean {
  * is also shown for Boat and Motorcycle. A blanket rename would put "Number of
  * Vehicles" on a boat policy, so the label follows the policy type instead:
  * the auto family are vehicles ({@link isAutoPolicyType} is exactly Auto,
- * Auto - Special and Motorcycle), Boat Owners are boats, and everything else
- * keeps the generic wording — an Umbrella or Life policy counts neither.
+ * Auto - Special and Motorcycle) and Boat Owners are boats.
+ *
+ * The generic "Item count" fallback survives for **display only**. No form asks
+ * it any more — {@link policyTypeHasItemCount} is false for every type that
+ * would reach it — but a migrated policy carrying an uncatalogued type still
+ * has a stored count to render, and it needs a word.
  *
  * ⚠ Labels only. The stored field stays `itemCount` (and `items` on `Policy`);
  * renaming it across five collections and four DTOs would be a migration, and

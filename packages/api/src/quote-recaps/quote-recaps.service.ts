@@ -9,6 +9,7 @@ import {
   QUOTE_ADVANCE_TARGET,
   normalizeLeadStatus,
   quoteAdvanceableStatusValues,
+  resolveItemCount,
 } from '@sfa/shared';
 import type {
   AccessContext,
@@ -118,7 +119,9 @@ function derivePolicies(
     return {
       policyType: row.policyType,
       premium: roundCents(row.premium),
-      itemCount: row.itemCount,
+      // Never taken straight off the wire: a type nobody is asked to count is
+      // stored as 1 whatever a client sent. See `resolveItemCount`.
+      itemCount: resolveItemCount(row.policyType, row.itemCount),
       propertyAddress,
       sameAsHousehold:
         Boolean(propertyAddress) && row.sameAsHousehold !== false,
