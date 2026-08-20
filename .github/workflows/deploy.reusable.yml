@@ -80,8 +80,28 @@ jobs:
     # Selects the GitHub Environment. Its secrets (same names across all
     # environments) resolve to that environment's values.
     environment: ${{ inputs.environment }}
+    outputs:
+      # Republished for deploy-inngest, which cannot read it itself. See the
+      # comment on that job.
+      inngest_enabled: ${{ steps.flags.outputs.inngest_enabled }}
     steps:
       - uses: actions/checkout@v4
+
+      # Environment variables ARE readable here — the environment is bound once
+      # the job is running, unlike in a job-level `if`.
+      - name: Resolve environment flags
+        id: flags
+        run: |
+          enabled="${{ vars.INNGEST_ENABLED }}"
+          echo "inngest_enabled=${enabled}" >> "$GITHUB_OUTPUT"
+          if [ "$enabled" = "true" ]; then
+            echo "Inngest is ENABLED for '${{ inputs.environment }}'."
+          else
+            # Loud rather than silent: a skipped deploy-inngest with no
+            # explanation is indistinguishable from a broken workflow, which is
+            # how this went unnoticed the first time.
+            echo "::warning::INNGEST_ENABLED is '${enabled}' (not 'true') for the '${{ inputs.environment }}' Environment — deploy-inngest will be skipped and no async work will run. Set it under Settings > Environments > ${{ inputs.environment }} > Environment variables (NOT Secrets)."
+          fi
 
       # Fail here rather than mid-rollout. Object storage in particular degrades
       # *silently*: with STORAGE_ENDPOINT unset, StorageService logs a warning,
@@ -286,7 +306,19 @@ jobs:
   # race against the poll interval.
   deploy-inngest:
     needs: deploy
-    if: ${{ vars.INNGEST_ENABLED == 'true' }}
+    # Gated on a job OUTPUT, not directly on `vars.INNGEST_ENABLED`.
+    #
+    # ⚠ An Environment-level variable CANNOT gate a job here. A job-level `if`
+    # is evaluated before the job is dispatched to a runner, which is before
+    # the `environment:` below has been bound — so `vars.INNGEST_ENABLED`
+    # resolves against repository/organisation variables only, finds nothing,
+    # and the job silently skips. It skips whether or not the variable is set
+    # correctly, which makes the failure look exactly like a misconfiguration.
+    #
+    # `deploy` reads the same variable at STEP level, where the environment IS
+    # bound, and republishes it as an output. Same flag, same source of truth,
+    # evaluated somewhere it actually resolves.
+    if: ${{ needs.deploy.outputs.inngest_enabled == 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
