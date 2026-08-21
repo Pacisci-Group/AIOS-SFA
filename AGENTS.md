@@ -114,8 +114,14 @@ npm run test:e2e           # API e2e tests
 >   reseed. No SmartSuite/network needed. "Pat Producer"
 >   (`producer@smithfamily.local`) is the data-rich hero for the Producer Dashboard.
 > - `api:migrate:dev` — real **SmartSuite → Mongo** import; needs SmartSuite
->   credentials (run `api:seed:dev` first). BigQuery (legacy mailer prospect data)
->   is **not migrated** — deferred (see arch doc O2).
+>   credentials (run `api:seed:dev` first).
+> - `api:migrate:mailers:dev` — **BigQuery → Mongo** backfill of the legacy
+>   mailer history (arch decision O2, resolved as *import*). Needs GCP
+>   credentials (`BQ_*` + `GOOGLE_APPLICATION_CREDENTIALS_JSON`) and is a
+>   **production deploy step**, not part of local development — the Super Admin
+>   RTP upload and the demo seed both populate a working `mailers` collection
+>   without it. Re-runnable: upserts on the control-number key, so a second run
+>   appends what is new and updates what changed.
 >
 > **After migrating, run `api:backfill:deal-refs:dev`** (deal/recap links +
 > policy match keys) — it only rewrites data already in Mongo, so it needs no

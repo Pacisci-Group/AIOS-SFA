@@ -748,7 +748,7 @@ Business logic in `SFA/lib/intake/` ports directly to NestJS services.
 | # | Question | Options | Recommendation |
 |---|----------|---------|----------------|
 | O1 | Is `office_manager` agency-wide or per-branch? | Agency / Branch | Per-branch `branch_manager` unless ops needs agency-wide |
-| O2 | Import BigQuery mailers or defer? | Import / Defer / CSV upload | Import to `mailers` collection if volume is manageable |
+| ~~O2~~ | ~~Import BigQuery mailers or defer?~~ | — | **Resolved 2026-08-12: import.** Mailers live in a Mongo `mailers` collection, written by two importers that share one mapper — the Super Admin RTP upload (PAC-73) and a re-runnable BigQuery backfill (`api:migrate:mailers`). The schema is modelled on the source spreadsheet, not on the BigQuery table, because BigQuery is a transform of it and the upload receives the original. |
 | O3 | File storage provider? | S3 / GCS / GridFS | S3 or GCS for production |
 | O4 | API style? | REST / GraphQL | REST (matches current Next.js API patterns) |
 
