@@ -3,10 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { getModelToken } from '@nestjs/mongoose';
 import type { MailerImportRejection } from '@sfa/shared';
 import { Model } from 'mongoose';
-import {
-  importMailerRows,
-  type MailerUpsertTarget,
-} from '../../common/mailers/mailer-import';
+import { importMailerRows } from '../../common/mailers/mailer-import';
 import { normalizeRow } from '../../common/mailers/mailer-row.mapper';
 import { Mailer } from '../../mailers/schemas/mailer.schema';
 import { Agency } from '../../platform/schemas/agency.schema';
@@ -141,7 +138,7 @@ async function main(): Promise<void> {
 
     const flush = async (agencyId: string, rows: Record<string, unknown>[]) => {
       const result = await importMailerRows(
-        arrayToAsyncIterable(rows),
+        rows,
         {
           agencyId,
           system: 'bigquery',
@@ -219,13 +216,6 @@ async function main(): Promise<void> {
   } finally {
     await app.close();
   }
-}
-
-/** The engine consumes an async iterable; a batched array is not one. */
-async function* arrayToAsyncIterable(
-  rows: Record<string, unknown>[],
-): AsyncIterable<Record<string, unknown>> {
-  for (const row of rows) yield row;
 }
 
 main().catch((error) => {

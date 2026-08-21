@@ -109,7 +109,12 @@ const SINGLE_VALUED_COLUMNS = [
  * than one-shot.
  */
 export async function importMailerRows(
-  rows: AsyncIterable<Record<string, unknown>>,
+  // Accepts a plain `Iterable` as well: the upload path hands over a CSV parse
+  // stream, but the BigQuery backfill batches rows per agency and already holds
+  // an array. `for await…of` consumes both, so widening the signature is free
+  // and saves every array-holding caller a generator wrapper.
+  rows:
+    AsyncIterable<Record<string, unknown>> | Iterable<Record<string, unknown>>,
   ctx: MailerMapContext,
   deps: { model: MailerUpsertTarget },
   options: MailerImportOptions = {},
