@@ -19,7 +19,9 @@
     "migrate": "node dist/migration/migrate.js",
     "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
     "backfill:deal-refs": "node dist/migration/backfill/backfill-deal-refs.js",
+    "migrate:mailers": "node dist/migration/mailers/import-bigquery-mailers.js",
     "backfill:deal-refs:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/backfill-deal-refs.ts",
+    "migrate:mailers:dev": "ts-node -r tsconfig-paths/register src/migration/mailers/import-bigquery-mailers.ts",
     "fix:dedupe-indexes": "node dist/migration/backfill/fix-legacy-dedupe-indexes.js",
     "fix:dedupe-indexes:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/fix-legacy-dedupe-indexes.ts",
     "migrate:permissions": "node dist/seed/migrate-permissions.js",
@@ -34,6 +36,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1093.0",
     "@aws-sdk/s3-request-presigner": "^3.1093.0",
+    "@google-cloud/bigquery": "^8.3.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",

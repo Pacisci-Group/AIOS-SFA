@@ -111,10 +111,7 @@ async function seed() {
     });
     console.log('Created agency: Smith Family Agency');
   } else {
-    await agencyModel.updateOne(
-      { _id: agency._id },
-      { $set: mailerIdentity },
-    );
+    await agencyModel.updateOne({ _id: agency._id }, { $set: mailerIdentity });
     console.log('Agency already exists, mailer identity reconciled');
   }
 

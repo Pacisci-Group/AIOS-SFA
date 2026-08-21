@@ -7,7 +7,11 @@ import { Model } from 'mongoose';
 import { importMailerRows } from '../src/common/mailers/mailer-import';
 import { normalizeHeader } from '../src/common/mailers/mailer-row.mapper';
 import { Mailer } from '../src/mailers/schemas/mailer.schema';
-import { closeTestApp, createTestApp, dropTestDatabase } from './helpers/test-app';
+import {
+  closeTestApp,
+  createTestApp,
+  dropTestDatabase,
+} from './helpers/test-app';
 
 const FIXTURE = join(__dirname, 'fixtures/mailers/rtp-sample.csv');
 const AGENCY_ID = '6a86ef5140258c85a093cc4e';
