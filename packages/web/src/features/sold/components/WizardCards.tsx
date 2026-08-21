@@ -4,6 +4,7 @@ import {
   POLICY_TYPE_OPTIONS,
   itemCountLabel,
   policyTypeHasItemCount,
+  premiumTermLabel,
 } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -284,6 +285,10 @@ const CANCELLED_BY_SELECT = CANCELLED_BY_OPTIONS.map((value) => ({
  * comes earlier in the loop, so the type is always known by the time this
  * renders.
  *
+ * The **premium's** label follows it too: an auto policy is quoted on a 6-month
+ * term, so the box asks for the 6-month figure by name rather than leaving the
+ * producer to guess and the summary to mislabel what they guessed.
+ *
  * Everything else — Home, Renters, Umbrella, Life — is not asked at all and
  * holds `1`: there is nothing on such a policy to count, so the field only ever
  * collected a wrong answer. The card is then premium alone, which is why it
@@ -309,7 +314,7 @@ export const PolicyFinancialsCard = withForm({
         <form.AppField name="premium">
           {(f) => (
             <f.NumberField
-              label="Premium"
+              label={premiumTermLabel(policyType)}
               inputMode="decimal"
               step="0.01"
               min="0"

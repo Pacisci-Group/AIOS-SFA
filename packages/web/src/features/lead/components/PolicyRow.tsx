@@ -1,4 +1,5 @@
 import type { LeadDetailPolicy } from "@sfa/shared";
+import { premiumTermSuffix } from "@sfa/shared";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "./lead-display";
@@ -40,7 +41,9 @@ export function PolicyRow({ policy }: { policy: LeadDetailPolicy }) {
         {policy.premium > 0 && (
           <p className="mt-1 text-base tabular-nums text-card-foreground">
             {formatCurrency(policy.premium)}
-            <span className="text-sm text-muted-foreground">/yr</span>
+            <span className="text-sm text-muted-foreground">
+              {premiumTermSuffix(policy.policyType)}
+            </span>
           </p>
         )}
       </div>

@@ -2,6 +2,7 @@ import {
   isCanonicalPolicyType,
   itemCountLabel,
   policyTypeHasItemCount,
+  premiumTermSuffix,
 } from '@sfa/shared';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -74,7 +75,10 @@ export function PolicyDrawer({
                   label="Status"
                   value={policy.policyStatus ?? (policy.active ? 'Active' : 'Inactive')}
                 />
-                <DrawerRow label="Premium" value={money(policy.premium)} />
+                <DrawerRow
+                  label="Premium"
+                  value={`${money(policy.premium)}${premiumTermSuffix(policy.policyType)}`}
+                />
                 {/*
                   Shown only where the count means something: the vehicle
                   types, which are the only ones asked for it — plus any

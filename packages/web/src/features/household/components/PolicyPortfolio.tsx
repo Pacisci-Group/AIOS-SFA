@@ -78,7 +78,9 @@ export function PolicyCard({ policy, onClick, isSelected }: { policy: Policy; on
 
       <div className="flex items-end justify-between">
         <div>
-          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>Annual Premium</p>
+          {/* Just "Premium" — the term rides on `premiumFreq` beside the
+              figure, and "Annual Premium … $940 /6 mo" contradicts itself. */}
+          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>Premium</p>
           <p className="text-lg font-semibold mt-0.5" style={{ color: "var(--foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
             {policy.premium}<span className="text-xs font-normal" style={{ color: "var(--muted-foreground)" }}>{policy.premiumFreq}</span>
           </p>
@@ -169,6 +171,9 @@ export function PolicyPortfolio({ policies, isDemo = false }: PolicyPortfolioPro
   const displayPolicies = policies.map(toDisplayPolicy);
   const activePolicies = displayPolicies.filter((p) => p.status === "Active");
 
+  // Summed across policy types, so it mixes a 6-month auto premium with an
+  // annual property one. It is labelled "Total Premium" rather than "Total
+  // Annual Premium" for that reason — no single term is true of the sum.
   const totalPremium = activePolicies.reduce((sum, p) => sum + p.premiumValue, 0);
   const inactiveCount = displayPolicies.length - activePolicies.length;
 
@@ -191,10 +196,10 @@ export function PolicyPortfolio({ policies, isDemo = false }: PolicyPortfolioPro
         </div>
         <div className="text-right">
           <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-            Total Annual Premium
+            Total Premium
           </p>
           <p className="text-xl font-semibold" style={{ color: "#4ade80", fontFamily: "'JetBrains Mono', monospace" }}>
-            ${totalPremium.toLocaleString()}<span className="text-xs font-normal" style={{ color: "var(--muted-foreground)" }}>/yr</span>
+            ${totalPremium.toLocaleString()}
           </p>
         </div>
       </div>

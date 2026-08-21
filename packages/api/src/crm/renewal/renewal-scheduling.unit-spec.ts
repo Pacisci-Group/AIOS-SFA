@@ -1,5 +1,8 @@
 import {
   DEFAULT_RENEWAL_STEP_DEFINITIONS,
+  POLICY_TYPE_CODE_ALIASES,
+  SEMIANNUAL_TERM_POLICY_TYPES,
+  isSemiannualPolicyType,
   renewalTrackFor,
   normalizeRenewalPolicyType,
 } from '@sfa/shared';
@@ -158,19 +161,56 @@ describe('scheduleRenewalSteps', () => {
 });
 
 describe('renewalTrackFor', () => {
-  it.each(['Auto', 'auto', '  AUTO  ', 'Autos'])(
-    'puts %p on the semiannual track',
-    (policyType) => {
-      expect(renewalTrackFor(policyType)).toBe('semiannual');
-    },
-  );
+  it.each([
+    'Auto',
+    'auto',
+    '  AUTO  ',
+    'Autos',
+    // David, 2026-08-19 scrum: the 6-month term applies to "any auto vehicle",
+    // so the whole auto family is on this track — not just plain Auto. Both of
+    // these used to fall through to annual.
+    'Auto - Special',
+    'Motorcycle',
+    'motorcycles',
+  ])('puts %p on the semiannual track', (policyType) => {
+    expect(renewalTrackFor(policyType)).toBe('semiannual');
+  });
 
-  it.each(['Home', 'Life', 'Umbrella', 'Renters', '', null, undefined])(
-    'puts %p on the annual track',
-    (policyType) => {
-      expect(renewalTrackFor(policyType)).toBe('annual');
-    },
-  );
+  it.each([
+    'Home',
+    'Life',
+    'Umbrella',
+    'Renters',
+    'Boat Owners',
+    '',
+    null,
+    undefined,
+  ])('puts %p on the annual track', (policyType) => {
+    expect(renewalTrackFor(policyType)).toBe('annual');
+  });
+
+  it('resolves a raw SmartSuite code, which the old key match could not', () => {
+    // `Zgsh3` is the Policies table's Auto, and `policies.policyType` is where
+    // the migration put it. Folding it to a de-pluralized key ('zgsh3') matched
+    // nothing, so every migrated auto policy was scheduled two calls on the
+    // annual track while its premium rendered `/6 mo`.
+    for (const [code, label] of Object.entries(POLICY_TYPE_CODE_ALIASES)) {
+      const expected = isSemiannualPolicyType(label) ? 'semiannual' : 'annual';
+      expect(renewalTrackFor(code)).toBe(expected);
+    }
+    expect(renewalTrackFor('Zgsh3')).toBe('semiannual');
+    expect(renewalTrackFor('gGKei')).toBe('semiannual');
+  });
+
+  it('tracks the shared term vocabulary rather than its own list', () => {
+    // The renewal cadence and the premium's `/6 mo` label must never disagree,
+    // which is why `SEMIANNUAL_POLICY_TYPES` is derived from
+    // `SEMIANNUAL_TERM_POLICY_TYPES` instead of being hand-written.
+    for (const policyType of SEMIANNUAL_TERM_POLICY_TYPES) {
+      expect(renewalTrackFor(policyType)).toBe('semiannual');
+      expect(isSemiannualPolicyType(policyType)).toBe(true);
+    }
+  });
 
   it('normalizes the free-form policyType string', () => {
     // `Policy.policyType` has no enum behind it, so the match has to tolerate

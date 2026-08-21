@@ -5,6 +5,7 @@ import {
   isCanonicalPolicyType,
   itemCountLabel,
   policyTypeHasItemCount,
+  premiumTermLabel,
 } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { Loader2, Pencil } from "lucide-react";
@@ -162,7 +163,10 @@ export function EditPolicyDialog({ leadId, policy }: EditPolicyDialogProps) {
               <form.AppField name="premium">
                 {(f) => (
                   <f.NumberField
-                    label="Annual premium"
+                    // Follows the pending type, like the item count below:
+                    // switching Home to Auto must say "6-month premium" before
+                    // the number is typed, not after it is saved.
+                    label={premiumTermLabel(policyType)}
                     // Takes the count's cell when there is no count.
                     className={!asksItemCount ? "sm:col-span-2" : undefined}
                     min="0"

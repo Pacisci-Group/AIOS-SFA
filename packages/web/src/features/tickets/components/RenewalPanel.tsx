@@ -10,7 +10,7 @@ import {
   PhoneCall,
   ShoppingCart,
 } from "lucide-react";
-import { RENEWAL_OUTCOME_LABELS } from "@sfa/shared";
+import { RENEWAL_OUTCOME_LABELS, premiumTermSuffix } from "@sfa/shared";
 import {
   getRenewalCycle,
   type RenewalOutcome,
@@ -145,7 +145,8 @@ export function RenewalPanel({
                   {policy.carrier && (
                     <div className="text-[10px] text-muted-foreground mt-0.5">
                       {policy.carrier}
-                      {policy.premium > 0 && ` · $${policy.premium.toLocaleString()}/yr`}
+                      {policy.premium > 0 &&
+                        ` · $${policy.premium.toLocaleString()}${premiumTermSuffix(policy.policyType)}`}
                     </div>
                   )}
                 </div>
