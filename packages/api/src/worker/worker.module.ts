@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ImportMailersFn } from './functions/import-mailers.fn';
 import { SendInviteEmailFn } from './functions/send-invite-email.fn';
 import { MailDeliveryService } from './email/mail-delivery.service';
 import { mailTransportProvider } from './email/mail-transport.provider';
@@ -8,6 +9,13 @@ import {
   EmailMessageSchema,
 } from './email/schemas/email-message.schema';
 import { WorkerIndexesService } from './worker-indexes.service';
+import { Mailer, MailerSchema } from '../mailers/schemas/mailer.schema';
+import {
+  MailerImportRun,
+  MailerImportRunSchema,
+} from '../mailers/schemas/mailer-import-run.schema';
+import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
+import { StorageModule } from '../storage/storage.module';
 
 /**
  * All asynchronous work: Inngest function bodies, and every outbound email.
@@ -36,7 +44,19 @@ import { WorkerIndexesService } from './worker-indexes.service';
   imports: [
     MongooseModule.forFeature([
       { name: EmailMessage.name, schema: EmailMessageSchema },
+      // Owned by the API; registered here so the mailer import can read and
+      // write them. Schemas are the one thing the worker boundary lets across
+      // (see `eslint.config.mjs`) — duplicating them would be strictly worse.
+      { name: Mailer.name, schema: MailerSchema },
+      { name: MailerImportRun.name, schema: MailerImportRunSchema },
+      { name: Agency.name, schema: AgencySchema },
     ]),
+    // Imported explicitly rather than relying on `StorageModule` being
+    // `@Global()`: a global module is only global within the app that imports
+    // it, and `WorkerRootModule` does not import `AppModule`. Without this the
+    // standalone worker would boot fine and then fail to resolve
+    // `StorageService` the first time a file needed reading.
+    StorageModule,
   ],
   providers: [
     WorkerIndexesService,
@@ -46,6 +66,7 @@ import { WorkerIndexesService } from './worker-indexes.service';
     // services; InngestRegistry (in src/inngest/) collects them by decorator,
     // so listing it here is the only registration step.
     SendInviteEmailFn,
+    ImportMailersFn,
   ],
 })
 export class WorkerModule {}

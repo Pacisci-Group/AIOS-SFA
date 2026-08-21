@@ -5,6 +5,18 @@ export const PlatformPermission = {
   AgenciesRead: 'platform:agencies:read',
   AgenciesWrite: 'platform:agencies:write',
   ModulesToggle: 'platform:modules:toggle',
+  /**
+   * Read mailer import runs in the Super Admin panel (PAC-73).
+   *
+   * ⚠ Distinct from the agency-facing `mailers:read` **module** permission that
+   * PAC-61's drawer uses. That one is a page inside an agency's own app and is
+   * filtered by the agency's module entitlements; this is a platform capability
+   * and bypasses that filter entirely (see `resolvePermissionSet`). Granting
+   * one never implies the other.
+   */
+  MailersRead: 'platform:mailers:read',
+  /** Upload an RTP file and commit the mailers it produces (PAC-73). */
+  MailersWrite: 'platform:mailers:write',
 } as const;
 
 /** Agency administration permissions (Agency Owner manages users/branches). */

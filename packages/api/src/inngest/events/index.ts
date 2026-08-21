@@ -11,3 +11,4 @@
  * touching a single producer.
  */
 export * from './email.events';
+export * from './mailer.events';

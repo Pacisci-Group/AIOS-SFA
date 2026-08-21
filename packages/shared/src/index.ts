@@ -12,6 +12,7 @@ export * from './domain/lead-intake';
 export * from './domain/lead-source';
 export * from './domain/lead-status';
 export * from './domain/lead-temperature';
+export * from './domain/mailer';
 export * from './domain/performance';
 export * from './domain/policy-check';
 export * from './domain/policy-edit';
