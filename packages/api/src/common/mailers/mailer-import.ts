@@ -159,10 +159,21 @@ export async function importMailerRows(
     }
 
     counts.mapped += 1;
-    const { primaryKey, keys, doc } = result.mapped;
+    const { keys, doc } = result.mapped;
     batch.push({
       updateOne: {
-        filter: { agencyId: ctx.agencyId, controlNumberKeys: primaryKey },
+        // `$in` over **every** key, not equality on the first one.
+        //
+        // The unique index spans the whole array, so a document already holding
+        // *any* of these keys is the document this row belongs to. Filtering on
+        // one key would miss a match on the other and try to insert, which the
+        // index then rejects with E11000 — turning a row that should have been
+        // an update into a hard failure. Reachable whenever the two forms stop
+        // moving together, and easy to mistake for corrupt source data.
+        filter: {
+          agencyId: ctx.agencyId,
+          controlNumberKeys: { $in: keys },
+        },
         update: {
           $set: doc,
           // Set on insert only: the array is the unique index's key, and

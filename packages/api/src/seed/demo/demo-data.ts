@@ -394,5 +394,6 @@ export const DEMO_CONFIG = {
    */
   repeatQuoteLeads: 4,
   serviceTickets: 16,
+  mailers: 14,
   timeOffRequests: 6,
 } as const;

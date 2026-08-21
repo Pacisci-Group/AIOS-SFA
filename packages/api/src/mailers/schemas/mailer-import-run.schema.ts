@@ -66,8 +66,10 @@ export class MailerImportRun {
   @Prop({ default: 0 })
   sizeBytes: number;
 
+  /** `type: String` is required: a union reflects as `Object` and throws. */
   @Prop({
     required: true,
+    type: String,
     default: 'previewing',
     enum: ['previewing', 'previewed', 'importing', 'completed', 'failed'],
     index: true,

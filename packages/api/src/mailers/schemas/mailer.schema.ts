@@ -116,7 +116,19 @@ export const MailerCampaignSchema =
  */
 @Schema({ _id: false })
 export class MailerSource {
-  @Prop({ required: true, trim: true }) system: MailerSourceSystem;
+  /**
+   * ⚠ Needs an explicit `type: String`. `MailerSourceSystem` is a union, and
+   * `@nestjs/mongoose` reflects the *design-time* type — a union reflects as
+   * `Object`, which throws at schema construction. The build does not catch it
+   * because the decorator only runs when the module is imported.
+   */
+  @Prop({
+    required: true,
+    trim: true,
+    type: String,
+    enum: ['bigquery', 'spreadsheet'],
+  })
+  system: MailerSourceSystem;
   /** The pipeline's `FileName` (`SFA-20P`), echoed for provenance. */
   @Prop({ trim: true }) fileName?: string;
   /** The name the operator's browser sent, e.g. `SFA-RTP-2026-29.csv`. */
