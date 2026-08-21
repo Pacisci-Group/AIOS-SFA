@@ -121,14 +121,54 @@ export class PlatformMailersService {
       requestedBy,
     });
 
-    await this.inngest.send(mailerImportPreviewRequested, {
-      importRunId: run._id.toString(),
-      agencyId: dto.agencyId,
-      storageKey: dto.key,
-      requestedBy,
-    });
+    await this.dispatch(run, () =>
+      this.inngest.send(mailerImportPreviewRequested, {
+        importRunId: run._id.toString(),
+        agencyId: dto.agencyId,
+        storageKey: dto.key,
+        requestedBy,
+      }),
+    );
 
     return this.toDto(run);
+  }
+
+  /**
+   * Send the event, and mark the run `failed` if it cannot be sent.
+   *
+   * The run is written **before** the event so that the id exists to put in the
+   * payload. That ordering means a failed dispatch would otherwise leave a run
+   * sitting in `previewing` or `importing` for ever, with a spinner the operator
+   * cannot clear and no way to tell a queue outage from a slow file.
+   *
+   * ⚠ This differs from `UsersService.issueInvite`, which deliberately lets the
+   * throw stand and leaves a *pending* invite the owner can resend. There is no
+   * resend here — the panel's recovery is to upload again — so a run that will
+   * never be picked up is better recorded as failed than left pending.
+   *
+   * The error is still rethrown: the caller asked for work to be queued and it
+   * was not, so this must not answer 201.
+   */
+  private async dispatch(
+    run: MailerImportRunDocument,
+    send: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await send();
+    } catch (error) {
+      const message = (error as Error).message;
+      await this.runModel.updateOne(
+        { _id: run._id },
+        {
+          $set: {
+            status: 'failed',
+            error: `Could not queue the import: ${message}`,
+            finishedAt: new Date(),
+          },
+        },
+      );
+      throw error;
+    }
   }
 
   /** The poll target while a run is working, and the report once it is done. */
@@ -180,12 +220,14 @@ export class PlatformMailersService {
     run.mismatchConfirmed = run.agencyMismatch;
     await run.save();
 
-    await this.inngest.send(mailerImportCommitRequested, {
-      importRunId: run._id.toString(),
-      agencyId: run.agencyId,
-      storageKey: run.storageKey,
-      requestedBy: run.requestedBy,
-    });
+    await this.dispatch(run, () =>
+      this.inngest.send(mailerImportCommitRequested, {
+        importRunId: run._id.toString(),
+        agencyId: run.agencyId,
+        storageKey: run.storageKey,
+        requestedBy: run.requestedBy,
+      }),
+    );
 
     return this.toDto(run);
   }

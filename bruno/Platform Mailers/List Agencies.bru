@@ -1,0 +1,73 @@
+meta {
+  name: List Agencies
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/platform/agencies
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:post-response {
+  // By slug, not `[0]`. The list has no guaranteed order and a second agency
+  // exists the moment anyone exercises onboarding — picking the first one made
+  // the rest of this chain upload an SFA file against whichever tenant happened
+  // to sort first, which the mismatch gate then correctly refused to commit.
+  if (res.getStatus() === 200) {
+    const agency = res.getBody().find((a) => a.slug === "smith-family-agency");
+    if (agency) bru.setVar("platformAgencyId", agency._id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the mailer identity fields (PAC-73)", function () {
+    const agency = res.getBody().find((a) => a.slug === "smith-family-agency");
+    expect(agency, "seeded agency is present").to.exist;
+    // Set by the core seed. `ticker` resolves BigQuery rows to a tenant;
+    // `allstateAgencyId` is what an uploaded file's `agencyid` is checked
+    // against. Without them the backfill imports nothing and every upload warns.
+    expect(agency.ticker).to.equal("SFA");
+    expect(agency.allstateAgencyId).to.equal("A0B9049");
+  });
+}
+
+docs {
+  # GET /platform/agencies — every agency on the platform
+
+  Backs the Add Mailers agency picker. A platform operator has no agency of
+  their own, so every panel endpoint takes the target agency explicitly.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:agencies:read`
+  - **Data scope:** none — this is above the tenant boundary. `@SkipTenant()`
+    and `@SkipBranch()` are both set.
+
+  ## Response `200`
+  ```json
+  [
+    {
+      "_id": "6a86ef5140258c85a093cc4e",
+      "name": "Smith Family Agency",
+      "slug": "smith-family-agency",
+      "status": "active",
+      "ticker": "SFA",
+      "allstateAgencyId": "A0B9049",
+      "modules": { "leads": { "enabled": true } }
+    }
+  ]
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — not a platform account (an agency owner gets this).
+}

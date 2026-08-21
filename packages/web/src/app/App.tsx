@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ModuleKey } from '@sfa/shared';
+import { ModuleKey, PlatformPermission } from '@sfa/shared';
 import { AuthProvider } from '@/contexts/auth-context';
 import { ThemeProvider } from '@/app/ThemeProvider';
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/layout/ProtectedRoute';
@@ -56,6 +56,12 @@ const RolePermissionsPage = lazy(
   () => import('@/features/admin/RolePermissionsPage'),
 );
 const UsersPage = lazy(() => import('@/features/admin/UsersPage'));
+const SuperAdminHomePage = lazy(
+  () => import('@/features/platform/SuperAdminHomePage'),
+);
+const AddMailersPage = lazy(
+  () => import('@/features/platform/AddMailersPage'),
+);
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const UserPermissionsPage = lazy(
   () => import('@/features/admin/UserPermissionsPage'),
@@ -90,8 +96,14 @@ function LazyPage({ children }: { children: React.ReactNode }) {
  * navigation hub.
  */
 function RoleLanding() {
-  const { canRead } = usePermissions();
+  const { canRead, can } = usePermissions();
 
+  // A platform operator holds only `platform:*` and no module permissions, so
+  // without this they fall all the way through to the dev navigator — a page
+  // full of tenant dashboards they cannot open (PAC-73).
+  if (can(PlatformPermission.AgenciesRead)) {
+    return <Navigate to="/admin" replace />;
+  }
   if (canRead(ModuleKey.Management)) {
     return <Navigate to="/dashboard/management" replace />;
   }
@@ -429,6 +441,51 @@ export function App() {
                     </LazyPage>
                   }
                 />
+              </Route>
+
+              {/*
+                Super Admin panel (PAC-73). Above the tenant boundary: these
+                pages render their own `SuperAdminLayout`, not `AppShell`, and
+                the operator has no agency of their own.
+
+                `/admin` gates on `platform:agencies:read` because every
+                platform admin holds it (`ALL_PLATFORM_PERMISSIONS`), so it is
+                the cheapest "is this a platform operator" test. The one live
+                feature gates on its own permission and falls back to the panel
+                rather than to `/`, which would bounce the operator out of it.
+              */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={PlatformPermission.AgenciesRead}
+                  />
+                }
+              >
+                <Route
+                  path="/admin"
+                  element={
+                    <LazyPage>
+                      <SuperAdminHomePage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={PlatformPermission.MailersWrite}
+                      redirectTo="/admin"
+                    />
+                  }
+                >
+                  <Route
+                    path="/admin/mailers/add"
+                    element={
+                      <LazyPage>
+                        <AddMailersPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
               </Route>
             </Route>
 

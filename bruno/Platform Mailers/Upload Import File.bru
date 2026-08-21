@@ -1,0 +1,63 @@
+meta {
+  name: Upload Import File
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{mailerUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: text/csv
+}
+
+body:text {
+  controlno,New Control Number,firstname,lastname,address,city,state,zip,county,squarefeet,yearbuilt,dwellingli,otherlimit,livingexpl,guestlimit,familylimi,totalpremi,yearlyprem,monthlypre,New Yearly Premium 2,Campaign Number,FileName,type,product,quotedate,Right_Name,agencyphon,agencyid,agencyname,donotcall,donotmail
+  #3f2a91c7-4d5e-4b8a-9f10-9c41b2d70e58,9c41b2d70e58,Dana,Okafor,1420 S Cheyenne Ave,Bartlesville,OK,74003-5807,017,4195,1998,"$899,675.00","$89,967.50","$89,967.50","$1,000.00/person","$100,000.00/occurrence",3096.65,$1886.15/year*,157.18,1886.15,Week_Number-29,SFA-20P,Home,FQ,46216,Tulsa,918-984-6163,A0B9049,SMITH FAMILY AGENCY,No,No
+  ,,Rowan,Fitzgerald,1201 S Main St,Tulsa,OK,74119-0900,143,1900,1988,"$300,000.00","$30,000.00","$30,000.00","$1,000.00/person","$100,000.00/occurrence",1500.00,$1500.00/year*,125.00,1500.00,Week_Number-29,SFA-20P,Home,FQ,46216,Tulsa,918-984-6163,A0B9049,SMITH FAMILY AGENCY,No,No
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw RTP upload (step 2 of 3, PAC-73)
+
+  Not an API endpoint: this goes **straight to object storage** using the URL
+  from `Presign Import`. Same three-step chain as
+  `Deal Audits/Upload Audit Attachment`.
+
+  - **Auth:** `none` — deliberately. The collection-level bearer would be sent
+    on this request and **break the S3 signature**; a presigned URL carries its
+    own credentials.
+
+  ## Why this exists
+
+  `Create Import` calls `HeadObject` on the declared key and 400s if nothing
+  landed there, so the import cannot be exercised without a real upload. The
+  declared `size` in the presign body is the client's claim; `HeadObject` is the
+  only server-side evidence of what was actually stored.
+
+  ## The body
+
+  Two data rows, deliberately: one complete, and one with **no control number in
+  either column** so the run reports a rejection with a reason rather than
+  silently dropping it. The values are the real measured ones — all five money
+  formats, `quotedate` `46216` (= 2026-07-13 under the 1899-12-30 Excel epoch),
+  and `county` `017`, which must stay a zero-padded string.
+
+  ## Headers
+  `Content-Type` **must** match the signed value (`requiredHeaders` from the
+  presign response) or storage rejects the PUT.
+
+  ## Response
+  - `200 OK` — object stored; the key can now be imported.
+  - `403 Forbidden` — signature mismatch: usually an `Authorization` header
+    being sent, a differing `Content-Type`, or an expired URL.
+}

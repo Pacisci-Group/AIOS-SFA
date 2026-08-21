@@ -1,0 +1,127 @@
+/**
+ * Super Admin panel theme (PAC-73).
+ *
+ * The panel must be **unmistakably not the tenant app**, so an operator with
+ * both open never mistakes one for the other. It uses shadcn's default neutral
+ * palette instead of the Allstate navy/sky identity.
+ *
+ * ## How the scoping works
+ *
+ * `theme.css` maps every Tailwind colour utility through `@theme inline`
+ * (`--color-background: var(--background)`, …). Because those aliases are
+ * `var()` indirections resolved at use site, redefining the **raw** token under
+ * a scope retints every `bg-background` / `bg-card` / `text-primary` inside it,
+ * with no new `@theme` entries. The `--color-*` names are global and must not
+ * be re-declared here.
+ *
+ * `:root` and `.dark` in `theme.css` are **not touched**. Editing those would
+ * repaint all seven tenant dashboards.
+ *
+ * ## Why the class goes on `<html>`, not on the panel's layout root
+ *
+ * Radix portals — `Dialog`, `Sheet`, `Select`, `DropdownMenu` — and the sonner
+ * `Toaster` all mount into `document.body`, outside any React layout root. A
+ * root-scoped class would leave every modal, dropdown and toast in the panel
+ * rendering in the Allstate theme, which is worse than not scoping at all: the
+ * chrome would say "platform" while the menus said "tenant". `SuperAdminLayout`
+ * adds the class to `document.documentElement` on mount and removes it on
+ * unmount, so portals inherit it and tenant pages are untouched.
+ *
+ * ## Both themes must be complete
+ *
+ * Every token defined in **both** `:root` and `.dark` is redefined in both
+ * blocks below. A token defined in only one would half-inherit the navy theme
+ * and render an Allstate blue button on an otherwise neutral page.
+ *
+ * ⚠ `--accent` is shadcn's subtle hover/focus surface — `focus:bg-accent` on
+ * every menu item, `bg-accent` on `Skeleton` — **not** a brand accent. Setting
+ * it to a saturated colour is what made menus and skeletons render green before
+ * PAC-56. It stays neutral here.
+ */
+
+.super-admin {
+  --background: #FFFFFF;
+  --foreground: #0A0A0A;
+  --card: #FFFFFF;
+  --card-foreground: #0A0A0A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0A0A0A;
+  /* Neutral near-black, deliberately not a brand colour. */
+  --primary: #171717;
+  --primary-foreground: #FAFAFA;
+  --secondary: #F5F5F5;
+  --secondary-foreground: #171717;
+  --muted: #F5F5F5;
+  --muted-foreground: #737373;
+  --accent: #F5F5F5;
+  --accent-foreground: #171717;
+  --success: #047857;
+  --success-foreground: #FFFFFF;
+  --destructive: #B45309;
+  --destructive-foreground: #FFFFFF;
+  --border: #E5E5E5;
+  --input: #FFFFFF;
+  --input-background: #FFFFFF;
+  --switch-background: #D4D4D4;
+  --sunken: #FAFAFA;
+  --ring: #A3A3A3;
+  --chart-1: #737373;
+  --chart-2: #A3A3A3;
+  --chart-3: #525252;
+  --chart-4: #D4D4D4;
+  --chart-5: #404040;
+  --sidebar: #FAFAFA;
+  --sidebar-foreground: #404040;
+  --sidebar-primary: #171717;
+  --sidebar-primary-foreground: #FAFAFA;
+  --sidebar-accent: #F5F5F5;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #E5E5E5;
+  --sidebar-ring: #A3A3A3;
+}
+
+/*
+ * Specificity (0,2,0) against (0,1,0), so this wins wherever both apply. Both
+ * are set on `<html>` itself rather than inherited, so there is no ordering
+ * subtlety of the kind `theme.css` warns about between `:root` and `.dark`.
+ */
+.dark .super-admin,
+.super-admin.dark {
+  --background: #0A0A0A;
+  --foreground: #FAFAFA;
+  --card: #171717;
+  --card-foreground: #FAFAFA;
+  --popover: #262626;
+  --popover-foreground: #FAFAFA;
+  --primary: #E5E5E5;
+  --primary-foreground: #171717;
+  --secondary: #262626;
+  --secondary-foreground: #FAFAFA;
+  --muted: #262626;
+  --muted-foreground: #A3A3A3;
+  --accent: #262626;
+  --accent-foreground: #FAFAFA;
+  --success: #10B981;
+  --success-foreground: #0A0A0A;
+  --destructive: #F59E0B;
+  --destructive-foreground: #0A0A0A;
+  --border: rgba(255, 255, 255, 0.12);
+  --input: #262626;
+  --input-background: #262626;
+  --switch-background: #404040;
+  --sunken: rgba(0, 0, 0, 0.4);
+  --ring: #737373;
+  --chart-1: #A3A3A3;
+  --chart-2: #737373;
+  --chart-3: #D4D4D4;
+  --chart-4: #525252;
+  --chart-5: #E5E5E5;
+  --sidebar: #171717;
+  --sidebar-foreground: #D4D4D4;
+  --sidebar-primary: #E5E5E5;
+  --sidebar-primary-foreground: #171717;
+  --sidebar-accent: #262626;
+  --sidebar-accent-foreground: #FAFAFA;
+  --sidebar-border: rgba(255, 255, 255, 0.1);
+  --sidebar-ring: #737373;
+}

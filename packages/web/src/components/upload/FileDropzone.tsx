@@ -5,6 +5,18 @@ import { cn } from "@/lib/utils";
 interface FileDropzoneProps {
   /** Accepted MIME types, e.g. `['application/pdf', 'image/png']`. */
   accept: readonly string[];
+  /**
+   * Extensions accepted **in addition to** {@link accept}, e.g. `['.csv']`.
+   *
+   * Needed wherever the browser cannot be trusted to report a type: `File.type`
+   * for a `.csv` is `text/csv` on Chrome, `application/vnd.ms-excel` on Windows
+   * where Excel owns the extension, and frequently the empty string on Safari
+   * or for a file that came out of a cloud drive. Matching on type alone
+   * rejects real files for a reason the user cannot see or act on.
+   *
+   * Omit it wherever the type is reliable (PDFs and images are).
+   */
+  acceptExtensions?: readonly string[];
   maxBytes: number;
   file: File | null;
   onSelect: (file: File | null) => void;
@@ -37,6 +49,7 @@ function formatSize(bytes: number): string {
  */
 export function FileDropzone({
   accept,
+  acceptExtensions,
   maxBytes,
   file,
   onSelect,
@@ -50,7 +63,11 @@ export function FileDropzone({
 
   const select = (candidate: File | undefined | null) => {
     if (!candidate || disabled) return;
-    if (!accept.includes(candidate.type)) {
+    const nameMatches = acceptExtensions?.some((ext) =>
+      candidate.name.toLowerCase().endsWith(ext.toLowerCase()),
+    );
+    // Either signal is enough. See `acceptExtensions`.
+    if (!accept.includes(candidate.type) && !nameMatches) {
       setError("Unsupported file type.");
       return;
     }
@@ -67,7 +84,7 @@ export function FileDropzone({
       <input
         ref={inputRef}
         type="file"
-        accept={accept.join(",")}
+        accept={[...accept, ...(acceptExtensions ?? [])].join(",")}
         className="hidden"
         onChange={(e) => select(e.target.files?.[0])}
       />
