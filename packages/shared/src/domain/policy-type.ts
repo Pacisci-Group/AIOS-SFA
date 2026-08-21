@@ -277,3 +277,114 @@ export function itemCountNoun(
       : 'item';
   return count === 1 ? singular : `${singular}s`;
 }
+
+/* -------------------------------------------------------------------------- *
+ * Premium term
+ * -------------------------------------------------------------------------- */
+
+/**
+ * How long the term a premium is quoted for actually is.
+ *
+ * David, 2026-08-19 scrum: *"auto policies are every six months … what they get
+ * paid off of is the premium for 6 months, not the yearly premium"*, and
+ * *"when they put in any other policy, it's going to be annual. So auto is the
+ * only policy that's six months."*
+ *
+ * ⚠ This is a **labelling** rule, not a conversion. The number a producer types
+ * is whatever the carrier quoted — for an auto policy that is already the
+ * 6-month figure. Nothing here doubles it, and no stored premium changes. The
+ * defect this fixes is that the app printed `/yr` beside a 6-month number.
+ */
+export const ANNUAL_TERM_MONTHS = 12;
+export const SEMIANNUAL_TERM_MONTHS = 6;
+
+/**
+ * Types quoted on a 6-month term.
+ *
+ * Seeded from {@link AUTO_POLICY_TYPES} because David confirmed the rule
+ * applies to "any auto vehicle" — so Motorcycle is in, alongside Auto and
+ * Auto - Special.
+ *
+ * **Kept as its own array rather than calling {@link isAutoPolicyType}.**
+ * "Renews every 6 months" and "is a motor vehicle" are two different facts that
+ * happen to coincide today; carriers write motorcycle annually more often than
+ * not, and a 6-month non-vehicle line is perfectly possible. When the term rule
+ * changes, change *this* array — editing `AUTO_POLICY_TYPES` would silently
+ * move the Sold form's discount branch and the `Drivers Verified` audit item
+ * with it.
+ */
+export const SEMIANNUAL_TERM_POLICY_TYPES: readonly PolicyType[] =
+  AUTO_POLICY_TYPES;
+
+const SEMIANNUAL_TERM_SET = new Set<string>(SEMIANNUAL_TERM_POLICY_TYPES);
+
+/**
+ * A lowercase comparison key: whitespace collapsed and a trailing plural
+ * dropped, so "Autos" matches "Auto".
+ *
+ * {@link normalizePolicyType} resolves codes and catalogued aliases but passes
+ * an unrecognized spelling straight through, and `policies.policyType` is a
+ * free-form string the migration filled from three different SmartSuite code
+ * sets. This is the second pass that catches what the first does not.
+ */
+function termComparisonKey(value: string): string {
+  const key = value.trim().toLowerCase().replace(/\s+/g, ' ');
+  return key.endsWith('s') ? key.slice(0, -1) : key;
+}
+
+const SEMIANNUAL_TERM_KEYS = new Set<string>(
+  SEMIANNUAL_TERM_POLICY_TYPES.map(termComparisonKey),
+);
+
+/**
+ * **The one authority on whether a premium is quoted per 6 months.**
+ * `renewalTrackFor` delegates here, so the renewal cadence and the `/6 mo`
+ * label cannot drift apart.
+ *
+ * Tolerant in both directions a stored value can be odd: a raw SmartSuite code
+ * (`PYgez`) resolves through {@link normalizePolicyType}, and an uncatalogued
+ * spelling ("Autos") falls back to {@link termComparisonKey}. Neither pass
+ * alone covers both — which is exactly how a migrated auto policy ended up on
+ * the annual renewal track while its premium rendered `/6 mo`.
+ *
+ * An unrecognized type answers `false`: a row carrying a type we never
+ * catalogued is described as annual, the safer of the two guesses.
+ */
+export function isSemiannualPolicyType(value?: string | null): boolean {
+  const canonical = normalizePolicyType(value);
+  if (!canonical) return false;
+  return (
+    SEMIANNUAL_TERM_SET.has(canonical) ||
+    SEMIANNUAL_TERM_KEYS.has(termComparisonKey(canonical))
+  );
+}
+
+/** The term a premium of this type covers, in months. */
+export function policyTermMonths(value?: string | null): number {
+  return isSemiannualPolicyType(value)
+    ? SEMIANNUAL_TERM_MONTHS
+    : ANNUAL_TERM_MONTHS;
+}
+
+/**
+ * The unit to print beside a premium figure, e.g. `$940` + `/6 mo`.
+ *
+ * Only ever for a *single* policy's premium. A total summed across policy types
+ * mixes terms and has no honest suffix; those render bare. See
+ * `QuoteTotals` in `QuoteRecapCard.tsx`.
+ */
+export function premiumTermSuffix(value?: string | null): string {
+  return isSemiannualPolicyType(value) ? '/6 mo' : '/yr';
+}
+
+/**
+ * What to call the premium field on a form — "6-month premium" / "Annual
+ * premium".
+ *
+ * This is the load-bearing half of the fix: a producer told which term the box
+ * wants enters the right number, so the data arrives correct instead of being
+ * relabelled after the fact.
+ */
+export function premiumTermLabel(value?: string | null): string {
+  return isSemiannualPolicyType(value) ? '6-month premium' : 'Annual premium';
+}

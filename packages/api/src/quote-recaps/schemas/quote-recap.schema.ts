@@ -104,7 +104,14 @@ export class QuoteRecap extends TenantRecord {
   @Prop({ type: Date, index: true })
   quoteDate?: Date;
 
-  /** Derived server-side: the sum of `policies[].premium`, rounded to cents. */
+  /**
+   * Derived server-side: the sum of `policies[].premium`, rounded to cents.
+   *
+   * ⚠ **Mixes terms.** Auto is quoted on a 6-month term and everything else
+   * annually (see `premiumTermSuffix`), so this sum has no single unit — never
+   * render it with `/yr`. It is the quoted figure, which is also the basis
+   * producers are paid on.
+   */
   @Prop({ default: 0 })
   premium: number;
 

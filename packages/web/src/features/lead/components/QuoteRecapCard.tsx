@@ -1,4 +1,8 @@
-import { itemCountNoun, policyTypeHasItemCount } from "@sfa/shared";
+import {
+  itemCountNoun,
+  policyTypeHasItemCount,
+  premiumTermSuffix,
+} from "@sfa/shared";
 import type { LeadDetailQuoteRecap } from "@sfa/shared";
 import {
   CalendarClock,
@@ -38,6 +42,13 @@ interface QuoteRecapCardProps {
  * the reader assembled it themselves from the rows and then found the answer
  * after they no longer needed it — and "Total · 2 items" immediately under a
  * list of per-policy item counts read as one more row rather than a sum.
+ *
+ * **The total carries no term suffix, deliberately.** It used to say `/yr`,
+ * which is what David caught in the 2026-08-19 scrum: auto is quoted on a
+ * 6-month term, so a recap spanning an auto and a home policy sums two
+ * different terms and no single unit is true of the result. The rows below
+ * carry their own term (`premiumTermSuffix`), where it is knowable; the total
+ * is the quoted figure, which is also the number producers are paid on.
  */
 function QuoteTotals({ recap }: { recap: LeadDetailQuoteRecap }) {
   const policyCount = recap.policies.length || recap.productsQuoted.length;
@@ -46,9 +57,6 @@ function QuoteTotals({ recap }: { recap: LeadDetailQuoteRecap }) {
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
       <p className="text-2xl font-semibold tabular-nums text-card-foreground">
         {formatCurrency(recap.premium)}
-        <span className="ml-1 text-sm font-normal text-muted-foreground">
-          /yr
-        </span>
       </p>
       <p className="text-sm tabular-nums text-muted-foreground">
         {policyCount > 0 && (
@@ -145,6 +153,9 @@ function QuoteRecapBody({ recap }: { recap: LeadDetailQuoteRecap }) {
                 )}
                 <span className="text-base font-medium tabular-nums text-card-foreground">
                   {formatCurrency(policy.premium)}
+                  <span className="ml-0.5 text-xs font-normal text-muted-foreground">
+                    {premiumTermSuffix(policy.policyType)}
+                  </span>
                 </span>
               </span>
             </li>

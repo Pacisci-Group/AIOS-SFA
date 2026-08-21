@@ -1,4 +1,6 @@
 import type { QuoteRecapPropertyAddress } from "@sfa/shared";
+import { premiumTermLabel } from "@sfa/shared";
+import { useStore } from "@tanstack/react-form";
 import { PolicyFields } from "@/components/policies/PolicyFields";
 import { PolicySheet } from "@/components/policies/PolicySheet";
 import { useAppForm } from "@/hooks/form";
@@ -46,6 +48,11 @@ export function QuoteRecapPolicySheet({
     },
   });
 
+  // Subscribed rather than read off `initial`: the type is editable in this
+  // sheet, so the premium's term has to follow the pending choice — picking
+  // Auto must relabel the box before the number is typed into it.
+  const policyType = useStore(form.store, (st) => st.values.policyType);
+
   return (
     <PolicySheet
       open={open}
@@ -69,7 +76,7 @@ export function QuoteRecapPolicySheet({
           <form.AppField name="premium">
             {(f) => (
               <f.NumberField
-                label="Premium ($)"
+                label={`${premiumTermLabel(policyType)} ($)`}
                 step="0.01"
                 min="0"
                 className="sm:col-span-2"

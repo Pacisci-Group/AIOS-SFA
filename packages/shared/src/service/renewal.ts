@@ -27,6 +27,11 @@
  * reverse.
  */
 
+import {
+  ANNUAL_TERM_MONTHS,
+  SEMIANNUAL_TERM_MONTHS,
+  isSemiannualPolicyType,
+} from '../domain/policy-type';
 import type { ServiceTicketStatus } from './service-ticket';
 
 /* -------------------------------------------------------------------------- *
@@ -42,21 +47,9 @@ export const RENEWAL_TRACKS = ['annual', 'semiannual'] as const;
 export type RenewalTrack = (typeof RENEWAL_TRACKS)[number];
 
 export const RENEWAL_TERM_MONTHS: Record<RenewalTrack, number> = {
-  annual: 12,
-  semiannual: 6,
+  annual: ANNUAL_TERM_MONTHS,
+  semiannual: SEMIANNUAL_TERM_MONTHS,
 };
-
-/**
- * Policy types that renew on a 6-month term, normalized (see
- * {@link normalizeRenewalPolicyType}). `Policy.policyType` is a free-form
- * string — the seeds alone contain Auto, Home, Life, Umbrella and Renters — so
- * this is a value match, not an enum lookup.
- *
- * **Extending this array is the only change needed to add another 6-month
- * line.** There is deliberately no `if (policyType === 'Auto')` anywhere in the
- * codebase.
- */
-export const SEMIANNUAL_POLICY_TYPES: readonly string[] = ['auto'];
 
 /**
  * Fold a free-form policy type down to something comparable: trimmed,
@@ -79,13 +72,23 @@ export function normalizeRenewalPolicyType(
   return normalized.endsWith('s') ? normalized.slice(0, -1) : normalized;
 }
 
-/** Which track a policy renews on. Anything unrecognized is treated as annual. */
+/**
+ * Which track a policy renews on. Anything unrecognized is treated as annual.
+ *
+ * **Delegates to `domain/policy-type`'s {@link isSemiannualPolicyType}** rather
+ * than keeping its own list, so the renewal cadence and the premium's `/6 mo`
+ * label are the same decision and cannot drift.
+ *
+ * This used to match a hand-written `['auto']` against
+ * {@link normalizeRenewalPolicyType}, which was wrong twice over: `Auto -
+ * Special` and `Motorcycle` fell through to the annual T-90/T-45 track, and a
+ * migrated row storing a raw SmartSuite code (`Zgsh3`) did too, because the
+ * de-pluralizing key function does not resolve codes.
+ */
 export function renewalTrackFor(
   policyType: string | null | undefined,
 ): RenewalTrack {
-  return SEMIANNUAL_POLICY_TYPES.includes(normalizeRenewalPolicyType(policyType))
-    ? 'semiannual'
-    : 'annual';
+  return isSemiannualPolicyType(policyType) ? 'semiannual' : 'annual';
 }
 
 /* -------------------------------------------------------------------------- *

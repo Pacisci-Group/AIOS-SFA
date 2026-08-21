@@ -50,6 +50,8 @@ export function HouseholdCard({ household }: HouseholdCardProps) {
   }
 
   const activePolicies = household.policies.filter((policy) => policy.active);
+  // Summed across policy types, so it mixes a 6-month auto premium with an
+  // annual property one and carries no term suffix — see `QuoteTotals`.
   const premium = activePolicies.reduce(
     (total, policy) => total + policy.premium,
     0,
@@ -64,7 +66,7 @@ export function HouseholdCard({ household }: HouseholdCardProps) {
       subheading={
         <p className="mt-1 text-sm tabular-nums text-muted-foreground">
           {activePolicies.length || household.totalActivePolicies} active
-          {premium > 0 && <> · {formatCurrency(premium)}/yr</>}
+          {premium > 0 && <> · {formatCurrency(premium)}</>}
         </p>
       }
     >

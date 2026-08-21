@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { PolicySummary } from "@sfa/shared";
+import { premiumTermSuffix } from "@sfa/shared";
 
 /**
  * The shape the policy cards render. Kept separate from the API's
@@ -87,7 +88,9 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
     line: policy.policyType ?? "Policy",
     policyNumber: policy.policyNumber ?? "—",
     premium: `$${policy.premium.toLocaleString()}`,
-    premiumFreq: "/yr",
+    // Auto is quoted on a 6-month term (2026-08-19 scrum), so the unit follows
+    // the policy type rather than being hard-coded annual.
+    premiumFreq: premiumTermSuffix(policy.policyType),
     premiumValue: policy.premium,
     status: toCardStatus(policy),
     effective: formatDate(policy.effectiveDate),

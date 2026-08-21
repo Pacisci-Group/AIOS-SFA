@@ -1,11 +1,18 @@
 import {
+  ANNUAL_TERM_MONTHS,
   AUTO_POLICY_TYPES,
   COUNTABLE_POLICY_TYPES,
   IMPLIED_ITEM_COUNT,
   POLICY_TYPES,
   POLICY_TYPE_CODE_ALIASES,
   PROPERTY_POLICY_TYPES,
+  SEMIANNUAL_TERM_MONTHS,
+  SEMIANNUAL_TERM_POLICY_TYPES,
   isAutoPolicyType,
+  isSemiannualPolicyType,
+  policyTermMonths,
+  premiumTermLabel,
+  premiumTermSuffix,
   isCanonicalPolicyType,
   isPropertyPolicyType,
   itemCountLabel,
@@ -184,5 +191,63 @@ describe('policy-type vocabulary', () => {
     for (const code of Object.keys(POLICY_TYPE_CODE_ALIASES)) {
       expect(isCanonicalPolicyType(code)).toBe(true);
     }
+  });
+});
+
+/**
+ * The premium term (2026-08-19 scrum). David: auto is quoted per 6 months and
+ * is *paid on* per 6 months; every other line is annual. These pin the rule
+ * because getting it wrong misstates a producer's commission basis on screen.
+ */
+describe('premium term', () => {
+  it('puts the whole auto family on a 6-month term', () => {
+    // "And it applies for any auto vehicle, right?" — "Correct."
+    for (const policyType of ['Auto', 'Auto - Special', 'Motorcycle']) {
+      expect(isSemiannualPolicyType(policyType)).toBe(true);
+      expect(policyTermMonths(policyType)).toBe(SEMIANNUAL_TERM_MONTHS);
+      expect(premiumTermSuffix(policyType)).toBe('/6 mo');
+      expect(premiumTermLabel(policyType)).toBe('6-month premium');
+    }
+  });
+
+  it('leaves every other catalogued type annual', () => {
+    const semiannual = new Set<string>(SEMIANNUAL_TERM_POLICY_TYPES);
+    const annual = POLICY_TYPES.filter((t) => !semiannual.has(t));
+
+    // Boat Owners is a vehicle you can count, but it is not quoted per 6
+    // months — which is why the term set is its own array, not `isAutoPolicyType`.
+    expect(annual).toContain('Boat Owners');
+
+    for (const policyType of annual) {
+      expect(isSemiannualPolicyType(policyType)).toBe(false);
+      expect(policyTermMonths(policyType)).toBe(ANNUAL_TERM_MONTHS);
+      expect(premiumTermSuffix(policyType)).toBe('/yr');
+      expect(premiumTermLabel(policyType)).toBe('Annual premium');
+    }
+  });
+
+  it('resolves a raw SmartSuite code and an alias spelling too', () => {
+    // `PYgez` is Quote Recaps' Auto; `OMJjl` is Motorcycle. A migrated recap
+    // stores the code, and it must label the same as the canonical spelling.
+    expect(isSemiannualPolicyType('PYgez')).toBe(true);
+    expect(isSemiannualPolicyType('OMJjl')).toBe(true);
+    expect(isSemiannualPolicyType('auto - special')).toBe(true);
+    expect(isSemiannualPolicyType('sNMRK')).toBe(false);
+  });
+
+  it('describes an unknown or missing type as annual', () => {
+    // The safer of the two guesses: a migrated row carrying a type we never
+    // catalogued renders `/yr`, matching `renewalTrackFor`.
+    for (const policyType of ['Flood', '', null, undefined]) {
+      expect(isSemiannualPolicyType(policyType)).toBe(false);
+      expect(premiumTermSuffix(policyType)).toBe('/yr');
+    }
+  });
+
+  it('keeps the term set separate from the auto-discount set', () => {
+    // They coincide today. The test exists so that changing one to fix a
+    // carrier rule does not silently move the Sold form's discount branch or
+    // the `Drivers Verified` audit item with it.
+    expect([...SEMIANNUAL_TERM_POLICY_TYPES]).toEqual([...AUTO_POLICY_TYPES]);
   });
 });
