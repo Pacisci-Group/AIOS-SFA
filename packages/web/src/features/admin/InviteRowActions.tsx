@@ -15,7 +15,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { ApiError } from "@/lib/api-client";
-import { resendInvite, revokeInvite, type AgencyUser } from "@/lib/users-api";
+import {
+  resendInvite,
+  revokeInvite,
+  userStatus,
+  type AgencyUser,
+} from "@/lib/users-api";
 
 interface InviteRowActionsProps {
   user: AgencyUser;
@@ -72,7 +77,13 @@ export function InviteRowActions({ user }: InviteRowActionsProps) {
     },
   });
 
-  if (user.isActive || !can("agency:users:write")) return null;
+  // `userStatus`, not `!user.isActive`. That older check was written when
+  // `isActive: false` could only mean "pending invite"; it now also covers a
+  // removed employee, and matching on it would offer "Resend" against someone
+  // the owner had just removed. The server refuses that (see
+  // `UsersService.findPendingInvite`) — this keeps the button from appearing at
+  // all. `UserRowActions` owns active and deactivated rows.
+  if (userStatus(user) !== "invited" || !can("agency:users:write")) return null;
 
   const busy = resend.isPending || revoke.isPending;
 

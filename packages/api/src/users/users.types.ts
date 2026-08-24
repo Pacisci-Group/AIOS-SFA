@@ -27,6 +27,13 @@ export interface UserDetailResponse {
   firstName?: string;
   lastName?: string;
   isActive: boolean;
+  /**
+   * Set when the user was removed from the agency.
+   *
+   * ⚠ Needed to tell a removed employee from a pending invite — `isActive` is
+   * `false` for both. See the table on `User.isActive`.
+   */
+  deactivatedAt?: Date | null;
   effectivePermissions: string[];
   roleDefaultPermissions: string[];
   createdAt?: Date;
