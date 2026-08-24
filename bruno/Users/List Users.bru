@@ -1,0 +1,68 @@
+meta {
+  name: List Users
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/users
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+script:post-response {
+  // Capture an active, non-owner user for the removal requests that follow.
+  // Picked by role rather than hard-coded id so the collection works against
+  // any seeded tenant.
+  if (res.getStatus() === 200) {
+    const target = res.getBody().find(
+      (u) => u.isActive && !u.deactivatedAt && u.email === bru.getEnvVar("producerEmail"),
+    );
+    if (target) bru.setVar("activeUserId", target._id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every row carries the three-way status fields", function () {
+    const user = res.getBody()[0];
+    expect(user).to.have.property("isActive");
+    // `isActive` alone is ambiguous — it is false for both a pending invite and
+    // a removed employee. `deactivatedAt` is what separates them.
+    expect(user).to.have.property("deactivatedAt");
+  });
+}
+
+docs {
+  # GET /users
+
+  Every user in the caller's agency. Platform admins are excluded — they are not
+  the agency's to manage.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:users:read`.
+
+  **Response `200`** — array of users. Secrets (`passwordHash`, `inviteToken`,
+  `passwordResetToken`) are never returned.
+
+  ## Reading the status — do not branch on `isActive` alone
+  `isActive: false` covers **two different states**:
+
+  | State       | `isActive` | `deactivatedAt` |
+  |-------------|------------|-----------------|
+  | Active      | `true`     | `null`          |
+  | Invited     | `false`    | `null`          |
+  | Deactivated | `false`    | set             |
+
+  A client that checks only `isActive` will render a removed employee as
+  "Invited" and offer to resend them an invite. The web app derives this once in
+  `userStatus()` (`packages/web/src/lib/users-api.ts`) — do the same.
+
+  **Errors**
+  - `403` — caller lacks `agency:users:read`.
+}

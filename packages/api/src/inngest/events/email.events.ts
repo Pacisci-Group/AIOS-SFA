@@ -1,5 +1,6 @@
 import { eventType } from 'inngest';
 import { z } from 'zod';
+import { eventEnvelope, isoDateTime, objectId } from './envelope';
 
 /**
  * Event contracts for outbound email.
@@ -25,14 +26,6 @@ import { z } from 'zod';
  * queue and Inngest's event history no longer hold any `.v1`.
  */
 
-/** ISO-8601 instant. See rule 1 above: never `z.coerce.date()`. */
-const isoDateTime = z.string().datetime();
-
-/** 24-character hex Mongo ObjectId, stringified. */
-const objectId = z
-  .string()
-  .regex(/^[0-9a-f]{24}$/, 'expected a 24-hex ObjectId');
-
 /**
  * Someone was invited to an agency and needs the "set your password" link.
  *
@@ -42,6 +35,7 @@ const objectId = z
  * consumer's idempotency key.
  */
 const inviteRequestedSchema = z.object({
+  ...eventEnvelope,
   /** The invited user. Present so the consumer can record delivery against them. */
   userId: objectId,
   agencyId: objectId,

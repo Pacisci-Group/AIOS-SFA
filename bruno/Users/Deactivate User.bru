@@ -1,0 +1,73 @@
+meta {
+  name: Deactivate User
+  type: http
+  seq: 8
+}
+
+delete {
+  url: {{baseUrl}}/users/{{activeUserId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("reports what went back to the unassigned queue", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("ticketsUnassigned");
+    expect(body).to.have.property("rotationsDeactivated");
+  });
+}
+
+docs {
+  # DELETE /users/:userId
+
+  Remove an employee from the agency. **Deactivates, never deletes** — contrast
+  `DELETE /users/:userId/invite`, which really does delete because a pending
+  invite owns no records. An active user is referenced by 31 `ref: 'User'` fields
+  across 16 collections (two of them `required`), so removing the row would point
+  every "produced by" column at a missing id.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:users:write`.
+
+  ## Access is revoked immediately, not at token expiry
+  `AccessResolverService` re-resolves from Mongo on every request and returns
+  nothing for an inactive user, so an already-issued JWT stops working on the
+  removed user's very next call. Any live `inviteToken` / `passwordResetToken` is
+  cleared at the same time — a credential must not outlive access.
+
+  ## Their open work is released
+  - Non-terminal service tickets are unassigned (`assignedUserId: null`) and the
+    denormalized `assignedRep` is cleared. Resolved and closed tickets are left
+    alone — those are history, not outstanding work.
+  - Their CRM rotation entries are switched off, so the round-robin stops handing
+    them new tickets. `CrmAssignmentService` builds its pool from
+    `activeForProducer` and never checks whether the user still exists, so
+    without this the work would leak straight back.
+
+  **Attribution is never touched.** `deals.producerId`, `leads.producerId` and
+  `quoteRecaps.producerId` record who did the work and stay exactly as they are.
+
+  **Response `200`** — `{ ticketsUnassigned, rotationsDeactivated }`.
+
+  **Errors**
+  - `400` — you cannot remove your own account (it would be unrecoverable).
+  - `403` — caller lacks `agency:users:write`.
+  - `404` — no such user in this agency, or the target is a platform admin.
+  - `409` — already removed; **or** the target is a pending invite, in which case
+    use `DELETE /users/:userId/invite` instead.
+
+  ## ⚠ Running this against the demo tenant has a side effect
+  **Reactivate User** (next) restores access, but the released work is
+  deliberately *not* restored — those tickets may have been picked up by someone
+  else in the meantime. A `bru run` therefore leaves the demo producer's open
+  tickets unassigned. Restore with
+  `npm run api:seed:demo:dev -- --fresh` if you need the Producer Dashboard's
+  demo data intact.
+}

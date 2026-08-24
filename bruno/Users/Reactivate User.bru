@@ -1,0 +1,54 @@
+meta {
+  name: Reactivate User
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/users/{{activeUserId}}/reactivate
+  auth: bearer
+  body: none
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the user is active again", function () {
+    const body = res.getBody();
+    expect(body.isActive).to.equal(true);
+    expect(body.deactivatedAt).to.equal(null);
+  });
+}
+
+docs {
+  # POST /users/:userId/reactivate
+
+  Restore a removed employee's access. They can sign in again and their
+  permissions resolve as before.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:users:write`.
+
+  **Response `201`** — the full user detail, same shape as `GET /users/:userId`.
+
+  **Errors**
+  - `403` — caller lacks `agency:users:write`.
+  - `404` — no such user in this agency, or the target is a platform admin.
+  - `409` — that user has not been removed.
+
+  ## What this does *not* do
+  It does not restore the work released when they were removed. Those tickets sat
+  in the unassigned queue and may well have been picked up by someone else;
+  silently yanking them back would be worse than making reassignment explicit.
+
+  ## Why it runs last
+  It is this pair's **cleanup** — **Deactivate User** removes the demo producer
+  and this puts them back, so a repeated `npx @usebruno/cli run` leaves the
+  tenant's logins intact. Note the caveat in **Deactivate User**: their released
+  tickets stay unassigned, which only a re-seed restores.
+}

@@ -14,11 +14,20 @@ process.env.JWT_REFRESH_EXPIRES = '7d';
 
 // Invites (PAC-58). Pinned so the "inviteUrl is absolute" assertion has a known
 // origin to compare against rather than depending on the developer's `.env`.
-//
-// The resend cooldown is deliberately left at its default: the suite exercises
-// it for real (immediate resend → 409) and then clears `inviteLastSentAt`
-// directly in Mongo to test the success path, so no test has to sleep.
 process.env.APP_BASE_URL = 'http://localhost:5173';
+
+// The cooldown is *exercised* by the suite (immediate resend → 409), which
+// clears `inviteLastSentAt` directly in Mongo to reach the success path so no
+// test has to sleep. It therefore needs a non-zero value, and it needs one that
+// does not depend on the developer's `.env`.
+//
+// This used to be left at its default on the assumption that nothing would set
+// it. That assumption is wrong in exactly the case you would expect: setting
+// `INVITE_RESEND_COOLDOWN_SECONDS=0` locally is a *reasonable* thing to do — it
+// is what makes hammering the resend button while testing bearable — and it
+// silently turned the 409 assertion into a 201. Pinned for the same reason
+// `APP_BASE_URL` above is.
+process.env.INVITE_RESEND_COOLDOWN_SECONDS = '60';
 
 // Throttler storage is in-memory and process-wide, so a tight public-intake
 // limit would bleed 429s into unrelated describe blocks. Raise the limits for
