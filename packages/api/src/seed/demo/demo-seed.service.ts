@@ -2,7 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { FilterQuery, Model, Types } from 'mongoose';
-import { ALL_MODULE_KEYS } from '@sfa/shared';
+import {
+  ALL_MODULE_KEYS,
+  DEAL_AUDIT_REASON_CODES,
+  DEFAULT_DEAL_AUDIT_STATUS,
+} from '@sfa/shared';
+import type { DealAuditStatus } from '@sfa/shared';
+import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
 import { SequenceService } from '../../common/mongo/sequence.service';
 import {
   householdCounterKey,
@@ -242,8 +248,26 @@ export class DemoSeedService {
     const policies = await this.seedPolicies(ctx, deals, rng);
 
     await this.seedAuditTemplates(ctx);
-    await this.seedDealAuditItems(ctx, deals, rng);
-    await this.seedDealAudits(ctx, deals, rng);
+    /*
+     * Roll-ups **before** items (PAC-72): the board pages over `dealAudits`,
+     * and an item needs its parent's `_id` to be loadable from a card. The
+     * order used to be the other way round, which left the two collections
+     * unlinked — invisible until the board tried to read them.
+     */
+    const auditIds = await this.seedDealAudits(ctx, deals, crms, rng);
+    const dealsWithOpenItems = await this.seedDealAuditItems(
+      ctx,
+      deals,
+      auditIds,
+      rng,
+    );
+    await this.settleAuditStatuses(
+      ctx,
+      deals,
+      auditIds,
+      dealsWithOpenItems,
+      rng,
+    );
     await this.seedInterestedParties(ctx, policies, rng);
     await this.seedPriorInsurance(ctx, deals, rng);
     await this.seedPriorPolicies(ctx, deals, rng);
@@ -868,7 +892,16 @@ export class DemoSeedService {
           legacyHouseholdId: hh.legacyId,
           quoteRecapId: quote?.id,
           legacyQuoteRecapId: quote?.legacyId,
-          dealAuditStatus: rng.pick(['Pending', 'In Progress', 'Complete']),
+          /*
+           * The display mirror of `DealAudit.auditStatus`, overwritten by
+           * `seedDealAudits` below so the two always agree.
+           *
+           * Was `rng.pick(['Pending', 'In Progress', 'Complete'])` — two of
+           * those are SmartSuite *labels* rather than the choice codes the app
+           * stores, and the third was invented outright, so the demo tenant
+           * disagreed with every other writer (PAC-72).
+           */
+          dealAuditStatus: DEFAULT_DEAL_AUDIT_STATUS,
           status: 'Sold',
           isTestRecord: false,
         },
@@ -987,21 +1020,35 @@ export class DemoSeedService {
     for (let i = 0; i < created + refreshed; i++) this.inc('auditTemplates');
   }
 
+  /**
+   * The per-deal checklist rows.
+   *
+   * Returns the deals that ended up with at least one **open** item, so
+   * {@link settleAuditStatuses} can give each roll-up a workflow state that
+   * matches its own items — a `Pass` sitting on a deal with three outstanding
+   * documents is exactly the kind of incoherence that makes demo data
+   * untrustworthy.
+   */
   private async seedDealAuditItems(
     ctx: Ctx,
     deals: DealRef[],
+    auditIds: Map<string, Types.ObjectId>,
     rng: Rng,
-  ): Promise<void> {
+  ): Promise<Set<string>> {
     // Newest deals drive the hand-off board — generate items for the most recent.
     const recent = [...deals]
       .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
       .slice(0, 16);
 
+    const withOpenItems = new Set<string>();
     let n = 0;
     for (const deal of recent) {
       const applicable = this.applicableTemplates(deal, rng);
       // ~40% of recent deals still have open (failed, unresolved) items.
       const hasOpen = rng.chance(0.4);
+      if (hasOpen && applicable.length) {
+        withOpenItems.add(deal.legacyId);
+      }
       for (let k = 0; k < applicable.length; k++) {
         const template = applicable[k];
         const isFailed = hasOpen && k === 0; // first item is the open one
@@ -1023,6 +1070,9 @@ export class DemoSeedService {
             legacySmartSuiteId: legacyId,
             title: `${deal.clientName} — ${template.name}`,
             dealId: deal.id,
+            // The link the board loads a card's checklist through (PAC-72).
+            // Never set before, so items and roll-ups were two unrelated piles.
+            dealAuditId: auditIds.get(deal.legacyId),
             legacyDealId: deal.legacyId,
             itemName: template.name,
             category: template.category,
@@ -1055,21 +1105,42 @@ export class DemoSeedService {
         n++;
       }
     }
+
+    return withOpenItems;
   }
 
+  /**
+   * The per-deal roll-ups — one card each on the hand-off board.
+   *
+   * Returns `legacyId -> audit _id` so the item pass can link its rows.
+   * `auditStatus` is deliberately **not** set here: it depends on whether the
+   * items that come next are still open, and inventing it now is how the demo
+   * tenant ended up claiming `Pass` on deals with outstanding documents. See
+   * {@link settleAuditStatuses}.
+   */
   private async seedDealAudits(
     ctx: Ctx,
     deals: DealRef[],
+    crms: TeamMember[],
     rng: Rng,
-  ): Promise<void> {
+  ): Promise<Map<string, Types.ObjectId>> {
     const recent = [...deals]
       .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
       .slice(0, 16);
+    const ids = new Map<string, Types.ObjectId>();
     let n = 0;
     for (const deal of recent) {
-      const result = rng.pick(['Pass', 'Pass', 'Needs Review', 'Fail']);
       const legacyId = `demo:dealaudit:${n}`;
-      await this.upsert(
+      /*
+       * Assignee is the selling producer, matching what `AuditGenerationService`
+       * stamps on a real sale — "Pat Producer" is the data-rich hero the
+       * Producer Dashboard is demoed with, so their board has to fill up.
+       *
+       * Reviewer is a CRM, which is the whole point of the two-role split: the
+       * person who gathers the evidence is not the person who signs it off.
+       */
+      const reviewer = crms.length ? rng.pick(crms) : undefined;
+      const id = await this.upsert(
         this.dealAuditModel,
         { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
         {
@@ -1079,27 +1150,84 @@ export class DemoSeedService {
           title: `${deal.clientName} — 24-Hour Audit`,
           auditId: `AUD-${9000 + n}`,
           auditDate: this.addDays(deal.occurredAt, 1),
-          result,
-          reasonCodes:
-            result === 'Pass'
-              ? []
-              : rng.sample(
-                  ['MISSING_DOC', 'PREMIUM_VAR', 'SIG_MISSING'],
-                  rng.int(1, 2),
-                ),
-          auditScore: result === 'Pass' ? rng.int(90, 100) : rng.int(60, 89),
-          auditNotes:
-            result === 'Pass'
-              ? 'All required documentation received.'
-              : 'Follow-up required before full hand-off.',
+          auditAssignee: { type: 'user', id: deal.producer.userId },
+          auditReviewer: reviewer
+            ? { type: 'user', id: reviewer.userId }
+            : undefined,
           dealId: deal.id,
           legacyDealIds: [deal.legacyId],
           isTestRecord: false,
         },
       );
+      ids.set(deal.legacyId, id);
       this.inc('dealAudits');
       n++;
     }
+    return ids;
+  }
+
+  /**
+   * Give each roll-up a workflow state consistent with its own checklist, then
+   * recompute the board's counters.
+   *
+   * A deal with outstanding documents is somewhere in the working half of the
+   * machine (`Not Submitted` / `Pending` / `Fail`); one with everything
+   * resolved has passed. Reason codes and the score follow from that, using the
+   * **real** vocabulary — the old seed picked from `['MISSING_DOC',
+   * 'PREMIUM_VAR', 'SIG_MISSING']`, none of which are SmartSuite reason codes.
+   *
+   * Counters come from `reconcileDealAudits`, the same function the migration
+   * calls, so a locally seeded tenant and a migrated one are consistent by
+   * construction rather than by two implementations agreeing.
+   */
+  private async settleAuditStatuses(
+    ctx: Ctx,
+    deals: DealRef[],
+    auditIds: Map<string, Types.ObjectId>,
+    dealsWithOpenItems: Set<string>,
+    rng: Rng,
+  ): Promise<void> {
+    for (const deal of deals) {
+      const auditId = auditIds.get(deal.legacyId);
+      if (!auditId) continue;
+
+      const open = dealsWithOpenItems.has(deal.legacyId);
+      const auditStatus: DealAuditStatus = open
+        ? rng.pick(['Not Submitted', 'Not Submitted', 'Pending', 'Fail'])
+        : 'Pass';
+      const failed = auditStatus === 'Fail';
+
+      await this.dealAuditModel.updateOne(
+        { _id: auditId },
+        {
+          $set: {
+            auditStatus,
+            reasonCodes: failed
+              ? rng.sample([...DEAL_AUDIT_REASON_CODES], rng.int(1, 2))
+              : [],
+            auditScore: open ? rng.int(60, 89) : rng.int(90, 100),
+            auditNotes: open
+              ? 'Follow-up required before full hand-off.'
+              : 'All required documentation received.',
+          },
+        },
+      );
+
+      // The denormalized display copy on the sales record.
+      await this.dealModel.updateOne(
+        { _id: deal.id },
+        { $set: { dealAuditStatus: auditStatus } },
+      );
+    }
+
+    await reconcileDealAudits(
+      {
+        itemModel: this.dealAuditItemModel,
+        dealAuditModel: this.dealAuditModel,
+        dealModel: this.dealModel,
+      },
+      ctx.agencyId,
+    );
   }
 
   private async seedInterestedParties(

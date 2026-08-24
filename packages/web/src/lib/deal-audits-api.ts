@@ -14,6 +14,11 @@ export interface DealAuditRowAttachment {
 /** One pending hand-off row (mirrors the API `DealAuditRow`). */
 export interface DealAuditRow {
   id: string;
+  /**
+   * The deal this item belongs to. Every audit workflow endpoint
+   * (assign / submit / review / notes) is keyed on the deal, not the item.
+   */
+  dealId: string;
   /** Human-readable masked label, e.g. `AUD-2026-0042`. */
   ref: string;
   client: string;

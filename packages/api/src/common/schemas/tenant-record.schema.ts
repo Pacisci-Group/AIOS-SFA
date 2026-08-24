@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, IndexOptions } from 'mongoose';
+import { HydratedDocument, IndexOptions, Types } from 'mongoose';
 
 export type TenantDocument = HydratedDocument<TenantRecord>;
 
@@ -26,6 +26,30 @@ export class TenantRecord {
    */
   createdAt?: Date;
   updatedAt?: Date;
+
+  /*
+   * The user counterparts to the two timestamps above (PAC-72).
+   *
+   * Written by `authorshipPlugin`, which is registered connection-wide and
+   * keys off these very paths — so declaring them here is what opts a
+   * collection in. Every `TenantRecord` descendant gets them at once.
+   *
+   * ⚠ **Nullable, and never backfilled.** Migration-, seed- and worker-written
+   * records have no acting user; `null` is the honest answer and reads as
+   * "system". Do not mint a placeholder user id to fill the column, and do not
+   * retro-assign an author to historical rows — nobody knows who wrote them.
+   *
+   * Unindexed on purpose. Nothing queries by author yet, and the two dead
+   * `producerId` indexes dropped from `activities` are the standing reminder
+   * that an index for a predicate nobody uses is pure write cost. Add one with
+   * the query that needs it.
+   */
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  createdBy?: Types.ObjectId | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  updatedBy?: Types.ObjectId | null;
 }
 
 export const TenantRecordSchema = SchemaFactory.createForClass(TenantRecord);

@@ -21,12 +21,17 @@ headers {
 }
 
 script:post-response {
-  // Capture the first row's id so the Presign / Resolve requests have an item
-  // to act on. Runtime-only var (never persisted to disk).
+  // Capture the first row's ids so the rest of this folder has something to act
+  // on. Runtime-only vars (never persisted to disk).
+  //
+  // `auditDealId` keeps the folder **self-sufficient**: the workflow requests
+  // are keyed on the deal, and Bruno runs folders alphabetically — so "Deal
+  // Audits" executes long before "Sold Deals" could set `createdSoldDealId`.
   if (res.getStatus() === 200) {
     const items = res.getBody().items;
     if (items && items.length > 0) {
       bru.setVar("dealAuditItemId", items[0].id);
+      bru.setVar("auditDealId", items[0].dealId);
     }
   }
 }

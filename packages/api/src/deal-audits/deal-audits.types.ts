@@ -1,3 +1,8 @@
+import type {
+  ActivityType,
+  AuditOwnerView,
+  DealAuditStatus,
+} from '@sfa/shared';
 import { DealType } from '../deals/schemas/deal.schema';
 
 /**
@@ -21,6 +26,14 @@ export interface DealAuditRowAttachment {
 export interface DealAuditRow {
   /** Raw record id (opaque; UI shows `ref` instead). */
   id: string;
+  /**
+   * The deal this item belongs to (PAC-72).
+   *
+   * Every workflow endpoint is keyed on the **deal**, not on the item or the
+   * audit — so without this the drawer has a row it cannot submit, assign or
+   * review. Empty only for a migrated item that was never linked to a deal.
+   */
+  dealId: string;
   /** Human-readable masked label, e.g. `AUD-2026-0042`. */
   ref: string;
   /** Client name (masked/normalized display value). */
@@ -71,4 +84,47 @@ export interface ResolveDealAuditResponse {
   id: string;
   resolved: boolean;
   resolvedAt: string;
+}
+
+/**
+ * A deal's audit as the workflow endpoints return it (PAC-72 section E).
+ *
+ * Owners are returned resolved — `{ type, id, name }` — because the stored
+ * value is an ObjectId with no indication of *what* it points at. Resolving on
+ * read rather than denormalizing the name means renaming a role or a user does
+ * not strand every audit they own.
+ */
+export interface AuditWorkflowView {
+  /** The audit record's id. */
+  id: string;
+  dealId: string;
+  auditStatus: DealAuditStatus;
+  assignee: AuditOwnerView | null;
+  reviewer: AuditOwnerView | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reasonCodes: string[];
+  auditScore: number;
+  auditNotes: string | null;
+  /** Checklist roll-up — the completion percentage and its inputs. */
+  itemCount: number;
+  resolvedCount: number;
+  openCount: number;
+  completionPct: number;
+}
+
+/**
+ * One entry on an audit's note/workflow thread.
+ *
+ * Both free-text notes and system-emitted workflow events, in one list — the
+ * point of reusing `activities` is that "Dana submitted this" and "Sam asked
+ * for the declarations page" read as one conversation rather than two.
+ */
+export interface AuditNoteView {
+  id: string;
+  type: ActivityType;
+  summary: string | null;
+  occurredAt: string;
+  /** Who did it. Empty when the actor is no longer resolvable. */
+  userName: string;
 }

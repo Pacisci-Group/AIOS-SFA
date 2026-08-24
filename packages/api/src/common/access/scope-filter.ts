@@ -19,6 +19,32 @@ export interface ScopeFilterOptions {
   producerField?: string;
 
   /**
+   * **Polymorphic** ownership: the owner is a `{ type: 'user' | 'role', id }`
+   * sub-document rather than a bare user ref (PAC-72's `DealAudit.auditAssignee`).
+   * Pass the sub-document's path, e.g. `'auditAssignee'`.
+   *
+   * Takes precedence over {@link producerField} when both are set.
+   *
+   * ⚠ **The emitted clause deliberately ignores `.type`.** PAC-72 specifies
+   * `{ $or: [ {type:'user', id: me}, {type:'role', id: {$in: myRoleIds}} ] }`,
+   * and this emits `{ '<path>.id': { $in: [me, ...myRoleIds] } }` instead. The
+   * two are equivalent — an ObjectId is unique across collections, so a role's
+   * `_id` can never collide with a user's, which is exactly why the ticket
+   * insisted `id` is always an ObjectId and never a role slug. Matching on the
+   * id alone cannot widen the result: every id in the `$in` is one the caller
+   * already owns.
+   *
+   * Preferred over the `$or` because it is a single-field predicate — it rides
+   * the `{ agencyId, '<path>.id', … }` index as one IXSCAN instead of an index
+   * union, and it leaves the top-level `$or` free for callers, who would
+   * otherwise silently clobber the tenancy clamp by spreading their own.
+   *
+   * `.type` remains the field that says *how* to render the owner ("the CRM
+   * team" vs "Pat Producer"); it is simply not load-bearing for access.
+   */
+  ownerField?: { path: string; polymorphic: true };
+
+  /**
    * Drop `isTestRecord` documents. On by default — every tenant collection
    * carries the flag and no producer-facing surface wants them. Pass `false`
    * only for a collection that genuinely lacks the field.
@@ -50,6 +76,13 @@ export interface ScopeFilterOptions {
  * an empty scorecard reads as "no sales this month", not as a bug. Callers
  * should not be re-deriving that by hand.
  *
+ * Ownership comes in two shapes. Most collections carry a scalar producer ref
+ * ({@link ScopeFilterOptions.producerField}); `dealAudits` carries a
+ * `{ type, id }` sub-document so an audit can belong to a *role* as well as a
+ * user ({@link ScopeFilterOptions.ownerField}). Both are handled here rather
+ * than by letting the board hand-roll its own clamp — which is the whole
+ * reason this function exists.
+ *
  * Extracted per the precedent set by `LeadAccessService`: the rule was
  * hand-duplicated in two services and about to acquire four more call sites.
  *
@@ -67,6 +100,7 @@ export function buildScopeFilter<T>(
     requestedScope,
     producerId,
     producerField = 'producerId',
+    ownerField,
     excludeTestRecords = true,
   } = options;
 
@@ -77,10 +111,40 @@ export function buildScopeFilter<T>(
 
   const self = new Types.ObjectId(access.userId);
 
+  /**
+   * The "owned by the caller" clause, in whichever shape this collection uses.
+   * Scalar collections pin the producer ref; polymorphic ones match the caller
+   * *or* any role they hold — see {@link ScopeFilterOptions.ownerField}.
+   */
+  const pinToSelf = (target: Record<string, unknown>): void => {
+    if (!ownerField) {
+      target[producerField] = self;
+      return;
+    }
+    const owners = [
+      self,
+      ...access.roleIds
+        .filter((roleId) => Types.ObjectId.isValid(roleId))
+        .map((roleId) => new Types.ObjectId(roleId)),
+    ];
+    target[`${ownerField.path}.id`] = { $in: owners };
+  };
+
+  /** Narrow to one *user* — never a role, which is a queue, not a person. */
+  const pinToUser = (target: Record<string, unknown>, id: string): void => {
+    const oid = new Types.ObjectId(id);
+    if (!ownerField) {
+      target[producerField] = oid;
+      return;
+    }
+    target[`${ownerField.path}.type`] = 'user';
+    target[`${ownerField.path}.id`] = oid;
+  };
+
   if (access.dataScope === DataScope.Own) {
     // `own` scope is only meaningful with a concrete user id, and nothing the
     // client sends can loosen it.
-    filter[producerField] = self;
+    pinToSelf(filter);
     return filter;
   }
 
@@ -92,14 +156,14 @@ export function buildScopeFilter<T>(
   // Agency scope: no producer/branch narrowing beyond agencyId.
 
   if (requestedScope === 'own') {
-    filter[producerField] = self;
+    pinToSelf(filter);
     return filter;
   }
 
   if (producerId && Types.ObjectId.isValid(producerId)) {
     // Kept alongside the branch clamp above, so a branch-scoped caller cannot
     // reach a producer outside their branch.
-    filter[producerField] = new Types.ObjectId(producerId);
+    pinToUser(filter, producerId);
   }
 
   return filter;

@@ -44,6 +44,22 @@ export const ACTIVITY_TYPES = [
   'note',
   'audit_resolved',
   'field_changed',
+  /*
+   * The deal-audit workflow (PAC-72 section E). All five are **system-emitted**
+   * by `DealAuditsService` — they are deliberately absent from
+   * `LOGGABLE_ACTIVITY_TYPES` below, for the same reason `sold` is: a client
+   * able to POST `audit_approved` could clear its own audit.
+   *
+   * `audit_changes_requested` and `audit_sent_back` both hand the audit back to
+   * its assignee and differ only in meaning — "this failed review" versus
+   * "this isn't ready / isn't mine". They are separate types precisely so the
+   * timeline keeps that distinction.
+   */
+  'audit_assigned',
+  'audit_submitted',
+  'audit_approved',
+  'audit_changes_requested',
+  'audit_sent_back',
 ] as const;
 
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
@@ -142,6 +158,12 @@ export const ACTIVITY_SUBJECT_TYPES = [
   'deal',
   'quoteRecap',
   'dealAuditItem',
+  /**
+   * The per-deal audit roll-up (PAC-72). Distinct from `dealAuditItem`, which
+   * is one checklist row: workflow events and free-text notes hang off the
+   * *audit*, while `audit_resolved` still hangs off the individual item.
+   */
+  'dealAudit',
 ] as const;
 
 export type ActivitySubjectType = (typeof ACTIVITY_SUBJECT_TYPES)[number];

@@ -1,0 +1,123 @@
+meta {
+  name: Set Audit Assignment
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}/assignment
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "assignee": { "type": "user", "id": "{{currentUserId}}" }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the audit with both owners resolved", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("auditStatus");
+    expect(body).to.have.property("assignee");
+    expect(body.assignee).to.have.property("type");
+    expect(body.assignee).to.have.property("id");
+    expect(body.assignee).to.have.property("name");
+  });
+}
+
+docs {
+  # PATCH /deal-audits/deals/:dealId/assignment — set assignee / reviewer (PAC-72)
+
+  Sets who is responsible for a deal's audit. **Ownership is per deal, not per
+  item**: the reviewer works item by item, but "who is on this" and the final
+  verdict belong to the audit as a whole.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write` (`write ⇒ read`)
+  - **Data scope:** the caller must be able to reach the audit — see the note on
+    reachability below.
+
+  ## The two roles
+  | slot     | does                                                            |
+  |----------|-----------------------------------------------------------------|
+  | assignee | gathers the evidence, uploads documents, submits for review     |
+  | reviewer | approves, requests changes, or sends it back                    |
+
+  Each slot holds a **user or a role**. A role assignee is a queue — "whoever on
+  the CRM team picks it up".
+
+  > 🔴 `id` is **always an ObjectId**, including for a role: store the role's
+  > `_id`, never its slug. A field that is sometimes an id and sometimes a name
+  > cannot be indexed, forces every read to branch, and breaks the moment
+  > someone renames a role. Display names are resolved on read.
+
+  ## Path params
+  | param  | type   | notes                                         |
+  |--------|--------|-----------------------------------------------|
+  | dealId | string | the **Deal** `_id` — not the audit's own id   |
+
+  ## Body — at least one key required
+  | field    | type          | notes                                        |
+  |----------|---------------|----------------------------------------------|
+  | assignee | object\|null  | `{ type: "user"\|"role", id }`; `null` clears |
+  | reviewer | object\|null  | same shape                                    |
+
+  Omitting a key leaves that slot untouched; sending `null` **clears** it. The
+  two are distinct: an audit whose reviewer left the agency has to be
+  un-assignable, not merely re-assignable.
+
+  ```json
+  { "assignee": { "type": "role", "id": "665f...ab2" }, "reviewer": null }
+  ```
+
+  ## Response `200`
+  ```json
+  {
+    "id": "665f...9c1",
+    "dealId": "665f...a03",
+    "auditStatus": "Not Submitted",
+    "assignee": { "type": "role", "id": "665f...ab2", "name": "CRM" },
+    "reviewer": null,
+    "submittedAt": null,
+    "reviewedAt": null,
+    "reasonCodes": [],
+    "auditScore": 0,
+    "auditNotes": null,
+    "itemCount": 7,
+    "resolvedCount": 2,
+    "openCount": 5,
+    "completionPct": 29
+  }
+  ```
+
+  ## Reachability — who can load an audit at all
+  Access to a specific audit is **assignee OR reviewer** (matched against the
+  caller's user id *and* their role ids). This is deliberately a different
+  question from *whose board it appears on*, which is scoped to the **assignee**
+  only — using the board's clamp here would `404` the very reviewer the review
+  endpoint exists for. Agency- and branch-scoped callers reach it through their
+  own scope as usual.
+
+  ⚠ Reassigning an audit **removes it from the previous assignee's board**. For
+  an `own`-scoped producer that means losing sight of a deal they sold.
+
+  ## Errors
+  - `400 Bad Request` — empty body, or an `id` that is not a 24-char hex id.
+  - `403 Forbidden` — module disabled or missing `deal_audits:write`.
+  - `404 Not Found` — no audit for that deal, or it is out of the caller's reach.
+
+  ## Side effects
+  Appends an `audit_assigned` entry to the audit's thread (see **List Audit
+  Notes**). Best-effort: a failed timeline write is logged, not surfaced.
+}

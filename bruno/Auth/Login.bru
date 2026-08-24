@@ -32,6 +32,11 @@ script:post-response {
     if (body.user && body.user.branchId) {
       bru.setVar("branchId", body.user.branchId);
     }
+    if (body.user && body.user.id) {
+      // Needed wherever a request has to name the signed-in user rather than
+      // just authenticate as them — e.g. assigning a deal audit to yourself.
+      bru.setVar("currentUserId", body.user.id);
+    }
   }
 }
 

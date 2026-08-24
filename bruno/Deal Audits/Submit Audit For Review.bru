@@ -1,0 +1,79 @@
+meta {
+  name: Submit Audit For Review
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}/submit
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("moves the audit to Pending", function () {
+    expect(res.getBody().auditStatus).to.equal("Pending");
+  });
+
+  test("records who submitted it", function () {
+    expect(res.getBody()).to.have.property("submittedAt");
+  });
+}
+
+docs {
+  # POST /deal-audits/deals/:dealId/submit — hand to the reviewer (PAC-72)
+
+  The assignee has gathered the evidence; the audit moves to **Pending** and is
+  now the reviewer's problem.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write`
+  - **Data scope:** assignee **or** reviewer (see **Set Audit Assignment**).
+
+  ## The state machine
+  ```
+  Not Submitted ──submit──> Pending ──approve──────────> Pass
+                               │
+                               ├──request_changes─────> Fail ──submit──> Pending
+                               └──send_back──────────> Not Submitted
+  ```
+
+  These four states are **SmartSuite's own** `deal_audit_status` choice codes —
+  the app has always stored them, so there is no mapping layer. (Its *labels*
+  are the unrelated "Not Started / In Progress / Complete / Overdue"; do not
+  write those.)
+
+  ## What is allowed
+  | current state | submit? | why |
+  |---------------|---------|-----|
+  | Not Submitted | ✅ | the normal path |
+  | Fail          | ✅ | **the correction loop** — fix it, submit again |
+  | Pass          | ✅ | a pass found to be wrong must be correctable |
+  | Pending       | ❌ `409` | already with the reviewer |
+
+  ⚠ Submitting is **not** restricted to the named assignee. An owner or manager
+  acting on their behalf is legitimate and common; `submittedById` records who
+  actually did it, and the meaningful separation is enforced on **review**.
+
+  ## Response `201`
+  The full audit — same shape as **Set Audit Assignment**, with `auditStatus`
+  now `"Pending"` and `submittedAt` set.
+
+  ## Errors
+  - `403 Forbidden` — module disabled or missing `deal_audits:write`.
+  - `404 Not Found` — no audit for that deal, or out of reach.
+  - `409 Conflict` — already awaiting review.
+
+  ## Side effects
+  Mirrors the new state onto `Deal.dealAuditStatus` (a display copy;
+  `DealAudit.auditStatus` is authoritative) and appends `audit_submitted` to the
+  thread. Both best-effort and post-commit.
+}

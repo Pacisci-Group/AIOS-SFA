@@ -221,6 +221,27 @@ DealAuditItemSchema.index({
 });
 
 /**
+ * The board's per-page item fetch (PAC-72).
+ *
+ * Since the board became audits-first, `listPendingHandoff` pages over
+ * `dealAudits` and then loads the open items for just that page with
+ * `dealAuditId: { $in: [...] }`. This serves that, and the counter recompute
+ * in `syncCounters` which reads the same shape one audit at a time.
+ *
+ * ⚠ The two `producerId`-prefixed board indexes above are now **dead** — the
+ * access key moved off the item and onto `DealAudit.auditAssignee`. They are
+ * left in place rather than edited: this is a new key pattern, which
+ * `autoIndex` creates on its own, whereas removing theirs is an index change
+ * needing a migration script. Drop them in that cleanup, not here.
+ */
+DealAuditItemSchema.index({
+  agencyId: 1,
+  dealAuditId: 1,
+  isFailed: 1,
+  isResolved: 1,
+});
+
+/**
  * Makes audit generation idempotent (PAC-40): re-running it for a deal creates
  * nothing new, so a retried submission cannot double the service team's
  * hand-off. Partial, never `sparse` — every migrated item lacks a `dedupeKey`,

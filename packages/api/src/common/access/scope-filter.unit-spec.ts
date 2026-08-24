@@ -6,6 +6,8 @@ const AGENCY_ID = '6941fdb2dc9a6d024fd8c3a1';
 const USER_ID = '507f1f77bcf86cd799439011';
 const OTHER_USER_ID = '507f191e810c19729de860ea';
 const BRANCH_ID = '6941fdb2dc9a6d024fd8bc53';
+const ROLE_ID = '68a1f77bcf86cd7994390abc';
+const OTHER_ROLE_ID = '68a1f77bcf86cd7994390def';
 
 function access(overrides: Partial<AccessContext> = {}): AccessContext {
   return {
@@ -16,8 +18,18 @@ function access(overrides: Partial<AccessContext> = {}): AccessContext {
     scope: AccessScope.Branch,
     dataScope: DataScope.Own,
     permissions: [],
+    roleIds: [ROLE_ID],
     ...overrides,
   };
+}
+
+/** The polymorphic-ownership option, as `dealAudits` passes it (PAC-72). */
+const ASSIGNEE = { path: 'auditAssignee', polymorphic: true } as const;
+
+/** `$in` members as comparable strings. */
+function owners(filter: Record<string, unknown>): string[] {
+  const clause = filter['auditAssignee.id'] as { $in: Types.ObjectId[] };
+  return clause.$in.map((id) => id.toString());
 }
 
 describe('buildScopeFilter', () => {
@@ -164,6 +176,109 @@ describe('buildScopeFilter', () => {
 
       expect((filter.assignedCrmId as Types.ObjectId).toString()).toBe(USER_ID);
       expect(filter).not.toHaveProperty('producerId');
+    });
+  });
+
+  // PAC-72: `dealAudits.auditAssignee` is `{ type: 'user' | 'role', id }`, so
+  // "mine" means assigned to me *or* to a role I hold.
+  describe('polymorphic ownership', () => {
+    it('matches the caller and every role they hold under own scope', () => {
+      const filter = buildScopeFilter(
+        access({ roleIds: [ROLE_ID, OTHER_ROLE_ID] }),
+        BRANCH_ID,
+        { ownerField: ASSIGNEE },
+      );
+
+      expect(owners(filter)).toEqual([USER_ID, ROLE_ID, OTHER_ROLE_ID]);
+      expect(filter).not.toHaveProperty('producerId');
+    });
+
+    it('still matches the caller when they hold no roles', () => {
+      const filter = buildScopeFilter(access({ roleIds: [] }), BRANCH_ID, {
+        ownerField: ASSIGNEE,
+      });
+
+      expect(owners(filter)).toEqual([USER_ID]);
+    });
+
+    it('ignores a malformed roleId instead of throwing', () => {
+      // Same contract as a malformed `producerId`: bad data degrades to "not
+      // one of my owners", never a 500.
+      const filter = buildScopeFilter(
+        access({ roleIds: ['not-an-object-id', ROLE_ID] }),
+        BRANCH_ID,
+        { ownerField: ASSIGNEE },
+      );
+
+      expect(owners(filter)).toEqual([USER_ID, ROLE_ID]);
+    });
+
+    it('emits ObjectIds, not strings', () => {
+      // The trap this whole helper exists for: `auditAssignee.id` is an
+      // ObjectId, so a string `$in` matches zero documents in silence.
+      const filter = buildScopeFilter(access(), BRANCH_ID, {
+        ownerField: ASSIGNEE,
+      });
+      const clause = filter['auditAssignee.id'] as { $in: unknown[] };
+
+      for (const id of clause.$in) {
+        expect(id).toBeInstanceOf(Types.ObjectId);
+      }
+    });
+
+    it('ignores a request to widen to agency under own scope', () => {
+      const filter = buildScopeFilter(access(), BRANCH_ID, {
+        ownerField: ASSIGNEE,
+        requestedScope: 'agency',
+      });
+
+      expect(owners(filter)).toEqual([USER_ID, ROLE_ID]);
+    });
+
+    it('honours a voluntary narrowing to own from agency scope', () => {
+      const filter = buildScopeFilter(
+        access({ dataScope: DataScope.Agency, scope: AccessScope.Agency }),
+        BRANCH_ID,
+        { ownerField: ASSIGNEE, requestedScope: 'own' },
+      );
+
+      expect(owners(filter)).toEqual([USER_ID, ROLE_ID]);
+    });
+
+    it('leaves an agency-scoped read unclamped by owner', () => {
+      const filter = buildScopeFilter(
+        access({ dataScope: DataScope.Agency, scope: AccessScope.Agency }),
+        BRANCH_ID,
+        { ownerField: ASSIGNEE },
+      );
+
+      expect(filter).not.toHaveProperty('auditAssignee.id');
+      expect(filter.agencyId).toBe(AGENCY_ID);
+    });
+
+    it('narrows a requested producerId to that *user*, never a role', () => {
+      // A role is a queue, so "show me Dana's audits" must not also return
+      // everything sitting on a team Dana happens to belong to.
+      const filter = buildScopeFilter(
+        access({ dataScope: DataScope.Agency, scope: AccessScope.Agency }),
+        BRANCH_ID,
+        { ownerField: ASSIGNEE, producerId: OTHER_USER_ID },
+      );
+
+      expect(filter['auditAssignee.type']).toBe('user');
+      expect((filter['auditAssignee.id'] as Types.ObjectId).toString()).toBe(
+        OTHER_USER_ID,
+      );
+    });
+
+    it('never emits a top-level $or, so callers can use their own', () => {
+      // The clause is a single-field `$in` precisely so a caller spreading this
+      // filter and adding `$or` cannot clobber the tenancy clamp.
+      const filter = buildScopeFilter(access(), BRANCH_ID, {
+        ownerField: ASSIGNEE,
+      });
+
+      expect(filter).not.toHaveProperty('$or');
     });
   });
 });

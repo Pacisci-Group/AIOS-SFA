@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { getModelToken } from '@nestjs/mongoose';
 import { AccessScope, DataScope } from '@sfa/shared';
-import type { AccessContext } from '@sfa/shared';
+import type { AccessContext, DealAuditStatus } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { AppModule } from '../app.module';
 import { AuditGenerationService } from '../audit-generation/audit-generation.service';
@@ -207,14 +207,15 @@ async function run() {
     resolved += 1;
   }
 
-  // The parent roll-up. Generation deliberately leaves this `Pending` because
-  // nothing has been audited yet; with every item cleared, it is a Pass.
+  // The parent roll-up. Generation leaves this `Not Submitted` because nothing
+  // has been through review yet; with every item cleared, it is a Pass.
   const passedAt = new Date();
   const audit = await auditModel.findOneAndUpdate(
     { agencyId, dealId: deal._id },
     {
       $set: {
-        result: 'Pass',
+        // Was `result: 'Pass'`; `result` folded into `auditStatus` (PAC-72).
+        auditStatus: 'Pass' satisfies DealAuditStatus,
         auditDate: passedAt,
         auditScore: 100,
         reasonCodes: [],
@@ -224,10 +225,15 @@ async function run() {
     { new: true },
   );
 
-  // Generation stamps the deal `Not Submitted`, which is true right up until
-  // the last item clears. `Complete` is the vocabulary the migration and demo
-  // seed use for a finished audit.
-  deal.dealAuditStatus = 'Complete';
+  /*
+   * The deal's display mirror of the roll-up's state.
+   *
+   * Was `'Complete'`, on the belief that this was "the vocabulary the migration
+   * and demo seed use" — it was not: `Complete` is a SmartSuite *label*, and
+   * the stored value is the choice code. Four writers, four vocabularies, all
+   * converged on `DEAL_AUDIT_STATUSES` in PAC-72.
+   */
+  deal.dealAuditStatus = 'Pass' satisfies DealAuditStatus;
   await deal.save();
 
   console.log(
@@ -328,6 +334,10 @@ function producerAccess(
     scope: AccessScope.Branch,
     dataScope: DataScope.Own,
     permissions: [],
+    // Empty, like `permissions` above: this context is synthesized to drive a
+    // service directly, not resolved from a user's roles. Nothing the fixture
+    // calls reads role-assigned ownership.
+    roleIds: [],
   };
 }
 

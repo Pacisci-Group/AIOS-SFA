@@ -83,6 +83,17 @@ export class Activity extends TenantRecord {
   quoteRecapId?: Types.ObjectId;
 
   /**
+   * The audit a workflow event or note hangs off (PAC-72).
+   *
+   * Distinct from `dealId`: a deal has one audit today, but the note thread and
+   * the assign/submit/review trail belong to the *audit*, not to the sale. An
+   * `audit_resolved` row still carries only `dealId`, because it is about one
+   * checklist item rather than the audit as a whole.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'DealAudit' })
+  dealAuditId?: Types.ObjectId;
+
+  /**
    * Whoever wrote the row — **not** necessarily a producer (PAC-65).
    *
    * `POST /activities` is gated on `leads:write`, which the Branch Manager and
@@ -151,3 +162,8 @@ ActivitySchema.index(
 // what the old index was shaped for — is never applied to this model. Add one
 // back when an author-scoped query exists, not before.
 ActivitySchema.index({ agencyId: 1, leadId: 1, occurredAt: -1 });
+
+// The audit note thread + workflow trail (PAC-72). Added *with* its read path
+// — `DealAuditsService.listNotes` — rather than ahead of it, which is the
+// lesson of the two dead `producerId` indexes described above.
+ActivitySchema.index({ agencyId: 1, dealAuditId: 1, occurredAt: -1 });

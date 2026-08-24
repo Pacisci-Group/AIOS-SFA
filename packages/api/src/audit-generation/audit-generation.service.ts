@@ -12,8 +12,10 @@ import {
 import {
   DealAuditAttachment,
   DealAuditItem,
-  DealAuditItemDocument,
 } from '../deal-audit-items/schemas/deal-audit-item.schema';
+import { DEFAULT_DEAL_AUDIT_STATUS } from '@sfa/shared';
+import { authorshipForInsert } from '../common/context/request-context';
+import { syncAuditCounters } from '../deal-audits/audit-counters';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   attachmentKey,
@@ -95,10 +97,17 @@ export class AuditGenerationService {
   constructor(
     @InjectModel(AuditTemplate.name)
     private readonly templateModel: Model<AuditTemplateDocument>,
+    /*
+     * Class-typed rather than `Model<…Document>` for these two, matching the
+     * migration and demo seed — `Model<T>` is invariant in `T`, so the two
+     * spellings are not interchangeable and `syncAuditCounters` has to be
+     * handed one or the other. The class form is already what this service's
+     * `AnyBulkWriteOperation<DealAuditItem>` ops are written against.
+     */
     @InjectModel(DealAuditItem.name)
-    private readonly itemModel: Model<DealAuditItemDocument>,
+    private readonly itemModel: Model<DealAuditItem>,
     @InjectModel(DealAudit.name)
-    private readonly dealAuditModel: Model<DealAuditDocument>,
+    private readonly dealAuditModel: Model<DealAudit>,
     @InjectModel(Deal.name)
     private readonly dealModel: Model<DealDocument>,
   ) {}
@@ -213,6 +222,32 @@ export class AuditGenerationService {
       await this.itemModel.bulkWrite(writes, { ordered: false });
     }
 
+    /*
+     * The board's sort keys and the completion-% denominator (PAC-72).
+     *
+     * After the items exist, not alongside them: the counters are derived from
+     * what actually landed, so a partially-failed `ordered: false` bulk write
+     * still leaves them describing reality. Best-effort like everything else on
+     * this path — a deal is already booked by now.
+     */
+    if (parent) {
+      try {
+        await syncAuditCounters(
+          this.itemModel,
+          this.dealAuditModel,
+          input.agencyId,
+          parent._id,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Could not sync audit counters for deal ${input.dealId.toString()}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
     // Count the deal's items rather than this run's inserts. The two agree on
     // a first run and diverge on every later one: the upserts are deliberately
     // `$setOnInsert`, so a re-run inserts nothing and reporting the insert
@@ -226,7 +261,10 @@ export class AuditGenerationService {
       auditGeneratedAt: new Date(),
       auditGenerationStatus: 'generated',
       auditItemCount: itemCount,
-      dealAuditStatus: 'Not Submitted',
+      // The display mirror of `DealAudit.auditStatus`, which is authoritative.
+      // Already the right value before PAC-72 — it is the constant now so the
+      // vocabulary has exactly one definition.
+      dealAuditStatus: DEFAULT_DEAL_AUDIT_STATUS,
     });
 
     return { status: 'generated', itemCount, unresolved };
@@ -258,6 +296,16 @@ export class AuditGenerationService {
     const now = new Date();
 
     return {
+      /*
+       * 🔴 Explicit, because `bulkWrite` below bypasses Mongoose middleware —
+       * `authorshipPlugin` never runs for these documents (PAC-72). Every other
+       * collection gets `createdBy` / `updatedBy` for free; this one would have
+       * silently had neither.
+       *
+       * Empty outside a request (the seed fixture calls this too), which leaves
+       * both fields null and reads as "system" — the intended behaviour.
+       */
+      ...authorshipForInsert(),
       agencyId: input.agencyId,
       branchId: input.branchId,
       dealId: input.dealId,
@@ -323,6 +371,13 @@ export class AuditGenerationService {
    * Non-unique index on `{agencyId, dealId}` — `DealAudit.legacyDealIds` is an
    * array, so migrated data may legitimately hold several per deal. `upsert`
    * with `$setOnInsert` keeps a re-run idempotent regardless.
+   *
+   * 🔴 **This record is no longer optional.** Until PAC-72 the board read
+   * `dealAuditItems` directly and a missing parent was cosmetic; the board now
+   * pages over `dealAudits`, so a deal without one is a deal the service team
+   * never sees. The failure is still caught — a booked sale must not be failed
+   * by its own side-effect — but it is logged as an error and stamped onto the
+   * deal, not shrugged off.
    */
   private async upsertParentAudit(
     input: GenerateAuditInput,
@@ -338,20 +393,42 @@ export class AuditGenerationService {
             dealId: input.dealId,
             title: dealTitle ?? input.clientName,
             auditDate: new Date(),
-            // Deliberately not Pass/Fail: nothing has been audited yet. The
-            // finalize flow (out of scope) computes the real result.
-            result: 'Pending',
+            /*
+             * The workflow's starting state (PAC-72). Was `result: 'Pending'`,
+             * which said the opposite of what it meant: nothing has been
+             * submitted, let alone reviewed. `Pending` in the real vocabulary
+             * means "with the reviewer".
+             */
+            auditStatus: DEFAULT_DEAL_AUDIT_STATUS,
+            /*
+             * Default the assignee to the selling producer.
+             *
+             * Without this the audit reaches nobody: the board scopes on
+             * `auditAssignee`, so an unassigned audit is invisible to every
+             * `own`-scoped user the moment it is created. Whoever gathers the
+             * documents can be reassigned later — this is a starting point,
+             * not a policy.
+             */
+            ...(input.producerId
+              ? {
+                  auditAssignee: {
+                    type: 'user' as const,
+                    id: input.producerId,
+                  },
+                }
+              : {}),
             isTestRecord: false,
           },
         },
         { upsert: true, new: true },
       );
     } catch (error) {
-      // A missing parent link is cosmetic — the items are what the board reads.
-      this.logger.warn(
-        `Could not upsert parent audit for deal ${input.dealId.toString()}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+      this.logger.error(
+        `Could not upsert parent audit for deal ${input.dealId.toString()} — ` +
+          `its hand-off will not appear on the board: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        error instanceof Error ? error.stack : undefined,
       );
       return null;
     }

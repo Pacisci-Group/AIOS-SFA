@@ -1,9 +1,12 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { Connection } from 'mongoose';
 import { AuthModule } from './auth/auth.module';
+import { RequestContextMiddleware } from './common/context/request-context.middleware';
+import { authorshipPlugin } from './common/mongo/authorship.plugin';
 import { MongoDuplicateKeyFilter } from './common/filters/mongo-duplicate-key.filter';
 import { AccessContextGuard } from './common/guards/access-context.guard';
 import { BranchGuard } from './common/guards/branch.guard';
@@ -74,6 +77,23 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         uri: config.get<string>('MONGODB_URI', 'mongodb://localhost:27017/sfa'),
+        /*
+         * `createdBy` / `updatedBy` for every collection that declares them
+         * (PAC-72). Registered on the connection rather than per-schema so a
+         * new collection is covered by extending `TenantRecord` and nothing
+         * else.
+         *
+         * Must run here: a connection plugin applies to models compiled
+         * *after* it, and every `MongooseModule.forFeature` in the graph
+         * resolves after the root connection.
+         *
+         * `onConnectionCreate` rather than `connectionFactory` — same hook
+         * point, but it is typed `(connection: Connection) => void` while
+         * `connectionFactory` is `(connection: any) => any`.
+         */
+        onConnectionCreate: (connection: Connection) => {
+          connection.plugin(authorshipPlugin);
+        },
       }),
     }),
     // In-memory storage on purpose. Redis is optional in this codebase (there is
@@ -160,4 +180,16 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     { provide: APP_FILTER, useClass: MongoDuplicateKeyFilter },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  /**
+   * Opens the per-request context store for every route (PAC-72).
+   *
+   * Middleware, not an interceptor: the store has to be established
+   * synchronously around the whole request so every async continuation inherits
+   * it — see `runWithRequestContext`. It runs before the guards, which is why
+   * the store starts empty and `AccessContextGuard` fills in the user.
+   */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RequestContextMiddleware).forRoutes('*');
+  }
+}

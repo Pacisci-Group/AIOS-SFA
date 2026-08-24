@@ -33,6 +33,12 @@ export interface TestSeedContext {
   producerEmail: string;
   csrEmail: string;
   readOnlyEmail: string;
+  /**
+   * User ids for the two non-producer personas, for tests that assign work to
+   * a specific person rather than logging in as them (PAC-72 audit ownership).
+   */
+  csrUserId: string;
+  readOnlyUserId: string;
   /** Client records in the main test branch. */
   householdId: string;
   policyId: string;
@@ -146,7 +152,7 @@ export async function seedTestData(
     isActive: true,
   });
 
-  await userModel.create({
+  const csrUser = await userModel.create({
     agencyId: agency._id,
     branchId: branch._id,
     email: csrEmail,
@@ -157,7 +163,7 @@ export async function seedTestData(
     isActive: true,
   });
 
-  await userModel.create({
+  const readOnlyUser = await userModel.create({
     agencyId: agency._id,
     branchId: branch._id,
     email: readOnlyEmail,
@@ -296,5 +302,7 @@ export async function seedTestData(
     producerEmail,
     csrEmail,
     readOnlyEmail,
+    csrUserId: csrUser._id.toString(),
+    readOnlyUserId: readOnlyUser._id.toString(),
   };
 }
