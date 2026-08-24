@@ -92,12 +92,16 @@ export function InviteUserDialog() {
 
   if (!allowed) return null;
 
+  // `triggerLabel` keeps the closed select to the role's name. The description
+  // is a full sentence — rendered on the trigger it blew past the dialog's
+  // edges, since the trigger is a one-line `whitespace-nowrap` control.
   const roleOptions = (rolesQuery.data ?? []).map((role) => ({
     value: role._id,
+    triggerLabel: role.name,
     label: role.description ? (
-      <span className="flex flex-col">
+      <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
         <span>{role.name}</span>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs whitespace-normal text-muted-foreground">
           {role.description}
         </span>
       </span>
@@ -179,6 +183,9 @@ export function InviteUserDialog() {
                   disabled={rolesQuery.isLoading || roleOptions.length === 0}
                   description="Sets what they can see and do. Adjustable afterwards."
                   triggerClassName="w-full bg-card border-border"
+                  // Without this the longest description sets the menu's width
+                  // and the panel spills out of the dialog.
+                  contentClassName="max-w-[var(--radix-select-trigger-width)]"
                 />
               )}
             </form.AppField>
