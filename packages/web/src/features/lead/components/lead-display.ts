@@ -219,6 +219,20 @@ export const activityDisplay: Record<
     tone: "text-amber-600 dark:text-amber-500",
     tint: "bg-amber-500/15",
   },
+  /*
+   * A lead changed hands (PAC-72 section D). Unlike the five audit types above,
+   * this one **does** render here — it hangs off the lead, and the producer
+   * losing it is exactly who needs to see it.
+   *
+   * Violet, matching `email`: both are "something happened to this record"
+   * rather than a pipeline milestone, and neither should compete with the
+   * emerald of a sale.
+   */
+  lead_reassigned: {
+    icon: UserCheck,
+    tone: "text-violet-600 dark:text-violet-400",
+    tint: "bg-violet-400/12",
+  },
 };
 
 /** Human label for an activity type, used when a row carries no `summary`. */
@@ -239,6 +253,9 @@ export const activityLabel: Record<ActivityType, string> = {
   audit_approved: "Audit approved",
   audit_changes_requested: "Changes requested on audit",
   audit_sent_back: "Audit sent back to assignee",
+  // A fallback only: `LeadAssignmentService` always writes a summary naming
+  // both producers, and the timeline prefers that over this label.
+  lead_reassigned: "Lead reassigned",
 };
 
 /** Up to two initials for an avatar; `?` when there is no name to work with. */

@@ -7,7 +7,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ModuleKey, modulePermission } from '@sfa/shared';
+import { AgencyPermission, ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
   RequireModule,
@@ -17,6 +17,7 @@ import {
 import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { HotLeadsService } from './hot-leads.service';
+import { LeadAssignmentService } from './lead-assignment.service';
 import { LeadDetailService } from './lead-detail.service';
 import { LeadsService } from './leads.service';
 import { listHotLeadsSchema } from './dto/list-hot-leads.dto';
@@ -27,6 +28,8 @@ import { createLeadSchema } from './dto/create-lead.dto';
 import type { CreateLeadDto } from './dto/create-lead.dto';
 import { updateLeadSchema } from './dto/update-lead.dto';
 import type { UpdateLeadDto } from './dto/update-lead.dto';
+import { reassignLeadSchema } from './dto/reassign-lead.dto';
+import type { ReassignLeadDto } from './dto/reassign-lead.dto';
 
 /**
  * Leads list (PAC-36) — the read path behind the `/leads` page.
@@ -43,6 +46,7 @@ export class LeadsController {
     private readonly leadsService: LeadsService,
     private readonly leadDetailService: LeadDetailService,
     private readonly hotLeadsService: HotLeadsService,
+    private readonly leadAssignment: LeadAssignmentService,
   ) {}
 
   @Get()
@@ -143,6 +147,35 @@ export class LeadsController {
     @Body(new ZodValidationPipe(updateLeadSchema)) body: UpdateLeadDto,
   ) {
     return this.leadDetailService.update(access, branchId, id, body);
+  }
+
+  /**
+   * Hand the lead to another user (PAC-72 section D).
+   *
+   * 🔴 **Two permissions, both required.** `@RequirePermissions` is an AND-set
+   * in `PermissionsGuard`, and `getAllAndOverride` replaces the class-level
+   * read requirement — so this is written out rather than using `@RequireWrite`,
+   * which sets the same metadata key with a single permission.
+   *
+   * `agency:users:read` is held by the **Agency Owner and Branch Manager only**.
+   * A Producer holds `leads:write` but not this, so they cannot hand their own
+   * leads off — reassignment is an owner/manager action, which is the decision
+   * taken on 2026-08-21 and supersedes this ticket's original `leads:write`
+   * line. It also means the picker's roster (`GET /users`, gated on the same
+   * permission) is reachable by exactly the people who can act on it.
+   */
+  @Patch(':id/assignment')
+  @RequirePermissions(
+    modulePermission(ModuleKey.Leads, 'write'),
+    AgencyPermission.UsersRead,
+  )
+  reassign(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(reassignLeadSchema)) body: ReassignLeadDto,
+  ) {
+    return this.leadAssignment.assign(access, branchId, id, body.producerId);
   }
 
   /**

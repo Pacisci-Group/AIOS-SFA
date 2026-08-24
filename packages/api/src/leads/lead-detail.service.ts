@@ -210,6 +210,22 @@ export class LeadDetailService {
       producerName: lead.producerId
         ? (userNames.get(lead.producerId.toString()) ?? null)
         : null,
+      /*
+       * The raw owner id, for the reassignment control (PAC-72 D) — and
+       * **only** for a caller who could actually use it.
+       *
+       * This response is deliberately scrubbed of raw ids (`agencyId`,
+       * `branchId`, `legacySmartSuiteId`, `submissionToken`, …); an e2e pins
+       * that. A user id is a smaller disclosure than those, but it is still one
+       * that buys a producer nothing: they can neither list users nor reassign,
+       * so `producerName` is the whole of what they need.
+       *
+       * Spread rather than set to `null`, so the key is *absent* for everyone
+       * else and the masking assertion keeps meaning what it says.
+       */
+      ...(access.permissions.includes(AgencyPermission.UsersRead)
+        ? { producerId: lead.producerId?.toString() ?? null }
+        : {}),
       primaryContact: this.findPrimaryContact(lead, household, contacts),
       household: this.toHousehold(household, lead, contacts, policies),
       latestQuoteRecap: latestRecap

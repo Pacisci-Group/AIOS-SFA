@@ -4265,6 +4265,32 @@ describe('SFA API (e2e)', () => {
       expect(recap?.document?.filename).toBe('quote-38.pdf');
     });
 
+    it('exposes producerId only to a caller who could act on it (PAC-72)', async () => {
+      /*
+       * The reassignment control needs the owner's raw id to pre-select them,
+       * and `PATCH /leads/:id/assignment` needs `agency:users:read` — so the id
+       * is returned to exactly those callers and omitted for everyone else.
+       *
+       * Asserted both ways: the masking rule above only means something if
+       * something else proves the field is reachable at all. Same shape as the
+       * `field_changed` activity gate this service already applies.
+       */
+      const asProducer = (await getAs(
+        producerToken,
+        leadId,
+      )) as unknown as Record<string, unknown>;
+      expect(asProducer).not.toHaveProperty('producerId');
+      // The name is what a producer reads instead.
+      expect(asProducer.producerName).toBeTruthy();
+
+      const asOwner = (await getAs(ownerToken, leadId)) as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(asOwner).toHaveProperty('producerId');
+      expect(asOwner.producerId).toEqual(expect.any(String));
+    });
+
     it('shows the household address, primary contact and roster (primary first)', async () => {
       const body = await getAs(producerToken, leadId);
 
@@ -4551,6 +4577,156 @@ describe('SFA API (e2e)', () => {
 
     it('a read-only user is forbidden (403)', async () => {
       await patchAs(readOnlyToken, leadId, { status: 'Contacted' }).expect(403);
+    });
+
+    /**
+     * Reassignment (PAC-72 section D).
+     *
+     * Kept in this block because it shares the fixtures, but it is a different
+     * endpoint with a different gate: `leads:write` **and** `agency:users:read`.
+     */
+    describe('reassignment', () => {
+      let ownerId: string;
+      let producerId: string;
+      let movableLeadId: string;
+
+      const reassignAs = (token: string, id: string, toUserId: string) =>
+        request(app.getHttpServer())
+          .patch(`/api/v1/leads/${id}/assignment`)
+          .set(authHeader(token))
+          .send({ producerId: toUserId });
+
+      beforeAll(async () => {
+        const userModel = app.get<Model<User>>(getModelToken(User.name));
+        const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+        const owner = await userModel.findOne({ email: seed.ownerEmail });
+        const producer = await userModel.findOne({
+          email: seed.producerEmail,
+        });
+        ownerId = owner!._id.toString();
+        producerId = producer!._id.toString();
+
+        // Its own lead: the shared `leadId` above is walked through several
+        // statuses by the tests before this, including `Sold`.
+        const lead = await leadModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Rowan',
+          lastName: 'Handover',
+          status: 'New',
+          temperature: 'Warm',
+          producerId: producer!._id,
+          isTestRecord: false,
+        });
+        movableLeadId = lead._id.toString();
+      });
+
+      it('moves the lead and records who did it, not who received it', async () => {
+        const activityModel = app.get<Model<Activity>>(
+          getModelToken(Activity.name),
+        );
+
+        const res = await reassignAs(ownerToken, movableLeadId, ownerId).expect(
+          200,
+        );
+        expect((res.body as { producerId: string }).producerId).toBe(ownerId);
+        expect(
+          (res.body as { producerName: string }).producerName,
+        ).toBeTruthy();
+
+        const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+        const stored = await leadModel.findById(movableLeadId);
+        expect(stored!.producerId?.toString()).toBe(ownerId);
+
+        const activity = await activityModel
+          .findOne({ leadId: stored!._id, type: 'lead_reassigned' })
+          .sort({ occurredAt: -1 });
+        expect(activity).not.toBeNull();
+        /*
+         * 🔴 The **actor**. PAC-65 #9 renamed this field from `producerId`
+         * precisely because it never meant "owner" — rewriting it so the new
+         * producer appears to have made the old one's calls would forge history.
+         * Here actor and recipient are both the owner, so the assertion that
+         * carries weight is the one below it.
+         */
+        expect(activity!.userId?.toString()).toBe(ownerId);
+        // Both names in `summary`, never in `changes`: a `field_changed` row is
+        // hidden from anyone without ChangeLogsRead — every producer — and the
+        // producer losing the lead is exactly who needs to see this.
+        expect(activity!.summary).toMatch(/reassigned/i);
+        expect(activity!.changes).toBeUndefined();
+      });
+
+      it('is a no-op when the lead is already theirs — no second timeline row', async () => {
+        const activityModel = app.get<Model<Activity>>(
+          getModelToken(Activity.name),
+        );
+        const before = await activityModel.countDocuments({
+          leadId: new Types.ObjectId(movableLeadId),
+          type: 'lead_reassigned',
+        });
+
+        await reassignAs(ownerToken, movableLeadId, ownerId).expect(200);
+
+        // Logging a change that did not happen is worse than logging nothing.
+        expect(
+          await activityModel.countDocuments({
+            leadId: new Types.ObjectId(movableLeadId),
+            type: 'lead_reassigned',
+          }),
+        ).toBe(before);
+      });
+
+      it('refuses to move a sold lead', async () => {
+        // The sale is the record of who earned it, and the scorecards read the
+        // deal. Letting the lead move would make the two disagree.
+        const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+        const sold = await leadModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Sold',
+          lastName: 'Frozen',
+          status: 'Sold',
+          producerId: new Types.ObjectId(producerId),
+          isTestRecord: false,
+        });
+
+        await reassignAs(ownerToken, sold._id.toString(), ownerId).expect(409);
+
+        const stored = await leadModel.findById(sold._id);
+        expect(stored!.producerId?.toString()).toBe(producerId);
+      });
+
+      it('forbids a producer, who holds leads:write but not agency:users:read', async () => {
+        /*
+         * The gate that makes reassignment an owner/manager action. A producer
+         * can write leads all day and still cannot hand one off — not even
+         * their own — which is the decision taken on 2026-08-21 and supersedes
+         * the ticket's original `leads:write` line.
+         */
+        await reassignAs(producerToken, movableLeadId, producerId).expect(403);
+      });
+
+      it('404s for a lead outside the caller-visible set', async () => {
+        await reassignAs(
+          ownerToken,
+          new Types.ObjectId().toString(),
+          ownerId,
+        ).expect(404);
+      });
+
+      it('404s for a user who is not in the agency', async () => {
+        await reassignAs(
+          ownerToken,
+          movableLeadId,
+          new Types.ObjectId().toString(),
+        ).expect(404);
+      });
+
+      it('rejects a malformed producerId', async () => {
+        await reassignAs(ownerToken, movableLeadId, 'not-an-id').expect(400);
+      });
     });
   });
 

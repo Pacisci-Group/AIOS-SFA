@@ -323,6 +323,24 @@ export interface LeadDetail {
   /** How the lead arrived; `null` on migrated records. */
   intakeChannel: IntakeChannel | null;
   producerName: string | null;
+  /**
+   * The owning producer's id, so the reassignment control can pre-select them
+   * (PAC-72 section D).
+   *
+   * ⚠ **Omitted entirely** unless the caller holds `agency:users:read` — the
+   * same permission `PATCH /leads/:id/assignment` and the picker's roster
+   * require. A raw user id is of no use to someone who cannot list users or
+   * reassign the lead, and this response is otherwise scrubbed of raw ids
+   * (`agencyId`, `branchId`, `legacySmartSuiteId`, …) by a deliberate
+   * data-masking rule. `producerName` is what everyone else reads.
+   *
+   * Same idea as the `field_changed` activity filter in `LeadDetailService`:
+   * one response, shaped to what the caller may act on.
+   *
+   * `null` when present-but-unowned — public-intake leads arrive that way until
+   * something assigns them.
+   */
+  producerId?: string | null;
   primaryContact: LeadDetailContact | null;
   /** `null` when the lead is not linked to a household — a real migrated gap. */
   household: LeadDetailHousehold | null;
@@ -385,5 +403,27 @@ export interface UpdateLeadResult {
   temperature: LeadTemperature;
   leadSource: NormalizedLeadSource;
   /** Always bumped — the Leads list sorts on it, and an edit is activity. */
+  lastActivityAt: string;
+}
+
+/**
+ * `PATCH /leads/:id/assignment` — hand a lead to another user (PAC-72 D).
+ *
+ * A route of its own rather than a fourth field on {@link UpdateLeadInput}.
+ * That one is the Lead Detail inline-edit patch, where three Select controls
+ * each fire a field; reassignment has a different permission story
+ * (`leads:write` **and** `agency:users:read`), a different failure mode (the
+ * sold-lead freeze), and writes its own activity.
+ */
+export interface ReassignLeadInput {
+  /** The user taking the lead on. */
+  producerId: string;
+}
+
+export interface ReassignLeadResult {
+  id: string;
+  producerId: string;
+  producerName: string | null;
+  /** Bumped like any other edit — the Leads list sorts on it. */
   lastActivityAt: string;
 }

@@ -32,6 +32,7 @@ import { ResolveHouseholdStep } from './intake/resolve-household.step';
 import { ResolveLeadStep } from './intake/resolve-lead.step';
 import { HotLeadsService } from './hot-leads.service';
 import { LeadAccessService } from './lead-access.service';
+import { LeadAssignmentService } from './lead-assignment.service';
 import { LeadDetailService } from './lead-detail.service';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
@@ -67,6 +68,7 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     HotLeadsService,
     LeadIntakeService,
     LeadAccessService,
+    LeadAssignmentService,
     ResolveContactStep,
     ResolveHouseholdStep,
     ResolveLeadStep,
@@ -75,6 +77,9 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
   // `LeadIntakeService` so the public share-link controller can run the same
   // pipeline; `LeadAccessService` so every lead-scoped write path (quote
   // recaps, sold deals) shares one scope clamp and one household resolver.
-  exports: [LeadIntakeService, LeadAccessService],
+  // `LeadAssignmentService` is exported for the two callers that do not exist
+  // yet — PAC-53's round-robin at intake and the bulk reassignment recorded in
+  // PAC-65 — so the freeze rule and the activity contract are written once.
+  exports: [LeadIntakeService, LeadAccessService, LeadAssignmentService],
 })
 export class LeadsModule {}

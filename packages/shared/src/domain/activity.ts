@@ -60,6 +60,22 @@ export const ACTIVITY_TYPES = [
   'audit_approved',
   'audit_changes_requested',
   'audit_sent_back',
+  /**
+   * A lead changed hands (PAC-72 section D). System-emitted by
+   * `LeadAssignmentService`, so absent from `LOGGABLE_ACTIVITY_TYPES`.
+   *
+   * 🔴 The row's `userId` is the **actor** — whoever performed the
+   * reassignment — and is never rewritten to the new owner. That field was
+   * called `producerId` until PAC-65 #9 renamed it precisely because it never
+   * meant "owner": rewriting history so a new producer appears to have made
+   * the old one's calls is a data-integrity bug, not a feature.
+   *
+   * The two names live in `summary`, deliberately not in `changes`:
+   * `LeadDetailService` filters `field_changed` rows out for anyone without
+   * `AgencyPermission.ChangeLogsRead`, so modelling a reassignment as a change
+   * row would hide it from the producer it affects most.
+   */
+  'lead_reassigned',
 ] as const;
 
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];

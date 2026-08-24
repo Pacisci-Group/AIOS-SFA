@@ -3,6 +3,7 @@ import type {
   HotLeadRow,
   LeadDetail,
   LeadTemperature,
+  ReassignLeadResult,
   ServiceTicketView,
   UpdateLeadInput,
   UpdateLeadResult,
@@ -106,6 +107,27 @@ export function updateLead(leadId: string, input: UpdateLeadInput) {
     method: 'PATCH',
     body: JSON.stringify(input),
   });
+}
+
+/**
+ * `PATCH /leads/:id/assignment` — hand the lead to another user (PAC-72 D).
+ *
+ * Gated on `leads:write` **and** `agency:users:read`, so in practice an owner
+ * or branch manager. A producer holds the first but not the second and cannot
+ * reassign — including their own leads.
+ *
+ * Refused with `409` for a lead that is already sold: the sale is the record of
+ * who earned it, and the scorecards read the deal, not the lead.
+ *
+ * Nothing cascades. `quoteRecaps` deliberately stay with their original quoter
+ * so the Quoted scorecard remains historically accurate; every other linked
+ * record is post-sale and therefore unreachable behind the freeze.
+ */
+export function reassignLead(leadId: string, producerId: string) {
+  return apiFetch<ReassignLeadResult>(
+    `/leads/${encodeURIComponent(leadId)}/assignment`,
+    { method: 'PATCH', body: JSON.stringify({ producerId }) },
+  );
 }
 
 /**

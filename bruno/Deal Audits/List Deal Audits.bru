@@ -28,13 +28,21 @@ script:post-response {
   // are keyed on the deal, and Bruno runs folders alphabetically — so "Deal
   // Audits" executes long before "Sold Deals" could set `createdSoldDealId`.
   if (res.getStatus() === 200) {
-    const items = res.getBody().items;
-    if (items && items.length > 0) {
-      bru.setVar("auditDealId", items[0].dealId);
+    const items = res.getBody().items || [];
+
+    // The workflow requests submit then review, so they need a deal that is not
+    // ALREADY awaiting review — submitting one of those is a 409, and reviewing
+    // it can 403 if whoever submitted it happens to be our reviewer. Prefer a
+    // submittable row; fall back to the first so the folder still has a target.
+    const workable = items.find((row) => row.auditStatus !== "Pending");
+    const target = workable || items[0];
+
+    if (target) {
+      bru.setVar("auditDealId", target.dealId);
       // A row is a **deal** since PAC-72, so the item id the presign / resolve
       // / download requests need lives on the nested checklist. Take the first
       // still-outstanding one — resolving a settled item is a no-op.
-      const open = (items[0].items || []).filter((entry) => entry.open);
+      const open = (target.items || []).filter((entry) => entry.open);
       if (open.length > 0) {
         bru.setVar("dealAuditItemId", open[0].id);
       }

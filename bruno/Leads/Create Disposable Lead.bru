@@ -1,0 +1,66 @@
+meta {
+  name: Create Disposable Lead
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/leads
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "primaryContact": {
+      "firstName": "Rowan",
+      "lastName": "Handover",
+      "dateOfBirth": "1985-09-30",
+      "phone": "(555) 909-1212",
+      "email": "rowan.handover@example.com"
+    },
+    "address": {
+      "street": "18 Transfer Street",
+      "city": "Owasso",
+      "state": "OK",
+      "zip": "74055"
+    },
+    "members": [],
+    "policiesOfInterest": [{ "policyType": "Auto", "itemCount": 1 }],
+    "leadSourceCode": "WCO7l",
+    "submissionToken": "{{$guid}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("disposableLeadId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # Create Disposable Lead — a lead the reassignment can move
+
+  Not an endpoint of its own; a fixture, and the same precedent as **Leads ›
+  Share Links › Create Disposable Share Link**.
+
+  **Reassign Lead** must not target `{{createdLeadId}}`. The CLI walks folders
+  alphabetically, so **Quote Recaps** and **Sold Deals** both run *after* Leads
+  and both use that lead **as the producer** — moving it to the owner would 404
+  every one of them, and the collection could never go green.
+
+  This lead exists only to be handed over, so nothing later depends on who owns
+  it. Its own address and contact are distinct from **Create Lead**'s so the
+  intake dedupe signals (name, address + zip, phone, email) cannot merge the two
+  onto one record.
+}

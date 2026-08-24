@@ -9,6 +9,7 @@ import { getLead } from "@/lib/leads-api";
 import { ActivityTimeline } from "./components/ActivityTimeline";
 import { HouseholdCard } from "./components/HouseholdCard";
 import { LeadContactCard } from "./components/LeadContactCard";
+import { LeadOwnerCard } from "./components/LeadOwnerCard";
 import { LeadDetailHeader } from "./components/LeadDetailHeader";
 import { PriorInsuranceCard } from "./components/PriorInsuranceCard";
 import { QuoteRecapCard } from "./components/QuoteRecapCard";
@@ -124,6 +125,10 @@ export default function LeadDetailsPage() {
           </main>
 
           <aside className="flex flex-col gap-4 p-4 md:p-5 lg:w-2/5 lg:border-l lg:border-border">
+            {/* Who owns this lead, and the hand-over control (PAC-72 D).
+                Above the household because "whose is this" is the question
+                asked before "who are they". */}
+            <LeadOwnerCard lead={lead} />
             <HouseholdCard household={lead.household} />
             <div className="min-h-[24rem] flex-1">
               <ActivityTimeline
