@@ -1,5 +1,7 @@
 import { Inngest } from 'inngest';
 import type { ConfigService } from '@nestjs/config';
+import { createEventLogMiddleware } from './event-log/event-log.middleware';
+import type { EventLogService } from './event-log/event-log.service';
 
 /** Identifies this app to Inngest. Shows up as the app name in the dashboard. */
 export const INNGEST_APP_ID = 'sfa';
@@ -30,13 +32,26 @@ export const INNGEST_CLIENT = Symbol('INNGEST_CLIENT');
  * else. Functions are built by {@link InngestRegistry} after the container is
  * up, so they get this same instance — `serve()` requires the client that
  * created the functions to be the one that serves them.
+ *
+ * ## Why `eventLog` is a parameter here
+ * Middleware is registered on the client and constructed by Inngest itself, so
+ * it has no constructor Nest can inject through. Threading the service in here —
+ * where DI is already happening — lets `event-log.middleware.ts` close over a
+ * real `@Injectable` instead of reaching for a module-level singleton.
  */
-export function createInngestClient(config: ConfigService): Inngest.Any {
+export function createInngestClient(
+  config: ConfigService,
+  eventLog: EventLogService,
+): Inngest.Any {
   const baseUrl = config.get<string>('INNGEST_BASE_URL');
 
   return new Inngest({
     id: INNGEST_APP_ID,
     eventKey: config.get<string>('INNGEST_EVENT_KEY'),
+    // Applies to every function this client runs, including ones not written
+    // yet — which is the whole reason the outbox's terminal write lives in
+    // middleware rather than in a per-function `onFailure`.
+    middleware: [createEventLogMiddleware(eventLog)],
     // Point the SDK at our self-hosted server. Unset locally, where the SDK
     // discovers the dev server on its default port by itself.
     ...(baseUrl ? { baseUrl } : {}),

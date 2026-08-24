@@ -11,6 +11,9 @@ function inviteData(
   overrides: Partial<InviteRequestedData> = {},
 ): InviteRequestedData {
   return {
+    // Stamped by `InngestService.send`, never by a producer. Present here only
+    // because it is part of the event contract every payload carries.
+    eventLogId: '507f1f77bcf86cd799439010',
     userId: '507f1f77bcf86cd799439011',
     agencyId: '507f1f77bcf86cd799439012',
     branchId: null,
