@@ -12,6 +12,7 @@ import {
   DataScope,
   canReviewAudit,
   canSubmitAudit,
+  normalizeDealAuditStatus,
 } from '@sfa/shared';
 import type {
   ActivityType,
@@ -51,8 +52,9 @@ import {
 import {
   AuditNoteView,
   AuditWorkflowView,
+  DealAuditDealRow,
+  DealAuditItemRow,
   DealAuditListResponse,
-  DealAuditRow,
   PresignAttachmentResponse,
   ResolveDealAuditResponse,
 } from './deal-audits.types';
@@ -87,7 +89,7 @@ function toOwnerRef(owner: AuditOwnerInput | null): AuditOwnerRef | null {
   return owner ? { type: owner.type, id: new Types.ObjectId(owner.id) } : null;
 }
 
-/** Lean projection of the fields the board reads (incl. timestamp). */
+/** Lean projection of the item fields a checklist row renders from. */
 type DealAuditItemLean = Pick<
   DealAuditItem,
   | 'clientName'
@@ -96,6 +98,26 @@ type DealAuditItemLean = Pick<
   | 'firstCreatedAt'
   | 'dueAt'
   | 'attachments'
+  | 'isFailed'
+  | 'isResolved'
+> & {
+  _id: Types.ObjectId;
+  dealId?: Types.ObjectId;
+  dealAuditId?: Types.ObjectId;
+  createdAt?: Date;
+};
+
+/** Lean projection of the audit fields a board card renders from. */
+type DealAuditLean = Pick<
+  DealAudit,
+  | 'title'
+  | 'auditStatus'
+  | 'auditDate'
+  | 'itemCount'
+  | 'resolvedCount'
+  | 'openFailedCount'
+  | 'oldestOpenAt'
+  | 'dueAt'
 > & {
   _id: Types.ObjectId;
   dealId?: Types.ObjectId;
@@ -130,9 +152,24 @@ export class DealAuditsService {
   ) {}
 
   /**
-   * Deals pending service hand-off: audit items that failed and are not yet
-   * resolved, scoped to the caller's data scope. Producers (`own`) only ever
-   * see their own deals' items. Sorted oldest-open first and paginated.
+   * Deals pending service hand-off — **one card per deal** (PAC-72 section A).
+   *
+   * Two indexed reads, not an aggregation: page over `dealAudits`, then load
+   * the checklists for just the deals on that page with `$in`. The same
+   * batch-then-map shape `loadDeals` already uses.
+   *
+   * ## Why this queries `dealAudits` and not `dealAuditItems`
+   *
+   * The obvious alternative — group items by `dealId` — cannot work. The data
+   * scope clamp lives on the **audit** (`auditAssignee`), so it could only be
+   * applied *after* the `$group`, turning every board load into a full agency
+   * scan. Denormalizing the assignee onto every item instead would contradict
+   * the settled "deal-level *who*, item-level *what*".
+   *
+   * The cost is that `DealAudit`'s counters must be maintained — see
+   * `syncAuditCounters`. That was owed anyway: the completion percentage needs
+   * a stored denominator, and sorting deals by their oldest open item is not
+   * index-backed without one.
    */
   async listPendingHandoff(
     access: AccessContext,
@@ -141,53 +178,112 @@ export class DealAuditsService {
   ): Promise<DealAuditListResponse> {
     const { page, pageSize, due } = query;
 
-    const filter: FilterQuery<DealAuditItemDocument> = {
-      ...buildScopeFilter<DealAuditItemDocument>(access, branchId),
-      isFailed: true,
-      isResolved: false,
+    const filter: FilterQuery<DealAudit> = {
+      ...buildScopeFilter<DealAudit>(access, branchId, {
+        // The access key moved off `dealAuditItems.producerId` (PAC-72). The
+        // item keeps `producerId` as provenance — who sold it — but the board
+        // is scoped to whoever is working the audit.
+        ownerField: { path: 'auditAssignee', polymorphic: true },
+      }),
+      // "Pending hand-off" is exactly "has at least one outstanding item". A
+      // deal whose checklist is clear leaves the board regardless of where its
+      // audit sits in the review workflow.
+      openFailedCount: { $gt: 0 },
       // The soft deadline is a *filter*, never a state change — see `dueAt` on
       // the schema. `all` adds nothing, so the default query is unchanged.
       ...this.dueFilter(due),
     };
 
-    const total = await this.dealAuditItemModel.countDocuments(filter);
+    const total = await this.dealAuditModel.countDocuments(filter);
 
-    const records = await this.dealAuditItemModel
+    const audits = await this.dealAuditModel
       .find(filter)
       // Oldest open first; `_id` tiebreaker keeps pagination stable.
-      .sort({ daysOpen: -1, _id: 1 })
+      .sort({ oldestOpenAt: 1, _id: 1 })
       .skip((page - 1) * pageSize)
       .limit(pageSize)
-      .lean<DealAuditItemLean[]>();
+      .lean<DealAuditLean[]>();
 
-    const dealType = await this.loadDealTypes(records);
+    const [deals, itemsByAudit] = await Promise.all([
+      this.loadDeals(audits),
+      this.loadChecklists(access.agencyId, audits),
+    ]);
 
-    const items: DealAuditRow[] = records.map((record) => {
-      const id = record._id.toString();
-      const type = record.dealId
-        ? (dealType.get(record.dealId.toString()) ?? 'Other')
-        : 'Other';
+    const items: DealAuditDealRow[] = audits.map((audit) => {
+      const id = audit._id.toString();
+      const deal = audit.dealId
+        ? deals.get(audit.dealId.toString())
+        : undefined;
+      const checklist = itemsByAudit.get(id) ?? [];
+
       return {
         id,
-        // What the workflow endpoints are keyed on — see `DealAuditRow.dealId`.
-        dealId: record.dealId?.toString() ?? '',
-        ref: this.maskRef(id, record.firstCreatedAt ?? record.createdAt),
-        client: record.clientName ?? 'Unknown Client',
-        type,
+        // What the workflow endpoints are keyed on.
+        dealId: audit.dealId?.toString() ?? '',
+        ref: this.maskRef(id, audit.auditDate ?? audit.createdAt),
+        client: deal?.clientName ?? audit.title ?? 'Unknown Client',
+        type: deal?.dealType ?? 'Other',
+        auditStatus: normalizeDealAuditStatus(audit.auditStatus),
+        completionPct: completionPercent({
+          itemCount: audit.itemCount ?? 0,
+          resolvedCount: audit.resolvedCount ?? 0,
+        }),
+        itemCount: audit.itemCount ?? 0,
+        openCount: audit.openFailedCount ?? 0,
+        /*
+         * Recomputed on read rather than served from a stored number (PAC-40).
+         * `oldestOpenAt` is a real timestamp so the age is always current,
+         * unlike the item-level `daysOpen`, which is written once at creation
+         * and is only ever right on the day it was written.
+         */
+        oldestDaysOpen: audit.oldestOpenAt ? daysSince(audit.oldestOpenAt) : 0,
+        dueAt: audit.dueAt ? audit.dueAt.toISOString() : null,
+        items: checklist,
+      };
+    });
+
+    return {
+      page,
+      pageSize,
+      // Deals, not items — see `DealAuditListResponse`.
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      items,
+    };
+  }
+
+  /**
+   * The checklists for one page of audits, keyed by audit id.
+   *
+   * Loads **every** item, not just the outstanding ones: the drawer sorts
+   * missing requirements to the top, which needs the settled ones present to
+   * sort above. Outstanding first, then oldest first — the order the drawer
+   * renders them in, decided here so the client does not re-derive it.
+   */
+  private async loadChecklists(
+    agencyId: string | null,
+    audits: Array<{ _id: Types.ObjectId }>,
+  ): Promise<Map<string, DealAuditItemRow[]>> {
+    const byAudit = new Map<string, DealAuditItemRow[]>();
+    if (!audits.length) return byAudit;
+
+    const records = await this.dealAuditItemModel
+      .find({
+        agencyId,
+        dealAuditId: { $in: audits.map((audit) => audit._id) },
+      })
+      .lean<DealAuditItemLean[]>();
+
+    for (const record of records) {
+      const auditId = record.dealAuditId?.toString();
+      if (!auditId) continue;
+
+      const openedAt = record.firstCreatedAt ?? record.createdAt;
+      const row: DealAuditItemRow = {
+        id: record._id.toString(),
         missing: record.itemName ?? 'Missing requirement',
-        // Recomputed on read rather than served from the stored value (PAC-40).
-        //
-        // `daysOpen` is written once, at creation, so a stored number is only
-        // ever right on the day it was written — migrated rows show a
-        // migration-time figure, and app-created rows would sit at 0 forever.
-        //
-        // The stored field is kept and still drives the **sort** (which is
-        // index-backed, and correct: app-created items all tie at 0 and fall
-        // back to `_id` ascending = oldest first, while migrated items carry
-        // real values and sort above them, which they genuinely are). Only the
-        // displayed figure is derived. A nightly recompute to fix cross-cohort
-        // drift is a follow-up.
-        daysOpen: daysSince(record.firstCreatedAt ?? record.createdAt),
+        daysOpen: daysSince(openedAt),
+        open: record.isFailed === true && record.isResolved !== true,
         dueAt: record.dueAt ? record.dueAt.toISOString() : null,
         /*
          * The proofs attached at sale time (PAC-56 #21b), finally surfaced
@@ -204,15 +300,18 @@ export class DealAuditsService {
           size: file.size,
         })),
       };
-    });
 
-    return {
-      page,
-      pageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-      items,
-    };
+      const list = byAudit.get(auditId);
+      if (list) list.push(row);
+      else byAudit.set(auditId, [row]);
+    }
+
+    for (const list of byAudit.values()) {
+      list.sort(
+        (a, b) => Number(b.open) - Number(a.open) || b.daysOpen - a.daysOpen,
+      );
+    }
+    return byAudit;
   }
 
   /**
@@ -222,10 +321,13 @@ export class DealAuditsService {
    * the field was added has no deadline, so it is neither overdue nor due soon
    * — treating a missing date as "overdue" would manufacture a backlog out of
    * the entire pre-PAC-65 history.
+   *
+   * Now applied to the **audit's** rolled-up `dueAt` — the earliest deadline
+   * across its open items — rather than to a single item's. Semantics are
+   * unchanged: a deal is overdue when its most pressing requirement is, which
+   * is what "pull me the overdue list" has always meant.
    */
-  private dueFilter(
-    due: ListDealAuditsDto['due'],
-  ): FilterQuery<DealAuditItemDocument> {
+  private dueFilter(due: ListDealAuditsDto['due']): FilterQuery<DealAudit> {
     if (due === 'all') return {};
     const now = new Date();
     if (due === 'overdue') return { dueAt: { $lt: now } };
@@ -237,10 +339,17 @@ export class DealAuditsService {
     };
   }
 
-  /** Batch-load the linked deals' policy type for badge rendering. */
-  private async loadDealTypes(
+  /**
+   * Batch-load the linked deals' client name and policy type for the card
+   * header and its badge.
+   *
+   * The name comes from the deal rather than the audit's `title`, which is
+   * whatever the generator had to hand at the time — the deal title if it had
+   * one, the client name otherwise. `DealAudit.title` remains the fallback.
+   */
+  private async loadDeals(
     records: Array<{ dealId?: Types.ObjectId }>,
-  ): Promise<Map<string, DealType>> {
+  ): Promise<Map<string, { dealType: DealType; clientName?: string }>> {
     const dealIds = [
       ...new Set(
         records
@@ -249,17 +358,26 @@ export class DealAuditsService {
       ),
     ].map((id) => new Types.ObjectId(id));
 
-    const map = new Map<string, DealType>();
+    const map = new Map<string, { dealType: DealType; clientName?: string }>();
     if (!dealIds.length) {
       return map;
     }
 
     const deals = await this.dealModel
       .find({ _id: { $in: dealIds } })
-      .select('dealType')
-      .lean<Array<{ _id: Types.ObjectId; dealType?: DealType }>>();
+      .select('dealType clientName')
+      .lean<
+        Array<{
+          _id: Types.ObjectId;
+          dealType?: DealType;
+          clientName?: string;
+        }>
+      >();
     for (const deal of deals) {
-      map.set(deal._id.toString(), deal.dealType ?? 'Other');
+      map.set(deal._id.toString(), {
+        dealType: deal.dealType ?? 'Other',
+        clientName: deal.clientName,
+      });
     }
     return map;
   }

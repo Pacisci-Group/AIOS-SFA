@@ -7950,32 +7950,116 @@ describe('SFA API (e2e)', () => {
       const body = res.body as {
         items: Array<{
           id: string;
+          dealId: string;
           ref: string;
           client: string;
           type: string;
-          missing: string;
-          daysOpen: number;
+          auditStatus: string;
+          completionPct: number;
+          itemCount: number;
+          openCount: number;
+          oldestDaysOpen: number;
+          items: Array<{ id: string; missing: string; open: boolean }>;
         }>;
       };
 
       const mine = body.items.filter((row) => row.client === clientName);
-      expect(mine.length).toBeGreaterThan(0);
+
+      /*
+       * **Exactly one card**, not one per requirement (PAC-72 section A item 1).
+       * This is the whole point of the rework: a bundled sale with six open
+       * items used to render six rows with six Resolve buttons, and could fill
+       * the board by itself.
+       */
+      expect(mine).toHaveLength(1);
 
       const row = mine[0];
-      // Not "Unknown Client" — proves `clientName` was stamped.
+      // Not "Unknown Client" — proves the linked deal resolved.
       expect(row.client).toBe(clientName);
-      // Proves `dealId` resolved, so the badge is real.
       expect(row.type).toBe('Auto');
-      expect(row.missing).toEqual(expect.any(String));
       expect(row.ref).toMatch(/^AUD-\d{4}-\d{4}$/);
-      // Freshly generated: recomputed from `firstCreatedAt`, so exactly 0.
-      expect(row.daysOpen).toBe(0);
+      // Freshly generated: recomputed from `oldestOpenAt`, so exactly 0.
+      expect(row.oldestDaysOpen).toBe(0);
+      // Nothing resolved yet, and the checklist is not empty.
+      expect(row.auditStatus).toBe('Not Submitted');
+      expect(row.itemCount).toBeGreaterThan(0);
+      expect(row.openCount).toBe(row.itemCount);
+      expect(row.completionPct).toBe(0);
 
-      // And it really is the deal we just booked.
+      // The card nests its whole checklist — what the drawer renders.
       const items = await genItemModel.find({
         dealId: new Types.ObjectId(deal.id),
       });
-      expect(items.map((i) => i._id.toString())).toContain(row.id);
+      expect(row.items).toHaveLength(items.length);
+      expect(row.items.every((item) => item.open)).toBe(true);
+      expect(row.items.map((i) => i.id).sort()).toEqual(
+        items.map((i) => i._id.toString()).sort(),
+      );
+
+      // And the card really is the deal we just booked — the id every workflow
+      // endpoint is keyed on.
+      expect(row.dealId).toBe(deal.id);
+    });
+
+    /**
+     * Resolving one requirement moves the percentage; resolving the last one
+     * takes the card off the board.
+     *
+     * The counters are denormalized, so this is what proves the resolve path
+     * maintains them — a stale `openFailedCount` would strand a finished deal
+     * on the board forever, and the board reads the counter, not the items.
+     */
+    it('tracks completion as items resolve, and drops the card at zero', async () => {
+      const { lead, clientName } = await seedLead();
+      await sell(lead._id.toString(), [autoPolicy(lead._id.toString())]);
+
+      const card = async () => {
+        const res = await request(app.getHttpServer())
+          .get(`${BOARD}?page=1&pageSize=50`)
+          .set(authHeader(producerToken))
+          .expect(200);
+        const body = res.body as {
+          items: Array<{
+            client: string;
+            completionPct: number;
+            openCount: number;
+            items: Array<{ id: string; open: boolean }>;
+          }>;
+        };
+        return body.items.find((row) => row.client === clientName);
+      };
+
+      const before = await card();
+      expect(before).toBeDefined();
+      const total = before!.items.length;
+      expect(total).toBeGreaterThan(1);
+
+      // Resolve one — the card stays, the percentage moves.
+      await request(app.getHttpServer())
+        .patch(`${BOARD}/${before!.items[0].id}/resolve`)
+        .set(authHeader(producerToken))
+        .send({ note: 'Received.' })
+        .expect(200);
+
+      const midway = await card();
+      expect(midway).toBeDefined();
+      expect(midway!.openCount).toBe(total - 1);
+      expect(midway!.completionPct).toBe(Math.round((1 / total) * 100));
+      // The resolved one is still listed — the drawer sorts it below the
+      // outstanding ones rather than hiding it.
+      expect(midway!.items).toHaveLength(total);
+      expect(midway!.items.filter((i) => i.open)).toHaveLength(total - 1);
+
+      // Resolve the rest — the card leaves the board entirely.
+      for (const item of midway!.items.filter((i) => i.open)) {
+        await request(app.getHttpServer())
+          .patch(`${BOARD}/${item.id}/resolve`)
+          .set(authHeader(producerToken))
+          .send({ note: 'Received.' })
+          .expect(200);
+      }
+
+      expect(await card()).toBeUndefined();
     });
 
     it("hides another producer's generated items from the board", async () => {
@@ -8240,21 +8324,30 @@ describe('SFA API (e2e)', () => {
 
       const body = res.body as {
         items: Array<{
-          missing: string;
-          dueAt: string | null;
-          attachments: Array<Record<string, unknown>>;
+          items: Array<{
+            missing: string;
+            dueAt: string | null;
+            attachments: Array<Record<string, unknown>>;
+          }>;
         }>;
       };
-      const row = body.items.find((r) => r.missing === 'Good Student');
-      expect(row).toBeTruthy();
-      expect(row!.dueAt).toBeTruthy();
-      expect(row!.attachments).toHaveLength(1);
-      expect(row!.attachments[0].filename).toBe('gen-proof.pdf');
-      expect(row!.attachments[0].index).toBe(0);
+
+      // Evidence now lives on the nested checklist entry rather than the row —
+      // the drawer renders it per requirement (PAC-72 section A). The PAC-65
+      // #16 contract is otherwise unchanged, and is load-bearing: this block is
+      // what makes the drawer say "verify it" instead of "call the client".
+      const item = body.items
+        .flatMap((row) => row.items)
+        .find((entry) => entry.missing === 'Good Student');
+      expect(item).toBeTruthy();
+      expect(item!.dueAt).toBeTruthy();
+      expect(item!.attachments).toHaveLength(1);
+      expect(item!.attachments[0].filename).toBe('gen-proof.pdf');
+      expect(item!.attachments[0].index).toBe(0);
       // ⚠ The key's prefix is what `assertKeyOwnership` treats as a security
       // property. It must not leave the server; `index` is what the download
       // route takes and all the client needs.
-      expect(row!.attachments[0]).not.toHaveProperty('key');
+      expect(item!.attachments[0]).not.toHaveProperty('key');
     });
 
     it('creates one certificate item per named defensive driver', async () => {

@@ -11,24 +11,52 @@ export interface DealAuditRowAttachment {
   size: number;
 }
 
-/** One pending hand-off row (mirrors the API `DealAuditRow`). */
-export interface DealAuditRow {
+/** The four audit workflow states (mirrors `DEAL_AUDIT_STATUSES`). */
+export type DealAuditStatus = 'Not Submitted' | 'Pending' | 'Pass' | 'Fail';
+
+/** One requirement on a deal's checklist (mirrors the API `DealAuditItemRow`). */
+export interface DealAuditItemRow {
+  id: string;
+  missing: string;
+  daysOpen: number;
+  /**
+   * Still outstanding. Drives the colour coding and the ordering — the server
+   * already sorts open items first, so the drawer renders `items` as given.
+   *
+   * ⚠ A settled item gets **no checkmark**: David rejected them explicitly and
+   * the deal's completion percentage replaces them.
+   */
+  open: boolean;
+  /** Soft deadline, ISO. `null` for items generated before the field existed. */
+  dueAt: string | null;
+  /** Empty means "no document on file" — the auditor has to call the client. */
+  attachments: DealAuditRowAttachment[];
+}
+
+/** One deal card on the board (mirrors the API `DealAuditDealRow`). */
+export interface DealAuditDealRow {
+  /** The audit record's id. */
   id: string;
   /**
-   * The deal this item belongs to. Every audit workflow endpoint
-   * (assign / submit / review / notes) is keyed on the deal, not the item.
+   * The deal this audit belongs to. Every audit workflow endpoint
+   * (assign / submit / review / notes) is keyed on the deal, not the audit.
    */
   dealId: string;
   /** Human-readable masked label, e.g. `AUD-2026-0042`. */
   ref: string;
   client: string;
   type: DealAuditType;
-  missing: string;
-  daysOpen: number;
-  /** Soft deadline, ISO. `null` for items generated before the field existed. */
+  auditStatus: DealAuditStatus;
+  /** Whole percent resolved. An empty checklist reads 100. */
+  completionPct: number;
+  itemCount: number;
+  openCount: number;
+  /** Age of the oldest outstanding requirement; the board's sort key. */
+  oldestDaysOpen: number;
+  /** Earliest soft deadline across the open items, ISO, or `null`. */
   dueAt: string | null;
-  /** Empty means "no document on file" — the auditor has to call the client. */
-  attachments: DealAuditRowAttachment[];
+  /** The full checklist, outstanding first. */
+  items: DealAuditItemRow[];
 }
 
 /** The soft-deadline filter. `all` is the default and adds no clause. */
@@ -37,9 +65,10 @@ export type DealAuditDueFilter = 'all' | 'overdue' | 'due_soon';
 export interface DealAuditListResponse {
   page: number;
   pageSize: number;
+  /** ⚠ Counts **deals**, not requirements — the badge copy follows from this. */
   total: number;
   totalPages: number;
-  items: DealAuditRow[];
+  items: DealAuditDealRow[];
 }
 
 export interface ListDealAuditsParams {

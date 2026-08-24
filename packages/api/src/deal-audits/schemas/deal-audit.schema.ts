@@ -74,11 +74,18 @@ export class DealAudit extends TenantRecord {
    * authoritative copy.** Keeping the workflow on the audit rather than the
    * sales record is deliberate (PAC-72 section E).
    */
+  /*
+   * Deliberately **unindexed**. Nothing queries by status alone: the board
+   * filters on `openFailedCount`, and the workflow endpoints load one audit by
+   * `dealId`. The two dead `producerId` indexes dropped from `activities` are
+   * the standing reminder that an index for a predicate nobody uses is pure
+   * write cost — add one with the query that needs it (a failed-deals view is
+   * the likely first, in section B item 10).
+   */
   @Prop({
     type: String,
     enum: DEAL_AUDIT_STATUSES,
     default: DEFAULT_DEAL_AUDIT_STATUS,
-    index: true,
   })
   auditStatus: DealAuditStatus;
 
@@ -180,27 +187,37 @@ DealAuditSchema.index(
 );
 
 /**
- * The hand-off board's query (PAC-72): agency + assignee, filtered by workflow
- * state, sorted oldest-open first.
+ * The hand-off board's query (PAC-72): agency + assignee, deals with at least
+ * one outstanding item, oldest open first.
  *
  * Serves a user-assigned *and* a role-assigned audit with one key pattern,
- * precisely because `auditAssignee.id` is an ObjectId either way — which is
- * why the field is modelled that way. Carrying the sort key keeps it a pure
- * IXSCAN instead of an in-memory sort over the filtered set.
+ * precisely because `auditAssignee.id` is an ObjectId either way — which is why
+ * the field is modelled that way.
+ *
+ * Key order follows equality → sort → range: `agencyId` and the assignee are
+ * matched exactly, `oldestOpenAt` is the sort, and `openFailedCount` is the
+ * `> 0` range predicate. Putting the range before the sort key would force an
+ * in-memory sort over the filtered set.
+ *
+ * ⚠ An earlier draft of this index led with `auditStatus`. The board does not
+ * filter on status — a deal with outstanding documents is on it whether the
+ * audit is Not Submitted, Pending or Fail — so that index served nothing. It
+ * never shipped beyond this branch; if it exists in a local database, drop
+ * `agencyId_1_auditAssignee.id_1_auditStatus_1_oldestOpenAt_-1` by hand.
  */
 DealAuditSchema.index({
   agencyId: 1,
   'auditAssignee.id': 1,
-  auditStatus: 1,
-  oldestOpenAt: -1,
+  oldestOpenAt: 1,
+  openFailedCount: 1,
 });
 
 /** The same board query narrowed by the soft deadline (PAC-65's `due` filter). */
 DealAuditSchema.index({
   agencyId: 1,
   'auditAssignee.id': 1,
-  auditStatus: 1,
   dueAt: 1,
+  openFailedCount: 1,
 });
 
 /**
