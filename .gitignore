@@ -21,3 +21,11 @@ sfaforms/
 # Claude Code — personal, machine-local config (.claude/rules/ IS committed)
 .claude/settings.local.json
 CLAUDE.local.md
+
+# Real mailer source files (PAC-73). 20-25 MB each and full of real prospects'
+# names and addresses — they belong on David's drive, not in git history, where
+# a `git rm` would not remove them. The committed test fixture is a redacted
+# 197-row slice: packages/api/test/fixtures/mailers/.
+SFA-RTP-*.csv
+*-RTP-*.csv
+Mailer_Test_Alteryx*.csv

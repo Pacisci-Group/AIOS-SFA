@@ -133,6 +133,45 @@ FROM `allstate123.smartsuite_data.Mailer_Test_Alteryx` GROUP BY ticker ORDER BY 
 
 ---
 
+## 3b. Measured against the real RTP files (2026-08-24)
+
+David supplied three final files — `SFA-RTP-2026-29.csv`, `-30` and `-32`. All
+three are Smith Family Agency, `type: Home`, `product: FQ`, with **byte-identical
+132-column headers**. Every earlier assumption held; a summary table and the
+per-column detail live in `packages/api/test/fixtures/mailers/README.md`.
+
+Week 29 imported end to end: **20,405 read, 20,405 mapped, 0 rejected, 20,405
+documents**, each carrying both control-number forms, `quoteDate` 2026-07-13,
+full campaign context, `county` as a zero-padded string, and no `NaN` in any
+numeric field. It took ~200 seconds — which settles the sync-vs-async question
+retrospectively: it would have blown any HTTP timeout.
+
+Three findings that were not visible from week 29 alone:
+
+1. **The filename's week and the campaign's week are different things.** The
+   file named `-30` carries `Week_Number-29` and week 29's quote date. The
+   filename number looks like the mail-drop week; `Campaign Number` is the quote
+   week. The preview reports what the data says. Do not reconcile one to the
+   other.
+2. **Weeks 29 and 30 share 4,825 control numbers, and on those rows every
+   business column is identical** — same premiums, coverage, campaign and quote
+   date. They differ only in `FileName` (`SFA-20P` vs `SFA-QBP`) and per-piece
+   mail-sorting columns. They are two **print runs of one campaign**. Upsert-
+   collapse is therefore correct and loses nothing of value. It also kills any
+   remaining idea that `Campaign Number` identifies a campaign: two different
+   files claim the same one.
+3. **`status` exists in the RTP file and is postal metadata, not a business
+   status.** Populated on 100% of rows with values like `SNNNN4`, sitting among
+   the `dpv_*` / `coa_*` address-standardisation columns. It stays in
+   `source.raw`. **Open item 3 in PAC-61 is still open** — this column does not
+   answer it, and must not be mistaken for an answer.
+
+⚠ The files themselves are **not** in the repo and must not be: 20–25 MB each,
+and full of real prospects' names and addresses. The committed fixture is a
+197-row redacted slice.
+
+---
+
 ## 4. Traps that will cost time if forgotten
 
 - **`create-lead.dto.ts` cannot be reused** for the log-lead endpoint. Its `person`

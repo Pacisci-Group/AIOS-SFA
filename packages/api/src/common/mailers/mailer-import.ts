@@ -33,7 +33,25 @@ import {
  * drift into producing different documents for the same mailer.
  */
 
-/** How many upserts go in one `bulkWrite`. */
+/**
+ * How many upserts go in one `bulkWrite`.
+ *
+ * Measured on the real week-29 file (20,405 rows, 24 MB):
+ *
+ * - **first import ≈ 100 rows/s** — 202s end to end
+ * - **re-import ≈ 46 rows/s** — updates are roughly half the speed of inserts,
+ *   since each one reads the existing document before writing it
+ *
+ * Most of that is MongoDB, not parsing: every row is a separate indexed upsert
+ * and every document carries ~90 unmodelled columns in `source.raw`.
+ *
+ * Fine for an upload — it is a background job with no request attached, which
+ * is exactly why it is one. Tolerable for the BigQuery backfill (671k rows
+ * ≈ 2h at insert speed, run once at deploy). If that ever stops being
+ * tolerable, **profile before tuning this number**: batch size was not the
+ * bottleneck when this was measured, and the obvious next lever is trimming
+ * `source.raw`, which costs recoverability.
+ */
 const DEFAULT_BATCH_SIZE = 1_000;
 
 /** One upsert, in the shape `Model.bulkWrite` takes. */
