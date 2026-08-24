@@ -65,6 +65,16 @@ export class DealAuditsController {
    * doubt. Same hazard the module ordering comments in `app.module.ts` describe.
    */
 
+  /** The deal's audit workflow state — owners, status, and what you may do. */
+  @Get('deals/:dealId')
+  workflow(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('dealId') dealId: string,
+  ) {
+    return this.dealAuditsService.getWorkflow(access, branchId, dealId);
+  }
+
   /** Set the audit's assignee and/or reviewer. */
   @Patch('deals/:dealId/assignment')
   @RequireWrite(ModuleKey.DealAudits)

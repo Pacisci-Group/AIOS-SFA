@@ -7926,6 +7926,77 @@ describe('SFA API (e2e)', () => {
           .set(authHeader(producerToken))
           .expect(404);
       });
+
+      /**
+       * What the drawer opens with, and the flags its buttons are gated on.
+       *
+       * `canReview` is the interesting one: the UI must not offer an action the
+       * API would reject, and it cannot work the rule out for itself because it
+       * is never told who submitted.
+       */
+      describe('workflow state', () => {
+        const state = async (dealId: string, token: string) => {
+          const res = await request(app.getHttpServer())
+            .get(workflow(dealId))
+            .set(authHeader(token))
+            .expect(200);
+          return res.body as {
+            auditStatus: string;
+            canSubmit: boolean;
+            canReview: boolean;
+            assignee: { type: string; name: string } | null;
+            completionPct: number;
+          };
+        };
+
+        it('opens submittable, not reviewable, and assigned to the producer', async () => {
+          const deal = await soldDeal();
+          const view = await state(deal.id, producerToken);
+
+          expect(view.auditStatus).toBe('Not Submitted');
+          expect(view.canSubmit).toBe(true);
+          expect(view.canReview).toBe(false);
+          expect(view.assignee?.type).toBe('user');
+          // Resolved to a display name rather than left as an id.
+          expect(view.assignee?.name).not.toBe('');
+          expect(view.completionPct).toBe(0);
+        });
+
+        it('offers review to a second person but not to the submitter', async () => {
+          const deal = await soldDeal();
+          await request(app.getHttpServer())
+            .post(`${workflow(deal.id)}/submit`)
+            .set(authHeader(producerToken))
+            .expect(201);
+
+          // The producer submitted, so the API would 403 their review — and
+          // the flag says so rather than letting the UI offer the button.
+          const submitter = await state(deal.id, producerToken);
+          expect(submitter.auditStatus).toBe('Pending');
+          expect(submitter.canSubmit).toBe(false);
+          expect(submitter.canReview).toBe(false);
+
+          const other = await state(deal.id, ownerToken);
+          expect(other.canReview).toBe(true);
+        });
+
+        it('never returns who submitted it', async () => {
+          const deal = await soldDeal();
+          await request(app.getHttpServer())
+            .post(`${workflow(deal.id)}/submit`)
+            .set(authHeader(producerToken))
+            .expect(201);
+
+          const res = await request(app.getHttpServer())
+            .get(workflow(deal.id))
+            .set(authHeader(ownerToken))
+            .expect(200);
+
+          // `canReview` already encodes the check; the id would be a leak with
+          // no other purpose, and a second place for the rule to live.
+          expect(res.body).not.toHaveProperty('submittedById');
+        });
+      });
     });
 
     /**

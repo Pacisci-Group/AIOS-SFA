@@ -159,6 +159,17 @@ export interface AuditWorkflowView {
   resolvedCount: number;
   openCount: number;
   completionPct: number;
+  /*
+   * What the caller may do next, decided by the server.
+   *
+   * The client could almost derive these — `canSubmitAudit` is exported from
+   * `@sfa/shared` — but not `canReview`, which depends on **who submitted**,
+   * and exposing `submittedById` purely so the UI could compare it would leak
+   * an identity for no other reason. Deciding both here also keeps one
+   * definition of the rules instead of two that can drift.
+   */
+  canSubmit: boolean;
+  canReview: boolean;
 }
 
 /**

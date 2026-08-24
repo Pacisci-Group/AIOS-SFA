@@ -33,6 +33,7 @@ import {
   type DealAuditItemRow,
   type DealAuditRowAttachment,
 } from "@/lib/deal-audits-api";
+import { AuditWorkflowPanel } from "./AuditWorkflowPanel";
 
 interface ResolvePanelProps {
   deal: DealAuditDealRow | null;
@@ -461,6 +462,13 @@ export function ResolvePanel({ deal, onClose, onResolved }: ResolvePanelProps) {
             </SheetHeader>
 
             <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-6 py-5">
+              {/*
+                * Ownership, the review workflow and the note thread (section E).
+                * Above the checklist because it answers "who is on this and
+                * where is it" — the question you ask before working the items.
+                */}
+              <AuditWorkflowPanel dealId={deal.dealId} />
+
               <div className="flex flex-col gap-2">
                 <p className="text-xs uppercase tracking-wider text-muted-foreground">
                   Requirements

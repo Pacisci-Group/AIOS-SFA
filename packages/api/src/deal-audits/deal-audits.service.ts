@@ -599,6 +599,23 @@ export class DealAuditsService {
   // --- Workflow: assign → submit → review (PAC-72 section E) ----------------
 
   /**
+   * A deal's audit workflow state — who owns it, where it sits, and what the
+   * caller may do next.
+   *
+   * Read separately from the board rather than folded into every row: the
+   * ownership names need two extra lookups each, and the board renders eight
+   * cards of which the user opens one.
+   */
+  async getWorkflow(
+    access: AccessContext,
+    branchId: string | null,
+    dealId: string,
+  ): Promise<AuditWorkflowView> {
+    const audit = await this.loadAuditForDeal(access, branchId, dealId);
+    return this.toWorkflowView(audit, access);
+  }
+
+  /**
    * Set the audit's assignee and/or reviewer.
    *
    * Ownership is per **deal**, not per item: the reviewer works item by item,
@@ -626,7 +643,7 @@ export class DealAuditsService {
       'audit_assigned',
       this.describeAssignment(dto),
     );
-    return this.toWorkflowView(audit);
+    return this.toWorkflowView(audit, access);
   }
 
   /**
@@ -663,7 +680,7 @@ export class DealAuditsService {
       'audit_submitted',
       'Audit submitted for review',
     );
-    return this.toWorkflowView(audit);
+    return this.toWorkflowView(audit, access);
   }
 
   /**
@@ -721,7 +738,7 @@ export class DealAuditsService {
       REVIEW_ACTIVITY_TYPES[dto.decision],
       REVIEW_SUMMARIES[dto.decision],
     );
-    return this.toWorkflowView(audit);
+    return this.toWorkflowView(audit, access);
   }
 
   /** Read the audit's note + workflow thread, newest first. */
@@ -879,6 +896,7 @@ export class DealAuditsService {
   /** The workflow response shape, with both owners resolved to display names. */
   private async toWorkflowView(
     audit: DealAuditDocument,
+    access: AccessContext,
   ): Promise<AuditWorkflowView> {
     const [assignee, reviewer] = await Promise.all([
       this.resolveOwner(audit.agencyId, audit.auditAssignee),
@@ -903,6 +921,13 @@ export class DealAuditsService {
         itemCount: audit.itemCount ?? 0,
         resolvedCount: audit.resolvedCount ?? 0,
       }),
+      canSubmit: canSubmitAudit(audit.auditStatus),
+      // The submitter may not review their own work — the one rule that makes
+      // the two roles mean anything. Decided here so the UI does not have to
+      // know who submitted, and cannot disagree with the endpoint.
+      canReview:
+        canReviewAudit(audit.auditStatus) &&
+        audit.submittedById?.toString() !== access.userId,
     };
   }
 

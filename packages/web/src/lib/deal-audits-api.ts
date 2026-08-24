@@ -100,6 +100,131 @@ export function getAuditAttachmentUrl(itemId: string, index: number) {
   );
 }
 
+// --- Workflow: assign → submit → review (PAC-72 section E) -----------------
+
+/** A user or a role, with its display name resolved server-side. */
+export interface AuditOwnerView {
+  type: 'user' | 'role';
+  id: string;
+  name: string;
+}
+
+/** What a reviewer can do with a submitted audit. */
+export type AuditReviewDecision =
+  | 'approve'
+  | 'request_changes'
+  | 'send_back';
+
+/** The failure vocabulary — SmartSuite's own `reason_codes` select. */
+export const DEAL_AUDIT_REASON_CODES = [
+  'Missing Docs',
+  'Coverage Not Offered',
+  'Incorrect Named Insured',
+  'Incorrect Address',
+  'Underwriting Issue',
+  'Other',
+] as const;
+
+export type DealAuditReasonCode = (typeof DEAL_AUDIT_REASON_CODES)[number];
+
+/** A deal's audit workflow state (mirrors the API `AuditWorkflowView`). */
+export interface AuditWorkflowView {
+  id: string;
+  dealId: string;
+  auditStatus: DealAuditStatus;
+  assignee: AuditOwnerView | null;
+  reviewer: AuditOwnerView | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reasonCodes: string[];
+  auditScore: number;
+  auditNotes: string | null;
+  itemCount: number;
+  resolvedCount: number;
+  openCount: number;
+  completionPct: number;
+  /**
+   * Decided by the server, not re-derived here.
+   *
+   * `canReview` in particular depends on **who submitted** — the submitter may
+   * not review their own audit — and the client is deliberately not told who
+   * that was. Gating the buttons on these keeps the UI from offering an action
+   * the API would reject.
+   */
+  canSubmit: boolean;
+  canReview: boolean;
+}
+
+/** One entry on the audit's note + workflow thread. */
+export interface AuditNoteView {
+  id: string;
+  type: string;
+  summary: string | null;
+  occurredAt: string;
+  userName: string;
+}
+
+export function getAuditWorkflow(dealId: string) {
+  return apiFetch<AuditWorkflowView>(`/deal-audits/deals/${dealId}`);
+}
+
+export interface AuditOwnerInput {
+  type: 'user' | 'role';
+  id: string;
+}
+
+/**
+ * Set the assignee and/or reviewer. Omitting a key leaves that slot untouched;
+ * `null` clears it — an audit whose reviewer left the agency has to be
+ * un-assignable, not merely re-assignable.
+ */
+export function assignAudit(
+  dealId: string,
+  payload: {
+    assignee?: AuditOwnerInput | null;
+    reviewer?: AuditOwnerInput | null;
+  },
+) {
+  return apiFetch<AuditWorkflowView>(
+    `/deal-audits/deals/${dealId}/assignment`,
+    { method: 'PATCH', body: JSON.stringify(payload) },
+  );
+}
+
+/** Hand the audit to its reviewer. */
+export function submitAudit(dealId: string) {
+  return apiFetch<AuditWorkflowView>(`/deal-audits/deals/${dealId}/submit`, {
+    method: 'POST',
+  });
+}
+
+/** Approve, request changes, or send back. */
+export function reviewAudit(
+  dealId: string,
+  payload: {
+    decision: AuditReviewDecision;
+    reasonCodes?: DealAuditReasonCode[];
+    notes?: string;
+  },
+) {
+  return apiFetch<AuditWorkflowView>(`/deal-audits/deals/${dealId}/review`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** The audit's note + workflow thread, newest first. */
+export function listAuditNotes(dealId: string) {
+  return apiFetch<AuditNoteView[]>(`/deal-audits/deals/${dealId}/notes`);
+}
+
+export function addAuditNote(dealId: string, body: string) {
+  return apiFetch<AuditNoteView>(`/deal-audits/deals/${dealId}/notes`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  });
+}
+
 // --- Resolve (PAC-14) ------------------------------------------------------
 
 /** Content types accepted for resolution document uploads. */
