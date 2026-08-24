@@ -153,6 +153,10 @@ describe('ImportMailersFn (e2e)', () => {
       agencyId: AGENCY_ID,
       storageKey: STORAGE_KEY,
       requestedBy: '507f1f77bcf86cd799439011',
+      // Stamped by `InngestService.send` in production, never by a producer.
+      // Supplied here because the catalog requires it and the handler receives
+      // it — see `eventEnvelope`.
+      eventLogId: '507f1f77bcf86cd799439010',
     };
   }
 

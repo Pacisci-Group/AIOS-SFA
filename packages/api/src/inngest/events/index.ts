@@ -10,5 +10,6 @@
  * the worker be lifted into its own package (or its own container) without
  * touching a single producer.
  */
+export * from './envelope';
 export * from './email.events';
 export * from './mailer.events';

@@ -78,12 +78,47 @@ export class UsersController {
     return this.usersService.resendInvite(agencyId, userId, actor?.sub);
   }
 
-  /** Revoke a pending invite. 204 — there is nothing left to return. */
+  /**
+   * Revoke a pending invite. 204 — there is nothing left to return.
+   *
+   * ⚠ Must stay declared **before** `DELETE /:userId`. Nest matches routes in
+   * declaration order, and the bare `:userId` pattern would otherwise swallow
+   * `/:userId/invite`, silently turning every revoke into a removal.
+   */
   @Delete(':userId/invite')
   @RequirePermissions(AgencyPermission.UsersWrite)
   @HttpCode(HttpStatus.NO_CONTENT)
   revokeInvite(@AgencyId() agencyId: string, @Param('userId') userId: string) {
     return this.usersService.revokeInvite(agencyId, userId);
+  }
+
+  /**
+   * Remove an employee from the agency.
+   *
+   * Deactivates rather than deletes — see `UsersService.deactivateUser` for why,
+   * and note that access really is revoked on their very next request, not at
+   * token expiry. Returns what was released so the UI can tell the owner how
+   * many tickets just went back to the unassigned queue.
+   *
+   * `agency:users:write` rather than a new permission: managing employees is
+   * already exactly what that permission means, and inventing a `users:delete`
+   * would leave every existing owner role without it.
+   */
+  @Delete(':userId')
+  @RequirePermissions(AgencyPermission.UsersWrite)
+  deactivate(
+    @AgencyId() agencyId: string,
+    @CurrentUser() actor: JwtPayload | undefined,
+    @Param('userId') userId: string,
+  ) {
+    return this.usersService.deactivateUser(agencyId, userId, actor?.sub);
+  }
+
+  /** Restore a removed employee. Does not restore the work released on removal. */
+  @Post(':userId/reactivate')
+  @RequirePermissions(AgencyPermission.UsersWrite)
+  reactivate(@AgencyId() agencyId: string, @Param('userId') userId: string) {
+    return this.usersService.reactivateUser(agencyId, userId);
   }
 
   @Patch(':userId/roles')

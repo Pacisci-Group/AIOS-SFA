@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ImportMailersFn } from './functions/import-mailers.fn';
 import { SendInviteEmailFn } from './functions/send-invite-email.fn';
+import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { MailDeliveryService } from './email/mail-delivery.service';
 import { mailTransportProvider } from './email/mail-transport.provider';
 import {
@@ -66,6 +67,7 @@ import { StorageModule } from '../storage/storage.module';
     // services; InngestRegistry (in src/inngest/) collects them by decorator,
     // so listing it here is the only registration step.
     SendInviteEmailFn,
+    SweepEventLogFn,
     ImportMailersFn,
   ],
 })

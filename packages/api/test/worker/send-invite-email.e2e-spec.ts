@@ -68,6 +68,9 @@ function inviteEvent(overrides: Partial<InviteRequestedData> = {}): {
     id: '01ABCDEF',
     name: 'email/invite.requested.v1',
     data: {
+      // Stamped by `InngestService.send` in real life; the handler itself never
+      // reads it — the event-log middleware does.
+      eventLogId: '507f1f77bcf86cd799439010',
       userId: '507f1f77bcf86cd799439011',
       agencyId: '507f1f77bcf86cd799439012',
       branchId: null,

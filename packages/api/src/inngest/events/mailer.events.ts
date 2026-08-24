@@ -1,5 +1,6 @@
 import { eventType } from 'inngest';
 import { z } from 'zod';
+import { eventEnvelope, objectId } from './envelope';
 
 /**
  * Event contracts for mailer imports (PAC-73).
@@ -14,6 +15,12 @@ import { z } from 'zod';
  *    the run id and the object key; the handler loads what it needs. A 23 MB
  *    file obviously cannot travel in an event, but neither should the parsed
  *    preview — the run record is where state lives.
+ * 3. **Spread `eventEnvelope` first.** It carries `eventLogId`, the outbox row
+ *    this event is recorded against. `InngestService.send` mints and sets it —
+ *    producers never pass it — but a schema that omits it cannot be passed to
+ *    `send` at all, which is a compile error rather than the very quiet runtime
+ *    symptom it would otherwise be: runs that never reach a terminal state and
+ *    get re-emitted by the sweeper forever.
  *
  * ## Why two events rather than one with a phase flag
  *
@@ -25,12 +32,8 @@ import { z } from 'zod';
  * operator only asked to look at.
  */
 
-/** 24-character hex Mongo ObjectId, stringified. */
-const objectId = z
-  .string()
-  .regex(/^[0-9a-f]{24}$/, 'expected a 24-hex ObjectId');
-
 const importRequestedSchema = z.object({
+  ...eventEnvelope,
   /** `MailerImportRun._id`. The handler reads and writes status through it. */
   importRunId: objectId,
   /** The agency the operator explicitly chose. Never inferred from the file. */

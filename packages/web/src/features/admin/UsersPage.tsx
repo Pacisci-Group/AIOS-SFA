@@ -4,7 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, Search, Users } from 'lucide-react';
 import { AppShell } from '@/components/layout/AppShell';
 import { MobileNav } from '@/components/layout/MobileNav';
-import { listUsers, type AgencyUser } from '@/lib/users-api';
+import {
+  listUsers,
+  userStatus,
+  type AgencyUser,
+  type UserStatus,
+} from '@/lib/users-api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +17,27 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { InviteRowActions } from './InviteRowActions';
 import { InviteUserDialog } from './InviteUserDialog';
+import { UserRowActions } from './UserRowActions';
+
+/**
+ * Badge copy and colour per status.
+ *
+ * `deactivated` is deliberately muted rather than destructive: red reads as
+ * "something is wrong", and a removed employee is a completed action, not a
+ * problem. Amber/destructive stays reserved for the pending invite, which is
+ * the row that still needs the owner to do something.
+ */
+const STATUS_BADGE: Record<UserStatus, { label: string; className: string }> = {
+  active: { label: 'Active', className: 'bg-success/12 text-success' },
+  invited: {
+    label: 'Invited',
+    className: 'bg-destructive/15 text-destructive',
+  },
+  deactivated: {
+    label: 'Deactivated',
+    className: 'bg-muted text-muted-foreground',
+  },
+};
 
 function displayName(user: AgencyUser): string {
   const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
@@ -189,21 +215,22 @@ export default function UsersPage() {
                     size="sm"
                     className={cn(
                       'w-fit rounded-full border-transparent font-semibold',
-                      user.isActive
-                        ? 'bg-success/12 text-success'
-                        : 'bg-destructive/15 text-destructive',
+                      STATUS_BADGE[userStatus(user)].className,
                     )}
                   >
-                    {user.isActive ? 'Active' : 'Invited'}
+                    {STATUS_BADGE[userStatus(user)].label}
                   </Badge>
                 </div>
 
                 {/* Actions sit above the stretched link so their clicks don't
-                    navigate. `InviteRowActions` renders nothing for an active
-                    user or a caller without `agency:users:write`, leaving just
-                    the chevron. */}
+                    navigate. The two components partition the rows between them
+                    by status — `InviteRowActions` takes pending invites,
+                    `UserRowActions` takes active and deactivated ones — so at
+                    most one renders, and a caller without `agency:users:write`
+                    gets neither, leaving just the chevron. */}
                 <div className="relative z-10 flex items-center gap-2 justify-self-end">
                   <InviteRowActions user={user} />
+                  <UserRowActions user={user} />
                   <ChevronRight
                     size={16}
                     className="hidden text-muted-foreground md:block"

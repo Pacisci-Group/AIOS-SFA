@@ -30,6 +30,10 @@ import {
   AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
 import { User, UserDocument } from './schemas/user.schema';
+import {
+  UserWorkReleaseService,
+  type ReleasedWork,
+} from './user-work-release.service';
 import { InviteResponse, UserDetailResponse } from './users.types';
 
 /**
@@ -54,6 +58,7 @@ export class UsersService {
     private accessResolver: AccessResolverService,
     private mailService: MailService,
     private configService: ConfigService,
+    private workRelease: UserWorkReleaseService,
   ) {}
 
   findByAgency(agencyId: string) {
@@ -180,6 +185,164 @@ export class UsersService {
   }
 
   /**
+   * Remove an employee from the agency.
+   *
+   * ## Why this deactivates rather than deletes
+   * The exact inverse of {@link revokeInvite}'s reasoning above. A pending
+   * invite "owns no records"; an active user owns a great many — 31 `ref: 'User'`
+   * fields across 16 collections, two of them `required`. Deleting the row would
+   * point every "produced by" column at a missing id and fail the next write to
+   * a producer goal. So the row stays and the person loses access.
+   *
+   * ## Deactivation really does revoke access, immediately
+   * Worth stating because "soft delete" often does not. `AuthService` refuses
+   * login for an inactive user, and `AccessResolverService.resolve` returns null
+   * for one on **every request** — so an already-issued JWT stops working as
+   * soon as the cached context is dropped, which is the `invalidateUser` call at
+   * the end. Without that call the old token keeps working until it expires.
+   */
+  async deactivateUser(
+    agencyId: string,
+    userId: string,
+    actorUserId?: string,
+  ): Promise<ReleasedWork> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+
+    // An owner who removes themselves cannot undo it — the endpoint they would
+    // need is the one they just lost. Cheapest check first, before any read.
+    if (actorUserId && actorUserId === userId) {
+      throw new BadRequestException(
+        'You cannot remove your own account. Ask another owner to do it.',
+      );
+    }
+
+    const user = await this.userModel.findOne({
+      _id: new Types.ObjectId(userId),
+      agencyId: new Types.ObjectId(agencyId),
+      // Platform admins are not the agency's to manage, and `findByAgency`
+      // already hides them. A 404 keeps the two consistent — from inside the
+      // agency, that user does not exist.
+      isPlatformAdmin: { $ne: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (user.deactivatedAt) {
+      throw new ConflictException('That user has already been removed.');
+    }
+
+    // A pending invite has its own verb, and it is the better one: revoking
+    // deletes the row and frees the email for a future invite, where
+    // deactivating would hold the unique `email` index forever.
+    if (!user.isActive) {
+      throw new ConflictException(
+        'That invite has not been accepted yet. Revoke the invite instead.',
+      );
+    }
+
+    await this.assertNotLastAgencyOwner(agencyId, userId);
+
+    user.isActive = false;
+    user.deactivatedAt = new Date();
+    user.deactivatedByUserId =
+      actorUserId && Types.ObjectId.isValid(actorUserId)
+        ? new Types.ObjectId(actorUserId)
+        : null;
+    // A live credential must not outlive access. Any of these left set would
+    // let the removed user walk back in through the invite or reset flow.
+    user.inviteToken = undefined;
+    user.inviteTokenExpiresAt = undefined;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpiresAt = undefined;
+    await user.save();
+
+    const released = await this.workRelease.release(agencyId, userId);
+
+    // Last, and load-bearing — see the docblock. Their next request re-resolves
+    // from Mongo, finds `isActive: false`, and gets nothing.
+    await this.accessResolver.invalidateUser(userId);
+
+    return released;
+  }
+
+  /**
+   * Restore a removed employee's access.
+   *
+   * Deliberately does **not** restore the work released on the way out. Those
+   * tickets have been sitting in the unassigned queue and may well have been
+   * picked up by someone else; silently yanking them back would be worse than
+   * making reassignment explicit.
+   */
+  async reactivateUser(
+    agencyId: string,
+    userId: string,
+  ): Promise<UserDetailResponse> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+
+    const user = await this.userModel.findOne({
+      _id: new Types.ObjectId(userId),
+      agencyId: new Types.ObjectId(agencyId),
+      isPlatformAdmin: { $ne: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    if (!user.deactivatedAt) {
+      throw new ConflictException('That user has not been removed.');
+    }
+
+    user.isActive = true;
+    user.deactivatedAt = null;
+    user.deactivatedByUserId = null;
+    await user.save();
+    await this.accessResolver.invalidateUser(userId);
+
+    return this.findById(agencyId, userId);
+  }
+
+  /**
+   * Refuse to remove the only person who can administer the agency.
+   *
+   * Without this an owner can remove the other owner, then be removed
+   * themselves by nobody — leaving an agency with users, data and billing but
+   * no one able to invite, assign roles or manage permissions. Recovering that
+   * needs a platform admin and a database edit.
+   */
+  private async assertNotLastAgencyOwner(
+    agencyId: string,
+    userId: string,
+  ): Promise<void> {
+    const ownerRole = await this.roleModel
+      .findOne({ agencyId: new Types.ObjectId(agencyId), slug: 'agency_owner' })
+      .select('_id')
+      .lean();
+    if (!ownerRole) return;
+
+    const isOwner = await this.userModel.exists({
+      _id: new Types.ObjectId(userId),
+      roleIds: ownerRole._id,
+    });
+    if (!isOwner) return;
+
+    const remainingOwners = await this.userModel.countDocuments({
+      agencyId: new Types.ObjectId(agencyId),
+      roleIds: ownerRole._id,
+      isActive: true,
+      _id: { $ne: new Types.ObjectId(userId) },
+    });
+    if (remainingOwners === 0) {
+      throw new ConflictException(
+        'This is the agency’s only owner. Assign the owner role to someone else first.',
+      );
+    }
+  }
+
+  /**
    * Mint a token onto an existing inactive user and mail the link. Shared by
    * first invite and resend so the two can never drift on expiry or content.
    */
@@ -282,6 +445,17 @@ export class UsersService {
     if (user.isActive) {
       throw new ConflictException(
         'That user has already accepted their invite.',
+      );
+    }
+    // ⚠ Security, not tidiness. `isActive: false` covers both "pending invite"
+    // and "removed from the agency" — see the table on `User.isActive`. Without
+    // this second check, `resendInvite` would accept a **deactivated** user,
+    // mint them a fresh token and email a working account-activation link to
+    // somebody the owner had just removed. Every caller of this method inherits
+    // the guard, which is why it lives here rather than at each call site.
+    if (user.deactivatedAt) {
+      throw new ConflictException(
+        'That user was removed from the agency. Reactivate them instead.',
       );
     }
     return user;

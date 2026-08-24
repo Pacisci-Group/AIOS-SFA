@@ -35,7 +35,8 @@ docs {
   - `403` — caller lacks `agency:users:write`.
   - `404` — no such user in this agency.
   - `409` — the user has already accepted; there is no pending invite to revoke.
-    (Removing a real employee is a different operation, not this one.)
+    Removing a real employee is **Deactivate User** (`DELETE /users/:userId`),
+    which deactivates rather than deletes because an active user owns records.
 
   After this, the emailed link returns `404` from **Get Invite (Public)** and
   `401` from `POST /auth/accept-invite`.
