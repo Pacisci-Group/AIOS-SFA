@@ -34,6 +34,7 @@ export class ActivitiesController {
     @BranchId() branchId: string | null,
     @Body(new ZodValidationPipe(createActivitySchema)) body: CreateActivityDto,
   ) {
+    
     return this.activitiesService.create(access, branchId, body);
   }
 }
