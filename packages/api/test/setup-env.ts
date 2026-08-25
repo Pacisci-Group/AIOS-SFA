@@ -40,3 +40,15 @@ process.env.PUBLIC_INTAKE_RATE_LIMIT =
   process.env.PUBLIC_INTAKE_RATE_LIMIT ?? '100000';
 process.env.PUBLIC_INTAKE_HOURLY_LIMIT =
   process.env.PUBLIC_INTAKE_HOURLY_LIMIT ?? '100000';
+
+// Same reasoning for the PAC-60 address limits. The per-link daily cap is
+// raised too: it is counted on the ShareLink document rather than in the
+// throttler, so it would otherwise persist across an entire suite's requests.
+process.env.PUBLIC_ADDRESS_RATE_LIMIT =
+  process.env.PUBLIC_ADDRESS_RATE_LIMIT ?? '100000';
+process.env.PUBLIC_ADDRESS_HOURLY_LIMIT =
+  process.env.PUBLIC_ADDRESS_HOURLY_LIMIT ?? '100000';
+process.env.PUBLIC_ADDRESS_LINK_DAILY_LIMIT =
+  process.env.PUBLIC_ADDRESS_LINK_DAILY_LIMIT ?? '100000';
+process.env.ADDRESS_LOOKUP_RATE_LIMIT =
+  process.env.ADDRESS_LOOKUP_RATE_LIMIT ?? '100000';
