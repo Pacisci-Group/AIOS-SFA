@@ -3,6 +3,7 @@ import {
   AUTO_DISCOUNT_KEYS,
   CANCELLED_BY_OPTIONS,
   CARRIER_OTHER,
+  DEFAULT_ADDRESS_STATE,
   POLICY_TYPES,
   PROPERTY_DISCOUNT_KEYS,
   UNIVERSAL_DISCOUNT_KEYS,
@@ -479,7 +480,19 @@ export function emptyEscrow(): NonNullable<SoldPolicyFormValues["escrow"]> {
   return {
     loanNumber: "",
     companyName: "",
-    address: { street: "", city: "", state: "", zip: "" },
+    /*
+     * State pre-filled, matching the two other address seeds in the app
+     * (`emptyLeadIntake`, `emptyPolicyAddress`). This one was the odd one out
+     * and blank — a mismatch the shared `AddressFields` group made visible when
+     * all three surfaces started rendering the same four inputs.
+     *
+     * ⚠ Behaviour change: escrow address previously blocked Continue on a
+     * missing State until it was typed, and now does not, because the field
+     * arrives filled. That is the same bargain the other two forms already
+     * struck (see `DEFAULT_ADDRESS_STATE`) — the agency is Oklahoma-based, so
+     * all but a handful of escrow companies are too.
+     */
+    address: { street: "", city: "", state: DEFAULT_ADDRESS_STATE, zip: "" },
   };
 }
 

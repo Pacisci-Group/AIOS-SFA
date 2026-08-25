@@ -62,6 +62,25 @@ export class ShareLink extends TenantRecord {
   @Prop({ type: Date })
   lastSubmissionAt?: Date;
 
+  /**
+   * Address lookups made through this link in the current rolling window
+   * (PAC-60).
+   *
+   * The per-IP throttle cannot see the attack that actually costs money here: a
+   * single scraped link driven from many addresses. Every request is billed by
+   * Google, so the counter has to hang off the link itself.
+   *
+   * Both fields are optional and unindexed — the write is a `findOneAndUpdate`
+   * on `_id`, which the primary key already serves. **No index change, so no
+   * index-options migration is required.**
+   */
+  @Prop({ default: 0 })
+  addressLookupCount?: number;
+
+  /** Start of the current rolling window; reset lazily on the first write past it. */
+  @Prop({ type: Date })
+  addressLookupWindowStart?: Date;
+
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   createdById: Types.ObjectId;
 

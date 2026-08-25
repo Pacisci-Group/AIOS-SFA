@@ -1,18 +1,12 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import {
-  ModuleKey,
-  PublicLeadFormInfo,
-  PublicLeadSubmitResponse,
-} from '@sfa/shared';
-import { Model, Types } from 'mongoose';
+import { PublicLeadFormInfo, PublicLeadSubmitResponse } from '@sfa/shared';
+import { Model } from 'mongoose';
 import { PublicCreateLeadDto } from '../leads/dto/create-lead.dto';
 import { IntakeContext } from '../leads/intake/intake.types';
 import { LeadIntakeService } from '../leads/intake/lead-intake.service';
-import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
-import { User, UserDocument } from '../users/schemas/user.schema';
 import { ShareLink, ShareLinkDocument } from './schemas/share-link.schema';
-import { isWellFormedShareLinkToken } from './share-link-token';
+import { ShareLinkAccessService } from './share-link-access.service';
 
 @Injectable()
 export class PublicLeadsService {
@@ -21,10 +15,8 @@ export class PublicLeadsService {
   constructor(
     @InjectModel(ShareLink.name)
     private readonly shareLinkModel: Model<ShareLinkDocument>,
-    @InjectModel(Agency.name)
-    private readonly agencyModel: Model<AgencyDocument>,
-    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly intake: LeadIntakeService,
+    private readonly shareLinkAccess: ShareLinkAccessService,
   ) {}
 
   /**
@@ -36,7 +28,7 @@ export class PublicLeadsService {
    * the internet holding the URL.
    */
   async getFormInfo(token: string): Promise<PublicLeadFormInfo> {
-    const { agency } = await this.resolveLink(token);
+    const { agency } = await this.shareLinkAccess.resolve(token);
     return { agencyName: agency.name, isActive: true };
   }
 
@@ -48,7 +40,7 @@ export class PublicLeadsService {
     token: string,
     dto: PublicCreateLeadDto,
   ): Promise<PublicLeadSubmitResponse> {
-    const { link } = await this.resolveLink(token);
+    const { link } = await this.shareLinkAccess.resolve(token);
 
     const ctx: IntakeContext = {
       // Every one of these comes from the stored link. Nothing in `dto` can
@@ -95,54 +87,5 @@ export class PublicLeadsService {
 
     // No ids, ever — the submitter is an outsider and gets a plain confirmation.
     return { submitted: true };
-  }
-
-  /**
-   * Resolve a token to its link and agency, or fail generically.
-   *
-   * Every rejection returns the *same* `NotFoundException`, so the response
-   * cannot be used to learn whether a token ever existed, whether it was
-   * revoked, or which agency it belonged to. The e2e suite asserts that an
-   * unknown token and a revoked one are byte-for-byte identical.
-   */
-  private async resolveLink(token: string): Promise<{
-    link: ShareLinkDocument;
-    agency: AgencyDocument;
-  }> {
-    if (!isWellFormedShareLinkToken(token)) throw this.unavailable();
-
-    const link = await this.shareLinkModel.findOne({ token });
-    if (!link || !link.isActive) throw this.unavailable();
-
-    // `ShareLink.agencyId` is a string (TenantRecord) while `Agency._id` is an
-    // ObjectId — the boundary where the two conventions meet.
-    if (!Types.ObjectId.isValid(link.agencyId)) throw this.unavailable();
-
-    const agency = await this.agencyModel.findById(
-      new Types.ObjectId(link.agencyId),
-    );
-    if (!agency || agency.status !== 'active') throw this.unavailable();
-
-    // `@Public()` skips ModuleGuard entirely, so the module entitlement has to
-    // be checked by hand. Disabling `leads` for an agency must also close its
-    // public forms.
-    if (!agency.modules?.[ModuleKey.Leads]?.enabled) throw this.unavailable();
-
-    // Not in the ticket, and deliberate: with round-robin out of scope there is
-    // no fallback producer, so a departed producer's link would keep stamping
-    // leads onto an inactive user where nobody would work them. Failing closed
-    // keeps "the context always names a valid producer" true.
-    const producerIsActive = await this.userModel.exists({
-      _id: link.producerId,
-      isActive: true,
-    });
-    if (!producerIsActive) throw this.unavailable();
-
-    return { link, agency };
-  }
-
-  /** One message for every failure mode. Do not specialise it. */
-  private unavailable(): NotFoundException {
-    return new NotFoundException('This form is no longer available.');
   }
 }

@@ -15,6 +15,8 @@ interface LeadPolicySheetProps {
   isEdit: boolean;
   /** Memoized by the caller — {@link PolicyFields} copies it in an effect. */
   householdAddress: QuoteRecapPropertyAddress | null;
+  /** Share-link token on the public intake form; omitted = authenticated (PAC-60). */
+  shareToken?: string;
   onSave: (policy: LeadPolicyFormValues) => void;
 }
 
@@ -37,6 +39,7 @@ export function LeadPolicySheet({
   initial,
   isEdit,
   householdAddress,
+  shareToken,
   onSave,
 }: LeadPolicySheetProps) {
   const form = useAppForm({
@@ -67,6 +70,7 @@ export function LeadPolicySheet({
             propertyAddress: "propertyAddress",
           }}
           householdAddress={householdAddress}
+          shareToken={shareToken}
         />
       </form.AppForm>
     </PolicySheet>
