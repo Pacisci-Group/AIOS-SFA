@@ -24,8 +24,9 @@ resource "digitalocean_ssh_key" "deploy" {
 module "vpc" {
   source = "../../modules/vpc"
 
-  name   = "${local.name_prefix}-vpc"
-  region = var.region
+  name     = "${local.name_prefix}-vpc"
+  region   = var.region
+  ip_range = var.vpc_ip_range
 }
 
 module "droplet" {

@@ -15,6 +15,30 @@ variable "spaces_region" {
   default     = "nyc3"
 }
 
+variable "vpc_ip_range" {
+  description = <<-EOT
+    CIDR for this environment's VPC.
+
+    ⚠ Must be unique per environment. DigitalOcean rejects a range that overlaps
+    any other network **in the account** — not merely in the region — so two
+    environments left on the same default collide, and the failure surfaces only
+    at apply: `terraform plan` renders the range happily and the API refuses it.
+
+    ⚠ Changing this on a live environment REPLACES the VPC, which cascades into
+    the droplets and the Managed MongoDB cluster attached to it. Choose it once,
+    at creation.
+
+    Must be inside RFC1918, no larger than /16 and no smaller than /24.
+
+    Allocated so far:
+      dev         10.10.0.0/16  (the default, claimed first)
+      production  10.20.0.0/16
+  EOT
+
+  type    = string
+  default = "10.10.0.0/16"
+}
+
 variable "droplet_size" {
   description = "Droplet size slug"
   type        = string

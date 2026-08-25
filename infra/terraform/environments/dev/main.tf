@@ -25,6 +25,7 @@ module "sfa" {
   environment                = var.environment
   region                     = var.region
   spaces_region              = var.spaces_region
+  vpc_ip_range               = var.vpc_ip_range
   droplet_size               = var.droplet_size
   mongo_size                 = var.mongo_size
   mongo_node_count           = var.mongo_node_count

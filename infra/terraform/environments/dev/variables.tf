@@ -12,6 +12,12 @@ variable "spaces_region" {
   default = "nyc3"
 }
 
+variable "vpc_ip_range" {
+  description = "CIDR for this environment's VPC. Must be unique across the whole DigitalOcean account, not just the region. Changing it on a live environment replaces the VPC and everything attached to it."
+  type        = string
+  default     = "10.10.0.0/16"
+}
+
 variable "droplet_size" {
   type = string
 }

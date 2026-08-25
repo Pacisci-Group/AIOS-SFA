@@ -234,6 +234,45 @@ docker compose -f /opt/sfa/docker-compose.prod.yml logs api | grep -i transactio
 2. Create a `staging` (or `production`) GitHub Environment with the same secret names.
 3. Run the matching **Deploy staging** / **Deploy production** workflow.
 
+### Every environment needs its own SSH keypair
+
+`stacks/sfa/main.tf` creates a `digitalocean_ssh_key` named `sfa-<env>-deploy`.
+DigitalOcean **rejects a second key whose public half is already on the account**, so
+reusing another environment's key fails the very first `terraform apply` with a 422 —
+before anything is created, and with an error that does not obviously say "duplicate
+key". Generate one per environment:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/sfa_<env>_deploy -C "sfa-<env>-deploy" -N ""
+```
+
+The public half goes in that environment's tfvars (`ssh_public_key`), the private half
+becomes its `SSH_KEY` Environment secret. Separate keys also mean a compromised dev key
+cannot reach production.
+
+### Production
+
+Serves **`app.smithfamily.agency`**. Same shape as dev: single app droplet + Inngest
+droplet, Managed MongoDB, Spaces, host Nginx with Certbot, `enable_inngest = true`.
+Sized identically to dev (`s-1vcpu-2gb` / `db-s-1vcpu-1gb`) — scale vertically until the
+load-balanced autoscaling work lands.
+
+Deviations from dev worth knowing:
+
+- **`mongo_allowed_ip_addresses = []`** — dev allow-lists two developer IPs for
+  Compass/mongosh; production has no standing hole in the database perimeter. Add a
+  named entry only when someone genuinely needs it, and remove it the same day.
+- **DNS is manual**, same as dev (`enable_dns = false`) — the zone is at GoDaddy. Point
+  an `app` A record at `terraform output -raw droplet_ip` (the reserved IP).
+- **No auto-seed and no demo data.** Run `seed.js` once by hand after TLS is up (see
+  "First deploy checklist" step 5). Do **not** run `seed:demo` or `api:migrate`.
+
+Ordering that matters: `enable_tls = true` is set from the first apply because
+`user_data` cannot be changed in place — flipping it later would **replace the droplet**.
+First-boot Certbot fails (DNS does not point at the reserved IP yet); cloud-init treats
+that as non-fatal. Finish with `sudo /opt/sfa/enable-tls.sh` once the A record resolves,
+then seed.
+
 ## Rollback
 
 Images are tagged by commit SHA in GHCR. To roll back, set `API_IMAGE`/`WEB_IMAGE`
