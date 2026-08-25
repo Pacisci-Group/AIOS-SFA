@@ -36,21 +36,27 @@ import {
 /**
  * How many upserts go in one `bulkWrite`.
  *
- * Measured on the real week-29 file (20,405 rows, 24 MB):
+ * Measured on the real week-30 file (20,976 rows, 25 MB) against a collection
+ * already holding 31,862 mailers: **≈ 2,300 rows/s** — 9s end to end, for a mix
+ * of 4,708 inserts and 16,268 updates.
  *
- * - **first import ≈ 100 rows/s** — 202s end to end
- * - **re-import ≈ 46 rows/s** — updates are roughly half the speed of inserts,
- *   since each one reads the existing document before writing it
+ * ⚠ The figures this block used to carry (≈100 rows/s first import, ≈46 rows/s
+ * re-import, 671k ≈ 2h) were measured while the upsert filter could not use
+ * `agencyId_1_controlNumberKeys_1` — see the `$type` note on the filter below.
+ * They described a full collection scan per row, so they were quadratic in
+ * collection size rather than a property of this batch size, and the 671k
+ * extrapolation was wrong by orders of magnitude. Do not restore them.
  *
- * Most of that is MongoDB, not parsing: every row is a separate indexed upsert
- * and every document carries ~90 unmodelled columns in `source.raw`.
+ * Rate is now roughly flat in collection size, because each row costs one
+ * index seek instead of a scan. What remains is genuine per-document work:
+ * every document carries ~90 unmodelled columns in `source.raw`.
  *
- * Fine for an upload — it is a background job with no request attached, which
- * is exactly why it is one. Tolerable for the BigQuery backfill (671k rows
- * ≈ 2h at insert speed, run once at deploy). If that ever stops being
- * tolerable, **profile before tuning this number**: batch size was not the
- * bottleneck when this was measured, and the obvious next lever is trimming
- * `source.raw`, which costs recoverability.
+ * If this ever does become the bottleneck, **profile before tuning this
+ * number** — batch size was not the constraint in either measurement, and the
+ * obvious next lever is trimming `source.raw`, which costs recoverability.
+ * Note that a larger batch also lengthens the window in which nothing is read
+ * from the object-storage stream; see `parseAndImport` in
+ * `worker/functions/import-mailers.fn.ts`.
  */
 const DEFAULT_BATCH_SIZE = 1_000;
 
@@ -193,9 +199,23 @@ export async function importMailerRows(
         // index then rejects with E11000 — turning a row that should have been
         // an update into a hard failure. Reachable whenever the two forms stop
         // moving together, and easy to mistake for corrupt source data.
+        //
+        // ⚠ `$type: 'string'` is **load-bearing, not decorative** — do not
+        // "simplify" it away. It restates the dedupe index's
+        // `partialFilterExpression` verbatim, and MongoDB will only use a
+        // partial index when the query provably implies that expression.
+        // `$in: [<strings>]` does *not* imply `$type: 'string'` on its own, so
+        // without this clause the planner silently discards
+        // `agencyId_1_controlNumberKeys_1` and falls back to `agencyId_1` —
+        // which, in a single-agency collection, FETCHes **every mailer in the
+        // agency for every row of the file**. That is O(n²) in the collection
+        // size: it hides on the first import into an empty collection and then
+        // degrades until a single batch outlives the object-storage read
+        // timeout, which is how a 20k-row import went from 3 minutes to a
+        // 5-hour hang.
         filter: {
           agencyId: ctx.agencyId,
-          controlNumberKeys: { $in: keys },
+          controlNumberKeys: { $in: keys, $type: 'string' },
         },
         update: {
           $set: doc,
