@@ -160,6 +160,10 @@ export class PermissionsService {
       scope,
       dataScope,
       permissions,
+      // Free: `resolveForUser` above already loaded the user's roles to resolve
+      // the permission set. Carried on the context so `buildScopeFilter` can
+      // match a record assigned to a *role* rather than to a user (PAC-72).
+      roleIds: (user.roleIds ?? []).map((roleId) => roleId.toString()),
     };
   }
 

@@ -30,4 +30,20 @@ export interface AccessContext {
   scope: AccessScope;
   dataScope: DataScope;
   permissions: string[];
+  /**
+   * The role `_id`s this user holds, as strings (PAC-72).
+   *
+   * Not a permission input — `permissions` above is already the fully-resolved
+   * set, and nothing re-derives it from these. This exists for **polymorphic
+   * ownership**: an audit assigned to a *role* rather than a user is only
+   * reachable by matching the assignee id against the caller's roles, which
+   * `buildScopeFilter` cannot do without them. See its `ownerField` option.
+   *
+   * ⚠ Adding a field to this interface changes what `PermissionCache` has
+   * serialized. `RedisPermissionCache`'s key prefix carries a version segment
+   * for exactly this reason — bump it, or warm entries deserialize without the
+   * new field and every role-assigned record silently disappears from its
+   * owner's view.
+   */
+  roleIds: string[];
 }

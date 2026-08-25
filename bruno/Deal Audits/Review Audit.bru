@@ -1,0 +1,95 @@
+meta {
+  name: Review Audit
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "decision": "request_changes",
+    "reasonCodes": ["Missing Docs"],
+    "notes": "Declarations page still outstanding.",
+    "score": 70
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("lands on a state matching the decision", function () {
+    const body = res.getBody();
+    expect(["Pass", "Fail", "Not Submitted"]).to.include(body.auditStatus);
+    expect(body).to.have.property("reviewedAt");
+  });
+}
+
+docs {
+  # POST /deal-audits/deals/:dealId/review — the reviewer's verdict (PAC-72)
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write`
+  - **Data scope:** assignee **or** reviewer (see **Set Audit Assignment**).
+
+  Only an audit in **Pending** can be reviewed — anything else is `409`.
+
+  ## Decisions
+  | decision          | lands on      | meaning |
+  |-------------------|---------------|---------|
+  | `approve`         | `Pass`        | signed off |
+  | `request_changes` | `Fail`        | this failed review; here is what is wrong |
+  | `send_back`       | `Not Submitted` | not ready / not mine — take it back |
+
+  The last two both return the audit to its assignee and differ only in
+  meaning. They stay separate so the timeline can say which happened
+  (`audit_changes_requested` vs `audit_sent_back`).
+
+  > 🔴 **The submitter cannot review their own audit** — `403`. Both actions are
+  > `deal_audits:write` and the Producer role template holds it, so nothing else
+  > in the guard chain expresses "a different person". This is the rule that
+  > makes the two-role split mean anything.
+
+  ## Body
+  | field       | type     | rules |
+  |-------------|----------|-------|
+  | decision    | enum     | required — `approve` \| `request_changes` \| `send_back` |
+  | reasonCodes | string[] | **required (≥1) when `request_changes`**; ignored on approve |
+  | notes       | string   | ≤ 2000 chars |
+  | score       | number   | integer 0–100 |
+
+  `reasonCodes` vocabulary (SmartSuite's own): `Missing Docs`,
+  `Coverage Not Offered`, `Incorrect Named Insured`, `Incorrect Address`,
+  `Underwriting Issue`, `Other`.
+
+  Requiring a reason on a failure is the point of the field: "it failed" with
+  nothing stated gives the assignee nothing to act on and the correction loop
+  just bounces.
+
+  **Reason codes are cleared on any non-failure outcome** — stale codes on a
+  passed audit would read as "passed, but here's what was wrong with it".
+
+  ## Response `201`
+  The full audit — same shape as **Set Audit Assignment**.
+
+  ## Errors
+  - `400 Bad Request` — unknown decision, or `request_changes` with no reason code.
+  - `403 Forbidden` — missing permission, or the caller submitted this audit.
+  - `404 Not Found` — no audit for that deal, or out of reach.
+  - `409 Conflict` — the audit is not awaiting review.
+}

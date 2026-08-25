@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AccessResolverService } from '../../permissions/access-resolver.service';
+import { setRequestUserId } from '../context/request-context';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { isPublicRoute } from './guard.utils';
 
@@ -42,6 +43,15 @@ export class AccessContextGuard implements CanActivate {
     }
 
     request.access = access;
+    /*
+     * The earliest point an acting user is known. `RequestContextMiddleware`
+     * opened the store before any guard ran — middleware always precedes guards
+     * in Nest — so it is sitting there empty waiting for this (PAC-72).
+     *
+     * Attribution only. Nothing authorizes off the ambient store; every guard
+     * below reads `request.access`.
+     */
+    setRequestUserId(access.userId);
     return true;
   }
 }

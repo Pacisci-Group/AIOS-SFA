@@ -1,5 +1,6 @@
 import type { ActivityType, LeadTemperature } from "@sfa/shared";
 import {
+  AlertTriangle,
   CheckCircle2,
   FileText,
   MessageSquare,
@@ -8,6 +9,8 @@ import {
   Send,
   Settings,
   Sparkles,
+  Undo2,
+  UserCheck,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -177,6 +180,59 @@ export const activityDisplay: Record<
     tone: "text-slate-600 dark:text-slate-400",
     tint: "bg-slate-400/12",
   },
+  /*
+   * The audit workflow (PAC-72 section E).
+   *
+   * These hang off a `dealAudit`, never a lead, so they do **not** appear on
+   * this timeline — they render on the hand-off drawer's note thread. They are
+   * mapped anyway because `Record<ActivityType, …>` is exhaustive by design:
+   * that is what turned five new union members into the compile error that
+   * brought anyone here, and an unmapped type would otherwise render as a blank
+   * circle rather than fail loudly.
+   *
+   * Colour follows meaning, not novelty: approval is the same emerald as every
+   * other "this is done" row, the two hand-backs share the amber that already
+   * means "needs attention", and assign/submit are neutral process steps.
+   */
+  audit_assigned: {
+    icon: UserCheck,
+    tone: "text-slate-600 dark:text-slate-400",
+    tint: "bg-slate-400/12",
+  },
+  audit_submitted: {
+    icon: Send,
+    tone: "text-sky-600 dark:text-sky-400",
+    tint: "bg-sky-400/12",
+  },
+  audit_approved: {
+    icon: CheckCircle2,
+    tone: "text-emerald-700 dark:text-emerald-500",
+    tint: "bg-emerald-500/12",
+  },
+  audit_changes_requested: {
+    icon: AlertTriangle,
+    tone: "text-amber-600 dark:text-amber-500",
+    tint: "bg-amber-500/15",
+  },
+  audit_sent_back: {
+    icon: Undo2,
+    tone: "text-amber-600 dark:text-amber-500",
+    tint: "bg-amber-500/15",
+  },
+  /*
+   * A lead changed hands (PAC-72 section D). Unlike the five audit types above,
+   * this one **does** render here — it hangs off the lead, and the producer
+   * losing it is exactly who needs to see it.
+   *
+   * Violet, matching `email`: both are "something happened to this record"
+   * rather than a pipeline milestone, and neither should compete with the
+   * emerald of a sale.
+   */
+  lead_reassigned: {
+    icon: UserCheck,
+    tone: "text-violet-600 dark:text-violet-400",
+    tint: "bg-violet-400/12",
+  },
 };
 
 /** Human label for an activity type, used when a row carries no `summary`. */
@@ -190,6 +246,16 @@ export const activityLabel: Record<ActivityType, string> = {
   email: "Email logged",
   note: "Note added",
   field_changed: "Record edited",
+  // Audit workflow (PAC-72). Rendered on the hand-off drawer's thread, not on
+  // the lead timeline — see the note in `activityDisplay`.
+  audit_assigned: "Audit assignment updated",
+  audit_submitted: "Audit submitted for review",
+  audit_approved: "Audit approved",
+  audit_changes_requested: "Changes requested on audit",
+  audit_sent_back: "Audit sent back to assignee",
+  // A fallback only: `LeadAssignmentService` always writes a summary naming
+  // both producers, and the timeline prefers that over this label.
+  lead_reassigned: "Lead reassigned",
 };
 
 /** Up to two initials for an avatar; `?` when there is no name to work with. */

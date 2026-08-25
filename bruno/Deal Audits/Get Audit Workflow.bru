@@ -1,0 +1,91 @@
+meta {
+  name: Get Audit Workflow
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the workflow state with owners resolved", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("auditStatus");
+    expect(body).to.have.property("assignee");
+    expect(body).to.have.property("reviewer");
+    expect(body).to.have.property("completionPct");
+  });
+
+  test("tells the caller what they may do", function () {
+    const body = res.getBody();
+    expect(body.canSubmit).to.be.a("boolean");
+    expect(body.canReview).to.be.a("boolean");
+  });
+
+  test("never reveals who submitted it", function () {
+    // `canReview` already encodes the submitter check. Exposing the id purely
+    // so the UI could compare it would leak an identity for no other reason.
+    expect(res.getBody()).to.not.have.property("submittedById");
+  });
+}
+
+docs {
+  # GET /deal-audits/deals/:dealId — the audit's workflow state (PAC-72)
+
+  What the hand-off drawer opens with: who owns the audit, where it sits in the
+  review workflow, and **what the caller may do next**.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:read`
+  - **Data scope:** assignee **or** reviewer (see **Set Audit Assignment**).
+
+  Read separately from the board rather than folded into every row: resolving
+  the two owners' display names costs an extra lookup each, and the board
+  renders eight cards of which the user opens one.
+
+  ## Response `200`
+  ```json
+  {
+    "id": "665f...9c1",
+    "dealId": "665f...a03",
+    "auditStatus": "Pending",
+    "assignee": { "type": "user", "id": "665f...b11", "name": "Pat Producer" },
+    "reviewer": { "type": "role", "id": "665f...ab2", "name": "CRM" },
+    "submittedAt": "2026-08-21T10:04:00.000Z",
+    "reviewedAt": null,
+    "reasonCodes": [],
+    "auditScore": 0,
+    "auditNotes": null,
+    "itemCount": 7,
+    "resolvedCount": 5,
+    "openCount": 2,
+    "completionPct": 71,
+    "canSubmit": false,
+    "canReview": true
+  }
+  ```
+
+  ## `canSubmit` / `canReview`
+  Decided by the **server**, and the UI gates its buttons on them rather than
+  re-deriving the rules.
+
+  `canReview` depends on who submitted — the submitter may not review their own
+  audit — and `submittedById` is deliberately **not** in the response. Returning
+  it purely so a client could make the comparison would leak an identity for no
+  other reason, and would let two implementations of the rule drift apart.
+
+  ## Errors
+  - `403 Forbidden` — module disabled or missing `deal_audits:read`.
+  - `404 Not Found` — no audit for that deal, or out of the caller's reach.
+}

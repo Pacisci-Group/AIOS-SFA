@@ -3325,6 +3325,34 @@ describe('SFA API (e2e)', () => {
     });
 
     /**
+     * PAC-72 F2 — `createdBy` / `updatedBy` reach the database.
+     *
+     * The only test that exercises the whole authorship chain end to end:
+     * `RequestContextMiddleware` opens the store, `AccessContextGuard` fills in
+     * the user, and `authorshipPlugin` stamps it on save. Every link is
+     * invisible when it breaks — a missing middleware, or a plugin registered
+     * after the models compile, leaves the fields null, which is
+     * indistinguishable from migrated data.
+     *
+     * Asserted across all three collections the intake writes, because they are
+     * created by different code paths within `LeadIntakeService`.
+     */
+    it('stamps createdBy and updatedBy with the acting user', async () => {
+      const body = await createAs(producerToken, payload('Authorship'));
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+
+      const lead = await leadModel.findById(body.id);
+      expect(lead!.createdBy?.toString()).toBe(producer!._id.toString());
+      expect(lead!.updatedBy?.toString()).toBe(producer!._id.toString());
+
+      const household = await householdModel.findById(lead!.householdId);
+      expect(household!.createdBy?.toString()).toBe(producer!._id.toString());
+
+      const contact = await contactModel.findById(lead!.primaryContactId);
+      expect(contact!.createdBy?.toString()).toBe(producer!._id.toString());
+    });
+
+    /**
      * PAC-56 #7 — the `HH-2614` identifier on the household.
      *
      * Pinned here because the failure mode is invisible in a single-request
@@ -4237,6 +4265,32 @@ describe('SFA API (e2e)', () => {
       expect(recap?.document?.filename).toBe('quote-38.pdf');
     });
 
+    it('exposes producerId only to a caller who could act on it (PAC-72)', async () => {
+      /*
+       * The reassignment control needs the owner's raw id to pre-select them,
+       * and `PATCH /leads/:id/assignment` needs `agency:users:read` — so the id
+       * is returned to exactly those callers and omitted for everyone else.
+       *
+       * Asserted both ways: the masking rule above only means something if
+       * something else proves the field is reachable at all. Same shape as the
+       * `field_changed` activity gate this service already applies.
+       */
+      const asProducer = (await getAs(
+        producerToken,
+        leadId,
+      )) as unknown as Record<string, unknown>;
+      expect(asProducer).not.toHaveProperty('producerId');
+      // The name is what a producer reads instead.
+      expect(asProducer.producerName).toBeTruthy();
+
+      const asOwner = (await getAs(ownerToken, leadId)) as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(asOwner).toHaveProperty('producerId');
+      expect(asOwner.producerId).toEqual(expect.any(String));
+    });
+
     it('shows the household address, primary contact and roster (primary first)', async () => {
       const body = await getAs(producerToken, leadId);
 
@@ -4523,6 +4577,156 @@ describe('SFA API (e2e)', () => {
 
     it('a read-only user is forbidden (403)', async () => {
       await patchAs(readOnlyToken, leadId, { status: 'Contacted' }).expect(403);
+    });
+
+    /**
+     * Reassignment (PAC-72 section D).
+     *
+     * Kept in this block because it shares the fixtures, but it is a different
+     * endpoint with a different gate: `leads:write` **and** `agency:users:read`.
+     */
+    describe('reassignment', () => {
+      let ownerId: string;
+      let producerId: string;
+      let movableLeadId: string;
+
+      const reassignAs = (token: string, id: string, toUserId: string) =>
+        request(app.getHttpServer())
+          .patch(`/api/v1/leads/${id}/assignment`)
+          .set(authHeader(token))
+          .send({ producerId: toUserId });
+
+      beforeAll(async () => {
+        const userModel = app.get<Model<User>>(getModelToken(User.name));
+        const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+
+        const owner = await userModel.findOne({ email: seed.ownerEmail });
+        const producer = await userModel.findOne({
+          email: seed.producerEmail,
+        });
+        ownerId = owner!._id.toString();
+        producerId = producer!._id.toString();
+
+        // Its own lead: the shared `leadId` above is walked through several
+        // statuses by the tests before this, including `Sold`.
+        const lead = await leadModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Rowan',
+          lastName: 'Handover',
+          status: 'New',
+          temperature: 'Warm',
+          producerId: producer!._id,
+          isTestRecord: false,
+        });
+        movableLeadId = lead._id.toString();
+      });
+
+      it('moves the lead and records who did it, not who received it', async () => {
+        const activityModel = app.get<Model<Activity>>(
+          getModelToken(Activity.name),
+        );
+
+        const res = await reassignAs(ownerToken, movableLeadId, ownerId).expect(
+          200,
+        );
+        expect((res.body as { producerId: string }).producerId).toBe(ownerId);
+        expect(
+          (res.body as { producerName: string }).producerName,
+        ).toBeTruthy();
+
+        const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+        const stored = await leadModel.findById(movableLeadId);
+        expect(stored!.producerId?.toString()).toBe(ownerId);
+
+        const activity = await activityModel
+          .findOne({ leadId: stored!._id, type: 'lead_reassigned' })
+          .sort({ occurredAt: -1 });
+        expect(activity).not.toBeNull();
+        /*
+         * 🔴 The **actor**. PAC-65 #9 renamed this field from `producerId`
+         * precisely because it never meant "owner" — rewriting it so the new
+         * producer appears to have made the old one's calls would forge history.
+         * Here actor and recipient are both the owner, so the assertion that
+         * carries weight is the one below it.
+         */
+        expect(activity!.userId?.toString()).toBe(ownerId);
+        // Both names in `summary`, never in `changes`: a `field_changed` row is
+        // hidden from anyone without ChangeLogsRead — every producer — and the
+        // producer losing the lead is exactly who needs to see this.
+        expect(activity!.summary).toMatch(/reassigned/i);
+        expect(activity!.changes).toBeUndefined();
+      });
+
+      it('is a no-op when the lead is already theirs — no second timeline row', async () => {
+        const activityModel = app.get<Model<Activity>>(
+          getModelToken(Activity.name),
+        );
+        const before = await activityModel.countDocuments({
+          leadId: new Types.ObjectId(movableLeadId),
+          type: 'lead_reassigned',
+        });
+
+        await reassignAs(ownerToken, movableLeadId, ownerId).expect(200);
+
+        // Logging a change that did not happen is worse than logging nothing.
+        expect(
+          await activityModel.countDocuments({
+            leadId: new Types.ObjectId(movableLeadId),
+            type: 'lead_reassigned',
+          }),
+        ).toBe(before);
+      });
+
+      it('refuses to move a sold lead', async () => {
+        // The sale is the record of who earned it, and the scorecards read the
+        // deal. Letting the lead move would make the two disagree.
+        const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+        const sold = await leadModel.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Sold',
+          lastName: 'Frozen',
+          status: 'Sold',
+          producerId: new Types.ObjectId(producerId),
+          isTestRecord: false,
+        });
+
+        await reassignAs(ownerToken, sold._id.toString(), ownerId).expect(409);
+
+        const stored = await leadModel.findById(sold._id);
+        expect(stored!.producerId?.toString()).toBe(producerId);
+      });
+
+      it('forbids a producer, who holds leads:write but not agency:users:read', async () => {
+        /*
+         * The gate that makes reassignment an owner/manager action. A producer
+         * can write leads all day and still cannot hand one off — not even
+         * their own — which is the decision taken on 2026-08-21 and supersedes
+         * the ticket's original `leads:write` line.
+         */
+        await reassignAs(producerToken, movableLeadId, producerId).expect(403);
+      });
+
+      it('404s for a lead outside the caller-visible set', async () => {
+        await reassignAs(
+          ownerToken,
+          new Types.ObjectId().toString(),
+          ownerId,
+        ).expect(404);
+      });
+
+      it('404s for a user who is not in the agency', async () => {
+        await reassignAs(
+          ownerToken,
+          movableLeadId,
+          new Types.ObjectId().toString(),
+        ).expect(404);
+      });
+
+      it('rejects a malformed producerId', async () => {
+        await reassignAs(ownerToken, movableLeadId, 'not-an-id').expect(400);
+      });
     });
   });
 
@@ -7171,13 +7375,21 @@ describe('SFA API (e2e)', () => {
     it('demands the prior agent and who cancelled it (PAC-65 #10/#11)', async () => {
       const lead = await seedLead();
       const attachment = upload(lead._id.toString());
-      const withPrior = (priorInsurance: Record<string, unknown>, cancellation: Record<string, unknown>) => ({
+      const withPrior = (
+        priorInsurance: Record<string, unknown>,
+        cancellation: Record<string, unknown>,
+      ) => ({
         leadId: lead._id.toString(),
         soldDate: '2026-02-15',
         policies: [
           policyWith(lead._id.toString(), {
             discounts: { ...EMPTY_DISCOUNTS, priorInsuranceDiscount: true },
-            priorInsurance: { none: false, carrier: 'Geico', attachment, ...priorInsurance },
+            priorInsurance: {
+              none: false,
+              carrier: 'Geico',
+              attachment,
+              ...priorInsurance,
+            },
             cancellation,
           }),
         ],
@@ -7569,7 +7781,24 @@ describe('SFA API (e2e)', () => {
         dealId: new Types.ObjectId(deal.id),
       });
       expect(parent).not.toBeNull();
-      expect(parent!.result).toBe('Pending');
+      /*
+       * Was `result: 'Pending'`, which said the opposite of what it meant:
+       * nothing has been submitted, let alone reviewed. `result` folded into
+       * `auditStatus` in PAC-72, and `Pending` in the real vocabulary means
+       * "with the reviewer".
+       */
+      expect(parent!.auditStatus).toBe('Not Submitted');
+
+      /*
+       * The audit defaults to the selling producer (PAC-72 section E). Without
+       * an assignee it reaches nobody — the board scopes on this field, so an
+       * unassigned audit is invisible to every `own`-scoped user the instant it
+       * is created.
+       */
+      expect(parent!.auditAssignee?.type).toBe('user');
+      expect(parent!.auditAssignee?.id?.toString()).toBe(
+        genProducerId.toString(),
+      );
 
       const items = await genItemModel.find({
         dealId: new Types.ObjectId(deal.id),
@@ -7578,6 +7807,372 @@ describe('SFA API (e2e)', () => {
       for (const item of items) {
         expect(item.dealAuditId?.toString()).toBe(parent!._id.toString());
       }
+
+      /*
+       * The board's roll-up figures, computed after the items land. The
+       * completion percentage has no denominator without `itemCount`, and the
+       * board cannot sort or paginate without `openFailedCount`.
+       */
+      expect(parent!.itemCount).toBe(items.length);
+      expect(parent!.openFailedCount).toBe(items.length);
+      expect(parent!.resolvedCount).toBe(0);
+      expect(parent!.oldestOpenAt).toBeTruthy();
+    });
+
+    /**
+     * The audit workflow (PAC-72 section E): assign → submit → review.
+     *
+     * Exercised through HTTP rather than the service so the route ordering,
+     * the guard chain and the state machine are all covered — the `deals/...`
+     * routes sit alongside `:itemId/...` ones, which is exactly the collision
+     * the module-ordering comments elsewhere warn about.
+     */
+    describe('audit workflow', () => {
+      const workflow = (dealId: string) => `${BOARD}/deals/${dealId}`;
+
+      /** A sold deal with a generated audit, ready to be worked. */
+      const soldDeal = async () => {
+        const { lead } = await seedLead();
+        return sell(lead._id.toString(), [autoPolicy(lead._id.toString())]);
+      };
+
+      it('starts Not Submitted and assigned to the selling producer', async () => {
+        const deal = await soldDeal();
+
+        const res = await request(app.getHttpServer())
+          .get(`${workflow(deal.id)}/notes`)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        // Nothing has happened yet, so the thread is empty — the audit is
+        // reachable, which is what this asserts.
+        expect(res.body).toEqual([]);
+      });
+
+      it('submits, then the reviewer approves', async () => {
+        const deal = await soldDeal();
+
+        const submitted = await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+        expect((submitted.body as { auditStatus: string }).auditStatus).toBe(
+          'Pending',
+        );
+
+        // The owner is agency-scoped, so they reach the audit without being
+        // named on it — and they are not the submitter, which is the rule.
+        const reviewed = await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/review`)
+          .set(authHeader(ownerToken))
+          .send({ decision: 'approve', notes: 'All documents received.' })
+          .expect(201);
+        expect((reviewed.body as { auditStatus: string }).auditStatus).toBe(
+          'Pass',
+        );
+
+        // The sales record mirrors the verdict for display.
+        const dealDoc = await genDealModel.findById(deal.id);
+        expect(dealDoc!.dealAuditStatus).toBe('Pass');
+      });
+
+      it('refuses to let the submitter review their own audit', async () => {
+        // 🔴 The rule that makes the two roles mean anything. Both actions are
+        // `deal_audits:write` and the Producer template holds it, so nothing
+        // else in the guard chain expresses "a different person".
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/review`)
+          .set(authHeader(producerToken))
+          .send({ decision: 'approve' })
+          .expect(403);
+      });
+
+      it('rejects a review of an audit nobody has submitted', async () => {
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/review`)
+          .set(authHeader(ownerToken))
+          .send({ decision: 'approve' })
+          .expect(409);
+      });
+
+      it('rejects a second submission while it is with the reviewer', async () => {
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(409);
+      });
+
+      it('runs the correction loop: fail → resubmit → Pending', async () => {
+        // Section B item 8. `resolveItem` is one-shot, so before PAC-72 a
+        // failed audit had nowhere to go.
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+
+        const failed = await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/review`)
+          .set(authHeader(ownerToken))
+          .send({ decision: 'request_changes', reasonCodes: ['Missing Docs'] })
+          .expect(201);
+        expect((failed.body as { auditStatus: string }).auditStatus).toBe(
+          'Fail',
+        );
+
+        const resubmitted = await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+        expect((resubmitted.body as { auditStatus: string }).auditStatus).toBe(
+          'Pending',
+        );
+      });
+
+      it('requires a reason code when requesting changes', async () => {
+        // "It failed" with no stated reason gives the assignee nothing to act
+        // on, and the correction loop just bounces.
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/review`)
+          .set(authHeader(ownerToken))
+          .send({ decision: 'request_changes' })
+          .expect(400);
+      });
+
+      it('clears reason codes when a re-review passes', async () => {
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/review`)
+          .set(authHeader(ownerToken))
+          .send({ decision: 'request_changes', reasonCodes: ['Missing Docs'] })
+          .expect(201);
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+
+        const passed = await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/review`)
+          .set(authHeader(ownerToken))
+          .send({ decision: 'approve' })
+          .expect(201);
+
+        // Stale codes on a passed audit would read as "passed, but here's what
+        // was wrong with it".
+        expect((passed.body as { reasonCodes: string[] }).reasonCodes).toEqual(
+          [],
+        );
+      });
+
+      it('reassigns the audit and resolves the owner to a name', async () => {
+        const deal = await soldDeal();
+
+        const res = await request(app.getHttpServer())
+          .patch(`${workflow(deal.id)}/assignment`)
+          .set(authHeader(ownerToken))
+          .send({
+            assignee: { type: 'user', id: seed.csrUserId },
+            reviewer: { type: 'role', id: seed.producerRoleId },
+          })
+          .expect(200);
+
+        const body = res.body as {
+          assignee: { type: string; id: string; name: string };
+          reviewer: { type: string; id: string; name: string };
+        };
+        expect(body.assignee.type).toBe('user');
+        expect(body.assignee.id).toBe(seed.csrUserId);
+        // Resolved on read rather than denormalized, so renaming does not
+        // strand every audit the user or role owns.
+        expect(body.assignee.name).not.toBe('');
+        expect(body.reviewer.type).toBe('role');
+        expect(body.reviewer.name).not.toBe('');
+      });
+
+      it('hides the audit from a producer once it is assigned away', async () => {
+        // The access key is the assignee, so an `own`-scoped producer loses
+        // sight of a deal they sold the moment someone else takes it on.
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .patch(`${workflow(deal.id)}/assignment`)
+          .set(authHeader(ownerToken))
+          .send({ assignee: { type: 'user', id: seed.csrUserId } })
+          .expect(200);
+
+        await request(app.getHttpServer())
+          .get(`${workflow(deal.id)}/notes`)
+          .set(authHeader(producerToken))
+          .expect(404);
+      });
+
+      it('keeps the reviewer reachable even though they are not the assignee', async () => {
+        /*
+         * The trap the board's scope clamp sets: `buildScopeFilter`'s
+         * `ownerField` pins to the *assignee*, which is right for "whose board
+         * is this on" and wrong for "who may act on it". Using it to load a
+         * single audit would 404 the very person the review endpoint exists
+         * for.
+         */
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .patch(`${workflow(deal.id)}/assignment`)
+          .set(authHeader(ownerToken))
+          .send({
+            assignee: { type: 'user', id: seed.csrUserId },
+            reviewer: { type: 'user', id: genProducerId.toString() },
+          })
+          .expect(200);
+
+        /*
+         * The producer is `own`-scoped and now only the *reviewer* — the CSR
+         * holds the assignee slot. This is exactly the case an assignee-only
+         * clamp would 404.
+         *
+         * (The CSR persona cannot stand in here: the CSR role template holds no
+         * `deal_audits` permission at all, so the guard chain 403s them before
+         * any of this is reached.)
+         */
+        await request(app.getHttpServer())
+          .get(`${workflow(deal.id)}/notes`)
+          .set(authHeader(producerToken))
+          .expect(200);
+      });
+
+      it('records workflow events and notes on one thread', async () => {
+        const deal = await soldDeal();
+
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/submit`)
+          .set(authHeader(producerToken))
+          .expect(201);
+        await request(app.getHttpServer())
+          .post(`${workflow(deal.id)}/notes`)
+          .set(authHeader(producerToken))
+          .send({ body: 'Left a voicemail for the client.' })
+          .expect(201);
+
+        const res = await request(app.getHttpServer())
+          .get(`${workflow(deal.id)}/notes`)
+          .set(authHeader(producerToken))
+          .expect(200);
+
+        const thread = res.body as Array<{ type: string; summary: string }>;
+        const types = thread.map((entry) => entry.type);
+        // One conversation, not two: "Dana submitted this" and the note read
+        // in the same list, newest first.
+        expect(types).toContain('audit_submitted');
+        expect(types).toContain('note');
+        expect(thread[0].summary).toBe('Left a voicemail for the client.');
+      });
+
+      it('404s for a deal that does not exist', async () => {
+        await request(app.getHttpServer())
+          .post(`${workflow(new Types.ObjectId().toString())}/submit`)
+          .set(authHeader(producerToken))
+          .expect(404);
+      });
+
+      /**
+       * What the drawer opens with, and the flags its buttons are gated on.
+       *
+       * `canReview` is the interesting one: the UI must not offer an action the
+       * API would reject, and it cannot work the rule out for itself because it
+       * is never told who submitted.
+       */
+      describe('workflow state', () => {
+        const state = async (dealId: string, token: string) => {
+          const res = await request(app.getHttpServer())
+            .get(workflow(dealId))
+            .set(authHeader(token))
+            .expect(200);
+          return res.body as {
+            auditStatus: string;
+            canSubmit: boolean;
+            canReview: boolean;
+            assignee: { type: string; name: string } | null;
+            completionPct: number;
+          };
+        };
+
+        it('opens submittable, not reviewable, and assigned to the producer', async () => {
+          const deal = await soldDeal();
+          const view = await state(deal.id, producerToken);
+
+          expect(view.auditStatus).toBe('Not Submitted');
+          expect(view.canSubmit).toBe(true);
+          expect(view.canReview).toBe(false);
+          expect(view.assignee?.type).toBe('user');
+          // Resolved to a display name rather than left as an id.
+          expect(view.assignee?.name).not.toBe('');
+          expect(view.completionPct).toBe(0);
+        });
+
+        it('offers review to a second person but not to the submitter', async () => {
+          const deal = await soldDeal();
+          await request(app.getHttpServer())
+            .post(`${workflow(deal.id)}/submit`)
+            .set(authHeader(producerToken))
+            .expect(201);
+
+          // The producer submitted, so the API would 403 their review — and
+          // the flag says so rather than letting the UI offer the button.
+          const submitter = await state(deal.id, producerToken);
+          expect(submitter.auditStatus).toBe('Pending');
+          expect(submitter.canSubmit).toBe(false);
+          expect(submitter.canReview).toBe(false);
+
+          const other = await state(deal.id, ownerToken);
+          expect(other.canReview).toBe(true);
+        });
+
+        it('never returns who submitted it', async () => {
+          const deal = await soldDeal();
+          await request(app.getHttpServer())
+            .post(`${workflow(deal.id)}/submit`)
+            .set(authHeader(producerToken))
+            .expect(201);
+
+          const res = await request(app.getHttpServer())
+            .get(workflow(deal.id))
+            .set(authHeader(ownerToken))
+            .expect(200);
+
+          // `canReview` already encodes the check; the id would be a leak with
+          // no other purpose, and a second place for the rule to live.
+          expect(res.body).not.toHaveProperty('submittedById');
+        });
+      });
     });
 
     /**
@@ -7602,32 +8197,116 @@ describe('SFA API (e2e)', () => {
       const body = res.body as {
         items: Array<{
           id: string;
+          dealId: string;
           ref: string;
           client: string;
           type: string;
-          missing: string;
-          daysOpen: number;
+          auditStatus: string;
+          completionPct: number;
+          itemCount: number;
+          openCount: number;
+          oldestDaysOpen: number;
+          items: Array<{ id: string; missing: string; open: boolean }>;
         }>;
       };
 
       const mine = body.items.filter((row) => row.client === clientName);
-      expect(mine.length).toBeGreaterThan(0);
+
+      /*
+       * **Exactly one card**, not one per requirement (PAC-72 section A item 1).
+       * This is the whole point of the rework: a bundled sale with six open
+       * items used to render six rows with six Resolve buttons, and could fill
+       * the board by itself.
+       */
+      expect(mine).toHaveLength(1);
 
       const row = mine[0];
-      // Not "Unknown Client" — proves `clientName` was stamped.
+      // Not "Unknown Client" — proves the linked deal resolved.
       expect(row.client).toBe(clientName);
-      // Proves `dealId` resolved, so the badge is real.
       expect(row.type).toBe('Auto');
-      expect(row.missing).toEqual(expect.any(String));
       expect(row.ref).toMatch(/^AUD-\d{4}-\d{4}$/);
-      // Freshly generated: recomputed from `firstCreatedAt`, so exactly 0.
-      expect(row.daysOpen).toBe(0);
+      // Freshly generated: recomputed from `oldestOpenAt`, so exactly 0.
+      expect(row.oldestDaysOpen).toBe(0);
+      // Nothing resolved yet, and the checklist is not empty.
+      expect(row.auditStatus).toBe('Not Submitted');
+      expect(row.itemCount).toBeGreaterThan(0);
+      expect(row.openCount).toBe(row.itemCount);
+      expect(row.completionPct).toBe(0);
 
-      // And it really is the deal we just booked.
+      // The card nests its whole checklist — what the drawer renders.
       const items = await genItemModel.find({
         dealId: new Types.ObjectId(deal.id),
       });
-      expect(items.map((i) => i._id.toString())).toContain(row.id);
+      expect(row.items).toHaveLength(items.length);
+      expect(row.items.every((item) => item.open)).toBe(true);
+      expect(row.items.map((i) => i.id).sort()).toEqual(
+        items.map((i) => i._id.toString()).sort(),
+      );
+
+      // And the card really is the deal we just booked — the id every workflow
+      // endpoint is keyed on.
+      expect(row.dealId).toBe(deal.id);
+    });
+
+    /**
+     * Resolving one requirement moves the percentage; resolving the last one
+     * takes the card off the board.
+     *
+     * The counters are denormalized, so this is what proves the resolve path
+     * maintains them — a stale `openFailedCount` would strand a finished deal
+     * on the board forever, and the board reads the counter, not the items.
+     */
+    it('tracks completion as items resolve, and drops the card at zero', async () => {
+      const { lead, clientName } = await seedLead();
+      await sell(lead._id.toString(), [autoPolicy(lead._id.toString())]);
+
+      const card = async () => {
+        const res = await request(app.getHttpServer())
+          .get(`${BOARD}?page=1&pageSize=50`)
+          .set(authHeader(producerToken))
+          .expect(200);
+        const body = res.body as {
+          items: Array<{
+            client: string;
+            completionPct: number;
+            openCount: number;
+            items: Array<{ id: string; open: boolean }>;
+          }>;
+        };
+        return body.items.find((row) => row.client === clientName);
+      };
+
+      const before = await card();
+      expect(before).toBeDefined();
+      const total = before!.items.length;
+      expect(total).toBeGreaterThan(1);
+
+      // Resolve one — the card stays, the percentage moves.
+      await request(app.getHttpServer())
+        .patch(`${BOARD}/${before!.items[0].id}/resolve`)
+        .set(authHeader(producerToken))
+        .send({ note: 'Received.' })
+        .expect(200);
+
+      const midway = await card();
+      expect(midway).toBeDefined();
+      expect(midway!.openCount).toBe(total - 1);
+      expect(midway!.completionPct).toBe(Math.round((1 / total) * 100));
+      // The resolved one is still listed — the drawer sorts it below the
+      // outstanding ones rather than hiding it.
+      expect(midway!.items).toHaveLength(total);
+      expect(midway!.items.filter((i) => i.open)).toHaveLength(total - 1);
+
+      // Resolve the rest — the card leaves the board entirely.
+      for (const item of midway!.items.filter((i) => i.open)) {
+        await request(app.getHttpServer())
+          .patch(`${BOARD}/${item.id}/resolve`)
+          .set(authHeader(producerToken))
+          .send({ note: 'Received.' })
+          .expect(200);
+      }
+
+      expect(await card()).toBeUndefined();
     });
 
     it("hides another producer's generated items from the board", async () => {
@@ -7892,21 +8571,30 @@ describe('SFA API (e2e)', () => {
 
       const body = res.body as {
         items: Array<{
-          missing: string;
-          dueAt: string | null;
-          attachments: Array<Record<string, unknown>>;
+          items: Array<{
+            missing: string;
+            dueAt: string | null;
+            attachments: Array<Record<string, unknown>>;
+          }>;
         }>;
       };
-      const row = body.items.find((r) => r.missing === 'Good Student');
-      expect(row).toBeTruthy();
-      expect(row!.dueAt).toBeTruthy();
-      expect(row!.attachments).toHaveLength(1);
-      expect(row!.attachments[0].filename).toBe('gen-proof.pdf');
-      expect(row!.attachments[0].index).toBe(0);
+
+      // Evidence now lives on the nested checklist entry rather than the row —
+      // the drawer renders it per requirement (PAC-72 section A). The PAC-65
+      // #16 contract is otherwise unchanged, and is load-bearing: this block is
+      // what makes the drawer say "verify it" instead of "call the client".
+      const item = body.items
+        .flatMap((row) => row.items)
+        .find((entry) => entry.missing === 'Good Student');
+      expect(item).toBeTruthy();
+      expect(item!.dueAt).toBeTruthy();
+      expect(item!.attachments).toHaveLength(1);
+      expect(item!.attachments[0].filename).toBe('gen-proof.pdf');
+      expect(item!.attachments[0].index).toBe(0);
       // ⚠ The key's prefix is what `assertKeyOwnership` treats as a security
       // property. It must not leave the server; `index` is what the download
       // route takes and all the client needs.
-      expect(row!.attachments[0]).not.toHaveProperty('key');
+      expect(item!.attachments[0]).not.toHaveProperty('key');
     });
 
     it('creates one certificate item per named defensive driver', async () => {
@@ -8607,7 +9295,11 @@ describe('SFA API (e2e)', () => {
             // here can only come from a client that ignores the rule. The wire
             // still accepts 1–99 for compatibility; the server is what makes
             // the stored value honest.
-            soldPolicy({ policyType: 'Home', policyNumber: home, itemCount: 4 }),
+            soldPolicy({
+              policyType: 'Home',
+              policyNumber: home,
+              itemCount: 4,
+            }),
           ],
         }),
       );
@@ -9096,7 +9788,7 @@ describe('SFA API (e2e)', () => {
         expect((await soldDealModel.findById(created.id))!.itemCount).toBe(1);
       });
 
-      it('leaves an uncatalogued type\'s stored count alone', async () => {
+      it("leaves an uncatalogued type's stored count alone", async () => {
         // A migrated policy whose type normalizes to nothing we know. Forcing
         // the implied 1 there would destroy a real count on the first
         // unrelated save.

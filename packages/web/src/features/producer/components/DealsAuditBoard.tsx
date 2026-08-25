@@ -5,26 +5,19 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   listDealAudits,
+  type DealAuditDealRow,
   type DealAuditDueFilter,
   type DealAuditListResponse,
-  type DealAuditRow,
   type DealAuditType,
 } from "@/lib/deal-audits-api";
 import { ResolvePanel } from "./ResolvePanel";
 
 const PAGE_SIZE = 8;
-/**
- * Four columns from `lg` up; below that a row collapses to "who + what to do
- * about it", with the requirement and the age folded in under the client name.
- * A 90px "Days Open" column and a Resolve button cannot both sit beside a
- * client name on a phone — or on a tablet, once the sidebar has taken 224px.
- */
-const GRID_COLS =
-  "grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[1fr_1.3fr_90px_80px]";
 
 const DUE_FILTERS: { value: DealAuditDueFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -45,10 +38,165 @@ const TypeIcon = ({ type }: { type: DealAuditType }) => {
   return <Package size={12} />;
 };
 
+/**
+ * One deal, one card (PAC-72 section A item 1).
+ *
+ * Replaces a four-column grid where one row was one audit *item* — a bundled
+ * Auto + Home sale with six open requirements rendered as six rows with six
+ * Resolve buttons and could fill the board by itself. The header badge counted
+ * requirements, not deals, so "12 Outstanding" never meant twelve clients.
+ *
+ * The completion percentage is what David asked for **instead of** per-item
+ * checkmarks (items 3 and 4), so there is deliberately no tick anywhere here.
+ */
+function DealCard({
+  deal,
+  canResolve,
+  onOpen,
+}: {
+  deal: DealAuditDealRow;
+  canResolve: boolean;
+  onOpen: () => void;
+}) {
+  const urgent = deal.oldestDaysOpen >= 30;
+  const warning = deal.oldestDaysOpen >= 14 && deal.oldestDaysOpen < 30;
+  const withEvidence = deal.items.filter(
+    (item) => item.open && item.attachments.length > 0,
+  ).length;
+
+  return (
+    <div
+      className={cn(
+        "group flex flex-col gap-3 border-b border-border px-4 py-4 transition-all last:border-b-0 lg:px-5",
+        "dark:border-white/[0.04]",
+        canResolve && "cursor-pointer hover:bg-muted/40",
+      )}
+      onClick={canResolve ? onOpen : undefined}
+      role={canResolve ? "button" : undefined}
+      tabIndex={canResolve ? 0 : undefined}
+      onKeyDown={
+        canResolve
+          ? (event) => {
+              // The whole card is the target (item 2: "click the deal → drawer"),
+              // so it has to answer the keyboard like the button it now is.
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpen();
+              }
+            }
+          : undefined
+      }
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs",
+              typeStyles[deal.type],
+            )}
+          >
+            <TypeIcon type={deal.type} />
+          </span>
+          <div className="min-w-0">
+            <span className="block truncate text-sm font-medium text-foreground">
+              {deal.client}
+            </span>
+            <span className="block truncate text-xs tracking-wide text-muted-foreground">
+              {deal.ref}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Clock
+            size={11}
+            className={cn(
+              "shrink-0",
+              urgent
+                ? "text-amber-500"
+                : warning
+                  ? "text-amber-300"
+                  : "text-muted-foreground",
+            )}
+          />
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-xs",
+              urgent
+                ? "bg-amber-500/15 font-bold text-amber-500"
+                : warning
+                  ? "bg-amber-300/10 font-medium text-amber-300"
+                  : "bg-muted font-medium text-muted-foreground",
+            )}
+          >
+            {deal.oldestDaysOpen}d
+          </span>
+        </div>
+      </div>
+
+      {/* Completion — the figure that replaced the checkmarks. */}
+      <div className="flex items-center gap-3">
+        <Progress
+          value={deal.completionPct}
+          className="h-1.5 flex-1"
+          aria-label={`${deal.completionPct}% of requirements resolved`}
+        />
+        <span className="shrink-0 text-xs font-medium text-muted-foreground tabular-nums">
+          {deal.completionPct}%
+        </span>
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
+          <span className="truncate">
+            {deal.openCount} of {deal.itemCount} outstanding
+          </span>
+          {/*
+            * A proof uploaded at sale time is already on the item (PAC-56 #21b)
+            * — the clip says the auditor is verifying, not chasing.
+            */}
+          {withEvidence > 0 && (
+            <Paperclip
+              size={11}
+              className="shrink-0 text-muted-foreground"
+              aria-label={`${withEvidence} outstanding requirement${withEvidence === 1 ? "" : "s"} with a document on file`}
+            />
+          )}
+        </span>
+
+        {canResolve ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={(event) => {
+              // The card already handles the click; without this the drawer
+              // would open twice on the button.
+              event.stopPropagation();
+              onOpen();
+            }}
+            className={cn(
+              "shrink-0 rounded-lg font-semibold hover:brightness-110 active:scale-95",
+              urgent
+                ? "border-amber-500/20 bg-amber-500/12 text-amber-500 hover:bg-amber-500/12"
+                : "border-sky-400/20 bg-sky-400/10 text-sky-400 hover:bg-sky-400/10",
+            )}
+          >
+            Review
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function DealsAuditBoard() {
   const [page, setPage] = useState(1);
   const [due, setDue] = useState<DealAuditDueFilter>("all");
-  const [selectedDeal, setSelectedDeal] = useState<DealAuditRow | null>(null);
+  const [selectedDeal, setSelectedDeal] = useState<DealAuditDealRow | null>(
+    null,
+  );
   const { canWrite } = usePermissions();
   const canResolve = canWrite("deal_audits");
   const queryClient = useQueryClient();
@@ -89,23 +237,63 @@ export function DealsAuditBoard() {
     setPage(1);
   };
 
-  const handleResolved = (id: string) => {
-    // The item was persisted as resolved by the API and now drops off the board.
-    // Optimistically remove the row for instant feedback, then invalidate so the
-    // list (and pagination/counts) reconciles with the server.
+  /**
+   * One requirement was resolved inside a deal.
+   *
+   * ⚠ This used to remove a **row** by item id, which is no longer what
+   * happens: a row is a deal now, so the item has to be marked settled *within*
+   * its card and the card dropped only when its last outstanding requirement
+   * goes. The completion percentage moves with it, because the drawer is still
+   * open and reading from this cache entry.
+   */
+  const handleResolved = (dealRowId: string, itemId: string) => {
+    let nextSelected: DealAuditDealRow | null = null;
+
     queryClient.setQueryData<DealAuditListResponse>(listKey, (prev) => {
       if (!prev) return prev;
-      const remaining = prev.items.filter((d) => d.id !== id);
-      const nextTotal = Math.max(0, prev.total - 1);
+
+      const rows: DealAuditDealRow[] = [];
+      for (const row of prev.items) {
+        if (row.id !== dealRowId) {
+          rows.push(row);
+          continue;
+        }
+
+        // Settled, not removed: the drawer keeps listing it below the
+        // outstanding ones, which is what "sorted to the top" is relative to.
+        const nextItems = row.items.map((item) =>
+          item.id === itemId ? { ...item, open: false } : item,
+        );
+        const openCount = nextItems.filter((item) => item.open).length;
+        if (openCount === 0) continue; // last one cleared — the card leaves
+
+        const resolved = row.itemCount - openCount;
+        const updated: DealAuditDealRow = {
+          ...row,
+          items: nextItems,
+          openCount,
+          completionPct: row.itemCount
+            ? Math.round((resolved / row.itemCount) * 100)
+            : 100,
+        };
+        nextSelected = updated;
+        rows.push(updated);
+      }
+
+      const nextTotal = Math.max(0, rows.length ? prev.total : prev.total - 1);
       return {
         ...prev,
-        items: remaining,
-        total: nextTotal,
+        items: rows,
+        total: rows.length === prev.items.length ? prev.total : nextTotal,
         // Recomputed with `total`, not left behind: the footer reads this, and
         // a stale value showed "Page 1 of 2" for a set that now fits on one.
         totalPages: Math.max(1, Math.ceil(nextTotal / prev.pageSize)),
       };
     });
+
+    // Keep the open drawer in step with the cache, or close it when its deal
+    // just cleared entirely.
+    setSelectedDeal(nextSelected);
     void queryClient.invalidateQueries({ queryKey: ["deal-audits"] });
   };
 
@@ -148,44 +336,38 @@ export function DealsAuditBoard() {
                 ))}
               </div>
             )}
+            {/*
+              * "Deals", not "Outstanding". `total` counts deals now, and the
+              * old wording read as a requirement count — which it no longer is.
+              */}
             {!isPending && !isError && (
               <Badge className="bg-amber-500/15 text-amber-500 border-transparent rounded-full text-xs font-bold">
-                {total} Outstanding
+                {total} {total === 1 ? "Deal" : "Deals"}
               </Badge>
             )}
           </div>
         </div>
 
-        {/* Column Headers */}
-        <div className="hidden grid-cols-[1fr_1.3fr_90px_80px] gap-3 border-b border-border px-5 py-2.5 lg:grid dark:border-white/[0.04]">
-          {["Client", "Missing Requirement", "Days Open", "Action"].map((h) => (
-            <span
-              key={h}
-              className="text-xs font-medium tracking-wide text-muted-foreground uppercase"
-            >
-              {h}
-            </span>
-          ))}
-        </div>
-
         {/* Body */}
         <div
           className="flex flex-col overflow-y-auto"
-          style={{ maxHeight: "360px" }}
+          style={{ maxHeight: "420px" }}
         >
           {isPending ? (
-            Array.from({ length: 5 }).map((_, i) => (
+            Array.from({ length: 4 }).map((_, i) => (
               <div
                 key={i}
-                className={cn(
-                  "grid items-center gap-3 border-b border-border px-4 py-3.5 lg:px-5 dark:border-white/[0.04]",
-                  GRID_COLS,
-                )}
+                className="flex flex-col gap-3 border-b border-border px-4 py-4 lg:px-5 dark:border-white/[0.04]"
               >
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="hidden h-3 w-40 lg:block" />
-                <Skeleton className="hidden h-5 w-12 rounded-full lg:block" />
-                <Skeleton className="h-7 w-16 rounded-lg" />
+                <div className="flex items-center justify-between gap-3">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-5 w-12 rounded-full" />
+                </div>
+                <Skeleton className="h-1.5 w-full rounded-full" />
+                <div className="flex items-center justify-between gap-3">
+                  <Skeleton className="h-3 w-28" />
+                  <Skeleton className="h-7 w-16 rounded-lg" />
+                </div>
               </div>
             ))
           ) : isError ? (
@@ -205,113 +387,14 @@ export function DealsAuditBoard() {
               </p>
             </div>
           ) : (
-            items.map((deal, i) => {
-              const urgent = deal.daysOpen >= 30;
-              const warning = deal.daysOpen >= 14 && deal.daysOpen < 30;
-
-              return (
-                <div
-                  key={deal.id}
-                  className={cn(
-                    "group grid items-center gap-3 px-4 py-3.5 transition-all hover:bg-muted/40 lg:px-5",
-                    GRID_COLS,
-                    i < items.length - 1 &&
-                      "border-b border-border dark:border-white/[0.04]",
-                  )}
-                >
-                  {/* Client */}
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span
-                      className={cn(
-                        "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs",
-                        typeStyles[deal.type],
-                      )}
-                    >
-                      <TypeIcon type={deal.type} />
-                    </span>
-                    <div className="min-w-0">
-                      <span className="block truncate text-sm font-medium text-foreground">
-                        {deal.client}
-                      </span>
-                      <span className="block truncate text-xs tracking-wide text-muted-foreground">
-                        {deal.ref}
-                      </span>
-                      {/* The two columns that don't fit on a phone, folded in
-                          under the name rather than dropped. */}
-                      <span className="mt-1 block truncate text-xs text-muted-foreground lg:hidden">
-                        {deal.missing} · {deal.daysOpen}d open
-                        {deal.attachments.length > 0 ? " · has evidence" : ""}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Missing */}
-                  <span className="hidden items-center gap-1.5 truncate text-xs text-muted-foreground lg:flex">
-                    <span className="truncate">{deal.missing}</span>
-                    {/*
-                      * A proof uploaded at sale time is already on the item
-                      * (PAC-56 #21b) — the clip says the auditor is verifying,
-                      * not chasing. Folded in here rather than given a column:
-                      * `GRID_COLS`, the header and the mobile collapse are all
-                      * tuned to four.
-                      */}
-                    {deal.attachments.length > 0 && (
-                      <Paperclip
-                        size={11}
-                        className="shrink-0 text-muted-foreground"
-                        aria-label={`${deal.attachments.length} document${deal.attachments.length === 1 ? "" : "s"} on file`}
-                      />
-                    )}
-                  </span>
-
-                  {/* Days */}
-                  <div className="hidden items-center gap-1.5 lg:flex">
-                    <Clock
-                      size={11}
-                      className={cn(
-                        "shrink-0",
-                        urgent
-                          ? "text-amber-500"
-                          : warning
-                            ? "text-amber-300"
-                            : "text-muted-foreground",
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-xs",
-                        urgent
-                          ? "bg-amber-500/15 font-bold text-amber-500"
-                          : warning
-                            ? "bg-amber-300/10 font-medium text-amber-300"
-                            : "bg-muted font-medium text-muted-foreground",
-                      )}
-                    >
-                      {deal.daysOpen}d
-                    </span>
-                  </div>
-
-                  {/* Resolve */}
-                  {canResolve ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setSelectedDeal(deal)}
-                      className={cn(
-                        "rounded-lg font-semibold hover:brightness-110 active:scale-95",
-                        urgent
-                          ? "border-amber-500/20 bg-amber-500/12 text-amber-500 hover:bg-amber-500/12"
-                          : "border-sky-400/20 bg-sky-400/10 text-sky-400 hover:bg-sky-400/10",
-                      )}
-                    >
-                      Resolve
-                    </Button>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">—</span>
-                  )}
-                </div>
-              );
-            })
+            items.map((deal) => (
+              <DealCard
+                key={deal.id}
+                deal={deal}
+                canResolve={canResolve}
+                onOpen={() => setSelectedDeal(deal)}
+              />
+            ))
           )}
         </div>
 

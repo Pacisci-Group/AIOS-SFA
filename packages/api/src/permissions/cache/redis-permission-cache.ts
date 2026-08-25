@@ -3,7 +3,19 @@ import { AccessContext } from '@sfa/shared';
 import Redis from 'ioredis';
 import { PermissionCache } from './permission-cache';
 
-const KEY_PREFIX = 'sfa:perm:';
+/**
+ * Versioned on purpose. Entries hold a serialized {@link AccessContext}, so
+ * **adding a field to that interface invalidates every warm entry** — a cached
+ * context deserializes without the new field and the code reading it sees
+ * `undefined` rather than a value, with no error anywhere.
+ *
+ * Bump `v2` whenever `AccessContext` gains or loses a field. Old keys are left
+ * to expire on their own TTL rather than scanned and deleted; they are simply
+ * never read again.
+ *
+ * `v2` = `roleIds` added for polymorphic ownership (PAC-72).
+ */
+const KEY_PREFIX = 'sfa:perm:v2:';
 
 /**
  * Redis-backed cache for resolved access contexts. Entries carry a safety TTL

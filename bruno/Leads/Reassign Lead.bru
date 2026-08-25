@@ -1,0 +1,145 @@
+meta {
+  name: Reassign Lead
+  type: http
+  seq: 17
+}
+
+patch {
+  url: {{baseUrl}}/leads/{{disposableLeadId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{leadReassignToken}}
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "producerId": "{{leadReassignUserId}}"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the new owner, resolved to a name", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(body).to.have.property("producerId");
+    expect(body).to.have.property("producerName");
+    expect(body.producerName).to.not.equal("");
+  });
+
+  test("bumps lastActivityAt — the Leads list sorts on it", function () {
+    expect(res.getBody()).to.have.property("lastActivityAt");
+  });
+
+  test("moved the lead to the requested owner", function () {
+    expect(res.getBody().producerId).to.equal(bru.getVar("leadReassignUserId"));
+  });
+}
+
+docs {
+  # PATCH /leads/:id/assignment — hand a lead to another user (PAC-72 D)
+
+  Moves `leads.producerId`, and appends a `lead_reassigned` entry to the lead's
+  timeline. That is the **whole** operation — see "No cascade" below.
+
+  - **Module:** `leads`
+  - **Permissions:** `leads:write` **AND** `agency:users:read` — both required
+  - **Data scope:** the caller must be able to reach the lead
+    (`LeadAccessService.loadOwnedLead`, which 404s rather than 403s)
+
+  ## 🔴 Why two permissions
+
+  `agency:users:read` is held by the **Agency Owner and Branch Manager only**.
+  A Producer holds `leads:write` but not this, so a producer **cannot reassign
+  a lead — not even their own**. Reassignment is an owner/manager action.
+
+  This supersedes the ticket's original "gated on `leads:write`" line (decided
+  2026-08-21). It also means the picker's roster — `GET /users`, gated on the
+  same permission — is reachable by exactly the people who can act on it, so no
+  extra endpoint was needed.
+
+  `@RequirePermissions` is an AND-set in `PermissionsGuard`; the handler spells
+  both out rather than using `@RequireWrite`, which sets the same metadata key
+  with a single permission.
+
+  ## 🔴 The sold-lead freeze
+
+  A lead can be reassigned **only before it is sold**. Once sold,
+  `Deal.producerId` is what the scorecards and the leaderboard read; letting the
+  lead move afterwards would make the two disagree about the same sale.
+  A sold lead returns **`409`**.
+
+  ⚠ **Known gap, deliberately unfixed.** `PATCH /leads/:id` accepts `status`, so
+  a caller holding `leads:write` can flip a lead out of `Sold`, reassign it, and
+  flip it back — keying the freeze on status alone is not airtight. The robust
+  fix, when wanted, is to also check for a linked `Deal`: a deal existing is a
+  fact, a status is an opinion. Recorded so it is a known gap, not a surprise.
+
+  ## No cascade
+
+  This looks larger than it is. Every other record linked to a lead is
+  **post-sale** — `deals`, `dealAuditItems`, `priorInsurance` — and therefore
+  unreachable behind the freeze.
+
+  `quoteRecaps` *are* reachable and deliberately **do not move**: the original
+  quoter keeps the credit and the new owner writes a fresh recap, which is what
+  keeps the Quoted scorecard historically accurate.
+
+  ## Body
+  | field      | type   | rules                        |
+  |------------|--------|------------------------------|
+  | producerId | string | required, 24-char hex user id |
+
+  The target must exist, be **active**, and be in the caller's agency.
+  Assigning to a deactivated account is refused (`409`) — that is how a lead
+  quietly reaches nobody.
+
+  Re-selecting the current owner is a **no-op**: it returns `200` and writes no
+  timeline entry, rather than logging a change that did not happen.
+
+  > ⚠ This request targets **Create Disposable Lead**, not `{{createdLeadId}}`.
+  > Quote Recaps and Sold Deals both run later *as the producer* and use that
+  > lead — moving it to the owner would 404 every one of them. See that
+  > request's docs.
+
+  ## Response `200`
+  ```json
+  {
+    "id": "665f...a01",
+    "producerId": "665f...b11",
+    "producerName": "Pat Producer",
+    "lastActivityAt": "2026-08-24T10:12:00.000Z"
+  }
+  ```
+
+  ## The activity row
+  Type `lead_reassigned`, in `ACTIVITY_TYPES` only — never
+  `LOGGABLE_ACTIVITY_TYPES`, so no client can forge one.
+
+  > 🔴 `activities.userId` is the **actor**, not the new owner, and is never
+  > rewritten. PAC-65 #9 renamed that field from `producerId` precisely because
+  > it never meant "owner" — rewriting it so a new producer appears to have made
+  > the old one's calls is a data-integrity bug, not a feature.
+
+  Both names go in `summary`, deliberately **not** in `changes`: a
+  `field_changed` row is hidden from anyone without
+  `agency:changelogs:read` — which is every producer — and the producer losing
+  the lead is precisely who needs to see it.
+
+  ## Errors
+  - `400 Bad Request` — missing or malformed `producerId`.
+  - `403 Forbidden` — missing `leads:write` or `agency:users:read`.
+  - `404 Not Found` — no such lead (or out of scope), or no such user.
+  - `409 Conflict` — the lead is sold, or the target user is deactivated.
+}

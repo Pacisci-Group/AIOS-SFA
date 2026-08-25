@@ -1,0 +1,60 @@
+meta {
+  name: Login as Lead Manager
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Captured under its OWN name, never as `accessToken` — overwriting the
+  // collection bearer would silently re-run every later folder as the owner and
+  // invalidate the `own`-scope assertions in Performance / Leaderboard.
+  if (res.getStatus() === 201) {
+    bru.setVar("leadReassignToken", res.getBody().accessToken);
+    // The reassignment target: moving the lead producer -> owner is a real
+    // change, so the activity row and the returned name are both exercised.
+    bru.setVar("leadReassignUserId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("holds both permissions reassignment needs", function () {
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("leads:write");
+    expect(perms).to.include("agency:users:read");
+  });
+}
+
+docs {
+  # Login as Lead Manager — a second identity for reassignment
+
+  Not an endpoint of its own; a fixture. `PATCH /leads/:id/assignment` needs
+  `leads:write` **and** `agency:users:read`, and the collection's default bearer
+  is a **producer**, who holds only the first.
+
+  The owner is used because they hold both and are agency-scoped, so they can
+  reach any lead in the tenant.
+
+  Same idiom, and same warning, as **Users › Login as Owner**: the token is
+  captured under its own variable name so the collection bearer is untouched.
+}

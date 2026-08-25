@@ -322,6 +322,8 @@ async function run() {
     scope: AccessScope.Agency,
     dataScope: DataScope.Agency,
     permissions: ['crm_service:read', 'crm_service:write'],
+    // Agency-scoped, so no owner clamp is applied and roles are never consulted.
+    roleIds: [],
   };
   await ticketsService.materializeRenewalCycles(access);
 

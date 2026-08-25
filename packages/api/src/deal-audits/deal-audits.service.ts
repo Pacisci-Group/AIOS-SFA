@@ -1,11 +1,24 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { AccessContext, DataScope } from '@sfa/shared';
+import {
+  AUDIT_REVIEW_OUTCOMES,
+  AccessContext,
+  DataScope,
+  canReviewAudit,
+  canSubmitAudit,
+  normalizeDealAuditStatus,
+} from '@sfa/shared';
+import type {
+  ActivityType,
+  AuditOwnerView,
+  AuditReviewDecision,
+} from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import {
   Activity,
@@ -18,13 +31,30 @@ import {
   DealAuditItem,
   DealAuditItemDocument,
 } from '../deal-audit-items/schemas/deal-audit-item.schema';
+import {
+  AgencyRole,
+  AgencyRoleDocument,
+} from '../roles/schemas/agency-role.schema';
 import { StorageService } from '../storage/storage.service';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import { completionPercent, syncAuditCounters } from './audit-counters';
+import { AddAuditNoteDto } from './dto/add-audit-note.dto';
+import { AssignAuditDto, AuditOwnerInput } from './dto/assign-audit.dto';
 import { DUE_SOON_DAYS, ListDealAuditsDto } from './dto/list-deal-audits.dto';
 import { PresignAttachmentDto } from './dto/presign-attachment.dto';
 import { ResolveDealAuditDto } from './dto/resolve-deal-audit.dto';
+import { ReviewAuditDto } from './dto/review-audit.dto';
 import {
+  AuditOwnerRef,
+  DealAudit,
+  DealAuditDocument,
+} from './schemas/deal-audit.schema';
+import {
+  AuditNoteView,
+  AuditWorkflowView,
+  DealAuditDealRow,
+  DealAuditItemRow,
   DealAuditListResponse,
-  DealAuditRow,
   PresignAttachmentResponse,
   ResolveDealAuditResponse,
 } from './deal-audits.types';
@@ -33,7 +63,33 @@ import {
 const RESOLVED_UPDATE_STATUS = 'complete';
 const RESOLVED_UPDATE_STATUS_LABEL = 'Verified - Complete';
 
-/** Lean projection of the fields the board reads (incl. timestamp). */
+/** How many thread entries a note read returns. Unpaginated by design. */
+const NOTE_PAGE_SIZE = 100;
+
+/** Each review decision's timeline type — the pair that must not be merged. */
+const REVIEW_ACTIVITY_TYPES: Record<AuditReviewDecision, ActivityType> = {
+  approve: 'audit_approved',
+  request_changes: 'audit_changes_requested',
+  send_back: 'audit_sent_back',
+};
+
+const REVIEW_SUMMARIES: Record<AuditReviewDecision, string> = {
+  approve: 'Audit approved',
+  request_changes: 'Changes requested on audit',
+  send_back: 'Audit sent back to assignee',
+};
+
+/**
+ * DTO owner → stored owner. `null` clears the slot.
+ *
+ * The cast to ObjectId happens here rather than in the schema so the DTO can
+ * keep validating a plain 24-hex string, which is what a client sends.
+ */
+function toOwnerRef(owner: AuditOwnerInput | null): AuditOwnerRef | null {
+  return owner ? { type: owner.type, id: new Types.ObjectId(owner.id) } : null;
+}
+
+/** Lean projection of the item fields a checklist row renders from. */
 type DealAuditItemLean = Pick<
   DealAuditItem,
   | 'clientName'
@@ -42,6 +98,26 @@ type DealAuditItemLean = Pick<
   | 'firstCreatedAt'
   | 'dueAt'
   | 'attachments'
+  | 'isFailed'
+  | 'isResolved'
+> & {
+  _id: Types.ObjectId;
+  dealId?: Types.ObjectId;
+  dealAuditId?: Types.ObjectId;
+  createdAt?: Date;
+};
+
+/** Lean projection of the audit fields a board card renders from. */
+type DealAuditLean = Pick<
+  DealAudit,
+  | 'title'
+  | 'auditStatus'
+  | 'auditDate'
+  | 'itemCount'
+  | 'resolvedCount'
+  | 'openFailedCount'
+  | 'oldestOpenAt'
+  | 'dueAt'
 > & {
   _id: Types.ObjectId;
   dealId?: Types.ObjectId;
@@ -53,18 +129,47 @@ export class DealAuditsService {
   private readonly logger = new Logger(DealAuditsService.name);
 
   constructor(
+    /*
+     * Class-typed, matching `AuditGenerationService`, the migration and the
+     * demo seed. `Model<T>` is invariant in `T`, so `Model<DealAuditItem>` and
+     * `Model<DealAuditItemDocument>` are not interchangeable and the shared
+     * `syncAuditCounters` has to be handed one spelling consistently.
+     * `findOne` still hydrates, so `loadOwnedItem` is unaffected.
+     */
     @InjectModel(DealAuditItem.name)
-    private dealAuditItemModel: Model<DealAuditItemDocument>,
+    private dealAuditItemModel: Model<DealAuditItem>,
     @InjectModel(Deal.name) private dealModel: Model<DealDocument>,
     @InjectModel(Activity.name)
     private activityModel: Model<ActivityDocument>,
+    // The board's driving collection since PAC-72 — see `DealAudit`'s docblock.
+    @InjectModel(DealAudit.name)
+    private dealAuditModel: Model<DealAudit>,
+    // Both only ever read, and only to turn an owner's ObjectId into a name.
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(AgencyRole.name)
+    private roleModel: Model<AgencyRoleDocument>,
     private readonly storage: StorageService,
   ) {}
 
   /**
-   * Deals pending service hand-off: audit items that failed and are not yet
-   * resolved, scoped to the caller's data scope. Producers (`own`) only ever
-   * see their own deals' items. Sorted oldest-open first and paginated.
+   * Deals pending service hand-off — **one card per deal** (PAC-72 section A).
+   *
+   * Two indexed reads, not an aggregation: page over `dealAudits`, then load
+   * the checklists for just the deals on that page with `$in`. The same
+   * batch-then-map shape `loadDeals` already uses.
+   *
+   * ## Why this queries `dealAudits` and not `dealAuditItems`
+   *
+   * The obvious alternative — group items by `dealId` — cannot work. The data
+   * scope clamp lives on the **audit** (`auditAssignee`), so it could only be
+   * applied *after* the `$group`, turning every board load into a full agency
+   * scan. Denormalizing the assignee onto every item instead would contradict
+   * the settled "deal-level *who*, item-level *what*".
+   *
+   * The cost is that `DealAudit`'s counters must be maintained — see
+   * `syncAuditCounters`. That was owed anyway: the completion percentage needs
+   * a stored denominator, and sorting deals by their oldest open item is not
+   * index-backed without one.
    */
   async listPendingHandoff(
     access: AccessContext,
@@ -73,51 +178,112 @@ export class DealAuditsService {
   ): Promise<DealAuditListResponse> {
     const { page, pageSize, due } = query;
 
-    const filter: FilterQuery<DealAuditItemDocument> = {
-      ...buildScopeFilter<DealAuditItemDocument>(access, branchId),
-      isFailed: true,
-      isResolved: false,
+    const filter: FilterQuery<DealAudit> = {
+      ...buildScopeFilter<DealAudit>(access, branchId, {
+        // The access key moved off `dealAuditItems.producerId` (PAC-72). The
+        // item keeps `producerId` as provenance — who sold it — but the board
+        // is scoped to whoever is working the audit.
+        ownerField: { path: 'auditAssignee', polymorphic: true },
+      }),
+      // "Pending hand-off" is exactly "has at least one outstanding item". A
+      // deal whose checklist is clear leaves the board regardless of where its
+      // audit sits in the review workflow.
+      openFailedCount: { $gt: 0 },
       // The soft deadline is a *filter*, never a state change — see `dueAt` on
       // the schema. `all` adds nothing, so the default query is unchanged.
       ...this.dueFilter(due),
     };
 
-    const total = await this.dealAuditItemModel.countDocuments(filter);
+    const total = await this.dealAuditModel.countDocuments(filter);
 
-    const records = await this.dealAuditItemModel
+    const audits = await this.dealAuditModel
       .find(filter)
       // Oldest open first; `_id` tiebreaker keeps pagination stable.
-      .sort({ daysOpen: -1, _id: 1 })
+      .sort({ oldestOpenAt: 1, _id: 1 })
       .skip((page - 1) * pageSize)
       .limit(pageSize)
-      .lean<DealAuditItemLean[]>();
+      .lean<DealAuditLean[]>();
 
-    const dealType = await this.loadDealTypes(records);
+    const [deals, itemsByAudit] = await Promise.all([
+      this.loadDeals(audits),
+      this.loadChecklists(access.agencyId, audits),
+    ]);
 
-    const items: DealAuditRow[] = records.map((record) => {
-      const id = record._id.toString();
-      const type = record.dealId
-        ? (dealType.get(record.dealId.toString()) ?? 'Other')
-        : 'Other';
+    const items: DealAuditDealRow[] = audits.map((audit) => {
+      const id = audit._id.toString();
+      const deal = audit.dealId
+        ? deals.get(audit.dealId.toString())
+        : undefined;
+      const checklist = itemsByAudit.get(id) ?? [];
+
       return {
         id,
-        ref: this.maskRef(id, record.firstCreatedAt ?? record.createdAt),
-        client: record.clientName ?? 'Unknown Client',
-        type,
+        // What the workflow endpoints are keyed on.
+        dealId: audit.dealId?.toString() ?? '',
+        ref: this.maskRef(id, audit.auditDate ?? audit.createdAt),
+        client: deal?.clientName ?? audit.title ?? 'Unknown Client',
+        type: deal?.dealType ?? 'Other',
+        auditStatus: normalizeDealAuditStatus(audit.auditStatus),
+        completionPct: completionPercent({
+          itemCount: audit.itemCount ?? 0,
+          resolvedCount: audit.resolvedCount ?? 0,
+        }),
+        itemCount: audit.itemCount ?? 0,
+        openCount: audit.openFailedCount ?? 0,
+        /*
+         * Recomputed on read rather than served from a stored number (PAC-40).
+         * `oldestOpenAt` is a real timestamp so the age is always current,
+         * unlike the item-level `daysOpen`, which is written once at creation
+         * and is only ever right on the day it was written.
+         */
+        oldestDaysOpen: audit.oldestOpenAt ? daysSince(audit.oldestOpenAt) : 0,
+        dueAt: audit.dueAt ? audit.dueAt.toISOString() : null,
+        items: checklist,
+      };
+    });
+
+    return {
+      page,
+      pageSize,
+      // Deals, not items — see `DealAuditListResponse`.
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      items,
+    };
+  }
+
+  /**
+   * The checklists for one page of audits, keyed by audit id.
+   *
+   * Loads **every** item, not just the outstanding ones: the drawer sorts
+   * missing requirements to the top, which needs the settled ones present to
+   * sort above. Outstanding first, then oldest first — the order the drawer
+   * renders them in, decided here so the client does not re-derive it.
+   */
+  private async loadChecklists(
+    agencyId: string | null,
+    audits: Array<{ _id: Types.ObjectId }>,
+  ): Promise<Map<string, DealAuditItemRow[]>> {
+    const byAudit = new Map<string, DealAuditItemRow[]>();
+    if (!audits.length) return byAudit;
+
+    const records = await this.dealAuditItemModel
+      .find({
+        agencyId,
+        dealAuditId: { $in: audits.map((audit) => audit._id) },
+      })
+      .lean<DealAuditItemLean[]>();
+
+    for (const record of records) {
+      const auditId = record.dealAuditId?.toString();
+      if (!auditId) continue;
+
+      const openedAt = record.firstCreatedAt ?? record.createdAt;
+      const row: DealAuditItemRow = {
+        id: record._id.toString(),
         missing: record.itemName ?? 'Missing requirement',
-        // Recomputed on read rather than served from the stored value (PAC-40).
-        //
-        // `daysOpen` is written once, at creation, so a stored number is only
-        // ever right on the day it was written — migrated rows show a
-        // migration-time figure, and app-created rows would sit at 0 forever.
-        //
-        // The stored field is kept and still drives the **sort** (which is
-        // index-backed, and correct: app-created items all tie at 0 and fall
-        // back to `_id` ascending = oldest first, while migrated items carry
-        // real values and sort above them, which they genuinely are). Only the
-        // displayed figure is derived. A nightly recompute to fix cross-cohort
-        // drift is a follow-up.
-        daysOpen: daysSince(record.firstCreatedAt ?? record.createdAt),
+        daysOpen: daysSince(openedAt),
+        open: record.isFailed === true && record.isResolved !== true,
         dueAt: record.dueAt ? record.dueAt.toISOString() : null,
         /*
          * The proofs attached at sale time (PAC-56 #21b), finally surfaced
@@ -134,15 +300,18 @@ export class DealAuditsService {
           size: file.size,
         })),
       };
-    });
 
-    return {
-      page,
-      pageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-      items,
-    };
+      const list = byAudit.get(auditId);
+      if (list) list.push(row);
+      else byAudit.set(auditId, [row]);
+    }
+
+    for (const list of byAudit.values()) {
+      list.sort(
+        (a, b) => Number(b.open) - Number(a.open) || b.daysOpen - a.daysOpen,
+      );
+    }
+    return byAudit;
   }
 
   /**
@@ -152,10 +321,13 @@ export class DealAuditsService {
    * the field was added has no deadline, so it is neither overdue nor due soon
    * — treating a missing date as "overdue" would manufacture a backlog out of
    * the entire pre-PAC-65 history.
+   *
+   * Now applied to the **audit's** rolled-up `dueAt` — the earliest deadline
+   * across its open items — rather than to a single item's. Semantics are
+   * unchanged: a deal is overdue when its most pressing requirement is, which
+   * is what "pull me the overdue list" has always meant.
    */
-  private dueFilter(
-    due: ListDealAuditsDto['due'],
-  ): FilterQuery<DealAuditItemDocument> {
+  private dueFilter(due: ListDealAuditsDto['due']): FilterQuery<DealAudit> {
     if (due === 'all') return {};
     const now = new Date();
     if (due === 'overdue') return { dueAt: { $lt: now } };
@@ -167,10 +339,17 @@ export class DealAuditsService {
     };
   }
 
-  /** Batch-load the linked deals' policy type for badge rendering. */
-  private async loadDealTypes(
+  /**
+   * Batch-load the linked deals' client name and policy type for the card
+   * header and its badge.
+   *
+   * The name comes from the deal rather than the audit's `title`, which is
+   * whatever the generator had to hand at the time — the deal title if it had
+   * one, the client name otherwise. `DealAudit.title` remains the fallback.
+   */
+  private async loadDeals(
     records: Array<{ dealId?: Types.ObjectId }>,
-  ): Promise<Map<string, DealType>> {
+  ): Promise<Map<string, { dealType: DealType; clientName?: string }>> {
     const dealIds = [
       ...new Set(
         records
@@ -179,17 +358,26 @@ export class DealAuditsService {
       ),
     ].map((id) => new Types.ObjectId(id));
 
-    const map = new Map<string, DealType>();
+    const map = new Map<string, { dealType: DealType; clientName?: string }>();
     if (!dealIds.length) {
       return map;
     }
 
     const deals = await this.dealModel
       .find({ _id: { $in: dealIds } })
-      .select('dealType')
-      .lean<Array<{ _id: Types.ObjectId; dealType?: DealType }>>();
+      .select('dealType clientName')
+      .lean<
+        Array<{
+          _id: Types.ObjectId;
+          dealType?: DealType;
+          clientName?: string;
+        }>
+      >();
     for (const deal of deals) {
-      map.set(deal._id.toString(), deal.dealType ?? 'Other');
+      map.set(deal._id.toString(), {
+        dealType: deal.dealType ?? 'Other',
+        clientName: deal.clientName,
+      });
     }
     return map;
   }
@@ -300,6 +488,32 @@ export class DealAuditsService {
     }
     await item.save();
 
+    /*
+     * The parent's roll-up figures (PAC-72). Resolving an item moves the
+     * completion percentage and can empty the card off the board entirely, both
+     * of which the board reads from `DealAudit`, not from the items.
+     *
+     * Best-effort and post-commit like the activity below: the item is already
+     * resolved, and a stale counter is a cosmetic problem that the next
+     * generation run or `reconcileDealAudits` corrects. Skipped for a migrated
+     * item with no parent link — nothing to update.
+     */
+    if (item.dealAuditId) {
+      try {
+        await syncAuditCounters(
+          this.dealAuditItemModel,
+          this.dealAuditModel,
+          item.agencyId,
+          item.dealAuditId,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to sync counters for audit ${item.dealAuditId.toString()}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+
     // Best-effort audit trail: the resolution is already committed, so a failure
     // to write the timeline entry must not report the whole operation as failed.
     try {
@@ -380,6 +594,449 @@ export class DealAuditsService {
       }
     }
     return item;
+  }
+
+  // --- Workflow: assign → submit → review (PAC-72 section E) ----------------
+
+  /**
+   * A deal's audit workflow state — who owns it, where it sits, and what the
+   * caller may do next.
+   *
+   * Read separately from the board rather than folded into every row: the
+   * ownership names need two extra lookups each, and the board renders eight
+   * cards of which the user opens one.
+   */
+  async getWorkflow(
+    access: AccessContext,
+    branchId: string | null,
+    dealId: string,
+  ): Promise<AuditWorkflowView> {
+    const audit = await this.loadAuditForDeal(access, branchId, dealId);
+    return this.toWorkflowView(audit, access);
+  }
+
+  /**
+   * Set the audit's assignee and/or reviewer.
+   *
+   * Ownership is per **deal**, not per item: the reviewer works item by item,
+   * but "who is on this" and the final verdict belong to the audit as a whole.
+   */
+  async assign(
+    access: AccessContext,
+    branchId: string | null,
+    dealId: string,
+    dto: AssignAuditDto,
+  ): Promise<AuditWorkflowView> {
+    const audit = await this.loadAuditForDeal(access, branchId, dealId);
+
+    if (dto.assignee !== undefined) {
+      audit.auditAssignee = toOwnerRef(dto.assignee);
+    }
+    if (dto.reviewer !== undefined) {
+      audit.auditReviewer = toOwnerRef(dto.reviewer);
+    }
+    await audit.save();
+
+    await this.recordWorkflowActivity(
+      access,
+      audit,
+      'audit_assigned',
+      this.describeAssignment(dto),
+    );
+    return this.toWorkflowView(audit, access);
+  }
+
+  /**
+   * The assignee hands the audit to the reviewer: `→ Pending`.
+   *
+   * Re-submitting a `Fail` is the correction loop the brief asks for — fix the
+   * problem, submit again — so only an audit already sitting with the reviewer
+   * is rejected.
+   *
+   * ⚠ Not restricted to the assignee. An owner or manager acting on their
+   * behalf is legitimate and common; `submittedById` records who actually did
+   * it, and {@link review} is where the meaningful separation is enforced.
+   */
+  async submit(
+    access: AccessContext,
+    branchId: string | null,
+    dealId: string,
+  ): Promise<AuditWorkflowView> {
+    const audit = await this.loadAuditForDeal(access, branchId, dealId);
+
+    if (!canSubmitAudit(audit.auditStatus)) {
+      throw new ConflictException('This audit is already awaiting review.');
+    }
+
+    audit.auditStatus = 'Pending';
+    audit.submittedAt = new Date();
+    audit.submittedById = new Types.ObjectId(access.userId);
+    await audit.save();
+    await this.mirrorStatusToDeal(audit);
+
+    await this.recordWorkflowActivity(
+      access,
+      audit,
+      'audit_submitted',
+      'Audit submitted for review',
+    );
+    return this.toWorkflowView(audit, access);
+  }
+
+  /**
+   * The reviewer's verdict: approve → `Pass`, request changes → `Fail`, send
+   * back → `Not Submitted`.
+   */
+  async review(
+    access: AccessContext,
+    branchId: string | null,
+    dealId: string,
+    dto: ReviewAuditDto,
+  ): Promise<AuditWorkflowView> {
+    const audit = await this.loadAuditForDeal(access, branchId, dealId);
+
+    if (!canReviewAudit(audit.auditStatus)) {
+      throw new ConflictException(
+        'Only an audit awaiting review can be reviewed.',
+      );
+    }
+
+    /*
+     * 🔴 The one rule that makes the two roles mean anything.
+     *
+     * Both submitting and reviewing are `deal_audits:write`, and the Producer
+     * template holds it — so without this the producer who gathered the
+     * evidence can approve their own work, which is exactly the gap section B
+     * item 6 exists to close. Nothing else in the guard chain expresses
+     * "a different person".
+     */
+    if (audit.submittedById?.toString() === access.userId) {
+      throw new ForbiddenException(
+        'An audit must be reviewed by someone other than the person who submitted it.',
+      );
+    }
+
+    const decided = AUDIT_REVIEW_OUTCOMES[dto.decision];
+    audit.auditStatus = decided;
+    audit.reviewedAt = new Date();
+    audit.reviewedById = new Types.ObjectId(access.userId);
+    // Cleared on anything but a failure: stale codes on a passed audit would
+    // read as "passed, but here's what was wrong with it".
+    audit.reasonCodes = decided === 'Fail' ? (dto.reasonCodes ?? []) : [];
+    if (dto.notes !== undefined) {
+      audit.auditNotes = dto.notes;
+    }
+    if (dto.score !== undefined) {
+      audit.auditScore = dto.score;
+    }
+    await audit.save();
+    await this.mirrorStatusToDeal(audit);
+
+    await this.recordWorkflowActivity(
+      access,
+      audit,
+      REVIEW_ACTIVITY_TYPES[dto.decision],
+      REVIEW_SUMMARIES[dto.decision],
+    );
+    return this.toWorkflowView(audit, access);
+  }
+
+  /** Read the audit's note + workflow thread, newest first. */
+  async listNotes(
+    access: AccessContext,
+    branchId: string | null,
+    dealId: string,
+  ): Promise<AuditNoteView[]> {
+    const audit = await this.loadAuditForDeal(access, branchId, dealId);
+
+    const rows = await this.activityModel
+      .find({ agencyId: audit.agencyId, dealAuditId: audit._id })
+      .sort({ occurredAt: -1, _id: -1 })
+      .limit(NOTE_PAGE_SIZE)
+      .lean<
+        Array<{
+          _id: Types.ObjectId;
+          type: ActivityType;
+          summary?: string;
+          occurredAt?: Date;
+          createdAt?: Date;
+          userId?: Types.ObjectId;
+        }>
+      >();
+
+    const names = await this.resolveUserNames(
+      rows.map((row) => row.userId).filter((id): id is Types.ObjectId => !!id),
+    );
+
+    return rows.map((row) => ({
+      id: row._id.toString(),
+      type: row.type,
+      summary: row.summary ?? null,
+      occurredAt: (row.occurredAt ?? row.createdAt ?? new Date()).toISOString(),
+      userName: row.userId ? (names.get(row.userId.toString()) ?? '') : '',
+    }));
+  }
+
+  /** Leave a free-text note on the audit. */
+  async addNote(
+    access: AccessContext,
+    branchId: string | null,
+    dealId: string,
+    dto: AddAuditNoteDto,
+  ): Promise<AuditNoteView> {
+    const audit = await this.loadAuditForDeal(access, branchId, dealId);
+    const occurredAt = new Date();
+
+    const activity = await this.activityModel.create({
+      agencyId: audit.agencyId,
+      branchId: audit.branchId,
+      type: 'note',
+      subjectType: 'dealAudit',
+      dealAuditId: audit._id,
+      dealId: audit.dealId,
+      userId: new Types.ObjectId(access.userId),
+      occurredAt,
+      summary: dto.body,
+      // Explicit: the schema default is `'migration'`, which would label an
+      // app write as imported data. Same trap as every other activity writer.
+      source: 'internal',
+      isTestRecord: false,
+    });
+
+    const names = await this.resolveUserNames([
+      new Types.ObjectId(access.userId),
+    ]);
+    return {
+      id: activity._id.toString(),
+      type: 'note',
+      summary: dto.body,
+      occurredAt: occurredAt.toISOString(),
+      userName: names.get(access.userId) ?? '',
+    };
+  }
+
+  /**
+   * Load a deal's audit within the caller's reach.
+   *
+   * ⚠ **Not `buildScopeFilter`'s `ownerField` clamp**, deliberately. That pins
+   * to the *assignee*, which is right for the board — but a reviewer is not the
+   * assignee, so using it here would 404 the very person the review endpoint
+   * exists for. Access to a specific audit is "assignee **or** reviewer", which
+   * is a different question from "whose board does this appear on".
+   *
+   * 404 rather than 403 throughout, matching `LeadAccessService.loadOwnedLead`:
+   * whether another team's audit exists is not the caller's business.
+   */
+  private async loadAuditForDeal(
+    access: AccessContext,
+    branchId: string | null,
+    dealId: string,
+  ): Promise<DealAuditDocument> {
+    if (!Types.ObjectId.isValid(dealId)) {
+      throw new NotFoundException('Audit not found.');
+    }
+
+    const audit = await this.dealAuditModel.findOne({
+      agencyId: access.agencyId,
+      dealId: new Types.ObjectId(dealId),
+    });
+    if (!audit) {
+      throw new NotFoundException('Audit not found.');
+    }
+
+    if (access.dataScope === DataScope.Own && !this.ownsAudit(audit, access)) {
+      throw new NotFoundException('Audit not found.');
+    }
+    if (
+      access.dataScope === DataScope.Branch &&
+      branchId &&
+      audit.branchId !== branchId
+    ) {
+      throw new NotFoundException('Audit not found.');
+    }
+    return audit;
+  }
+
+  /**
+   * Is the caller on this audit, as either owner?
+   *
+   * Compares against their user id *and* their role ids, because either slot
+   * may hold a role — which is why `AccessContext.roleIds` exists and why the
+   * stored `id` is always an ObjectId regardless of which kind it is.
+   */
+  private ownsAudit(audit: DealAuditDocument, access: AccessContext): boolean {
+    const mine = new Set<string>([access.userId, ...access.roleIds]);
+    return [audit.auditAssignee, audit.auditReviewer].some(
+      (owner) => !!owner && mine.has(owner.id.toString()),
+    );
+  }
+
+  /**
+   * Keep `Deal.dealAuditStatus` in step with the authoritative value.
+   *
+   * Best-effort: the audit's own transition is already committed, and failing
+   * the request over a denormalized display copy would fail in the wrong
+   * direction.
+   */
+  private async mirrorStatusToDeal(audit: DealAuditDocument): Promise<void> {
+    if (!audit.dealId) return;
+    try {
+      await this.dealModel.updateOne(
+        { _id: audit.dealId },
+        { $set: { dealAuditStatus: audit.auditStatus } },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to mirror audit status onto deal ${audit.dealId.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /** The workflow response shape, with both owners resolved to display names. */
+  private async toWorkflowView(
+    audit: DealAuditDocument,
+    access: AccessContext,
+  ): Promise<AuditWorkflowView> {
+    const [assignee, reviewer] = await Promise.all([
+      this.resolveOwner(audit.agencyId, audit.auditAssignee),
+      this.resolveOwner(audit.agencyId, audit.auditReviewer),
+    ]);
+
+    return {
+      id: audit._id.toString(),
+      dealId: audit.dealId?.toString() ?? '',
+      auditStatus: audit.auditStatus,
+      assignee,
+      reviewer,
+      submittedAt: audit.submittedAt?.toISOString() ?? null,
+      reviewedAt: audit.reviewedAt?.toISOString() ?? null,
+      reasonCodes: audit.reasonCodes ?? [],
+      auditScore: audit.auditScore ?? 0,
+      auditNotes: audit.auditNotes ?? null,
+      itemCount: audit.itemCount ?? 0,
+      resolvedCount: audit.resolvedCount ?? 0,
+      openCount: audit.openFailedCount ?? 0,
+      completionPct: completionPercent({
+        itemCount: audit.itemCount ?? 0,
+        resolvedCount: audit.resolvedCount ?? 0,
+      }),
+      canSubmit: canSubmitAudit(audit.auditStatus),
+      // The submitter may not review their own work — the one rule that makes
+      // the two roles mean anything. Decided here so the UI does not have to
+      // know who submitted, and cannot disagree with the endpoint.
+      canReview:
+        canReviewAudit(audit.auditStatus) &&
+        audit.submittedById?.toString() !== access.userId,
+    };
+  }
+
+  /**
+   * `{ type, id }` → `{ type, id, name }`.
+   *
+   * The name is looked up rather than stored, so renaming a user or a role does
+   * not leave every audit they own displaying the old one.
+   */
+  private async resolveOwner(
+    agencyId: string,
+    owner?: AuditOwnerRef | null,
+  ): Promise<AuditOwnerView | null> {
+    if (!owner) return null;
+
+    if (owner.type === 'role') {
+      const role = await this.roleModel
+        .findById(owner.id)
+        .select('name')
+        .lean<{ name?: string }>();
+      return {
+        type: 'role',
+        id: owner.id.toString(),
+        name: role?.name ?? 'Unknown role',
+      };
+    }
+
+    const names = await this.resolveUserNames([owner.id]);
+    return {
+      type: 'user',
+      id: owner.id.toString(),
+      name: names.get(owner.id.toString()) ?? 'Unknown user',
+      // `agencyId` is not used to narrow the lookup: both users and roles are
+      // already agency-scoped by the id itself, and a cross-agency id could
+      // only arrive from a caller who passed our tenancy clamp to begin with.
+    };
+  }
+
+  /** Batch `userId -> display name`. */
+  private async resolveUserNames(
+    userIds: Types.ObjectId[],
+  ): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    const unique = [...new Set(userIds.map((id) => id.toString()))];
+    if (!unique.length) return map;
+
+    const users = await this.userModel
+      .find({ _id: { $in: unique.map((id) => new Types.ObjectId(id)) } })
+      .select('firstName lastName')
+      .lean<
+        Array<{
+          _id: Types.ObjectId;
+          firstName?: string;
+          lastName?: string;
+        }>
+      >();
+    for (const user of users) {
+      map.set(
+        user._id.toString(),
+        [user.firstName, user.lastName].filter(Boolean).join(' ').trim(),
+      );
+    }
+    return map;
+  }
+
+  /** Human-readable summary of what an assignment call changed. */
+  private describeAssignment(dto: AssignAuditDto): string {
+    const parts: string[] = [];
+    if (dto.assignee !== undefined) {
+      parts.push(dto.assignee ? 'Assignee updated' : 'Assignee cleared');
+    }
+    if (dto.reviewer !== undefined) {
+      parts.push(dto.reviewer ? 'Reviewer updated' : 'Reviewer cleared');
+    }
+    return parts.join(' · ') || 'Audit assignment updated';
+  }
+
+  /**
+   * Append a workflow event to the audit's thread.
+   *
+   * Best-effort, like `recordResolveActivity`: the transition is already
+   * committed, so a failed timeline write must not report the whole operation
+   * as failed.
+   */
+  private async recordWorkflowActivity(
+    access: AccessContext,
+    audit: DealAuditDocument,
+    type: ActivityType,
+    summary: string,
+  ): Promise<void> {
+    try {
+      await this.activityModel.create({
+        agencyId: audit.agencyId,
+        branchId: audit.branchId,
+        type,
+        subjectType: 'dealAudit',
+        dealAuditId: audit._id,
+        dealId: audit.dealId,
+        userId: new Types.ObjectId(access.userId),
+        occurredAt: new Date(),
+        summary,
+        source: 'internal',
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to record ${type} activity for audit ${audit._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /** Write an `audit_resolved` activity so the timeline records who/when. */

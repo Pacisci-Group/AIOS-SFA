@@ -5,9 +5,11 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import {
   formatHouseholdRef,
   normalizeCarrier,
+  normalizeDealAuditStatus,
   normalizeInsuranceMonth,
   parseHouseholdRef,
 } from '@sfa/shared';
+import { reconcileDealAudits } from '../deal-audits/audit-reconcile';
 import { Agency } from '../platform/schemas/agency.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
@@ -240,6 +242,14 @@ export class MigrationService {
     );
     await this.migrateAuditItems(ss, ctx, deals, options, report);
     await this.migrateDealAudits(ss, ctx, deals, options, report);
+    /*
+     * Must follow both passes (PAC-72). Items import before roll-ups, so an
+     * item cannot know its parent's `_id` at import time, and legacy has no
+     * audit assignee at all. Without this the hand-off board — which pages over
+     * `dealAudits` and scopes on `auditAssignee` — shows nothing for any
+     * migrated deal.
+     */
+    await this.reconcileAudits(ctx);
     await this.migrateAuditTemplates(ss, ctx, options, report);
     await this.migrateInterestedParties(
       ss,
@@ -1120,7 +1130,18 @@ export class MigrationService {
           title: toText(rec[DEAL_AUDIT_FIELDS.title]),
           auditId: toText(rec[DEAL_AUDIT_FIELDS.auditId]),
           auditDate: toDate(rec[DEAL_AUDIT_FIELDS.auditDate]),
-          result: selectCode(rec[DEAL_AUDIT_FIELDS.result]),
+          /*
+           * Legacy `Result` is a `Pass`/`Fail` single-select — a strict subset
+           * of the four workflow states — so it folds straight into
+           * `auditStatus` (PAC-72). A row with no verdict has not been through
+           * review, which is `Not Submitted`, not `Pending`.
+           *
+           * The `result` field is gone: two fields answering the same question
+           * is how they drift.
+           */
+          auditStatus: normalizeDealAuditStatus(
+            selectCode(rec[DEAL_AUDIT_FIELDS.result]),
+          ),
           reasonCodes: this.selectCodes(rec[DEAL_AUDIT_FIELDS.reasonCodes]),
           auditScore: toNumber(rec[DEAL_AUDIT_FIELDS.auditScore]),
           auditNotes: toText(rec[DEAL_AUDIT_FIELDS.auditNotes]),
@@ -1138,6 +1159,36 @@ export class MigrationService {
   // ---------------------------------------------------------------------------
   // Audit Templates
   // ---------------------------------------------------------------------------
+
+  /**
+   * Link items to roll-ups, default the assignee, and compute the board's
+   * counters (PAC-72). See {@link reconcileDealAudits} for why each is needed.
+   *
+   * Derived entirely from data already in Mongo, so it is skipped on a dry run
+   * — there is nothing imported for it to reconcile.
+   */
+  private async reconcileAudits(ctx: TenantCtx): Promise<void> {
+    if (ctx.dryRun) {
+      this.logger.log('Deal audits: reconcile skipped (dry run)');
+      return;
+    }
+
+    const outcome = await reconcileDealAudits(
+      {
+        itemModel: this.dealAuditItemModel,
+        dealAuditModel: this.dealAuditModel,
+        dealModel: this.dealModel,
+      },
+      ctx.agencyId,
+    );
+
+    this.logger.log(
+      `Deal audits: ${outcome.auditsCreated} roll-ups created, ` +
+        `${outcome.itemsLinked} items linked, ${outcome.assigneesSet} assignees set, ` +
+        `${outcome.statusesHealed} statuses healed, ` +
+        `${outcome.countersSynced} counter sets synced`,
+    );
+  }
 
   private async migrateAuditTemplates(
     ss: SmartSuiteClient,
