@@ -58,6 +58,7 @@ import {
   FIRST_NAMES,
   LAST_NAMES,
   LEAD_SOURCE_CODES,
+  MAILER_CITIES,
   DEMO_LEAD_UNQUOTED_STATUSES,
   POLICY_TYPE_SETS,
   SERVICE_CATEGORIES,
@@ -1567,7 +1568,7 @@ export class DemoSeedService {
 
       const first = rng.pick(FIRST_NAMES);
       const last = rng.pick(LAST_NAMES);
-      const city = rng.pick(CITIES);
+      const city = rng.pick(MAILER_CITIES);
       const dwelling = rng.int(180, 900) * 1000;
       const monthly = rng.int(90, 260);
 
@@ -1596,8 +1597,17 @@ export class DemoSeedService {
               zip5: city.zip,
               // Zero-padded FIPS, as the real column ships it. Seeded as a
               // string so anything rendering it hits the same case production
-              // will.
-              county: String(rng.int(1, 199)).padStart(3, '0'),
+              // will, and a *real* Oklahoma code so the drawer can resolve it
+              // to a county name — a random one would leave that row blank
+              // forever and the resolution path untested.
+              //
+              // Every fifth mailer gets none, on purpose: the drawer omits the
+              // county row rather than dashing it when the code is missing or
+              // unmapped, and that branch needs something to exercise it.
+              // Offset so the gap misses the first three — those are the ones
+              // printed as samples at the end of the seed, and the number a
+              // developer copies out of the log should show the whole drawer.
+              county: i % 5 === 4 ? undefined : city.countyFips,
             },
             squareFeet: rng.int(1200, 4600),
             yearBuilt: rng.int(1955, 2020),

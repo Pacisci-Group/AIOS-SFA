@@ -1,0 +1,137 @@
+meta {
+  name: Log Mailer Lead
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/mailers/log-lead
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "controlNumber": "{{mailerLongForm}}"
+  }
+}
+
+script:post-response {
+  // Captured for the replay request, which must return this same id.
+  if (res.getStatus() === 200) {
+    bru.setVar("mailerLeadId", res.getBody().leadId);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    // 200, not 201: this resolves-or-creates. On a replay nothing was created.
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the lead id and whether it already existed", function () {
+    const body = res.getBody();
+    expect(body.leadId).to.be.a("string");
+    expect(body.alreadyExisted).to.be.a("boolean");
+    expect(Object.keys(body).sort()).to.eql(["alreadyExisted", "leadId"]);
+  });
+}
+
+docs {
+  # POST /mailers/log-lead — save a mailer's recipient as a lead (PAC-61)
+
+  Modules `mailers` **and** `leads` · permissions **`mailers:read`** and
+  **`leads:write`** (both required).
+
+  One click in the Mailers drawer. Replaces legacy's three-step Mailers search
+  page → mailer detail page → *Log Lead*.
+
+  **Body**
+  | field | type | rules |
+  |---|---|---|
+  | `controlNumber` | string | 1–80 chars after trim; either printed form, any case, any punctuation |
+
+  That is the whole body. Everything written to the lead — the recipient, the
+  address, the lead source, the producer — is read from the stored mailer or
+  from the authenticated user, so there is nothing here for a caller to
+  influence.
+
+  ## What it writes
+
+  Runs the **same** `LeadIntakeService` pipeline as `POST /leads` and the public
+  share-link route, so contact matching, household derivation, dedupe, linking
+  and assignment are written once: resolve contact → derive household → resolve
+  or create lead → link → assign producer. A Lead, a Household and a Contact
+  come out of a first call.
+
+  - **Lead source is always `WCO7l` (Mailer)**, set server-side and never read
+    from the request. Legacy branched to JYA on
+    `Campaign_Number.startsWith('JYA')`; no campaign number in this data can
+    match — every value is `Week_Number-NN` — so that branch is not ported.
+  - **The producer is the caller.** Legacy resolved this through ~170 lines of
+    Clerk lookup with an email fallback and a self-healing `PATCH`, all of which
+    existed because it had no first-class user identity.
+  - **`quoteControlNumber` gets the LONG form**, taken from the mailer document
+    rather than from what was typed. Two reasons: the Leads list searches that
+    field with a contains-regex and the short form is the last 12 characters
+    *inside* the long one, so storing the long form is findable by either — and
+    the dedupe on that field is an exact-equality **merge**, where a collision
+    on 48 bits of truncated UUID would quietly join two different prospects'
+    leads.
+  - **The address stores the 5-digit zip**, not the ZIP+4. Address dedupe keys
+    on `street|zip`, so a `74133-5807` would stop this lead ever matching one a
+    producer typed by hand at the same house.
+  - **No `policiesOfInterest`.** `campaign.policyType` says what *kind* of
+    policy was mailed, but the row carries no item count and the field requires
+    one. Writing `itemCount: 1` would put a guess where a producer later reads a
+    captured answer.
+
+  ### Why it does not reuse `create-lead.dto.ts`
+
+  That DTO's `person` schema requires a date of birth, a 10-character phone and
+  a valid email. Measured on the real RTP file, `emailaddre` and `birthdate` are
+  empty on **100%** of rows and `phone` is present on **4.4%** — so reusing it
+  would 400 roughly 96% of real requests. The service-layer `IntakePerson` has
+  all three optional, which is what makes this work.
+
+  ## Idempotency
+
+  Keyed on `submissionToken = MAIL|<the mailer's normalized control-number key>`
+  against the unique `{ agencyId, submissionToken }` index — the equivalent of
+  legacy's `mail_log_token`, needing no new field.
+
+  The key comes from the **mailer document**, not from the request. Keying on
+  what the producer typed would make the two printed forms two different tokens,
+  and one mailer would become two leads — see **Log Mailer Lead (Replay, Other
+  Form)**.
+
+  ## Response `200`
+
+  ```json
+  { "leadId": "68b0…", "alreadyExisted": false }
+  ```
+
+  `alreadyExisted` is `false` only when this call created the lead. It comes
+  back `true` for three honest reasons, all reported the same way: a
+  submission-token replay (this mailer logged before, in either form), the
+  quote-control-number dedupe, and the address dedupe against a recent lead at
+  the same street.
+
+  > On a **fresh** demo seed this request creates the lead and
+  > `alreadyExisted` is `false`; on a second collection run against the same
+  > database it is `true` and the same `leadId` comes back. The assertions here
+  > therefore pin the *shape* — the behavioural assertion lives in the replay
+  > request, which is unconditional either way.
+
+  **Errors**
+  | code | when |
+  |---|---|
+  | `400` | missing or malformed `controlNumber` |
+  | `403` | `mailers` or `leads` module disabled, or missing `mailers:read` / `leads:write` |
+  | `404` | no mailer with that number in the caller's agency |
+  | `422` | the mailer carries no usable recipient name, so no lead can be created — not `400` (the body was fine) and not `404` (the mailer exists) |
+}

@@ -375,7 +375,7 @@ docs {
   | policiesOfInterest | array           | `{ policyType, itemCount, propertyAddress }` captured at intake (PAC-56 #2); `[]` on migrated leads |
   | propertyAddress    | object \| null  | **lead-level** dwelling — migrated records and pre-PAC-56-#14 leads only; read the per-row one first |
   | agingDays          | int             | recomputed live, **not** the stale migrated value          |
-  | intakeChannel      | enum \| null    | `internal` \| `share_link`; `null` on migrated leads       |
+  | intakeChannel      | enum \| null    | `internal` \| `share_link` \| `mailer`; `null` on migrated leads |
   | primaryContact     | object \| null  | DOB is `YYYY-MM-DD`, never a timestamp                    |
   | household          | object \| null  | `null` when the lead has no household (a migrated gap)     |
   | latestQuoteRecap   | object \| null  | newest by `quoteDate`                                      |

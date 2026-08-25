@@ -1,0 +1,208 @@
+meta {
+  name: Lookup Mailer (Long Form)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/mailers/{{mailerControlNumberEncoded}}
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // The short form comes off the response rather than out of the environment,
+  // so seq 2 proves "either form resolves" against *this* mailer instead of
+  // against two env vars someone kept in sync by hand.
+  if (res.getStatus() === 200) {
+    bru.setVar("mailerShortForm", res.getBody().newControlNumber);
+    bru.setVar("mailerLongForm", res.getBody().controlNumber);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries both printed forms of the control number", function () {
+    const body = res.getBody();
+    expect(body.controlNumber).to.be.a("string");
+    expect(body.newControlNumber).to.be.a("string");
+    // The short form is the last 12 hex characters of the UUID inside the long
+    // one. They are different strings, which is why both are stored.
+    expect(body.controlNumber).to.not.equal(body.newControlNumber);
+    expect(body.controlNumber.toUpperCase()).to.include(
+      body.newControlNumber.toUpperCase(),
+    );
+  });
+
+  test("renders county as a name, never a raw FIPS code", function () {
+    const county = res.getBody().address.county;
+    expect(county).to.be.a("string");
+    expect(county).to.not.match(/^\d{3}$/);
+  });
+
+  test("returns the quoted coverage and both premiums", function () {
+    const body = res.getBody();
+    expect(body.coverage).to.have.property("dwelling");
+    expect(body.premium).to.have.property("yearly");
+    expect(body.premium).to.have.property("total");
+  });
+
+  test("invents no campaign status for an uploaded mailer", function () {
+    // BigQuery-only column. Legacy hard-coded 'Pending' here.
+    expect(res.getBody().campaign.status).to.equal(null);
+  });
+
+  test("leaks no internals", function () {
+    const body = res.getBody();
+    expect(body).to.not.have.property("_id");
+    expect(body).to.not.have.property("agencyId");
+    expect(body).to.not.have.property("source");
+    expect(body).to.not.have.property("isTestRecord");
+    expect(body).to.not.have.property("agencyPhone");
+  });
+}
+
+docs {
+  # GET /mailers/:controlNumber — look a mail piece up by its QCN (PAC-61)
+
+  Module `mailers` · permission **`mailers:read`** · no data scope.
+
+  Backs the Mailers drawer on the Leads page. A producer holding a mail piece
+  types the Quote Control Number printed on it and sees who it went to, the
+  property, and the coverage that was quoted — enough to read the offer back on
+  the call.
+
+  **Not data-scoped**, deliberately: a mailer has no producer, and the point is
+  that any producer can pick up a mail piece and work it. The *lead* it may
+  already have produced is scoped — see `linkedLeadId` below.
+
+  ## Either printed form resolves
+
+  | column | form | example |
+  |---|---|---|
+  | `controlno` | `#` + a UUID | `#d3d00000-aaaa-aaaa-f00d-0000bbbbbbbb` |
+  | `New Control Number` | that UUID's last 12 hex characters | `0000bbbbbbbb` |
+
+  These are **different strings** — they differ on all 671,339 legacy rows and
+  all 20,405 rows of the reference RTP file. PAC-73 stores both normalized
+  (uppercased, non-alphanumerics stripped) in a multikey-indexed
+  `controlNumberKeys` array, so matching either is **one indexed equality**.
+  Legacy had no way to relate them and fell back to `ENDS_WITH` /
+  `CONTAINS_SUBSTR`, which is a collection scan on every keystroke.
+
+  Input is case-insensitive, whitespace-tolerant and punctuation-tolerant:
+  `9C41B2D70E58`, `  9c41b2d70e58 ` and `9c41-b2d7-0e58` all reach the same key.
+
+  **Params** — `controlNumber` (path): either form, any case, any punctuation.
+
+  ## Response `200`
+
+  ```json
+  {
+    "controlNumber": "#d3d00000-aaaa-aaaa-f00d-0000bbbbbbbb",
+    "newControlNumber": "0000bbbbbbbb",
+    "name": "Dana Whitfield",
+    "firstName": "Dana",
+    "lastName": "Whitfield",
+    "address": {
+      "street": "1420 S Birch Ave",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74133",
+      "county": "Tulsa County"
+    },
+    "squareFeet": 2410,
+    "yearBuilt": 1998,
+    "coverage": {
+      "dwelling": 412000,
+      "otherStructures": 41200,
+      "lossOfUse": 41200,
+      "guestMedical": 1000,
+      "familyLiability": 100000
+    },
+    "premium": { "yearly": 1886.15, "monthly": 157.18, "total": 3096.65 },
+    "campaign": { "weekNumber": 29, "policyType": "Home", "product": "FQ", "status": null },
+    "quoteDate": "2026-07-13T00:00:00.000Z",
+    "email": null,
+    "phone": null,
+    "dateOfBirth": null,
+    "doNotCall": false,
+    "doNotMail": false,
+    "alreadyLogged": false,
+    "linkedLeadId": null
+  }
+  ```
+
+  ### Fields worth understanding
+
+  - **`premium.yearly` vs `premium.total`.** Two different figures, not
+    restatements. Across all 20,405 rows of the reference file `yearly` never
+    equals `total` on a single row and the ratio spans 0.46–2.95. `yearly` is
+    the mailed offer (`"$1886.15/year*"` at source, `monthly × 12`) and the only
+    premium legacy ever fetched. Neither is presented as "our quote" until the
+    product owner rules — PAC-61 open item 1.
+  - **`address.county` is a name or `null`, never a code.** The source ships a
+    zero-padded FIPS code (`'143'`) and legacy showed producers "County: 083".
+    The API resolves it; unmapped state/code pairs come back `null` and the
+    drawer omits the row rather than showing a dash.
+  - **`address.zip` is the 5-digit form.** The stored ZIP+4 is postal metadata.
+  - **`campaign.status` is `null` on any uploaded mailer.** `campaign_status`
+    exists only in BigQuery, so a mailer that arrived through the RTP upload has
+    none. Nothing is substituted — legacy's hard-coded `'Pending'` literal is
+    the thing being fixed.
+  - **`email`, `phone` and `dateOfBirth` are usually `null`.** Measured on the
+    real file: `email` and `dateOfBirth` are empty on **100%** of rows and
+    `phone` is present on **4.4%**. This is why the log-lead endpoint cannot
+    reuse `create-lead.dto.ts`.
+  - **`doNotCall` / `doNotMail`** are suppression flags carried through from the
+    source. Not cosmetic — a producer cold-calling a suppressed record is a
+    compliance problem.
+  - **`alreadyLogged` vs `linkedLeadId`.** `alreadyLogged` is agency-wide:
+    whether *anyone* has logged this mailer, which is the collision the drawer
+    exists to prevent. `linkedLeadId` is returned **only when that lead is
+    inside the caller's data scope**, because `GET /leads/:id` 404s another
+    producer's lead under `own` scope and an unreachable id would render a
+    "View lead" button that goes nowhere. `alreadyLogged: true` with
+    `linkedLeadId: null` means "logged by someone else".
+
+  ### Deliberately withheld
+
+  `_id`, `agencyId`, `isTestRecord`, the whole `source` block (including
+  `source.raw`, which is the entire 132-column source row), `gender`,
+  `agencyPhone` (a dynamic local-presence dial number — explicitly *not* tenant
+  identity), `market`, `address.zip4`, and the campaign's `fileName`,
+  `campaignNumber` and `quoteStatus`. Widening this is a decision, not a tweak.
+
+  **Errors**
+  | code | when |
+  |---|---|
+  | `401` | no/invalid token |
+  | `403` | `mailers` module disabled for the agency, or missing `mailers:read` |
+  | `404` | no mailer with that number **in the caller's agency**, or the input normalized to nothing |
+
+  `404` is deliberately the same body for all three cases — which one it was is
+  not the caller's business.
+
+  ## Why the environment variable is percent-encoded
+
+  `mailerControlNumberEncoded` holds `%23d3d0…` rather than `#d3d0…`. A literal
+  `#` in a URL starts the **fragment**, so an unencoded long form would send
+  `GET /mailers/` and never reach this route at all.
+
+  The web client never hits this: it normalizes the typed number client-side
+  (`mailerControlNumberKey` in `@sfa/shared`, which strips every
+  non-alphanumeric) and sends the resulting key, so the `#` is gone before a URL
+  is built. The server re-normalizes regardless, which is what makes a raw value
+  from Bruno or `curl` work too.
+
+  > Needs `npm run api:seed:demo:dev`, which prints three sample control numbers
+  > at the end of its run. They are deterministic, so
+  > `mailerControlNumberEncoded` in `environments/Local.bru` stays valid across
+  > reseeds.
+}

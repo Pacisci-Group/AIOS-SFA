@@ -4,7 +4,6 @@ import {
   DashboardController,
   DealsController,
   HouseholdsController,
-  MailersController,
   ManagementController,
   OnboardingsController,
   OwnerDashboardController,
@@ -16,8 +15,9 @@ import {
 // `contacts` by the real `ContactsModule` (see src/contacts),
 // `crm/service-tickets` by the real `CrmModule` (see src/crm), `performance` by
 // the real `PerformanceModule` (see src/performance) and `leaderboard` by the
-// real `LeaderboardModule` (see src/leaderboard), so their stub controllers are
-// intentionally omitted here.
+// real `LeaderboardModule` (see src/leaderboard), and `mailers` by the real
+// agency-facing `MailersController` in `MailersModule` (see src/mailers,
+// PAC-61), so their stub controllers are intentionally omitted here.
 //
 // `files` is gone entirely: it was a `@Controller('files')` placeholder that
 // borrowed the `quote_recaps` module key for want of a better one. The real
@@ -27,7 +27,6 @@ const controllers = [
   DashboardController,
   HouseholdsController,
   DealsController,
-  MailersController,
   OnboardingsController,
   ManagementController,
   OwnerDashboardController,

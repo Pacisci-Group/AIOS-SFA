@@ -432,9 +432,10 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .send({
           overrides: [
-            // Grant read on a page the producer role lacks.
-            { moduleKey: ModuleKey.Mailers, level: 'read' },
             // Downgrade a page the producer role has write on to read only.
+            // (The Producer template has held `mailers:write` since before
+            // PAC-73; this line used to claim the role lacked the page.)
+            { moduleKey: ModuleKey.Mailers, level: 'read' },
             { moduleKey: ModuleKey.Leads, level: 'read' },
           ],
         })
@@ -915,8 +916,10 @@ describe('SFA API (e2e)', () => {
       // `{status:'ready'}` stubs — each is covered by its own describe block
       // below. The `files` stub was removed with PAC-39: it borrowed the
       // `quote_recaps` gate and the real file API is now
-      // `POST /quote-recaps/quote-document/presign`.
-      { path: 'mailers', module: ModuleKey.Mailers },
+      // `POST /quote-recaps/quote-document/presign`. `mailers` left this list
+      // with PAC-61, which replaced its stub with the real agency-facing
+      // controller — `GET /mailers/:controlNumber`, covered by
+      // `mailer-lookup.e2e-spec.ts`.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
       { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
@@ -970,7 +973,11 @@ describe('SFA API (e2e)', () => {
         .expect(403);
     });
 
-    it('GET /api/v1/mailers — module disabled', async () => {
+    it('GET /api/v1/mailers/:controlNumber — module disabled', async () => {
+      // Repointed by PAC-61 from the bare `GET /mailers` stub to the real
+      // lookup route. **403, not 404, is the assertion**: `ModuleGuard` runs
+      // before the handler, so a disabled module must reject the request
+      // outright rather than let it through to report that no mailer matched.
       await request(app.getHttpServer())
         .patch(`/api/v1/platform/agencies/${seed.agencyId}/modules`)
         .set(authHeader(superAdminToken))
@@ -978,7 +985,7 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       await request(app.getHttpServer())
-        .get('/api/v1/mailers')
+        .get('/api/v1/mailers/NOSUCHQCN123')
         .set(authHeader(ownerToken))
         .expect(403);
 
@@ -1004,10 +1011,7 @@ describe('SFA API (e2e)', () => {
      * `{ module }` — so the echo is worth asserting: it proves *which*
      * controller answered, not merely that something did.
      */
-    const csrStubReads = [
-      { path: 'dashboard', module: ModuleKey.Dashboard },
-      { path: 'mailers', module: ModuleKey.Mailers },
-    ];
+    const csrStubReads = [{ path: 'dashboard', module: ModuleKey.Dashboard }];
 
     it.each(csrStubReads)(
       'GET /api/v1/$path — CSR can read',
@@ -1040,6 +1044,23 @@ describe('SFA API (e2e)', () => {
       },
     );
 
+    /*
+     * `mailers` joined the real modules with PAC-61 and has no collection
+     * route to `GET` — only `GET /mailers/:controlNumber`.
+     *
+     * **404, not 403, is the assertion that matters**, for the same reason as
+     * the leads probe below: a 403 would mean the guard chain rejected the CSR
+     * for lacking `mailers:read`; a 404 means it let them through and no mailer
+     * carried that number. So this pins the permission while asserting nothing
+     * about any particular mailer.
+     */
+    it('GET /api/v1/mailers/:controlNumber — CSR passes the read gate (real module)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/mailers/NOSUCHQCN123')
+        .set(authHeader(csrToken))
+        .expect(404);
+    });
+
     it('GET /api/v1/crm/service-tickets — CSR can read (real module)', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/v1/crm/service-tickets')
@@ -1049,12 +1070,18 @@ describe('SFA API (e2e)', () => {
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    // Still a stub, so the bare `PATCH /mailers` write probe still answers.
-    it('PATCH /api/v1/mailers — CSR can write', async () => {
+    /*
+     * Was `PATCH /mailers` against the stub until PAC-61 deleted it. The real
+     * mailer write is `POST /mailers/log-lead`, which needs `mailers:read` AND
+     * `leads:write` — the CSR holds both, so a 404 (no such mailer) proves the
+     * pair resolved, where a 403 would mean one of them did not.
+     */
+    it('POST /api/v1/mailers/log-lead — CSR passes both write gates', async () => {
       await request(app.getHttpServer())
-        .patch('/api/v1/mailers')
+        .post('/api/v1/mailers/log-lead')
         .set(authHeader(csrToken))
-        .expect(200);
+        .send({ controlNumber: 'NOSUCHQCN123' })
+        .expect(404);
     });
 
     /*
@@ -1168,8 +1195,8 @@ describe('SFA API (e2e)', () => {
       // `performance` (PAC-10/11) and `leaderboard` (PAC-13) are real read-only
       // modules now, with no mutating handler at all, so neither can appear in
       // this list. `crm/service-tickets` is a real module (CrmModule) with its
-      // own describe block too.
-      { path: 'mailers', module: ModuleKey.Mailers },
+      // own describe block too. `mailers` left with PAC-61 — its write is
+      // `POST /mailers/log-lead`, probed on its own below.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
       { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
@@ -1211,6 +1238,22 @@ describe('SFA API (e2e)', () => {
         expect(body.status).toBe('updated');
       },
     );
+
+    /*
+     * The `mailers` write, which left `mutatingFeatureRoutes` with PAC-61.
+     *
+     * A strictly better probe than the bare `PATCH /mailers` it replaces: the
+     * read-only user holds `mailers:read` on every module but no `leads:write`,
+     * and `POST /mailers/log-lead` requires *both*. So this pins the AND-set on
+     * that route rather than merely re-proving that read does not imply write.
+     */
+    it('POST /api/v1/mailers/log-lead — read-only user is forbidden', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/mailers/log-lead')
+        .set(authHeader(readOnlyToken))
+        .send({ controlNumber: 'NOSUCHQCN123' })
+        .expect(403);
+    });
 
     // NOTE: the "read-only user can read a read-only page" test that lived here
     // moved into `Leaderboard / Motivation Hub (PAC-13)` below, where it now

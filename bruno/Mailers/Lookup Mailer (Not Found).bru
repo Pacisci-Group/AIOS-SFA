@@ -1,0 +1,36 @@
+meta {
+  name: Lookup Mailer (Not Found)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/mailers/NOSUCHQCN123
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 404 Not Found", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # GET /mailers/:controlNumber — unknown number
+
+  A miss is a **404**, and in the drawer it is an ordinary outcome rather than
+  an error: a producer half-way through typing a control number has not made a
+  mistake. The web client catches this status in `lib/mailers-api.ts` and
+  returns `null`, so the drawer renders its "no record" empty state from a
+  successful query rather than an error state — and TanStack Query never treats
+  the miss as retryable.
+
+  The same 404, with the same body, covers three cases on purpose: no mailer
+  carries that number, the input normalized to nothing (`---`), and the mailer
+  belongs to a different agency. Distinguishing them would disclose whether
+  another tenant holds the record.
+}
