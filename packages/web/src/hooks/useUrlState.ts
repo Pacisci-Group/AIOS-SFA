@@ -1,0 +1,140 @@
+import { useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
+
+/**
+ * A key is a repeated param (`?status=New&status=Sold`) when its default is an
+ * array, and a single param otherwise. The default declares which.
+ */
+type UrlValue = string | readonly string[];
+
+type UrlValues<D extends Record<string, UrlValue>> = {
+  [K in keyof D]: D[K] extends readonly string[] ? string[] : string;
+};
+
+/**
+ * What a key accepts: an explicit vocabulary, or a predicate for the shapes a
+ * list can't express (an ISO date, an ObjectId).
+ */
+type Accepts = readonly string[] | ((value: string) => boolean);
+
+interface UseUrlStateOptions<D extends Record<string, UrlValue>> {
+  /**
+   * Every key this hook owns, with the value that means "not set" — `''` for a
+   * single param, `[]` for a repeated one. A key absent from the URL reads back
+   * as its default, and writing the default removes it again, so the default
+   * must be the empty value or it can never be cleared.
+   */
+  defaults: D;
+  /**
+   * Optional guard per key. A value outside it falls back to that key's default
+   * rather than reaching the API — a hand-edited or stale URL should render the
+   * default view, not trigger a 400. Repeated params are filtered value by
+   * value, so one bad entry doesn't discard the rest.
+   */
+  allowed?: Partial<Record<keyof D, Accepts>>;
+}
+
+const accepts = (rule: Accepts | undefined) => (value: string) => {
+  if (!rule) return true;
+  return typeof rule === 'function' ? rule(value) : rule.includes(value);
+};
+
+/**
+ * Read and write a group of query-string parameters as component state.
+ *
+ * ## Why this owns a *group* of keys rather than one
+ *
+ * `setSearchParams` is not a React state setter — it calls `navigate()`, and
+ * navigation is asynchronous. Three single-key hooks updating in the same tick
+ * therefore each compute from a location that has not committed yet, and the
+ * last write wins: setting `range=lastMonth` and then clearing `from`/`to`
+ * silently discards the range. The functional-updater form does **not** save
+ * you, because the "current" params it hands back are equally stale.
+ *
+ * So the unit of update has to be the whole group, in one `navigate()`. That is
+ * also what a real filter bar needs, where changing any facet resets the page:
+ * see `useDashboardRange` (PAC-9) and `useLeadsUrlState`.
+ *
+ * Writes with `{ replace: true }`: clicking through four time chips, or typing
+ * four characters into a search box, should not leave four entries in the
+ * browser's back stack. The current filters still ride on the URL, so opening a
+ * record and coming back restores them.
+ */
+export function useUrlState<D extends Record<string, UrlValue>>({
+  defaults,
+  allowed,
+}: UseUrlStateOptions<D>): [
+  UrlValues<D>,
+  (patch: Partial<UrlValues<D>>) => void,
+] {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const keys = useMemo(
+    () => Object.keys(defaults) as (keyof D & string)[],
+    [defaults],
+  );
+
+  // Serialized so the memo below is keyed on the values we own, not on the
+  // URLSearchParams identity, which changes on every render.
+  const serialized = keys
+    .map((key) => JSON.stringify(searchParams.getAll(key)))
+    .join('');
+
+  const values = useMemo(() => {
+    const next = {} as UrlValues<D>;
+    for (const key of keys) {
+      const fallback = defaults[key];
+      const accept = accepts(allowed?.[key]);
+      type Value = UrlValues<D>[typeof key];
+
+      if (Array.isArray(fallback)) {
+        // Deduped: `?status=New&status=New` is one selection, and a doubled
+        // value would otherwise render as two chips.
+        const picked = [...new Set(searchParams.getAll(key))]
+          .filter(Boolean)
+          .filter(accept);
+        next[key] = (picked.length ? picked : fallback) as Value;
+        continue;
+      }
+
+      const raw = searchParams.get(key);
+      next[key] = (!raw || !accept(raw) ? fallback : raw) as Value;
+    }
+    return next;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serialized, keys, defaults, allowed]);
+
+  const setValues = useCallback(
+    (patch: Partial<UrlValues<D>>) => {
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          const entries = Object.entries(patch) as [
+            keyof D & string,
+            UrlValue | undefined,
+          ][];
+
+          for (const [key, value] of entries) {
+            // Rewritten rather than `set`: a repeated key needs `append`, and
+            // any stale duplicate has to go first either way.
+            params.delete(key);
+
+            if (Array.isArray(value)) {
+              for (const item of value) if (item) params.append(key, item);
+              continue;
+            }
+            // The default is implied by its absence — no `?range=mtd` noise.
+            if (typeof value === 'string' && value && value !== defaults[key]) {
+              params.set(key, value);
+            }
+          }
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [defaults, setSearchParams],
+  );
+
+  return [values, setValues];
+}

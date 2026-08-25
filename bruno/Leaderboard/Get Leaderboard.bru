@@ -1,0 +1,135 @@
+meta {
+  name: Get Leaderboard
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/leaderboard
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~month: 2026-08
+  ~limit: 5
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the office total and a ranked list", function () {
+    const body = res.getBody();
+    expect(body.month).to.match(/^\d{4}-(0[1-9]|1[0-2])$/);
+    expect(body).to.have.property("officeTotalPremium");
+    expect(body.entries).to.be.an("array");
+  });
+
+  // THE PRIVACY CONTRACT. This is why a producer is allowed to read the whole
+  // agency here at all — see the docs below. If this test ever fails, the
+  // endpoint has started leaking colleagues' numbers.
+  test("no entry exposes another producer's dollars", function () {
+    for (const entry of res.getBody().entries) {
+      expect(entry).to.not.have.property("premium");
+      expect(entry).to.not.have.property("goalPremium");
+    }
+  });
+
+  test("the caller's own row carries their own figures", function () {
+    const self = res.getBody().self;
+    if (self !== null) {
+      expect(self).to.have.property("premium");
+      expect(self).to.have.property("goalPremium");
+    }
+  });
+}
+
+docs {
+  # GET /leaderboard — Motivation Hub (PAC-13)
+
+  Office total, ranked standings, and the caller's own progress.
+
+  - **Module:** `leaderboard` (must be enabled for the agency)
+  - **Permission:** `leaderboard:read`
+  - **Read-only** — `PATCH /leaderboard` is a `404`.
+
+  ## ⚠ Deliberate `DataScope` bypass
+
+  This endpoint reads **agency-wide regardless of the caller's data scope**. A
+  producer whose scope is `own` still sees the office total and every
+  colleague's rank — that is the entire product requirement, not an oversight,
+  and it is the one endpoint in the API that does not apply the scope clamp.
+
+  What that buys is bounded by the **response contract** instead:
+
+  - `entries[]` carry `rank`, `name`, `initials` and `attainmentPct` —
+    a position and a ratio. **Never a dollar figure.**
+  - `officeTotalPremium` is the only aggregate dollar figure.
+  - `self` carries dollars, because that is the caller's own data.
+
+  Do not add `premium` to an entry, and do not "fix" the missing scope clamp.
+  Both are asserted above and in the API e2e suite.
+
+  Branch is likewise ignored — "office" means the agency. A per-branch
+  leaderboard has no product definition yet.
+
+  ## Month-scoped, not range-scoped
+  There is **no `range` param**, and the dashboard's time chips deliberately do
+  not drive this card. `producerGoals` stores one goal per producer per month,
+  so a "% to goal" for a week would mean prorating a monthly target — a decision
+  nobody has made, and a fabricated number on a motivation panel is worse than
+  no number. The card is labelled *Monthly Goal* for that reason.
+
+  ## Query params
+  | param | type | default | rules |
+  |-------|------|---------|-------|
+  | month | string | current Chicago month | `YYYY-MM` |
+  | limit | int | 5 | 1–25. The caller's own row may be appended **beyond** it |
+
+  ## Response `200`
+  ```json
+  {
+    "month": "2026-08",
+    "officeTotalPremium": 46071,
+    "producerCount": 5,
+    "self": {
+      "producerId": "6a70...156",
+      "rank": 1,
+      "premium": 31662,
+      "goalPremium": 60000,
+      "attainmentPct": 52.8,
+      "isOutsideTop": false
+    },
+    "entries": [
+      { "producerId": "6a70...156", "name": "Pat Producer", "initials": "PP",
+        "rank": 1, "attainmentPct": 52.8, "isSelf": true }
+    ]
+  }
+  ```
+
+  ## Ranking
+  By **`attainmentPct` descending**, not by premium. Attainment is the only
+  quantity rendered per row, so a list ordered by a number the viewer cannot see
+  reads as broken. Producers with no goal sort last, ordered among themselves by
+  premium. Ties share a rank and the next rank skips.
+
+  Two rules worth knowing:
+  - Producers with a goal but **no sales** are included — a board that shrinks
+    in a slow month is the opposite of motivating.
+  - The caller's row is **always** present, appended at its true rank with
+    `isOutsideTop: true` when it falls outside `limit`.
+
+  `attainmentPct` is `null` when the producer has no goal row for the month, or
+  the goal is `0`. The UI renders an em dash, never `0%`.
+
+  ## Errors
+  - `400` — malformed `month` (e.g. `2026-5`, `2026-13`), or `limit` outside 1–25.
+  - `401` — missing/expired access token.
+  - `403` — `leaderboard` module disabled, or missing `leaderboard:read`.
+
+  > **Deploy note:** PAC-13 grants Branch Manager `leaderboard:read`. Existing
+  > agencies only pick that up after `npm run sync:roles:dev -w @sfa/api`, and
+  > signed-in clients keep their cached permissions until the next refresh.
+}

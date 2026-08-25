@@ -1,8 +1,34 @@
+# Local development stack, split by COMPOSE PROFILE so the same file serves both
+# ways of running the app:
+#
+#   docker compose up -d                  -> backing services ONLY (mongo, minio,
+#                                            redis). Run the API + web on the host
+#                                            with `npm run api:dev` / `web:dev`.
+#   docker compose --profile app up -d    -> everything, app included.
+#
+# Services with no `profiles:` key are always enabled, so the backing services
+# start in both modes and also start as dependencies of the app services. Only
+# `api` and `web` carry `profiles: [app]`.
+#
+# Use the Makefile rather than remembering the flags: `make infra` (backing
+# services only) / `make up` (full stack) / `make dev` (infra + host commands).
+#
+# The two modes cannot both own port 4000/5173 — `make infra` stops the app
+# containers first for exactly that reason.
 services:
+  # Runs as a SINGLE-NODE REPLICA SET, not a standalone. Mongo only supports
+  # multi-document transactions on a replica set or a sharded cluster, and the
+  # lead-intake pipeline (PAC-37) writes leads + households + contacts as one
+  # atomic unit. Production is DigitalOcean Managed MongoDB, which is already a
+  # replica set — this keeps dev and prod on the same capability.
+  #
+  # Converting an existing standalone data directory is non-destructive: mongod
+  # starts on it and `rs.initiate()` adopts the data as-is.
   mongo:
     image: mongo:7
     container_name: sfa-mongo
     restart: unless-stopped
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "27017:27017"
     volumes:
@@ -14,7 +40,125 @@ services:
       retries: 10
       start_period: 10s
 
+  # One-shot: initiate the replica set. Idempotent — `rs.status()` throws
+  # NotYetInitialized (code 94) only on a fresh set, which is the one case we
+  # initiate in. Mirrors the minio-createbucket pattern below.
+  mongo-init:
+    image: mongo:7
+    container_name: sfa-mongo-init
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      mongosh --quiet --host mongo:27017 --eval "
+      try { rs.status(); print('Replica set rs0 already initiated'); }
+      catch (e) {
+        if (e.code !== 94) throw e;
+        rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] });
+        print('Replica set rs0 initiated');
+      }
+      for (let i = 0; i < 60 && !db.hello().isWritablePrimary; i++) { sleep(500); }
+      if (!db.hello().isWritablePrimary) { throw new Error('rs0 did not reach PRIMARY'); }
+      print('Replica set rs0 PRIMARY ready');
+      "
+
+  minio:
+    image: minio/minio:latest
+    container_name: sfa-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # web console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot: create the uploads bucket so presigned PUTs work out of the box.
+  minio-createbucket:
+    image: minio/mc:latest
+    container_name: sfa-minio-createbucket
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/sfa-uploads &&
+      echo 'Bucket sfa-uploads ready';
+      "
+    restart: "no"
+
+  # Permission cache (OPTIONAL at runtime). The API only uses Redis when
+  # REDIS_URL is set — unset, it resolves permissions from MongoDB on every
+  # request (see permissions/cache/permission-cache.provider.ts). The container
+  # runs regardless so the cached path is one uncommented line away in .env.
+  #
+  # Deliberately no volume: this is a pure cache, and persisting it across
+  # `docker compose down` would resurrect stale permission sets after a role
+  # change made while the stack was down.
+  redis:
+    image: redis:7-alpine
+    container_name: sfa-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # Inngest, in DEV-SERVER mode — deliberately not the `inngest start` that runs
+  # in deployed environments.
+  #
+  # The dev server needs no event key, no signing key and no persistence: it
+  # keeps everything in memory and wipes on restart, which is what you want
+  # locally. Production runs `inngest start` on its own droplet with a SQLite
+  # volume (docker-compose.inngest.yml).
+  #
+  # Carries no profile, so `make dev` starts it alongside Mongo/MinIO/Redis and
+  # the host-mode `npm run api:dev` is picked up automatically.
+  inngest:
+    image: inngest/inngest
+    container_name: sfa-inngest
+    restart: unless-stopped
+    # `-u` points at the API's serve handler. `host.docker.internal` because in
+    # the default dev loop the API runs on the HOST, not in compose — `localhost`
+    # inside this container is Inngest itself. `--no-discovery` stops it probing
+    # a list of common ports and registering something unexpected.
+    command:
+      [
+        "inngest",
+        "dev",
+        "-u",
+        "http://host.docker.internal:4000/api/inngest",
+        "--no-discovery",
+      ]
+    # Docker Desktop provides host.docker.internal automatically; Linux does not.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8288:8288"
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
   api:
+    profiles: ["app"]
     build:
       context: .
       dockerfile: packages/api/Dockerfile
@@ -26,10 +170,49 @@ services:
       - .env
     environment:
       PORT: 4000
-      MONGODB_URI: mongodb://mongo:27017/sfa
+      # `directConnection=true` and NEVER `replicaSet=` — the driver derives its
+      # topology from directConnection first and rejects the pair. Single
+      # topology also stops SDAM swapping the host for the member's advertised
+      # address, which is what makes the same URI shape work from the host.
+      MONGODB_URI: mongodb://mongo:27017/sfa?directConnection=true
       CORS_ORIGIN: http://localhost:5173,http://localhost:4000
+      # Object storage (MinIO). The API talks to MinIO over the compose network
+      # (minio:9000) for server-side ops, but signs browser-facing presigned URLs
+      # against localhost:9000 — same port, different host: `minio` does not
+      # resolve in the browser.
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_PUBLIC_URL: http://localhost:9000
+      STORAGE_REGION: us-east-1
+      STORAGE_BUCKET: sfa-uploads
+      STORAGE_ACCESS_KEY_ID: minioadmin
+      STORAGE_SECRET_ACCESS_KEY: minioadmin
+      STORAGE_FORCE_PATH_STYLE: "true"
+      # Mirrors whatever .env decided, translated to the compose network: expands
+      # to the redis:6379 address only when REDIS_URL is set and non-empty in
+      # .env, and to nothing when it is commented out. The rewrite is required —
+      # .env holds the host-mode value (localhost:6379), and `localhost` inside
+      # this container is the API itself. Keeps both run modes on the same
+      # caching behaviour from a single switch.
+      REDIS_URL: ${REDIS_URL:+redis://redis:6379}
+      # Inngest, translated to the compose network. `.env` holds the host-mode
+      # value (or none at all, since the SDK finds a local dev server itself),
+      # and `localhost` inside this container is the API.
+      #
+      # INNGEST_DEV=1 keeps the SDK in dev mode: it skips request-signature
+      # verification, which is correct here because the dev server has no signing
+      # key. Deployed environments set it to "0".
+      INNGEST_DEV: "1"
+      INNGEST_BASE_URL: http://inngest:8288
     depends_on:
       mongo:
+        condition: service_healthy
+      # Not just `mongo: healthy` — mongod answers pings while the set is still
+      # uninitiated or mid-election, and the seed runs writes immediately.
+      mongo-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test:
@@ -46,7 +229,59 @@ services:
     command: >
       sh -c "node packages/api/dist/seed/seed.js && node packages/api/dist/main.js"
 
+  # The worker as its own container — the shape it will take in production when
+  # traffic justifies scaling it separately. NOT started by `make up`.
+  #
+  # ⚠ Exactly one process may serve the functions. Before starting this, set
+  # WORKER_INLINE=false on the api service (a real env var, not a .env line —
+  # it is read while the module graph is built, before dotenv runs), otherwise
+  # both register under the same Inngest app id and whichever synced last wins.
+  #
+  #   docker compose --profile app --profile worker up -d
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    container_name: sfa-worker
+    command: ["node", "packages/api/dist/worker.js"]
+    restart: unless-stopped
+    ports:
+      - "4001:4001"
+    env_file:
+      - .env
+    environment:
+      WORKER_PORT: 4001
+      MONGODB_URI: mongodb://mongo:27017/sfa?directConnection=true
+      INNGEST_DEV: "1"
+      INNGEST_BASE_URL: http://inngest:8288
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_PUBLIC_URL: http://localhost:9000
+      STORAGE_REGION: us-east-1
+      STORAGE_BUCKET: sfa-uploads
+      STORAGE_ACCESS_KEY_ID: minioadmin
+      STORAGE_SECRET_ACCESS_KEY: minioadmin
+      STORAGE_FORCE_PATH_STYLE: "true"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4001/api/inngest').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
   web:
+    profiles: ["app"]
     build:
       context: .
       dockerfile: packages/web/Dockerfile
@@ -60,3 +295,4 @@ services:
 
 volumes:
   mongo_data:
+  minio_data:

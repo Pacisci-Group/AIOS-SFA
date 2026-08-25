@@ -1,0 +1,67 @@
+meta {
+  name: Get Invite (Public)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/auth/invite/{{inviteToken}}
+  auth: none
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("greets the invitee with agency and role", function () {
+    const body = res.getBody();
+    expect(body.email).to.be.a("string");
+    expect(body.agencyName).to.be.a("string");
+    expect(body.roleNames).to.be.an("array").that.is.not.empty;
+  });
+
+  test("discloses nothing beyond the four documented fields", function () {
+    // The non-disclosure contract. This is an unauthenticated endpoint, so a new
+    // field appearing here is a leak to anyone holding a forwarded link — this
+    // test is meant to fail when one is added without thought.
+    expect(Object.keys(res.getBody()).sort()).to.eql([
+      "agencyName",
+      "email",
+      "expiresAt",
+      "roleNames",
+    ]);
+  });
+}
+
+docs {
+  # GET /auth/invite/:token — public invite preview
+
+  Public (`@Public()`, `auth: none`). Lets the accept-invite page greet the
+  invitee — "You've been invited to *Smith Family Agency* as *Producer*" — before
+  they have any credentials.
+
+  **Response `200`**
+  ```json
+  {
+    "email": "pending@example.com",
+    "agencyName": "Smith Family Agency",
+    "roleNames": ["Producer"],
+    "expiresAt": "2026-08-24T09:00:00.000Z"
+  }
+  ```
+
+  Every field is something the holder of the emailed link already knows. No user
+  id, no name, nothing that would turn a token into a directory lookup.
+
+  **Errors**
+  - `410 Gone` — the token is valid but expired. The page tells the invitee to
+    ask for a resend, which is actionable.
+  - `404 Not Found` — unknown token, or one already used. Generic on purpose.
+
+  ## Folder placement
+  This is an `auth/*` route but lives under **Users**, not **Auth**, for the same
+  ordering reason activity logging lives under **Leads**: the CLI walks folders
+  alphabetically, so an `Auth` copy would run before any invite existed and have
+  no token to send. It sits here, immediately after the invite that mints it.
+}

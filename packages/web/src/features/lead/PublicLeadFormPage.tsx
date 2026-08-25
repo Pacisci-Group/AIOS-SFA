@@ -1,0 +1,130 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { CheckCircle2, ShieldAlert } from "lucide-react";
+import { useRef, useState } from "react";
+import { useParams } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { getPublicLeadForm, submitPublicLead } from "@/lib/lead-intake-api";
+import { LeadIntakeForm } from "./components/LeadIntakeForm";
+import {
+  newSubmissionToken,
+  toPolicyOfInterestInputs,
+  type LeadIntakeFormValues,
+} from "./components/lead-intake-schema";
+
+/**
+ * `/f/lead/:token` — the public intake form (PAC-37).
+ *
+ * Deliberately outside the app shell: no sidebar, no nav, no authenticated
+ * chrome. Mobile-first, because most people opening a link a producer texted or
+ * emailed them will be on a phone.
+ *
+ * Routed as a sibling of BOTH route guards. `ProtectedRoute` would bounce an
+ * anonymous prospect to `/login`, and `PublicOnlyRoute` would redirect a
+ * signed-in producer away from previewing their own link.
+ */
+export default function PublicLeadFormPage() {
+  const { token = "" } = useParams();
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [formKey, setFormKey] = useState(0);
+  const submissionToken = useRef(newSubmissionToken());
+
+  const form = useQuery({
+    queryKey: ["public-lead-form", token],
+    queryFn: () => getPublicLeadForm(token),
+    retry: false,
+  });
+
+  const mutation = useMutation({
+    mutationFn: (values: LeadIntakeFormValues) =>
+      submitPublicLead(token, {
+        primaryContact: values.primaryContact,
+        address: values.address,
+        members: values.members,
+        // Each row carries its own dwelling address (PAC-56 #14).
+        policiesOfInterest: toPolicyOfInterestInputs(values.policiesOfInterest),
+        submissionToken: submissionToken.current,
+      }),
+    onSuccess: () => setSubmitted(true),
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const agencyName = form.data?.agencyName ?? "";
+
+  return (
+    <div className="min-h-screen bg-background text-foreground px-4 py-8">
+      {/* Wider than the `max-w-lg` this shipped as (PAC-56 #5). `FormGrid` is
+          already `sm:grid-cols-2`, so the room buys a card whose fields pair up
+          on a laptop and stack on a phone — which is what keeps one-card-per-page
+          from turning into a long scroll on desktop. Matches the `max-w-3xl` the
+          authenticated `/leads/new` page uses.
+
+          The status panels below stay at `max-w-lg` — they are two lines of
+          prose, and prose set to 3xl is a worse read, not a better one. */}
+      <div className="mx-auto w-full max-w-3xl">
+        {form.isPending ? (
+          <p className="text-center text-sm text-muted-foreground">Loading…</p>
+        ) : form.isError ? (
+          // The API returns one identical message for an unknown token, a
+          // revoked link, a disabled agency and a deactivated producer — so this
+          // screen must not speculate about which happened either.
+          <div className="mx-auto max-w-lg rounded-xl bg-card border border-border p-6 text-center space-y-3">
+            <ShieldAlert size={24} className="mx-auto text-amber-500" />
+            <h1 className="text-sm font-bold">This form isn't available</h1>
+            <p className="text-sm text-muted-foreground">
+              The link may have expired or been turned off. Please check with the
+              person who shared it with you.
+            </p>
+          </div>
+        ) : submitted ? (
+          <div className="mx-auto max-w-lg rounded-xl bg-card border border-border p-6 text-center space-y-3">
+            <CheckCircle2 size={24} className="mx-auto text-emerald-500" />
+            <h1 className="text-sm font-bold">Thank you — we've got it</h1>
+            <p className="text-sm text-muted-foreground">
+              {agencyName} has received your information and will be in touch
+              shortly.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                // A fresh token, or the second submission would dedupe onto the
+                // first and silently do nothing.
+                submissionToken.current = newSubmissionToken();
+                setFormKey((key) => key + 1);
+                setError(null);
+                setSubmitted(false);
+              }}
+            >
+              Submit another
+            </Button>
+          </div>
+        ) : (
+          <>
+            <header className="mb-6 text-center">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {agencyName}
+              </p>
+              <h1 className="mt-1 text-lg font-bold">Tell us about yourself</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Share a few details and someone will reach out with a quote.
+              </p>
+            </header>
+
+            <LeadIntakeForm
+              key={formKey}
+              variant="public"
+              submitting={mutation.isPending}
+              errorMessage={error}
+              submitLabel="Submit"
+              onSubmit={(values) => {
+                setError(null);
+                mutation.mutate(values);
+              }}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

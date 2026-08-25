@@ -1,0 +1,105 @@
+import * as React from "react"
+import { cva, type VariantProps } from "class-variance-authority"
+import { Slot } from "radix-ui"
+
+import { cn } from "@/lib/utils"
+
+const buttonVariants = cva(
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
+        /**
+         * The emerald "completed the sale" action — today just "Mark as Sold".
+         *
+         * Local, like `brand` below, and lost the same way if `button` is
+         * re-added from the registry. It exists so that button stops
+         * hard-coding `bg-emerald-600 text-white`, which is a dark-only raw
+         * palette pair: `text-white` on emerald-600 is fine on the navy theme
+         * and marginal on the light one, and neither value re-themes.
+         */
+        success: "bg-success text-success-foreground hover:bg-success/90",
+        outline:
+          "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+        secondary:
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost:
+          "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+        link: "text-primary underline-offset-4 hover:underline",
+        /**
+         * The Allstate-sky gradient on primary submit buttons — the New Lead
+         * form, the Quote Recap form, and Sign in.
+         *
+         * A `cva` variant rather than a wrapper component, per AGENTS.md §11
+         * ("Add variants via `cva` inside the primitive rather than one-off
+         * wrappers"). Note the tension with the neighbouring rule that `ui/` is
+         * shadcn-CLI-managed: **re-running `npx shadcn@latest add button` will
+         * drop this variant.** Re-add it if that happens.
+         *
+         * `active:scale-95` is intentionally *not* here — two of the three call
+         * sites have it and Sign in does not, so it stays at the call site.
+         */
+        brand:
+          "bg-gradient-to-br from-sky-400 to-sky-500 text-primary-foreground font-semibold hover:brightness-110",
+      },
+      size: {
+        default: "h-9 px-4 py-2 has-[>svg]:px-3",
+        xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
+        sm: "h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5",
+        lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
+        icon: "size-9",
+        "icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
+        "icon-sm": "size-8",
+        "icon-lg": "size-10",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+
+type ButtonProps = React.ComponentProps<"button"> &
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean
+  }
+
+/**
+ * `forwardRef` is load-bearing on React 18, not ceremony.
+ *
+ * `React.ComponentProps<"button">` includes `ref` in its type, so passing one
+ * to a plain function component **typechecks and then silently does nothing** —
+ * React 18 drops it and logs "Function components cannot be given refs" only at
+ * runtime. `CalendarDayButton` in `ui/calendar.tsx` relies on the ref to move
+ * focus as you arrow through days, so without this the calendar is unusable by
+ * keyboard while looking perfectly fine to the compiler.
+ *
+ * (The shadcn registry now generates React 19 components, where `ref` is an
+ * ordinary prop and this wrapper is unnecessary. This codebase is on React 18.)
+ */
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  (
+    { className, variant = "default", size = "default", asChild = false, ...props },
+    ref,
+  ) => {
+    const Comp = asChild ? Slot.Root : "button"
+
+    return (
+      <Comp
+        ref={ref}
+        data-slot="button"
+        data-variant={variant}
+        data-size={size}
+        className={cn(buttonVariants({ variant, size, className }))}
+        {...props}
+      />
+    )
+  },
+)
+Button.displayName = "Button"
+
+export { Button, buttonVariants }

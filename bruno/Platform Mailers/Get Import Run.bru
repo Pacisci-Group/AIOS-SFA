@@ -1,0 +1,112 @@
+meta {
+  name: Get Import Run
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/platform/mailers/imports/{{mailerImportRunId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:pre-request {
+  // The preview is a queued Inngest job, so it is not done the instant
+  // `Create Import` returns. Without this pause the assertions below pass
+  // vacuously against a run still in `previewing`, and `Commit Import` gets a
+  // correct-but-useless 409 — the chain would go green while proving nothing.
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries a presigned link to the raw uploaded file", function () {
+    expect(res.getBody().rawFileUrl).to.be.a("string");
+  });
+
+  test("has finished previewing", function () {
+    expect(res.getBody().status).to.equal("previewed");
+  });
+
+  test("reports the file's own agency and campaign", function () {
+    const body = res.getBody();
+    expect(body.detected.agencyId).to.equal("A0B9049");
+    expect(body.detected.campaignNumber).to.equal("Week_Number-29");
+    expect(body.detected.weekNumber).to.equal(29);
+    expect(body.detected.quoteDate).to.contain("2026-07-13");
+  });
+
+  test("counts the row with no control number as skipped, with a reason", function () {
+    const body = res.getBody();
+    expect(body.counts.read).to.equal(2);
+    expect(body.counts.mapped).to.equal(1);
+    expect(body.counts.skipped).to.equal(1);
+    expect(body.rejections[0].reason).to.match(/control number/i);
+  });
+
+  test("nothing is written until the commit", function () {
+    const body = res.getBody();
+    expect(body.counts.created).to.equal(0);
+    expect(body.counts.updated).to.equal(0);
+  });
+}
+
+docs {
+  # GET /platform/mailers/imports/:runId — the poll target and the report
+
+  While a run works this is what the panel polls; once it settles this is the
+  report. Same shape either way.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Status
+  `previewing` -> `previewed` -> `importing` -> `completed`, with `failed`
+  reachable from either working state. **Nothing is written to `mailers` until
+  `Commit Import`** — a run left at `previewed` has changed nothing.
+
+  ## Response `200`
+  ```json
+  {
+    "id": "…",
+    "status": "previewed",
+    "uploadedFilename": "SFA-RTP-2026-29.csv",
+    "sizeBytes": 2048,
+    "detected": {
+      "agencyId": "A0B9049",
+      "agencyName": "SMITH FAMILY AGENCY",
+      "campaignNumber": "Week_Number-29",
+      "weekNumber": 29,
+      "fileName": "SFA-20P",
+      "quoteDate": "2026-07-13T00:00:00.000Z",
+      "policyType": "Home",
+      "product": "FQ"
+    },
+    "agencyMismatch": false,
+    "counts": { "read": 2, "mapped": 1, "created": 0, "updated": 0, "skipped": 1 },
+    "rejections": [{ "row": 2, "controlNumber": null, "reason": "No usable control number…" }],
+    "error": null,
+    "rawFileUrl": "http://localhost:9000/sfa-uploads/…"
+  }
+  ```
+
+  | field | notes |
+  |---|---|
+  | `detected` | What the file says about itself, read off the first data row. Safe because `agencyid`, `agencyname`, `Campaign Number`, `FileName` and `quotedate` each hold exactly **one** distinct value across all 20,405 rows of a real file. The importer verifies that rather than assuming it. |
+  | `agencyMismatch` | The file's `agencyid` disagrees with the selected agency's `allstateAgencyId`. Absence of either is **not** a mismatch — there is nothing to compare, and a confirmation nobody can act on just trains people to click through it. |
+  | `counts.skipped` | The authoritative total. |
+  | `rejections` | A capped **sample** (50), not the full list. |
+  | `rawFileUrl` | Short-lived presigned download, minted per read because presigned URLs expire — a report left open for ten minutes would hand out a dead link. |
+
+  ## Errors
+  - `401` / `403` — as above. Note this is `platform:mailers:read`, not `:write`.
+  - `404 Not Found` — no such run, or a malformed id.
+}

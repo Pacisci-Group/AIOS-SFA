@@ -1,0 +1,283 @@
+meta {
+  name: List Deal Audits
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/deal-audits?page=1&pageSize=8&due=all
+  body: none
+  auth: inherit
+}
+
+params:query {
+  page: 1
+  pageSize: 8
+  due: all
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // Capture the first row's ids so the rest of this folder has something to act
+  // on. Runtime-only vars (never persisted to disk).
+  //
+  // `auditDealId` keeps the folder **self-sufficient**: the workflow requests
+  // are keyed on the deal, and Bruno runs folders alphabetically — so "Deal
+  // Audits" executes long before "Sold Deals" could set `createdSoldDealId`.
+  if (res.getStatus() === 200) {
+    const items = res.getBody().items || [];
+
+    // The workflow requests submit then review, so they need a deal that is not
+    // ALREADY awaiting review — submitting one of those is a 409, and reviewing
+    // it can 403 if whoever submitted it happens to be our reviewer. Prefer a
+    // submittable row; fall back to the first so the folder still has a target.
+    const workable = items.find((row) => row.auditStatus !== "Pending");
+    const target = workable || items[0];
+
+    if (target) {
+      bru.setVar("auditDealId", target.dealId);
+      // A row is a **deal** since PAC-72, so the item id the presign / resolve
+      // / download requests need lives on the nested checklist. Take the first
+      // still-outstanding one — resolving a settled item is a no-op.
+      const open = (target.items || []).filter((entry) => entry.open);
+      if (open.length > 0) {
+        bru.setVar("dealAuditItemId", open[0].id);
+      }
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("page");
+    expect(body).to.have.property("pageSize");
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body).to.have.property("items");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("rows are masked (no raw ObjectId in ref)", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      expect(items[0].ref).to.match(/^AUD-\d{4}-\d{4}$/);
+    }
+  });
+
+  test("a row is one deal, carrying its whole checklist", function () {
+    // PAC-72 section A item 1. Before this a row was one requirement, so a
+    // bundled sale rendered as six rows with six Resolve buttons.
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      const row = items[0];
+      expect(row).to.have.property("dealId");
+      expect(row).to.have.property("auditStatus");
+      expect(row.items).to.be.an("array");
+      expect(row.itemCount).to.be.at.least(row.openCount);
+      expect(row.openCount).to.be.above(0);
+    }
+  });
+
+  test("completion is a whole percent consistent with the counters", function () {
+    // The figure that replaced David's rejected checkmarks.
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      const row = items[0];
+      expect(row.completionPct).to.be.within(0, 100);
+      const resolved = row.itemCount - row.openCount;
+      expect(row.completionPct).to.equal(
+        Math.round((resolved / row.itemCount) * 100),
+      );
+    }
+  });
+
+  test("outstanding requirements sort above settled ones", function () {
+    // "Missing requirements colour-coded and sorted to the top" (item 5) — the
+    // server owns the order so the drawer renders the list as given.
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      const flags = items[0].items.map((entry) => entry.open);
+      expect(flags.indexOf(false) === -1 || flags.lastIndexOf(true) < flags.indexOf(false)).to.equal(true);
+    }
+  });
+
+  test("checklist entries carry the soft deadline and any evidence on file", function () {
+    const items = res.getBody().items;
+    if (items.length > 0 && items[0].items.length > 0) {
+      expect(items[0].items[0]).to.have.property("dueAt");
+      expect(items[0].items[0].attachments).to.be.an("array");
+    }
+  });
+
+  test("attachments expose an index, never the storage key", function () {
+    // The key's prefix is what `assertKeyOwnership` treats as a security
+    // property, so it must not leave the server. `index` is what the download
+    // route takes and is all the client needs.
+    const entries = res.getBody().items.flatMap((row) => row.items || []);
+    const withFiles = entries.filter((e) => e.attachments.length > 0);
+    if (withFiles.length > 0) {
+      const file = withFiles[0].attachments[0];
+      expect(file).to.have.property("index");
+      expect(file).to.have.property("filename");
+      expect(file).to.not.have.property("key");
+    }
+  });
+}
+
+docs {
+  # GET /deal-audits — Deals Pending Service Hand-off (PAC-12)
+
+  Producer Dashboard "Deals Pending Service Hand-off" board (**read only**).
+
+  ## 🔴 One row is one DEAL (PAC-72)
+
+  A row used to be one audit *item*, which is what David asked to replace: a
+  bundled Auto + Home sale with six open requirements rendered as six rows with
+  six Resolve buttons and could fill the board by itself. Each row now carries
+  the deal's whole checklist in `items`, plus a completion percentage — the
+  figure that replaced the per-item checkmarks he rejected.
+
+  **`total` and `totalPages` count deals**, not requirements.
+
+  A deal appears when it has **at least one outstanding requirement**
+  (`openFailedCount > 0`), regardless of where its audit sits in the review
+  workflow. Sorted by the age of its oldest outstanding requirement.
+
+  - **Module:** `deal_audits` (must be enabled for the agency)
+  - **Permission:** `deal_audits:read`
+  - **Data scope** (enforced in the service layer):
+    - `own` → deals whose audit is assigned to the caller **or to a role they
+      hold** — the access key moved from `dealAuditItems.producerId` to
+      `DealAudit.auditAssignee`. The item keeps `producerId` as provenance
+      (who sold it); it is no longer what the board is scoped by.
+    - `branch` → audits in the caller's branch (or the `X-Branch-Id` branch)
+    - `agency` → all audits in the agency
+
+  ⚠ Reassigning an audit therefore **removes the deal from the previous
+  assignee's board** — for an `own`-scoped producer, that means losing sight of
+  a deal they sold. See **Set Audit Assignment**.
+
+  ## Query params
+  | param    | type | default | rules                              |
+  |----------|------|---------|------------------------------------|
+  | page     | int  | 1       | min 1 (1-based)                    |
+  | pageSize | int  | 8       | min 1, max 50                      |
+  | due      | enum | `all`   | `all` \| `overdue` \| `due_soon`    |
+
+  ### `due` — the soft 7-day deadline (PAC-65)
+
+  ⚠ **A filter, not enforcement.** Generated items carry a `dueAt` of
+  `generated + 7 days`. Nothing reads it to change state: no cron, no auto-fail,
+  no escalation, no expiry, and no status that flips itself at day 7. An item
+  past its `dueAt` is still `in_progress` / failed until a human resolves it.
+  The team pulls an overdue list, and that is the whole of it.
+
+  - `all` — adds no clause. Byte-identical to the pre-PAC-65 response.
+  - `overdue` — `dueAt < now`.
+  - `due_soon` — `dueAt` within the next 3 days.
+
+  Both narrowing values **require `dueAt` to exist**, so items generated before
+  the field was added match neither and are never overdue. There is no backfill:
+  retro-stamping deadlines onto old items would manufacture a backlog nobody
+  agreed to.
+
+  Since PAC-72 the filter reads the **deal's** rolled-up `dueAt` — the earliest
+  deadline across its outstanding requirements. Semantics are unchanged: a deal
+  is overdue when its most pressing requirement is.
+
+  ## Headers
+  - `Authorization: Bearer <accessToken>` — inherited from the collection.
+  - `X-Branch-Id` *(optional)* — disabled by default. Only relevant for
+    `branch`/`agency` callers who want to target a specific branch; ignored for
+    producers (`own` scope). Enable the header to send it.
+
+  ## Response `200`
+  ```json
+  {
+    "page": 1,
+    "pageSize": 8,
+    "total": 12,
+    "totalPages": 2,
+    "items": [
+      {
+        "id": "665f...9c1",
+        "dealId": "665f...a03",
+        "ref": "AUD-2026-0042",
+        "client": "Jane Homeowner",
+        "type": "Home",
+        "auditStatus": "Not Submitted",
+        "completionPct": 71,
+        "itemCount": 7,
+        "openCount": 2,
+        "oldestDaysOpen": 9,
+        "dueAt": "2026-08-24T10:15:00.000Z",
+        "items": [
+          {
+            "id": "665f...ac1",
+            "missing": "Wind/Hail Inspection Report",
+            "daysOpen": 9,
+            "open": true,
+            "dueAt": "2026-08-24T10:15:00.000Z",
+            "attachments": [
+              {
+                "index": 0,
+                "filename": "roof-receipt.pdf",
+                "contentType": "application/pdf",
+                "size": 20480
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+  ```
+
+  `id` is the **audit** record; `items[].id` is what the resolve, presign and
+  download routes take, and `dealId` is what every workflow endpoint is keyed
+  on. `items` lists the **whole** checklist, outstanding entries first — the
+  settled ones have to be present for "sorted to the top" to mean anything, and
+  they render with no checkmark by design.
+
+  Row fields:
+  | field    | type   | notes                                                   |
+  |----------|--------|---------------------------------------------------------|
+  | id       | string | raw record id (opaque; UI shows `ref`)                  |
+  | ref      | string | masked, human-readable label `AUD-<year>-<seq>`         |
+  | client   | string | client name (`"Unknown Client"` fallback)              |
+  | type     | enum   | linked deal type: `Auto` \| `Home` \| `Bundle` \| `Other` |
+  | missing  | string | the failed/missing requirement (audit item name)        |
+  | daysOpen | number | days the item has been open (oldest first)              |
+  | dueAt    | string \| null | soft deadline, ISO. `null` for items generated before the field existed |
+  | attachments | array | proofs uploaded at sale time (PAC-56 #21b), surfaced by PAC-65 #16 |
+
+  ### `attachments` — evidence, or the instruction to go get it
+
+  Producers have been uploading discount proofs since PAC-56 #21b and the board
+  never read them, so the service team was chasing documents already sitting in
+  storage. Each entry is `{ index, filename, contentType, size }` — **never the
+  storage key**, whose prefix is a security property `assertKeyOwnership`
+  relies on. Fetch a short-lived URL with
+  `GET /deal-audits/:itemId/attachments/:index/download`.
+
+  ⚠ **An empty array is meaningful**, not missing data: it is what makes the row
+  read "no document on file — call the client and obtain it". Uploads are
+  optional across Card 5 as of PAC-65, so this is the common case.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `deal_audits` module disabled, or missing
+    `deal_audits:read`, or a branch mismatch for a branch-scoped caller.
+  - `400 Bad Request` — invalid query params (e.g. `pageSize` > 50, `page` < 1).
+
+  > **Tip:** the seeded producer (`producer@smithfamily.local`) is the
+  > data-rich user for this board. Log in as them to get non-empty results.
+}

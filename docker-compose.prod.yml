@@ -1,0 +1,167 @@
+# Production/staging/dev-server Docker Compose for SFA.
+#
+# Differences from local docker-compose.yml:
+#   - No MongoDB container (uses DigitalOcean Managed MongoDB via MONGODB_URI)
+#   - No MinIO container (uses DigitalOcean Spaces via STORAGE_*)
+#   - Uses pre-built images from the registry (no build on the droplet)
+#   - No auto-seed on startup (run `docker compose run --rm api node packages/api/dist/seed/seed.js` once, manually)
+#   - Web is published only to loopback (127.0.0.1:8080); host Nginx terminates TLS and proxies to it
+#   - API is published only on the droplet's PRIVATE IP (API_INNGEST_BIND), so the
+#     Inngest droplet can invoke functions at /api/inngest over the VPC
+#
+# /opt/sfa/.env is written in full by .github/workflows/deploy.reusable.yml on
+# every deploy — edit the GitHub Environment secrets, not the file on the box.
+#
+# Required variables (from /opt/sfa/.env):
+#   API_IMAGE, WEB_IMAGE  -> full registry image refs (e.g. ghcr.io/owner/repo/api:sha)
+#   MONGODB_URI           -> managed MongoDB connection string. Must be a replica
+#                            set (DO Managed MongoDB is) — the lead-intake
+#                            pipeline writes lead+household+contacts in one
+#                            transaction and silently degrades without one.
+#   JWT_ACCESS_SECRET, JWT_REFRESH_SECRET
+#   CORS_ORIGIN           -> e.g. https://dev.example.com
+#   WEB_BIND              -> host bind for web (default 127.0.0.1:8080)
+#   STORAGE_ENDPOINT, STORAGE_REGION, STORAGE_BUCKET,
+#   STORAGE_ACCESS_KEY_ID, STORAGE_SECRET_ACCESS_KEY,
+#   STORAGE_FORCE_PATH_STYLE=false
+#                         -> Spaces bucket for document uploads. Missing values
+#                            disable uploads *silently* — the API still boots and
+#                            passes its health check.
+#   PUBLIC_FORM_BASE_URL  -> public site URL; share links are built from it
+#   API_INNGEST_BIND      -> "<droplet private IP>:4000". Inngest reaches the
+#                            serve handler here; the firewall admits only the
+#                            Inngest droplet.
+#   INNGEST_BASE_URL, INNGEST_EVENT_KEY, INNGEST_SIGNING_KEY, INNGEST_DEV=0
+#                         -> the self-hosted Inngest server. INNGEST_DEV must be
+#                            "0" or the SDK infers dev mode and stops verifying
+#                            request signatures.
+#   RESEND_API_KEY, MAIL_DEFAULT_FROM
+#                         -> outbound email. A missing RESEND_API_KEY disables
+#                            sending *silently* — the worker falls back to a
+#                            logging transport, boots, and passes every health
+#                            check. Same failure shape as the STORAGE_* vars.
+#
+# Optional:
+#   WORKER_INLINE         -> "false" moves async work to the `worker` profile
+#                            below. Must be a real env var, not a .env line.
+#
+# Optional (defaults in packages/api/src/config/rate-limit.config.ts):
+#   RATE_LIMIT_SHORT, RATE_LIMIT_LONG, PUBLIC_FORM_RATE_LIMIT,
+#   PUBLIC_INTAKE_RATE_LIMIT, PUBLIC_INTAKE_HOURLY_LIMIT
+
+services:
+  api:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+    # Published, not just exposed, so the Inngest droplet can invoke functions at
+    # /api/inngest over the VPC.
+    #
+    # Defaults to loopback, which is the old `expose`-only behaviour. In deployed
+    # environments API_INNGEST_BIND is set to the droplet's PRIVATE IP, and the
+    # DO firewall admits port 4000 from the Inngest droplet alone. Deliberately
+    # not routed through nginx: the nginx config is baked into the droplet's
+    # cloud-init `user_data`, which cannot be changed in place — editing it
+    # replaces the running droplet.
+    #
+    # ⚠ Never bind this to 0.0.0.0. /api/inngest is raw Express middleware that
+    # none of the seven global guards see; its only authentication is Inngest's
+    # request signature.
+    ports:
+      - "${API_INNGEST_BIND:-127.0.0.1:4000}:4000"
+    networks:
+      - sfa
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/v1/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Async work as its own container. NOT started today — traffic is low, so the
+  # API runs the worker in-process (WORKER_INLINE defaults to true).
+  #
+  # It is defined here rather than left to a future PR so the split path is real
+  # and testable rather than hypothetical: same image, different entrypoint.
+  #
+  # To split:
+  #   1. set WORKER_INLINE=false in /opt/sfa/.env  (the API then serves no
+  #      functions — otherwise both processes register under the same Inngest
+  #      app id and whichever synced last wins)
+  #   2. docker compose --profile worker up -d      (--scale worker=N to fan out)
+  #   3. repoint INNGEST_URLS at the worker's :4001/api/inngest
+  worker:
+    profiles: ["worker"]
+    image: ${API_IMAGE}
+    command: ["node", "packages/api/dist/worker.js"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      WORKER_PORT: 4001
+    ports:
+      - "${WORKER_INNGEST_BIND:-127.0.0.1:4001}:4001"
+    networks:
+      - sfa
+    healthcheck:
+      # The serve endpoint answers a GET with its function count, which is a
+      # better readiness signal than "the process is up": it proves the registry
+      # resolved and the client is configured.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4001/api/inngest').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  web:
+    image: ${WEB_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_BIND:-127.0.0.1:8080}:80"
+    networks:
+      - sfa
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  sfa:
+    driver: bridge

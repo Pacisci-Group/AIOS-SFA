@@ -1,0 +1,55 @@
+meta {
+  name: Login as Reviewer
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Captured under its OWN name, never as `accessToken` — overwriting the
+  // collection bearer would silently re-run every later folder as the owner and
+  // invalidate the `own`-scope assertions in Leads / Performance / Leaderboard.
+  if (res.getStatus() === 201) {
+    bru.setVar("auditReviewerToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the reviewer can write deal audits", function () {
+    expect(res.getBody().user.permissions).to.include("deal_audits:write");
+  });
+}
+
+docs {
+  # Login as Reviewer — a second identity for the review step
+
+  Not an endpoint of its own; a fixture. **An audit cannot be reviewed by the
+  person who submitted it** (`403`), and the collection's default bearer is the
+  producer who submits — so **Review Audit** needs a different token.
+
+  The owner is used because they are agency-scoped and hold `deal_audits:write`,
+  so they can reach any audit in the tenant without being named on it.
+
+  Same idiom, and same warning, as **Users › Login as Owner**: the token is
+  captured under its own variable name so the collection bearer is untouched.
+}

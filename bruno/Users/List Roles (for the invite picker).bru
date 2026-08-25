@@ -1,0 +1,52 @@
+meta {
+  name: List Roles (for the invite picker)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/roles
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+script:post-response {
+  // Pick the Producer template so the invited user lands with a realistic
+  // permission set, falling back to the first role if the demo seed's naming
+  // ever changes. Captured as `inviteRoleId` for **Invite User**.
+  if (res.getStatus() === 200) {
+    const roles = res.getBody();
+    const producer = roles.find((r) => r.slug === "producer") ?? roles[0];
+    if (producer) {
+      bru.setVar("inviteRoleId", producer._id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns at least one assignable role", function () {
+    expect(res.getBody().length).to.be.greaterThan(0);
+  });
+}
+
+docs {
+  # GET /roles — the invite form's role picker
+
+  Not a new endpoint; listed here because it is what populates the **Role**
+  select on `/settings/users` (PAC-58 Scope 3), and because **Invite User** needs
+  a real role id to send.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:roles:read`.
+
+  **Response `200`** — `AgencyRole[]`: `_id`, `name`, `slug`, `description`,
+  `permissions[]`, `dataScope`, `isSystemTemplate`, `grantsAllEnabledModules`.
+
+  The UI shows `name` + `description`; `_id` is what goes into `roleIds[]`.
+}

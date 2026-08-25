@@ -1,0 +1,70 @@
+name: Terraform Plan (dev)
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform-plan.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/dev
+
+    env:
+      DIGITALOCEAN_TOKEN: ${{ secrets.DO_API_TOKEN }}
+      # Spaces credentials for the S3-compatible remote state backend
+      AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+      # Spaces credentials for the *provider*. Distinct from the pair above:
+      # those configure the state backend, these let the digitalocean provider
+      # read/manage the uploads bucket and its CORS rules, which go over the S3
+      # API rather than the DO API. Without them the plan fails on
+      # digitalocean_spaces_bucket as soon as enable_spaces = true. Same
+      # account-level Spaces key, so it reuses the TF_STATE_* secrets.
+      SPACES_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY }}
+      SPACES_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+      # Non-secret vars supplied via TF_VAR_ (secrets/IPs come from tfvars/secrets)
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+        working-directory: infra/terraform
+
+      - name: Guard against missing backend
+        run: |
+          if [ ! -f backend.tf ]; then
+            echo "::warning::No backend.tf in environments/dev — run 'make bootstrap' and 'make apply ENV=dev' locally first."
+            echo "Skipping remote plan; validating configuration only."
+            echo "SKIP_REMOTE=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Terraform init (local, no backend)
+        if: env.SKIP_REMOTE == 'true'
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        if: env.SKIP_REMOTE == 'true'
+        run: terraform validate
+
+      - name: Terraform init
+        if: env.SKIP_REMOTE != 'true'
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        if: env.SKIP_REMOTE != 'true'
+        run: terraform plan -input=false -var-file=terraform.tfvars -no-color

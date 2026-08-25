@@ -1,168 +1,231 @@
-import { useState } from "react";
-import { Phone, MessageSquare, FileText, Settings, User, Plus, Send } from "lucide-react";
+import type { ActivityOrigin, LeadDetailActivity } from "@sfa/shared";
+import { ACTIVITY_ORIGIN_LABELS } from "@sfa/shared";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import { ActivityChanges } from "./ActivityChanges";
+import { ActivityComposer } from "./ActivityComposer";
+import { activityDisplay, activityLabel } from "./lead-display";
 
-type ActivityType = "call" | "note" | "quote" | "system" | "email";
-
-interface Activity {
-  id: string;
-  type: ActivityType;
-  title: string;
-  body?: string;
-  timestamp: string;
-  user: string;
+interface ActivityTimelineProps {
+  activities: LeadDetailActivity[];
+  /** Needed by the composer, which logs against this lead. */
+  leadId: string;
 }
 
-const activities: Activity[] = [
-  {
-    id: "1",
-    type: "call",
-    title: "Outbound call — 12 min",
-    body: "Discussed current State Farm renewal. Client frustrated with 18% rate increase. Interested in exploring options. Confirmed household info.",
-    timestamp: "Today, 10:42 AM",
-    user: "MR",
-  },
-  {
-    id: "2",
-    type: "quote",
-    title: "Quote generated — Progressive Auto",
-    body: "Full quote package built. $156/mo vs $195/mo current. Sent recap PDF to client email.",
-    timestamp: "Today, 9:15 AM",
-    user: "System",
-  },
-  {
-    id: "3",
-    type: "note",
-    title: "Note added",
-    body: "Client prefers text over email. Best time to reach: mornings before 11am. Has teenage driver (Priya, 17) being added soon.",
-    timestamp: "Yesterday, 4:30 PM",
-    user: "MR",
-  },
-  {
-    id: "4",
-    type: "email",
-    title: "Quote recap sent via email",
-    body: "Side-by-side comparison emailed to anurodh.vaidya@gmail.com",
-    timestamp: "Yesterday, 4:35 PM",
-    user: "System",
-  },
-  {
-    id: "5",
-    type: "system",
-    title: "Lead status changed → Hot",
-    timestamp: "Yesterday, 3:00 PM",
-    user: "System",
-  },
-  {
-    id: "6",
-    type: "call",
-    title: "Inbound call — 4 min",
-    body: "Client called to confirm appointment for Thursday. Left VM.",
-    timestamp: "Jun 6, 2:10 PM",
-    user: "MR",
-  },
-  {
-    id: "7",
-    type: "system",
-    title: "Lead created — Referred by David Chen",
-    timestamp: "Jun 5, 8:00 AM",
-    user: "System",
-  },
-];
+/** `Today, 10:42 AM` / `Yesterday, 4:30 PM` / `Jun 5, 8:00 AM`. */
+function formatWhen(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
 
-const typeConfig: Record<ActivityType, { icon: React.ElementType; color: string; bg: string }> = {
-  call: { icon: Phone, color: "var(--sky)", bg: "rgba(14,165,233,0.12)" },
-  note: { icon: MessageSquare, color: "var(--amber)", bg: "rgba(245,158,11,0.12)" },
-  quote: { icon: FileText, color: "var(--emerald)", bg: "rgba(16,185,129,0.12)" },
-  system: { icon: Settings, color: "var(--muted-foreground)", bg: "var(--muted)" },
-  email: { icon: Send, color: "#8b5cf6", bg: "rgba(139,92,246,0.12)" },
-};
+  const time = date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 
-export function ActivityTimeline() {
-  const [note, setNote] = useState("");
-  const [items, setItems] = useState<Activity[]>(activities);
+  const startOfDay = (input: Date) =>
+    new Date(input.getFullYear(), input.getMonth(), input.getDate()).getTime();
+  const days = Math.round(
+    (startOfDay(new Date()) - startOfDay(date)) / 86_400_000,
+  );
 
-  const addNote = () => {
-    if (!note.trim()) return;
-    const newItem: Activity = {
-      id: String(Date.now()),
-      type: "note",
-      title: "Note added",
-      body: note.trim(),
-      timestamp: "Just now",
-      user: "MR",
-    };
-    setItems([newItem, ...items]);
-    setNote("");
-  };
+  if (days === 0) return `Today, ${time}`;
+  if (days === 1) return `Yesterday, ${time}`;
+  return `${date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === new Date().getFullYear()
+      ? {}
+      : { year: "numeric" }),
+  })}, ${time}`;
+}
+
+/**
+ * Notes & Activity — this lead's history, newest first, with a composer.
+ *
+ * The composer was removed in PAC-38: the version inherited from the Figma
+ * export wrote to local state, so notes appeared and then vanished on the next
+ * render, and there was no endpoint to point it at. PAC-16 added
+ * `POST /activities` and it is back, as `ActivityComposer` — the same endpoint
+ * the dashboard's Call/Text/Email quick actions use.
+ *
+ * Renders whatever types exist rather than assuming a set. `lead_created`,
+ * `quoted`, `sold` and `audit_resolved` come from their own pipelines; `call`,
+ * `text`, `email` and `note` are client-written; `field_changed` is the
+ * quote/sold edit log (PAC-65 #9).
+ *
+ * ## The edit log is absent, not hidden, for most readers
+ *
+ * `field_changed` rows are excluded from the `GET /leads/:id` **query** for any
+ * caller without `agency:changelogs:read` — owners and managers hold it,
+ * producers do not. So there is no permission check in this component, and the
+ * entry count in the header legitimately differs by role.
+ *
+ * ## Notes read as notes (PAC-56 #29)
+ *
+ * A note used to render exactly like a logged call — one line of text in a
+ * timeline row — so it was neither identifiable as a note nor traceable to where
+ * it was written. Two changes fix that:
+ *
+ * - **Notes get their own treatment**: the text sits in a sunken quote block
+ *   with an accent rule, so a written thought is visibly different from an event
+ *   the system recorded.
+ * - **Every row carries its provenance**: who wrote it, when, and which surface
+ *   it came from. The origin chip is shown only when it is *not* the lead
+ *   itself — on a page about this lead, "Lead" on every row is noise, and the
+ *   rows worth spotting are the ones that arrived from the quote recap or the
+ *   sold flow.
+ */
+export function ActivityTimeline({
+  activities,
+  leadId,
+}: ActivityTimelineProps) {
+  return (
+    <section className="flex h-full flex-col rounded-xl border border-border bg-card">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3">
+        <h2 className="text-sm font-semibold text-card-foreground">
+          Notes &amp; activity
+        </h2>
+        <span className="text-sm text-muted-foreground">
+          {activities.length} {activities.length === 1 ? "entry" : "entries"}
+        </span>
+      </div>
+
+      {activities.length === 0 ? (
+        <p className="flex-1 px-5 py-4 text-base text-muted-foreground">
+          Nothing has been logged against this lead yet.
+        </p>
+      ) : (
+        <ol className="flex-1 overflow-y-auto px-5 py-3">
+          {activities.map((activity, index) => {
+            const { icon: Icon, tone, tint } = activityDisplay[activity.type];
+            const isLast = index === activities.length - 1;
+            const isNote = activity.type === "note";
+            const isChange = activity.type === "field_changed";
+            // `POST /activities` defaults an untyped touch's summary to the
+            // type's own label, so a bare "Call logged" would otherwise render
+            // twice — once as the heading, once as the body.
+            const body =
+              activity.summary && activity.summary !== activityLabel[activity.type]
+                ? activity.summary
+                : null;
+
+            return (
+              <li key={activity.id} className="relative flex gap-3">
+                {/* The connector, stopping at the last entry. */}
+                {!isLast && (
+                  <span
+                    aria-hidden
+                    className="absolute bottom-0 left-4 top-10 w-px bg-border"
+                  />
+                )}
+
+                <span
+                  aria-hidden
+                  className={cn(
+                    "relative z-10 mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full",
+                    tint,
+                  )}
+                >
+                  <Icon className={cn("size-4", tone)} />
+                </span>
+
+                <div className="min-w-0 flex-1 pb-4">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p
+                      className={cn(
+                        "text-base font-medium",
+                        isNote ? "text-muted-foreground" : "text-card-foreground",
+                      )}
+                    >
+                      {isNote
+                        ? "Note"
+                        : /*
+                           * A change row's summary is its heading. It is
+                           * deliberately value-free server-side ("Quote recap
+                           * edited" / "Policy edited"), so it says which record
+                           * was touched without duplicating the before/after
+                           * list below it — and it beats the generic
+                           * "Record edited" fallback.
+                           */
+                          (isChange && activity.summary) ||
+                          activityLabel[activity.type]}
+                    </p>
+                    <span className="shrink-0 whitespace-nowrap text-sm text-muted-foreground">
+                      {formatWhen(activity.occurredAt)}
+                    </span>
+                  </div>
+
+                  {isChange && activity.changes ? (
+                    <ActivityChanges changes={activity.changes} />
+                  ) : isNote
+                    ? /*
+                       * The note's own words, set apart from the surrounding
+                       * event rows. `whitespace-pre-line` because the composer
+                       * is a textarea and a producer's line breaks are
+                       * meaningful.
+                       */
+                      body && (
+                        <p className="mt-1.5 whitespace-pre-line rounded-r-md border-l-2 border-destructive/50 bg-sunken py-2 pl-3 pr-2 text-base text-card-foreground">
+                          {body}
+                        </p>
+                      )
+                    : body && (
+                        <p className="mt-0.5 text-base text-card-foreground">
+                          {body}
+                        </p>
+                      )}
+
+                  <Provenance
+                    userName={activity.userName}
+                    origin={activity.origin}
+                    tone={tone}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+
+      {/* Pinned below the scrolling list, so it stays reachable on a lead with
+          a long history. */}
+      <ActivityComposer leadId={leadId} />
+    </section>
+  );
+}
+
+/**
+ * Who wrote it and where (#29).
+ *
+ * The origin chip is suppressed for `lead`, which is where the overwhelming
+ * majority of rows come from — labelling every row on a lead page "Lead" is
+ * noise that hides the two or three rows whose origin actually matters.
+ *
+ * `system` covers migrated rows and anything the platform generated with no
+ * human author; it is shown, because "this came from the old system" is exactly
+ * the kind of thing a producer needs to know before trusting a summary.
+ */
+function Provenance({
+  userName,
+  origin,
+  tone,
+}: {
+  userName: string | null;
+  origin: ActivityOrigin;
+  tone: string;
+}) {
+  const showOrigin = origin !== "lead";
+  if (!userName && !showOrigin) return null;
 
   return (
-    <div className="bg-card rounded-lg border border-border flex flex-col h-full">
-      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-        <h3 className="text-sm text-card-foreground" style={{ fontWeight: 600 }}>Notes & Activity</h3>
-        <span className="text-xs text-muted-foreground">{items.length} entries</span>
-      </div>
-
-      {/* Quick note input */}
-      <div className="px-4 py-3 border-b border-border">
-        <div className="flex gap-2">
-          <div className="size-6 rounded-full flex items-center justify-center text-white shrink-0 mt-0.5" style={{ background: "var(--sky)", fontSize: 10, fontWeight: 700 }}>
-            MR
-          </div>
-          <div className="flex-1 flex gap-2">
-            <input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addNote()}
-              placeholder="Log a note or call..."
-              className="flex-1 text-xs bg-muted/50 rounded-md px-3 py-2 outline-none border border-transparent focus:border-border placeholder:text-muted-foreground/60"
-            />
-            <button
-              onClick={addNote}
-              className="px-3 py-1.5 rounded-md text-white transition-opacity hover:opacity-80"
-              style={{ background: "var(--sky)", fontSize: 12, fontWeight: 600 }}
-            >
-              <Plus size={14} />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Timeline scroll area */}
-      <div className="overflow-y-auto flex-1 px-4 py-3 space-y-0" style={{ scrollbarWidth: "none" }}>
-        {items.map((item, i) => {
-          const cfg = typeConfig[item.type];
-          const Icon = cfg.icon;
-          const isLast = i === items.length - 1;
-          return (
-            <div key={item.id} className="flex gap-3 relative">
-              {/* Vertical line */}
-              {!isLast && (
-                <div className="absolute left-3 top-8 bottom-0 w-px bg-border" style={{ zIndex: 0 }} />
-              )}
-              {/* Icon dot */}
-              <div
-                className="size-6 rounded-full flex items-center justify-center shrink-0 relative z-10 mt-1"
-                style={{ background: cfg.bg }}
-              >
-                <Icon size={11} style={{ color: cfg.color }} />
-              </div>
-              {/* Content */}
-              <div className="pb-4 flex-1 min-w-0">
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-xs text-card-foreground" style={{ fontWeight: 500 }}>{item.title}</p>
-                  <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">{item.timestamp}</span>
-                </div>
-                {item.body && (
-                  <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{item.body}</p>
-                )}
-                {item.user !== "System" && (
-                  <p className="text-xs mt-1" style={{ color: cfg.color }}>{item.user}</p>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+      {userName && <span className={tone}>{userName}</span>}
+      {showOrigin && (
+        <Badge size="sm" variant="secondary" className="text-muted-foreground">
+          {ACTIVITY_ORIGIN_LABELS[origin]}
+        </Badge>
+      )}
+    </p>
   );
 }

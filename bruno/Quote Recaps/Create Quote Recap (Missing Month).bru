@@ -1,0 +1,86 @@
+meta {
+  name: Create Quote Recap (Missing Month)
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{baseUrl}}/quote-recaps
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "policies": [
+      { "policyType": "Auto", "premium": 1200.00, "itemCount": 1 }
+    ],
+    "quoteDocument": {
+      "key": "{{quoteDocumentKey}}",
+      "filename": "carrier-quote.pdf",
+      "contentType": "application/pdf",
+      "size": 2048
+    }
+  }
+}
+
+tests {
+  test("rejects a create with no renewal month", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("names the field, so the form can point at it", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("errors");
+    expect(JSON.stringify(body.errors)).to.contain("insuranceRenewalMonth");
+  });
+
+  test("no submissionToken, so nothing was created to clean up", function () {
+    expect(res.getBody()).to.not.have.property("id");
+  });
+}
+
+docs {
+  # POST /quote-recaps — the renewal month is required (PAC-56 #16)
+
+  Documents the one asymmetry in this field's contract, which is otherwise easy
+  to "tidy" in the wrong direction:
+
+  | surface | required? | why |
+  |---|---|---|
+  | `POST /quote-recaps` | **yes** | David asked for it on the form; a new recap should always record when the client's cover renews. |
+  | `PATCH /quote-recaps/:id` | no | every migrated recap predates the field — requiring it would make all of them un-editable. |
+  | Mongoose `QuoteRecap` | no | `required: true` would assert something false about thousands of existing documents and break the migration under `runValidators`. |
+
+  So requiredness lives **only** in the create DTO. Deleting this request, or
+  "fixing" the schema to require the field everywhere, breaks editing every
+  recap imported from SmartSuite.
+
+  - **Module:** `quote_recaps` · **Permission:** `quote_recaps:write`
+
+  ## Also rejected
+  SmartSuite's choice UUIDs (`0897f82f-de3a-4bbb-b973-c56bb1f4fecb` and the
+  other eleven). They are for *reading* migrated data —
+  `normalizeInsuranceMonth` maps them on every read — and accepting them on a
+  write path would put a second vocabulary back into the collection, which is
+  the mess `policyType` already had to be cleaned up from.
+
+  ## Response `400`
+  ```json
+  {
+    "message": "Validation failed",
+    "errors": { "fieldErrors": { "insuranceRenewalMonth": ["Pick the renewal month"] } }
+  }
+  ```
+
+  ## Run order
+  Needs `createdLeadId` (Leads) and `quoteDocumentKey` (Presign + Upload Quote
+  Document). Sends no `submissionToken`: a rejected request must not burn the
+  idempotency key the earlier requests in this folder rely on.
+}

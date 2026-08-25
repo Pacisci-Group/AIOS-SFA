@@ -1,0 +1,89 @@
+meta {
+  name: List Audit Notes
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}/notes
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a thread array", function () {
+    expect(res.getBody()).to.be.an("array");
+  });
+
+  test("entries carry type, summary, when and who", function () {
+    const thread = res.getBody();
+    if (thread.length > 0) {
+      expect(thread[0]).to.have.property("type");
+      expect(thread[0]).to.have.property("summary");
+      expect(thread[0]).to.have.property("occurredAt");
+      expect(thread[0]).to.have.property("userName");
+    }
+  });
+}
+
+docs {
+  # GET /deal-audits/deals/:dealId/notes — the audit thread (PAC-72)
+
+  Free-text notes **and** workflow events in one list, newest first.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:read`
+  - **Data scope:** assignee **or** reviewer (see **Set Audit Assignment**).
+
+  Mixing the two is the point: "Dana submitted this" and "called the client,
+  no answer" read as one conversation rather than two parallel logs.
+
+  ## Storage
+  These are ordinary `activities` rows — `subjectType: "dealAudit"` with a
+  `dealAuditId` ref — not a separate comments collection. The timeline
+  vocabulary already existed and reusing it means one renderer, one permission
+  story and one place to look.
+
+  ## Types you will see
+  | type | written by |
+  |------|------------|
+  | `note` | a person, via **Add Audit Note** |
+  | `audit_assigned` | Set Audit Assignment |
+  | `audit_submitted` | Submit Audit For Review |
+  | `audit_approved` / `audit_changes_requested` / `audit_sent_back` | Review Audit |
+
+  Only `note` is client-writable. The five workflow types are **system-emitted**
+  and deliberately absent from `LOGGABLE_ACTIVITY_TYPES` — a client able to POST
+  `audit_approved` could clear its own audit.
+
+  `audit_resolved` is **not** here: it hangs off an individual checklist item,
+  not off the audit as a whole.
+
+  ## Response `200`
+  ```json
+  [
+    {
+      "id": "665f...d21",
+      "type": "audit_submitted",
+      "summary": "Audit submitted for review",
+      "occurredAt": "2026-08-21T10:04:00.000Z",
+      "userName": "Pat Producer"
+    }
+  ]
+  ```
+
+  Capped at 100 entries, newest first, and unpaginated by design — an audit
+  thread that long is a conversation that should have been a phone call.
+
+  ## Errors
+  - `403 Forbidden` — module disabled or missing `deal_audits:read`.
+  - `404 Not Found` — no audit for that deal, or out of reach.
+}

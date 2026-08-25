@@ -6,7 +6,26 @@ coverage
 *.log
 .DS_Store
 
-# Local project folders (not pushed)
+# Local project folders / symlinks (not pushed)
+# Read-only reference to the legacy SFA app (see .claude/rules/legacy-sfa-reference.md)
+/SFA
 SFA/
+# Read-only reference to the Figma FE mockups repo (see .claude/rules/figma-mockups-reference.md)
+/agencyops_fe_mockups
+agencyops_fe_mockups/
 agencyops/
+# Read-only reference to the sfaforms prototype (see .claude/rules/sfaforms-reference.md)
+/sfaforms
 sfaforms/
+
+# Claude Code — personal, machine-local config (.claude/rules/ IS committed)
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Real mailer source files (PAC-73). 20-25 MB each and full of real prospects'
+# names and addresses — they belong on David's drive, not in git history, where
+# a `git rm` would not remove them. The committed test fixture is a redacted
+# 197-row slice: packages/api/test/fixtures/mailers/.
+SFA-RTP-*.csv
+*-RTP-*.csv
+Mailer_Test_Alteryx*.csv

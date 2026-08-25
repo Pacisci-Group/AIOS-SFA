@@ -1,0 +1,24 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+
+# Local var files with secrets (presets are committed; live tfvars in env dirs are not)
+environments/*/terraform.tfvars
+bootstrap/terraform.tfvars
+
+# Keep the template's example tfvars and the committed presets
+!environments/_template/terraform.tfvars.tpl
+!environments/presets/*.tfvars
+
+# Backend config generated per-env (contains bucket name, not secrets, but env-specific)
+environments/*/backend.tf
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

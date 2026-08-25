@@ -1,0 +1,131 @@
+variable "environment" {
+  type = string
+}
+
+variable "region" {
+  type    = string
+  default = "nyc3"
+}
+
+variable "spaces_region" {
+  type    = string
+  default = "nyc3"
+}
+
+variable "vpc_ip_range" {
+  description = "CIDR for this environment's VPC. Must be unique across the whole DigitalOcean account, not just the region. Changing it on a live environment replaces the VPC and everything attached to it."
+  type        = string
+  default     = "10.10.0.0/16"
+}
+
+variable "droplet_size" {
+  type = string
+}
+
+variable "mongo_size" {
+  type = string
+}
+
+variable "mongo_node_count" {
+  type    = number
+  default = 1
+}
+
+variable "domain_root" {
+  type = string
+}
+
+variable "dns_subdomain" {
+  type = string
+}
+
+variable "domain" {
+  type = string
+}
+
+variable "enable_tls" {
+  type    = bool
+  default = false
+}
+
+variable "certbot_email" {
+  type    = string
+  default = ""
+}
+
+variable "ssh_public_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "ssh_allowed_ips" {
+  type = list(string)
+}
+
+variable "enable_dns" {
+  type    = bool
+  default = true
+}
+
+variable "create_domain_zone" {
+  type    = bool
+  default = false
+}
+
+variable "enable_reserved_ip" {
+  type    = bool
+  default = false
+}
+
+variable "enable_spaces" {
+  type    = bool
+  default = false
+}
+
+variable "spaces_cors_origins" {
+  type    = list(string)
+  default = []
+}
+
+variable "create_spaces_access_key" {
+  type    = bool
+  default = true
+}
+
+variable "enable_backups" {
+  type    = bool
+  default = false
+}
+
+variable "prevent_destroy" {
+  type    = bool
+  default = false
+}
+
+variable "project_id" {
+  type    = string
+  default = ""
+}
+
+variable "tags" {
+  type    = list(string)
+  default = []
+}
+
+variable "enable_inngest" {
+  description = "Provision the Inngest droplet (self-hosted async event bus/scheduler)"
+  type        = bool
+  default     = false
+}
+
+variable "inngest_droplet_size" {
+  description = "Size of the Inngest droplet"
+  type        = string
+  default     = "s-1vcpu-1gb"
+}
+
+variable "mongo_allowed_ip_addresses" {
+  description = "Developer IPs/CIDRs allowed to reach Managed MongoDB directly. Declare here, never in the DO console."
+  type        = list(string)
+  default     = []
+}

@@ -4,29 +4,101 @@ import { Model } from 'mongoose';
 import { getModelToken } from '@nestjs/mongoose';
 import { ALL_MODULE_KEYS } from '@sfa/shared';
 import { AppModule } from '../app.module';
+import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
 import { Branch } from '../branches/schemas/branch.schema';
+import { Carrier } from '../carriers/schemas/carrier.schema';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency } from '../platform/schemas/agency.schema';
-import { AgencyRole } from '../roles/schemas/agency-role.schema';
 import { User } from '../users/schemas/user.schema';
+import { seedAuditTemplates } from './audit-templates.seed';
+import { seedCarriers } from './carriers.seed';
 
+/**
+ * Core seed — platform-required data only.
+ *
+ * This seed provisions the minimum needed for the app to *function* and is safe
+ * to run in every environment (including production) and on API startup:
+ *   1. The platform super admin (so the platform can be logged into and agencies
+ *      provisioned).
+ *   2. Global catalog / feature data (plans, feature definitions, constants) —
+ *      see the marked section below as these collections come online.
+ *   3. A single empty tenant scaffold (Smith Family Agency + Main branch +
+ *      default roles) that the SmartSuite -> Mongo migration imports into.
+ *
+ * It intentionally does NOT create demo users or any CRM data. For a fully
+ * populated agency to build/test against, use the demo seed instead
+ * (`npm run seed:demo:dev`, see `src/seed/demo`).
+ */
 async function seed() {
   const app = await NestFactory.createApplicationContext(AppModule);
 
   const agencyModel = app.get<Model<Agency>>(getModelToken(Agency.name));
   const branchModel = app.get<Model<Branch>>(getModelToken(Branch.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
-  const roleModel = app.get<Model<AgencyRole>>(getModelToken(AgencyRole.name));
+  const auditTemplateModel = app.get<Model<AuditTemplate>>(
+    getModelToken(AuditTemplate.name),
+  );
+  const carrierModel = app.get<Model<Carrier>>(getModelToken(Carrier.name));
   const permissionsService = app.get(PermissionsService);
 
+  // ---------------------------------------------------------------------------
+  // 1. Platform super admin (required for the app to function)
+  // ---------------------------------------------------------------------------
   const superAdminEmail =
     process.env.SEED_SUPER_ADMIN_EMAIL ?? 'admin@sfa.local';
   const superAdminPassword =
     process.env.SEED_SUPER_ADMIN_PASSWORD ?? 'ChangeMe123!';
 
+  const existingSuperAdmin = await userModel.findOne({
+    email: superAdminEmail,
+  });
+  if (!existingSuperAdmin) {
+    await userModel.create({
+      email: superAdminEmail,
+      passwordHash: await bcrypt.hash(superAdminPassword, 12),
+      isPlatformAdmin: true,
+      firstName: 'Super',
+      lastName: 'Admin',
+      isActive: true,
+    });
+    console.log(`Created super admin: ${superAdminEmail}`);
+  } else {
+    await userModel.updateOne(
+      { _id: existingSuperAdmin._id },
+      { $set: { isPlatformAdmin: true }, $unset: { roles: 1 } },
+    );
+    console.log('Super admin updated');
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2. Global catalog / feature data (plans, feature definitions, constants)
+  // ---------------------------------------------------------------------------
+  // Anything seeded here must be part of a shipped feature and required for the
+  // app to function — never demo/tenant data (that belongs in the demo seed).
+
+  // Carrier catalog (PAC-56 #19). Platform-required, not demo data: it is the
+  // only source for the Sold wizard's carrier select, so an empty collection
+  // forces every sale through the "Other" escape. Rows carry `agencyId: null`,
+  // which is what makes them visible to every tenant.
+  const carriers = await seedCarriers(carrierModel);
+  console.log(
+    `Carriers seeded (${carriers.created} created, ${carriers.refreshed} already present)`,
+  );
+
+  // ---------------------------------------------------------------------------
+  // 3. Empty tenant scaffold — migration target (no demo users, no CRM data)
+  // ---------------------------------------------------------------------------
   const modules = Object.fromEntries(
     ALL_MODULE_KEYS.map((key) => [key, { enabled: true }]),
   );
+
+  // The mailer identity fields (PAC-73). `ticker` is how the BigQuery backfill
+  // attributes a row to this tenant; `allstateAgencyId` is what an uploaded RTP
+  // file's `agencyid` column is cross-checked against. Both are reconciled on
+  // an existing agency rather than only set on create, because the scaffold
+  // predates them and a database seeded before PAC-73 would otherwise import
+  // nothing and warn on every upload.
+  const mailerIdentity = { ticker: 'SFA', allstateAgencyId: 'A0B9049' };
 
   let agency = await agencyModel.findOne({ slug: 'smith-family-agency' });
   if (!agency) {
@@ -35,10 +107,12 @@ async function seed() {
       slug: 'smith-family-agency',
       status: 'active',
       modules,
+      ...mailerIdentity,
     });
     console.log('Created agency: Smith Family Agency');
   } else {
-    console.log('Agency already exists, skipping create');
+    await agencyModel.updateOne({ _id: agency._id }, { $set: mailerIdentity });
+    console.log('Agency already exists, mailer identity reconciled');
   }
 
   await permissionsService.seedDefaultRoles(agency._id);
@@ -60,61 +134,27 @@ async function seed() {
     console.log('Branch already exists, skipping create');
   }
 
-  const ownerRole = await roleModel.findOne({
-    agencyId: agency._id,
-    slug: 'agency_owner',
-  });
+  // Post-sale audit checklist (PAC-40). Platform-required, not demo data:
+  // `AuditGenerationService` resolves computed titles against this collection
+  // by exact name, so an agency without it books sold deals that generate no
+  // service hand-off at all — silently, because generation is best-effort.
+  const templates = await seedAuditTemplates(
+    auditTemplateModel,
+    agency._id.toString(),
+    branch._id.toString(),
+  );
+  console.log(
+    `Audit templates seeded (${templates.created} created, ${templates.refreshed} already present)`,
+  );
 
-  const existingSuperAdmin = await userModel.findOne({ email: superAdminEmail });
-  if (!existingSuperAdmin) {
-    await userModel.create({
-      email: superAdminEmail,
-      passwordHash: await bcrypt.hash(superAdminPassword, 12),
-      isPlatformAdmin: true,
-      firstName: 'Super',
-      lastName: 'Admin',
-      isActive: true,
-    });
-    console.log(`Created super admin: ${superAdminEmail}`);
-  } else {
-    await userModel.updateOne(
-      { _id: existingSuperAdmin._id },
-      { $set: { isPlatformAdmin: true }, $unset: { roles: 1 } },
-    );
-    console.log('Super admin updated');
-  }
-
-  const ownerEmail =
-    process.env.SEED_AGENCY_OWNER_EMAIL ?? 'owner@smithfamily.local';
-  const ownerPassword =
-    process.env.SEED_AGENCY_OWNER_PASSWORD ?? 'ChangeMe123!';
-
-  const existingOwner = await userModel.findOne({ email: ownerEmail });
-  if (!existingOwner) {
-    await userModel.create({
-      agencyId: agency._id,
-      email: ownerEmail,
-      passwordHash: await bcrypt.hash(ownerPassword, 12),
-      roleIds: ownerRole ? [ownerRole._id] : [],
-      firstName: 'Agency',
-      lastName: 'Owner',
-      isActive: true,
-    });
-    console.log(`Created agency owner: ${ownerEmail}`);
-  } else if (ownerRole) {
-    await userModel.updateOne(
-      { _id: existingOwner._id },
-      {
-        $set: { roleIds: [ownerRole._id] },
-        $unset: { roles: 1 },
-      },
-    );
-    console.log('Agency owner updated with agency_owner role');
-  }
-
-  console.log('\nSeed complete.');
+  console.log('\nCore seed complete.');
   console.log(`Super Admin: ${superAdminEmail} / ${superAdminPassword}`);
-  console.log(`Agency Owner: ${ownerEmail} / ${ownerPassword}`);
+  console.log(
+    'Tenant scaffold ready: Smith Family Agency / Main branch (empty).',
+  );
+  console.log(
+    'For a populated agency to test against, run: npm run seed:demo:dev',
+  );
 
   await app.close();
 }

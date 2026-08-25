@@ -1,0 +1,22 @@
+# Copy to backend.tf and fill in your state bucket, then `terraform init`.
+#   cp backend.tf.example backend.tf
+#
+# Requires these env vars at init/plan/apply time:
+#   AWS_ACCESS_KEY_ID     = Spaces access key
+#   AWS_SECRET_ACCESS_KEY = Spaces secret key
+#
+terraform {
+  backend "s3" {
+    endpoints = {
+      s3 = "https://nyc3.digitaloceanspaces.com"
+    }
+    bucket                      = "sfa-terraform-state"
+    key                         = "dev/terraform.tfstate"
+    region                      = "us-east-1"
+    skip_credentials_validation = true
+    skip_requesting_account_id  = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
+    skip_s3_checksum            = true
+  }
+}

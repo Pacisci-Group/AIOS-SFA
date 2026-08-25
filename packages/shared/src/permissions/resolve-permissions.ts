@@ -3,6 +3,21 @@ export interface PermissionOverrides {
   revokes: string[];
 }
 
+/**
+ * Ensure every `{module}:write` permission also carries `{module}:read`.
+ * Write always implies read in the simplified page model.
+ */
+function expandWriteImpliesRead(set: Set<string>): void {
+  for (const permission of [...set]) {
+    if (permission.endsWith(':write')) {
+      const moduleKey = permission.slice(0, -':write'.length);
+      if (moduleKey) {
+        set.add(`${moduleKey}:read`);
+      }
+    }
+  }
+}
+
 export function resolvePermissionSet(input: {
   rolePermissions: string[];
   grants?: string[];
@@ -26,6 +41,11 @@ export function resolvePermissionSet(input: {
   for (const revoke of input.revokes ?? []) {
     set.delete(revoke);
   }
+
+  // Apply write => read AFTER grants/revokes so the invariant holds no matter
+  // how the set was built: any surviving `{m}:write` re-adds `{m}:read`. Read
+  // can never be stripped while write remains — write always carries read.
+  expandWriteImpliesRead(set);
 
   const result = [...set];
 

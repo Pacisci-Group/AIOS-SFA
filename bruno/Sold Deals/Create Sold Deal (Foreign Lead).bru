@@ -1,0 +1,69 @@
+meta {
+  name: Create Sold Deal (Foreign Lead)
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/sold-deals
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "000000000000000000000000",
+    "soldDate": "2026-02-15",
+    "policies": [
+      {
+        "policyType": "Auto",
+        "effectiveDate": "2026-02-01",
+        "carrier": "Allstate",
+        "policyNumber": "SHOULD-NEVER-EXIST",
+        "premium": 100,
+        "itemCount": 1,
+        "newBusinessApplication": {
+          "key": "{{nbaDocumentKey}}",
+          "filename": "new-business-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
+        "priorInsurance": { "none": true },
+        "cancellation": { "cancelled": false }
+      }
+    ]
+  }
+}
+
+tests {
+  test("returns 404 Not Found — not 403", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("says nothing about whether the lead exists", function () {
+    expect(JSON.stringify(res.getBody())).to.not.contain("permission");
+  });
+}
+
+docs {
+  # POST /sold-deals — a lead the caller cannot see (PAC-40)
+
+  Asserts the scope clamp is a **404, not a 403**.
+
+  A 403 would confirm the lead exists and merely isn't yours; a 404 says
+  nothing. Whether another producer's lead exists is not the caller's business,
+  so the same response is returned for "no such lead", "another producer's
+  lead" and "another branch's lead".
+
+  Note an **unassigned** lead is also a 404 under `own` scope: `Lead.producerId`
+  is optional, so `undefined !== userId` and the clamp holds. A producer cannot
+  book a sale against a lead nobody owns.
+
+  Same shape as `Quote Recaps/Create Quote Recap (Foreign Lead)` — both write
+  paths share one `LeadAccessService`.
+}

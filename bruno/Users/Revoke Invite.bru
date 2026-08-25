@@ -1,0 +1,49 @@
+meta {
+  name: Revoke Invite
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}/users/{{invitedUserId}}/invite
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /users/:userId/invite
+
+  Revoke a pending invite. The user row is **deleted** — it was never a person:
+  never logged into, owns no records. Deactivating instead would leave a dead
+  account in the directory and hold the unique `email` index against a future
+  invite to the same address.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:users:write`.
+
+  **Response `204`** — no body.
+
+  **Errors**
+  - `403` — caller lacks `agency:users:write`.
+  - `404` — no such user in this agency.
+  - `409` — the user has already accepted; there is no pending invite to revoke.
+    Removing a real employee is **Deactivate User** (`DELETE /users/:userId`),
+    which deactivates rather than deletes because an active user owns records.
+
+  After this, the emailed link returns `404` from **Get Invite (Public)** and
+  `401` from `POST /auth/accept-invite`.
+
+  ## Why it runs last
+  It is also this folder's **cleanup**. **Invite User** mints a fresh address
+  every run; revoking it here means a repeated `npx @usebruno/cli run` leaves no
+  accumulating pile of pending invites in the demo tenant. Same role as
+  `Leads › Share Links › Create Disposable Share Link`.
+}

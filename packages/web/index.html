@@ -4,12 +4,34 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AgencyOps</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
+    <!--
+      Applies the theme class before first paint. next-themes only sets it in an
+      effect, which in a Vite SPA (no SSR) lands *after* the first paint — every
+      dark-mode load would flash light. Must stay in sync with the provider in
+      `src/app/ThemeProvider.tsx`: same storage key, same "dark" default.
+    -->
+    <script>
+      (function () {
+        var el = document.documentElement;
+        var t = 'dark';
+        try {
+          var stored = localStorage.getItem('theme');
+          if (stored === 'light' || stored === 'dark') {
+            t = stored;
+          } else if (stored === 'system') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+          }
+        } catch (e) {
+          /* Safari private mode throws on localStorage; fall through to dark. */
+        }
+        el.classList.add(t);
+        el.style.colorScheme = t;
+      })();
+    </script>
+    <!-- Inter is self-hosted via `@fontsource-variable/inter`, imported at the
+         top of `src/styles/index.css`. Do not re-add a Google Fonts link. -->
   </head>
   <body>
     <div id="root"></div>

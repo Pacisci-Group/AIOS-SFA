@@ -1,17 +1,52 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
+import {
+  ALL_MODULE_KEYS,
+  allPagePermissionKeys,
+  PageLevel,
+  PageLevelOverride,
+  pageLevelToPermissions,
+  permissionsToPageLevel,
+} from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import {
+  inviteExpiryDays,
+  inviteResendCooldownSeconds,
+} from '../config/invite.config';
+import { MailService } from '../mail/mail.service';
+import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
-import { AgencyRole, AgencyRoleDocument } from '../roles/schemas/agency-role.schema';
+import {
+  AgencyRole,
+  AgencyRoleDocument,
+} from '../roles/schemas/agency-role.schema';
 import { User, UserDocument } from './schemas/user.schema';
-import { UserDetailResponse } from './users.types';
+import {
+  UserWorkReleaseService,
+  type ReleasedWork,
+} from './user-work-release.service';
+import { InviteResponse, UserDetailResponse } from './users.types';
+
+/**
+ * Per-user overrides only ever move a user between page levels, so every
+ * grant/revoke must be a page `{module}:read|write` permission. Owner-only admin
+ * permissions are never overridable per user.
+ */
+const ALLOWED_PAGE_PERMISSIONS = new Set<string>(allPagePermissionKeys());
+
+/** `"Ada Lovelace"`, or null when neither name part is set. */
+function fullName(first?: string, last?: string): string | null {
+  return [first, last].filter(Boolean).join(' ').trim() || null;
+}
 
 @Injectable()
 export class UsersService {
@@ -20,17 +55,27 @@ export class UsersService {
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
     private permissionsService: PermissionsService,
+    private accessResolver: AccessResolverService,
+    private mailService: MailService,
+    private configService: ConfigService,
+    private workRelease: UserWorkReleaseService,
   ) {}
 
   findByAgency(agencyId: string) {
     return this.userModel
-      .find({ agencyId: new Types.ObjectId(agencyId) })
+      .find({
+        agencyId: new Types.ObjectId(agencyId),
+        isPlatformAdmin: { $ne: true },
+      })
       .select('-passwordHash -inviteToken -passwordResetToken')
       .populate('roleIds', 'name slug')
       .lean();
   }
 
-  async findById(agencyId: string, userId: string): Promise<UserDetailResponse> {
+  async findById(
+    agencyId: string,
+    userId: string,
+  ): Promise<UserDetailResponse> {
     const user = await this.userModel
       .findOne({
         _id: new Types.ObjectId(userId),
@@ -43,13 +88,27 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const effectivePermissions = await this.permissionsService.resolveForUser(
-      user as UserDocument,
-    );
+    const [effectivePermissions, roleDefaultPermissions] = await Promise.all([
+      this.permissionsService.resolveForUser(user as UserDocument),
+      this.permissionsService.resolveRoleDefaults(user as UserDocument),
+    ]);
 
-    return { ...user, effectivePermissions } as UserDetailResponse;
+    return {
+      ...user,
+      effectivePermissions,
+      roleDefaultPermissions,
+    };
   }
 
+  /**
+   * Invite an employee: create them inactive, mint a token, email the link.
+   *
+   * **The user row is created before the email is dispatched, and that order is
+   * deliberate.** If delivery throws, the invite still exists as a pending row
+   * the owner can resend from the users list — which is the recoverable
+   * outcome. Sending first and creating second would mean a delivered link
+   * pointing at no account.
+   */
   async inviteUser(input: {
     agencyId: string;
     branchId?: string;
@@ -57,30 +116,385 @@ export class UsersService {
     roleIds: string[];
     firstName?: string;
     lastName?: string;
-  }) {
+    invitedByUserId?: string;
+  }): Promise<InviteResponse> {
     await this.validateRoles(input.agencyId, input.roleIds);
 
-    const inviteToken = randomBytes(32).toString('hex');
-    const inviteTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const email = input.email.toLowerCase();
+    await this.assertEmailAvailable(email);
 
     const user = await this.userModel.create({
       agencyId: new Types.ObjectId(input.agencyId),
       branchId: input.branchId ? new Types.ObjectId(input.branchId) : undefined,
-      email: input.email.toLowerCase(),
+      email,
+      // A random unusable secret, not a known placeholder: until the invite is
+      // accepted there is no password, and this row must never be loggable into.
       passwordHash: await bcrypt.hash(randomBytes(16).toString('hex'), 12),
       roleIds: input.roleIds.map((id) => new Types.ObjectId(id)),
       firstName: input.firstName,
       lastName: input.lastName,
       isActive: false,
-      inviteToken,
-      inviteTokenExpiresAt,
+    });
+
+    return this.issueInvite(user, input.invitedByUserId);
+  }
+
+  /**
+   * Regenerate the token, reset the expiry, and send again.
+   *
+   * Issuing a fresh token **invalidates the previous link** — that is the point,
+   * not a side effect: an invite that was forwarded or leaked stops working the
+   * moment the owner resends.
+   */
+  async resendInvite(
+    agencyId: string,
+    userId: string,
+    invitedByUserId?: string,
+  ): Promise<InviteResponse> {
+    const user = await this.findPendingInvite(agencyId, userId);
+
+    const cooldownSeconds = inviteResendCooldownSeconds(
+      this.configService.get<string>('INVITE_RESEND_COOLDOWN_SECONDS'),
+    );
+    const lastSentAt = user.inviteLastSentAt?.getTime();
+    if (lastSentAt) {
+      const elapsedSeconds = (Date.now() - lastSentAt) / 1000;
+      if (elapsedSeconds < cooldownSeconds) {
+        const wait = Math.ceil(cooldownSeconds - elapsedSeconds);
+        throw new ConflictException(
+          `An invite was just sent to this address. Try again in ${wait} second${wait === 1 ? '' : 's'}.`,
+        );
+      }
+    }
+
+    return this.issueInvite(user, invitedByUserId);
+  }
+
+  /**
+   * Revoke a pending invite by deleting the user.
+   *
+   * Deleting rather than deactivating because the row is not a person yet — it
+   * has never been logged into, owns no records, and leaving a permanently
+   * inactive account behind would both clutter the directory and hold the unique
+   * `email` index against a future invite to the same address.
+   */
+  async revokeInvite(agencyId: string, userId: string): Promise<void> {
+    const user = await this.findPendingInvite(agencyId, userId);
+    await this.userModel.deleteOne({ _id: user._id });
+    await this.accessResolver.invalidateUser(userId);
+  }
+
+  /**
+   * Remove an employee from the agency.
+   *
+   * ## Why this deactivates rather than deletes
+   * The exact inverse of {@link revokeInvite}'s reasoning above. A pending
+   * invite "owns no records"; an active user owns a great many — 31 `ref: 'User'`
+   * fields across 16 collections, two of them `required`. Deleting the row would
+   * point every "produced by" column at a missing id and fail the next write to
+   * a producer goal. So the row stays and the person loses access.
+   *
+   * ## Deactivation really does revoke access, immediately
+   * Worth stating because "soft delete" often does not. `AuthService` refuses
+   * login for an inactive user, and `AccessResolverService.resolve` returns null
+   * for one on **every request** — so an already-issued JWT stops working as
+   * soon as the cached context is dropped, which is the `invalidateUser` call at
+   * the end. Without that call the old token keeps working until it expires.
+   */
+  async deactivateUser(
+    agencyId: string,
+    userId: string,
+    actorUserId?: string,
+  ): Promise<ReleasedWork> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+
+    // An owner who removes themselves cannot undo it — the endpoint they would
+    // need is the one they just lost. Cheapest check first, before any read.
+    if (actorUserId && actorUserId === userId) {
+      throw new BadRequestException(
+        'You cannot remove your own account. Ask another owner to do it.',
+      );
+    }
+
+    const user = await this.userModel.findOne({
+      _id: new Types.ObjectId(userId),
+      agencyId: new Types.ObjectId(agencyId),
+      // Platform admins are not the agency's to manage, and `findByAgency`
+      // already hides them. A 404 keeps the two consistent — from inside the
+      // agency, that user does not exist.
+      isPlatformAdmin: { $ne: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (user.deactivatedAt) {
+      throw new ConflictException('That user has already been removed.');
+    }
+
+    // A pending invite has its own verb, and it is the better one: revoking
+    // deletes the row and frees the email for a future invite, where
+    // deactivating would hold the unique `email` index forever.
+    if (!user.isActive) {
+      throw new ConflictException(
+        'That invite has not been accepted yet. Revoke the invite instead.',
+      );
+    }
+
+    await this.assertNotLastAgencyOwner(agencyId, userId);
+
+    user.isActive = false;
+    user.deactivatedAt = new Date();
+    user.deactivatedByUserId =
+      actorUserId && Types.ObjectId.isValid(actorUserId)
+        ? new Types.ObjectId(actorUserId)
+        : null;
+    // A live credential must not outlive access. Any of these left set would
+    // let the removed user walk back in through the invite or reset flow.
+    user.inviteToken = undefined;
+    user.inviteTokenExpiresAt = undefined;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpiresAt = undefined;
+    await user.save();
+
+    const released = await this.workRelease.release(agencyId, userId);
+
+    // Last, and load-bearing — see the docblock. Their next request re-resolves
+    // from Mongo, finds `isActive: false`, and gets nothing.
+    await this.accessResolver.invalidateUser(userId);
+
+    return released;
+  }
+
+  /**
+   * Restore a removed employee's access.
+   *
+   * Deliberately does **not** restore the work released on the way out. Those
+   * tickets have been sitting in the unassigned queue and may well have been
+   * picked up by someone else; silently yanking them back would be worse than
+   * making reassignment explicit.
+   */
+  async reactivateUser(
+    agencyId: string,
+    userId: string,
+  ): Promise<UserDetailResponse> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+
+    const user = await this.userModel.findOne({
+      _id: new Types.ObjectId(userId),
+      agencyId: new Types.ObjectId(agencyId),
+      isPlatformAdmin: { $ne: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    if (!user.deactivatedAt) {
+      throw new ConflictException('That user has not been removed.');
+    }
+
+    user.isActive = true;
+    user.deactivatedAt = null;
+    user.deactivatedByUserId = null;
+    await user.save();
+    await this.accessResolver.invalidateUser(userId);
+
+    return this.findById(agencyId, userId);
+  }
+
+  /**
+   * Refuse to remove the only person who can administer the agency.
+   *
+   * Without this an owner can remove the other owner, then be removed
+   * themselves by nobody — leaving an agency with users, data and billing but
+   * no one able to invite, assign roles or manage permissions. Recovering that
+   * needs a platform admin and a database edit.
+   */
+  private async assertNotLastAgencyOwner(
+    agencyId: string,
+    userId: string,
+  ): Promise<void> {
+    const ownerRole = await this.roleModel
+      .findOne({ agencyId: new Types.ObjectId(agencyId), slug: 'agency_owner' })
+      .select('_id')
+      .lean();
+    if (!ownerRole) return;
+
+    const isOwner = await this.userModel.exists({
+      _id: new Types.ObjectId(userId),
+      roleIds: ownerRole._id,
+    });
+    if (!isOwner) return;
+
+    const remainingOwners = await this.userModel.countDocuments({
+      agencyId: new Types.ObjectId(agencyId),
+      roleIds: ownerRole._id,
+      isActive: true,
+      _id: { $ne: new Types.ObjectId(userId) },
+    });
+    if (remainingOwners === 0) {
+      throw new ConflictException(
+        'This is the agency’s only owner. Assign the owner role to someone else first.',
+      );
+    }
+  }
+
+  /**
+   * Mint a token onto an existing inactive user and mail the link. Shared by
+   * first invite and resend so the two can never drift on expiry or content.
+   */
+  private async issueInvite(
+    user: UserDocument,
+    invitedByUserId?: string,
+  ): Promise<InviteResponse> {
+    const inviteToken = randomBytes(32).toString('hex');
+    const expiryDays = inviteExpiryDays(
+      this.configService.get<string>('INVITE_EXPIRY_DAYS'),
+    );
+    const expiresAt = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000);
+
+    user.inviteToken = inviteToken;
+    user.inviteTokenExpiresAt = expiresAt;
+    user.inviteLastSentAt = new Date();
+    await user.save();
+
+    const inviteUrl = this.buildInviteUrl(inviteToken);
+
+    const [agencyName, roleNames, inviterName] = await Promise.all([
+      this.resolveAgencyName(user.agencyId),
+      this.permissionsService.resolveRoleNames(user),
+      this.resolveUserName(invitedByUserId),
+    ]);
+
+    // `agencyId` is optional on the schema (a platform super admin has none)
+    // but is guaranteed on both paths into here: `inviteUser` sets it from a
+    // required input, and `resendInvite` loads the user scoped by it. Asserting
+    // rather than defaulting keeps that guarantee visible — the event schema
+    // would otherwise reject an empty string with a message about hex digits,
+    // which says nothing about what actually went wrong.
+    if (!user.agencyId) {
+      throw new Error(
+        `Cannot invite user ${user._id.toString()}: no agencyId on the record.`,
+      );
+    }
+
+    await this.mailService.sendInviteEmail({
+      userId: user._id.toString(),
+      agencyId: user.agencyId.toString(),
+      branchId: user.branchId?.toString() ?? null,
+      to: user.email,
+      recipientName: fullName(user.firstName, user.lastName),
+      agencyName,
+      inviterName,
+      roleNames,
+      inviteUrl,
+      expiresAt,
     });
 
     return {
       userId: user._id.toString(),
-      inviteToken,
-      inviteUrl: `/auth/accept-invite?token=${inviteToken}`,
+      inviteUrl,
+      expiresAt: expiresAt.toISOString(),
+      // The raw token is a bearer credential and the email is its delivery
+      // channel, so it is withheld in production. It is still returned outside
+      // production because mail delivery is a logging stub (see `MailService`) —
+      // without it there is no way to walk the flow locally or in e2e. Remove
+      // this the moment a real transport lands.
+      ...(this.exposeInviteToken() ? { inviteToken } : {}),
     };
+  }
+
+  /**
+   * Distinguish "already a member" from "already invited" — the owner's next
+   * action is completely different (nothing vs. resend), so one generic 409
+   * would be useless. Checked explicitly rather than leaning on the unique
+   * `email` index, which can only report that *something* collided.
+   */
+  private async assertEmailAvailable(email: string): Promise<void> {
+    const existing = await this.userModel
+      .findOne({ email })
+      .select('isActive')
+      .lean();
+    if (!existing) return;
+
+    throw new ConflictException(
+      existing.isActive
+        ? 'That email already belongs to a member of this agency.'
+        : 'That email already has a pending invite. Resend it instead.',
+    );
+  }
+
+  private async findPendingInvite(
+    agencyId: string,
+    userId: string,
+  ): Promise<UserDocument> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+
+    const user = await this.userModel.findOne({
+      _id: new Types.ObjectId(userId),
+      agencyId: new Types.ObjectId(agencyId),
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    if (user.isActive) {
+      throw new ConflictException(
+        'That user has already accepted their invite.',
+      );
+    }
+    // ⚠ Security, not tidiness. `isActive: false` covers both "pending invite"
+    // and "removed from the agency" — see the table on `User.isActive`. Without
+    // this second check, `resendInvite` would accept a **deactivated** user,
+    // mint them a fresh token and email a working account-activation link to
+    // somebody the owner had just removed. Every caller of this method inherits
+    // the guard, which is why it lives here rather than at each call site.
+    if (user.deactivatedAt) {
+      throw new ConflictException(
+        'That user was removed from the agency. Reactivate them instead.',
+      );
+    }
+    return user;
+  }
+
+  /**
+   * Absolute, because the link is opened from an email client that has no origin
+   * to resolve a relative path against.
+   */
+  private buildInviteUrl(token: string): string {
+    const base = this.configService
+      .get<string>('APP_BASE_URL', 'http://localhost:5173')
+      .replace(/\/+$/, '');
+    return `${base}/auth/accept-invite?token=${token}`;
+  }
+
+  private exposeInviteToken(): boolean {
+    return this.configService.get<string>('NODE_ENV') !== 'production';
+  }
+
+  private async resolveAgencyName(
+    agencyId: Types.ObjectId | undefined,
+  ): Promise<string> {
+    if (!agencyId) return 'your agency';
+    const agency = await this.agencyModel
+      .findById(agencyId)
+      .select('name')
+      .lean();
+    return agency?.name ?? 'your agency';
+  }
+
+  private async resolveUserName(userId?: string): Promise<string | null> {
+    if (!userId || !Types.ObjectId.isValid(userId)) return null;
+    const user = await this.userModel
+      .findById(userId)
+      .select('firstName lastName')
+      .lean();
+    if (!user) return null;
+    return fullName(user.firstName, user.lastName);
   }
 
   async updateRoles(
@@ -100,13 +514,20 @@ export class UsersService {
 
     user.roleIds = roleIds.map((id) => new Types.ObjectId(id));
     await user.save();
+    await this.accessResolver.invalidateUser(userId);
     return this.findById(agencyId, userId);
   }
 
+  /**
+   * Apply per-page permission overrides for a user. The owner submits a desired
+   * level (`none` / `read` / `write`) per page; we diff each page against the
+   * user's role defaults and store only the differences as grants/revokes, so
+   * the user keeps inheriting role changes for pages left at their default.
+   */
   async updatePermissions(
     agencyId: string,
     userId: string,
-    input: { grants?: string[]; revokes?: string[] },
+    overrides: PageLevelOverride[],
   ): Promise<UserDetailResponse> {
     const user = await this.userModel.findOne({
       _id: new Types.ObjectId(userId),
@@ -116,27 +537,78 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const enabledModules = await this.getEnabledModules(agencyId);
-    const assignable = new Set(
-      this.permissionsService.allAssignablePermissions(enabledModules),
+    const enabledModules = new Set(await this.getEnabledModules(agencyId));
+    const roleDefaults = new Set(
+      await this.permissionsService.resolveRoleDefaults(user),
     );
 
-    if (input.grants) {
-      const invalid = input.grants.filter((p) => !assignable.has(p));
-      if (invalid.length) {
-        throw new BadRequestException(
-          `Cannot grant permissions not available for this agency: ${invalid.join(', ')}`,
-        );
+    const overrideMap = new Map<string, PageLevel>();
+    for (const { moduleKey, level } of overrides) {
+      if (enabledModules.has(moduleKey) && this.isValidLevel(level)) {
+        overrideMap.set(moduleKey, level);
       }
-      user.permissionGrants = [...new Set(input.grants)];
     }
 
-    if (input.revokes) {
-      user.permissionRevokes = [...new Set(input.revokes)];
+    const grants = new Set<string>();
+    const revokes = new Set<string>();
+
+    for (const moduleKey of ALL_MODULE_KEYS) {
+      if (!enabledModules.has(moduleKey)) {
+        continue;
+      }
+
+      const roleLevel = permissionsToPageLevel(roleDefaults, moduleKey);
+      const desiredLevel = overrideMap.get(moduleKey) ?? roleLevel;
+      if (desiredLevel === roleLevel) {
+        continue;
+      }
+
+      const rolePerms = new Set(pageLevelToPermissions(moduleKey, roleLevel));
+      const desiredPerms = new Set(
+        pageLevelToPermissions(moduleKey, desiredLevel),
+      );
+
+      for (const permission of desiredPerms) {
+        if (!rolePerms.has(permission)) {
+          grants.add(permission);
+        }
+      }
+      for (const permission of rolePerms) {
+        if (!desiredPerms.has(permission)) {
+          revokes.add(permission);
+        }
+      }
     }
 
+    const grantList = [...grants];
+    const revokeList = [...revokes];
+    this.assertPagePermissions([...grantList, ...revokeList]);
+
+    user.permissionGrants = grantList;
+    user.permissionRevokes = revokeList;
     await user.save();
+    await this.accessResolver.invalidateUser(userId);
+
     return this.findById(agencyId, userId);
+  }
+
+  private isValidLevel(level: string): level is PageLevel {
+    return level === 'none' || level === 'read' || level === 'write';
+  }
+
+  /**
+   * Guard against persisting anything other than page read/write permissions in
+   * per-user overrides. Never throws in normal operation; catches regressions.
+   */
+  private assertPagePermissions(permissions: string[]): void {
+    const invalid = permissions.filter(
+      (permission) => !ALLOWED_PAGE_PERMISSIONS.has(permission),
+    );
+    if (invalid.length) {
+      throw new BadRequestException(
+        `Invalid page permission override(s): ${invalid.join(', ')}`,
+      );
+    }
   }
 
   async listAssignablePermissions(agencyId: string): Promise<string[]> {
@@ -154,7 +626,9 @@ export class UsersService {
       _id: { $in: roleIds.map((id) => new Types.ObjectId(id)) },
     });
     if (count !== roleIds.length) {
-      throw new BadRequestException('One or more roles are invalid for this agency');
+      throw new BadRequestException(
+        'One or more roles are invalid for this agency',
+      );
     }
   }
 

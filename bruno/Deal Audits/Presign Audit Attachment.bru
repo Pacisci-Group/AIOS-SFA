@@ -1,0 +1,99 @@
+meta {
+  name: Presign Audit Attachment
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/deal-audits/{{dealAuditItemId}}/attachments/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "filename": "prior-insurance.pdf",
+    "contentType": "application/pdf",
+    "size": 204800
+  }
+}
+
+script:post-response {
+  // Capture the object key for the Resolve request's attachment metadata, and
+  // the URL the upload step PUTs the bytes to.
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("dealAuditAttachmentKey", res.getBody().key);
+    bru.setVar("dealAuditAttachmentUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a presigned upload URL + key", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("key");
+    expect(body).to.have.property("uploadUrl");
+    expect(body).to.have.property("requiredHeaders");
+    expect(body).to.have.property("expiresIn");
+    expect(body.uploadUrl).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /deal-audits/:itemId/attachments/presign — presign a resolution doc
+
+  Issues a short-lived **presigned PUT URL** so the browser can upload a
+  resolution document (e.g. the missing prior-insurance proof) directly to
+  object storage (MinIO locally / DigitalOcean Spaces in cloud). File bytes
+  never pass through the API.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write`
+  - **Data scope:** enforced on the target item — a producer (`own`) may only
+    presign for their **own** audit items (else `403`).
+
+  The object **key is server-generated** and agency-namespaced
+  (`agencies/<agencyId>/deal-audits/<itemId>/<uuid>-<file>`), so a caller can
+  never write outside their agency.
+
+  ## Path params
+  | param  | type   | notes                          |
+  |--------|--------|--------------------------------|
+  | itemId | string | Deal Audit Item `_id` (raw id) |
+
+  ## Body
+  | field       | type   | rules                                          |
+  |-------------|--------|------------------------------------------------|
+  | filename    | string | 1–255 chars                                    |
+  | contentType | enum   | `application/pdf` \| `image/jpeg` \| `image/png` |
+  | size        | int    | > 0, ≤ 10 MB (10485760)                        |
+
+  ## Response `201`
+  ```json
+  {
+    "key": "agencies/<agencyId>/deal-audits/<itemId>/<uuid>-prior-insurance.pdf",
+    "uploadUrl": "http://localhost:9000/sfa-uploads/agencies/...",
+    "requiredHeaders": { "Content-Type": "application/pdf" },
+    "expiresIn": 300
+  }
+  ```
+
+  The browser then does `PUT <uploadUrl>` with the file body and the
+  `requiredHeaders`, and finally calls **Resolve Deal Audit Item** with the
+  returned `key`.
+
+  ## Errors
+  - `400 Bad Request` — invalid body (bad content type, size > 10 MB, …).
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — module disabled, missing `deal_audits:write`, or the item
+    is not the caller's (own scope) / not in their branch.
+  - `404 Not Found` — no such audit item in the caller's agency.
+}

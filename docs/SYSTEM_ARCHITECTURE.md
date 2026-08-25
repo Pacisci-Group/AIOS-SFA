@@ -307,6 +307,29 @@ Every API request passes through four checks:
 
 ![Four-layer guard model — auth through permission checks](diagrams/09-four-layer-guard.svg)
 
+#### Authorization source of truth (PAC-25)
+
+The JWT is used for **authentication + stable identity claims only**. The
+**effective permission set is resolved from the backend store (MongoDB) on every
+authenticated request** — it is *not* trusted from the token. Immediately after
+`JwtAuthGuard`, an `AccessContextGuard` resolves the caller's live
+`AccessContext` (permissions, data scope, tenant/branch, active flag) via
+`AccessResolverService` and attaches it to `request.access`; every downstream
+guard reads from there.
+
+Consequences:
+
+- Owner permission/role edits and user de-provisioning take effect on the
+  **next request** — no re-login and no waiting for the token to expire.
+- A deactivated/deleted user is rejected even while holding a still-valid token.
+
+**Optional Redis cache.** Resolution always reads from MongoDB unless `REDIS_URL`
+is configured, in which case resolved contexts are cached in Redis (with a safety
+TTL) to avoid a DB read per request. Redis is strictly optional — behavior is
+identical either way. Cache entries are explicitly invalidated when a role's
+levels change (all members), a user's role/overrides change (that user), or an
+agency's module entitlements change (all members).
+
 ### 7.2 Scope matrix
 
 | Actor | Agency data | Branch data | Module disabled |
@@ -336,7 +359,14 @@ Every API request passes through four checks:
 | View agency leads | ✓ | ✓ | | | |
 | View branch leads | ✓ | ✓ | ✓ | | ✓ |
 | View own leads | | ✓ | ✓ | ✓ | |
-| Run deal audits | | ✓ | ✓ | | ✓ |
+| Run deal audits | | ✓ | ✓ | ✓ | ✓ |
+| Edit a client contact | | ✓ | ✓ | ✓¹ | ✓ |
+
+¹ Producers hold `clients:write` (added by PAC-38 for the Lead Detail contact
+edit), but `Contact` carries no `producerId`, so their `own` scope cannot be a
+field comparison. `ContactAccessService` **derives** it: a producer may edit a
+contact only if they own a lead that reaches it, directly or through its
+household. Everything else in the `clients` module remains out of their reach.
 
 ---
 
@@ -428,17 +458,22 @@ src/
 | Super Admin | Seeded account; platform scope |
 | Password reset | Email-based token flow |
 
-**JWT payload:**
+**JWT payload (slim — identity claims only):**
 
 ```typescript
 {
   sub: string;              // userId
   agencyId: string | null;  // null for super_admin
   branchId: string | null;  // null for agency-wide roles
-  roles: string[];
   scope: 'platform' | 'agency' | 'branch';
+  isPlatformAdmin: boolean;
 }
 ```
+
+The token intentionally does **not** carry the effective permission set — that is
+resolved live from the store per request (see §7.1). The login response still
+returns the resolved `permissions` / `dataScope` / role names for the web app to
+gate its UI.
 
 Agency Owners may pass `X-Branch-Id` header to filter UI to a specific branch without losing agency-wide access.
 
@@ -713,7 +748,7 @@ Business logic in `SFA/lib/intake/` ports directly to NestJS services.
 | # | Question | Options | Recommendation |
 |---|----------|---------|----------------|
 | O1 | Is `office_manager` agency-wide or per-branch? | Agency / Branch | Per-branch `branch_manager` unless ops needs agency-wide |
-| O2 | Import BigQuery mailers or defer? | Import / Defer / CSV upload | Import to `mailers` collection if volume is manageable |
+| ~~O2~~ | ~~Import BigQuery mailers or defer?~~ | — | **Resolved 2026-08-12: import.** Mailers live in a Mongo `mailers` collection, written by two importers that share one mapper — the Super Admin RTP upload (PAC-73) and a re-runnable BigQuery backfill (`api:migrate:mailers`). The schema is modelled on the source spreadsheet, not on the BigQuery table, because BigQuery is a transform of it and the upload receives the original. |
 | O3 | File storage provider? | S3 / GCS / GridFS | S3 or GCS for production |
 | O4 | API style? | REST / GraphQL | REST (matches current Next.js API patterns) |
 

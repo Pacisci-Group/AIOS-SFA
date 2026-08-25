@@ -1,0 +1,61 @@
+meta {
+  name: Upload New Business Application
+  type: http
+  seq: 6
+}
+
+put {
+  url: {{nbaDocumentUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/pdf
+}
+
+body:text {
+  %PDF-1.4
+  1 0 obj<</Type/Catalog>>endobj
+  trailer<</Root 1 0 R>>
+  %%EOF
+}
+
+tests {
+  test("storage accepts the application", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw new business application upload (PAC-56 #23)
+
+  Not an API endpoint: this goes **straight to object storage** using the URL
+  from `Presign New Business Application`.
+
+  - **Auth:** `none` — deliberately. The collection-level bearer would be sent
+    on this request and **break the S3 signature**; a presigned URL carries its
+    own credentials.
+
+  ## Headers
+  `Content-Type` must be `application/pdf` — it has to match the signed value,
+  and this kind accepts nothing else.
+
+  ## Body
+  A minimal valid PDF stub. The bytes are irrelevant to the API; only the
+  object's type and size matter, and `POST /sold-deals` reads both back with
+  `HeadObject` rather than trusting anything declared.
+
+  ## Run order
+  ⚠ Runs **after** `Create Sold Deal` (seq 4) because of Bruno's numeric
+  ordering, so `nbaDocumentKey` is not what that request uses — it reuses
+  `soldDocumentKey`, which is already a PDF under the shared prefix and is
+  therefore valid for a discount proof.
+
+  These two requests exist to pin the **presign contract** for the application
+  kind: that it is PDF-only and that it lands under `/nba/`. The full
+  presign → upload → declare chain for the application, including the
+  cross-kind bypass attempt, is covered by the e2e suite
+  (`new business application (PAC-56 #23)`), where key prefixes can be asserted
+  directly without depending on request ordering.
+}

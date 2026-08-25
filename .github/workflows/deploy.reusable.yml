@@ -1,0 +1,475 @@
+name: Deploy (reusable)
+
+# Shared build + deploy pipeline. Not triggered directly — called by the
+# per-environment workflows (deploy-dev / deploy-staging / deploy-production),
+# each of which passes the GitHub Environment to target.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target GitHub Environment (dev | staging | production)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      api_image: ${{ steps.meta.outputs.api_image }}
+      web_image: ${{ steps.meta.outputs.web_image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image refs
+        id: meta
+        run: |
+          OWNER_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "api_repo=${REGISTRY}/${OWNER_REPO}/api" >> "$GITHUB_OUTPUT"
+          echo "web_repo=${REGISTRY}/${OWNER_REPO}/web" >> "$GITHUB_OUTPUT"
+          echo "api_image=${REGISTRY}/${OWNER_REPO}/api:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "web_image=${REGISTRY}/${OWNER_REPO}/web:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/api/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.api_image }}
+            ${{ steps.meta.outputs.api_repo }}:${{ inputs.environment }}
+          cache-from: type=gha,scope=api-${{ inputs.environment }}
+          cache-to: type=gha,scope=api-${{ inputs.environment }},mode=max
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/web/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.web_image }}
+            ${{ steps.meta.outputs.web_repo }}:${{ inputs.environment }}
+          cache-from: type=gha,scope=web-${{ inputs.environment }}
+          cache-to: type=gha,scope=web-${{ inputs.environment }},mode=max
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # Selects the GitHub Environment. Its secrets (same names across all
+    # environments) resolve to that environment's values.
+    environment: ${{ inputs.environment }}
+    outputs:
+      # Republished for deploy-inngest, which cannot read it itself. See the
+      # comment on that job.
+      inngest_enabled: ${{ steps.flags.outputs.inngest_enabled }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Environment variables ARE readable here — the environment is bound once
+      # the job is running, unlike in a job-level `if`.
+      - name: Resolve environment flags
+        id: flags
+        run: |
+          enabled="${{ vars.INNGEST_ENABLED }}"
+          echo "inngest_enabled=${enabled}" >> "$GITHUB_OUTPUT"
+          if [ "$enabled" = "true" ]; then
+            echo "Inngest is ENABLED for '${{ inputs.environment }}'."
+          else
+            # Loud rather than silent: a skipped deploy-inngest with no
+            # explanation is indistinguishable from a broken workflow, which is
+            # how this went unnoticed the first time.
+            echo "::warning::INNGEST_ENABLED is '${enabled}' (not 'true') for the '${{ inputs.environment }}' Environment — deploy-inngest will be skipped and no async work will run. Set it under Settings > Environments > ${{ inputs.environment }} > Environment variables (NOT Secrets)."
+          fi
+
+      # Fail here rather than mid-rollout. Object storage in particular degrades
+      # *silently*: with STORAGE_ENDPOINT unset, StorageService logs a warning,
+      # disables itself, and the health check still passes — so a deploy missing
+      # that secret looks completely green while every document upload fails.
+      # PUBLIC_FORM_BASE_URL has the same shape of failure: unset, share links
+      # are generated pointing at http://localhost:5173.
+      - name: Preflight — required Environment secrets are set
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+          JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+          CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          STORAGE_ENDPOINT: ${{ secrets.STORAGE_ENDPOINT }}
+          STORAGE_REGION: ${{ secrets.STORAGE_REGION }}
+          STORAGE_BUCKET: ${{ secrets.STORAGE_BUCKET }}
+          STORAGE_ACCESS_KEY_ID: ${{ secrets.STORAGE_ACCESS_KEY_ID }}
+          STORAGE_SECRET_ACCESS_KEY: ${{ secrets.STORAGE_SECRET_ACCESS_KEY }}
+          PUBLIC_FORM_BASE_URL: ${{ secrets.PUBLIC_FORM_BASE_URL }}
+          # Async work. RESEND_API_KEY belongs in this list for exactly the
+          # reason STORAGE_ENDPOINT does: unset, the worker falls back to a
+          # transport that logs instead of sending. The app boots, the health
+          # check passes, Inngest runs complete successfully — and not one email
+          # is delivered. Nothing downstream would ever surface that.
+          INNGEST_BASE_URL: ${{ secrets.INNGEST_BASE_URL }}
+          INNGEST_EVENT_KEY: ${{ secrets.INNGEST_EVENT_KEY }}
+          INNGEST_SIGNING_KEY: ${{ secrets.INNGEST_SIGNING_KEY }}
+          APP_PRIVATE_IP: ${{ secrets.APP_PRIVATE_IP }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_DEFAULT_FROM: ${{ secrets.MAIL_DEFAULT_FROM }}
+          INNGEST_ENABLED: ${{ vars.INNGEST_ENABLED }}
+        run: |
+          set -uo pipefail
+
+          required="SSH_HOST SSH_KEY MONGODB_URI JWT_ACCESS_SECRET
+                    JWT_REFRESH_SECRET CORS_ORIGIN APP_BASE_URL GHCR_PULL_USER
+                    GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION
+                    STORAGE_BUCKET STORAGE_ACCESS_KEY_ID
+                    STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL"
+
+          # The async secrets are required only where Inngest is turned on, so
+          # an environment that predates async work keeps deploying unchanged.
+          # Gated on the same INNGEST_ENABLED variable as the deploy-inngest job
+          # and terraform's enable_inngest, so the three cannot disagree.
+          if [ "${INNGEST_ENABLED}" = "true" ]; then
+            required="${required}
+                      INNGEST_BASE_URL INNGEST_EVENT_KEY INNGEST_SIGNING_KEY
+                      APP_PRIVATE_IP RESEND_API_KEY MAIL_DEFAULT_FROM"
+          fi
+
+          missing=""
+          for name in $required; do
+            if [ -z "${!name}" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing secrets in the '${{ inputs.environment }}' GitHub Environment:${missing}"
+            echo "See DEPLOYMENT.md → 'Environment secrets'. Storage values come from"
+            echo "'terraform output' in infra/terraform/environments/${{ inputs.environment }}."
+            exit 1
+          fi
+          echo "All required secrets are present."
+
+      - name: Copy compose file to droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          source: "docker-compose.prod.yml"
+          target: "/opt/sfa"
+
+      - name: Deploy on droplet
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          API_IMAGE: ${{ needs.build-and-push.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.build-and-push.outputs.web_image }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          envs: API_IMAGE,WEB_IMAGE
+          script: |
+            set -euo pipefail
+            cd /opt/sfa
+
+            # Registry login (GHCR PAT with read:packages)
+            echo "${{ secrets.GHCR_PULL_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_PULL_USER }}" --password-stdin
+
+            # Write/refresh runtime env. App secrets come from the GitHub Environment.
+            #
+            # This file is REWRITTEN IN FULL on every deploy — anything hand-edited
+            # on the droplet is lost. Every runtime variable the app needs has to
+            # be listed here and backed by an Environment secret.
+            umask 077
+            cat > /opt/sfa/.env <<EOF
+            API_IMAGE=${API_IMAGE}
+            WEB_IMAGE=${WEB_IMAGE}
+            WEB_BIND=127.0.0.1:8080
+            NODE_ENV=production
+            PORT=4000
+            MONGODB_URI=${{ secrets.MONGODB_URI }}
+            JWT_ACCESS_SECRET=${{ secrets.JWT_ACCESS_SECRET }}
+            JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
+            JWT_ACCESS_EXPIRES=15m
+            JWT_REFRESH_EXPIRES=7d
+            CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
+            # Base URL every invite / accept-invite link is built from
+            # (UsersService.buildInviteUrl). Unset, it falls back to
+            # http://localhost:5173 and every invite email ships a dead link
+            # while the API, the send and the delivery record all look healthy.
+            APP_BASE_URL=${{ secrets.APP_BASE_URL }}
+
+            # Object storage (DigitalOcean Spaces) — document uploads.
+            # Values come from the environment's terraform outputs:
+            #   spaces_endpoint / spaces_region / spaces_bucket /
+            #   spaces_access_key_id / spaces_secret_access_key
+            STORAGE_ENDPOINT=${{ secrets.STORAGE_ENDPOINT }}
+            STORAGE_REGION=${{ secrets.STORAGE_REGION }}
+            STORAGE_BUCKET=${{ secrets.STORAGE_BUCKET }}
+            STORAGE_ACCESS_KEY_ID=${{ secrets.STORAGE_ACCESS_KEY_ID }}
+            STORAGE_SECRET_ACCESS_KEY=${{ secrets.STORAGE_SECRET_ACCESS_KEY }}
+            # Spaces uses virtual-host addressing (bucket.region.digitaloceanspaces.com).
+            # Only MinIO needs path-style, so this is false everywhere but local dev.
+            STORAGE_FORCE_PATH_STYLE=false
+            # STORAGE_PUBLIC_URL is intentionally unset: the API and the browser
+            # reach Spaces at the same endpoint, unlike the local MinIO split.
+
+            # Base URL used to build shareable public intake links. Unset, the API
+            # falls back to http://localhost:5173 and every shared link is dead.
+            PUBLIC_FORM_BASE_URL=${{ secrets.PUBLIC_FORM_BASE_URL }}
+
+            # Rate limits for the public (unauthenticated) intake routes. Optional —
+            # unset resolves to the defaults in config/rate-limit.config.ts, which
+            # parses an empty value back to the default. These must be real
+            # environment variables, and env_file makes them exactly that: the
+            # @Throttle decorators are evaluated at class-definition time, before
+            # ConfigModule has loaded any dotenv file.
+            RATE_LIMIT_SHORT=${{ secrets.RATE_LIMIT_SHORT }}
+            RATE_LIMIT_LONG=${{ secrets.RATE_LIMIT_LONG }}
+            PUBLIC_FORM_RATE_LIMIT=${{ secrets.PUBLIC_FORM_RATE_LIMIT }}
+            PUBLIC_INTAKE_RATE_LIMIT=${{ secrets.PUBLIC_INTAKE_RATE_LIMIT }}
+            PUBLIC_INTAKE_HOURLY_LIMIT=${{ secrets.PUBLIC_INTAKE_HOURLY_LIMIT }}
+
+            # Async work. Every outbound email and every scheduled job runs as
+            # an Inngest function served from this container at /api/inngest.
+            #
+            # Binds the api container to the droplet's PRIVATE IP so the Inngest
+            # droplet can invoke functions over the VPC. Never 0.0.0.0: that
+            # endpoint is raw Express middleware none of the seven global guards
+            # see, and its only authentication is the Inngest request signature.
+            API_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4000
+            INNGEST_BASE_URL=${{ secrets.INNGEST_BASE_URL }}
+            INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
+            INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
+            # Must be "0". Left unset the SDK infers dev mode from NODE_ENV and
+            # stops verifying request signatures.
+            INNGEST_DEV=0
+
+            # Outbound email. RESEND_API_KEY unset means the worker silently
+            # falls back to a logging transport — see the preflight note.
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            MAIL_DEFAULT_FROM=${{ secrets.MAIL_DEFAULT_FROM }}
+            MAIL_REPLY_TO=${{ secrets.MAIL_REPLY_TO }}
+            EOF
+
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker image prune -f
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            for i in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null; then
+                echo "Health check passed."
+                exit 0
+              fi
+              echo "Waiting for app... ($i)"
+              sleep 5
+            done
+            echo "Health check failed."
+            docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100
+            exit 1
+
+  # Self-hosted Inngest, on its own droplet. Nothing of ours is built for it —
+  # this pulls an upstream image and hands it a config file.
+  #
+  # Gated on an Environment *variable* rather than the presence of a secret, so
+  # "this environment has no Inngest" is an explicit statement someone made in
+  # the GitHub UI rather than something inferred from an omission. The same flag
+  # gates the preflight secrets above and terraform's `enable_inngest`.
+  #
+  # Runs AFTER the app deploy on purpose: Inngest syncs function definitions
+  # from the API's /api/inngest at boot, so deploying it against an already-
+  # running app makes the sync verification below deterministic instead of a
+  # race against the poll interval.
+  deploy-inngest:
+    needs: deploy
+    # Gated on a job OUTPUT, not directly on `vars.INNGEST_ENABLED`.
+    #
+    # ⚠ An Environment-level variable CANNOT gate a job here. A job-level `if`
+    # is evaluated before the job is dispatched to a runner, which is before
+    # the `environment:` below has been bound — so `vars.INNGEST_ENABLED`
+    # resolves against repository/organisation variables only, finds nothing,
+    # and the job silently skips. It skips whether or not the variable is set
+    # correctly, which makes the failure look exactly like a misconfiguration.
+    #
+    # `deploy` reads the same variable at STEP level, where the environment IS
+    # bound, and republishes it as an output. Same flag, same source of truth,
+    # evaluated somewhere it actually resolves.
+    if: ${{ needs.deploy.outputs.inngest_enabled == 'true' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Which key are we authenticating with, and does the target match the
+      # droplet Terraform built? Both values are PUBLIC — a fingerprint and a
+      # public key reveal nothing that a server does not already hand out.
+      #
+      # Added because `ssh: unable to authenticate` gives no clue whether the
+      # secret is wrong, the host is wrong, or the droplet never got the key,
+      # and none of those are diagnosable from a laptop that lacks the key.
+      #
+      # Compare the fingerprint below against:
+      #   terraform output -raw ... ; ssh-keygen -lf <the ssh_public_key in tfvars>
+      # A mismatch means SSH_KEY and infra/terraform tfvars have drifted apart.
+      - name: Diagnose SSH identity and target
+        run: |
+          set -uo pipefail
+          umask 077
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > /tmp/id_deploy
+          chmod 600 /tmp/id_deploy
+
+          echo "Target host: ${{ secrets.INNGEST_SSH_HOST }}"
+          echo "App droplet: ${{ secrets.SSH_HOST }}  (this key is known to work there)"
+          echo
+          echo "Public half of the SSH_KEY secret:"
+          ssh-keygen -y  -f /tmp/id_deploy || echo "  !! SSH_KEY is not a readable private key"
+          echo "Fingerprint:"
+          ssh-keygen -lf /tmp/id_deploy -E md5 || true
+
+          echo
+          echo "Host keys offered by the Inngest droplet (proves we reach the right box):"
+          ssh-keyscan -T 10 "${{ secrets.INNGEST_SSH_HOST }}" 2>/dev/null | ssh-keygen -lf - || \
+            echo "  !! could not reach ${{ secrets.INNGEST_SSH_HOST }} on port 22"
+
+          rm -f /tmp/id_deploy
+
+      # A freshly built droplet is reachable over SSH long before cloud-init
+      # has finished with it: sshd comes from the base image, while the deploy
+      # user, Docker and /opt/sfa-inngest all arrive later from runcmd.
+      #
+      # Deploying into that window fails in ways that look like anything but a
+      # race - a rejected SSH key, or
+      #   tar: docker-compose.inngest.yml: Cannot open: Permission denied
+      # - and re-running "fixes" it, which is how the race hides.
+      #
+      # So block until provisioning is actually finished, then assert the two
+      # things every later step depends on.
+      - name: Wait for cloud-init, and assert the droplet is provisioned
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.INNGEST_SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            # --wait blocks until cloud-init reaches a terminal state. It exits
+            # non-zero on 'degraded', which is worth reporting but not fatal on
+            # its own, so judge by the concrete checks below instead.
+            cloud-init status --wait >/dev/null 2>&1 || true
+            cloud-init status --long || true
+
+            if ! command -v docker >/dev/null; then
+              echo "::error::Docker is not installed on the Inngest droplet. cloud-init did not complete its runcmd - check /var/log/cloud-init-output.log."
+              exit 1
+            fi
+            if ! sudo -n docker compose version >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+              echo "::error::The docker compose plugin is missing on the Inngest droplet."
+              exit 1
+            fi
+            if [ ! -w /opt/sfa-inngest ]; then
+              echo "::error::/opt/sfa-inngest is not writable by the deploy user. Ownership is set at the top of runcmd; if this fails, cloud-init did not get that far."
+              ls -ld /opt/sfa-inngest || true
+              exit 1
+            fi
+            echo "Droplet is provisioned: docker present, /opt/sfa-inngest writable."
+
+      - name: Copy compose file to the Inngest droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.INNGEST_SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          source: "docker-compose.inngest.yml"
+          target: "/opt/sfa-inngest"
+
+      - name: Deploy Inngest
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.INNGEST_SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/sfa-inngest
+
+            # Rewritten in full every deploy, same as /opt/sfa/.env — anything
+            # hand-edited on the droplet is lost. Every variable Inngest needs
+            # has to be listed here and backed by an Environment secret.
+            umask 077
+            cat > /opt/sfa-inngest/.env <<EOF
+            INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
+            INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
+            # Where our functions are served: the app droplet's PRIVATE address.
+            APP_PRIVATE_IP=${{ secrets.APP_PRIVATE_IP }}
+            EOF
+
+            docker compose -f docker-compose.inngest.yml pull
+            docker compose -f docker-compose.inngest.yml up -d --remove-orphans
+            docker image prune -f
+
+      # A health check alone is not enough here. Inngest can be perfectly
+      # healthy while having synced zero functions — because the app was
+      # unreachable, the URL was wrong, or the signing keys disagree. That state
+      # is invisible: every check passes and no async work ever runs. So assert
+      # the thing we actually care about, which is that it found our functions.
+      - name: Verify Inngest synced our functions
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.INNGEST_SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -uo pipefail
+            for i in $(seq 1 20); do
+              # GraphQL, not /v0/apps — that path 404s on `inngest start`; it
+              # only exists on the dev server. /api/v1/apps is the dashboard SPA
+              # and returns HTML. Asking the wrong endpoint fails this check on
+              # every deploy, forever.
+              body=$(curl -fsS -X POST -H 'content-type: application/json' \
+                       -d '{"query":"{ apps { name url connected functionCount error } }"}' \
+                       http://127.0.0.1:8288/v0/gql 2>/dev/null || true)
+              # functionCount > 0, not merely "an app exists". An app that synced
+              # zero functions is the failure worth catching: healthy, connected,
+              # and running nothing.
+              if echo "$body" | grep -qE '"functionCount":[[:space:]]*[1-9]'; then
+                echo "Inngest has synced our functions."
+                exit 0
+              fi
+              echo "Waiting for function sync... ($i)"
+              sleep 5
+            done
+            echo "::error::Inngest is running but synced no functions from ${{ secrets.APP_PRIVATE_IP }}:4000/api/inngest."
+            echo "Check: the app droplet firewall admits port 4000 from this droplet;"
+            echo "INNGEST_SIGNING_KEY matches on both sides; the API has WORKER_INLINE unset or true."
+            docker compose -f /opt/sfa-inngest/docker-compose.inngest.yml logs --tail=100
+            exit 1

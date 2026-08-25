@@ -1,0 +1,226 @@
+meta {
+  name: Create Lead
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/leads
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "primaryContact": {
+      "firstName": "Dana",
+      "lastName": "Whitfield",
+      "dateOfBirth": "1988-04-12",
+      "phone": "(555) 222-3333",
+      "email": "Dana.Whitfield@Example.com"
+    },
+    "address": {
+      "street": "77 Oak Lane",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74101"
+    },
+    "members": [
+      {
+        "firstName": "Sam",
+        "lastName": "Whitfield",
+        "dateOfBirth": "1990-06-01",
+        "role": "Spouse"
+      },
+      {
+        "firstName": "Kit",
+        "lastName": "Whitfield",
+        "role": "Child"
+      }
+    ],
+    "policiesOfInterest": [
+      { "policyType": "Auto", "itemCount": 2 },
+      { "policyType": "Home", "itemCount": 1, "sameAsHousehold": true },
+      {
+        "policyType": "Landlord",
+        "itemCount": 1,
+        "sameAsHousehold": false,
+        "propertyAddress": {
+          "street": "4 Rental Row",
+          "city": "Bixby",
+          "state": "OK",
+          "zip": "74008"
+        }
+      }
+    ],
+    "leadSourceCode": "WCO7l",
+    "submissionToken": "{{$guid}}"
+  }
+}
+
+script:post-response {
+  // Capture for the Replay request, which must return this same id.
+  if (res.getStatus() === 201) {
+    bru.setVar("createdLeadId", res.getBody().id);
+    bru.setVar("createdLeadToken", req.getBody().submissionToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns only the new lead id", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(Object.keys(body)).to.have.lengthOf(1);
+  });
+}
+
+docs {
+  # POST /leads — create a lead from the New Lead form (PAC-37)
+
+  Runs the full intake pipeline: resolve contact → derive household → resolve or
+  create lead → link entities → assign producer. A port of legacy
+  `processNewLead`, minus round-robin (see PAC-53).
+
+  - **Module:** `leads`
+  - **Permission:** `leads:write`
+  - **Data scope:** `own` — the created lead is assigned to **the caller**.
+
+  > `leads:write` is also held by **Agency Owner** and **Branch Manager**, so an
+  > owner or manager who submits this form becomes the lead's producer. That
+  > matches legacy (which stamped the current user with no role check) and is an
+  > accepted trade-off, revisited in PAC-53.
+
+  ## Body
+  | field                   | type   | required | rules                                        |
+  |-------------------------|--------|----------|----------------------------------------------|
+  | primaryContact.firstName| string | yes      | 1–60 chars                                   |
+  | primaryContact.lastName | string | yes      | 1–60 chars                                   |
+  | primaryContact.dateOfBirth | string | yes   | `YYYY-MM-DD`                                 |
+  | primaryContact.phone    | string | yes      | 10–20 chars; punctuation is stripped         |
+  | primaryContact.email    | string | yes      | valid email; lowercased on write             |
+  | address                 | object | no       | street / city / state / zip, the **living** address |
+  | members[]               | array  | no       | max 10; role ∈ Spouse, Child, Driver, Additional Named Insured |
+  | policiesOfInterest[]    | array  | no       | max 12; canonical labels, count 1–99; defaults to `[]` — see the row shape below |
+  | policiesOfInterest[].policyType | string | yes | canonical label; a raw SmartSuite code is a `400` |
+  | policiesOfInterest[].itemCount  | number | yes | integer 1–99 — **stored as sent only for `Auto` / `Auto - Special` / `Motorcycle` / `Boat Owners`; every other type is stored as `1`** (nothing on a Home or Umbrella policy is countable, so the form no longer asks) |
+  | policiesOfInterest[].sameAsHousehold | bool | no | defaults `true`; property rows only. When set, `address` is copied onto **this row** |
+  | policiesOfInterest[].propertyAddress | object | cond. | required when the row is a property type **and** `sameAsHousehold` is false |
+  | leadSourceCode          | string | yes      | canonical code; `ENEJP` (Test) is rejected   |
+  | householdId             | string | no       | ObjectId (24 hex); pins the lead to an existing household — see below |
+  | quoteControlNumber      | string | no       | dedupe signal 2                              |
+  | submissionToken         | string | no       | 8–200 chars; per-form-session idempotency key |
+
+  ## Behaviour worth knowing
+  **Contact matching.** Candidates are found by exact (case-insensitive) first +
+  last name, then scored: matching DOB +4, matching email +2, matching phone +2.
+  A **conflicting** DOB disqualifies a candidate outright — two people sharing a
+  name but not a birth date are different people. No positive score → a new
+  contact is created. Creating a duplicate is recoverable; merging two people is
+  not.
+
+  **Household.** Derived from the resolved contact, never looked up by address —
+  that is what stops an existing client acquiring a second household. Migrated
+  contacts carrying only `legacyHouseholdId` are self-healed on first touch.
+
+  **Pinning a household (`householdId`).** The Household page's "Start Quote"
+  dialog creates the lead from a household the producer already has open, so
+  the household is a fact rather than something to infer. Sending it inverts the
+  usual step order — the household resolves *first* — and changes three things,
+  all for the one reason that nothing may be inferred which could contradict it:
+
+  1. The household is taken verbatim, scoped to the caller's agency. A household
+     that does not exist there is a `404`, never a quiet fall back to deriving
+     one; "create this lead on household X" landing somewhere else is the one
+     outcome nobody could detect afterwards.
+  2. **Contact matching is confined to that household's contacts.** An
+     agency-wide name hit would be wrong twice over: linking moves the matched
+     contact into this household, and the household they came from silently
+     loses them. Confining it can at worst create a duplicate contact — the
+     recoverable half of the trade this endpoint makes everywhere.
+  3. **Address dedupe (signal 3) is confined to that household**, so a lead at
+     the same street and zip belonging to *different* people — the apartment
+     building and house-share case address matching is documented as unable to
+     tell apart — is not returned as this one.
+
+  It is accepted on this route only. `POST /public/leads/:token` uses the bare
+  base schema, so an outside submitter can never name the household their
+  submission lands in.
+
+  **Lead dedupe**, in strict order: (1) `submissionToken` — an exact hit returns
+  the existing lead untouched; (2) `quoteControlNumber`; (3) `addressKey`
+  (`street|zip`, both lowercased) restricted to non-terminal leads created in the
+  last 90 days (and to `householdId` when pinned). Signals 2 and 3 merge
+  additively and never change `producerId`, `status` or `temperature`.
+
+  > Worth knowing on the pinned path: because the dialog prefills the form from
+  > the household, a second "new" lead for a household that already has an open
+  > one at the same address dedupes onto it and returns its id. That is the
+  > intended answer — the dialog lists those leads first — not a failure.
+
+  **Policies of interest (PAC-56 #2).** What the submitter wants quoted — the
+  Quote Recap's policy rows **minus premium**, since no quote exists yet. Same
+  vocabulary (`Auto`, `Home`, `Renters`, `Condominium`, `Landlord`,
+  `Motorcycle`, `Boat Owners`, `Umbrella`, `Life`, `Valuable Item Protection`,
+  `Auto - Special`); an unrecognised value is a `400`, it is a fixed vocabulary
+  and not free text. Optional here while the web form requires at least one,
+  exactly as `address` is: the endpoint would rather store an incomplete lead
+  than reject one. On a dedupe merge (signals 2 and 3) the rows are **unioned by
+  policy type *and* dwelling** into the existing lead — a restated type at the
+  same address keeps the count already on file, while the same type at a
+  different address is a second row (a landlord adding a second rental is
+  stating a second interest, not restating the first). Legacy captured no
+  equivalent at intake; every migrated lead has `[]`.
+
+  > **Which form sends this.** The **public** intake form (`POST
+  > /public/leads/:token`) collects it — PAC-56 #2 scopes the question to the
+  > prospect. The internal `/leads/new` form does **not**, and omits the field
+  > entirely; a producer records what was quoted on the Quote Recap instead, with
+  > real premiums. The endpoint accepts it on both routes because the schema is
+  > shared and PAC-53's white-label forms will post here too — this request
+  > exercises that path.
+
+  **Property address (PAC-56 #6/#14).** Lives on the **policy row**, not on the
+  submission: a prospect can ask about the home they live in *and* a rental they
+  let out, and one lead-level address describes only one of them. Asked only for
+  a property-type row (`Home`, `Renters`, `Condominium`, `Landlord`) and stored
+  **already resolved** — with `sameAsHousehold: true` the server copies `address`
+  onto that row and **discards** any `propertyAddress` sent with it, so a row
+  cannot claim one thing and store another. With it false, a blank address is a
+  `400`. **Nothing is stored on a non-property row**, which is what stops the
+  `sameAsHousehold: true` default from quietly stamping an address onto every
+  Auto-only lead.
+
+  > The **lead-level** `propertyAddress` is no longer written. It stays on the
+  > document for migrated records (SmartSuite `Property Address`, `sfd5ba053e`)
+  > and for leads captured before #14, and `GET /leads/:id` still returns it —
+  > read `policiesOfInterest[].propertyAddress` first and fall back to it.
+
+  **Atomicity.** Lead, household and contacts are written in one MongoDB
+  transaction; a failure part-way leaves no partial records.
+
+  **Idempotency.** Send the same `submissionToken` twice — from a double-click or
+  a retry — and you get the same lead id, with no second record. Even two
+  genuinely concurrent requests resolve to one lead.
+
+  ## Response `201`
+  ```json
+  { "id": "665f0a1b2c3d4e5f60718293" }
+  ```
+  Deliberately just the id — the client navigates to `/leads/:id`.
+
+  ## Errors
+  - `400 Bad Request` — validation failure; body is `{ message, errors }` with
+    zod's flattened field errors.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, missing `leads:write`, a
+    platform-admin caller with no agency, or an agency with no default branch.
+  - `404 Not Found` — `householdId` names no household in the caller's agency.
+}

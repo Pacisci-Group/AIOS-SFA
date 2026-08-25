@@ -1,0 +1,101 @@
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  # AIOS-SFA API
+
+  Bruno collection for the AIOS-SFA NestJS API (`packages/api`).
+
+  - **Base URL:** `http://localhost:4000/api/v1` (see the `baseUrl` env var)
+  - **Auth:** JWT Bearer. Run **Auth › Login** first — it captures
+    `accessToken` / `refreshToken` (and `branchId`) into the active environment,
+    and every other request inherits the collection-level bearer auth.
+
+  ## Guard chain
+  Global guards run in registration order:
+  `ThrottlerGuard → JwtAuthGuard → AccessContextGuard → TenantGuard →
+  BranchGuard → ModuleGuard → PermissionsGuard`.
+
+  A request therefore needs, in order:
+  1. To be within the per-IP rate limit (throttling comes **first**, so a flood
+     is rejected before JWT verification and before any database work).
+  2. A valid `Authorization: Bearer <accessToken>` header.
+  3. An `AccessContext` resolved from the **database**, not the token — so a
+     revoked role or permission takes effect immediately.
+  4. A tenant (`agencyId`) resolved from the token.
+  5. A branch — for branch/agency-scoped callers you may pass `X-Branch-Id`.
+     Producers (`own` scope) get their branch from their own record.
+  6. The module enabled for the agency (e.g. `deal_audits`).
+  7. The required permission (e.g. `deal_audits:read`).
+
+  Missing module/permission → **403**. Missing/expired token → **401**.
+  Rate limit exceeded → **429**.
+
+  ### Public routes
+  Handlers marked `@Public()` bypass **all** of the guards above except the
+  throttler — there is no JWT and no `AccessContext`, so they resolve tenancy
+  themselves and re-check module entitlement by hand. Today that is `auth/*`,
+  `health`, and the two **Public Intake** routes.
+
+  ## Getting started
+  1. Start Mongo + API: `npm run api:dev` (from repo root).
+  2. Seed a populated demo tenant: `npm run api:seed:demo:dev`.
+  3. Select the **Local** environment (top-right in Bruno).
+  4. Send **Auth › Login**, then any authenticated request.
+
+  ## Folders
+  - **Auth** — login / refresh (public, no bearer).
+  - **Deal Audits** — Deals Pending Service Hand-off board (PAC-12, read) +
+    resolve item / presign attachment (PAC-14, write).
+  - **Leaderboard** — Motivation Hub: office total, ranked standings, % to goal
+    (PAC-13, read). Its tests assert the privacy contract.
+  - **Leads** — Leads list with search, facet filters and pagination
+    (PAC-36, read); create a lead + the idempotency replay (PAC-37, write);
+    the dashboard's Hot Leads panel (PAC-15) and activity logging (PAC-16).
+    - **Share Links** — generate / list / revoke a producer's public intake
+      links (PAC-37).
+  - **Performance** — Sold + Quoted scorecards for a time range
+    (PAC-10 / PAC-11, read).
+  - **Public Intake** — the unauthenticated share-link form: render + submit,
+    plus the unknown-token negative case that documents the non-disclosure
+    contract (PAC-37). These use `auth: none`.
+  - **Users** — the employee invitation lifecycle (PAC-58): invite → public
+    preview → resend → revoke. Logs in as the **owner** first and uses that token
+    explicitly, because the collection-level bearer is the producer, who holds
+    none of the `agency:users:*` permissions these need.
+
+  > `GET /auth/invite/:token` is an `auth/*` route but lives under **Users**, for
+  > the same ordering reason as activity logging (below): in the **Auth** folder
+  > it would run before any invite existed and have no token to send.
+
+  > Activity logging lives under **Leads**, not in a folder of its own. Two
+  > reasons: it is gated by the `leads` module and depends on a lead id captured
+  > earlier in that chain, and a top-level `Activities` folder would sort
+  > **before `Auth`** and run with no `accessToken`.
+
+  ## Run order
+  A full `npx @usebruno/cli run --env Local` passes as-is — the collection is
+  order-independent. Worth knowing why, since it is not obvious:
+
+  The CLI walks folders alphabetically, so `Leads › Share Links › Revoke Share
+  Link` always runs *before* `Public Intake`. If Revoke destroyed the shared
+  `shareLinkToken`, the public requests would then correctly return the generic
+  404 and the collection could never go green. So Revoke targets a throwaway link
+  minted by **Create Disposable Share Link**, leaving `shareLinkToken` live.
+
+  Running requests by hand, the natural order is `Auth › Login` → `Leads ›
+  Create Lead` → `Create Lead (Replay)` → `Share Links › Create Share Link` →
+  `Public Intake › *`.
+
+  **Users** is self-contained and idempotent: it logs in, invites a
+  freshly-generated address, and revokes it again, so it can be re-run
+  indefinitely without colliding on the unique `email` index. One request there
+  accepts two statuses by design — `Resend Invite` returns `409` inside the
+  per-user cooldown, which in a back-to-back run is the correct answer; its
+  `tests` block explains why.
+}

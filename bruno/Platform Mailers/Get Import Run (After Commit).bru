@@ -1,0 +1,63 @@
+meta {
+  name: Get Import Run (After Commit)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/platform/mailers/imports/{{mailerImportRunId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:pre-request {
+  // Same reason as `Get Import Run`: the commit is queued, not synchronous.
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the run completed and stamped a finish time", function () {
+    expect(res.getBody().status).to.equal("completed");
+    expect(res.getBody().finishedAt).to.be.a("string");
+  });
+
+  test("wrote the one mappable row, and still skipped the other", function () {
+    const counts = res.getBody().counts;
+    // First run of the collection creates it; every subsequent run updates the
+    // same document in place. Either way exactly one row lands and no second
+    // document appears — that is the dedupe index doing its job.
+    expect(counts.created + counts.updated).to.equal(1);
+    expect(counts.skipped).to.equal(1);
+  });
+}
+
+docs {
+  # GET /platform/mailers/imports/:runId — after the commit (PAC-73)
+
+  The same endpoint as `Get Import Run`, read once the import job has finished.
+  Separate request rather than a re-run of that one because the CLI executes a
+  folder top to bottom, and this is what proves the **write** happened rather
+  than just the parse.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+
+  ## What it proves
+
+  `created + updated === 1` on **every** run of the collection. The first run
+  creates the mailer; every run after that updates the same document, because
+  the upsert keys on `(agencyId, controlNumberKeys)` and the fixture body is
+  fixed. A second document appearing here would mean the dedupe index or the
+  key normalization had regressed.
+
+  `skipped === 1` is the row with no control number in either column — rejected
+  with a reason rather than dropped silently.
+}

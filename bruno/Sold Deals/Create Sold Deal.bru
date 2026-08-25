@@ -1,0 +1,369 @@
+meta {
+  name: Create Sold Deal
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/sold-deals
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "soldDate": "2026-02-15",
+    "submissionToken": "{{soldSubmissionToken}}",
+    "policies": [
+      {
+        "policyType": "Auto",
+        "effectiveDate": "2026-02-01",
+        "carrier": "Allstate",
+        "policyNumber": "{{soldPolicyNumber}}",
+        "premium": 1200.10,
+        "itemCount": 2,
+        "newBusinessApplication": {
+          "key": "{{nbaDocumentKey}}",
+          "filename": "new-business-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
+        "discounts": {
+          "drivewise": true,
+          "priorInsuranceDiscount": true,
+          "defensiveDriver": {
+            "selected": true,
+            "drivers": [
+              {
+                "name": "Dana Driver",
+                "attachment": {
+                  "key": "{{soldDocumentKey}}",
+                  "filename": "dana-certificate.pdf",
+                  "contentType": "application/pdf",
+                  "size": 2048
+                }
+              },
+              {
+                "name": "Sam Second",
+                "attachment": {
+                  "key": "{{soldDocumentKey}}",
+                  "filename": "sam-certificate.pdf",
+                  "contentType": "application/pdf",
+                  "size": 2048
+                }
+              }
+            ]
+          },
+          "studentDiscount": {
+            "selected": true,
+            "attachment": {
+              "key": "{{soldDocumentKey}}",
+              "filename": "transcript.pdf",
+              "contentType": "application/pdf",
+              "size": 2048
+            }
+          }
+        },
+        "priorInsurance": {
+          "none": false,
+          "carrier": "Geico",
+          "agentName": "Jamie Prior",
+          "attachment": {
+            "key": "{{soldDocumentKey}}",
+            "filename": "declarations-page.pdf",
+            "contentType": "application/pdf",
+            "size": 2048
+          }
+        },
+        "cancellation": {
+          "cancelled": true,
+          "effectiveDate": "2026-02-10",
+          "cancelledBy": "SFA staff",
+          "cancelledByUserId": "{{soldStaffUserId}}"
+        }
+      },
+      {
+        "policyType": "Home",
+        "effectiveDate": "2026-02-01",
+        "carrier": "Allstate",
+        "policyNumber": "{{soldPolicyNumberHome}}",
+        "premium": 899.95,
+        "itemCount": 3,
+        "newBusinessApplication": {
+          "key": "{{nbaDocumentKey}}",
+          "filename": "new-business-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
+        "discounts": {
+          "escrow": true,
+          "roofReceipt": {
+            "selected": true,
+            "attachment": {
+              "key": "{{soldDocumentKey}}",
+              "filename": "roof-receipt.pdf",
+              "contentType": "application/pdf",
+              "size": 2048
+            }
+          }
+        },
+        "escrow": {
+          "loanNumber": "LN-99887766",
+          "companyName": "First National Escrow",
+          "address": { "street": "1 Lender Way", "city": "Austin", "state": "TX", "zip": "78745" }
+        },
+        "priorInsurance": { "none": true },
+        "cancellation": { "cancelled": false }
+      }
+    ]
+  }
+}
+
+script:pre-request {
+  // Fresh per run: policy numbers are deduped within a submission, and a
+  // replayed token must resolve to the deal this run created, not a prior one.
+  //
+  // Digits only, and two distinct values rather than one plus a "-H" suffix:
+  // the carrier is Allstate, whose seeded rule is digits-only (PAC-56 #20), and
+  // the check runs on the *normalized* key — so "…-H" would normalize to
+  // "…H" and 400.
+  if (!bru.getVar("soldSubmissionToken")) {
+    const stamp = Date.now();
+    bru.setVar("soldSubmissionToken", "bruno-sold-" + stamp);
+    bru.setVar("soldPolicyNumber", String(stamp));
+    bru.setVar("soldPolicyNumberHome", String(stamp + 1));
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("createdSoldDealId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("derives the totals server-side", function () {
+    const body = res.getBody();
+    // 1200.10 + 899.95 — rounded to cents, not 2100.0499999999997.
+    expect(body.premium).to.equal(2100.05);
+    // 2 vehicles + the Home row's implied 1. The body sends `itemCount: 3` on
+    // that row on purpose: only a vehicle policy is counted, so anything else
+    // is stored as 1 whatever a client posts.
+    expect(body.itemCount).to.equal(3);
+    expect(body.policyCount).to.equal(2);
+  });
+
+  test("classifies an auto + property sale as a Bundle", function () {
+    const body = res.getBody();
+    expect(body.isBundle).to.equal(true);
+    expect(body.dealType).to.equal("Bundle");
+    expect(body.policyTypes).to.have.members(["Auto", "Home"]);
+  });
+
+  test("advances the lead to Sold", function () {
+    expect(res.getBody().leadStatus).to.equal("Sold");
+  });
+}
+
+docs {
+  # POST /sold-deals — record the closed sale (PAC-40)
+
+  The Sold wizard's write path. Creates the **deal**, every **policy**, the
+  **prior-insurance** summary and its per-line **prior-policy** rows, plus an
+  **interested party** for each escrow — all in one transaction.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write`
+  - **Data scope:** `own` producers may only sell against their own lead
+
+  > **Why `deal_audits` and not `clients`?** The Producer role template grants
+  > no `clients:*`, which is where the generated `DealsController` stub sits —
+  > gating here would mean *no producer could record a sale*. `deal_audits` is
+  > the honest choice among the permissions a producer already holds, and the
+  > submission's whole purpose is generating the post-sale audit.
+
+  ## Body
+  | field            | type   | rules                                       |
+  |------------------|--------|---------------------------------------------|
+  | leadId           | string | required; the household is resolved from it |
+  | soldDate         | date   | `YYYY-MM-DD`, one per deal (Card 1)         |
+  | quoteRecapId     | string | optional — not every sale has a quote       |
+  | policies         | array  | 1–10; one per loop iteration                |
+  | policies[].newBusinessApplication | object | **required**, PDF only — see below |
+  | submissionToken  | string | optional idempotency key, 8–200 chars       |
+
+  ## The new business application (PAC-56 #23)
+  Required on **every policy**, and **PDF only** — the deliberate exception to
+  the sold form's PDF-or-image rule, because it is a signed application rather
+  than a photographed receipt.
+
+  Per policy rather than legacy's five type-keyed columns on the Deal
+  (`Auto_`/`Home_`/`Landlord_`/`Renters_`/`Other_New Business Application`): the
+  wizard already loops per policy, legacy's own Policies table carried the same
+  field (`sd61f05a5f`), and two Landlord policies on one deal each need their
+  own application rather than sharing a slot.
+
+  Its key must have been issued with `kind: "new_business_application"` — see
+  `Presign New Business Application`. A key from the discount-proof prefix is
+  rejected, which is what stops an image being declared as the application.
+
+  ⚠ The migration does **not** port legacy's copies. They are SmartSuite
+  `file[]` values behind opaque Filestack handles; moving those binaries out is
+  a separate exercise, not an oversight.
+
+  ### Lead-scoped, not household-scoped
+  Legacy rejects a sold log with no lead, and resolving the household
+  server-side is what stops a client claiming one it does not own.
+
+  ## Derived server-side — never trusted from the client
+  `premium` (summed and rounded to cents), `itemCount`, `policyCount`,
+  `policyTypes`, `isBundle`, `dealType`, `soldDateYmd`, `clientName` and
+  `leadSource`. Legacy received these pre-aggregated from Fillout because
+  SmartSuite maintained them as rollups; Mongo has none, so they are computed
+  here — and a client-supplied total would corrupt the Sold scorecard (PAC-11).
+
+  ## `itemCount` is only asked of vehicle policies
+  A count is stored **as sent** for `Auto`, `Auto - Special`, `Motorcycle` and
+  `Boat Owners`, and as **1** for every other type. There is nothing on a Home,
+  Renters, Umbrella or Life policy to count, so the wizard no longer asks — and
+  the server normalizes rather than trusting the wire, because the field is
+  still required (integer 1–99) for backwards compatibility. The deal-level
+  `itemCount` sums the normalized rows, so it always matches the policies it is
+  a total of.
+
+  ## Carrier and policy-number rules (PAC-56 #18/#20)
+  `carrier` is still a free string on the wire — the catalog (`GET /carriers`)
+  constrains what the *wizard offers*, and its "Other" escape means an unseeded
+  carrier must never block a sale. The one value rejected is the client's own
+  `__other__` sentinel.
+
+  If the submitted carrier **is** in the catalog and carries a
+  `policyNumberPattern`, the policy number must satisfy it — checked against the
+  **normalized** key (uppercase, non-alphanumerics stripped), so `123-456`
+  passes a digits-only rule. Today only Allstate carries a pattern. The 400
+  quotes the carrier's own hint and names the policy's position.
+
+  Ordering matters: this runs **after** the lead ownership clamp, so a foreign
+  lead still 404s rather than leaking its existence through a format error.
+
+  ## Discount rules worth knowing
+  - **Proofs are optional (PAC-65, reversing PAC-56 #21).** Ticking a discount
+    generates its audit item whether or not a document came with it — the upload
+    only decides whether the auditor verifies a file in place or is told to call
+    the client for it. Nothing on this card 400s for a missing attachment. The
+    dead `hasProof` key is gone; a stale client still sending it is *dropped*
+    rather than rejected, since zod strips unknown keys.
+  - **Naming a defensive driver is still required.** `defensiveDriver.selected`
+    with an empty `drivers[]` is a 400: the generator emits one item per name, so
+    an unnamed selection produces a single item nobody can act on. Their
+    certificates are optional.
+  - **The proof reaches the audit item, not just storage (#21b).** Each upload is
+    mapped onto the item it evidences, so the service team opens the hand-off
+    board and finds the file already attached. ⚠ The item still opens as
+    `in_progress` / failed — a document is evidence *for* the auditor, not a
+    resolution.
+  - **Cross-branch discounts are rejected (400), not stripped.** A Home policy
+    claiming `studentDiscount` would otherwise generate an auto audit item for a
+    deal with no auto line, and nothing downstream could tell it was bogus.
+  - **Escrow ticked ⇒ the escrow sub-card is required**, because the audit item
+    it generates asks the service team to verify exactly those fields. There is
+    no statement upload (PAC-65 removed it) — David: *"the audit is going to be
+    based on the information"*, meaning the keyed-in loan detail.
+  - **Prior insurance is a discount now, and its proof is the one that is
+    required.** `discounts.priorInsuranceDiscount` applies to **every** policy
+    type — it sits in `UNIVERSAL_DISCOUNT_KEYS`, so the cross-branch rule never
+    touches it and an Umbrella policy can carry it. Ticking it does three
+    things: generates the `Prior Insurance` audit item (no longer baseline —
+    see below), makes `priorInsurance.attachment` **required** (400 without it),
+    and makes `priorInsurance.none` a 400. That last pair is a **cross-card
+    invariant of the same kind as `none && cancelled`** — rejected, not
+    stripped, because neither answer is safe to silently discard.
+  - **`Prior Insurance` is no longer generated on every deal.** It left the
+    `Common` category *and* lost `alwaysInclude`, because `isBaselineTemplate`
+    matches either one. A deal with no prior coverage no longer carries an item
+    telling the service team to obtain a declarations page that does not exist.
+  - **Nor is `Accord Cancellation` (PAC-65).** Same change, same two routes out
+    of the baseline — David confirmed a client with no prior insurance must not
+    get one, since it told the service team to send an ACORD 35 cancellation
+    form to a carrier that does not exist.
+    ⚠ It is driven by **`priorInsurance.none === false` on any policy**, *not*
+    by `discounts.priorInsuranceDiscount`. The two conditional items answer
+    different questions: the discount checkbox says "there is a declarations
+    page to verify", while naming a prior carrier says "there is a policy to
+    cancel". Declaring a carrier without ticking the discount therefore
+    generates the ACORD item and **not** `Prior Insurance` — see the
+    asymmetry note below.
+    The template name is misspelled (`Accord`, not `ACORD`) and stays that way:
+    the title is the join key between the seed catalog and the generator, and it
+    came in from SmartSuite that way. Renaming it without a data migration would
+    silently orphan every migrated item.
+  - **⚠ Known asymmetry on `Prior Insurance`, unchanged here.** Its *records*
+    (`priorInsurance` / `priorPolicies`) are written from
+    `priorInsurance.none === false`, but its *audit item* comes from the
+    discounts checkbox. So a producer who declares a prior carrier without
+    ticking that box gets the records and no audit item, and is never asked for
+    the declarations page. That gap is the reason the checkbox exists; closing
+    it is a separate decision.
+  - **⚠ Still open: the already-cancelled case.** The wizard writes
+    `needsCancellation: "No"` when the producer says the prior policy is already
+    cancelled, but `Accord Cancellation` is still generated — the rule above
+    only looks at whether prior coverage exists. David answered the
+    no-prior-insurance case only.
+  - **Prior agent is required, and so is "who cancelled it" (PAC-65 #10/#11).**
+    `priorInsurance.agentName` 400s when blank on a policy that declares prior
+    coverage — the service team calls that person to chase the cancellation and
+    the declarations page. When `cancellation.cancelled` is true,
+    `cancelledBy` (`Customer` | `SFA staff`) is required, and `SFA staff`
+    additionally requires `cancelledByUserId`. ⚠ That id is **re-verified
+    against the caller's agency** before it is stored — unchecked it would be a
+    cross-agency write primitive, the same trap `existingPolicyId` documents.
+    Populate it from `GET /sold-deals/staff`.
+  - **`inspection` and the Drivewise proof no longer exist (PAC-65).** Both keys
+    are simply absent from the schema — a stale client sending either is
+    stripped, not rejected. `Home Inspection` / `Landlord Inspection` still come
+    from the policy type unconditionally; `drivewise` is now a bare boolean that
+    generates **no audit item at all**.
+  - Attachment `contentType`/`size` are **re-derived from storage** via
+    `HeadObject`; the declared values are ignored.
+
+  ## Idempotency
+  Replaying `submissionToken` returns the **same deal id** and creates nothing
+  new. A concurrent double-submit loses the race on the unique
+  `{agencyId, submissionToken}` index and is resolved by re-reading the winner.
+
+  ## Response `201`
+  ```json
+  {
+    "id": "665f…d31", "leadId": "665f…ac1",
+    "premium": 2100.05, "itemCount": 3, "policyCount": 2,
+    "policyTypes": ["Auto", "Home"], "dealType": "Bundle", "isBundle": true,
+    "soldDate": "2026-02-15T00:00:00.000Z", "leadStatus": "Sold",
+    "auditItemCount": 0, "crmAssigned": false
+  }
+  ```
+  `auditItemCount` / `crmAssigned` are populated once audit generation and CRM
+  assignment land (PR5); they are `0` / `false` until then rather than absent,
+  so the wire shape does not change under the web app later.
+
+  ## Errors
+  - `400` — validation, cross-branch discounts, a duplicate policy number within
+    the same submission, a policy number that fails its carrier's format rule,
+    or an oversized/disallowed document.
+  - `401` / `403` — auth, module or permission.
+  - `404` — unknown lead, a lead outside scope, or a document key that never landed.
+  - `409` — the lead is not linked to a household.
+
+  ## Ordering
+  Needs **Leads/Create Lead** (`createdLeadId`) and **Presign + Upload Sold
+  Document** (`soldDocumentKey`) to have run first.
+}

@@ -1,92 +1,191 @@
-import { Users, ChevronRight, Car, Home, Umbrella } from "lucide-react";
+import type { LeadDetailHousehold } from "@sfa/shared";
+import { Check, Copy, Users } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { DetailCard, SectionLabel } from "./DetailCard";
+import { formatCurrency, formatDate, initials } from "./lead-display";
+import { PolicyRow } from "./PolicyRow";
 
-interface HouseholdMember {
-  name: string;
-  relation: string;
-  dob: string;
-  initials: string;
-  color: string;
-  policies: string[];
+interface HouseholdCardProps {
+  household: LeadDetailHousehold | null;
 }
 
-const members: HouseholdMember[] = [
-  {
-    name: "Anurodh Vaidya",
-    relation: "Primary",
-    dob: "04/12/1978",
-    initials: "AV",
-    color: "var(--sky)",
-    policies: ["Auto"],
-  },
-  {
-    name: "Meena Vaidya",
-    relation: "Spouse",
-    dob: "09/03/1980",
-    initials: "MV",
-    color: "#8b5cf6",
-    policies: ["Auto"],
-  },
-  {
-    name: "Priya Vaidya",
-    relation: "Dependent",
-    dob: "02/14/2008",
-    initials: "PV",
-    color: "var(--amber)",
-    policies: [],
-  },
-];
+/**
+ * The household roster and its policies (PAC-38, reworked for PAC-56 #7 + #26).
+ *
+ * ## What David asked for
+ *
+ * Two things, from the 2026-08-03 and 2026-08-04 scrum reviews:
+ *
+ * 1. **The household's unique identifier, visible** — a support/lookup
+ *    affordance, so it is in the header with a copy button rather than buried.
+ *    The chip shows `HH-2614` and copying puts exactly that on the clipboard.
+ *    It used to show a label derived from the ObjectId and copy the ObjectId
+ *    instead, because the derived label was not unique enough to resolve a
+ *    record; the reference is now a stored per-agency sequence, so the thing
+ *    you read is the thing you paste. See `record-reference.ts`.
+ * 2. **Policy number, policy type and carrier on each policy.** The card
+ *    previously showed type and carrier run together in a sentence, and no
+ *    number at all. Status is ours, not his — flag it if he reviews this.
+ *
+ * ## Policies are household-level, not per-member
+ *
+ * The mockup shows a strip of small policy icons beside each person — Auto on
+ * one member, Home on another. That is **not derivable**: `Policy` links to
+ * `Household` and to `Deal`, and never to a `Contact`, so nothing in the system
+ * records which member a policy belongs to. Attributing them per person would
+ * mean guessing. Tracked as PAC-55; listing policies in full here makes the gap
+ * more visible, which is the honest outcome.
+ */
+export function HouseholdCard({ household }: HouseholdCardProps) {
+  if (!household) {
+    return (
+      <DetailCard title="Household" icon={Users}>
+        <p className="text-base text-muted-foreground">
+          This lead isn’t linked to a household yet.
+        </p>
+      </DetailCard>
+    );
+  }
 
-const policyIcons: Record<string, React.ElementType> = {
-  Auto: Car,
-  Home: Home,
-  Umbrella: Umbrella,
-};
+  const activePolicies = household.policies.filter((policy) => policy.active);
+  // Summed across policy types, so it mixes a 6-month auto premium with an
+  // annual property one and carries no term suffix — see `QuoteTotals`.
+  const premium = activePolicies.reduce(
+    (total, policy) => total + policy.premium,
+    0,
+  );
 
-export function HouseholdCard() {
   return (
-    <div className="bg-card rounded-lg border border-border">
-      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Users size={14} className="text-muted-foreground" />
-          <h3 className="text-sm text-card-foreground" style={{ fontWeight: 600 }}>Household</h3>
-        </div>
-        <button className="flex items-center gap-1 text-xs hover:opacity-80 transition-opacity" style={{ color: "var(--sky)" }}>
-          View all <ChevronRight size={12} />
-        </button>
-      </div>
+    <DetailCard
+      title={household.name ?? "Household"}
+      icon={Users}
+      bodyless
+      action={<HouseholdReference reference={household.reference} />}
+      subheading={
+        <p className="mt-1 text-sm tabular-nums text-muted-foreground">
+          {activePolicies.length || household.totalActivePolicies} active
+          {premium > 0 && <> · {formatCurrency(premium)}</>}
+        </p>
+      }
+    >
+      <section className="border-b border-border">
+        <SectionLabel className="px-5 pb-1 pt-3">Members</SectionLabel>
 
-      <div className="px-4 py-3 space-y-2">
-        {members.map((m) => (
-          <div
-            key={m.name}
-            className="flex items-center gap-3 p-2 rounded-md hover:bg-muted/50 cursor-pointer transition-colors"
-          >
-            <div
-              className="size-8 rounded-full flex items-center justify-center text-white shrink-0"
-              style={{ background: m.color, fontSize: 11, fontWeight: 700 }}
-            >
-              {m.initials}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-card-foreground truncate" style={{ fontWeight: 500 }}>{m.name}</p>
-              <p className="text-xs text-muted-foreground">{m.relation} · DOB {m.dob}</p>
-            </div>
-            <div className="flex gap-1">
-              {m.policies.map((p) => {
-                const Icon = policyIcons[p] || Car;
-                return (
-                  <div key={p} className="size-5 rounded flex items-center justify-center" style={{ background: "var(--muted)" }}>
-                    <Icon size={10} className="text-muted-foreground" />
-                  </div>
-                );
-              })}
-              {m.policies.length === 0 && (
-                <span className="text-xs text-muted-foreground/60 italic">No policies</span>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
+        {household.members.length > 0 ? (
+          <ul className="divide-y divide-border">
+            {household.members.map((member) => (
+              <li key={member.id} className="flex items-center gap-3 px-5 py-3">
+                <span
+                  aria-hidden
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/12 text-xs font-bold text-primary"
+                >
+                  {initials(member.name)}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-base text-card-foreground">
+                    {member.name}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {[
+                      member.isPrimary ? "Primary" : member.role,
+                      member.dateOfBirth
+                        ? `DOB ${formatDate(member.dateOfBirth)}`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "—"}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="px-5 pb-4 text-base text-muted-foreground">
+            No household members on file.
+          </p>
+        )}
+      </section>
+
+      <section>
+        <SectionLabel className="px-5 pb-1 pt-3">Policies</SectionLabel>
+
+        {household.policies.length > 0 ? (
+          <ul className="divide-y divide-border">
+            {household.policies.map((policy) => (
+              <li key={policy.id} className="px-5 py-3">
+                <PolicyRow policy={policy} />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="px-5 pb-4 text-base text-muted-foreground">
+            No policies bound on this household yet.
+          </p>
+        )}
+      </section>
+    </DetailCard>
+  );
+}
+
+/**
+ * The household's identifier (#7).
+ *
+ * Renders nothing when the reference is empty — a household migrated before
+ * `householdRef` existed and not yet backfilled. An absent chip is honest; a
+ * bare `HH-` is not.
+ */
+function HouseholdReference({ reference }: { reference: string }) {
+  const [copied, setCopied] = useState(false);
+
+  if (!reference) return null;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(reference);
+      setCopied(true);
+      toast.success(`Copied ${reference}`);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard access needs a secure context and can be blocked outright,
+      // so say so rather than leaving the button looking broken.
+      toast.error("Couldn’t copy the household ID");
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => void copy()}
+      title={`Copy household ID ${reference}`}
+      className="font-mono font-medium text-muted-foreground hover:text-foreground"
+    >
+      {/*
+       * `translate-y-[0.5px]` is an optical correction, not a fudge.
+       *
+       * Flexbox centres the *line box*, which puts the baseline at
+       * `(height + ascent - descent) / 2`. Optically centred caps want it at
+       * `(height + capHeight) / 2`, and those agree only when
+       * `ascent - descent === capHeight`. That holds for Inter, which is why
+       * the heading beside this needs nothing; it does not hold for
+       * `ui-monospace`, whose asymmetric metrics leave `HH-2614` sitting
+       * 0.51px high — measured in the browser, and enough to snap the text
+       * onto a different pixel row from the heading at this size.
+       *
+       * On the text only: the icon is a replaced box with no baseline, so it
+       * is already centred and shifting it would break what works. The
+       * alternative fix — dropping `font-mono` — aligns perfectly but breaks
+       * ranks with the policy numbers rendered just below in this same card.
+       */}
+      <span className="translate-y-[0.5px]">{reference}</span>
+      {copied ? (
+        <Check className="size-4 text-emerald-700 dark:text-emerald-500" />
+      ) : (
+        <Copy className="size-4" />
+      )}
+      <span className="sr-only">Copy household ID</span>
+    </Button>
   );
 }

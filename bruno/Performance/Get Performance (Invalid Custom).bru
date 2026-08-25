@@ -1,0 +1,60 @@
+meta {
+  name: Get Performance (Invalid Custom)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/performance?range=custom
+  body: none
+  auth: inherit
+}
+
+params:query {
+  range: custom
+}
+
+tests {
+  test("rejects a custom range with no bounds", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("says which field is wrong", function () {
+    expect(res.getBody().message).to.equal("Validation failed");
+  });
+}
+
+docs {
+  # GET /performance?range=custom (no bounds) — `400`
+
+  A negative test kept in the collection because this is the failure the web
+  client is built to avoid rather than to handle.
+
+  `range=custom` without `from`/`to` is reachable by ordinary means — a shared
+  link truncated at `?range=custom`, or a reload while the picker is open — so
+  the **client degrades to the default range** instead of sending this request.
+  Verified in the browser: such a URL renders month-to-date figures, not an
+  error state.
+
+  The API still rejects it, because a server should not invent a window the
+  caller did not ask for.
+
+  ## Also `400`
+  | query | why |
+  |-------|-----|
+  | `from=2026-02-01&to=2026-01-01` | `from` after `to` |
+  | `from=2026-02-31&to=2026-03-01` | February 31st does not exist |
+  | `from=2020-01-01&to=2026-01-01` | span over the 366-day cap |
+  | `range=fortnight` | not in the enum |
+
+  ## Response `400`
+  ```json
+  {
+    "message": "Validation failed",
+    "errors": {
+      "formErrors": [],
+      "fieldErrors": { "from": ["A custom range needs both from and to."] }
+    }
+  }
+  ```
+}

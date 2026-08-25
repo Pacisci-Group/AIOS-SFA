@@ -23,15 +23,54 @@ export function setTokens(accessToken: string, refreshToken: string) {
   localStorage.setItem('refreshToken', refreshToken);
 }
 
+/**
+ * Device preferences that survive logout.
+ *
+ * Everything else in `localStorage` is session-derived and must not — see
+ * {@link clearTokens}. These are the opposite: they describe the *browser*, not
+ * the person signed into it, they contain nothing about the account, and
+ * resetting them is a bug rather than a safeguard. Logging out used to repaint
+ * the app dark for anyone who had chosen the light theme.
+ *
+ * Keep this list short, and only add a key when leaking it to the next user of
+ * the same machine would be harmless.
+ */
+const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
+
+/**
+ * Wipe every trace of the session from the browser. Clears the whole
+ * localStorage and sessionStorage rather than individual keys so no cached
+ * data (tokens, user, branch selection, or anything added later) can leak
+ * into the next session — then restores the handful of device preferences in
+ * {@link PRESERVED_UI_PREFERENCE_KEYS}.
+ *
+ * Deliberately still a clear-then-restore rather than a list of keys to remove:
+ * the default for anything new stays "wiped", which is the safe direction.
+ */
 export function clearTokens() {
-  localStorage.removeItem('accessToken');
-  localStorage.removeItem('refreshToken');
-  localStorage.removeItem('user');
+  try {
+    const preserved = PRESERVED_UI_PREFERENCE_KEYS.map(
+      (key) => [key, localStorage.getItem(key)] as const,
+    );
+
+    localStorage.clear();
+    sessionStorage.clear();
+
+    for (const [key, value] of preserved) {
+      if (value !== null) localStorage.setItem(key, value);
+    }
+  } catch {
+    // Storage may be unavailable (private mode / SSR); ignore.
+  }
 }
 
 export interface AuthUser {
   id: string;
   email: string;
+  /** Full name from firstName/lastName, or null if not set. */
+  name: string | null;
+  /** Human-readable role names (e.g. ["Owner"]). For display only. */
+  roles: string[];
   agencyId: string | null;
   branchId: string | null;
   permissions: string[];
@@ -107,6 +146,49 @@ export async function apiFetch<T>(
       res = await fetch(`${API_BASE}${path}`, { ...options, headers });
     }
   }
+
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text || res.statusText;
+    try {
+      const json = JSON.parse(text) as { message?: string | string[] };
+      if (json.message) {
+        message = Array.isArray(json.message) ? json.message.join(', ') : json.message;
+      }
+    } catch {
+      // use raw text
+    }
+    throw new ApiError(message, res.status);
+  }
+
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
+  return res.json() as Promise<T>;
+}
+
+/**
+ * Fetch for `@Public()` API routes. No `Authorization`, no `X-Branch-Id`, and
+ * no 401-refresh — same `ApiError` contract otherwise.
+ *
+ * Deliberately not `apiFetch`. A producer previewing their own share link is a
+ * completely ordinary thing to do, and if their access token happens to be
+ * expired, `apiFetch` would attempt a refresh, fail it, and call
+ * `clearTokens()` — which wipes localStorage and **logs them out of the app for
+ * opening their own link**. Precedent: `uploadToPresignedUrl` in
+ * `deal-audits-api.ts` bypasses `apiFetch` for the same class of reason.
+ */
+export async function publicFetch<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const headers = new Headers(options.headers);
+  if (!headers.has('Content-Type') && options.body) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
   if (!res.ok) {
     const text = await res.text();

@@ -1,0 +1,58 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Captured under its OWN name, not `accessToken`. Overwriting the collection
+  // bearer would silently re-run every later folder as the owner, quietly
+  // invalidating the scope assertions in Leads / Performance / Leaderboard that
+  // depend on being the `own`-scope producer.
+  if (res.getStatus() === 201) {
+    bru.setVar("ownerAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the owner holds agency:users:write", function () {
+    expect(res.getBody().user.permissions).to.include("agency:users:write");
+  });
+}
+
+docs {
+  # POST /auth/login — as the agency owner
+
+  Test plumbing for this folder, not a distinct endpoint: the same call as
+  **Auth › Login**, with different credentials.
+
+  Every request in this folder needs `agency:users:write` or
+  `agency:users:read`, and the collection-level bearer belongs to
+  `producer@smithfamily.local`, who holds **neither** — a producer inviting a
+  user gets a `403`. So this captures `ownerAccessToken` and the invite requests
+  reference it explicitly via `auth:bearer`.
+
+  Requires the demo seed (`npm run api:seed:demo:dev`), which creates
+  `owner@smithfamily.local` with the Agency Owner role.
+}

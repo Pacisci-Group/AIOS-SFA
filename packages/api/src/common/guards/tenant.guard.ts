@@ -5,9 +5,10 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AccessScope, JwtPayload } from '@sfa/shared';
+import { AccessScope } from '@sfa/shared';
 import { SKIP_TENANT_KEY } from '../decorators/access.decorators';
-import { isPublicRoute } from './guard.utils';
+import { AuthenticatedRequest } from '../types/authenticated-request';
+import { asIdString, isPublicRoute } from './guard.utils';
 
 @Injectable()
 export class TenantGuard implements CanActivate {
@@ -26,35 +27,36 @@ export class TenantGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest();
-    const user = request.user as JwtPayload | undefined;
-    if (!user) {
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const access = request.access;
+    if (!access) {
       throw new ForbiddenException('Authentication required');
     }
 
-    if (user.isPlatformAdmin || user.scope === AccessScope.Platform) {
-      const routeAgencyId =
+    if (access.isPlatformAdmin || access.scope === AccessScope.Platform) {
+      const routeAgencyId: unknown =
         request.params?.agencyId ??
         request.query?.agencyId ??
         request.body?.agencyId;
-      request.resolvedAgencyId = routeAgencyId ?? user.agencyId ?? null;
+      request.resolvedAgencyId =
+        asIdString(routeAgencyId) ?? access.agencyId ?? null;
       return true;
     }
 
-    if (!user.agencyId) {
+    if (!access.agencyId) {
       throw new ForbiddenException('Agency context required');
     }
 
-    const routeAgencyId =
+    const routeAgencyId: unknown =
       request.params?.agencyId ??
       request.query?.agencyId ??
       request.body?.agencyId;
 
-    if (routeAgencyId && routeAgencyId !== user.agencyId) {
+    if (routeAgencyId && routeAgencyId !== access.agencyId) {
       throw new ForbiddenException('Access denied for this agency');
     }
 
-    request.resolvedAgencyId = user.agencyId;
+    request.resolvedAgencyId = access.agencyId;
     return true;
   }
 }

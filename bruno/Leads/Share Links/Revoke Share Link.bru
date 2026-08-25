@@ -1,0 +1,76 @@
+meta {
+  name: Revoke Share Link
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/leads/share-links/{{disposableShareLinkId}}/revoke
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the link is deactivated and stamped", function () {
+    expect(res.getBody().isActive).to.equal(false);
+    expect(res.getBody().revokedAt).to.not.equal(null);
+  });
+}
+
+docs {
+  # PATCH /leads/share-links/:id/revoke — kill a link (PAC-37)
+
+  Deactivates a share link. **This is the containment mechanism** for a link
+  that has been forwarded somewhere it shouldn't have been: there is no expiry
+  and no submission cap in this story, so revocation is the only way to stop a
+  link working.
+
+  Run **Create Disposable Share Link** first — it captures
+  `disposableShareLinkId`. This request deliberately revokes that throwaway link
+  rather than the shared `shareLinkToken`, so the Public Intake folder (which
+  the CLI runs afterwards, folders being walked alphabetically) still has a live
+  token to exercise.
+
+  - **Module:** `leads`
+  - **Permission:** `leads:write`
+  - **Data scope:** `own` — a producer can only revoke their own links.
+
+  ## Effect
+  Once revoked, both public routes stop serving the token immediately:
+  `GET /public/lead-form/:token` and `POST /public/leads/:token` return the same
+  generic `404` a completely unknown token gets. Leads already submitted through
+  the link are untouched — they keep their `intakeSource.shareLinkId`, so a
+  misbehaving link stays traceable to the records it produced.
+
+  ## Idempotency
+  Revoking an already-revoked link returns `200` with the **original**
+  `revokedAt`, rather than moving the timestamp. Same contract as
+  `PATCH /deal-audits/:itemId/resolve`.
+
+  ## Response `200`
+  The full link row, as returned by the list endpoint:
+  ```json
+  {
+    "id": "665f0a1b2c3d4e5f60718293",
+    "token": "8Kj2mQ7xR4tY9wZ1aB3cD5eF6gH8iJ0kL2mN4oP6qRs",
+    "url": "http://localhost:5173/f/lead/8Kj2...",
+    "label": "Referrals from Dave at First National",
+    "isActive": false,
+    "submissionCount": 4,
+    "lastSubmissionAt": "2026-08-02T18:31:05.000Z",
+    "createdAt": "2026-07-30T09:00:00.000Z",
+    "revokedAt": "2026-08-03T11:02:44.000Z"
+  }
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `leads` module disabled, or missing `leads:write`.
+  - `404 Not Found` — unknown id, a malformed id, or **another producer's link**.
+    Deliberately a 404 rather than a 403: whether someone else's link exists is
+    not the caller's business.
+}

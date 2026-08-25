@@ -1,0 +1,37 @@
+meta {
+  name: Update Quote Recap (Empty Body)
+  type: http
+  seq: 10
+}
+
+patch {
+  url: {{baseUrl}}/quote-recaps/{{createdQuoteRecapId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("rejects a patch that changes nothing", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH /quote-recaps/:id with `{}` — 400
+
+  Guarded by `.refine(Object.keys(value).length > 0)` on the DTO.
+
+  A patch that names no field is a client bug — most likely a form that
+  serialised nothing — and silently returning `200` with the record untouched
+  would hide it. The same rule and the same reasoning as
+  `Leads/Update Lead (Invalid).bru`.
+}

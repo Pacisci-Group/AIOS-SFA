@@ -1,0 +1,102 @@
+meta {
+  name: Presign Sold Document
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/sold-deals/documents/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "filename": "roof-receipt.pdf",
+    "contentType": "application/pdf",
+    "size": 2048
+  }
+}
+
+script:post-response {
+  // Runtime-only vars so the upload + create requests can chain off this one.
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    const body = res.getBody();
+    bru.setVar("soldDocumentKey", body.key);
+    bru.setVar("soldDocumentUploadUrl", body.uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a presigned PUT scoped to the agency and lead", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("key");
+    expect(body).to.have.property("uploadUrl");
+    expect(body).to.have.property("requiredHeaders");
+    expect(body).to.have.property("expiresIn");
+    // The prefix is what `POST /sold-deals` later verifies.
+    expect(body.key).to.contain("/sold-deals/");
+    expect(body.requiredHeaders["Content-Type"]).to.equal("application/pdf");
+  });
+}
+
+docs {
+  # POST /sold-deals/documents/presign — Card 5 proof upload (PAC-40)
+
+  Issues a presigned `PUT` for a **Card 5** proof document — fire subscription,
+  roof receipt, or student transcript. File bytes go **straight to object
+  storage**; they never pass through the API.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write`
+  - **Data scope:** `own` producers may only presign against their own lead
+
+  ## Why lead-scoped, not deal-scoped
+  The upload happens while the wizard is still being filled in, so no deal
+  exists yet to attach it to. The key embeds the agency and the lead, and
+  `POST /sold-deals` verifies that prefix before accepting the attachment.
+
+  ## Body
+  | field       | type   | rules                                   |
+  |-------------|--------|-----------------------------------------|
+  | leadId      | string | 24-char ObjectId                        |
+  | filename    | string | 1–255 chars; sanitized into the key     |
+  | contentType | enum   | `application/pdf`, `image/jpeg`, `image/png` |
+  | size        | number | > 0, ≤ 10 MB                            |
+
+  > `size` here is a **claim, not evidence** — the presigned PUT signs only the
+  > content type, so a caller holding a valid URL could upload something larger.
+  > It is bounded here to fail fast; `POST /sold-deals` re-derives the real size
+  > with `HeadObject` and is what actually enforces the limit.
+
+  ## Response `201`
+  ```json
+  {
+    "key": "agencies/<agencyId>/sold-deals/<leadId>/2026/<uuid>-roof-receipt.pdf",
+    "uploadUrl": "https://…",
+    "requiredHeaders": { "Content-Type": "application/pdf" },
+    "expiresIn": 900
+  }
+  ```
+
+  ## Errors
+  - `400 Bad Request` — bad `leadId`, disallowed `contentType`, or `size` over 10 MB.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — `deal_audits` disabled, or missing `deal_audits:write`.
+  - `404 Not Found` — the lead does not exist **or** belongs to another producer.
+    Ownership is checked *before* signing, so a presign never leaks the
+    existence of someone else's lead.
+
+  ## Ordering
+  Run **Leads/Create Lead** first — it sets `createdLeadId`.
+}

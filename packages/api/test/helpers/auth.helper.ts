@@ -17,10 +17,8 @@ export async function login(
     .send({ email, password })
     .expect(201);
 
-  return {
-    accessToken: res.body.accessToken,
-    refreshToken: res.body.refreshToken,
-  };
+  const { accessToken, refreshToken } = res.body as AuthTokens;
+  return { accessToken, refreshToken };
 }
 
 export function authHeader(token: string): { Authorization: string } {

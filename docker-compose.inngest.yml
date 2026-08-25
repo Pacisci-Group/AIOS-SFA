@@ -1,0 +1,75 @@
+# Self-hosted Inngest, deployed to its OWN droplet (sfa-<env>-inngest).
+#
+# Inngest is the durable event bus, scheduler and executor for every asynchronous
+# thing the platform does: outbound email today, scheduled scans next. We deploy
+# it; we do not build it — this is an upstream image, and nothing of ours ships
+# here.
+#
+# Deployed to /opt/sfa-inngest by the `deploy-inngest` job in
+# .github/workflows/deploy.reusable.yml. Like /opt/sfa/.env, the .env beside this
+# file is REWRITTEN IN FULL on every deploy — edit the GitHub Environment
+# secrets, not the file on the box.
+#
+# Required variables (from /opt/sfa-inngest/.env):
+#   INNGEST_EVENT_KEY    -> authenticates events the API sends
+#   INNGEST_SIGNING_KEY  -> signs requests to our /api/inngest endpoint. Must be
+#                           hex with an even number of characters:
+#                           `openssl rand -hex 32`
+#   APP_PRIVATE_IP       -> the app droplet's VPC address; where the functions live
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠ THE DASHBOARD HAS NO AUTHENTICATION.
+#
+# Port 8288 serves the Event API, the REST/GraphQL API *and* the dashboard UI,
+# with no login of any kind. Inngest has not shipped dashboard auth yet. The
+# DigitalOcean firewall is therefore the ONLY thing standing between this port
+# and the internet — that rule is load-bearing, not defence in depth, and the
+# droplet has no public ingress at all (allow_http_https = false).
+#
+# To reach the UI, tunnel:  ssh -L 8288:localhost:8288 deploy@<inngest-droplet>
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  inngest:
+    image: inngest/inngest
+    # ⚠ The serve URL and poll interval MUST be flags, not env vars.
+    #
+    # INNGEST_URLS / INNGEST_POLL_INTERVAL are ignored by the binary. It
+    # starts perfectly happily, reports healthy, and simply never syncs any
+    # app — so every check passes while no async work exists. Verified
+    # locally: with the env vars the GraphQL `apps` list stays empty; with
+    # these flags the app appears with functionCount > 0.
+    command: "inngest start -u http://${APP_PRIVATE_IP}:4000/api/inngest --poll-interval 30"
+    restart: unless-stopped
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+      # Persist to the mounted volume rather than the default ./.inngest/main.db
+      # inside the container, which a `docker compose down` would take with it.
+      INNGEST_SQLITE_DIR: /data
+    ports:
+      # Bound to all interfaces so the app droplet can reach it over the VPC.
+      # See the warning above: the firewall is what makes this safe, and it
+      # admits the app droplet only.
+      - "8288:8288"
+    volumes:
+      # Run state and history. Single-node SQLite with an in-memory queue that
+      # snapshots here periodically, so a hard crash can lose in-flight run
+      # state. Acceptable at this volume; the documented upgrade is
+      # INNGEST_POSTGRES_URI + INNGEST_REDIS_URI, which is two env vars rather
+      # than a rewrite. Back this volume up nightly regardless.
+      - inngest_data:/data
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  inngest_data:

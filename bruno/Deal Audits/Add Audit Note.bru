@@ -1,0 +1,76 @@
+meta {
+  name: Add Audit Note
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}/notes
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "body": "Called the client for the declarations page — voicemail left."
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("echoes the note back as a thread entry", function () {
+    const body = res.getBody();
+    expect(body.type).to.equal("note");
+    expect(body).to.have.property("summary");
+    expect(body).to.have.property("occurredAt");
+    expect(body).to.have.property("userName");
+  });
+}
+
+docs {
+  # POST /deal-audits/deals/:dealId/notes — leave a note (PAC-72)
+
+  "Any user with access can leave notes on the audit throughout" — section E of
+  the ticket. Notes are visible to everyone who can read the audit.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write`
+  - **Data scope:** assignee **or** reviewer (see **Set Audit Assignment**).
+
+  ## Body
+  | field | type   | rules              |
+  |-------|--------|--------------------|
+  | body  | string | required, 1–2000 chars |
+
+  Stored as an `activities` row with `type: "note"`,
+  `subjectType: "dealAudit"` and `source: "internal"` — the last of these
+  explicitly, because the schema default is `"migration"` and would otherwise
+  label a fresh note as imported data.
+
+  ## Response `201`
+  The created entry, in the same shape **List Audit Notes** returns, so the
+  client can splice it into the thread without a refetch.
+
+  ```json
+  {
+    "id": "665f...e07",
+    "type": "note",
+    "summary": "Called the client — voicemail left.",
+    "occurredAt": "2026-08-21T10:12:00.000Z",
+    "userName": "Pat Producer"
+  }
+  ```
+
+  ## Errors
+  - `400 Bad Request` — empty or over-long body.
+  - `403 Forbidden` — module disabled or missing `deal_audits:write`.
+  - `404 Not Found` — no audit for that deal, or out of reach.
+}

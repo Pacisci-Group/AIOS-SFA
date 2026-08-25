@@ -1,0 +1,57 @@
+meta {
+  name: Refresh Token
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/refresh
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "refreshToken": "{{refreshToken}}"
+  }
+}
+
+script:post-response {
+  // Rotate the runtime tokens with the freshly issued pair (in-memory only).
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    const body = res.getBody();
+    bru.setVar("accessToken", body.accessToken);
+    bru.setVar("refreshToken", body.refreshToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a new access token", function () {
+    expect(res.getBody()).to.have.property("accessToken");
+  });
+}
+
+docs {
+  # POST /auth/refresh
+
+  Public. Exchange a valid refresh token for a new access/refresh pair.
+  Uses `{{refreshToken}}`, which **Login** populated.
+
+  **Body**
+  | field        | type   | rules     |
+  |--------------|--------|-----------|
+  | refreshToken | string | non-empty |
+
+  **Response `201`** — same shape as **Login** (`accessToken`, `refreshToken`, `user`).
+
+  **Errors** — `401 Unauthorized` if the refresh token is invalid, expired, or
+  the user is inactive.
+}

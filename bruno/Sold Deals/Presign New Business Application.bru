@@ -1,0 +1,111 @@
+meta {
+  name: Presign New Business Application
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/sold-deals/documents/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "leadId": "{{createdLeadId}}",
+    "kind": "new_business_application",
+    "filename": "new-business-application.pdf",
+    "contentType": "application/pdf",
+    "size": 2048
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    const body = res.getBody();
+    bru.setVar("nbaDocumentKey", body.key);
+    bru.setVar("nbaDocumentUploadUrl", body.uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("signs the key under the /nba/ prefix", function () {
+    // The prefix is the enforcement mechanism, not decoration — see the docs.
+    expect(res.getBody().key).to.contain("/nba/");
+  });
+
+  test("still scopes the key to the agency and lead", function () {
+    const key = res.getBody().key;
+    expect(key).to.contain("agencies/");
+    expect(key).to.contain(bru.getVar("createdLeadId"));
+  });
+}
+
+docs {
+  # POST /sold-deals/documents/presign — the new business application (PAC-56 #23)
+
+  The same endpoint as `Presign Sold Document`, with `kind:
+  "new_business_application"`. Two things change.
+
+  - **Module:** `deal_audits` · **Permission:** `deal_audits:write`
+
+  ## 1. PDF only
+  The deliberate exception to the sold form's PDF-or-image rule (#22). This is a
+  **signed application**, not a photographed receipt, and the data-accuracy case
+  for requiring it is why David asked for it at all. An `image/png` here is a
+  400.
+
+  ## 2. Its own key prefix — and that is the real gate
+  The key comes back under `agencies/<agencyId>/sold-deals/<leadId>/nba/…`
+  rather than the shared prefix.
+
+  That is not cosmetic. `assertKeyOwnership` at submit time matches the key
+  against the purpose for the slot it was declared in, so a caller who presigns
+  a PNG as a `discount_proof` and then declares that key as the new business
+  application is rejected — **the key is under the wrong prefix**. The
+  `HeadObject` content-type re-check catches the same attempt independently.
+  The narrowing on *this* request is only a fast-fail; those two are what hold.
+
+  ⚠ The `discount_proof` prefix is deliberately **unchanged** — there are
+  in-flight keys in every environment and an e2e case pins it.
+
+  ## `kind`
+  | value | accepts | key prefix |
+  |---|---|---|
+  | `discount_proof` *(default)* | PDF, JPEG, PNG | `sold-deals/<leadId>` |
+  | `new_business_application` | **PDF only** | `sold-deals/<leadId>/nba` |
+
+  Defaulted, so every caller written before #23 keeps working untouched.
+
+  ## Response `201`
+  ```json
+  {
+    "key": "agencies/665f…/sold-deals/665f…/nba/2026/9f2c-new-business-application.pdf",
+    "uploadUrl": "http://localhost:9000/sfa-uploads/…?X-Amz-Signature=…",
+    "requiredHeaders": { "Content-Type": "application/pdf" },
+    "expiresIn": 900
+  }
+  ```
+
+  ## Errors
+  - `400` — a non-PDF `contentType` for this kind, a malformed `leadId`, or a
+    declared size over 10 MB.
+  - `404` — unknown lead, or one outside the caller's data scope. Checked
+    **before** anything is signed, so a presign cannot probe for leads.
+
+  ## Run order
+  Needs `createdLeadId`. Feeds `Upload New Business Application` (seq 12).
+
+  ⚠ **10 MB ceiling.** A scanned, signed application can exceed it, and the
+  failure surfaces here with a generic message. Flagged for the product owner
+  rather than raised unilaterally.
+}
