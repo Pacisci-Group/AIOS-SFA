@@ -31,6 +31,10 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Leads | Log Activity (Invalid Type) | `POST /activities` | **PAC-16** — pins the write vocabulary; a forged `sold` must 400. |
 | Leads | Log Activity (Foreign Lead) | `POST /activities` | **PAC-16** — asserts an out-of-scope lead 404s, not 403s. |
 | Leads › Share Links | Create / List / Revoke | `/leads/share-links…` | **PAC-37** — public intake links. `leads:write`. |
+| Leads › Address | Address Autocomplete | `POST /address/autocomplete` | **PAC-60** — Google-backed predictions for every address field. OR-gated over four modules at `:write`. Fails open: always 200, read `available`. |
+| Leads › Address | Resolve Address | `POST /address/resolve` | **PAC-60** — chosen prediction → `{street, city, state, zip}`. Accepts 200 **or** 400 by design; asserts the spelled-out state and the five-digit ZIP. |
+| Public Intake | Public Address Autocomplete | `POST /public/address/:token/autocomplete` | **PAC-60** — the same lookup on the anonymous share-link form. `auth: none`. Over the per-link daily cap it answers `200 { available: false }`, never 429. |
+| Public Intake | Public Address Autocomplete (Unknown Token) | `POST /public/address/:token/autocomplete` | **PAC-60** — the non-disclosure contract: an unknown token must be byte-identical to a revoked one. |
 | Leaderboard | Get Leaderboard | `GET /leaderboard` | **PAC-13** — Motivation Hub. `leaderboard:read`. Asserts no entry leaks another producer's dollars. |
 | Leaderboard | Get Leaderboard (Explicit Month) | `GET /leaderboard` | **PAC-13** — a past month; month-scoped, never range-scoped. |
 | Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |

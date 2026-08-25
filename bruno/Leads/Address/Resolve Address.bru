@@ -1,0 +1,170 @@
+meta {
+  name: Resolve Address
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/address/resolve
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "placeId": "{{addressPlaceId}}",
+    "sessionToken": "{{addressSessionToken}}"
+  }
+}
+
+tests {
+  test("answers 200, or 400 for a place id Google does not recognise", function () {
+    // Two statuses by design. With no GOOGLE_MAPS_API_KEY (the usual dev
+    // machine) `Address Autocomplete` captures no place id and hands over a
+    // sentinel; the service short-circuits before calling Google and answers
+    // 200 { available: false }. With a key, the captured id is real and this is
+    // a 200 carrying an address. A 400 means a key IS configured but the id was
+    // stale or minted by a different GCP project.
+    expect([200, 400]).to.include(res.getStatus());
+  });
+
+  test("a 200 carries the { available, address } envelope", function () {
+    if (res.getStatus() !== 200) return;
+    const body = res.getBody();
+    expect(body).to.have.property("available");
+    expect(body.available).to.be.a("boolean");
+    expect(body).to.have.property("address");
+  });
+
+  test("a resolved address carries exactly the four form fields", function () {
+    const body = res.getStatus() === 200 ? res.getBody() : null;
+    if (!body || !body.address) return;
+    expect(Object.keys(body.address).sort()).to.eql(["city", "state", "street", "zip"]);
+  });
+
+  test("state is spelled out, never the two-letter code", function () {
+    const body = res.getStatus() === 200 ? res.getBody() : null;
+    if (!body || !body.address || !body.address.state) return;
+    // The PAC-60 acceptance criterion. Migrated SmartSuite households store
+    // `Oklahoma`, so a two-letter state would sort new records apart from old
+    // ones in exactly the support lookup this serves.
+    expect(body.address.state.length).to.be.above(2);
+  });
+
+  test("zip is five digits — no +4", function () {
+    const body = res.getStatus() === 200 ? res.getBody() : null;
+    if (!body || !body.address || !body.address.zip) return;
+    // ZIP is half of the household dedupe key, so a `73013-1234` would never
+    // match a migrated `73013`.
+    expect(body.address.zip).to.not.include("-");
+  });
+
+  test("never leaks the API key or Google's raw payload", function () {
+    const raw = JSON.stringify(res.getBody());
+    expect(raw).to.not.include("AIza");
+    expect(raw).to.not.include("addressComponents");
+    expect(raw).to.not.include("googleapis.com");
+  });
+}
+
+docs {
+  # POST /address/resolve — turn a chosen prediction into four fields (PAC-60)
+
+  The second half of an address-entry session: the user clicked a suggestion
+  from `POST /address/autocomplete`, and this returns the
+  `{ street, city, state, zip }` the form actually holds.
+
+  - **Module / Permission / Scope:** identical to `POST /address/autocomplete` —
+    an OR over `leads`, `quote_recaps`, `deal_audits`, `crm_service` at `:write`,
+    no data scope. See that request's docs for why.
+
+  ## Request
+  ```json
+  {
+    "placeId": "ChIJ...",
+    "sessionToken": "3519edfe-0f75-4a30-bfe4-7cbd89340b2c"
+  }
+  ```
+
+  `sessionToken` **must be the same value the autocomplete keystrokes carried**.
+  That is what bundles them into one billed session; a mismatched or missing
+  token gets every keystroke billed standalone.
+
+  ## Response `200`
+  ```json
+  {
+    "available": true,
+    "address": {
+      "street": "4821 North Maple Avenue",
+      "city": "Oklahoma City",
+      "state": "Oklahoma",
+      "zip": "73013"
+    }
+  }
+  ```
+
+  `address` is `null` when the place carried no usable components — the client
+  then leaves what the user typed alone rather than blanking four fields.
+
+  ## Two mapping rules that are load-bearing, not cosmetic
+
+  **1. `state` is the spelled-out name.** Google returns
+  `administrative_area_level_1` as both `shortText: "OK"` and
+  `longText: "Oklahoma"`, and **Google's own sample form maps `shortText`**.
+  Copying that would split our data down the middle: `DEFAULT_ADDRESS_STATE` is
+  `'Oklahoma'` and every migrated SmartSuite household stores the full name, so
+  two-letter states would sort new records apart from old ones in exactly the
+  support lookup this serves. Both mappers pass state through one shared
+  `US_STATE_NAMES` table, which also covers the Address Validation API — where
+  `postalAddress.administrativeArea` is *only* ever the short form.
+
+  **2. `zip` is five digits — `postal_code_suffix` is deliberately dropped.**
+  ZIP is half of `buildAddressKey(street, zip)`, the household dedupe key. A new
+  lead keyed `73013-1234` can never match a migrated household keyed `73013`, so
+  appending +4 would silently disable dedupe for every address Google happens to
+  know the suffix for. Asserted in
+  `packages/shared/src/domain/google-address.spec.ts` so nobody "improves" it.
+
+  A blank `state` is backfilled with the agency default so an autofilled address
+  never comes back *less* complete than the form was seeded.
+
+  ## Nothing here rewrites stored data
+  The only writer is the user clicking a suggestion, which goes through the
+  form's normal field-set path. `households.propertyAddress` already coerces
+  three writer key-sets on read; a silently-canonicalised fourth shape would
+  make that coercion wrong with no failing test. The validation half of PAC-60
+  (a "we found a slightly different address" notice) follows the same rule:
+  warn and suggest, never rewrite.
+
+  ## ⚠ Two accepted statuses, by design
+  With **no `GOOGLE_MAPS_API_KEY`** — the usual dev machine — `Address
+  Autocomplete` captures no place id and hands over the sentinel
+  `no-key-configured`. The service short-circuits on `configured` before calling
+  Google, so the answer is `200 { "available": false, "address": null }`. That is
+  a pass, and it deliberately exercises the service rather than the validation
+  pipe — an empty `placeId` would 400 at the pipe and never prove the fail-open
+  path works. A `400` here means a key *is* configured but the id was stale or
+  minted by a different GCP project. The `tests` block accepts both and only
+  asserts the address shape when one actually came back, so the collection stays
+  green with or without a key.
+
+  ## Rate limiting
+  `120 requests / minute / IP` (`ADDRESS_LOOKUP_RATE_LIMIT`), shared with
+  `/address/autocomplete`. ⚠ Real environment variable only — see that request.
+
+  ## Errors
+  - `400 Bad Request` — blank/oversized `placeId` or `sessionToken`, or a place
+    id Google rejects.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — none of the four modules enabled, or none of the four write
+    permissions held.
+  - `429 Too Many Requests` — rate limit exceeded.
+
+  ## Run order
+  After `Address Autocomplete`, which sets both `addressSessionToken` and
+  `addressPlaceId`.
+}
