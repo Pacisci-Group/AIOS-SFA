@@ -4,6 +4,7 @@ export * from './domain/business-type';
 export * from './domain/carrier';
 export * from './domain/contact';
 export * from './domain/deal-audit';
+export * from './domain/google-address';
 export * from './domain/hot-lead';
 export * from './domain/household-role';
 export * from './domain/insurance-month';

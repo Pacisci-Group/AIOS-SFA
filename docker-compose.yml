@@ -203,6 +203,15 @@ services:
       # key. Deployed environments set it to "0".
       INNGEST_DEV: "1"
       INNGEST_BASE_URL: http://inngest:8288
+      # Address autocomplete throttle (PAC-60). Declared HERE and not in
+      # .env because @Throttle bakes the number into decorator metadata when
+      # the controller class is imported, which is before ConfigModule runs
+      # dotenv — same constraint as the PUBLIC_* limits. GOOGLE_MAPS_API_KEY
+      # itself goes through ConfigService, so .env carries it via env_file.
+      ADDRESS_LOOKUP_RATE_LIMIT: ${ADDRESS_LOOKUP_RATE_LIMIT:-120}
+      PUBLIC_ADDRESS_RATE_LIMIT: ${PUBLIC_ADDRESS_RATE_LIMIT:-30}
+      PUBLIC_ADDRESS_HOURLY_LIMIT: ${PUBLIC_ADDRESS_HOURLY_LIMIT:-200}
+      PUBLIC_ADDRESS_LINK_DAILY_LIMIT: ${PUBLIC_ADDRESS_LINK_DAILY_LIMIT:-500}
     depends_on:
       mongo:
         condition: service_healthy

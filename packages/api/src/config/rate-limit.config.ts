@@ -50,3 +50,51 @@ export const PUBLIC_INTAKE_HOURLY_LIMIT = limitFromEnv(
   'PUBLIC_INTAKE_HOURLY_LIMIT',
   30,
 );
+
+/**
+ * `POST /address/*` — authenticated address autocomplete (PAC-60).
+ *
+ * Generous, because unlike the intake limits this one guards a *billed* call
+ * behind a login rather than an abuse surface. A 250 ms debounce yields roughly
+ * 6–10 requests per address typed, so 120/min is several forms a minute per
+ * user; the real spend ceiling is the quota cap on the Google key.
+ */
+export const ADDRESS_LOOKUP_RATE_LIMIT = limitFromEnv(
+  'ADDRESS_LOOKUP_RATE_LIMIT',
+  120,
+);
+
+/**
+ * `POST /public/address/:token/*` — the same lookup on the unauthenticated
+ * intake form. Two windows, like the intake limits: the per-minute one stops a
+ * burst, the hourly one catches a slow drip that would sit under it all day.
+ *
+ * Tighter than the authenticated limit because there is no login behind it, but
+ * still well above one person typing two addresses — a submitter locked out
+ * mid-form is a lost lead, and the feature is only meant to save them typing.
+ */
+export const PUBLIC_ADDRESS_RATE_LIMIT = limitFromEnv(
+  'PUBLIC_ADDRESS_RATE_LIMIT',
+  30,
+);
+export const PUBLIC_ADDRESS_HOURLY_LIMIT = limitFromEnv(
+  'PUBLIC_ADDRESS_HOURLY_LIMIT',
+  200,
+);
+
+/**
+ * Address lookups per share link per rolling day.
+ *
+ * The one limit that catches the attack that actually costs money: a single
+ * scraped link driven from many IPs, which per-IP throttling structurally
+ * cannot see. Counted on the `ShareLink` document rather than in the throttler.
+ *
+ * ⚠ Unlike its two neighbours this one is read at *request* time, not baked
+ * into decorator metadata — but it is kept here so all four address limits are
+ * tuned from one file, and it follows the same real-environment-variable rule
+ * for consistency.
+ */
+export const PUBLIC_ADDRESS_LINK_DAILY_LIMIT = limitFromEnv(
+  'PUBLIC_ADDRESS_LINK_DAILY_LIMIT',
+  500,
+);

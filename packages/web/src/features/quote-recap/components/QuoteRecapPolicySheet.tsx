@@ -72,6 +72,9 @@ export function QuoteRecapPolicySheet({
             propertyAddress: "propertyAddress",
           }}
           householdAddress={householdAddress}
+          // Quote Recap is authenticated-only — there is no public variant of
+          // this form — so address lookup uses the normal endpoint (PAC-60).
+          shareToken={undefined}
         >
           <form.AppField name="premium">
             {(f) => (

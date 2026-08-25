@@ -17,3 +17,21 @@ export const TIGHT_PUBLIC_INTAKE_LIMIT = 2;
 process.env.PUBLIC_FORM_RATE_LIMIT = String(TIGHT_PUBLIC_FORM_LIMIT);
 process.env.PUBLIC_INTAKE_RATE_LIMIT = String(TIGHT_PUBLIC_INTAKE_LIMIT);
 process.env.PUBLIC_INTAKE_HOURLY_LIMIT = '50';
+
+/**
+ * Address autocomplete on the public form (PAC-60).
+ *
+ * The per-minute throttle is left generous while the **per-link daily cap** is
+ * clamped, because they guard different things and only one of them is worth
+ * asserting here: the throttle is the same `@Throttle` machinery the intake
+ * limits above already prove, whereas the per-link cap is bespoke counting on
+ * the ShareLink document and is the only defence against one scraped link
+ * driven from many IPs.
+ */
+export const TIGHT_PUBLIC_ADDRESS_LINK_DAILY_LIMIT = 3;
+
+process.env.PUBLIC_ADDRESS_RATE_LIMIT = '100000';
+process.env.PUBLIC_ADDRESS_HOURLY_LIMIT = '100000';
+process.env.PUBLIC_ADDRESS_LINK_DAILY_LIMIT = String(
+  TIGHT_PUBLIC_ADDRESS_LINK_DAILY_LIMIT,
+);

@@ -1,0 +1,79 @@
+meta {
+  name: Public Address Autocomplete (Unknown Token)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/public/address/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/autocomplete
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "input": "4821 North Maple",
+    "sessionToken": "bru-unknown-token-probe"
+  }
+}
+
+tests {
+  test("returns 404 Not Found", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("gives the same generic message the intake routes give", function () {
+    // Byte-identical to `Get Public Lead Form (Unknown)`. If these two ever
+    // diverge, the address route has become an oracle for which share links
+    // exist — which is the failure this request is here to catch.
+    expect(res.getBody().message).to.equal("This form is no longer available.");
+  });
+
+  test("discloses nothing about the agency, producer or link", function () {
+    const raw = JSON.stringify(res.getBody());
+    expect(raw).to.not.include("agency");
+    expect(raw).to.not.include("producer");
+    expect(raw).to.not.include("revoked");
+    expect(raw).to.not.include("module");
+  });
+
+  test("spends no Google quota", function () {
+    // Link verification runs BEFORE the lookup and before the per-link
+    // allowance is touched, so an unknown token can neither bill us nor drain
+    // another link's budget.
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # POST /public/address/:token/autocomplete — the non-disclosure contract (PAC-60)
+
+  The negative case for the public address lookup. A well-formed but unknown
+  token must be **indistinguishable** from a revoked one, a link whose agency was
+  deactivated, one whose agency lost the `leads` module, and one whose producer
+  left.
+
+  This mirrors `Get Public Lead Form (Unknown)` deliberately — both routes resolve
+  the token through the same `ShareLinkAccessService`, and this request exists so
+  that a future change to one cannot silently make it more informative than the
+  other.
+
+  ## Why it matters more here than it looks
+  This endpoint is **billed**. If the response distinguished "no such link" from
+  "link exists but is revoked", an attacker could enumerate live share links
+  cheaply and then point a distributed load at a real one — which is exactly the
+  spend the per-link daily cap exists to bound.
+
+  ## Order of operations
+  Verification happens **before** any allowance is consumed and before Google is
+  called, so an unknown token costs nothing and cannot drain a real link's
+  budget. Asserted in `packages/api/test/public-address.e2e-spec.ts`.
+
+  ## Response `404`
+  ```json
+  { "message": "This form is no longer available.", "error": "Not Found", "statusCode": 404 }
+  ```
+
+  ## Run order
+  Self-contained — the token is a literal that cannot exist.
+}
