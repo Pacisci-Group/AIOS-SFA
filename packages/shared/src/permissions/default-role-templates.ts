@@ -56,6 +56,12 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       ...permissionsForModule(ModuleKey.Leaderboard, ['read']),
       modulePermission(ModuleKey.CrmService, 'read'),
       modulePermission(ModuleKey.CrmService, 'write'),
+      // PAC-61: every role gets `mailers:read` so the Mailers drawer on the
+      // Leads page is reachable. Read only — logging a lead from a mailer also
+      // needs `leads:write`, which each template grants or withholds on its own
+      // terms. Who should *actually* hold the drawer is deferred to a later
+      // access-model pass; this is a placeholder, not a considered answer.
+      modulePermission(ModuleKey.Mailers, 'read'),
     ],
   },
   {
@@ -118,6 +124,12 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.DealAudits, 'write'),
       modulePermission(ModuleKey.Onboardings, 'read'),
       modulePermission(ModuleKey.Onboardings, 'write'),
+      // PAC-61: every role gets `mailers:read` so the Mailers drawer on the
+      // Leads page is reachable. Read only — logging a lead from a mailer also
+      // needs `leads:write`, which each template grants or withholds on its own
+      // terms. Who should *actually* hold the drawer is deferred to a later
+      // access-model pass; this is a placeholder, not a considered answer.
+      modulePermission(ModuleKey.Mailers, 'read'),
     ],
   },
   {
@@ -133,6 +145,12 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.OwnerDashboard, 'read'),
       modulePermission(ModuleKey.Performance, 'read'),
       modulePermission(ModuleKey.Leaderboard, 'read'),
+      // PAC-61: every role gets `mailers:read` so the Mailers drawer on the
+      // Leads page is reachable. Read only — logging a lead from a mailer also
+      // needs `leads:write`, which each template grants or withholds on its own
+      // terms. Who should *actually* hold the drawer is deferred to a later
+      // access-model pass; this is a placeholder, not a considered answer.
+      modulePermission(ModuleKey.Mailers, 'read'),
     ],
   },
 ];

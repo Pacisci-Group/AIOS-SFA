@@ -11,8 +11,16 @@
 import type { HouseholdMemberRole } from './household-role';
 import type { PolicyType } from './policy-type';
 
-/** How a lead entered the platform. Stored on `leads.intakeSource.channel`. */
-export type IntakeChannel = 'internal' | 'share_link';
+/**
+ * How a lead entered the platform. Stored on `leads.intakeSource.channel`.
+ *
+ * `mailer` is a lead logged from a direct-mail piece through the Mailers drawer
+ * (PAC-61). It records **provenance, not attribution** — the lead source is
+ * always `WCO7l` (Mailer), set server-side, and lives on `leads.leadSource`.
+ * The two answer different questions: the channel says which surface wrote the
+ * record, the source says where the prospect came from.
+ */
+export type IntakeChannel = 'internal' | 'share_link' | 'mailer';
 
 export interface LeadIntakePerson {
   firstName: string;

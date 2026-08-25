@@ -8,13 +8,14 @@
 > got here, what was verified against real data, what is still unanswered, and the
 > traps that cost time to find.
 >
-> Last updated 2026-08-21.
+> Last updated 2026-08-25.
 >
-> **Status.** The write side is built — PAC-73 shipped the `mailers` collection,
+> **Status. Both halves are built.** PAC-73 shipped the `mailers` collection,
 > the shared import engine, the Super Admin RTP upload and the BigQuery backfill
-> script. PAC-61 (the drawer) is still to come. The ticket splits and the
-> measurements taken against the real RTP file live in **PAC-73**; this file is
-> the BigQuery-side profiling and the decision history behind both.
+> script; PAC-61 shipped the drawer, the QCN lookup and log-lead. The ticket
+> splits and the measurements taken against the real RTP file live in
+> **PAC-73**; this file is the BigQuery-side profiling and the decision history
+> behind both. What PAC-61 settled on the way is in §7.
 >
 > Two things below are now out of date and are left in place rather than edited,
 > because the reasoning still matters: §5 open item 1 (Carl's raw spreadsheet)
@@ -252,3 +253,100 @@ literally and present neither as "our quote".
 - Unrelated but flagged in the same scrum: a role is named **CRM** and should be **CSR**.
   Abu Bakar is fixing dev data; `packages/shared/src/permissions/default-role-templates.ts`
   still says `CRM`, so the code needs it too.
+
+---
+
+## 7. What PAC-61 settled
+
+Decisions taken while building the drawer, recorded here because none of them
+are visible in the ticket and two contradict what it literally said.
+
+### The premium: `yearlyprem` leads, `totalpremi` follows
+
+Open item #2 in §5 was never answered by David, but legacy answers it in
+practice: `SFA/lib/bigquery/mailers.ts` never even **selects** `totalpremi` —
+its SELECT is fifteen columns and `yearlyprem` is the only premium — and
+`MailerDetailClient.tsx` renders it alone as "Yearly Premium". Whatever the
+theory, `yearlyprem` is the number producers have been quoting.
+
+So the drawer leads with it (plus the monthly figure) and shows `totalpremi`
+below, under an "Also on the mail file" label. Neither is called "our quote".
+Answering the open question properly is a label change, not a redesign.
+
+Legacy showed **no** coverage limits at all — dwelling, other structures, loss
+of use and the liability limits are net-new on this screen.
+
+### The campaign line: facts only
+
+Open item #3, resolved as "show campaign + week only". Week number, product and
+policy type, quote date. `campaign.campaignStatus` renders as a badge **only
+when the document carries one**, which means never for an RTP-uploaded mailer,
+because the column exists only in BigQuery. Nothing is substituted. Legacy's
+`status` was a hard-coded `'Pending'` literal invented in the API layer.
+
+### County: Oklahoma only, resolved server-side
+
+`common/mailers/county-names.ts` maps state + FIPS to a county name for
+Oklahoma's 77 counties and nothing else — every reference file and 100% of the
+committed fixture is OK. Adding a state is one object literal. An unmapped pair
+resolves to `null` and the drawer **omits the row** rather than rendering a
+dash: a dash asserts we looked and found nothing.
+
+The demo seed needed its own Oklahoma city list (`MAILER_CITIES`) for this to be
+exercisable — the tenant's `CITIES` are eight Illinois towns, which no
+Oklahoma-keyed table could ever resolve, and the seed was already stamping
+`market: 'Tulsa'` and a 918 phone number onto them.
+
+### Two things the ticket got wrong
+
+1. **The idempotency key cannot be built from what the producer typed.** The
+   ticket specified `` submissionToken = `MAIL|${QCN.toUpperCase()}` ``. The two
+   printed forms are different strings, so the long form and the short form
+   produce different tokens, the unique `{agencyId, submissionToken}` index sees
+   no conflict, and **one mailer becomes two leads** — the exact failure the
+   endpoint exists to prevent. The key is the mailer document's own
+   `controlNumberKeys[0]` instead, which is identical whichever form was typed.
+   `buildSubmissionToken` gained a `mailer` branch so every channel's namespace
+   stays in the one function that owns the rule. Pinned by an e2e case and a
+   Bruno request.
+
+2. **`linkedLeadId` has to be scope-clamped.** `GET /leads/:id` 404s another
+   producer's lead under `own` scope, so returning the id of a lead the caller
+   cannot open would render a "View lead" button that goes to a not-found page.
+   The lookup returns two fields: `alreadyLogged` (agency-wide — stopping a
+   producer working a mailer a colleague already took is the whole point) and
+   `linkedLeadId`, present only when the lead is inside the caller's scope.
+
+### Canonical control number: the long form
+
+`Lead.quoteControlNumber` stores `mailer.controlNumber`, taken from the document
+and never from the request. The Leads list searches that field with a
+contains-regex and the short form is the last 12 characters *inside* the long
+one, so the long form is findable by either and the reverse is not true. And
+dedupe signal 2 is an exact-equality **merge**: a collision on 48 bits of
+truncated UUID would quietly join two different prospects' leads.
+
+⚠ **Known gap, deliberately not fixed.** A lead whose control number a producer
+typed by hand into the New Lead form is stored trimmed but not normalized, so it
+will not match the lookup's `$in`. Closing it properly needs a stored
+`Lead.quoteControlNumberKey` plus an index and a backfill.
+
+### Permissions
+
+`mailers:read` added to Branch Manager, CRM and Data Team; Producer and CSR
+already held read+write and Agency Owner gets it from `grantsAllEnabledModules`.
+**Existing agencies need `npm run api:sync:roles`** — editing a template does
+not touch already-seeded roles, and signed-in users keep their cached set until
+their next token refresh.
+
+Who should *actually* hold the drawer is still the later access-model pass §2
+decision 5 defers it to. The templates say so in a comment so it does not read
+as considered intent.
+
+### The dead `/mailers` nav link is gone
+
+`nav-items.ts` pointed at `/mailers`, a route that has never existed in
+`App.tsx`. It was invisible to most roles only because most roles lacked
+`mailers:read` — which this ticket gave to everyone, promoting a hidden dead
+link into a universally visible one. PAC-22 was cancelled and PAC-61 puts a
+standalone page out of scope, so nothing was coming to fill it.

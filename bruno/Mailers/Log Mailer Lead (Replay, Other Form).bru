@@ -1,0 +1,55 @@
+meta {
+  name: Log Mailer Lead (Replay, Other Form)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/mailers/log-lead
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "controlNumber": "{{mailerShortForm}}"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("reports the lead already existed", function () {
+    expect(res.getBody().alreadyExisted).to.equal(true);
+  });
+
+  test("returns the SAME lead, from the other control-number form", function () {
+    expect(res.getBody().leadId).to.equal(bru.getVar("mailerLeadId"));
+  });
+}
+
+docs {
+  # POST /mailers/log-lead — replay, through the *other* printed form
+
+  Same endpoint as **Log Mailer Lead**; see that request's docs for the full
+  contract.
+
+  Seq 4 logged the mailer using the long control number. This sends the **short**
+  one and must come back with the identical `leadId` and `alreadyExisted: true`.
+
+  This is the assertion that matters most on this endpoint. The ticket
+  originally specified the idempotency key as ``MAIL|${QCN.toUpperCase()}`` —
+  built from what the producer typed. Taken literally that breaks here: the two
+  printed forms are different strings, so they produce different tokens, the
+  unique `{ agencyId, submissionToken }` index sees no conflict, and one mailer
+  becomes two leads. The implementation keys on the mailer document's own stable
+  normalized key instead, which is identical whichever form was typed.
+
+  Nothing new is created, so the lead count is unchanged.
+}
