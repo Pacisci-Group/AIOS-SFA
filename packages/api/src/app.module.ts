@@ -32,6 +32,7 @@ import { CrmModule } from './crm/crm.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { DealAuditsModule } from './deal-audits/deal-audits.module';
 import { LeaderboardModule } from './leaderboard/leaderboard.module';
+import { MailersModule } from './mailers/mailers.module';
 import { LeadsModule } from './leads/leads.module';
 import { PerformanceModule } from './performance/performance.module';
 import { PoliciesModule } from './policies/policies.module';
@@ -154,6 +155,11 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     PerformanceModule,
     LeaderboardModule,
     ActivitiesModule,
+    // Super Admin mailer imports (PAC-73). Registers the `mailers` and
+    // `mailerImportRuns` models so their indexes build; it routes on
+    // `platform/mailers`, so it does not collide with the `mailers` module
+    // stub still served by FeatureModulesModule for the agency-facing page.
+    MailersModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,

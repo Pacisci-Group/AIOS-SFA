@@ -1,0 +1,4 @@
+# Mailer import fixtures are byte-faithful slices of real RTP files, which are
+# CRLF. Git would normalise that to LF on checkout and the fixture would stop
+# exercising the line endings production actually sees (PAC-73).
+packages/api/test/fixtures/mailers/*.csv -text

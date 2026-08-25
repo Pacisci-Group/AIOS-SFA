@@ -15,6 +15,8 @@
     "api:seed:demo:dev": "npm run seed:demo:dev -w @sfa/api",
     "api:migrate": "npm run migrate -w @sfa/api",
     "api:migrate:dev": "npm run migrate:dev -w @sfa/api",
+    "api:migrate:mailers": "npm run migrate:mailers -w @sfa/api",
+    "api:migrate:mailers:dev": "npm run migrate:mailers:dev -w @sfa/api",
     "api:backfill:deal-refs": "npm run backfill:deal-refs -w @sfa/api",
     "api:backfill:deal-refs:dev": "npm run backfill:deal-refs:dev -w @sfa/api",
     "api:fix:dedupe-indexes": "npm run fix:dedupe-indexes -w @sfa/api",

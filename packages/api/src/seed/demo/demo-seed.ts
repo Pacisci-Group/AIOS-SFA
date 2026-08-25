@@ -47,6 +47,17 @@ async function main() {
       );
     }
     console.log('');
+
+    // A mailer is only reachable *by* its control number — there is no list
+    // view — so printing a few is the difference between the demo mailers
+    // being testable and being invisible.
+    if (summary.sampleMailerControlNumbers.length > 0) {
+      console.log('Sample Quote Control Numbers (either form resolves):');
+      for (const qcn of summary.sampleMailerControlNumbers) {
+        console.log(`  ${qcn.short}   ${qcn.long}`);
+      }
+      console.log('');
+    }
   } finally {
     await app.close();
   }

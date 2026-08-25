@@ -92,6 +92,14 @@ async function seed() {
     ALL_MODULE_KEYS.map((key) => [key, { enabled: true }]),
   );
 
+  // The mailer identity fields (PAC-73). `ticker` is how the BigQuery backfill
+  // attributes a row to this tenant; `allstateAgencyId` is what an uploaded RTP
+  // file's `agencyid` column is cross-checked against. Both are reconciled on
+  // an existing agency rather than only set on create, because the scaffold
+  // predates them and a database seeded before PAC-73 would otherwise import
+  // nothing and warn on every upload.
+  const mailerIdentity = { ticker: 'SFA', allstateAgencyId: 'A0B9049' };
+
   let agency = await agencyModel.findOne({ slug: 'smith-family-agency' });
   if (!agency) {
     agency = await agencyModel.create({
@@ -99,10 +107,12 @@ async function seed() {
       slug: 'smith-family-agency',
       status: 'active',
       modules,
+      ...mailerIdentity,
     });
     console.log('Created agency: Smith Family Agency');
   } else {
-    console.log('Agency already exists, skipping create');
+    await agencyModel.updateOne({ _id: agency._id }, { $set: mailerIdentity });
+    console.log('Agency already exists, mailer identity reconciled');
   }
 
   await permissionsService.seedDefaultRoles(agency._id);

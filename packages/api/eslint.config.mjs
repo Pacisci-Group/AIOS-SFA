@@ -6,10 +6,10 @@ import tseslint from 'typescript-eslint';
 
 /**
  * Feature directories under `src/`. Anything not listed here is either shared
- * infrastructure the worker is allowed to use (`common`, `config`, `inngest`),
- * the worker itself, or an offline CLI (`seed`, `migration`).
+ * infrastructure the worker is allowed to use (`common`, `config`, `inngest`,
+ * `storage`), the worker itself, or an offline CLI (`seed`, `migration`).
  *
- * ⚠ Two things to know before editing this list:
+ * ⚠ Three things to know before editing this list:
  *
  * 1. Add a new feature directory here when you create one, or the worker
  *    boundary silently stops covering it.
@@ -18,15 +18,24 @@ import tseslint from 'typescript-eslint';
  *    own relative imports too and the rule fires on correct code. This is why
  *    the worker's email subsystem lives in `src/worker/email/` rather than
  *    `src/worker/mail/` — `mail` is taken by `src/mail/`.
+ * 3. `storage` was here and was **deliberately removed** (PAC-73). It is not a
+ *    feature: `StorageService` is an S3 wrapper whose only injected dependency
+ *    is `ConfigService`, it is already `@Global()`, and it owns no domain
+ *    logic — the same tier as `common`/`config`/`inngest`. Any worker job that
+ *    processes an uploaded file needs it, and the mailer import is the first
+ *    one. Listing it forced the alternative of re-reading the object through a
+ *    hand-rolled second S3 client inside the worker, which is strictly worse.
+ *    `WorkerModule` imports `StorageModule` explicitly so the standalone worker
+ *    gets it too, rather than relying on `AppModule`'s global registration.
  */
 const FEATURE_DIRS = [
   'activities', 'audit-generation', 'audit-templates', 'auth', 'branches',
   'carriers', 'clients', 'contacts', 'crm', 'crm-rotations', 'deal-audit-items',
   'deal-audits', 'deals', 'feature-modules', 'households', 'interested-parties',
-  'leaderboard', 'leads', 'mail', 'performance', 'permissions', 'platform',
-  'policies', 'prior-insurance', 'prior-policies', 'producer-assignments',
-  'producer-goals', 'quote-recaps', 'roles', 'service-tickets', 'share-links',
-  'sold-deals', 'storage', 'time-off-requests', 'users',
+  'leaderboard', 'leads', 'mail', 'mailers', 'performance', 'permissions',
+  'platform', 'policies', 'prior-insurance', 'prior-policies',
+  'producer-assignments', 'producer-goals', 'quote-recaps', 'roles',
+  'service-tickets', 'share-links', 'sold-deals', 'time-off-requests', 'users',
 ];
 
 const WORKER_IS_PRIVATE =
@@ -108,22 +117,36 @@ export default tseslint.config(
    * ── Worker boundary, rule 2 ────────────────────────────────────────────────
    * The worker does not reach into feature modules.
    *
-   * Schemas are deliberately still allowed (`*.schema` is negated): the worker
-   * has to read the same collections the API writes, and duplicating 31 schema
-   * definitions to avoid one import would be strictly worse. It is the
-   * *services* — with their injected dependencies and transitive module graph —
-   * that must not cross.
+   * Schemas are deliberately allowed: the worker has to read the same
+   * collections the API writes, and duplicating 30-odd schema definitions to
+   * avoid one import would be strictly worse. It is the *services* — with their
+   * injected dependencies and transitive module graph — that must not cross.
+   *
+   * ## Why `regex` and not `group` (PAC-73)
+   *
+   * This was a `group` of gitignore-style patterns with negations for
+   * `*.schema` files and `schemas` directories, and **those negations never
+   * took effect** — a
+   * worker file importing `../policies/schemas/policy.schema` was rejected
+   * despite the rule's own docblock promising it would not be. Gitignore
+   * semantics forbid re-including a file whose parent directory is already
+   * excluded, and a recursive glob over `policies` excludes the `schemas`
+   * directory along with everything else under it. Nothing caught it because
+   * until the mailer import no worker file had ever needed a feature schema.
+   *
+   * A regex with a leading negative lookahead expresses the exception directly.
+   * It is also anchored to `../`, which the `group` form was not, so it matches
+   * only imports whose **first non-relative segment** is a feature directory.
+   * That kills a second, subtler failure mode: `../../common/mailers/…` — a
+   * pure helper in the shared tier — matched the recursive `mailers` glob
+   * purely because the word appeared somewhere in the path.
    */
   {
     files: ['src/worker/**/*.ts'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [{
-          group: [
-            ...FEATURE_DIRS.flatMap((dir) => [`**/${dir}/**`, `../${dir}/*`]),
-            '!**/*.schema',
-            '!**/schemas/**',
-          ],
+          regex: `^(?!.*(?:/schemas/|\\.schema$))(?:\\.\\./)+(?:${FEATURE_DIRS.join('|')})/`,
           message: WORKER_OWNS_ITS_LOGIC,
         }],
       }],

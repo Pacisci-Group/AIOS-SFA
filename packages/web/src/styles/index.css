@@ -12,6 +12,8 @@
 @import '@fontsource-variable/inter';
 @import './tailwind.css';
 @import './theme.css';
+/* After `theme.css`: it overrides the same tokens under a `.super-admin` scope. */
+@import './super-admin.css';
 
 @layer base {
   html {

@@ -1,0 +1,62 @@
+meta {
+  name: List Imports
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/platform/mailers/imports?agencyId={{platformAgencyId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+params:query {
+  agencyId: {{platformAgencyId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns this agency's runs, newest first", function () {
+    const runs = res.getBody();
+    expect(runs).to.be.an("array");
+    expect(runs.length).to.be.greaterThan(0);
+    for (const run of runs) {
+      expect(run.agencyId).to.equal(bru.getVar("platformAgencyId"));
+    }
+    if (runs.length > 1) {
+      expect(new Date(runs[0].startedAt).getTime()).to.be.at.least(
+        new Date(runs[1].startedAt).getTime(),
+      );
+    }
+  });
+}
+
+docs {
+  # GET /platform/mailers/imports?agencyId= — recent runs for one agency
+
+  The panel's history list. Capped at 20, newest first.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Query params
+  | param    | type   | notes                                        |
+  |----------|--------|----------------------------------------------|
+  | agencyId | string | Required in practice — omitting it matches no runs rather than returning every tenant's. |
+
+  ## Response `200`
+  An array of the same objects `Get Import Run` returns, **without**
+  `rawFileUrl`: presigning a download per row would mean one signature per run
+  on every list read, for links nobody has clicked.
+
+  ## Errors
+  - `401` / `403` — as above.
+}

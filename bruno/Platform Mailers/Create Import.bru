@@ -1,0 +1,119 @@
+meta {
+  name: Create Import
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/platform/mailers/imports
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "agencyId": "{{platformAgencyId}}",
+    "key": "{{mailerImportKey}}",
+    "filename": "SFA-RTP-2026-29.csv"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("mailerImportRunId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("starts in `previewing` and has written nothing", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("previewing");
+    expect(body.counts).to.equal(null);
+    expect(body.finishedAt).to.equal(null);
+  });
+
+  test("records the real object size, not the declared one", function () {
+    expect(res.getBody().sizeBytes).to.be.greaterThan(0);
+  });
+
+  test("never exposes the storage key", function () {
+    expect(res.getBody()).to.not.have.property("storageKey");
+  });
+}
+
+docs {
+  # POST /platform/mailers/imports — step 3 of 3: start the preview (PAC-73)
+
+  Records the upload and queues the **preview** parse. Writes no mailers, and
+  neither does the job it starts — the operator sees what the file contains
+  before committing.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## What it validates before accepting
+
+  1. The agency exists.
+  2. `assertKeyOwnership` — the key must carry this agency's
+     `agencies/<agencyId>/mailer-imports/` prefix. A caller hands back the key
+     it was given, so without this it could hand back **any** key it knew of,
+     including another agency's object.
+  3. `HeadObject` — the object really exists and is non-empty. A presigned PUT
+     signs only `Content-Type`, so a client holding a valid URL can upload
+     anything; the declared size validates the claim, not the object.
+
+  ## Why this is asynchronous
+
+  The parse runs as an Inngest job (`mailers/import.preview.requested.v1`), not
+  in this request. The reference file is 23 MB / 20,405 rows and the BigQuery
+  history is 30x larger; an HTTP timeout is not a size limit worth having. Poll
+  `Get Import Run` until `status` leaves `previewing`.
+
+  ⚠ Requires the Inngest dev server locally:
+  `npx inngest-cli@latest dev -u http://localhost:4000/api/inngest`. Without it
+  this returns **500** and the run is recorded as `failed` with the reason,
+  rather than being left in `previewing` for ever.
+
+  ## Body
+  | field    | type   | rules                                   |
+  |----------|--------|-----------------------------------------|
+  | agencyId | string | 24-hex; must match the key's prefix     |
+  | key      | string | the `key` from `Presign Import`         |
+  | filename | string | 1-255 chars, shown in the report        |
+
+  ## Response `201`
+  ```json
+  {
+    "id": "…",
+    "agencyId": "…",
+    "status": "previewing",
+    "uploadedFilename": "SFA-RTP-2026-29.csv",
+    "sizeBytes": 2048,
+    "detected": null,
+    "agencyMismatch": false,
+    "counts": null,
+    "rejections": [],
+    "error": null,
+    "startedAt": "2026-08-21T…",
+    "finishedAt": null
+  }
+  ```
+
+  ## Errors
+  - `400 Bad Request` — invalid key prefix, or nothing was uploaded to that key.
+  - `401` / `403` — as `Presign Import`.
+  - `404 Not Found` — no such agency.
+}

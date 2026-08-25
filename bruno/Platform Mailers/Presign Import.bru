@@ -1,0 +1,109 @@
+meta {
+  name: Presign Import
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/platform/mailers/imports/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "agencyId": "{{platformAgencyId}}",
+    "filename": "SFA-RTP-2026-29.csv",
+    "contentType": "text/csv",
+    "size": 2048
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("mailerImportKey", res.getBody().key);
+    bru.setVar("mailerUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a presigned PUT URL and a server-minted key", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("key");
+    expect(body).to.have.property("uploadUrl");
+    expect(body).to.have.property("expiresIn");
+    // Signed as text/csv whatever the browser reported — see the docs block.
+    expect(body.requiredHeaders["Content-Type"]).to.equal("text/csv");
+  });
+
+  test("the key is namespaced to the chosen agency", function () {
+    expect(res.getBody().key).to.match(
+      new RegExp(`^agencies/${bru.getVar("platformAgencyId")}/mailer-imports/`),
+    );
+  });
+}
+
+docs {
+  # POST /platform/mailers/imports/presign — step 1 of 3 (PAC-73)
+
+  Issues a short-lived **presigned PUT URL** so the browser uploads the RTP file
+  straight to object storage. The bytes never pass through the API — there is no
+  multer and no `FileInterceptor` anywhere in this codebase, and none should be
+  added. Same chain as `Deal Audits/Presign Audit Attachment`.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ⚠ `platform:mailers:write` is **not** the agency-facing `mailers:read` module
+  permission PAC-61's drawer uses. Neither implies the other.
+
+  ## Body
+  | field       | type   | rules                                              |
+  |-------------|--------|----------------------------------------------------|
+  | agencyId    | string | 24-hex. **Chosen by the operator**, never inferred from the filename. |
+  | filename    | string | 1–255 chars                                        |
+  | contentType | enum   | `text/csv` \| `application/csv` \| `text/plain` \| `application/vnd.ms-excel` |
+  | size        | int    | > 0, ≤ 100 MB                                      |
+
+  The content-type list is wide because `File.type` for a `.csv` is `text/csv`
+  on Chrome, `application/vnd.ms-excel` on Windows and often **empty** on
+  Safari. Whatever is sent, the URL is signed with the canonical `text/csv`, and
+  the `PUT` must use exactly that value or the S3 signature fails with a 403.
+
+  100 MB rather than the 10 MB used for PDFs elsewhere: the reference RTP file
+  is 23 MB and an Auto file will be larger.
+
+  ## Response `201`
+  ```json
+  {
+    "key": "agencies/<agencyId>/mailer-imports/2026/<uuid>-sfa-rtp-2026-29.csv",
+    "uploadUrl": "http://localhost:9000/sfa-uploads/agencies/...",
+    "requiredHeaders": { "Content-Type": "text/csv" },
+    "expiresIn": 300
+  }
+  ```
+
+  The key is **server-generated** and agency-namespaced, and `Create Import`
+  re-checks that prefix — so a caller cannot hand back a key belonging to
+  another agency and have that file imported into their own tenant.
+
+  ## Errors
+  - `400 Bad Request` — invalid body (bad content type, size over 100 MB).
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — missing `platform:mailers:write`.
+  - `404 Not Found` — no such agency.
+  - `503 Service Unavailable` — object storage is not configured.
+}

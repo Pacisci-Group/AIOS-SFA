@@ -1,0 +1,89 @@
+meta {
+  name: Login as Super Admin
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{adminEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Captured as its own variable rather than overwriting `accessToken`: the
+  // folders that run after this one (Policies, Public Intake, Quote Recaps, …)
+  // are producer-scoped, and a platform token would fail every one of them —
+  // a platform admin holds `platform:*` and no module permissions at all.
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    bru.setVar("platformAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    // 201, matching `Auth/Login` — the controller does not override the
+    // POST default.
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the super admin is a platform account with no agency", function () {
+    const user = res.getBody().user;
+    expect(user.isPlatformAdmin).to.equal(true);
+    expect(user.agencyId).to.equal(null);
+  });
+
+  test("holds the platform mailer permissions", function () {
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("platform:mailers:read");
+    expect(perms).to.include("platform:mailers:write");
+  });
+}
+
+docs {
+  # POST /auth/login — sign in as the platform super admin (PAC-73)
+
+  Seeded by `npm run api:seed:dev` as `admin@sfa.local`. There is exactly one
+  such account, and `isPlatformAdmin` is a boolean on `User` rather than a role.
+
+  - **Module:** none (`@Public()`)
+  - **Permission:** none
+
+  ## Why a platform admin's permissions look the way they do
+
+  `PermissionsService.resolveForUser` short-circuits on `isPlatformAdmin` and
+  returns `ALL_PLATFORM_PERMISSIONS` **verbatim** — the role/grant/revoke and
+  enabled-module machinery is skipped entirely. So this account holds every
+  `platform:*` string and **no** module permission: it cannot open `/leads` and
+  a producer cannot open `/admin`.
+
+  Adding a member to `PlatformPermission` therefore grants it to this account
+  with no seed or migration step.
+
+  ## Response `201`
+  ```json
+  {
+    "accessToken": "…",
+    "refreshToken": "…",
+    "user": {
+      "isPlatformAdmin": true,
+      "agencyId": null,
+      "permissions": ["platform:agencies:read", "platform:mailers:write", "…"]
+    }
+  }
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — wrong credentials, or the core seed has not been run.
+}

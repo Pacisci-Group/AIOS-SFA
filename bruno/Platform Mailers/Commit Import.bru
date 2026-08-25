@@ -1,0 +1,88 @@
+meta {
+  name: Commit Import
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/platform/mailers/imports/{{mailerImportRunId}}/commit
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    // 200, not 201: this starts work on an existing run rather than creating a
+    // resource. `Get Import Run` waits for the preview first, so a 409 here is
+    // a real failure, not a race.
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("moves the run to `importing`", function () {
+    expect(res.getBody().status).to.equal("importing");
+  });
+}
+
+docs {
+  # POST /platform/mailers/imports/:runId/commit — write the mailers (PAC-73)
+
+  Queues the import job. This is the **only** call in the flow that writes to
+  `mailers`; everything before it is read-only, so cancelling at any earlier
+  point leaves the database untouched.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  Answers **200**, not 201: it starts work on an existing run rather than
+  creating a resource.
+
+  ## Two server-side gates
+
+  1. **Status must be `previewed`.** Committing something still parsing would
+     write from a file nobody has seen the shape of; committing something
+     already `completed` would be a silent double-import.
+  2. **`confirmAgencyMismatch` must be `true` when the run flagged a mismatch.**
+     The flag lives on the run record, not in the request, so a client cannot
+     get past this by omitting the field. Filing one agency's prospects under
+     another is the failure this exists to prevent, and the confirmation is
+     recorded on the run so the decision is auditable.
+
+  ## Body
+  | field                 | type    | rules                                    |
+  |-----------------------|---------|------------------------------------------|
+  | confirmAgencyMismatch | boolean | optional; required to be `true` **only** when `agencyMismatch` is set |
+
+  ## Idempotency and retries
+
+  Every write is an upsert on `(agencyId, controlNumberKeys)`, so re-importing
+  the same file updates in place: same document count, no E11000, no duplicates.
+  That property is what makes the Inngest function safe to retry — a run that
+  died halfway converges on a retry rather than double-writing.
+
+  The commit **re-parses** the file rather than reusing the preview's output:
+  20k mapped documents are far too much to stash on a run record, and the object
+  key is UUID-suffixed and therefore immutable, so the second parse sees
+  byte-identical input.
+
+  ## Response `200`
+  The run, with `status: "importing"`. Poll `Get Import Run` for `completed` and
+  the final counts.
+
+  ## Errors
+  - `409 Conflict` — the run is not `previewed`, or a mismatch was not confirmed.
+  - `401` / `403` — as `Presign Import`.
+  - `404 Not Found` — no such run.
+}

@@ -69,6 +69,8 @@ import {
   TeamMemberSpec,
 } from './demo-data';
 import { createRng, Rng } from './rng';
+import { Mailer } from '../../mailers/schemas/mailer.schema';
+import { mailerControlNumberKeys } from '../../common/mailers/mailer-control-number';
 
 export interface DemoSeedOptions {
   agencySlug: string;
@@ -83,6 +85,14 @@ export type DemoSeedSummary = {
   agencySlug: string;
   counts: Record<string, number>;
   logins: { email: string; role: string; password: string }[];
+  /**
+   * A few seeded Quote Control Numbers, both forms.
+   *
+   * Printed by the seed because a mailer is only reachable *by* its control
+   * number — there is no list view — so without this the demo mailers exist but
+   * nobody can look one up.
+   */
+  sampleMailerControlNumbers: { long: string; short: string }[];
 };
 
 interface Ctx {
@@ -215,6 +225,7 @@ export class DemoSeedService {
     @InjectModel(ProducerGoal.name)
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
+    @InjectModel(Mailer.name) private readonly mailerModel: Model<Mailer>,
     private readonly permissionsService: PermissionsService,
     private readonly sequences: SequenceService,
   ) {}
@@ -279,6 +290,10 @@ export class DemoSeedService {
 
     await this.seedProducerGoals(ctx, producers);
     await this.seedActivities(ctx, leads, quotes, deals, rng);
+    // Last, and independent of everything above: a mailer is a cold prospect
+    // who is deliberately *not* in the CRM yet — logging one as a lead is what
+    // creates the household (PAC-61).
+    const mailers = await this.seedMailers(ctx, rng);
 
     const logins = team.map((m) => ({
       email: m.spec.email,
@@ -291,6 +306,7 @@ export class DemoSeedService {
       agencySlug: options.agencySlug,
       counts: this.summary,
       logins,
+      sampleMailerControlNumbers: mailers.slice(0, 3),
     };
   }
 
@@ -1511,6 +1527,149 @@ export class DemoSeedService {
   // Producer goals + activities
   // ---------------------------------------------------------------------------
 
+  /**
+   * A handful of mailer prospects (PAC-73).
+   *
+   * Exists so the Mailers drawer and the Add Mailers report are testable with
+   * **neither** GCP credentials nor a real RTP file — both of which gate the
+   * two real importers, and neither of which a new contributor will have.
+   *
+   * ## Deliberately not tied to demo households
+   *
+   * These are cold prospects who have been mailed a quote and are not clients.
+   * That is the whole point of the flow: a producer looks one up by the number
+   * printed on the mail piece and *then* a household and contact get created.
+   * Reusing a seeded household here would make the drawer look like it works
+   * while never exercising the path that matters.
+   *
+   * ## Why the idempotency key is not `demo:*`
+   *
+   * Every other demo collection upserts on `legacySmartSuiteId: 'demo:<type>:<n>'`,
+   * and `Mailer` deliberately has no such field — mailers never lived in
+   * SmartSuite. This follows the `ProducerGoal` exception instead and keys on
+   * `source.recordSource`, which `purge()` also filters on.
+   */
+  private async seedMailers(
+    ctx: Ctx,
+    rng: Rng,
+  ): Promise<{ long: string; short: string }[]> {
+    const sample: { long: string; short: string }[] = [];
+    const quoteDate = this.daysAgo(21);
+    const weekNumber = 29;
+
+    for (let i = 0; i < DEMO_CONFIG.mailers; i++) {
+      // A stable, realistic-looking pair: a '#'-prefixed 32-hex "UUID" whose
+      // last 12 characters are the short code — the exact relationship the real
+      // data has, and what makes "either form resolves" worth testing.
+      const hex = this.demoHex(i);
+      const controlNumber = `#${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+      const newControlNumber = hex.slice(-12);
+
+      const first = rng.pick(FIRST_NAMES);
+      const last = rng.pick(LAST_NAMES);
+      const city = rng.pick(CITIES);
+      const dwelling = rng.int(180, 900) * 1000;
+      const monthly = rng.int(90, 260);
+
+      await this.mailerModel.updateOne(
+        {
+          agencyId: ctx.agencyId,
+          // `$in` over both forms, matching the unique index's domain — see
+          // the note on the same filter in `common/mailers/mailer-import.ts`.
+          controlNumberKeys: {
+            $in: mailerControlNumberKeys(controlNumber, newControlNumber),
+          },
+        },
+        {
+          $set: {
+            controlNumber,
+            newControlNumber,
+            firstName: first,
+            lastName: last,
+            fullName: `${first} ${last}`,
+            gender: rng.chance(0.5) ? 'M' : 'F',
+            address: {
+              street: `${rng.int(100, 9999)} ${rng.pick(STREET_NAMES)} ${rng.pick(STREET_SUFFIXES)}`,
+              city: city.city,
+              state: city.state,
+              zip: `${city.zip}-${String(rng.int(1000, 9999))}`,
+              zip5: city.zip,
+              // Zero-padded FIPS, as the real column ships it. Seeded as a
+              // string so anything rendering it hits the same case production
+              // will.
+              county: String(rng.int(1, 199)).padStart(3, '0'),
+            },
+            squareFeet: rng.int(1200, 4600),
+            yearBuilt: rng.int(1955, 2020),
+            coverage: {
+              dwelling,
+              otherStructures: Math.round(dwelling * 0.1),
+              lossOfUse: Math.round(dwelling * 0.1),
+              guestMedical: 1000,
+              familyLiability: 100000,
+            },
+            // Both premiums, disagreeing — as they do on every real row. Kept
+            // that way on purpose so nothing downstream can quietly start
+            // treating them as interchangeable.
+            premium: {
+              total: rng.int(1400, 3400),
+              yearly: monthly * 12,
+              monthly,
+              newYearly: monthly * 12,
+            },
+            campaign: {
+              campaignNumber: `Week_Number-${weekNumber}`,
+              weekNumber,
+              fileName: 'SFA-20P',
+              policyType: 'Home',
+              product: 'FQ',
+            },
+            quoteDate,
+            market: rng.pick(['Tulsa', 'Oklahoma City']),
+            agencyPhone: '918-984-6163',
+            doNotCall: false,
+            // A couple of suppressed rows, because a producer cold-calling one
+            // is a compliance problem and the UI has to show it.
+            doNotMail: i % 7 === 0,
+            isTestRecord: false,
+            source: {
+              system: 'spreadsheet',
+              fileName: 'SFA-20P',
+              uploadedFilename: 'demo-seed.csv',
+              recordSource: 'demo:seed',
+              uploadedAt: this.now,
+            },
+          },
+          $setOnInsert: {
+            agencyId: ctx.agencyId,
+            controlNumberKeys: mailerControlNumberKeys(
+              controlNumber,
+              newControlNumber,
+            ),
+          },
+        },
+        { upsert: true },
+      );
+      this.inc('mailers');
+      sample.push({ long: controlNumber, short: newControlNumber });
+    }
+
+    return sample;
+  }
+
+  /** 32 stable hex characters for demo mailer `i`. Not cryptographic. */
+  private demoHex(index: number): string {
+    // A fixed prefix plus the index makes every run produce the same numbers,
+    // which is the only reason a developer can copy one out of the seed log
+    // once and keep using it.
+    // Hex characters only — a real control number is a UUID, and a demo one
+    // carrying a stray 'm' would let a normalization bug that mangles
+    // non-hex input pass here and fail on production data.
+    return `d3d0${String(index).padStart(4, '0')}`
+      .padEnd(16, 'a')
+      .concat(`f00d${String(index).padStart(4, '0')}`.padEnd(16, 'b'));
+  }
+
   private async seedProducerGoals(
     ctx: Ctx,
     producers: TeamMember[],
@@ -1662,6 +1821,12 @@ export class DemoSeedService {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
+    // Same exception as producer goals: `Mailer` has no `legacySmartSuiteId`,
+    // so it is keyed and purged on its provenance marker instead.
+    await this.mailerModel.deleteMany({
+      agencyId,
+      'source.recordSource': 'demo:seed',
+    });
 
     // Reset the household counter too, so a `--fresh` seed is actually
     // reproducible rather than climbing `HH-44`, `HH-68`, … on every run.

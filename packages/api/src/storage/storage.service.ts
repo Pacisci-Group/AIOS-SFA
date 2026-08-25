@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { Readable } from 'stream';
 import {
   CreateBucketCommand,
   GetObjectCommand,
@@ -12,6 +13,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -340,5 +342,42 @@ export class StorageService implements OnModuleInit {
   /** Whether an object exists (used to confirm an upload completed). */
   async objectExists(key: string): Promise<boolean> {
     return (await this.statObject(key)) !== null;
+  }
+
+  /**
+   * The object's bytes as a stream, for server-side processing (PAC-73).
+   *
+   * The counterpart to {@link createPresignedDownload}: that one hands a URL to
+   * a browser, this one hands the content to us. The mailer import needs it
+   * because a 23 MB CSV must be parsed row by row rather than buffered — and
+   * because the bytes went straight from the browser to storage, the API has
+   * never seen them.
+   *
+   * Uses the **internal** client, not the signing one: this is a server-side
+   * read over the compose network, not something a browser follows.
+   *
+   * @throws NotFoundException when the key holds nothing. A missing object at
+   * this point means an upload that was presigned but never completed, which is
+   * a real and reachable state rather than an internal error.
+   */
+  async getObjectStream(key: string): Promise<Readable> {
+    this.assertConfigured();
+    try {
+      const res = await this.client.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      if (!res.Body) {
+        throw new NotFoundException('Uploaded file is empty or missing.');
+      }
+      // In Node the SDK returns a `Readable`; the union also covers the
+      // browser's `ReadableStream`/`Blob`, neither of which occurs here.
+      return res.Body as Readable;
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      this.logger.warn(
+        `Could not read object "${key}": ${(err as Error).message}`,
+      );
+      throw new NotFoundException('Uploaded file could not be read.');
+    }
   }
 }
