@@ -17,6 +17,7 @@ import { SequenceService } from '../common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../households/household-ref';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
+import { normalizePolicyNumber } from '../policies/policy-number';
 import { quoteDateYmd } from '../quote-recaps/quote.normalize';
 import { QuoteRecap } from '../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../deals/schemas/deal.schema';
@@ -401,8 +402,13 @@ export class MigrationService {
             legacySmartSuiteId: legacyId,
           },
           {
+            // A random, unusable secret — not a bcrypt hash, so `bcrypt.compare`
+            // can never match it and a migrated row is never loggable into.
+            // Roles are NOT assigned here: SmartSuite's role field does not map
+            // onto this system's roles, and guessing would hand people access
+            // nobody chose. An owner assigns them from /settings/users; the
+            // first owner comes from the core seed.
             passwordHash: randomBytes(24).toString('hex'),
-            roleIds: [],
           },
           ctx.dryRun,
         );
@@ -696,7 +702,7 @@ export class MigrationService {
    * strings. Historically only the legacy ids were written, which left every
    * migrated recap unreachable from `GET /leads/:id` — that query is
    * `{ agencyId, leadId }` — and made `quoteRecaps.leadId` useless for
-   * reporting. `backfill-deal-refs` repaired deals but never these.
+   * reporting.
    *
    * An unresolved link stays `undefined` rather than being guessed at; Mongoose
    * strips it from the `$set`, so the `legacy*` string remains the only record
@@ -753,9 +759,9 @@ export class MigrationService {
         {
           title: toText(rec.title),
           quoteDate,
-          // The Quoted scorecard's bucket key (PAC-10). Written on import so a
-          // freshly migrated agency needs no backfill pass; `backfill:deal-refs`
-          // exists for agencies migrated before PAC-9.
+          // The Quoted scorecard's bucket key (PAC-10). Written on import, so
+          // a migrated agency needs no follow-up pass — recaps written before
+          // PAC-9 are invisible to every range query until a re-run heals them.
           quoteDateYmd: quoteDate ? quoteDateYmd(quoteDate) : undefined,
           premium: toNumber(rec[QUOTE_RECAP_FIELDS.premium]),
           itemCount: toNumber(rec[QUOTE_RECAP_FIELDS.items]),
@@ -811,10 +817,11 @@ export class MigrationService {
   /**
    * Deals (Sold Log).
    *
-   * Resolves the same refs `backfill-deal-refs` was written to repair
-   * (`leadId`, `householdId`, `quoteRecapId`) at import time instead. The
-   * backfill stays — it is the only remedy for databases migrated before this
-   * — but a fresh migration no longer needs it.
+   * Resolves `leadId`, `householdId` and `quoteRecapId` at import time. These
+   * used to be left as `legacy*` strings for a follow-up pass to repair, which
+   * meant a migrated deal had no traversable link to its lead or household —
+   * audit generation and CRM assignment both resolve the client through
+   * `householdId`, and the hand-off board showed "Unknown Client" without it.
    */
   private async migrateDeals(
     ss: SmartSuiteClient,
@@ -1053,12 +1060,22 @@ export class MigrationService {
       const test = deal?.isTest ?? false;
       if (test) stat.excludedTest++;
 
+      const policyNumber = toText(rec[POLICY_FIELDS.policyNumber]);
+
       const id = await this.persist(
         this.policyModel,
         ctx,
         legacyId,
         {
-          policyNumber: toText(rec[POLICY_FIELDS.policyNumber]),
+          policyNumber,
+          // The normalized match key behind `GET /policies/check` (PAC-40).
+          // Written here rather than by a follow-up pass: without it the dedupe
+          // check silently matches nothing for every migrated policy, which is
+          // worse than having no check — a producer is told a number is free
+          // when it is not. `null` for anything under
+          // MIN_POLICY_NUMBER_KEY_LENGTH usable characters, because a match on
+          // two or three digits carries no information.
+          policyNumberKey: normalizePolicyNumber(policyNumber),
           policyType: selectCode(rec[POLICY_FIELDS.policyType]),
           // Mapped at write as well as normalized on read (PAC-56 #19): the raw
           // `B4tEH` was being rendered to users, and mapping only on read would

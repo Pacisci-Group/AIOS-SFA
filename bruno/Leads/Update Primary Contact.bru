@@ -73,10 +73,9 @@ docs {
   template, which previously granted no `clients:*` at all.
 
   Existing agencies do not pick that up automatically: `seedDefaultRoles` only
-  runs for agencies someone re-seeds, and `migrate:permissions` filters to
-  `agency:`/`platform:` strings. Run `npm run api:sync:roles:dev` — and note a
-  producer who is already signed in keeps their cached permission set until they
-  log in again.
+  runs for agencies someone re-seeds. Run `npm run api:sync:roles:dev` — and note
+  a producer who is already signed in keeps their cached permission set until
+  they log in again.
 
   ## The scope clamp is not the module gate
 

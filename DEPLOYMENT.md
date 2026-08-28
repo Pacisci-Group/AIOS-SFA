@@ -264,14 +264,67 @@ Deviations from dev worth knowing:
   named entry only when someone genuinely needs it, and remove it the same day.
 - **DNS is manual**, same as dev (`enable_dns = false`) — the zone is at GoDaddy. Point
   an `app` A record at `terraform output -raw droplet_ip` (the reserved IP).
-- **No auto-seed and no demo data.** Run `seed.js` once by hand after TLS is up (see
-  "First deploy checklist" step 5). Do **not** run `seed:demo` or `api:migrate`.
+- **No auto-seed and no demo data.** Nothing seeds on startup. Bring the data up by
+  hand once TLS is up — see "Data bring-up" below. Never run `seed:demo` against
+  production; it writes ~500 synthetic CRM records into the live tenant.
 
 Ordering that matters: `enable_tls = true` is set from the first apply because
 `user_data` cannot be changed in place — flipping it later would **replace the droplet**.
 First-boot Certbot fails (DNS does not point at the reserved IP yet); cloud-init treats
 that as non-fatal. Finish with `sudo /opt/sfa/enable-tls.sh` once the A record resolves,
 then seed.
+
+## Data bring-up
+
+Three steps populate a fresh database, in dependency order: seed the tenant,
+import the CRM from SmartSuite, import the mailer history from BigQuery.
+`scripts/migration/run-migration.sh` runs them with a preflight, a per-step log
+and `--from <n>` to resume — see the header comment in the script itself.
+
+Step 1 also creates the agency owner when `SEED_AGENCY_OWNER_EMAIL` and
+`SEED_AGENCY_OWNER_PASSWORD` are set, and skips it when they are not. Set them
+for the first production bring-up: without an owner the tenant has no login that
+can administer it, and there is no way to bootstrap one afterwards — the platform
+super admin holds no `agency:*` permission, so inviting the first user 403s.
+
+Run it **on the droplet**, in `--mode compose`. Two reasons it is not run from a
+laptop:
+
+- `packages/api/src/config/env.config.ts` resolves `ENV_FILE_PATH` to the
+  repo-root `.env` and offers no override. A real environment variable still
+  wins (`@nestjs/config` merges `process.env` last), but every value you *forget*
+  to override silently keeps its local one — `STORAGE_*` still on MinIO,
+  `APP_BASE_URL` still `http://localhost:5173`, `SEED_SUPER_ADMIN_PASSWORD`
+  still the dev password, which the core seed would then write to the real super
+  admin. The container carries no repo `.env`, so `/opt/sfa/.env` is the only
+  source and the whole class of mistake disappears.
+- Production's Managed Mongo admits nothing but the droplet
+  (`mongo_allowed_ip_addresses = []`). Reaching it from anywhere else means
+  opening the database perimeter on a cluster holding real client data.
+
+```bash
+scp scripts/migration/run-migration.sh deploy@<host>:/opt/sfa/
+ssh deploy@<host>
+cd /opt/sfa
+export SMARTSUITE_API_TOKEN=... SMARTSUITE_ACCOUNT_ID=... SMARTSUITE_SOLUTION_ID=...
+export BQ_PROJECT_ID=... BQ_DATASET_ID=... BQ_MAILERS_TABLE_ID=...
+export GOOGLE_APPLICATION_CREDENTIALS_JSON="$(cat sa.json)"
+./run-migration.sh --mode compose --dry-run     # steps 2 + 5 fetch and report, no writes
+./run-migration.sh --mode compose
+```
+
+The SmartSuite and BigQuery credentials are exported for the run rather than
+added to `/opt/sfa/.env`: the deploy workflow rewrites that file in full on every
+deploy, so anything put there is lost, and they are read-only source credentials
+the running API has no reason to hold.
+
+> **The image must be newer than the webpack entry-list fix.** Every one-shot
+> script is a separate webpack entry (`packages/api/webpack.config.js`), and the
+> runner stage of the Dockerfile copies `dist` and never `src`. A script that is
+> not an entry does not exist on the server, and `node dist/…` fails with
+> `MODULE_NOT_FOUND` — which is how the migration, both backfills and both
+> permission scripts were unrunnable in a deployed environment while working
+> fine locally under ts-node. Deploy first, then bring the data up.
 
 ## Rollback
 

@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { AccessContext } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import { UserRole } from './schemas/user-role.schema';
 import { PermissionCache } from './cache/permission-cache';
 import { PermissionsService } from './permissions.service';
 
@@ -17,6 +18,7 @@ import { PermissionsService } from './permissions.service';
 export class AccessResolverService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(UserRole.name) private userRoleModel: Model<UserRole>,
     private permissionsService: PermissionsService,
     private cache: PermissionCache,
   ) {}
@@ -52,17 +54,23 @@ export class AccessResolverService {
 
   /**
    * Drop cached contexts for every user holding a role in an agency. Used when a
-   * role's permission set changes so all its members re-resolve.
+   * role's permission set or data scope changes so all its members re-resolve.
+   *
+   * ⚠ Reads `userRoles`, which is where the assignment lives. This used to
+   * query `users.roleIds` — a field that no longer exists, and the failure mode
+   * if this is ever pointed back at the wrong collection is silent: the query
+   * matches nobody, no error is raised, and every member of the edited role
+   * keeps their old permissions until the cache TTL expires.
    */
   async invalidateRole(agencyId: string, roleId: string): Promise<void> {
-    const users = await this.userModel
+    const links = await this.userRoleModel
       .find({
         agencyId: new Types.ObjectId(agencyId),
-        roleIds: new Types.ObjectId(roleId),
+        roleId: new Types.ObjectId(roleId),
       })
-      .select('_id')
+      .select('userId')
       .lean();
-    await this.cache.delMany(users.map((u) => u._id.toString()));
+    await this.cache.delMany(links.map((link) => link.userId.toString()));
   }
 
   /**

@@ -9,7 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { Model } from 'mongoose';
-import { JwtPayload } from '@sfa/shared';
+import { AccessContext, JwtPayload } from '@sfa/shared';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -115,6 +115,52 @@ export class AuthService {
     return this.issueTokens(user);
   }
 
+  /**
+   * The `user` blob returned by login, refresh, accept-invite and `GET /me`.
+   *
+   * Factored out so those four can never drift: the whole value of `/me` is
+   * that a client can refresh this object and get *exactly* what it was given
+   * at login, only current.
+   *
+   * `roles` are display names. Never branch on them — `permissions` is the
+   * authority, and it is resolved from the database, never from the token.
+   */
+  private toAuthUser(user: UserDocument, access: AccessContext, roles: string[]) {
+    return {
+      id: user._id.toString(),
+      email: user.email,
+      name:
+        [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null,
+      roles,
+      agencyId: access.agencyId,
+      branchId: access.branchId,
+      permissions: access.permissions,
+      scope: access.scope,
+      dataScope: access.dataScope,
+      isPlatformAdmin: access.isPlatformAdmin,
+    };
+  }
+
+  /**
+   * The caller's current identity and freshly resolved permissions.
+   *
+   * Exists because the web keeps this blob in `localStorage` and only rewrote it
+   * at login, refresh and accept-invite — so a permission change did not reach a
+   * signed-in browser for up to the access-token lifetime, even though the API
+   * had been enforcing it since the moment it was saved.
+   */
+  async me(userId: string) {
+    const user = await this.userModel.findById(userId);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    const [access, roles] = await Promise.all([
+      this.permissionsService.buildAccessContext(user),
+      this.permissionsService.resolveRoleNames(user),
+    ]);
+    return this.toAuthUser(user, access, roles);
+  }
+
   private async issueTokens(user: UserDocument) {
     const access = await this.permissionsService.buildAccessContext(user);
     // Only slim, stable identity claims are signed into the token. The effective
@@ -122,8 +168,6 @@ export class AuthService {
     // from here.
     const claims = this.permissionsService.buildJwtClaims(access);
     const roles = await this.permissionsService.resolveRoleNames(user);
-    const name =
-      [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null;
     const accessToken = this.jwtService.sign(claims, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       expiresIn: this.configService.get<string>(
@@ -142,18 +186,7 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      user: {
-        id: user._id.toString(),
-        email: user.email,
-        name,
-        roles,
-        agencyId: access.agencyId,
-        branchId: access.branchId,
-        permissions: access.permissions,
-        scope: access.scope,
-        dataScope: access.dataScope,
-        isPlatformAdmin: access.isPlatformAdmin,
-      },
+      user: this.toAuthUser(user, access, roles),
     };
   }
 }

@@ -57,18 +57,29 @@ Tables are migrated in dependency order so cross-record links resolve to Mongo
 
 ## Running
 
+Prefer the full pipeline — it seeds, migrates and imports mailers in one
+resumable, logged run, with a preflight that fails before the first write:
+
+```bash
+./scripts/migration/run-migration.sh --mode dev            # local, ts-node
+./scripts/migration/run-migration.sh --mode dev --dry-run  # fetch + report only
+./scripts/migration/run-migration.sh --mode compose        # on the droplet
+```
+
+Or the migration on its own:
+
 ```bash
 cd packages/api
-
-# Dry run: fetch + map + report, no Mongo writes
-npm run migrate:dev -- --dry-run
-
-# Full run
-npm run migrate:dev
-
-# Production (compiled)
-npm run build && npm run migrate
+npm run migrate:dev -- --dry-run   # fetch + map + report, no Mongo writes
+npm run migrate:dev                # full run
+npm run build && npm run migrate   # compiled, as a server runs it
 ```
+
+**Nothing needs running afterwards.** The migration writes its own cross-record
+refs (`leadId` / `householdId` / `quoteRecapId`), its own match keys
+(`policies.policyNumberKey`, `quoteRecaps.quoteDateYmd`) and reconciles household
+`HH-…` numbering at the end of its household pass. The repair passes that used to
+follow it existed for databases migrated by older code and have been removed.
 
 Flags: `--dry-run`, `--agency <slug>` (default `smith-family-agency`),
 `--branch <slug>` (default `main`), `--page-size <n>` (default `500`).

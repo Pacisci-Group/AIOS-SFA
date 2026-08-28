@@ -37,7 +37,7 @@ import { CrmRotation } from '../../crm-rotations/schemas/crm-rotation.schema';
 import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request.schema';
 import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema';
 import { Activity } from '../../activities/schemas/activity.schema';
-import { PermissionsService } from '../../permissions/permissions.service';
+import { RoleAssignmentsService } from '../../permissions/role-assignments.service';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
 import {
   INSURANCE_MONTHS,
@@ -227,7 +227,7 @@ export class DemoSeedService {
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     @InjectModel(Mailer.name) private readonly mailerModel: Model<Mailer>,
-    private readonly permissionsService: PermissionsService,
+    private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
 
@@ -343,7 +343,7 @@ export class DemoSeedService {
       this.inc('branches');
     }
 
-    await this.permissionsService.seedDefaultRoles(agencyObjectId);
+    await this.roleAssignments.seedDefaultRoles(agencyObjectId);
 
     return {
       ctx: {
@@ -393,7 +393,6 @@ export class DemoSeedService {
           $set: {
             agencyId: ctx.agencyObjectId,
             branchId: branchObjectId,
-            roleIds: roleId ? [roleId] : [],
             firstName: spec.firstName,
             lastName: spec.lastName,
             isActive: true,
@@ -403,6 +402,16 @@ export class DemoSeedService {
           $setOnInsert: { passwordHash },
         },
         { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+      // Through the join, and through the one writer — a direct `userRoles`
+      // insert would skip cache invalidation and the owner-protection checks.
+      // The seed acts as a platform admin: it must be able to assign the owner
+      // role on a fresh tenant.
+      await this.roleAssignments.setUserRoles(
+        { userId: user._id.toString(), isPlatformAdmin: true },
+        ctx.agencyObjectId,
+        user._id,
+        roleId ? [roleId] : [],
       );
       this.inc('users');
       team.push({
@@ -831,7 +840,7 @@ export class DemoSeedService {
    * Deals are no longer drawn independently: the lead, its household, its
    * producer and its quote all come from the same chain, so `GET /leads/:id`
    * resolves a real deal and `deals.quoteRecapId` points at the recap that
-   * became the sale — the three refs `backfill-deal-refs` exists to repair.
+   * became the sale, matching what the SmartSuite migration produces.
    *
    * A lead without a household is skipped rather than paired with an unrelated
    * one; that only happens if no households were seeded.

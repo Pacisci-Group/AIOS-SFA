@@ -1,0 +1,91 @@
+meta {
+  name: Me
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/auth/me
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the freshly resolved permission set", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("permissions").that.is.an("array");
+    expect(body).to.have.property("roles").that.is.an("array");
+    expect(body).to.have.property("dataScope");
+  });
+
+  test("matches the shape login returns", function () {
+    const body = res.getBody();
+    expect(body).to.have.all.keys(
+      "id",
+      "email",
+      "name",
+      "roles",
+      "agencyId",
+      "branchId",
+      "permissions",
+      "scope",
+      "dataScope",
+      "isPlatformAdmin",
+    );
+  });
+}
+
+docs {
+  # GET /auth/me — the caller's identity and current permissions
+
+  **Module:** none (`@SkipTenant`, `@SkipBranch`, `@SkipModule`).
+  **Permission:** none beyond a valid access token.
+
+  Returns exactly the `user` object that `POST /auth/login` returns, resolved
+  from the database at request time. Both are built by one private
+  `toAuthUser` helper so they cannot drift — the whole value of this endpoint is
+  that a client can refresh the object and get the same shape, only current.
+
+  The tenant and branch guards are skipped because a platform admin has neither
+  an agency nor a branch, and "who am I" has to answer for them too.
+
+  ## Why it exists
+
+  The web keeps this blob in `localStorage` and reads permissions from it, but
+  only rewrote it at login, token refresh and accept-invite. So an owner editing
+  someone's permissions did not reach that person's browser until their access
+  token refreshed — up to 15 minutes of a UI showing access the API had already
+  revoked. The server side was never wrong: permissions are resolved from Mongo
+  on every request and the JWT carries only
+  `{ sub, agencyId, branchId, scope, isPlatformAdmin }`. This endpoint lets the
+  client catch up.
+
+  ## Response
+
+  ```json
+  {
+    "id": "…",
+    "email": "owner@smithfamily.local",
+    "name": "Agency Owner",
+    "roles": ["Agency Owner"],
+    "agencyId": "…",
+    "branchId": null,
+    "permissions": ["agency:roles:read", "leads:read", "…"],
+    "scope": "agency",
+    "dataScope": "agency",
+    "isPlatformAdmin": false
+  }
+  ```
+
+  `roles` are display names — never branch on them. `permissions` is the
+  authority, and `dataScope` is the widest across the roles the user holds.
+
+  ## Errors
+  - `401 Unauthorized` — no token, an expired one, or the user has since been
+    deactivated. `AccessResolverService` returns null for an inactive user on
+    every request, so a still-valid JWT stops working immediately rather than at
+    expiry.
+}

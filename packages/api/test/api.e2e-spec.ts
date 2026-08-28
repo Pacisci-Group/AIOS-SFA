@@ -304,18 +304,37 @@ describe('SFA API (e2e)', () => {
       }
     });
 
-    it('PATCH /api/v1/roles/:roleId — preserves owner admin permissions', async () => {
-      const res = await request(app.getHttpServer())
+    /**
+     * The owner role's access is a rule — everything the agency has enabled —
+     * not a stored page matrix, so editing its levels would either do nothing
+     * or appear to work. The web has always rendered it read-only; the API
+     * used to disagree, which let an owner PATCH their own admin permissions
+     * away.
+     */
+    it('PATCH /api/v1/roles/:roleId — refuses to edit the owner role', async () => {
+      await request(app.getHttpServer())
         .patch(`/api/v1/roles/${seed.ownerRoleId}`)
+        .set(authHeader(ownerToken))
+        .send({ levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
+        .expect(409);
+    });
+
+    it('PATCH /api/v1/roles/:roleId — preserves admin permissions on an editable role', async () => {
+      // The throwaway role, never Producer: this replaces the whole page matrix,
+      // so editing a role other tests depend on would strip their access and
+      // fail them somewhere else entirely.
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/roles/${seed.editableRoleId}`)
         .set(authHeader(ownerToken))
         .send({ levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
         .expect(200);
 
-      // Page levels change, but agency-admin permissions are never dropped.
+      // Page levels change; any agency-admin permission on the role survives.
       const body = res.body as { permissions: string[] };
-      expect(body.permissions).toContain('agency:roles:read');
-      expect(body.permissions).toContain('agency:roles:write');
       expect(body.permissions).toContain('leads:read');
+      expect(
+        body.permissions.filter((p) => p.startsWith('platform:')),
+      ).toHaveLength(0);
     });
 
     it('PATCH /api/v1/roles/:roleId — forbidden for producer', async () => {
@@ -423,7 +442,11 @@ describe('SFA API (e2e)', () => {
         .send({ roleIds: [seed.producerRoleId] })
         .expect(200);
 
-      expect((res.body as { roleIds: string[] }).roleIds.length).toBe(1);
+      // The response still carries populated roles, even though the assignment
+      // now lives in `userRoles` rather than on the user document.
+      const body = res.body as { roleIds: { _id: string; slug: string }[] };
+      expect(body.roleIds).toHaveLength(1);
+      expect(body.roleIds[0]._id).toBe(seed.producerRoleId);
     });
 
     it('PATCH /api/v1/users/:userId/permissions — per-page overrides', async () => {

@@ -3,14 +3,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ALL_MODULE_KEYS, ModuleKey } from '@sfa/shared';
 import { AccessResolverService } from '../permissions/access-resolver.service';
-import { PermissionsService } from '../permissions/permissions.service';
+import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { Agency, AgencyDocument } from './schemas/agency.schema';
 
 @Injectable()
 export class PlatformService {
   constructor(
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
-    private permissionsService: PermissionsService,
+    private roleAssignments: RoleAssignmentsService,
     private accessResolver: AccessResolverService,
   ) {}
 
@@ -49,7 +49,7 @@ export class PlatformService {
       modules,
     });
 
-    await this.permissionsService.seedDefaultRoles(agency._id);
+    await this.roleAssignments.seedDefaultRoles(agency._id);
     return agency;
   }
 

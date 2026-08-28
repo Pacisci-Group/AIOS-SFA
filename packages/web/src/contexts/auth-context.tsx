@@ -2,13 +2,15 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   clearTokens,
+  fetchMe,
   getStoredUser,
   login as apiLogin,
   type AuthUser,
@@ -29,6 +31,14 @@ interface AuthContextValue {
    * it never had a password to replay.
    */
   adoptSession: (user: AuthUser) => void;
+  /**
+   * Re-read the caller's own permissions from the API.
+   *
+   * Call after anything that could change them — most obviously an owner
+   * editing their own role or permissions, where the UI would otherwise keep
+   * offering actions that have started 403ing.
+   */
+  refreshUser: () => Promise<void>;
   logout: () => void;
 }
 
@@ -37,6 +47,39 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(() => getStoredUser());
+
+  /**
+   * Keep the in-memory user in step with the server.
+   *
+   * `initialData` is the stored blob, so there is no unauthenticated flash on
+   * boot and `ProtectedRoute` never bounces a signed-in user to the login page
+   * while this is in flight. It refetches on window focus, which is what closes
+   * the window where an owner changes someone's permissions and that person's
+   * open tab keeps rendering the old set until their token refreshes.
+   *
+   * Disabled when nobody is signed in — `/auth/me` would just 401.
+   */
+  const { data: me } = useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: fetchMe,
+    enabled: !!user,
+    initialData: user ?? undefined,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (me) setUser(me);
+  }, [me]);
+
+  const refreshUser = useCallback(async () => {
+    const fresh = await queryClient.fetchQuery({
+      queryKey: ['auth', 'me'],
+      queryFn: fetchMe,
+    });
+    setUser(fresh);
+  }, [queryClient]);
 
   const login = useCallback(async (email: string, password: string) => {
     const data = await apiLogin(email, password);
@@ -69,9 +112,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: !!user,
       login,
       adoptSession,
+      refreshUser,
       logout,
     }),
-    [user, login, adoptSession, logout],
+    [user, login, adoptSession, refreshUser, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
