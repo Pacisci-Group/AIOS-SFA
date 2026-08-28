@@ -7,6 +7,9 @@ import {
 } from '@sfa/shared';
 import { ArrowLeft, Check, RotateCcw, Search } from 'lucide-react';
 import { AppShell } from '@/components/layout/AppShell';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
+import type { PermissionDefinition } from '@/lib/roles-api';
 import { MobileNav } from '@/components/layout/MobileNav';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,7 +36,17 @@ interface PermissionCatalogEditorProps {
    * highlights pages that differ (owner overrides). Used on the per-user page.
    */
   roleDefaults?: Record<string, PageLevel>;
-  onSave: (levels: PageLevelOverride[]) => void;
+  /**
+   * The agency-admin capabilities (`agency:*`) available to grant.
+   *
+   * Optional because only the role editor offers them — they can never be
+   * granted per user, which is what `assignableToUser: false` says in the
+   * catalog and what `UsersService.updatePermissions` has always enforced.
+   */
+  adminPermissions?: PermissionDefinition[];
+  /** Which of those the role currently holds. */
+  initialAdminPermissions?: string[];
+  onSave: (levels: PageLevelOverride[], adminPermissions?: string[]) => void;
   saving?: boolean;
   saved?: boolean;
   error?: string | null;
@@ -55,6 +68,8 @@ export function PermissionCatalogEditor({
   subtitle,
   initialLevels,
   roleDefaults,
+  adminPermissions,
+  initialAdminPermissions,
   onSave,
   saving = false,
   saved = false,
@@ -65,6 +80,7 @@ export function PermissionCatalogEditor({
   readOnlyNotice = 'This role automatically has access to every enabled module. Its access is not controlled by per-page levels.',
 }: PermissionCatalogEditorProps) {
   const [levels, setLevels] = useState<Record<string, PageLevel>>({});
+  const [admin, setAdmin] = useState<string[]>([]);
   const [query, setQuery] = useState('');
 
   const seed = useMemo(
@@ -85,6 +101,18 @@ export function PermissionCatalogEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed]);
 
+  const adminSeed = (initialAdminPermissions ?? []).join('|');
+  useEffect(() => {
+    setAdmin(initialAdminPermissions ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminSeed]);
+
+  const toggleAdmin = (key: string) => {
+    setAdmin((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+  };
+
   const setLevel = (moduleKey: string, level: PageLevel) => {
     setLevels((prev) => ({ ...prev, [moduleKey]: level }));
   };
@@ -100,12 +128,22 @@ export function PermissionCatalogEditor({
     return haystack.includes(query.toLowerCase());
   });
 
+  const filteredAdmin = (adminPermissions ?? []).filter((permission) => {
+    if (!query) return true;
+    const haystack =
+      `${permission.label} ${permission.description}`.toLowerCase();
+    return haystack.includes(query.toLowerCase());
+  });
+
   const handleSave = () => {
     const payload: PageLevelOverride[] = PAGES.map((page) => ({
       moduleKey: page.moduleKey,
       level: levels[page.moduleKey] ?? 'none',
     }));
-    onSave(payload);
+    // `undefined`, not `[]`, when this editor does not offer capabilities —
+    // the API reads `[]` as "remove them all", which on the per-user screen
+    // would silently strip a role's admin access.
+    onSave(payload, adminPermissions ? admin : undefined);
   };
 
   return (
@@ -169,10 +207,57 @@ export function PermissionCatalogEditor({
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Type to search pages…"
+            placeholder={
+              adminPermissions
+                ? 'Type to search pages and capabilities…'
+                : 'Type to search pages…'
+            }
             className="pl-9 bg-card border-border"
           />
         </div>
+
+        {filteredAdmin.length > 0 && (
+          <section className="mb-6">
+            <h2 className="mb-1 text-sm font-semibold text-foreground">
+              Agency administration
+            </h2>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Capabilities rather than pages — they are on or off, and they can
+              only be granted through a role, never to one person.
+            </p>
+            <div className="flex flex-col gap-2">
+              {filteredAdmin.map((permission) => (
+                <div
+                  key={permission.key}
+                  className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3.5 sm:px-5"
+                >
+                  <Checkbox
+                    id={`cap-${permission.key}`}
+                    checked={admin.includes(permission.key)}
+                    disabled={readOnly}
+                    onCheckedChange={() => toggleAdmin(permission.key)}
+                    className="mt-0.5"
+                  />
+                  <div className="grid min-w-0 gap-0.5 leading-none">
+                    <Label
+                      htmlFor={`cap-${permission.key}`}
+                      className="cursor-pointer text-sm font-medium"
+                    >
+                      {permission.label}
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      {permission.description}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {filteredAdmin.length > 0 && filteredPages.length > 0 && (
+          <h2 className="mb-3 text-sm font-semibold text-foreground">Pages</h2>
+        )}
 
         <div className="flex flex-col gap-2">
           {filteredPages.map((page) => {

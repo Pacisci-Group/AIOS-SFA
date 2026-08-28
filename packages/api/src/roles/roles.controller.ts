@@ -70,15 +70,27 @@ export class RolesController {
   async update(
     @AgencyId() agencyId: string,
     @Param('roleId') roleId: string,
-    @Body() body: UpdateRoleDto & { levels?: PageLevelOverride[] },
+    @Body()
+    body: UpdateRoleDto & {
+      levels?: PageLevelOverride[];
+      adminPermissions?: string[];
+    },
   ): Promise<RoleResponse> {
-    const { levels, ...details } = body;
+    const { levels, adminPermissions, ...details } = body;
     let role = await this.rolesService.findById(agencyId, roleId);
     if (Object.values(details).some((value) => value !== undefined)) {
       role = await this.rolesService.update(agencyId, roleId, details);
     }
-    if (levels) {
-      role = await this.rolesService.updateLevels(agencyId, roleId, levels);
+    // `adminPermissions` rides along with the page matrix rather than getting
+    // its own route: both are the role's permission set, and splitting them
+    // would let a client save half of an edit.
+    if (levels || adminPermissions) {
+      role = await this.rolesService.updateLevels(
+        agencyId,
+        roleId,
+        levels,
+        adminPermissions,
+      );
     }
     return role;
   }

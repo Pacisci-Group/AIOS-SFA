@@ -21,7 +21,8 @@ body:json {
     "levels": [
       { "moduleKey": "leads", "level": "write" },
       { "moduleKey": "dashboard", "level": "read" }
-    ]
+    ],
+    "adminPermissions": ["agency:changelogs:read"]
   }
 }
 
@@ -40,6 +41,17 @@ tests {
 
   test("applies the metadata too", function () {
     expect(res.getBody().dataScope).to.equal("own");
+  });
+
+  test("grants the agency capability", function () {
+    expect(res.getBody().permissions).to.include("agency:changelogs:read");
+  });
+
+  test("never grants a platform permission", function () {
+    const platform = res
+      .getBody()
+      .permissions.filter((p) => p.startsWith("platform:"));
+    expect(platform).to.eql([]);
   });
 }
 
@@ -61,6 +73,21 @@ docs {
   | description | string, ≤240 | |
   | dataScope | `own` \| `branch` \| `agency` | Changing it invalidates every holder's cached permissions — a stale scope is a user reading rows they should no longer see. |
   | levels | `{ moduleKey, level }[]` | `level` is `none` \| `read` \| `write`. Replaces the whole page matrix. |
+  | adminPermissions | `string[]` | The `agency:*` capabilities the role grants. Replaces the whole set. |
+
+  ## Both permission fields are independently optional
+
+  **Omitting one preserves it; sending `[]` clears it.** So `{ levels }` alone —
+  which is what the web sent for its whole life — leaves the role's capabilities
+  untouched, and `{ adminPermissions }` alone leaves the page matrix untouched.
+  The checks are for `undefined` rather than falsiness precisely so an empty
+  array stays a real instruction.
+
+  ⚠ `platform:*` is preserved and **never settable here**, whatever is passed.
+  Those permissions sit above the tenant boundary; an agency owner granting
+  themselves one would be a privilege escalation out of their own tenant.
+  Passing one is a `400` rather than a silent drop — a silently ignored
+  permission would show in the UI as saved when it was never stored.
 
   ## How levels are applied
 

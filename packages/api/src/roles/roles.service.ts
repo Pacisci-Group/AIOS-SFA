@@ -93,10 +93,20 @@ export class RolesService {
   }
 
   /**
-   * Set a role's per-page permission levels. Each submitted page level is
-   * expanded to `{module}:read` / `{module}:write` strings for pages whose
-   * module is enabled for the agency. Agency-admin (`agency:*`) and platform
-   * permissions already on the role are preserved.
+   * Set a role's page levels and/or its agency-admin capabilities.
+   *
+   * Each submitted page level expands to `{module}:read` / `{module}:write` for
+   * pages whose module the agency has enabled.
+   *
+   * **Both arguments are independently optional, and omitting one preserves it.**
+   * `levels` alone is what the web sent for its whole life; `adminPermissions`
+   * alone must not wipe the page matrix. In both cases `[]` is a real
+   * instruction to clear that half, which is why the checks are for `undefined`
+   * rather than falsiness.
+   *
+   * ⚠ `platform:*` is preserved and never settable here, whatever is passed.
+   * Those permissions sit above the tenant boundary; an agency owner granting
+   * themselves one would be a privilege escalation out of their own tenant.
    *
    * ⚠ Refuses a role with `grantsAllEnabledModules`. That role's access is a
    * *rule* — everything the agency has enabled — not a stored set, so editing
@@ -107,7 +117,8 @@ export class RolesService {
   async updateLevels(
     agencyId: string,
     roleId: string,
-    levels: PageLevelOverride[],
+    levels?: PageLevelOverride[],
+    adminPermissions?: string[],
   ): Promise<RoleResponse> {
     const role = await this.roleModel.findOne({
       _id: new Types.ObjectId(roleId),
@@ -131,30 +142,73 @@ export class RolesService {
         : [],
     );
 
-    // Preserve owner-only admin permissions (agency / platform). Only
-    // whitelisted admin permissions survive — no fine-grained or unknown
-    // strings. They are not settable over HTTP either way.
     const current = await this.roleAssignments.rolePermissionKeys([role._id]);
-    const preserved = current.filter(
+
+    // `platform:*` is always carried over and can never be set through this
+    // endpoint — see the docblock. Only whitelisted strings survive, so a
+    // legacy or unknown permission on the role is dropped rather than
+    // reinstated.
+    const platform = current.filter(
       (permission) =>
-        (permission.startsWith('agency:') ||
-          permission.startsWith('platform:')) &&
+        permission.startsWith('platform:') &&
         ALLOWED_ROLE_PERMISSIONS.has(permission),
     );
 
-    const pagePermissions = levels.flatMap(({ moduleKey, level }) =>
-      enabledModules.has(moduleKey)
-        ? pageLevelToPermissions(moduleKey, level)
-        : [],
-    );
+    const admin =
+      adminPermissions === undefined
+        ? current.filter(
+            (permission) =>
+              permission.startsWith('agency:') &&
+              ALLOWED_ROLE_PERMISSIONS.has(permission),
+          )
+        : this.validateAdminPermissions(adminPermissions);
 
-    const next = [...new Set([...preserved, ...pagePermissions])];
+    const pagePermissions =
+      levels === undefined
+        ? current.filter((permission) => {
+            const [moduleKey] = permission.split(':');
+            return (
+              !permission.startsWith('agency:') &&
+              !permission.startsWith('platform:') &&
+              // Same filter the write path applies, so preserving cannot
+              // resurrect a page whose module has since been disabled.
+              enabledModules.has(moduleKey)
+            );
+          })
+        : levels.flatMap(({ moduleKey, level }) =>
+            enabledModules.has(moduleKey)
+              ? pageLevelToPermissions(moduleKey, level)
+              : [],
+          );
+
+    const next = [...new Set([...platform, ...admin, ...pagePermissions])];
     assertAllowedPermissions(next);
 
     // Writes the join AND invalidates every holder's cached permissions.
     await this.roleAssignments.setRolePermissions(agencyId, role._id, next);
 
     return this.findById(agencyId, roleId);
+  }
+
+  /**
+   * Narrow a submitted admin set to real `agency:*` capabilities.
+   *
+   * Rejects rather than filters. A caller sending `platform:agencies:write`
+   * here is either confused or probing, and silently dropping it would let the
+   * UI show a permission as saved that was never stored.
+   */
+  private validateAdminPermissions(permissions: string[]): string[] {
+    const invalid = permissions.filter(
+      (permission) =>
+        !permission.startsWith('agency:') ||
+        !ALLOWED_ROLE_PERMISSIONS.has(permission),
+    );
+    if (invalid.length) {
+      throw new BadRequestException(
+        `Not an agency capability: ${invalid.join(', ')}`,
+      );
+    }
+    return [...new Set(permissions)];
   }
 
   /**

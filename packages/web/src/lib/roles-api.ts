@@ -49,10 +49,22 @@ export function getRole(roleId: string) {
   return apiFetch<AgencyRole>(`/roles/${roleId}`);
 }
 
-export function updateRoleLevels(roleId: string, levels: PageLevelOverride[]) {
+/**
+ * Replace a role's page matrix and, optionally, its `agency:*` capabilities.
+ *
+ * Both halves are independently optional on the API: omitting one preserves it,
+ * while `[]` clears it. So pass `undefined` for capabilities from any screen
+ * that does not offer them, never `[]` — that would silently strip the role's
+ * admin access.
+ */
+export function updateRoleLevels(
+  roleId: string,
+  levels: PageLevelOverride[],
+  adminPermissions?: string[],
+) {
   return apiFetch<AgencyRole>(`/roles/${roleId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ levels }),
+    body: JSON.stringify({ levels, adminPermissions }),
   });
 }
 
