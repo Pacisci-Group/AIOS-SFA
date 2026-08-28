@@ -19,13 +19,18 @@ interface DetailCardProps {
 }
 
 /**
- * The Lead Detail card shell.
+ * The app's detail-page card shell.
  *
  * Five cards — contact, prior insurance, quote summary, sold, household — were
  * each hand-writing the identical header (`flex flex-wrap items-center
  * justify-between gap-2 border-b border-border px-5 py-3` + an `h2`), and had
  * already drifted: two radii, two pill sizes, and the same icon at 12px and 13px
  * inside one card. One shell means fixing the spacing once.
+ *
+ * It started in `features/lead/` and moved here when the ticket, household and
+ * policy pages were brought onto the same design language — those three had
+ * grown a third and fourth card idiom of their own (`rounded-lg` + an uppercase
+ * micro-label header, and inline `style` objects) rather than reusing this one.
  *
  * The title is a real heading — `text-sm font-semibold` in sentence case, not
  * the 10px uppercase muted micro-label it used to be. That treatment made every
@@ -96,5 +101,32 @@ export function SectionLabel({
     >
       {children}
     </p>
+  );
+}
+
+/**
+ * A label-over-value pair inside a card body — the ticket detail's "Assigned
+ * rep", the policy detail's "Carrier", the transfer panel's "Change".
+ *
+ * Sub-label on top, value below, both on the scale in
+ * `styles/TYPOGRAPHY.md`. Three surfaces had written their own version of this
+ * with three different label sizes; this is the one.
+ */
+export function DataRow({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex min-w-0 flex-col gap-0.5", className)}>
+      <SectionLabel>{label}</SectionLabel>
+      <span className="min-w-0 text-base text-card-foreground">
+        {value ?? "—"}
+      </span>
+    </div>
   );
 }

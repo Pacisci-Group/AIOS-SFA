@@ -1,14 +1,19 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import {
-  Shield,
+  AlertTriangle,
+  ExternalLink,
   Heart,
   Plus,
-  ExternalLink,
-  AlertTriangle,
+  Shield,
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 import type { PolicySummary } from "@sfa/shared";
+import { SectionLabel } from "@/components/common/DetailCard";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   statusColors,
   toDisplayPolicy,
@@ -46,72 +51,145 @@ const demoCrossSells: CrossSell[] = [
   },
 ];
 
-export function PolicyCard({ policy, onClick, isSelected }: { policy: Policy; onClick: () => void; isSelected: boolean }) {
-  const sc = statusColors[policy.status];
+/**
+ * `SectionLabel`'s classes, as a string.
+ *
+ * The component renders a `<p>`, which is not valid inside the `<button>` that
+ * is `PolicyCard`'s disclosure trigger. Same scale, same tier — see
+ * `styles/TYPOGRAPHY.md`.
+ */
+const CARD_LABEL =
+  "block text-xs font-medium uppercase tracking-wide text-muted-foreground";
+
+const CROSS_SELL_PRIORITY: Record<CrossSell["priority"], string> = {
+  High: "bg-red-500/12 text-red-600 dark:text-red-400",
+  Medium: "bg-amber-500/15 text-amber-700 dark:text-amber-500",
+};
+
+/**
+ * One policy in the portfolio grid, and on the policy detail page.
+ *
+ * Expanding is a disclosure, not navigation — "Open policy" in the expanded
+ * body is what actually goes to `/policies/:id`. That button used to be a
+ * hard-coded `#1d4ed8` `<button>` with no handler at all, so the one obvious
+ * way into a policy did nothing.
+ */
+export function PolicyCard({
+  policy,
+  onClick,
+  isSelected,
+  /** Hidden on the policy detail page, which is already at that route. */
+  showOpenLink = true,
+}: {
+  policy: Policy;
+  onClick: () => void;
+  isSelected: boolean;
+  showOpenLink?: boolean;
+}) {
   const Icon = policy.icon;
+  // Pairs `aria-expanded` on the trigger with the region it discloses; without
+  // it the state is announced but the target is not.
+  const detailsId = `policy-${policy.id}-details`;
   return (
     <div
-      onClick={onClick}
-      className="rounded-xl p-4 cursor-pointer transition-all"
-      style={{
-        background: isSelected ? "var(--secondary)" : "var(--card)",
-        border: isSelected ? "1px solid #3b82f6" : "1px solid var(--border)",
-        boxShadow: isSelected ? "0 0 0 1px #3b82f640" : "none",
-      }}
+      className={cn(
+        "rounded-xl border bg-card transition-colors",
+        isSelected ? "border-primary bg-secondary" : "border-border",
+      )}
     >
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: policy.iconBg }}>
-            <Icon size={18} style={{ color: policy.iconColor }} />
-          </div>
-          <div>
-            <p className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>{policy.line}</p>
-            <p className="text-xs font-mono" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-              {policy.policyNumber}
-            </p>
-          </div>
-        </div>
-        <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: sc.bg, color: sc.text, border: `1px solid ${sc.border}` }}>
-          {policy.status}
+      {/*
+        Everything inside the trigger is a `span`. A `<button>` may contain only
+        phrasing content, so the `div`/`p` this had before was invalid markup;
+        display comes from the classes either way, so it renders identically.
+        `SectionLabel` is inlined as `CARD_LABEL` here for the same reason — the
+        component renders a `<p>`.
+      */}
+      <button
+        type="button"
+        onClick={onClick}
+        aria-expanded={isSelected}
+        aria-controls={detailsId}
+        className="w-full rounded-xl p-4 text-left"
+      >
+        <span className="mb-3 flex items-start justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-2.5">
+            <span
+              aria-hidden
+              className={cn(
+                "flex size-9 shrink-0 items-center justify-center rounded-lg",
+                policy.iconTint,
+              )}
+            >
+              <Icon className={cn("size-5", policy.iconTone)} />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold text-card-foreground">
+                {policy.line}
+              </span>
+              <span className="block truncate text-xs tabular-nums text-muted-foreground">
+                {policy.policyNumber}
+              </span>
+            </span>
+          </span>
+          <Badge
+            size="sm"
+            variant="ghost"
+            className={cn("shrink-0", statusColors[policy.status])}
+          >
+            {policy.status}
+          </Badge>
         </span>
-      </div>
 
-      <div className="flex items-end justify-between">
-        <div>
-          {/* Just "Premium" — the term rides on `premiumFreq` beside the
-              figure, and "Annual Premium … $940 /6 mo" contradicts itself. */}
-          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>Premium</p>
-          <p className="text-lg font-semibold mt-0.5" style={{ color: "var(--foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-            {policy.premium}<span className="text-xs font-normal" style={{ color: "var(--muted-foreground)" }}>{policy.premiumFreq}</span>
-          </p>
-        </div>
-        <div className="text-right">
-          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>Expires</p>
-          <p className="text-xs font-medium mt-0.5" style={{ color: "var(--foreground)" }}>{policy.expiration}</p>
-        </div>
-      </div>
+        <span className="flex items-end justify-between gap-2">
+          <span className="min-w-0">
+            {/* Just "Premium" — the term rides on `premiumFreq` beside the
+                figure, and "Annual Premium … $940 /6 mo" contradicts itself. */}
+            <span className={CARD_LABEL}>Premium</span>
+            <span className="mt-0.5 block text-lg font-semibold tabular-nums text-card-foreground">
+              {policy.premium}
+              <span className="text-xs font-normal text-muted-foreground">
+                {policy.premiumFreq}
+              </span>
+            </span>
+          </span>
+          <span className="min-w-0 text-right">
+            <span className={CARD_LABEL}>Expires</span>
+            <span className="mt-0.5 block text-sm font-medium text-card-foreground">
+              {policy.expiration}
+            </span>
+          </span>
+        </span>
+      </button>
 
       {isSelected && (
-        <div className="mt-3 pt-3 flex flex-col gap-1.5 border-t" style={{ borderColor: "var(--border)" }}>
-          <div className="flex justify-between">
-            <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>Carrier</span>
-            <span className="text-xs" style={{ color: "var(--foreground)" }}>{policy.carrier}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>Effective</span>
-            <span className="text-xs" style={{ color: "var(--foreground)" }}>{policy.effective}</span>
-          </div>
+        <div
+          id={detailsId}
+          className="mx-4 flex flex-col gap-1.5 border-t border-border py-3"
+        >
+          <DetailLine label="Carrier" value={policy.carrier} />
+          <DetailLine label="Effective" value={policy.effective} />
           {policy.deductible && (
-            <div className="flex justify-between">
-              <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>Deductible</span>
-              <span className="text-xs" style={{ color: "var(--foreground)" }}>{policy.deductible}</span>
-            </div>
+            <DetailLine label="Deductible" value={policy.deductible} />
           )}
-          <button className="mt-2 flex items-center justify-center gap-1.5 w-full py-1.5 rounded text-xs transition-colors hover:bg-blue-600" style={{ background: "#1d4ed8", color: "#fff" }}>
-            <ExternalLink size={11} /> Open Policy
-          </button>
+          {showOpenLink && (
+            <Button asChild size="sm" className="mt-2 w-full">
+              <Link to={`/policies/${policy.id}`}>
+                <ExternalLink />
+                Open policy
+              </Link>
+            </Button>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+function DetailLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-3 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-right text-card-foreground">{value}</span>
     </div>
   );
 }
@@ -119,36 +197,35 @@ export function PolicyCard({ policy, onClick, isSelected }: { policy: Policy; on
 function CrossSellCard({ item }: { item: CrossSell }) {
   const Icon = item.icon;
   return (
-    <div
-      className="rounded-xl p-4 cursor-pointer transition-all hover:border-blue-500/50 group"
-      style={{
-        background: "transparent",
-        border: "1.5px dashed rgba(255,255,255,0.12)",
-      }}
-    >
+    <div className="group rounded-xl border border-dashed border-border p-4 transition-colors hover:border-primary/50">
       <div className="flex items-start gap-3">
-        <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-all group-hover:bg-blue-900/40" style={{ background: "var(--muted)", border: "1px dashed rgba(255,255,255,0.15)" }}>
-          <Icon size={16} style={{ color: "var(--muted-foreground)" }} className="group-hover:text-blue-400 transition-colors" />
-        </div>
-        <div className="flex-1">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium" style={{ color: "var(--muted-foreground)" }} >{item.line}</p>
-            <span
-              className="px-2 py-0.5 rounded-full text-xs"
-              style={
-                item.priority === "High"
-                  ? { background: "#2d0a0a", color: "#f87171", border: "1px solid #7f1d1d" }
-                  : { background: "#1c1002", color: "#fbbf24", border: "1px solid #78350f" }
-              }
+        <span
+          aria-hidden
+          className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border bg-muted transition-colors group-hover:bg-primary/12"
+        >
+          <Icon className="size-4 text-muted-foreground transition-colors group-hover:text-primary" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium text-muted-foreground">
+              {item.line}
+            </p>
+            <Badge
+              size="sm"
+              variant="ghost"
+              className={CROSS_SELL_PRIORITY[item.priority]}
             >
-              {item.priority} Priority
-            </span>
+              {item.priority} priority
+            </Badge>
           </div>
-          <p className="text-xs mt-0.5" style={{ color: "var(--muted-foreground)" }}>{item.opportunity}</p>
-          <p className="text-xs mt-2" style={{ color: "var(--muted-foreground)", opacity: 0.7 }}>{item.reason}</p>
-          <button className="mt-3 flex items-center gap-1.5 text-xs transition-colors hover:text-blue-300" style={{ color: "#3b82f6" }}>
-            <TrendingUp size={11} /> Start Quote
-          </button>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {item.opportunity}
+          </p>
+          <p className="mt-2 text-sm text-muted-foreground">{item.reason}</p>
+          <Button variant="link" size="sm" className="mt-2 h-auto p-0">
+            <TrendingUp />
+            Start quote
+          </Button>
         </div>
       </div>
     </div>
@@ -181,70 +258,74 @@ export function PolicyPortfolio({ policies, isDemo = false }: PolicyPortfolioPro
     // A plain scrolling block, deliberately not a flex column: as flex items
     // these sections would shrink to min-content to fit the height, squashing
     // the policy grid instead of overflowing into a scroll.
-    <div className="h-full min-h-0 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
+    <div className="h-full min-h-0 overflow-y-auto">
       {/* Summary bar */}
-      <div className="px-5 py-4 border-b flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
-        <div>
-          <p className="text-xs uppercase tracking-widest" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-            Policy Portfolio
-          </p>
-          <p className="mt-0.5 text-xs" style={{ color: "var(--muted-foreground)" }}>
-            {activePolicies.length} active {activePolicies.length === 1 ? "line" : "lines"}
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-card-foreground">
+            Policy portfolio
+          </h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {activePolicies.length} active{" "}
+            {activePolicies.length === 1 ? "line" : "lines"}
             {inactiveCount > 0 && ` · ${inactiveCount} inactive`}
             {isDemo && ` · ${demoCrossSells.length} cross-sell opportunities`}
           </p>
         </div>
-        <div className="text-right">
-          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-            Total Premium
-          </p>
-          <p className="text-xl font-semibold" style={{ color: "#4ade80", fontFamily: "'JetBrains Mono', monospace" }}>
+        <div className="shrink-0 text-right">
+          <SectionLabel>Total premium</SectionLabel>
+          <p className="text-xl font-semibold tabular-nums text-success">
             ${totalPremium.toLocaleString()}
           </p>
         </div>
       </div>
 
-      <div className="p-5 flex flex-col gap-4">
+      <div className="flex flex-col gap-6 px-4 py-4 md:px-5">
         {/* Policies */}
-        <div>
-          <p className="text-xs uppercase tracking-widest mb-3" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-            Policies
-          </p>
-          {displayPolicies.length === 0 && (
-            <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-              No policies on file.
-            </p>
+        <section>
+          <SectionLabel className="mb-3">Policies</SectionLabel>
+          {displayPolicies.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No policies on file.</p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {displayPolicies.map((p) => (
+                <PolicyCard
+                  key={p.id}
+                  policy={p}
+                  isSelected={selectedId === p.id}
+                  onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
+                />
+              ))}
+            </div>
           )}
-          <div className="grid grid-cols-2 gap-3">
-            {displayPolicies.map((p) => (
-              <PolicyCard
-                key={p.id}
-                policy={p}
-                isSelected={selectedId === p.id}
-                onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
-              />
-            ))}
-          </div>
-        </div>
+        </section>
 
         {/* Cross-sell section — demo only until real opportunities are derived. */}
         {isDemo && (
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <AlertTriangle size={13} style={{ color: "#f59e0b" }} />
-              <p className="text-xs uppercase tracking-widest" style={{ color: "#f59e0b", fontFamily: "'JetBrains Mono', monospace" }}>
-                Cross-Sell Opportunities
-              </p>
+          <section>
+            <div className="mb-3 flex items-center gap-2">
+              <AlertTriangle
+                aria-hidden
+                className="size-4 text-amber-600 dark:text-amber-500"
+              />
+              <SectionLabel className="text-amber-600 dark:text-amber-500">
+                Cross-sell opportunities
+              </SectionLabel>
             </div>
             <div className="flex flex-col gap-3">
               {demoCrossSells.map((item) => (
                 <CrossSellCard key={item.line} item={item} />
               ))}
             </div>
-            <button className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-medium transition-colors hover:bg-white/5" style={{ border: "1px dashed rgba(255,255,255,0.12)", color: "var(--muted-foreground)" }}>
-              <Plus size={12} /> Add Custom Opportunity
-            </button>
-          </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-3 w-full border-dashed text-muted-foreground"
+            >
+              <Plus />
+              Add custom opportunity
+            </Button>
+          </section>
         )}
       </div>
     </div>

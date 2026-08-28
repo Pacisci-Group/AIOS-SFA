@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/select";
 import { reassignLead } from "@/lib/leads-api";
 import { listUsers } from "@/lib/users-api";
-import { DetailCard } from "./DetailCard";
+import { DetailCard } from "@/components/common/DetailCard";
 import { leadDetailKey } from "./useUpdateLead";
 
 /**

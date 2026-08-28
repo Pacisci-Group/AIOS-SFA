@@ -281,11 +281,25 @@ Chakra, etc.).
   is light. When a light fix would shift the dark rendering, pin the original
   with a `dark:` override rather than accepting the drift (see
   `components/form/FormError.tsx`).
-- The 5 prototype dashboards (management, management-alt, service, tickets,
-  household) are **not** light-theme clean and are not meant to be — they are
-  slated for replacement. They also reference ~9 CSS variables (`--kpi-*`,
-  `--navy-900`, `--emerald`, `--red`, `--amber`) that are defined nowhere and
-  render transparent. Don't copy those patterns into new work.
+- **3 prototype dashboards remain** (management, management-alt, service). They
+  are **not** light-theme clean and are not meant to be — they are slated for
+  replacement, and they still reference `--emerald`, `--red`, `--amber` and
+  `--font-mono`, which are defined nowhere and render transparent. Don't copy
+  those patterns into new work.
+- The **ticket workspace, household detail and policy detail** used to be on
+  that list and no longer are: they render inside `AppShell`, compose `ui/`
+  primitives, follow `TYPOGRAPHY.md`, and are light+dark clean. The eight
+  `--kpi-*` variables they relied on are **deleted** from `theme.css` — they
+  were declared only under `.dark`, so every one of them rendered as no colour
+  on the light theme. Their replacements are the theme tokens plus the
+  `X-600 dark:X-400` pairs in `features/tickets/components/ticket-data.ts` and
+  `features/household/components/policy-display.ts`, which follow the same rules
+  as `lead-display.ts`. Never add a colour variable to `.dark` without a `:root`
+  counterpart.
+- The detail-page card shell is **`components/common/DetailCard.tsx`**
+  (`DetailCard` / `SectionLabel` / `DataRow`). It lived in `features/lead/` until
+  the ticket, household and policy pages had each grown their own card idiom;
+  compose it rather than hand-writing another card header.
 - **We own UI/UX. The mockups are the starting point, not a contract.** There is
   no dedicated designer on this team, and the product owner has said explicitly
   that UI/UX calls are ours. `./agencyops_fe_mockups` is where a screen's layout,

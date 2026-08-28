@@ -124,7 +124,7 @@ export function HouseholdDrawer({
                       <li key={policy.id} className="text-sm">
                         <button
                           type="button"
-                          className="text-[var(--kpi-blue)] hover:underline"
+                          className="text-primary hover:underline"
                           onClick={() => navigate(`/policies/${policy.id}`)}
                         >
                           {policy.policyType} — {policy.policyNumber}

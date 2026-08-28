@@ -1,31 +1,22 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import {
-  AlertCircle,
-  ArrowLeftRight,
-  CreditCard,
-  Filter,
-  FileCheck,
-  FileSignature,
-  FileText,
-  MessageSquare,
-  Mail,
-  Phone,
-  RefreshCw,
-  ShieldCheck,
-  ShieldX,
-  UserPlus,
-  type LucideIcon,
-} from "lucide-react";
+import { Mail, Phone, type LucideIcon } from "lucide-react";
 import {
   isTerminalTicketStatus,
-  type ServiceTicketCategory,
   type ServiceTicketStatus,
   type ServiceTicketView,
 } from "@sfa/shared";
+import { SectionLabel } from "@/components/common/DetailCard";
+import { FilterToggles } from "@/components/common/FilterToggles";
+import { Badge } from "@/components/ui/badge";
 import { listServiceTicketsForHousehold } from "@/lib/service-tickets-api";
-import { TICKET_STATUS_CONFIG } from "@/features/tickets/components/ticket-data";
+import {
+  categoryDisplay,
+  TICKET_CATEGORY_DISPLAY,
+  TICKET_STATUS_CONFIG,
+} from "@/features/tickets/components/ticket-data";
+import { cn } from "@/lib/utils";
 
 /**
  * The household's Activity & Tickets column: every service ticket the client
@@ -39,6 +30,11 @@ import { TICKET_STATUS_CONFIG } from "@/features/tickets/components/ticket-data"
  *
  * Archived tickets are included on purpose (see `listForHousehold` on the API
  * side): a 360 view that hid last month's resolved claim would be lying.
+ *
+ * The per-category icon and accent come from `TICKET_CATEGORY_DISPLAY` rather
+ * than a second copy of the map — this file used to carry its own, keyed by the
+ * same categories with different hex values, so a Billing ticket was one green
+ * on the ticket workspace and another here.
  */
 export function ActivityFeed({
   householdId,
@@ -72,71 +68,63 @@ export function ActivityFeed({
   ).length;
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      {/* Header */}
-      <div className="px-5 py-4 border-b shrink-0" style={{ borderColor: "var(--border)" }}>
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs uppercase tracking-widest" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-            Activity &amp; Tickets
-          </p>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="shrink-0 space-y-3 border-b border-border px-4 py-4 md:px-5">
+        <div className="flex items-center justify-between gap-2">
+          <SectionLabel>Activity &amp; tickets</SectionLabel>
           {openCount > 0 && (
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs" style={{ background: "#2d0a0a", color: "#f87171", border: "1px solid #7f1d1d" }}>
+            <Badge
+              size="sm"
+              variant="ghost"
+              className="bg-destructive/12 text-destructive"
+            >
               {openCount} open
-            </span>
+            </Badge>
           )}
         </div>
 
-        {/* Filter pills */}
-        <div className="flex items-center gap-1.5">
-          <Filter size={11} style={{ color: "var(--muted-foreground)" }} />
-          {FILTERS.map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className="px-2.5 py-1 rounded text-xs transition-all"
-              style={
-                filter === f
-                  ? { background: "#1d4ed8", color: "#fff" }
-                  : { background: "var(--muted)", color: "var(--muted-foreground)", border: "1px solid var(--border)" }
-              }
-            >
-              {f}
-            </button>
-          ))}
-        </div>
+        <FilterToggles
+          label="Filter activity by status"
+          options={FILTER_OPTIONS}
+          value={filter}
+          onChange={setFilter}
+        />
       </div>
 
       {/* Timeline */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3" style={{ scrollbarWidth: "none" }}>
-        <div className="flex flex-col gap-0 relative">
-          {/* Vertical line */}
-          <div className="absolute left-[18px] top-2 bottom-2 w-px" style={{ background: "var(--border)" }} />
-
-          {filtered.map((item) => (
-            <FeedRow key={item.id} item={item} />
-          ))}
-        </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 md:px-5">
+        {filtered.length > 0 && (
+          <ol>
+            {filtered.map((item, index) => (
+              <FeedRow
+                key={item.id}
+                item={item}
+                isLast={index === filtered.length - 1}
+              />
+            ))}
+          </ol>
+        )}
 
         {/* `isLoading`, not `isPending`: a disabled query (demo, or no id yet)
             stays pending forever and would sit on the spinner. */}
         {query.isLoading && (
-          <p className="text-xs text-center py-8" style={{ color: "var(--muted-foreground)" }}>
+          <p className="py-8 text-center text-sm text-muted-foreground">
             Loading tickets…
           </p>
         )}
 
         {query.isError && (
-          <p className="text-xs text-center py-8" style={{ color: "var(--muted-foreground)" }}>
+          <p className="py-8 text-center text-sm text-muted-foreground">
             Could not load this client's tickets.
           </p>
         )}
 
         {!query.isLoading && !query.isError && filtered.length === 0 && (
-          <div className="flex items-center justify-center h-32">
-            <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-              {items.length === 0 ? "No tickets for this client yet" : "No matching activity"}
-            </p>
-          </div>
+          <p className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+            {items.length === 0
+              ? "No tickets for this client yet"
+              : "No matching activity"}
+          </p>
         )}
       </div>
     </div>
@@ -146,74 +134,91 @@ export function ActivityFeed({
 /**
  * One ticket card. The whole card is the link target — a CSR reading the feed
  * is nearly always on their way into the ticket.
+ *
+ * The connector is drawn per row and starts *below* the icon tile rather than
+ * running the full height of the list behind them — same as the lead timeline,
+ * and for the same reason: the tiles are alpha tints (`bg-primary/12`), so a
+ * line passing behind one shows straight through it.
  */
-function FeedRow({ item }: { item: FeedItem }) {
+function FeedRow({ item, isLast }: { item: FeedItem; isLast: boolean }) {
   const Icon = item.icon;
   const status = TICKET_STATUS_CONFIG[item.status];
 
   const body = (
     <>
-      {/* Icon node */}
-      <div
-        className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 z-10 transition-transform group-hover:scale-105"
-        style={{ background: item.bg, border: `1px solid ${item.color}30` }}
+      {!isLast && (
+        <span
+          aria-hidden
+          className="absolute bottom-0 left-[18px] top-11 w-px bg-border"
+        />
+      )}
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105",
+          item.tint,
+        )}
       >
-        <Icon size={15} style={{ color: item.color }} />
-      </div>
+        <Icon className={cn("size-4", item.tone)} />
+      </span>
 
-      {/* Content */}
-      <div
-        className="flex-1 rounded-lg p-3 transition-all group-hover:border-white/10"
-        style={{ background: "var(--card)", border: "1px solid var(--border)" }}
-      >
-        <div className="flex items-start justify-between gap-2 mb-1">
-          <p className="text-xs font-semibold leading-tight" style={{ color: "var(--foreground)" }}>
+      <span className="min-w-0 flex-1 rounded-lg border border-border bg-card p-3 transition-colors group-hover:border-primary/40">
+        <span className="mb-1 flex items-start justify-between gap-2">
+          <span className="text-sm font-semibold leading-tight text-card-foreground">
             {item.title}
-          </p>
-          <span
-            className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs shrink-0 ${status.bg} ${status.text}`}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
-            {status.label}
           </span>
-        </div>
+          <Badge
+            size="sm"
+            variant="ghost"
+            className={cn("shrink-0 gap-1", status.bg, status.text)}
+          >
+            <span className={cn("size-2 rounded-full", status.dot)} />
+            {status.label}
+          </Badge>
+        </span>
 
-        <p className="text-xs leading-relaxed mb-2" style={{ color: "var(--muted-foreground)" }}>
+        <span className="mb-2 block text-sm leading-relaxed text-muted-foreground">
           {item.description}
-        </p>
+        </span>
 
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-mono" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace", opacity: 0.7 }}>
+        <span className="flex items-center justify-between gap-2">
+          <span className="text-xs tabular-nums text-muted-foreground">
             {item.timestamp}
           </span>
-          <div className="flex items-center gap-1.5 shrink-0">
+          <span className="flex shrink-0 items-center gap-1.5">
             {item.isHighPriority && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--kpi-amber-bg)] text-[var(--kpi-amber)]">
+              <Badge
+                size="sm"
+                variant="ghost"
+                className="bg-red-500/12 text-red-600 dark:text-red-400"
+              >
                 High
-              </span>
+              </Badge>
             )}
             {item.agent && (
-              <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}>
+              <Badge size="sm" variant="ghost" className="bg-muted text-muted-foreground">
                 {item.agent}
-              </span>
+              </Badge>
             )}
-          </div>
-        </div>
-      </div>
+          </span>
+        </span>
+      </span>
     </>
   );
 
   if (!item.ticketId) {
-    return <div className="relative flex gap-3 pb-4 group">{body}</div>;
+    return <li className="group relative flex gap-3 pb-4">{body}</li>;
   }
 
   return (
-    <Link
-      to={`/crm/tickets?ticket=${item.ticketId}`}
-      className="relative flex gap-3 pb-4 group"
-    >
-      {body}
-    </Link>
+    <li className="relative pb-4">
+      <Link
+        to={`/crm/tickets?ticket=${item.ticketId}`}
+        className="group flex gap-3"
+      >
+        {body}
+      </Link>
+    </li>
   );
 }
 
@@ -226,8 +231,8 @@ interface FeedItem {
   /** Set for real tickets; the demo items link nowhere. */
   ticketId?: string;
   icon: LucideIcon;
-  color: string;
-  bg: string;
+  tone: string;
+  tint: string;
   title: string;
   description: string;
   timestamp: string;
@@ -239,32 +244,8 @@ interface FeedItem {
 const FILTERS = ["All", "Open", "Overdue", "Resolved"] as const;
 type FilterType = (typeof FILTERS)[number];
 
-/**
- * Icon and accent per ticket category, carried over from the mockup's activity
- * types. Categories that mean the same thing to a reader — a payment and a
- * billing question, an endorsement and a policy change — share an accent.
- */
-const CATEGORY_ICONS: Record<
-  ServiceTicketCategory,
-  { icon: LucideIcon; color: string; bg: string }
-> = {
-  Onboarding: { icon: UserPlus, color: "#3b82f6", bg: "#1e3a5f" },
-  Endorsement: { icon: FileSignature, color: "#06b6d4", bg: "#0a1628" },
-  "Policy Change": { icon: FileSignature, color: "#06b6d4", bg: "#0a1628" },
-  Billing: { icon: CreditCard, color: "#10b981", bg: "#052e16" },
-  Payment: { icon: CreditCard, color: "#10b981", bg: "#052e16" },
-  "Claims Assist": { icon: FileCheck, color: "#ef4444", bg: "#2d0a0a" },
-  "Renewal Review": { icon: RefreshCw, color: "#f59e0b", bg: "#1c1002" },
-  "Renewal Taken": { icon: ShieldCheck, color: "#f59e0b", bg: "#1c1002" },
-  "Company Transfer": { icon: ArrowLeftRight, color: "#8b5cf6", bg: "#1e1b4b" },
-  Save: { icon: ShieldCheck, color: "#10b981", bg: "#052e16" },
-  Termination: { icon: ShieldX, color: "#ef4444", bg: "#2d0a0a" },
-  // Violet, matching the "Start Quote" quick action this ticket comes from.
-  Quote: { icon: FileText, color: "#8b5cf6", bg: "#1e1b4b" },
-  Other: { icon: MessageSquare, color: "#94a3b8", bg: "#1e293b" },
-};
-
-const FALLBACK_ICON = { icon: AlertCircle, color: "#f59e0b", bg: "#1c1002" };
+const FILTER_OPTIONS: readonly { label: string; value: FilterType }[] =
+  FILTERS.map((value) => ({ label: value, value }));
 
 /**
  * A ticket as one feed card. The description is the latest timeline entry —
@@ -272,15 +253,15 @@ const FALLBACK_ICON = { icon: AlertCircle, color: "#f59e0b", bg: "#1c1002" };
  * is what a reader scanning the column wants.
  */
 function toFeedItem(ticket: ServiceTicketView): FeedItem {
-  const config = CATEGORY_ICONS[ticket.category] ?? FALLBACK_ICON;
+  const config = categoryDisplay(ticket.category);
   const latest = ticket.timeline[ticket.timeline.length - 1];
 
   return {
     id: ticket.id,
     ticketId: ticket.id,
     icon: config.icon,
-    color: config.color,
-    bg: config.bg,
+    tone: config.tone,
+    tint: config.tint,
     title: `${ticket.category} — ${ticket.ticketNumber}`,
     description:
       latest?.content ||
@@ -313,7 +294,7 @@ function formatStamp(iso: string): string {
 const DEMO_ITEMS: FeedItem[] = [
   {
     id: "a1",
-    ...CATEGORY_ICONS.Billing,
+    ...TICKET_CATEGORY_DISPLAY.Billing,
     title: "Billing — BILL-104",
     description:
       "Jessica called regarding $18 late fee on Auto policy. Agreed to one-time waiver pending supervisor approval.",
@@ -324,7 +305,7 @@ const DEMO_ITEMS: FeedItem[] = [
   },
   {
     id: "a2",
-    ...CATEGORY_ICONS.Endorsement,
+    ...TICKET_CATEGORY_DISPLAY.Endorsement,
     title: "Endorsement — ENDR-101",
     description:
       "Teen driver added to household roster. Excluded from Auto policy per Jessica's request. Signed exclusion form on file.",
@@ -334,7 +315,7 @@ const DEMO_ITEMS: FeedItem[] = [
   },
   {
     id: "a3",
-    ...CATEGORY_ICONS.Payment,
+    ...TICKET_CATEGORY_DISPLAY.Payment,
     title: "Payment — PAY-118",
     description:
       "Monthly ACH payment of $184.00 processed successfully. Next due: Jul 15.",
@@ -344,7 +325,7 @@ const DEMO_ITEMS: FeedItem[] = [
   },
   {
     id: "a4",
-    ...CATEGORY_ICONS["Renewal Review"],
+    ...TICKET_CATEGORY_DISPLAY["Renewal Review"],
     title: "Renewal Review — RENEW-142",
     description:
       "Outbound call to review Home policy renewal. Discussed roof inspection results. No changes to coverage requested.",
@@ -354,7 +335,7 @@ const DEMO_ITEMS: FeedItem[] = [
   },
   {
     id: "a5",
-    ...CATEGORY_ICONS["Claims Assist"],
+    ...TICKET_CATEGORY_DISPLAY["Claims Assist"],
     title: "Claims Assist — CLAIM-133",
     description:
       "Claim #CLM-2024-0882 filed. Adjuster inspected May 14. Settlement of $6,200 issued for roof replacement.",
@@ -366,8 +347,8 @@ const DEMO_ITEMS: FeedItem[] = [
   {
     id: "a6",
     icon: Mail,
-    color: "#8b5cf6",
-    bg: "#1e1b4b",
+    tone: "text-violet-600 dark:text-violet-400",
+    tint: "bg-violet-400/12",
     title: "Other — TKT-127",
     description:
       "Umbrella policy renewal documents emailed to jessica.cobb@email.com. Read receipt confirmed.",
@@ -378,8 +359,8 @@ const DEMO_ITEMS: FeedItem[] = [
   {
     id: "a7",
     icon: Phone,
-    color: "#3b82f6",
-    bg: "#1e3a5f",
+    tone: "text-primary",
+    tint: "bg-primary/12",
     title: "Policy Change — PCHG-119",
     description:
       "Agent requested updated property address for Landlord policy. Awaiting documentation from client.",

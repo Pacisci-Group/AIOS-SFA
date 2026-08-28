@@ -107,7 +107,7 @@ export function PolicyDrawer({
                 <DrawerSection title="Household">
                   <button
                     type="button"
-                    className="text-sm text-[var(--kpi-blue)] hover:underline"
+                    className="text-sm text-primary hover:underline"
                     onClick={() => navigate(`/clients/${policy.household!.id}`)}
                   >
                     {policy.household.name ?? 'View household'}
