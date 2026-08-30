@@ -289,6 +289,7 @@ export class PermissionsService {
         dataScope: DataScope.Agency,
         permissions: ALL_PLATFORM_PERMISSIONS,
         roleIds: [],
+        tokenVersion: user.tokenVersion ?? 0,
       };
     }
 
@@ -310,7 +311,9 @@ export class PermissionsService {
       branchId: user.branchId?.toString() ?? null,
       isPlatformAdmin: false,
       scope:
-        dataScope === DataScope.Agency ? AccessScope.Agency : AccessScope.Branch,
+        dataScope === DataScope.Agency
+          ? AccessScope.Agency
+          : AccessScope.Branch,
       dataScope,
       permissions,
       // Not a permission input. `buildScopeFilter` uses it to match a record
@@ -319,6 +322,10 @@ export class PermissionsService {
       // that `user.roleIds` is gone; drop it and the hand-off board silently
       // stops matching role-assigned audits.
       roleIds: data.roles.map((role) => role.roleId),
+      // Straight off the document, not derived. `AccessContextGuard` compares it
+      // to the caller's signed claim so a password reset ends every session that
+      // was live when it happened (PAC-79).
+      tokenVersion: user.tokenVersion ?? 0,
     };
   }
 
@@ -330,6 +337,7 @@ export class PermissionsService {
       branchId: context.branchId,
       scope: context.scope,
       isPlatformAdmin: context.isPlatformAdmin,
+      tokenVersion: context.tokenVersion ?? 0,
     };
   }
 

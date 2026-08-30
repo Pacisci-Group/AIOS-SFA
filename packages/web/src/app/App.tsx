@@ -63,6 +63,7 @@ const AddMailersPage = lazy(
   () => import('@/features/platform/AddMailersPage'),
 );
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
+const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 const UserPermissionsPage = lazy(
   () => import('@/features/admin/UserPermissionsPage'),
 );
@@ -520,6 +521,20 @@ export function App() {
               element={
                 <LazyPage>
                   <AcceptInvitePage />
+                </LazyPage>
+              }
+            />
+
+            {/* Set a new password from an admin-triggered reset link (PAC-79).
+                Outside both guards for the same two reasons as the invite route
+                above, only more sharply: everyone who reaches this page is by
+                definition someone who cannot sign in. Must sit above the
+                catch-all. */}
+            <Route
+              path="/auth/reset-password"
+              element={
+                <LazyPage>
+                  <ResetPasswordPage />
                 </LazyPage>
               }
             />

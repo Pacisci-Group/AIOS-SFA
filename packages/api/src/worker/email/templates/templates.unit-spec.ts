@@ -1,6 +1,10 @@
 import { EMAIL_TEMPLATES, type TemplateKey } from './registry';
 import { inviteTemplate } from './invite.template';
-import type { InviteRequestedData } from '../../../inngest/events';
+import { passwordResetTemplate } from './password-reset.template';
+import type {
+  InviteRequestedData,
+  PasswordResetRequestedData,
+} from '../../../inngest/events';
 
 /**
  * A payload with the awkward values a real agency will eventually supply: an
@@ -28,6 +32,24 @@ function inviteData(
   };
 }
 
+/** The same awkward values, for the reset payload. */
+function passwordResetData(
+  overrides: Partial<PasswordResetRequestedData> = {},
+): PasswordResetRequestedData {
+  return {
+    eventLogId: '507f1f77bcf86cd799439010',
+    userId: '507f1f77bcf86cd799439011',
+    agencyId: '507f1f77bcf86cd799439012',
+    branchId: null,
+    to: 'pat@example.com',
+    recipientName: "Pat O'Brien",
+    agencyName: 'Smith Family Agency',
+    resetUrl: 'https://app.example.com/auth/reset-password?token=abc123',
+    expiresAt: '2026-08-26T14:30:00.000Z',
+    ...overrides,
+  };
+}
+
 const ALL_KEYS = Object.keys(EMAIL_TEMPLATES) as TemplateKey[];
 
 /**
@@ -42,6 +64,7 @@ describe('email template registry', () => {
   // fixture fails here rather than silently skipping the invariants.
   const FIXTURES: Record<TemplateKey, unknown> = {
     invite: inviteData(),
+    passwordReset: passwordResetData(),
   };
 
   it('has a fixture for every registered template', () => {
@@ -147,5 +170,73 @@ describe('invite template', () => {
         'Someone invited you to Smith Family Agency on AgencyOps',
       );
     });
+  });
+});
+
+describe('password reset template', () => {
+  it('carries the reset URL in both parts', () => {
+    const data = passwordResetData();
+    const { html, text } = passwordResetTemplate.render(data);
+
+    expect(text).toContain(data.resetUrl);
+    expect(html).toContain(data.resetUrl);
+  });
+
+  it('names the agency but never a person who triggered it', () => {
+    // The load-bearing assertion in this file. Naming the owner is the obvious
+    // symmetry with the invite email and is deliberately not done: it tells the
+    // recipient who to trust and an attacker who to impersonate on the
+    // follow-up call. If someone later adds the name, this fails.
+    const { text } = passwordResetTemplate.render(passwordResetData());
+
+    expect(text).toContain('An administrator at Smith Family Agency');
+    expect(text).not.toContain('Dana Owner');
+  });
+
+  it('renders the expiry with a time, not just a date', () => {
+    // A 24-hour link that says only "expires on August 26", read on the morning
+    // of the 26th, tells the recipient nothing. Unlike the invite's 7 days, the
+    // clock time is the useful part.
+    const { text } = passwordResetTemplate.render(
+      passwordResetData({ expiresAt: '2026-08-26T14:30:00.000Z' }),
+    );
+
+    expect(text).toContain('August 26, 2026');
+    expect(text).toContain('2:30');
+    expect(text).toContain('UTC');
+  });
+
+  it('tells an unprompted recipient their current password still works', () => {
+    // This mail arrives unannounced at an existing account. Without this line a
+    // recipient cannot tell it from phishing, and "click to check" is the
+    // reaction that costs them if it ever is.
+    const { text } = passwordResetTemplate.render(passwordResetData());
+    expect(text).toContain('your current');
+    expect(text).toContain('password still works');
+  });
+
+  it('says the link is single-use', () => {
+    const { text } = passwordResetTemplate.render(passwordResetData());
+    expect(text).toContain('only be used once');
+  });
+
+  describe('untrusted values', () => {
+    it('escapes markup in an agency name', () => {
+      const { html } = passwordResetTemplate.render(
+        passwordResetData({ agencyName: '<script>alert(1)</script>' }),
+      );
+
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
+    });
+  });
+
+  it('falls back rather than rendering "null" at the reader', () => {
+    const { text } = passwordResetTemplate.render(
+      passwordResetData({ recipientName: null }),
+    );
+
+    expect(text).not.toContain('null');
+    expect(text).toContain('Hi there,');
   });
 });

@@ -16,6 +16,23 @@ export interface InviteResponse {
 }
 
 /**
+ * `POST /users/:userId/password-reset` response (PAC-79).
+ *
+ * `resetToken` is **absent in production** — see
+ * `UsersService.exposeTokensForDev`. Anything consuming it must treat it as
+ * optional rather than assuming the dev shape.
+ */
+export interface PasswordResetResponse {
+  userId: string;
+  /** Absolute reset URL. */
+  resetUrl: string;
+  /** ISO-8601. */
+  expiresAt: string;
+  /** Dev/test only. */
+  resetToken?: string;
+}
+
+/**
  * A user in the agency directory.
  *
  * Explicit rather than inferred from `lean()` — the hydrated Mongoose type is

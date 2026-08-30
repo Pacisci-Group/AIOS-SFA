@@ -23,7 +23,10 @@ import {
   SkipModule,
 } from '../common/decorators/access.decorators';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
-import { MINUTE_MS } from '../config/rate-limit.config';
+import {
+  MINUTE_MS,
+  PASSWORD_RESET_ISSUE_RATE_LIMIT,
+} from '../config/rate-limit.config';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { UsersService } from './users.service';
 
@@ -81,6 +84,31 @@ export class UsersController {
     @Param('userId') userId: string,
   ) {
     return this.usersService.resendInvite(agencyId, userId, actor?.sub);
+  }
+
+  /**
+   * Email an active employee a link to set a new password (PAC-79).
+   *
+   * `agency:users:write` rather than a new permission, for the same reason
+   * `DELETE /:userId` below reuses it: managing employees is already what it
+   * means, and inventing a `users:password-reset` would leave every existing
+   * owner role without it, so the feature would work for nobody until each was
+   * re-granted.
+   *
+   * The `@Throttle` is per-IP and only catches a flood; the limit that matters
+   * is the per-**user** cooldown in `UsersService.sendPasswordReset`, because
+   * what needs protecting is the employee's inbox, not the API.
+   */
+  @Post(':userId/password-reset')
+  @RequirePermissions(AgencyPermission.UsersWrite)
+  @Throttle({
+    short: { limit: PASSWORD_RESET_ISSUE_RATE_LIMIT, ttl: MINUTE_MS },
+  })
+  sendPasswordReset(
+    @AgencyId() agencyId: string,
+    @Param('userId') userId: string,
+  ) {
+    return this.usersService.sendPasswordReset(agencyId, userId);
   }
 
   /**

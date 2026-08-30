@@ -52,6 +52,43 @@ export const PUBLIC_INTAKE_HOURLY_LIMIT = limitFromEnv(
 );
 
 /**
+ * `POST /users/:userId/password-reset` — authenticated, `agency:users:write`.
+ *
+ * Env-driven rather than a bare literal because onboarding a migrated agency is
+ * exactly the burst this would otherwise block: an owner working down a list of
+ * fourteen people trips a hard-coded ten and cannot finish. The limit that
+ * actually protects an inbox is the per-**user** cooldown in
+ * `UsersService.sendPasswordReset`; this one only catches a flood.
+ */
+export const PASSWORD_RESET_ISSUE_RATE_LIMIT = limitFromEnv(
+  'PASSWORD_RESET_ISSUE_RATE_LIMIT',
+  60,
+);
+
+/**
+ * `GET /auth/password-reset/:token` — the public preview behind a reset link
+ * (PAC-79). Looser than the submit limit for the same reason the intake form is
+ * looser than the intake submit: someone opening a link on a phone may reload
+ * it, and locking them out of a page that renders an email address and an
+ * expiry protects nothing.
+ */
+export const PASSWORD_RESET_PREVIEW_RATE_LIMIT = limitFromEnv(
+  'PASSWORD_RESET_PREVIEW_RATE_LIMIT',
+  10,
+);
+
+/**
+ * `POST /auth/reset-password` — an unauthenticated write that sets a password,
+ * so it gets the tightest public limit in the file. The token is 256 bits, so
+ * this is not what stops guessing; it caps the damage from a link leaked to
+ * something that will hammer it.
+ */
+export const PASSWORD_RESET_SUBMIT_RATE_LIMIT = limitFromEnv(
+  'PASSWORD_RESET_SUBMIT_RATE_LIMIT',
+  5,
+);
+
+/**
  * `POST /address/*` — authenticated address autocomplete (PAC-60).
  *
  * Generous, because unlike the intake limits this one guards a *billed* call

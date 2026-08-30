@@ -13,6 +13,7 @@ import {
   modulePermission,
 } from '@sfa/shared';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
 import type {
   ContactDetail,
@@ -841,6 +842,412 @@ describe('SFA API (e2e)', () => {
         .post('/api/v1/auth/accept-invite')
         .send({ token: inviteToken, password: 'short' })
         .expect(400);
+    });
+  });
+
+  /**
+   * Admin-triggered password reset (PAC-79).
+   *
+   * Like the invite block above, this covers the lifecycle rather than each
+   * endpoint alone: the guarantees that matter are relationships between calls.
+   * A reset must kill the previous link, a used link must not work twice, and a
+   * reset must end sessions that were live when it happened.
+   *
+   * ⚠ Every test here works on a user it creates itself. Resetting one of the
+   * seeded personas would bump their `tokenVersion` and silently 401 the shared
+   * `ownerToken` / `producerToken` for every later describe block in this file.
+   */
+  describe('Admin-triggered password reset (PAC-79)', () => {
+    const server = () => request(app.getHttpServer());
+    let userModel: Model<User>;
+
+    let seq = 0;
+    const freshEmail = () => `pac79-reset-${++seq}@sfa.local`;
+
+    const ORIGINAL_PASSWORD = 'OriginalPass123!';
+    const NEW_PASSWORD = 'BrandNewReset123!';
+
+    interface ResetBody {
+      userId: string;
+      resetUrl: string;
+      expiresAt: string;
+      resetToken?: string;
+    }
+
+    /** What the server stores: the digest, never the token. */
+    const digest = (token: string) =>
+      createHash('sha256').update(token).digest('hex');
+
+    /**
+     * An active user of this agency, made the only way the API allows —
+     * invite, then accept. `sendPasswordReset` refuses anyone who has not
+     * accepted, so there is no shortcut here.
+     */
+    async function activeUser(email = freshEmail()) {
+      const invited = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({
+          email,
+          roleIds: [seed.producerRoleId],
+          branchId: seed.branchId,
+          firstName: 'Reset',
+          lastName: 'Target',
+        })
+        .expect(201);
+
+      const { userId, inviteToken } = invited.body as {
+        userId: string;
+        inviteToken?: string;
+      };
+      await server()
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: inviteToken, password: ORIGINAL_PASSWORD })
+        .expect(201);
+
+      return { userId, email };
+    }
+
+    async function sendReset(userId: string, token = ownerToken) {
+      const res = await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(token))
+        .expect(201);
+      return res.body as ResetBody;
+    }
+
+    /**
+     * Step past the per-user cooldown without sleeping. The cooldown is real —
+     * "refused inside the cooldown" below asserts it — so any test wanting a
+     * second successful reset has to clear it explicitly.
+     */
+    async function clearResetCooldown(userId: string) {
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $unset: { passwordResetLastSentAt: 1 } },
+      );
+    }
+
+    async function expireResetToken(userId: string) {
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $set: { passwordResetExpiresAt: new Date(Date.now() - 1000) } },
+      );
+    }
+
+    beforeAll(() => {
+      userModel = app.get<Model<User>>(getModelToken(User.name));
+    });
+
+    it('POST /users/:id/password-reset — stores a digest, never the token', async () => {
+      // The one departure from the invite flow that the ticket was explicit
+      // about: `inviteToken` is stored raw, and this must not copy it. A
+      // database read must not yield a working credential.
+      const { userId } = await activeUser();
+      const { resetToken, resetUrl, expiresAt } = await sendReset(userId);
+
+      const stored = await userModel.findById(userId).lean();
+      expect(stored?.passwordResetToken).toBeTruthy();
+      expect(stored?.passwordResetToken).not.toBe(resetToken);
+      expect(stored?.passwordResetToken).toBe(digest(resetToken!));
+      expect(stored?.passwordResetToken).toMatch(/^[0-9a-f]{64}$/);
+
+      // Absolute, for the same reason the invite URL is: an email client has no
+      // origin to resolve a relative path against.
+      expect(resetUrl.startsWith('http://localhost:5173/')).toBe(true);
+      expect(resetUrl).toContain('/auth/reset-password?token=');
+      expect(new Date(expiresAt).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('POST /users/:id/password-reset — forbidden for a CSR and a producer', async () => {
+      const { userId } = await activeUser();
+
+      await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(csrToken))
+        .expect(403);
+      await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(producerToken))
+        .expect(403);
+    });
+
+    it('POST /users/:id/password-reset — refused inside the per-user cooldown', async () => {
+      const { userId } = await activeUser();
+      await sendReset(userId);
+
+      const res = await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(ownerToken))
+        .expect(409);
+      expect((res.body as { message: string }).message).toMatch(/try again/i);
+    });
+
+    it('POST /users/:id/password-reset — a second issue kills the first link', async () => {
+      const { userId } = await activeUser();
+      const first = await sendReset(userId);
+      await clearResetCooldown(userId);
+      const second = await sendReset(userId);
+
+      expect(second.resetToken).toBeTruthy();
+      expect(second.resetToken).not.toBe(first.resetToken);
+
+      // The security property, not a detail: re-issuing is the owner's recovery
+      // when a link goes astray, so the stray one has to stop working.
+      await server()
+        .get(`/api/v1/auth/password-reset/${first.resetToken}`)
+        .expect(404);
+      await server()
+        .get(`/api/v1/auth/password-reset/${second.resetToken}`)
+        .expect(200);
+    });
+
+    it('POST /users/:id/password-reset — 409 for a user who has not accepted their invite', async () => {
+      const invited = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({ email: freshEmail(), roleIds: [seed.producerRoleId] })
+        .expect(201);
+      const { userId } = invited.body as { userId: string };
+
+      const res = await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(ownerToken))
+        .expect(409);
+      expect((res.body as { message: string }).message).toMatch(/invite/i);
+    });
+
+    it('POST /users/:id/password-reset — clears any pending invite token', async () => {
+      // Belt-and-braces: the guards already make "invited" and "active"
+      // disjoint, so this state should not arise. Asserted because the
+      // invariant the code claims is "one live credential per account", and an
+      // invariant nothing checks is a comment.
+      const { userId } = await activeUser();
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        {
+          $set: {
+            inviteToken: 'left-behind-token',
+            inviteTokenExpiresAt: new Date(Date.now() + 60_000),
+          },
+        },
+      );
+
+      await sendReset(userId);
+
+      const after = await userModel.findById(userId).lean();
+      expect(after?.inviteToken).toBeUndefined();
+      expect(after?.inviteTokenExpiresAt).toBeUndefined();
+    });
+
+    it('GET /auth/password-reset/:token — public preview discloses only three fields', async () => {
+      const { userId, email } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+
+      const res = await server()
+        .get(`/api/v1/auth/password-reset/${resetToken}`)
+        .expect(200);
+
+      const body = res.body as { email: string; agencyName: string };
+      expect(body.email).toBe(email);
+      expect(body.agencyName).toBeTruthy();
+
+      // Narrower than the invite preview on purpose — no `roleNames`. A
+      // forwarded link should not answer "what can this person do?".
+      expect(Object.keys(body).sort()).toEqual([
+        'agencyName',
+        'email',
+        'expiresAt',
+      ]);
+    });
+
+    it('GET /auth/password-reset/:token — 404 unknown, 410 expired', async () => {
+      await server()
+        .get('/api/v1/auth/password-reset/not-a-real-token')
+        .expect(404);
+
+      const { userId } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+      await expireResetToken(userId);
+
+      // 410 rather than 404 so the page can tell them to ask for another,
+      // which is actionable, instead of a generic failure.
+      await server()
+        .get(`/api/v1/auth/password-reset/${resetToken}`)
+        .expect(410);
+    });
+
+    it('POST /auth/reset-password — sets the password, signs in, and cannot be replayed', async () => {
+      const { userId, email } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+
+      const done = await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: NEW_PASSWORD })
+        .expect(201);
+
+      const body = done.body as {
+        accessToken: string;
+        user: { email: string; permissions: string[] };
+      };
+      expect(body.user.email).toBe(email);
+      // The returned pair is what lands them in the app already signed in, so
+      // it has to actually work — including against the version bump this same
+      // call just made.
+      expect(body.user.permissions).toContain('leads:read');
+      await server()
+        .get('/api/v1/leads')
+        .set(authHeader(body.accessToken))
+        .expect(200);
+
+      // The new password is live and the old one is not.
+      await login(app, email, NEW_PASSWORD);
+      await server()
+        .post('/api/v1/auth/login')
+        .send({ email, password: ORIGINAL_PASSWORD })
+        .expect(401);
+
+      // Single use — the token is cleared on success, so a forwarded or
+      // browser-cached link cannot take the account over a second time.
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: 'ThirdPartyPass123!' })
+        .expect(401);
+      await server()
+        .get(`/api/v1/auth/password-reset/${resetToken}`)
+        .expect(404);
+
+      const after = await userModel.findById(userId).lean();
+      expect(after?.passwordResetToken).toBeUndefined();
+      expect(after?.passwordResetExpiresAt).toBeUndefined();
+    });
+
+    it('POST /auth/reset-password — invalidates sessions that were live at the time', async () => {
+      // The acceptance criterion the ticket's stated mechanism could not meet:
+      // `accessResolver.invalidateUser` only drops a cache entry, and the user
+      // is still active, so they re-resolve fine. `tokenVersion` is what makes
+      // this pass.
+      const { userId, email } = await activeUser();
+      const live = await login(app, email, ORIGINAL_PASSWORD);
+
+      // The attacker's token works right up until the reset.
+      await server()
+        .get('/api/v1/auth/me')
+        .set(authHeader(live.accessToken))
+        .expect(200);
+
+      const { resetToken } = await sendReset(userId);
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: NEW_PASSWORD })
+        .expect(201);
+
+      await server()
+        .get('/api/v1/auth/me')
+        .set(authHeader(live.accessToken))
+        .expect(401);
+
+      // And the refresh token cannot mint a replacement — without that check a
+      // reset would lock them out for fifteen minutes and then hand them a new
+      // token.
+      await server()
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: live.refreshToken })
+        .expect(401);
+    });
+
+    it('POST /auth/reset-password — does not reactivate, and leaves isActive alone', async () => {
+      const { userId } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: NEW_PASSWORD })
+        .expect(201);
+
+      const after = await userModel.findById(userId).lean();
+      expect(after?.isActive).toBe(true);
+      expect(after?.deactivatedAt).toBeNull();
+    });
+
+    it('POST /auth/reset-password — 401 on an expired token', async () => {
+      const { userId } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+      await expireResetToken(userId);
+
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: NEW_PASSWORD })
+        .expect(401);
+    });
+
+    it('POST /auth/reset-password — rejects a password under 8 characters', async () => {
+      const { userId } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: 'short' })
+        .expect(400);
+    });
+
+    describe('a removed employee cannot walk back in', () => {
+      it('POST /users/:id/password-reset — 409 for a deactivated user', async () => {
+        const { userId } = await activeUser();
+        await server()
+          .delete(`/api/v1/users/${userId}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        const res = await server()
+          .post(`/api/v1/users/${userId}/password-reset`)
+          .set(authHeader(ownerToken))
+          .expect(409);
+        // Not "they have not accepted their invite" — both states have
+        // `isActive: false`, and answering with the wrong one would send the
+        // owner to the wrong remedy.
+        expect((res.body as { message: string }).message).toMatch(/removed/i);
+      });
+
+      it('a link minted before the removal dies with it', async () => {
+        const { userId } = await activeUser();
+        const { resetToken } = await sendReset(userId);
+
+        await server()
+          .delete(`/api/v1/users/${userId}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        // `deactivateUser` clears the reset fields precisely so the link in
+        // their inbox stops working.
+        await server()
+          .get(`/api/v1/auth/password-reset/${resetToken}`)
+          .expect(404);
+        await server()
+          .post('/api/v1/auth/reset-password')
+          .send({ token: resetToken, password: NEW_PASSWORD })
+          .expect(401);
+      });
+    });
+
+    it('POST /users/:id/password-reset — 404 for a platform admin', async () => {
+      // Platform admins are not the agency's to manage, and `findByAgency`
+      // already hides them — so from inside the agency that user does not
+      // exist, and 404 keeps the two consistent. The same query scopes by
+      // `agencyId`, which is what stops one tenant resetting another's people.
+      const platformAdmin = await userModel
+        .findOne({ email: seed.superAdminEmail })
+        .lean();
+      await server()
+        .post(`/api/v1/users/${platformAdmin!._id.toString()}/password-reset`)
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    it('POST /users/:id/password-reset — 404 for a malformed id', async () => {
+      await server()
+        .post('/api/v1/users/not-an-object-id/password-reset')
+        .set(authHeader(ownerToken))
+        .expect(404);
     });
   });
 

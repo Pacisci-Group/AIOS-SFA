@@ -17,8 +17,10 @@ import { PermissionCache } from './permission-cache';
  * `v3` = relational RBAC — permissions, roles and overrides resolved from the
  *        `permissions` / `rolePermissions` / `userRoles` / `userPermissions`
  *        collections instead of arrays on the user and role documents.
+ * `v4` = `tokenVersion` added so a password reset can end live sessions
+ *        (PAC-79).
  */
-const KEY_PREFIX = 'sfa:perm:v3:';
+const KEY_PREFIX = 'sfa:perm:v4:';
 
 /**
  * Redis-backed cache for resolved access contexts. Entries carry a safety TTL
