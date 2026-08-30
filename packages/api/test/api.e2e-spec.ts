@@ -190,6 +190,157 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Impersonation (PAC-70)', () => {
+    type Session = {
+      accessToken: string;
+      user: {
+        id: string;
+        dataScope: string;
+        permissions: string[];
+        impersonatedBy: string | null;
+        isPlatformAdmin: boolean;
+      };
+    };
+
+    const me = async (token: string): Promise<Session['user']> => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/auth/me')
+        .set(authHeader(token))
+        .expect(200);
+      return res.body as Session['user'];
+    };
+
+    let producerUserId: string;
+    let superAdminUserId: string;
+    let secondAdminUserId: string;
+
+    beforeAll(async () => {
+      producerUserId = (await me(producerToken)).id;
+      superAdminUserId = (await me(superAdminToken)).id;
+
+      // A second platform admin, so the "never sideways" guard can actually be
+      // exercised. Impersonating *yourself* short-circuits on a different check,
+      // so without a peer here that refusal would go untested.
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const peer = await userModel.create({
+        email: 'peer-admin@sfa.local',
+        passwordHash: await bcrypt.hash(TEST_PASSWORD, 10),
+        firstName: 'Peer',
+        lastName: 'Admin',
+        isPlatformAdmin: true,
+        isActive: true,
+      });
+      secondAdminUserId = peer._id.toString();
+    });
+
+    it('mints a session that IS the target, not a hybrid', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${producerUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(201);
+
+      const body = res.body as Session;
+      expect(body.user.id).toBe(producerUserId);
+      expect(body.user.isPlatformAdmin).toBe(false);
+      /*
+       * The security argument for the whole endpoint: `sub` is the target, so
+       * every guard resolves the target's real context from the store. However
+       * powerful the admin who minted it, the session is `own`-scoped and holds
+       * no platform permission — including the one that minted it.
+       */
+      expect(body.user.dataScope).toBe('own');
+      expect(body.user.permissions).not.toContain('platform:users:impersonate');
+      expect(body.user.permissions).not.toContain('platform:agencies:read');
+      expect(body.user.impersonatedBy).toBe(superAdminUserId);
+    });
+
+    it('the minted token works, and is confined to the target', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${producerUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(201);
+      const token = (res.body as Session).accessToken;
+
+      // Reaches what the producer reaches...
+      await request(app.getHttpServer())
+        .get('/api/v1/performance?range=mtd')
+        .set(authHeader(token))
+        .expect(200);
+
+      // ...and nothing the admin could. A token that still opened platform
+      // routes would mean impersonation had widened, not narrowed, authority.
+      await request(app.getHttpServer())
+        .get('/api/v1/platform/agencies')
+        .set(authHeader(token))
+        .expect(403);
+
+      // `/me` reports the provenance, so a client can render a banner.
+      expect((await me(token)).impersonatedBy).toBe(superAdminUserId);
+    });
+
+    it('an ordinary login carries no impersonation marker', async () => {
+      // `null`, not absent — the web stores this blob, and an omitted key would
+      // leave a stale banner up after switching back to a real login.
+      expect((await me(producerToken)).impersonatedBy).toBeNull();
+    });
+
+    it('refuses to impersonate another platform admin', async () => {
+      // Sideways into a peer's authority is the one direction this must never
+      // go — the audit row would name the wrong person for whatever followed.
+      // Downwards into a tenant is the only direction.
+      await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${secondAdminUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(403);
+    });
+
+    it('refuses to impersonate a deactivated user', async () => {
+      // A deprovisioned account must not be reachable by a second route, and
+      // the refusal is a 404 — indistinguishable from "no such user", so this
+      // cannot confirm who exists either.
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const gone = await userModel.create({
+        email: 'gone-user@sfa.local',
+        passwordHash: await bcrypt.hash(TEST_PASSWORD, 10),
+        agencyId: new Types.ObjectId(seed.agencyId),
+        branchId: new Types.ObjectId(seed.branchId),
+        isActive: false,
+      });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${gone._id.toString()}`)
+        .set(authHeader(superAdminToken))
+        .expect(404);
+      expect((res.body as { message: string }).message).toBe('User not found');
+    });
+
+    it('refuses to impersonate yourself', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${superAdminUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(400);
+    });
+
+    it('says nothing about who exists', async () => {
+      // Byte-identical to the inactive-user response: this endpoint reaches
+      // every tenant, so a distinguishable 404 would be an enumeration oracle.
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/auth/impersonate/000000000000000000000000')
+        .set(authHeader(superAdminToken))
+        .expect(404);
+      expect((res.body as { message: string }).message).toBe('User not found');
+    });
+
+    it('is not something an agency owner can do', async () => {
+      // The capability is `platform:`-namespaced, so it is unreachable from
+      // inside a tenant however senior the caller is there.
+      await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${producerUserId}`)
+        .set(authHeader(ownerToken))
+        .expect(403);
+    });
+  });
+
   describe('Platform (Super Admin)', () => {
     it('GET /api/v1/platform/agencies', async () => {
       const res = await request(app.getHttpServer())

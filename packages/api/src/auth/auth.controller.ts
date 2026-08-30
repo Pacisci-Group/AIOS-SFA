@@ -1,8 +1,10 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { JwtPayload } from '@sfa/shared';
+import { PlatformPermission } from '@sfa/shared';
 import {
   Public,
+  RequirePermissions,
   SkipBranch,
   SkipModule,
   SkipTenant,
@@ -47,7 +49,34 @@ export class AuthController {
   @SkipBranch()
   @SkipModule()
   me(@CurrentUser() user: JwtPayload) {
-    return this.authService.me(user.sub);
+    return this.authService.me(user.sub, user.impersonatedBy);
+  }
+
+  /**
+   * Mint a session as another user (PAC-70).
+   *
+   * `@SkipTenant`/`@SkipBranch` for the same reason `GET /me` skips them: the
+   * caller is a platform admin with no agency of their own, and the target's
+   * tenant is derived from the target, not from a request header.
+   *
+   * Gated on `platform:users:impersonate` — a distinct capability, not something
+   * `isPlatformAdmin` implies, so it can be revoked without demoting an admin.
+   * The refusals that bound it (never a platform admin, never an inactive user,
+   * never yourself) live in `AuthService.impersonate`.
+   *
+   * Returns exactly what `POST /auth/login` returns, so a client — or Bruno —
+   * can use it interchangeably. The only difference is `user.impersonatedBy`.
+   */
+  @Post('impersonate/:userId')
+  @SkipTenant()
+  @SkipBranch()
+  @SkipModule()
+  @RequirePermissions(PlatformPermission.UsersImpersonate)
+  impersonate(
+    @CurrentUser() user: JwtPayload,
+    @Param('userId') userId: string,
+  ) {
+    return this.authService.impersonate(user, userId);
   }
 
   @Public()

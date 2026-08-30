@@ -1,6 +1,9 @@
 import {
+  BadRequestException,
+  ForbiddenException,
   GoneException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -8,7 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { AccessContext, JwtPayload } from '@sfa/shared';
 import { hashResetToken } from '../common/crypto/reset-token';
 import { AccessResolverService } from '../permissions/access-resolver.service';
@@ -17,12 +20,20 @@ import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { AcceptInviteDto, LoginDto, ResetPasswordDto } from './dto/auth.dto';
 import { InvitePreview, PasswordResetPreview } from './auth.types';
+import {
+  ImpersonationEvent,
+  ImpersonationEventDocument,
+} from './schemas/impersonation-event.schema';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
+    @InjectModel(ImpersonationEvent.name)
+    private impersonationEventModel: Model<ImpersonationEventDocument>,
     private permissionsService: PermissionsService,
     private accessResolver: AccessResolverService,
     private jwtService: JwtService,
@@ -242,6 +253,7 @@ export class AuthService {
     user: UserDocument,
     access: AccessContext,
     roles: string[],
+    impersonatedBy?: string,
   ) {
     return {
       id: user._id.toString(),
@@ -256,6 +268,13 @@ export class AuthService {
       scope: access.scope,
       dataScope: access.dataScope,
       isPlatformAdmin: access.isPlatformAdmin,
+      /**
+       * Present only on an impersonated session (PAC-70), so a client can show
+       * a banner. `null` rather than omitted, because the web stores this blob
+       * and an absent key would leave a stale `true` behind after switching
+       * back to an ordinary login.
+       */
+      impersonatedBy: impersonatedBy ?? null,
     };
   }
 
@@ -267,7 +286,7 @@ export class AuthService {
    * signed-in browser for up to the access-token lifetime, even though the API
    * had been enforcing it since the moment it was saved.
    */
-  async me(userId: string) {
+  async me(userId: string, impersonatedBy?: string) {
     const user = await this.userModel.findById(userId);
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid credentials');
@@ -276,15 +295,89 @@ export class AuthService {
       this.permissionsService.buildAccessContext(user),
       this.permissionsService.resolveRoleNames(user),
     ]);
-    return this.toAuthUser(user, access, roles);
+    return this.toAuthUser(user, access, roles, impersonatedBy);
   }
 
-  private async issueTokens(user: UserDocument) {
+  /**
+   * Mint a session as another user, without their password (PAC-70).
+   *
+   * The Super Admin's way into a tenant to see what a real user sees. It is also
+   * the only way to exercise an `own`-scope screen against **migrated** data: the
+   * SmartSuite import gives every user an unusable random `passwordHash`
+   * (`migration.service.ts`), so nobody imported can ever log in normally.
+   *
+   * **Why this hands back an ordinary token.** The session is the target's, not a
+   * hybrid: `sub` is the target, so `AccessContextGuard` resolves *their* live
+   * permissions, data scope and tenant from the store exactly as it would for
+   * their own login. `impersonatedBy` rides along as provenance only. That means
+   * an impersonated session can never do something the target could not, and no
+   * guard needs to learn a new special case.
+   *
+   * The refusals below are the whole security model, and they bound the *target*
+   * rather than the caller:
+   *
+   * - **Never another platform admin.** Otherwise this is a sideways climb into
+   *   a peer's authority, and the audit trail would name the wrong person for
+   *   whatever they then did. Downwards into a tenant is the only direction.
+   * - **Never an inactive user**, matching {@link login} — a deprovisioned
+   *   account must not be reachable by a second route.
+   * - **Never yourself**, which would only produce a confusing audit row.
+   */
+  async impersonate(actor: JwtPayload, targetUserId: string) {
+    if (actor.sub === targetUserId) {
+      throw new BadRequestException('You are already signed in as this user');
+    }
+
+    const target = await this.userModel.findById(targetUserId);
+    // Same opaque 404 for "no such user" and "not active": who exists in another
+    // tenant is not something this endpoint should confirm.
+    if (!target || !target.isActive) {
+      throw new NotFoundException('User not found');
+    }
+    if (target.isPlatformAdmin) {
+      throw new ForbiddenException('Platform admins cannot be impersonated');
+    }
+
+    const session = await this.issueTokens(target, actor.sub);
+
+    /*
+     * Audited after the tokens are minted but before they are returned, and
+     * deliberately not fire-and-forget: if we cannot record who took this
+     * session, the session is not handed out. A failed write here is a 500,
+     * which is the correct outcome — an unaudited impersonation is worse than a
+     * failed one.
+     */
+    await this.impersonationEventModel.create({
+      actorUserId: new Types.ObjectId(actor.sub),
+      targetUserId: target._id,
+      agencyId: target.agencyId ?? null,
+      issuedAt: new Date(),
+    });
+
+    this.logger.warn(
+      `Impersonation: ${actor.sub} issued a session as ${target.email} (${target._id.toString()})`,
+    );
+
+    return session;
+  }
+
+  private async issueTokens(user: UserDocument, impersonatedBy?: string) {
     const access = await this.permissionsService.buildAccessContext(user);
     // Only slim, stable identity claims are signed into the token. The effective
     // permission set is resolved from the store on every request, not trusted
     // from here.
     const claims = this.permissionsService.buildJwtClaims(access);
+    /*
+     * Provenance, stamped onto the claims rather than built into them.
+     *
+     * `buildJwtClaims` derives from `AccessContext`, which is per *user* and is
+     * what `PermissionCache` serializes — impersonation is per *session*, so it
+     * cannot live there without leaking one admin's session into the target's
+     * cached context. See `JwtPayload.impersonatedBy`.
+     */
+    if (impersonatedBy) {
+      claims.impersonatedBy = impersonatedBy;
+    }
     const roles = await this.permissionsService.resolveRoleNames(user);
     const accessToken = this.jwtService.sign(claims, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
@@ -304,7 +397,7 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      user: this.toAuthUser(user, access, roles),
+      user: this.toAuthUser(user, access, roles, impersonatedBy),
     };
   }
 }
