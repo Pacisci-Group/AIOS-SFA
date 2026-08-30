@@ -1,4 +1,8 @@
-import { normalizeCarrier, normalizePolicyType } from '@sfa/shared';
+import {
+  normalizeCarrier,
+  normalizePolicyStatus,
+  normalizePolicyType,
+} from '@sfa/shared';
 import type { LeadDetailPolicy } from '@sfa/shared';
 import { PolicyDocument } from './schemas/policy.schema';
 
@@ -21,7 +25,9 @@ export function toLeadDetailPolicy(policy: PolicyDocument): LeadDetailPolicy {
     carrier: normalizeCarrier(policy.carrier) || null,
     policyNumber: policy.policyNumber ?? null,
     active: policy.active ?? false,
-    status: policy.policyStatus ?? null,
+    // And the same again for the status, which had no vocabulary to map against
+    // until PAC-80 — 3,998 of 4,327 migrated policies rendered `QsrnM` here.
+    status: normalizePolicyStatus(policy.policyStatus) || null,
     premium: policy.premium ?? 0,
     items: policy.items ?? 0,
     effectiveDate: policyDate(policy.effectiveDate),

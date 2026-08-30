@@ -4839,10 +4839,21 @@ describe('SFA API (e2e)', () => {
         householdId: household._id,
       });
 
+      /*
+       * Prior policies carry their OWN type codes, from a different SmartSuite
+       * field than a live policy's (PAC-80). The fixture used to seed the
+       * Policies-table codes `Zgsh3`/`eCEuV` here, which no prior policy in the
+       * migrated data actually holds — all 131 coded rows use these.
+       *
+       * The distinction is load-bearing: `XT6s7` and `fr4Ge` also mean "SFA
+       * Call" and "Customer Call" on the Prior Insurance table, which is why
+       * they must never enter the global policy-type map. See
+       * `prior-policy.spec.ts`.
+       */
       await priorPolicyModel.create([
         {
           ...base,
-          policyType: 'Zgsh3',
+          policyType: 'XT6s7',
           previousCarrier: 'State Farm',
           cancellationStatus: 'Pending',
           dealId: deal._id,
@@ -4850,7 +4861,7 @@ describe('SFA API (e2e)', () => {
         },
         {
           ...base,
-          policyType: 'eCEuV',
+          policyType: 'fr4Ge',
           previousCarrier: 'State Farm',
           cancellationStatus: 'Complete',
           dealId: deal._id,

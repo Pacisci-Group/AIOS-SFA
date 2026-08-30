@@ -17,6 +17,7 @@ import { SequenceService } from '../common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../households/household-ref';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
+import { auditItemDueAt } from '../audit-generation/audit-due';
 import { normalizePolicyNumber } from '../policies/policy-number';
 import { quoteDateYmd } from '../quote-recaps/quote.normalize';
 import { QuoteRecap } from '../quote-recaps/schemas/quote-recap.schema';
@@ -76,9 +77,25 @@ import {
   toYmd,
 } from './helpers/value-utils';
 import {
+  MAX_POLICIES_PER_RECORD,
+  isPlausibleItemCount,
+  isPlausiblePolicyCount,
   isTestRecord,
+  maxPlausibleItemCount,
+  normalizeCancellationResponsibility,
+  normalizeContactRole,
+  normalizeHouseholdStatus,
   normalizeLeadSource,
+  normalizeLegacyTicketCategory,
+  normalizeLegacyTicketStatus,
+  normalizePolicyStatus,
   normalizePolicyType,
+  normalizePriorPolicyCancellationStatus,
+  normalizePriorPolicyType,
+  normalizeTimeOffDecision,
+  normalizeTimeOffRequestType,
+  normalizeTimeOffStatus,
+  normalizeTimeOffType,
 } from '@sfa/shared';
 import {
   daysSince,
@@ -87,12 +104,31 @@ import {
   policyTypeLabels,
   resolvePremium,
 } from './helpers/derive';
+import { recentChicagoMonths } from '../performance/performance.range';
 import {
   CollectionStat,
   MigrationReport,
   createReport,
   emptyStat,
+  recordRejection,
 } from './report';
+
+/**
+ * Marks the goal rows this import owns, so a future goal-setting UI's rows are
+ * distinguishable from derived ones and a re-run can tell them apart.
+ */
+const GOAL_SOURCE = 'migration:user-monthly-goal';
+
+/**
+ * How many months of producer goals to write, counting back from the current
+ * Chicago month.
+ *
+ * A year, because SmartSuite holds one standing goal with no month dimension and
+ * the leaderboard is queryable per month: writing only the current one left
+ * every historical month blank and expired the goals at the next rollover. A
+ * year is the range a Motivation Hub is ever asked about.
+ */
+const GOAL_MONTHS_WRITTEN = 12;
 
 export interface MigrationOptions {
   dryRun: boolean;
@@ -428,16 +464,54 @@ export class MigrationService {
     return map;
   }
 
+  /**
+   * Resolve a SmartSuite producer link to one of our users.
+   *
+   * Accounts for the outcome three ways (PAC-80), because "no producer" has two
+   * very different causes and only one of them is a bug we could fix:
+   *
+   * - `linked` — resolved.
+   * - `unresolved` — the source names a producer we did not import. A real
+   *   defect, and the only one worth chasing.
+   * - `absent` — the source record has no producer at all. **This used to return
+   *   silently**, which is why 441 of 1,652 migrated deals had no `producerId`
+   *   and the report still read `Unmapped: 0`. They are unattributed in
+   *   SmartSuite, so there is nothing to repair — but an unattributed quarter of
+   *   the book is a fact the operator should be told, not one they should have
+   *   to discover by querying Mongo.
+   *
+   * The distinction matters downstream: an unattributed deal counts toward
+   * agency-scoped scorecards and the leaderboard's office total, but toward no
+   * producer's own card and no ranked row — so the office total will legitimately
+   * exceed the sum of the rows.
+   */
   private resolveProducer(
     legacyProducerId: string | undefined,
     producers: Map<string, ProducerEntry>,
+    stat: CollectionStat,
     report: MigrationReport,
   ): ProducerEntry | undefined {
-    if (!legacyProducerId) return undefined;
-    const entry = producers.get(legacyProducerId);
-    if (!entry && !report.producers.unmapped.includes(legacyProducerId)) {
-      report.producers.unmapped.push(legacyProducerId);
+    const links = (stat.producerLinks ??= {
+      linked: 0,
+      unresolved: 0,
+      absent: 0,
+    });
+
+    if (!legacyProducerId) {
+      links.absent++;
+      return undefined;
     }
+
+    const entry = producers.get(legacyProducerId);
+    if (!entry) {
+      links.unresolved++;
+      if (!report.producers.unmapped.includes(legacyProducerId)) {
+        report.producers.unmapped.push(legacyProducerId);
+      }
+      return undefined;
+    }
+
+    links.linked++;
     return entry;
   }
 
@@ -495,7 +569,9 @@ export class MigrationService {
           householdRef:
             refSeq === null ? undefined : formatHouseholdRef(refSeq),
           name,
-          status: selectCode(rec[HOUSEHOLD_FIELDS.status]),
+          status: normalizeHouseholdStatus(
+            selectCode(rec[HOUSEHOLD_FIELDS.status]),
+          ),
           propertyAddress: this.asObject(rec[HOUSEHOLD_FIELDS.propertyAddress]),
           mailingAddress: this.asObject(rec[HOUSEHOLD_FIELDS.mailingAddress]),
           primaryEmails: this.deepEmails(rec[HOUSEHOLD_FIELDS.primaryEmail]),
@@ -589,7 +665,9 @@ export class MigrationService {
           emails: toStringArray(rec[CONTACT_FIELDS.email]),
           phones: toPhoneArray(rec[CONTACT_FIELDS.phone]),
           dateOfBirth: toDate(rec[CONTACT_FIELDS.dateOfBirth]),
-          roleInHousehold: selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
+          roleInHousehold: normalizeContactRole(
+            selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
+          ),
           isPrimary: toBool(rec[CONTACT_FIELDS.isPrimary]),
           notes: toText(rec[CONTACT_FIELDS.notes]),
           householdId: this.ref(legacyHouseholdId, households),
@@ -646,6 +724,7 @@ export class MigrationService {
       const producer = this.resolveProducer(
         firstLinkedId(rec[LEAD_FIELDS.producer]),
         producers,
+        stat,
         report,
       );
       const createdDate = toDate(rec[LEAD_FIELDS.createdDate]);
@@ -739,6 +818,7 @@ export class MigrationService {
       const producer = this.resolveProducer(
         firstLinkedId(rec[QUOTE_RECAP_FIELDS.producer]),
         producers,
+        stat,
         report,
       );
       const test = isTestRecord(null, producer?.name, toText(rec.title));
@@ -752,6 +832,19 @@ export class MigrationService {
       const leadId = this.ref(legacyLeadId, leadIds);
       if (legacyLeadId && !leadId) unlinked++;
 
+      /*
+       * Normalized to canonical labels (PAC-39). This field historically stored
+       * raw SmartSuite choice codes while `deals.policyTypes` and the demo seed
+       * stored labels; because `persist` `$set`s the field, a re-run heals the
+       * code-holding documents already in Mongo.
+       *
+       * Hoisted out of the document literal because `itemCount` is bounded by
+       * its length (PAC-80).
+       */
+      const productsQuoted = this.selectCodes(
+        rec[QUOTE_RECAP_FIELDS.productsQuoted],
+      ).map(normalizePolicyType);
+
       const id = await this.persist(
         this.quoteRecapModel,
         ctx,
@@ -764,14 +857,19 @@ export class MigrationService {
           // PAC-9 are invisible to every range query until a re-run heals them.
           quoteDateYmd: quoteDate ? quoteDateYmd(quoteDate) : undefined,
           premium: toNumber(rec[QUOTE_RECAP_FIELDS.premium]),
-          itemCount: toNumber(rec[QUOTE_RECAP_FIELDS.items]),
-          // Normalized to canonical labels (PAC-39). This field historically
-          // stored raw SmartSuite choice codes while `deals.policyTypes` and
-          // the demo seed stored labels; because `persist` `$set`s the field, a
-          // re-run heals the code-holding documents already in Mongo.
-          productsQuoted: this.selectCodes(
-            rec[QUOTE_RECAP_FIELDS.productsQuoted],
-          ).map(normalizePolicyType),
+          /*
+           * Bounded by how many products the recap actually quotes — one recap
+           * holds `itemCount: 3228`, which is its own *premium* (3228.98) typed
+           * into the items field.
+           */
+          itemCount: this.plausibleItemCount(
+            rec[QUOTE_RECAP_FIELDS.items],
+            productsQuoted.length,
+            legacyId,
+            'itemCount',
+            stat,
+          ),
+          productsQuoted,
           // "Insurance X Month" (PAC-56 #16). Mapped to the month label at
           // write, not left as SmartSuite's choice UUID — the read paths
           // normalize too, so a re-run heals recaps imported before this.
@@ -861,6 +959,7 @@ export class MigrationService {
       const producer = this.resolveProducer(
         firstLinkedId(rec[DEAL_FIELDS.producer]),
         producers,
+        stat,
         report,
       );
       const test = isTestRecord(leadSource, clientName, producer?.name);
@@ -880,6 +979,20 @@ export class MigrationService {
       const leadId = this.ref(legacyLeadId, leadIds);
       if (legacyLeadId && !leadId) unlinked++;
 
+      /*
+       * Read before `itemCount`, which is bounded *by* it — a 2-policy bundle
+       * cannot hold 662 items.
+       *
+       * Bounded itself, and this ordering matters: the policy count is the item
+       * count's structural denominator, so a nonsense one would *widen* the
+       * ceiling instead of narrowing it and let the very values we are rejecting
+       * back through.
+       */
+      const rawPolicyCount = toNumber(rec[DEAL_FIELDS.policyCount]);
+      const policyCount = isPlausiblePolicyCount(rawPolicyCount)
+        ? rawPolicyCount
+        : this.rejectPolicyCount(rawPolicyCount, legacyId, stat);
+
       const id = await this.persist(
         this.dealModel,
         ctx,
@@ -892,8 +1005,14 @@ export class MigrationService {
             toNumber(rec[DEAL_FIELDS.soldDateYmd]) || toYmd(soldDate),
           premium,
           premiumSource: source,
-          itemCount: toNumber(rec[DEAL_FIELDS.totalItems]),
-          policyCount: toNumber(rec[DEAL_FIELDS.policyCount]),
+          itemCount: this.plausibleItemCount(
+            rec[DEAL_FIELDS.totalItems],
+            policyCount,
+            legacyId,
+            'itemCount',
+            stat,
+          ),
+          policyCount,
           dealType: deriveDealType(isBundle, policyLabels),
           isBundle,
           policyTypes: policyLabels,
@@ -1011,10 +1130,46 @@ export class MigrationService {
           clientName,
           producerName,
           producerId: deal?.producerId,
-          daysOpen:
-            toNumber(rec[DEAL_AUDIT_ITEM_FIELDS.daysOpen]) ||
-            daysSince(firstCreatedAt),
+          /*
+           * Derived, never imported.
+           *
+           * Legacy `Days Open` (`s939cb7bec`) is
+           * `DATEDIFF(completion-or-today, sold_date)` — operands reversed in
+           * SmartSuite itself, so it evaluates to `sold − completion` and every
+           * migrated row imported a *negative* (−171, −176, −198…). Worse, it
+           * measures distance from the **sold date**, not from when the item was
+           * raised, which is what the board means by "open".
+           *
+           * `daysSince(firstCreatedAt)` is the same quantity
+           * `DealAuditsService.loadChecklists` recomputes on read and
+           * `AuditGenerationService.buildItem` writes at creation, so a migrated
+           * item and an app-created one now agree.
+           */
+          daysOpen: daysSince(firstCreatedAt),
           firstCreatedAt,
+          /*
+           * The same 7-day rule an app-generated item gets, measured from when
+           * the item was actually raised (PAC-80).
+           *
+           * Without this the board's Overdue / Due Soon filters answer *nothing*
+           * on an imported agency: `dealAudits.dueAt` is a `$min` over open
+           * items' `dueAt`, so a null on every item leaves a null on every audit,
+           * and both filters exclude a missing `dueAt` by design.
+           *
+           * ⚠ This deliberately reverses the "no backfill" note that used to sit
+           * on `DealAuditItem.dueAt`. That note was about not retro-stamping
+           * documents *already in Mongo*, where a manufactured backlog would be
+           * an invention. Importing a legacy row is a different act: these items
+           * genuinely were raised years ago and genuinely are still open, so
+           * "overdue" is the truth about them, and a hand-off board that reports
+           * a real backlog is doing its job. Expect the imported set to land
+           * overdue on day one — that is the finding, not a bug.
+           *
+           * Undefined when `firstCreatedAt` is missing, rather than dated from
+           * the migration run: a deadline measured from when we happened to
+           * import is not a fact about the item.
+           */
+          dueAt: firstCreatedAt ? auditItemDueAt(firstCreatedAt) : undefined,
           isTestRecord: test,
         },
         stat,
@@ -1076,7 +1231,9 @@ export class MigrationService {
           // MIN_POLICY_NUMBER_KEY_LENGTH usable characters, because a match on
           // two or three digits carries no information.
           policyNumberKey: normalizePolicyNumber(policyNumber),
-          policyType: selectCode(rec[POLICY_FIELDS.policyType]),
+          policyType: normalizePolicyType(
+            selectCode(rec[POLICY_FIELDS.policyType]),
+          ),
           // Mapped at write as well as normalized on read (PAC-56 #19): the raw
           // `B4tEH` was being rendered to users, and mapping only on read would
           // leave the stored value un-matchable against the carrier catalog.
@@ -1086,8 +1243,28 @@ export class MigrationService {
           expirationDate: toDate(rec[POLICY_FIELDS.expirationDate]),
           renewalDate: toDate(rec[POLICY_FIELDS.renewalDate]),
           premium: toNumber(rec[POLICY_FIELDS.premium]),
-          items: toNumber(rec[POLICY_FIELDS.items]),
-          policyStatus: selectCode(rec[POLICY_FIELDS.policyStatus]),
+          /*
+           * The leaf where the junk actually lives (PAC-80).
+           *
+           * `Deals.Total Items` is a *rollup* over the policies' `Items`, so
+           * validating only the deal would leave the source of `875,244,687`
+           * intact — and that policy is rendered directly on the household card
+           * via `clients.service.ts`. Confirmed in the migrated data: one policy
+           * has `items: 875244684` and `policyNumber: '875244684'`, the number
+           * typed into the wrong field.
+           *
+           * A policy *is* one policy, so the bound is a single policy's ceiling.
+           */
+          items: this.plausibleItemCount(
+            rec[POLICY_FIELDS.items],
+            1,
+            legacyId,
+            'items',
+            stat,
+          ),
+          policyStatus: normalizePolicyStatus(
+            selectCode(rec[POLICY_FIELDS.policyStatus]),
+          ),
           notes: toText(rec[POLICY_FIELDS.notes]),
           householdId: this.ref(legacyHouseholdId, households),
           legacyHouseholdId,
@@ -1359,8 +1536,13 @@ export class MigrationService {
         legacyId,
         {
           title: toText(rec[PRIOR_INSURANCE_FIELDS.title]),
-          cancellationResponsibility: selectCode(
-            rec[PRIOR_INSURANCE_FIELDS.cancellationResponsibility],
+          /*
+           * Its own vocabulary, not the prior-*policy* one, despite sharing
+           * field id `sb3cc60eb5` and the codes `XT6s7`/`fr4Ge` with it. Here
+           * they mean SFA Call / Customer Call; there they mean Auto / Home.
+           */
+          cancellationResponsibility: normalizeCancellationResponsibility(
+            selectCode(rec[PRIOR_INSURANCE_FIELDS.cancellationResponsibility]),
           ),
           cancelledPreviousInsurance: selectCode(
             rec[PRIOR_INSURANCE_FIELDS.cancelledPreviousInsurance],
@@ -1441,8 +1623,18 @@ export class MigrationService {
         legacyId,
         {
           title: toText(rec[PRIOR_POLICY_FIELDS.title]),
-          cancellationStatus: selectCode(rec[PRIOR_POLICY_FIELDS.status]),
-          policyType: selectCode(rec[PRIOR_POLICY_FIELDS.policyType]),
+          cancellationStatus: normalizePriorPolicyCancellationStatus(
+            selectCode(rec[PRIOR_POLICY_FIELDS.status]),
+          ),
+          /*
+           * Prior policies use their OWN type vocabulary, never
+           * `normalizePolicyType`. Its codes (`XT6s7`/`fr4Ge`) collide with
+           * the Prior Insurance table's cancellation-responsibility codes,
+           * so a shared map would render one as the other.
+           */
+          policyType: normalizePriorPolicyType(
+            selectCode(rec[PRIOR_POLICY_FIELDS.policyType]),
+          ),
           needsCancellation: selectCode(
             rec[PRIOR_POLICY_FIELDS.needsCancellation],
           ),
@@ -1520,13 +1712,23 @@ export class MigrationService {
           title: toText(rec[SERVICE_TICKET_FIELDS.title]),
           createdDate:
             toDate(rec[SERVICE_TICKET_FIELDS.createdDate]) ?? firstCreatedAt,
-          category: selectCode(rec[SERVICE_TICKET_FIELDS.category]),
+          category: normalizeLegacyTicketCategory(
+            selectCode(rec[SERVICE_TICKET_FIELDS.category]),
+          ),
           priority: selectCode(rec[SERVICE_TICKET_FIELDS.priority]),
           dueDate: toDate(rec[SERVICE_TICKET_FIELDS.dueDate]),
-          status: selectCode(rec[SERVICE_TICKET_FIELDS.status]),
+          status: normalizeLegacyTicketStatus(
+            selectCode(rec[SERVICE_TICKET_FIELDS.status]),
+          ),
           dateResolved: toDate(rec[SERVICE_TICKET_FIELDS.dateResolved]),
+          /*
+           * Unlike the deal-audit-item formula, this one is the right way round
+           * (`DATEDIFF(first_created, TODAY())`, example `"65"`), so the source
+           * value is trusted — but clamped, because a future `first_created`
+           * would still yield a negative, and "open for −3 days" is not a thing.
+           */
           daysOpen:
-            toNumber(rec[SERVICE_TICKET_FIELDS.daysOpen]) ||
+            Math.max(0, toNumber(rec[SERVICE_TICKET_FIELDS.daysOpen])) ||
             daysSince(firstCreatedAt),
           clientName,
           crmName: toText(rec[SERVICE_TICKET_FIELDS.crmName]),
@@ -1699,11 +1901,19 @@ export class MigrationService {
           title: toText(rec[TIME_OFF_REQUEST_FIELDS.title]),
           startDate: toDate(rec[TIME_OFF_REQUEST_FIELDS.startDate]),
           endDate: toDate(rec[TIME_OFF_REQUEST_FIELDS.endDate]),
-          requestType: selectCode(rec[TIME_OFF_REQUEST_FIELDS.requestType]),
+          requestType: normalizeTimeOffRequestType(
+            selectCode(rec[TIME_OFF_REQUEST_FIELDS.requestType]),
+          ),
           hoursRequested: toNumber(rec[TIME_OFF_REQUEST_FIELDS.hoursRequested]),
-          status: selectCode(rec[TIME_OFF_REQUEST_FIELDS.status]),
-          type: selectCode(rec[TIME_OFF_REQUEST_FIELDS.type]),
-          decision: selectCode(rec[TIME_OFF_REQUEST_FIELDS.decision]),
+          status: normalizeTimeOffStatus(
+            selectCode(rec[TIME_OFF_REQUEST_FIELDS.status]),
+          ),
+          type: normalizeTimeOffType(
+            selectCode(rec[TIME_OFF_REQUEST_FIELDS.type]),
+          ),
+          decision: normalizeTimeOffDecision(
+            selectCode(rec[TIME_OFF_REQUEST_FIELDS.decision]),
+          ),
           producerId: this.userRef(legacyProducerId, producers),
           legacyProducerId,
         },
@@ -1723,11 +1933,34 @@ export class MigrationService {
     producers: Map<string, ProducerEntry>,
     report: MigrationReport,
   ): Promise<void> {
-    const month = new Date().toISOString().slice(0, 7); // YYYY-MM
+    /*
+     * Chicago, not UTC (PAC-80).
+     *
+     * `new Date().toISOString().slice(0, 7)` disagrees with the
+     * `currentChicagoMonth()` the leaderboard queries with for the first five or
+     * six hours of every month, so a migration run just after midnight UTC on
+     * the 1st wrote goals into a month nothing would ask for.
+     */
+    const months = recentChicagoMonths(GOAL_MONTHS_WRITTEN);
+    const withoutGoal: string[] = [];
     let created = 0;
+
     for (const [legacyId, entry] of producers) {
-      if (entry.monthlyGoal <= 0) continue;
-      if (!ctx.dryRun) {
+      if (entry.monthlyGoal <= 0) {
+        withoutGoal.push(entry.name);
+        continue;
+      }
+      /*
+       * One row per month in the window, not just the current one.
+       *
+       * SmartSuite's "Monthly Goal" is a single standing scalar with no month
+       * dimension, so writing it for one month made every other month
+       * unanswerable — `?month=2026-07` returned no goals at all, and the
+       * current month's rows silently stopped applying the moment the month
+       * rolled over.
+       */
+      for (const month of months) {
+        if (ctx.dryRun) continue;
         await this.producerGoalModel.updateOne(
           {
             agencyId: ctx.agencyId,
@@ -1739,16 +1972,32 @@ export class MigrationService {
               branchId: ctx.branchId,
               goalPremium: entry.monthlyGoal,
               legacyProducerId: legacyId,
-              source: 'migration:user-monthly-goal',
+              source: GOAL_SOURCE,
             },
           },
           { upsert: true },
         );
+        created++;
       }
-      created++;
     }
+
     report.derived.producerGoals = created;
-    this.logger.log(`Producer goals: ${created} for ${month}`);
+    report.derived.producersWithoutGoal = withoutGoal;
+
+    /*
+     * Say *why* when the answer is zero.
+     *
+     * "Producer goals: 0 for 2026-08" reads as a bug in the migration. It is
+     * not: SmartSuite's Monthly Goal is empty for every user in this workspace,
+     * so there is nothing to import and the Motivation Hub has no percentages to
+     * show. That is a data-entry fact somebody can act on, and it is worth one
+     * line of output to make it actionable rather than mysterious.
+     */
+    this.logger.log(
+      created > 0
+        ? `Producer goals: ${created} rows across ${months.length} months`
+        : `Producer goals: 0 rows — ${withoutGoal.length} of ${producers.size} users have Monthly Goal = 0 in SmartSuite, so "% to goal" will be blank`,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1834,6 +2083,59 @@ export class MigrationService {
   // ---------------------------------------------------------------------------
   // Persistence helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * An item count the source record could not honestly have held (PAC-80).
+   *
+   * Legacy "items" fields contain typos of a different order to the usual
+   * missing-value problem: one deal holds `875244687`, which is the policy
+   * number of one of its own policies. `PerformanceService` sums this field, so
+   * a single such row set the Producer Dashboard's entire Sold card.
+   *
+   * Rejected values fall back to a **derived** count rather than to zero, so the
+   * row keeps a defensible number: a deal with 2 policies reads as 2 items, not
+   * as 0. Zero is only used when there is nothing to derive from.
+   *
+   * ⚠ Returns a number, never `undefined`. Mongoose strips `undefined` from a
+   * `$set`, so an `undefined` here would be a silent no-op — and the 875-million
+   * value already in Mongo would survive the very re-run meant to heal it.
+   */
+  private plausibleItemCount(
+    raw: unknown,
+    policyCount: number | undefined,
+    legacyId: string,
+    field: string,
+    stat: CollectionStat,
+  ): number {
+    const value = toNumber(raw);
+    if (isPlausibleItemCount(value, policyCount)) return value;
+
+    const replacedWith = policyCount && policyCount > 0 ? policyCount : 0;
+    recordRejection(stat, {
+      legacyId,
+      field,
+      value,
+      limit: maxPlausibleItemCount(policyCount),
+      replacedWith,
+    });
+    return replacedWith;
+  }
+
+  /** {@link plausibleItemCount}'s counterpart for the policy count itself. */
+  private rejectPolicyCount(
+    value: number,
+    legacyId: string,
+    stat: CollectionStat,
+  ): number {
+    recordRejection(stat, {
+      legacyId,
+      field: 'policyCount',
+      value,
+      limit: MAX_POLICIES_PER_RECORD,
+      replacedWith: 0,
+    });
+    return 0;
+  }
 
   /**
    * Idempotent upsert for a tenant-scoped, SmartSuite-sourced record keyed on

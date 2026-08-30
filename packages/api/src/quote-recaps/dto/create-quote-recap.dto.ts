@@ -1,4 +1,9 @@
-import { INSURANCE_MONTHS, POLICY_TYPES } from '@sfa/shared';
+import {
+  INSURANCE_MONTHS,
+  MAX_POLICIES_PER_RECORD,
+  MAX_POLICY_ITEM_COUNT,
+  POLICY_TYPES,
+} from '@sfa/shared';
 import { z } from 'zod';
 import {
   policyAddressFields,
@@ -25,7 +30,8 @@ export const quotedPolicySchema = z
      */
     policyType: z.enum(POLICY_TYPES),
     premium: z.coerce.number().min(0).max(1_000_000),
-    itemCount: z.coerce.number().int().min(1).max(99),
+    // Shared with the migration (PAC-80), so validation and import agree.
+    itemCount: z.coerce.number().int().min(1).max(MAX_POLICY_ITEM_COUNT),
     /**
      * The dwelling **this row** insures (PAC-56 #14). A recap covering a home
      * and a landlord policy describes two buildings; one recap-level address
@@ -44,7 +50,7 @@ export const createQuoteRecapSchema = z.object({
   policies: z
     .array(quotedPolicySchema)
     .min(1, 'At least one policy is required')
-    .max(12),
+    .max(MAX_POLICIES_PER_RECORD),
   /**
    * When the client's current insurance renews (PAC-56 #16).
    *

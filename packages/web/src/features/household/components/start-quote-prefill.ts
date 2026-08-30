@@ -1,22 +1,27 @@
 import type { HouseholdView } from "@sfa/shared";
-import { HOUSEHOLD_MEMBER_ROLES } from "@sfa/shared";
+import { HOUSEHOLD_MEMBER_ROLES, normalizeHouseholdRole } from "@sfa/shared";
 import {
   emptyLeadIntake,
   type LeadIntakeFormValues,
 } from "@/features/lead/components/lead-intake-schema";
 
-/** `roleInHousehold` is free-ish text on the record; the form's is an enum. */
+/**
+ * `roleInHousehold` is free-ish text on the record; the form's is an enum.
+ *
+ * `normalizeHouseholdRole` resolves a raw SmartSuite choice code before the
+ * canonical check (PAC-80). Until it did, every migrated contact stored a code
+ * like `W7qil`, matched nothing, and prefilled as "Driver" — so a whole
+ * household of spouses and children came through as drivers.
+ */
 function toMemberRole(
   role: string | null,
 ): (typeof HOUSEHOLD_MEMBER_ROLES)[number] {
-  const match = HOUSEHOLD_MEMBER_ROLES.find(
-    (known) => known.toLowerCase() === (role ?? "").trim().toLowerCase(),
-  );
   // "Driver" is the honest fallback for a member whose stored role is something
   // the intake vocabulary has no word for (or nothing at all): it is the one
   // option that claims no relationship. Guessing "Spouse" would put a
-  // relationship on the record that nobody stated.
-  return match ?? "Driver";
+  // relationship on the record that nobody stated. `Named Insured`, `Parent` and
+  // `Other` are real stored roles the form cannot offer, so they land here too.
+  return normalizeHouseholdRole(role) ?? "Driver";
 }
 
 /** Read one address part off the household's loosely-typed stored address. */
