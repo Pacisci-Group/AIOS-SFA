@@ -1,0 +1,60 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Captured under its OWN name, never `accessToken`. Overwriting the
+  // collection bearer would silently re-run every later folder as the owner and
+  // invalidate the `own`-scope assertions in Leads / Performance / Leaderboard.
+  if (res.getStatus() === 201) {
+    bru.setVar("ownerAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the owner holds the role-management permissions", function () {
+    const permissions = res.getBody().user.permissions;
+    expect(permissions).to.include("agency:roles:read");
+    expect(permissions).to.include("agency:roles:write");
+  });
+}
+
+docs {
+  # POST /auth/login — as the agency owner
+
+  Test plumbing for this folder, not a distinct endpoint: the same call as
+  **Auth › Login**, with different credentials.
+
+  Every request here needs `agency:roles:read` or `agency:roles:write`, and the
+  collection-level bearer belongs to `producer@smithfamily.local`, who holds
+  neither. So this captures `ownerAccessToken` and each request references it
+  explicitly via `auth:bearer` — the same arrangement **Users › Login as Owner**
+  uses, and for the same reason.
+
+  `owner@smithfamily.local` comes from the core seed when
+  `SEED_AGENCY_OWNER_EMAIL` / `SEED_AGENCY_OWNER_PASSWORD` are set, or from the
+  demo seed (`npm run api:seed:demo:dev`).
+}

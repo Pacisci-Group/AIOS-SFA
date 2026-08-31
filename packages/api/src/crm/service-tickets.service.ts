@@ -57,6 +57,7 @@ import {
   AgencyRole,
   AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
+import { UserRole } from '../permissions/schemas/user-role.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   AddNoteDto,
@@ -117,6 +118,7 @@ export class ServiceTicketsService {
     @InjectModel(ServiceTicket.name)
     private ticketModel: Model<ServiceTicketDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(UserRole.name) private userRoleModel: Model<UserRole>,
     @InjectModel(AgencyRole.name)
     private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(OnboardingStepDefinitionRecord.name)
@@ -160,11 +162,31 @@ export class ServiceTicketsService {
     }
     const slugById = new Map(roles.map((r) => [String(r._id), r.slug]));
 
+    // Who holds one of those roles, from the join. `user.roleIds` is gone —
+    // the assignment lives in `userRoles` so a role can be queried from either
+    // side, which is what cache invalidation needs.
+    const links = await this.userRoleModel
+      .find({ roleId: { $in: roles.map((r) => r._id) } })
+      .select({ userId: 1, roleId: 1 })
+      .lean();
+    if (!links.length) {
+      return [];
+    }
+    const roleSlugsByUser = new Map<string, string[]>();
+    for (const link of links) {
+      const slug = slugById.get(String(link.roleId));
+      if (!slug) continue;
+      const key = String(link.userId);
+      roleSlugsByUser.set(key, [...(roleSlugsByUser.get(key) ?? []), slug]);
+    }
+
     const filter: FilterQuery<UserDocument> = {
       agencyId,
       isPlatformAdmin: { $ne: true },
       isActive: { $ne: false },
-      roleIds: { $in: roles.map((r) => r._id) },
+      _id: {
+        $in: [...roleSlugsByUser.keys()].map((id) => new Types.ObjectId(id)),
+      },
     };
     // Agency-wide scopes see every CRM; narrower scopes stay inside the branch.
     if (access.dataScope !== DataScope.Agency && access.branchId) {
@@ -173,7 +195,7 @@ export class ServiceTicketsService {
 
     const users = await this.userModel
       .find(filter)
-      .select('firstName lastName email roleIds')
+      .select('firstName lastName email')
       .sort({ firstName: 1, lastName: 1 })
       .lean();
 
@@ -181,9 +203,7 @@ export class ServiceTicketsService {
       id: String(user._id),
       name: userDisplayName(user),
       email: user.email ?? '',
-      roles: (user.roleIds ?? [])
-        .map((id) => slugById.get(String(id)))
-        .filter((slug): slug is string => Boolean(slug)),
+      roles: roleSlugsByUser.get(String(user._id)) ?? [],
     }));
   }
 

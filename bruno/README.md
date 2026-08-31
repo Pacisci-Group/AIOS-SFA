@@ -31,8 +31,17 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Leads | Log Activity (Invalid Type) | `POST /activities` | **PAC-16** — pins the write vocabulary; a forged `sold` must 400. |
 | Leads | Log Activity (Foreign Lead) | `POST /activities` | **PAC-16** — asserts an out-of-scope lead 404s, not 403s. |
 | Leads › Share Links | Create / List / Revoke | `/leads/share-links…` | **PAC-37** — public intake links. `leads:write`. |
+| Leads › Address | Address Autocomplete | `POST /address/autocomplete` | **PAC-60** — Google-backed predictions for every address field. OR-gated over four modules at `:write`. Fails open: always 200, read `available`. |
+| Leads › Address | Resolve Address | `POST /address/resolve` | **PAC-60** — chosen prediction → `{street, city, state, zip}`. Accepts 200 **or** 400 by design; asserts the spelled-out state and the five-digit ZIP. |
+| Public Intake | Public Address Autocomplete | `POST /public/address/:token/autocomplete` | **PAC-60** — the same lookup on the anonymous share-link form. `auth: none`. Over the per-link daily cap it answers `200 { available: false }`, never 429. |
+| Public Intake | Public Address Autocomplete (Unknown Token) | `POST /public/address/:token/autocomplete` | **PAC-60** — the non-disclosure contract: an unknown token must be byte-identical to a revoked one. |
 | Leaderboard | Get Leaderboard | `GET /leaderboard` | **PAC-13** — Motivation Hub. `leaderboard:read`. Asserts no entry leaks another producer's dollars. |
 | Leaderboard | Get Leaderboard (Explicit Month) | `GET /leaderboard` | **PAC-13** — a past month; month-scoped, never range-scoped. |
+| Mailers | Lookup Mailer (Long Form) | `GET /mailers/:controlNumber` | **PAC-61** — Mailers drawer QCN lookup. `mailers:read`. The `#`-prefixed form must be percent-encoded in the URL; the web client sends the normalized key instead. |
+| Mailers | Lookup Mailer (Short Form) | `GET /mailers/:controlNumber` | **PAC-61** — the 12-char printed form must resolve to the *same* mailer. Reads the short form off the previous response, not the env. |
+| Mailers | Lookup Mailer (Not Found) | `GET /mailers/:controlNumber` | **PAC-61** — an unknown number is a 404, which the drawer renders as an empty state rather than an error. |
+| Mailers | Log Mailer Lead | `POST /mailers/log-lead` | **PAC-61** — creates Lead + Household + Contact via `LeadIntakeService`. Needs `mailers:read` **and** `leads:write`. 200, not 201: resolve-or-create. |
+| Mailers | Log Mailer Lead (Replay, Other Form) | `POST /mailers/log-lead` | **PAC-61** — the same mailer through the *other* control-number form returns the same `leadId` with `alreadyExisted: true`. One mailer, one lead. |
 | Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
@@ -74,9 +83,9 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 > without it `Create Import` 500s.
 >
 > **Folder order matters when running the whole collection.** The CLI walks
-> folders alphabetically (`Auth` → `Deal Audits` → `Leads` → `Performance` →
-> `Platform Mailers` → `Policies` → `Public Intake` → `Quote Recaps` →
-> `Sold Deals`), and the downstream chains
+> folders alphabetically (`Auth` → `Deal Audits` → `Leads` → `Mailers` →
+> `Performance` → `Platform Mailers` → `Policies` → `Public Intake` →
+> `Quote Recaps` → `Sold Deals`), and the downstream chains
 > reuse ids captured earlier: Quote Recaps and Sold Deals both need
 > `createdLeadId` from **Leads › Create Lead**, and the PAC-38 contact requests
 > need `primaryContactId` from **Leads › Get Lead** (which in turn needs

@@ -3,6 +3,7 @@ import type { SoldHouseholdContact } from "@sfa/shared";
 import { isAutoPolicyType, isPropertyPolicyType } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { Plus, X } from "lucide-react";
+import { AddressFields } from "@/components/address/AddressFields";
 import { FormGrid, FormSubPanel } from "@/components/form";
 import { useFieldError } from "@/components/form/fields";
 import { Button } from "@/components/ui/button";
@@ -92,14 +93,6 @@ const PriorInsuranceDiscountField = withForm({
   },
 });
 
-/** Written once as `[path, label]` pairs so each path is checked against the schema. */
-const ESCROW_ADDRESS_FIELDS = [
-  ["escrow.address.street", "Street"],
-  ["escrow.address.city", "City"],
-  ["escrow.address.state", "State"],
-  ["escrow.address.zip", "ZIP"],
-] as const;
-
 /** Home / Renters / Condominium / Landlord. */
 const PropertyDiscounts = withForm({
   defaultValues: emptyPolicy(),
@@ -150,13 +143,18 @@ const PropertyDiscounts = withForm({
             <form.AppField name="escrow.companyName">
               {(f) => <f.TextField label="Escrow company" />}
             </form.AppField>
-            <FormGrid gap={3}>
-              {ESCROW_ADDRESS_FIELDS.map(([name, label]) => (
-                <form.AppField key={name} name={name}>
-                  {(f) => <f.TextField label={label} />}
-                </form.AppField>
-              ))}
-            </FormGrid>
+            {/*
+              * Mounted only inside `{escrow && …}`. `escrow` is
+              * `escrowSchema.optional()`, validated whenever the object is
+              * *present* regardless of the checkbox, so a permanently-mounted
+              * group would fight `emptyEscrow()` — the shape of the bug that
+              * once jammed Continue with no message on screen.
+              *
+              * No `inputClassName`: the wizard deliberately does not use
+              * `bg-card border-border`. No `shareToken` — this form is
+              * authenticated-only.
+              */}
+            <AddressFields form={form} fields="escrow.address" gap={3} />
           </FormSubPanel>
         )}
 

@@ -18,8 +18,12 @@ export class AgencyRole {
   @Prop({ trim: true })
   description?: string;
 
-  @Prop({ type: [String], default: [] })
-  permissions: string[];
+  /*
+   * The permissions this role grants live in `rolePermissions`, not here.
+   *
+   * Written only by `RoleAssignmentsService.setRolePermissions`; read through
+   * `.rolePermissionKeys`, or resolved for a user by `PermissionsService`.
+   */
 
   @Prop({ type: String, enum: DataScope, default: DataScope.Branch })
   dataScope: DataScope;

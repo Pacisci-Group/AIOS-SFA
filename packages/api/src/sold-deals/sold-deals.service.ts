@@ -350,12 +350,11 @@ export class SoldDealsService {
    * Backs the "Mark as Sold is disabled until a quote has been given" gate, and
    * lets `/sold/new` block a typed URL rather than trusting the button.
    *
-   * ⚠ **The legacy fallback is load-bearing, not defensive.** The migration
-   * writes only `legacyLeadId` on recaps — `backfill-deal-refs` repairs deals,
-   * never these — so a bare `{ leadId }` probe answers "no recap" for *every*
-   * migrated lead, locking all of them out of the wizard. `LeadDetailService
-   * .loadQuoteRecaps` carries the same fallback for the same reason, and both
-   * indexes exist to serve it.
+   * ⚠ **The legacy fallback is load-bearing, not defensive.** A recap imported
+   * before the migration resolved `leadId` carries only `legacyLeadId`, so a
+   * bare `{ leadId }` probe answers "no recap" for such leads and locks them out
+   * of the wizard. `LeadDetailService.loadQuoteRecaps` carries the same fallback
+   * for the same reason, and both indexes exist to serve it.
    *
    * Unlike that one this does not backfill: it is a read on a gate, and
    * viewing the lead page (which does backfill) is how anyone arrives here.

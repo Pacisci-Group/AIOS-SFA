@@ -228,6 +228,39 @@ export const CITIES: CitySpec[] = [
   { city: 'Champaign', state: 'IL', zip: '61820' },
 ];
 
+export interface MailerCitySpec extends CitySpec {
+  /** Zero-padded Census county FIPS, as the source column ships it. */
+  countyFips: string;
+}
+
+/**
+ * Mailer addresses are **Oklahoma**, unlike the Illinois {@link CITIES} the
+ * rest of the demo tenant uses.
+ *
+ * Not cosmetic. The Mailers drawer resolves `county` through a state-keyed FIPS
+ * table (`common/mailers/county-names.ts`) that today carries Oklahoma only, so
+ * an Illinois row could never exercise the county row however plausible its
+ * FIPS code looked. The seed also stamps `market: 'Tulsa' | 'Oklahoma City'`
+ * and a 918 `agencyPhone` on these records, which had been sitting on Illinois
+ * addresses since PAC-73.
+ *
+ * Real cities, real zips, real county codes — each `countyFips` is the county
+ * the city actually sits in, and all seventeen codes in the committed RTP
+ * fixture are Oklahoma too.
+ */
+export const MAILER_CITIES: MailerCitySpec[] = [
+  { city: 'Tulsa', state: 'OK', zip: '74133', countyFips: '143' },
+  { city: 'Broken Arrow', state: 'OK', zip: '74012', countyFips: '143' },
+  { city: 'Owasso', state: 'OK', zip: '74055', countyFips: '143' },
+  { city: 'Bixby', state: 'OK', zip: '74008', countyFips: '143' },
+  { city: 'Bartlesville', state: 'OK', zip: '74006', countyFips: '147' },
+  { city: 'Oklahoma City', state: 'OK', zip: '73142', countyFips: '109' },
+  { city: 'Edmond', state: 'OK', zip: '73013', countyFips: '109' },
+  { city: 'Claremore', state: 'OK', zip: '74017', countyFips: '131' },
+  { city: 'Sapulpa', state: 'OK', zip: '74066', countyFips: '037' },
+  { city: 'Guthrie', state: 'OK', zip: '73044', countyFips: '083' },
+];
+
 export const STREET_NAMES = [
   'Maple',
   'Oak',

@@ -1,0 +1,42 @@
+meta {
+  name: Lookup Mailer (Short Form)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/mailers/{{mailerShortForm}}
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("resolves to the same mailer as the long form", function () {
+    // The assertion the whole `controlNumberKeys` design exists for.
+    expect(res.getBody().controlNumber).to.equal(bru.getVar("mailerLongForm"));
+  });
+}
+
+docs {
+  # GET /mailers/:controlNumber — the short printed form
+
+  Same endpoint as **Lookup Mailer (Long Form)**; see that request's docs for
+  the full contract.
+
+  This exists as its own request because "either printed form resolves to the
+  same mailer" is the single behaviour PAC-73's storage design was built for,
+  and a contract worth a standing assertion rather than a comment. The short
+  form is captured from seq 1's response rather than read from the environment,
+  so this proves the two forms agree on *one real document* instead of proving
+  that two environment variables were kept in sync by hand.
+
+  Legacy needed `ENDS_WITH` / `CONTAINS_SUBSTR` here — a collection scan, and a
+  correctness hazard, on every keystroke of a search.
+}

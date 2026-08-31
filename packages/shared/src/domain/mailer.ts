@@ -125,3 +125,155 @@ export interface MailerImportRun {
 
 /** How many rejections a run stores and returns. */
 export const MAILER_IMPORT_REJECTION_SAMPLE_SIZE = 50;
+
+// ---------------------------------------------------------------------------
+// The Mailers drawer (PAC-61) — what `GET /mailers/:controlNumber` returns
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚠ This is the **complete** payload a producer sees for a mailer. It is a
+ * deliberate projection, not the document.
+ *
+ * Withheld on purpose: `_id`, `agencyId`, `isTestRecord`, the whole `source`
+ * block (`storageKey`, `runId` and `raw` — `raw` is the entire 132-column
+ * source row, including the postal `dpv_*`/`coa_*` address-standardisation
+ * columns), `gender`, `agencyPhone` (a dynamic local-presence dial number that
+ * is explicitly *not* tenant identity), `market`, `address.zip4`, and the
+ * campaign's `fileName`, `campaignNumber` (a restatement of `weekNumber`) and
+ * `quoteStatus`. Widening this is a decision, not a tweak.
+ */
+export interface MailerLookupAddress {
+  street: string | null;
+  city: string | null;
+  state: string | null;
+  /** 5-digit. The ZIP+4 is postal metadata and stays out of the drawer. */
+  zip: string | null;
+  /**
+   * The resolved county **name** (`'Tulsa County'`), never the zero-padded FIPS
+   * code the source ships. Legacy showed producers "County: 083".
+   *
+   * `null` when the state/FIPS pair is not in the server-side table — today
+   * that is anything outside Oklahoma. The drawer omits the row entirely rather
+   * than rendering a dash, because a dash claims we looked and found nothing.
+   */
+  county: string | null;
+}
+
+/** The quoted coverage the prospect received, so a producer can read it back. */
+export interface MailerLookupCoverage {
+  /** Coverage A. */
+  dwelling: number | null;
+  /** Coverage B. */
+  otherStructures: number | null;
+  /** Coverage D. */
+  lossOfUse: number | null;
+  guestMedical: number | null;
+  familyLiability: number | null;
+}
+
+/**
+ * ⚠ `yearly` and `total` are **two different figures**, not restatements.
+ *
+ * Measured across all 20,405 rows of the reference file, `yearly` never equals
+ * `total` on a single row and the ratio between them spans 0.46–2.95. `yearly`
+ * is the headline because it is the mailed offer — pre-formatted at source as
+ * `"$1886.15/year*"` with a printed-offer footnote, equal to `monthly × 12`,
+ * and the only premium legacy ever fetched or displayed. `total` is shown
+ * below it, source-labelled. Neither is presented as "our quote" until the
+ * product owner rules (PAC-61 open item 1), because a wrong label misquotes a
+ * live prospect.
+ */
+export interface MailerLookupPremium {
+  /** `yearlyprem` — the mailed offer. */
+  yearly: number | null;
+  /** `monthlypre`. */
+  monthly: number | null;
+  /** `totalpremi` — straight from the mail file, untouched by the pipeline. */
+  total: number | null;
+}
+
+export interface MailerLookupCampaign {
+  weekNumber: number | null;
+  /** `type`, e.g. `Home`. */
+  policyType: string | null;
+  /** `product`, e.g. `FQ`. */
+  product: string | null;
+  /**
+   * `Active` / `Closed`. Present only on BigQuery-backfilled mailers — the
+   * column does not exist in an RTP file — so this is `null` on anything an
+   * operator uploaded, and the drawer renders it only when non-null.
+   *
+   * Never fabricate it. Legacy's `status` was a hard-coded `'Pending'` literal
+   * invented in the API layer, which is exactly the thing not to reproduce.
+   */
+  status: string | null;
+}
+
+/** One mailer, as the drawer renders it. */
+export interface MailerLookupView {
+  /** `#`+UUID. The canonical value stamped onto a lead logged from this mailer. */
+  controlNumber: string | null;
+  /** The last 12 hex characters — the short form printed on the piece. */
+  newControlNumber: string | null;
+  /** `fullName`, else `first last`. */
+  name: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  address: MailerLookupAddress;
+  squareFeet: number | null;
+  yearBuilt: number | null;
+  coverage: MailerLookupCoverage;
+  premium: MailerLookupPremium;
+  campaign: MailerLookupCampaign;
+  /** ISO date. */
+  quoteDate: string | null;
+  /**
+   * ⚠ `email` and `dateOfBirth` are empty on 100% of rows in the reference
+   * file and `phone` on 95.6%. The drawer omits these rows when absent rather
+   * than dashing them — a dash reads as data we failed to load, when in fact
+   * it is data that will never arrive.
+   */
+  email: string | null;
+  phone: string | null;
+  /** `YYYY-MM-DD`. */
+  dateOfBirth: string | null;
+  /**
+   * Suppression flags, carried straight through from the source.
+   *
+   * Not a display nicety: a producer cold-calling a suppressed record is a
+   * real-world compliance problem.
+   */
+  doNotCall: boolean;
+  doNotMail: boolean;
+  /**
+   * Whether **any** lead in the agency already carries this control number.
+   *
+   * Agency-wide on purpose, and separate from {@link linkedLeadId}: the point
+   * of showing it is to stop a producer logging a mailer a colleague already
+   * worked. `POST /mailers/log-lead` would reveal the same fact through
+   * `alreadyExisted`, so this discloses nothing new.
+   */
+  alreadyLogged: boolean;
+  /**
+   * That lead's id — but **only when it is inside the caller's data scope**.
+   *
+   * `GET /leads/:id` 404s another producer's lead under `own` scope, so handing
+   * back an unreachable id would render a "View lead" button that goes to a
+   * not-found page. `null` with `alreadyLogged: true` means "logged by someone
+   * else"; the drawer says so instead of offering the link.
+   */
+  linkedLeadId: string | null;
+}
+
+/** `POST /mailers/log-lead`. */
+export interface LogMailerLeadResponse {
+  leadId: string;
+  /**
+   * True when the call resolved to a lead that already existed rather than
+   * creating one. Three honest routes here, all reported the same way: a
+   * submission-token replay (the same mailer logged twice, in either
+   * control-number form), the quote-control-number dedupe, and the address
+   * dedupe against a recent lead at the same street.
+   */
+  alreadyExisted: boolean;
+}

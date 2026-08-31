@@ -8,6 +8,7 @@ import {
 } from "@sfa/shared";
 import { useStore } from "@tanstack/react-form";
 import { useEffect } from "react";
+import { AddressFields } from "@/components/address/AddressFields";
 import { FormGrid, FormSubPanel } from "@/components/form";
 import { withFieldGroup } from "@/hooks/form";
 import { ADDRESS_FIELDS } from "@/lib/format-address";
@@ -34,12 +35,6 @@ const policyDefaults = {
   propertyAddress: { street: "", city: "", state: "", zip: "" },
 };
 
-const ADDRESS_LABELS: Record<(typeof ADDRESS_FIELDS)[number], string> = {
-  street: "Street",
-  city: "City",
-  state: "State",
-  zip: "ZIP",
-};
 
 /**
  * Everything about one policy, address included (PAC-56 #14/#15).
@@ -67,8 +62,16 @@ export const PolicyFields = withFieldGroup({
      * identity changing every render.
      */
     householdAddress: null as QuoteRecapPropertyAddress | null,
+    /**
+     * Share-link token, on the public intake form only (PAC-60).
+     *
+     * Address autocomplete there has no session to authenticate with, so it
+     * routes through the link's own public endpoint. The Quote Recap never
+     * passes one — it is authenticated-only.
+     */
+    shareToken: undefined as string | undefined,
   },
-  render: function Render({ group, householdAddress, children }) {
+  render: function Render({ group, householdAddress, shareToken, children }) {
     /*
      * Subscribed, not read off `group.state`. `useFieldGroup` never subscribes
      * its host component to the store — `state` is a live getter, so a plain
@@ -174,27 +177,21 @@ export const PolicyFields = withFieldGroup({
               </p>
             )}
 
-            <FormGrid gap={3}>
-              {ADDRESS_FIELDS.map((name) => (
-                <group.AppField key={name} name={`propertyAddress.${name}`}>
-                  {(f) => (
-                    <f.TextField
-                      label={ADDRESS_LABELS[name]}
-                      className={name === "street" ? "sm:col-span-2" : undefined}
-                      inputClassName="bg-card border-border"
-                      /*
-                       * `disabled` on the DOM input only. These fields were
-                       * written by the effect above, so they stay in form state
-                       * — which is fine, because the client drops them from the
-                       * payload for a "same as" row and the server would
-                       * discard them anyway.
-                       */
-                      disabled={sameAsHousehold}
-                    />
-                  )}
-                </group.AppField>
-              ))}
-            </FormGrid>
+            <AddressFields
+              form={group}
+              fields="propertyAddress"
+              gap={3}
+              inputClassName="bg-card border-border"
+              shareToken={shareToken}
+              /*
+               * `disabled` on the DOM inputs only. These fields were written by
+               * the effect above, so they stay in form state — which is fine,
+               * because the client drops them from the payload for a "same as"
+               * row and the server would discard them anyway. It also suppresses
+               * the lookup, so a copied address never spends a billed request.
+               */
+              disabled={sameAsHousehold}
+            />
           </FormSubPanel>
         )}
       </div>

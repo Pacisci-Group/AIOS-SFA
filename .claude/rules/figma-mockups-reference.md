@@ -1,3 +1,8 @@
+---
+paths:
+  - "packages/web/src/**"
+---
+
 # Figma FE mockups — read-only design reference
 
 The **`agencyops_fe_mockups`** repo (Figma design pictures + Figma-exported React

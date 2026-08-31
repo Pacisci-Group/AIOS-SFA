@@ -17,6 +17,7 @@
  *     `superRefine`. Markup decides how a message looks, never whether it fires.
  */
 export { TextField } from "./TextField";
+export { AddressAutocompleteField } from "./AddressAutocompleteField";
 export { NumberField } from "./NumberField";
 export { SelectField } from "./SelectField";
 export { CheckboxField } from "./CheckboxField";

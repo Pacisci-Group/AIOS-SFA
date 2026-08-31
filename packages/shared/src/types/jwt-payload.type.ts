@@ -14,6 +14,45 @@ export interface JwtPayload {
   branchId: string | null;
   scope: AccessScope;
   isPlatformAdmin: boolean;
+  /**
+   * Which generation of this user's credentials the token was signed for
+   * (PAC-79). Compared against the live value on every request by
+   * `AccessContextGuard`; a mismatch is a 401.
+   *
+   * This is the only thing that ends an already-issued session. Deactivation
+   * works because `AccessResolverService.resolve` returns null for an inactive
+   * user, but a password reset leaves the user active — without this counter an
+   * attacker's token would keep working until it expired, and their refresh
+   * token would keep minting new ones indefinitely.
+   *
+   * Optional because tokens signed before PAC-79 do not carry it. Every
+   * comparison must read it as `?? 0` so those compare equal to a user who has
+   * never reset, rather than 401ing the whole estate mid-deploy.
+   */
+  tokenVersion?: number;
+  /**
+   * The platform admin acting as this user, when the session was minted by
+   * `POST /auth/impersonate/:userId` (PAC-70). Absent on every ordinary login.
+   *
+   * **Provenance only — never an authorization input.** `sub` is the target
+   * user, so every guard resolves the target's real `AccessContext` from the
+   * store and the session can do exactly what they can do, no more. This claim
+   * exists so the API can say who is really behind a request and so the client
+   * can show a banner.
+   *
+   * ⚠ Deliberately on the token and **not** on {@link AccessContext}. The
+   * resolved context is what `PermissionCache` serializes and is keyed by user
+   * id alone — putting a per-session field there would both need a cache version
+   * bump and leak one admin's impersonation into the target's own cached
+   * context.
+   */
+  impersonatedBy?: string;
+  /**
+   * Issued-at, in seconds. Added by `jsonwebtoken` at sign time and passed
+   * straight through by `JwtStrategy.validate`; declared here because it is
+   * genuinely present, not because anything authorizes off it.
+   */
+  iat?: number;
 }
 
 /**
@@ -46,4 +85,13 @@ export interface AccessContext {
    * owner's view.
    */
   roleIds: string[];
+  /**
+   * The live credential generation, straight off the user document (PAC-79).
+   * `AccessContextGuard` rejects a request whose JWT carries an older one.
+   *
+   * Optional for the reason given on {@link JwtPayload.tokenVersion}, plus one
+   * of its own: a warm cache entry written before this field existed
+   * deserializes without it. Both sides of the comparison read `?? 0`.
+   */
+  tokenVersion?: number;
 }

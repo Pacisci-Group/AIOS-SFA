@@ -7,11 +7,14 @@ import { AppModule } from '../app.module';
 import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { Carrier } from '../carriers/schemas/carrier.schema';
-import { PermissionsService } from '../permissions/permissions.service';
+import { RoleAssignmentsService } from '../permissions/role-assignments.service';
+import { Permission } from '../permissions/schemas/permission.schema';
 import { Agency } from '../platform/schemas/agency.schema';
+import { AgencyRole } from '../roles/schemas/agency-role.schema';
 import { User } from '../users/schemas/user.schema';
 import { seedAuditTemplates } from './audit-templates.seed';
 import { seedCarriers } from './carriers.seed';
+import { seedPermissions } from './permissions.seed';
 
 /**
  * Core seed — platform-required data only.
@@ -39,7 +42,11 @@ async function seed() {
     getModelToken(AuditTemplate.name),
   );
   const carrierModel = app.get<Model<Carrier>>(getModelToken(Carrier.name));
-  const permissionsService = app.get(PermissionsService);
+  const roleModel = app.get<Model<AgencyRole>>(getModelToken(AgencyRole.name));
+  const permissionModel = app.get<Model<Permission>>(
+    getModelToken(Permission.name),
+  );
+  const roleAssignments = app.get(RoleAssignmentsService);
 
   // ---------------------------------------------------------------------------
   // 1. Platform super admin (required for the app to function)
@@ -85,6 +92,16 @@ async function seed() {
     `Carriers seeded (${carriers.created} created, ${carriers.refreshed} already present)`,
   );
 
+  // The permission vocabulary as rows, for `rolePermissions` and
+  // `userPermissions` to reference. Must precede role seeding:
+  // `setRolePermissions` resolves each key to a catalog id and refuses one it
+  // cannot find, so a missing catalog fails loudly instead of producing roles
+  // that grant nothing.
+  const permissions = await seedPermissions(permissionModel);
+  console.log(
+    `Permissions seeded (${permissions.created} created, ${permissions.updated} updated, ${permissions.deprecated} deprecated)`,
+  );
+
   // ---------------------------------------------------------------------------
   // 3. Empty tenant scaffold — migration target (no demo users, no CRM data)
   // ---------------------------------------------------------------------------
@@ -115,7 +132,7 @@ async function seed() {
     console.log('Agency already exists, mailer identity reconciled');
   }
 
-  await permissionsService.seedDefaultRoles(agency._id);
+  await roleAssignments.seedDefaultRoles(agency._id);
   console.log('Default agency roles seeded');
 
   let branch = await branchModel.findOne({
@@ -147,8 +164,86 @@ async function seed() {
     `Audit templates seeded (${templates.created} created, ${templates.refreshed} already present)`,
   );
 
+  // ---------------------------------------------------------------------------
+  // 4. Agency owner — the one login that can administer the tenant
+  // ---------------------------------------------------------------------------
+  //
+  // Without this a migrated agency is unreachable. The SmartSuite migration
+  // gives every user it creates `passwordHash: randomBytes(24).toString('hex')`
+  // and `roleIds: []` — a hash bcrypt can never match, and no role, so login
+  // fails and would resolve to zero permissions even if it succeeded. Nobody
+  // can bootstrap out of that from inside the app either: the platform super
+  // admin resolves to ALL_PLATFORM_PERMISSIONS only, holds no `agency:*`, and
+  // `PermissionsGuard` has no platform-admin bypass, so `POST /users/invite`
+  // 403s. There is no password-reset endpoint.
+  //
+  // Gated on the password being set, so production never silently gains an
+  // account with a default password. Everyone else is then onboarded through
+  // the normal invite flow.
+  const ownerEmail = process.env.SEED_AGENCY_OWNER_EMAIL?.toLowerCase().trim();
+  const ownerPassword = process.env.SEED_AGENCY_OWNER_PASSWORD;
+
+  if (!ownerEmail || !ownerPassword) {
+    console.log(
+      'Agency owner skipped (set SEED_AGENCY_OWNER_EMAIL + SEED_AGENCY_OWNER_PASSWORD to create one)',
+    );
+  } else {
+    const ownerRole = await roleModel
+      .findOne({ agencyId: agency._id, slug: 'agency_owner' })
+      .select('_id')
+      .lean();
+    if (!ownerRole) {
+      throw new Error(
+        'agency_owner role missing — seedDefaultRoles should have created it',
+      );
+    }
+
+    await userModel.updateOne(
+      { email: ownerEmail },
+      {
+        $set: {
+          agencyId: agency._id,
+          branchId: branch._id,
+          isActive: true,
+          isPlatformAdmin: false,
+          deactivatedAt: null,
+          deactivatedByUserId: null,
+          // In `$set`, not `$setOnInsert`, on purpose: re-running the seed is
+          // the supported way to recover a lost owner password. `$setOnInsert`
+          // would silently no-op on the row that actually needs it.
+          passwordHash: await bcrypt.hash(ownerPassword, 12),
+          // A sentinel rather than an absent field or an explicit null. The
+          // `legacySmartSuiteId` index is `unique + sparse`: absent is skipped,
+          // but an explicit null IS indexed and would collide with any other
+          // null. This also marks the row as seed-created, not migrated.
+          legacySmartSuiteId: 'seed:agency-owner',
+        },
+        $setOnInsert: { firstName: 'Agency', lastName: 'Owner' },
+      },
+      { upsert: true },
+    );
+
+    // Through the join, never a field on the user: `RoleAssignmentsService` is
+    // the only writer of `userRoles`, and it is also what invalidates the
+    // resolved-permission cache.
+    const owner = await userModel
+      .findOne({ email: ownerEmail })
+      .select('_id')
+      .lean();
+    await roleAssignments.setUserRoles(
+      { userId: owner!._id.toString(), isPlatformAdmin: true },
+      agency._id,
+      owner!._id,
+      [ownerRole._id],
+    );
+    console.log(`Agency owner ready: ${ownerEmail}`);
+  }
+
   console.log('\nCore seed complete.');
   console.log(`Super Admin: ${superAdminEmail} / ${superAdminPassword}`);
+  if (ownerEmail && ownerPassword) {
+    console.log(`Agency Owner: ${ownerEmail} / ${ownerPassword}`);
+  }
   console.log(
     'Tenant scaffold ready: Smith Family Agency / Main branch (empty).',
   );

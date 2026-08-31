@@ -1,3 +1,18 @@
+---
+paths:
+  - "packages/web/src/features/household/**"
+  - "packages/web/src/features/lead/**"
+  - "packages/web/src/features/quote-recap/**"
+  - "packages/web/src/features/sold/**"
+  - "packages/web/src/components/form/**"
+  - "packages/api/src/households/**"
+  - "packages/api/src/quote-recaps/**"
+  - "packages/api/src/sold-deals/**"
+  - "packages/api/src/deal-audits/**"
+  - "packages/api/src/audit-generation/**"
+  - "docs/form-pipeline/**"
+---
+
 # `sfaforms` prototype — read-only reference for the form pipeline
 
 The **`sfaforms`** repo (a standalone Next.js 15 prototype of the

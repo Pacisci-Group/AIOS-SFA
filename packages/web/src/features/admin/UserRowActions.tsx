@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2, UserCheck } from "lucide-react";
+import { Loader2, Trash2, UserCheck, UserCog } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
 import { usePermissions } from "@/hooks/usePermissions";
+import { ChangeRoleDialog } from "./ChangeRoleDialog";
 import { ApiError } from "@/lib/api-client";
 import {
   deactivateUser,
@@ -67,6 +68,7 @@ export function UserRowActions({ user }: UserRowActionsProps) {
   const { user: currentUser } = useAuth();
   const queryClient = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [rolesOpen, setRolesOpen] = useState(false);
 
   const status = userStatus(user);
 
@@ -127,23 +129,47 @@ export function UserRowActions({ user }: UserRowActionsProps) {
     );
   }
 
-  // Active. Hide the control on your own row rather than letting the owner
-  // discover the 400 by clicking it.
-  if (currentUser?.id === user._id) return null;
+  // Active.
+  //
+  // Changing roles is offered on every active row **including your own** — an
+  // owner giving up their own owner role is a legitimate, server-supported move
+  // (it is only taking it off *someone else* that is blocked). Removal is not:
+  // self-removal 400s, so that button stays hidden on your own row rather than
+  // letting the owner discover the error by clicking it.
+  const isSelf = currentUser?.id === user._id;
 
   return (
     <>
       <Button
         variant="ghost"
         size="sm"
-        className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
-        disabled={deactivate.isPending}
-        onClick={() => setConfirmOpen(true)}
-        aria-label={`Remove ${user.email}`}
+        className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+        onClick={() => setRolesOpen(true)}
+        aria-label={`Change roles for ${user.email}`}
       >
-        <Trash2 size={12} />
-        Remove
+        <UserCog size={12} />
+        Roles
       </Button>
+
+      <ChangeRoleDialog
+        user={user}
+        open={rolesOpen}
+        onOpenChange={setRolesOpen}
+      />
+
+      {isSelf ? null : (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
+          disabled={deactivate.isPending}
+          onClick={() => setConfirmOpen(true)}
+          aria-label={`Remove ${user.email}`}
+        >
+          <Trash2 size={12} />
+          Remove
+        </Button>
+      )}
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>

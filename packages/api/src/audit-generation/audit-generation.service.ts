@@ -26,25 +26,15 @@ import {
   type RequiredAuditItem,
 } from './audit-titles';
 
-/**
- * How long the service team is given on a generated audit item (PAC-65).
- *
- * ⚠ Soft. See the note on `dueAt` in `buildItem` — nothing enforces it, and
- * nothing should be built that does.
+/*
+ * The deadline rule now lives in `./audit-due`, so the migration can write the
+ * same `dueAt` without importing this request-path service. Re-exported here
+ * because `AUDIT_ITEM_DUE_DAYS` was already imported from this module by the
+ * demo seed and the specs.
  */
-export const AUDIT_ITEM_DUE_DAYS = 7;
+import { auditItemDueAt } from './audit-due';
 
-/**
- * `date + n` days, as a plain `Date`.
- *
- * Local rather than reusing `performance.range`'s `addDays`, which walks
- * `{ year, month, day }` calendar parts in the agency time zone — the right
- * tool for scorecard buckets, the wrong one for a wall-clock deadline that is
- * only ever compared against `new Date()`.
- */
-function addDays(from: Date, days: number): Date {
-  return new Date(from.getTime() + days * 24 * 60 * 60 * 1000);
-}
+export { AUDIT_ITEM_DUE_DAYS } from './audit-due';
 
 export interface GenerateAuditInput {
   agencyId: string;
@@ -347,7 +337,7 @@ export class AuditGenerationService {
        * Inside `$setOnInsert` with everything else here, so re-running
        * generation for a deal never moves a deadline already promised.
        */
-      dueAt: addDays(now, AUDIT_ITEM_DUE_DAYS),
+      dueAt: auditItemDueAt(now),
       submissionToken: input.submissionToken ?? undefined,
       dedupeKey: buildDedupeKey(input.dealId.toString(), item),
       /*

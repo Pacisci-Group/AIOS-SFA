@@ -49,3 +49,18 @@ export const SMARTSUITE_TABLE_IDS = {
 } as const;
 
 export type SmartSuiteTableKey = keyof typeof SMARTSUITE_TABLE_IDS;
+
+/**
+ * Table id -> key, so a log line can name the table a caller only passed an id
+ * for. Built by inverting the map above rather than maintained by hand: the two
+ * cannot drift, and a table added above is nameable in the logs for free.
+ */
+export const SMARTSUITE_TABLE_NAMES: Record<string, string> =
+  Object.fromEntries(
+    Object.entries(SMARTSUITE_TABLE_IDS).map(([key, id]) => [id, key]),
+  );
+
+/** Human label for a table id — its key when we know it, else the raw id. */
+export function tableLabel(tableId: string): string {
+  return SMARTSUITE_TABLE_NAMES[tableId] ?? tableId;
+}

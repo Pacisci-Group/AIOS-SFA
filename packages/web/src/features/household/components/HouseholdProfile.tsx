@@ -1,5 +1,9 @@
 import { Phone, Mail, MapPin, Star, Shield, Car } from "lucide-react";
 import type { ContactSummary, HouseholdView } from "@sfa/shared";
+import {
+  isActiveHouseholdStatus,
+  normalizeHouseholdStatus,
+} from "@sfa/shared";
 
 interface Member {
   name: string;
@@ -60,9 +64,15 @@ function addressLines(address: Record<string, unknown> | null) {
   return { line1, rest };
 }
 
-/** The green "live" treatment is only honest for a genuinely active record. */
+/**
+ * The green "live" treatment is only honest for a genuinely active record.
+ *
+ * `isActiveHouseholdStatus` rather than a bare `/active/i` (PAC-80): 2,095 of
+ * 2,519 migrated households store the code `b5qvJ`, which the regex never
+ * matched — so every one of them rendered grey and read as inactive.
+ */
 function statusStyle(status: string | null) {
-  return /active/i.test(status ?? "")
+  return isActiveHouseholdStatus(status)
     ? { background: "#052e16", color: "#4ade80", border: "1px solid #166534" }
     : {
         background: "var(--secondary)",
@@ -129,7 +139,7 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
   const primaryContact = household.contacts.find((c) => c.isPrimary);
 
   const name = household.name ?? "Unnamed household";
-  const status = household.status ?? "Unknown";
+  const status = normalizeHouseholdStatus(household.status) || "Unknown";
   const recordLabel = `HH-${household.id.slice(-6).toUpperCase()}`;
   // Falling back to the primary contact is real data, not a placeholder.
   const contactName =

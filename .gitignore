@@ -6,6 +6,12 @@ coverage
 *.log
 .DS_Store
 
+# Data bring-up artifacts (scripts/migration/run-migration.sh). The per-step
+# logs are already covered by *.log, but the directory and the SmartSuite
+# reconciliation report are not — and the report is a run record, not source.
+migration-logs/
+migration-report.json
+
 # Local project folders / symlinks (not pushed)
 # Read-only reference to the legacy SFA app (see .claude/rules/legacy-sfa-reference.md)
 /SFA

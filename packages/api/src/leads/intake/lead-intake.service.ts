@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import type { IntakeChannel } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import {
   Activity,
@@ -22,6 +23,13 @@ import { ResolveLeadStep } from './resolve-lead.step';
 
 /** Mongo duplicate-key error. */
 const DUPLICATE_KEY = 11000;
+
+/** Timeline wording for the `lead_created` activity, per entry point. */
+const CREATED_SUMMARY: Record<IntakeChannel, string> = {
+  internal: 'Lead created',
+  share_link: 'Lead submitted through a share link',
+  mailer: 'Lead created from a mailer',
+};
 
 function isDuplicateKeyError(error: unknown): boolean {
   return (
@@ -232,10 +240,7 @@ export class LeadIntakeService {
         leadId: outcome.leadId,
         userId: ctx.producerId,
         occurredAt: new Date(),
-        summary:
-          ctx.channel === 'share_link'
-            ? 'Lead submitted through a share link'
-            : 'Lead created',
+        summary: CREATED_SUMMARY[ctx.channel],
         source: ctx.channel,
         isTestRecord: false,
       });

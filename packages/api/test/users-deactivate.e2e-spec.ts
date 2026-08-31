@@ -7,6 +7,7 @@ import { App } from 'supertest/types';
 import { ServiceTicket } from '../src/crm/schemas/service-ticket.schema';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
+import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import { User } from '../src/users/schemas/user.schema';
 import { login, authHeader } from './helpers/auth.helper';
 import {
@@ -28,6 +29,7 @@ describe('User removal (e2e)', () => {
   let tickets: Model<ServiceTicket>;
   let rotations: Model<CrmRotation>;
   let deals: Model<Deal>;
+  let roleAssignments: RoleAssignmentsService;
   let producerId: string;
 
   const api = () => request(app.getHttpServer());
@@ -39,6 +41,7 @@ describe('User removal (e2e)', () => {
     tickets = app.get<Model<ServiceTicket>>(getModelToken(ServiceTicket.name));
     rotations = app.get<Model<CrmRotation>>(getModelToken(CrmRotation.name));
     deals = app.get<Model<Deal>>(getModelToken(Deal.name));
+    roleAssignments = app.get(RoleAssignmentsService);
 
     ctx = await seedTestData(app);
     ownerToken = (await login(app, ctx.ownerEmail, TEST_PASSWORD)).accessToken;
@@ -274,45 +277,58 @@ describe('User removal (e2e)', () => {
       expect(res.status).toBe(400);
     });
 
-    it('refuses to remove the last agency owner', async () => {
-      // A second owner, so the first can be targeted by someone.
+    /**
+     * Owner protection has two distinct rules and they fail differently:
+     * removing *someone else's* ownership is policy (403, platform admin only),
+     * while emptying the agency of owners is integrity (409). Asserting them
+     * separately is what stops one silently masking the other.
+     */
+    it('refuses to let one owner remove another', async () => {
       const second = await users.create({
         agencyId: new Types.ObjectId(ctx.agencyId),
         branchId: new Types.ObjectId(ctx.branchId),
         email: 'second-owner@sfa.local',
         passwordHash: await bcrypt.hash(TEST_PASSWORD, 12),
-        roleIds: [new Types.ObjectId(ctx.ownerRoleId)],
         isActive: true,
       });
+      await roleAssignments.setUserRoles(
+        { userId: second._id.toString(), isPlatformAdmin: true },
+        ctx.agencyId,
+        second._id,
+        [ctx.ownerRoleId],
+      );
+
       const secondToken = (
         await login(app, 'second-owner@sfa.local', TEST_PASSWORD)
       ).accessToken;
-
-      // Removing one of two owners is fine.
       const owner = await users.findOne({ email: ctx.ownerEmail }).lean();
-      await api()
-        .delete(`/api/v1/users/${owner!._id.toString()}`)
-        .set(authHeader(secondToken))
-        .expect(200);
 
-      // The remaining one cannot be removed by anyone — not even themselves,
-      // though that path is already blocked by the self-removal guard.
-      await users.updateOne(
-        { _id: owner!._id },
-        { $set: { isActive: true, deactivatedAt: null } },
-      );
-      const ownerTokenAgain = (await login(app, ctx.ownerEmail, TEST_PASSWORD))
-        .accessToken;
+      // Two owners exist, so this is not the integrity rule — it is 403 purely
+      // because one owner may not remove another.
       const res = await api()
-        .delete(`/api/v1/users/${second._id.toString()}`)
-        .set(authHeader(ownerTokenAgain));
-      expect(res.status).toBe(200);
-
-      // Now only `owner` is left holding the role.
-      const lastRes = await api()
         .delete(`/api/v1/users/${owner!._id.toString()}`)
-        .set(authHeader(ownerTokenAgain));
-      expect(lastRes.status).toBe(400); // self-removal catches it first
+        .set(authHeader(secondToken));
+      expect(res.status).toBe(403);
+
+      // Clean up so later tests still see exactly one owner.
+      await roleAssignments.setUserRoles(
+        { userId: second._id.toString(), isPlatformAdmin: true },
+        ctx.agencyId,
+        second._id,
+        [],
+      );
+      await users.deleteOne({ _id: second._id });
+    });
+
+    it('refuses to remove the last agency owner', async () => {
+      const owner = await users.findOne({ email: ctx.ownerEmail }).lean();
+
+      // Self-removal is caught by its own guard before ownership is considered
+      // — the endpoint needed to undo it is the one being given up.
+      const res = await api()
+        .delete(`/api/v1/users/${owner!._id.toString()}`)
+        .set(authHeader(ownerToken));
+      expect(res.status).toBe(400);
     });
 
     it('rejects a second removal of the same user', async () => {

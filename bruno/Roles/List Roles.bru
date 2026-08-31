@@ -1,0 +1,89 @@
+meta {
+  name: List Roles
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/roles
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+script:post-response {
+  const custom = res.getBody().find((r) => !r.isSystemTemplate);
+  if (custom) bru.setVar("customRoleId", custom._id);
+  const producer = res.getBody().find((r) => r.slug === "producer");
+  if (producer) bru.setVar("producerRoleId", producer._id);
+  const owner = res.getBody().find((r) => r.slug === "agency_owner");
+  if (owner) bru.setVar("ownerRoleId", owner._id);
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("includes the six system roles", function () {
+    const slugs = res.getBody().map((r) => r.slug);
+    expect(slugs).to.include.members([
+      "agency_owner",
+      "branch_manager",
+      "producer",
+      "csr",
+      "crm",
+      "data_team",
+    ]);
+  });
+
+  test("reports permissions and holder count", function () {
+    const producer = res.getBody().find((r) => r.slug === "producer");
+    expect(producer.permissions).to.be.an("array");
+    expect(producer).to.have.property("userCount");
+  });
+}
+
+docs {
+  # GET /roles — the agency's roles
+
+  **Module:** none (`@SkipModule()`).
+  **Permission:** `agency:roles:read`
+  **Data scope:** agency — roles are per-tenant, unique on `(agencyId, slug)`.
+
+  ## Response
+
+  ```json
+  [
+    {
+      "_id": "…",
+      "agencyId": "…",
+      "name": "Producer",
+      "slug": "producer",
+      "description": "Sales producer — own leads and quoting.",
+      "permissions": ["dashboard:read", "leads:read", "leads:write", "…"],
+      "dataScope": "own",
+      "isSystemTemplate": true,
+      "grantsAllEnabledModules": false,
+      "userCount": 5
+    }
+  ]
+  ```
+
+  `permissions` is assembled from the `rolePermissions` join rather than read off
+  the role document — the field no longer exists there — so the shape is
+  unchanged from before the relational refactor.
+
+  `grantsAllEnabledModules` is true only for **Agency Owner**, and it is a rule
+  rather than a stored set: that role gets read+write on whatever modules the
+  agency currently has enabled. Its `permissions` array therefore lists only the
+  eight `agency:*` capabilities. It cannot be edited — see *Update Role*.
+
+  `userCount` is how many people hold the role. A role with holders cannot be
+  deleted.
+
+  ## Errors
+  - `403 Forbidden` — missing `agency:roles:read`.
+}

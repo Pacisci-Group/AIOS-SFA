@@ -17,10 +17,15 @@ import {
   permissionsToPageLevel,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { hashResetToken, mintResetToken } from '../common/crypto/reset-token';
 import {
   inviteExpiryDays,
   inviteResendCooldownSeconds,
 } from '../config/invite.config';
+import {
+  passwordResetCooldownSeconds,
+  passwordResetExpiryHours,
+} from '../config/password-reset.config';
 import { MailService } from '../mail/mail.service';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
@@ -34,7 +39,18 @@ import {
   UserWorkReleaseService,
   type ReleasedWork,
 } from './user-work-release.service';
-import { InviteResponse, UserDetailResponse } from './users.types';
+import { RoleAssignmentsService } from '../permissions/role-assignments.service';
+import {
+  ActingUser,
+  OwnerProtectionService,
+} from '../permissions/owner-protection.service';
+import { UserRole } from '../permissions/schemas/user-role.schema';
+import {
+  AgencyUserListItem,
+  InviteResponse,
+  PasswordResetResponse,
+  UserDetailResponse,
+} from './users.types';
 
 /**
  * Per-user overrides only ever move a user between page levels, so every
@@ -54,22 +70,72 @@ export class UsersService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
+    @InjectModel(UserRole.name) private userRoleModel: Model<UserRole>,
     private permissionsService: PermissionsService,
+    private roleAssignments: RoleAssignmentsService,
+    private ownerProtection: OwnerProtectionService,
     private accessResolver: AccessResolverService,
     private mailService: MailService,
     private configService: ConfigService,
     private workRelease: UserWorkReleaseService,
   ) {}
 
-  findByAgency(agencyId: string) {
-    return this.userModel
+  /**
+   * Roles for a set of users, as the `{ _id, name, slug }` shape the web has
+   * always received from `.populate('roleIds')`.
+   *
+   * Replaces that populate now that the assignment lives in `userRoles`. Batched
+   * over all the users at once — the alternative, a lookup per row, is how a
+   * 15-person agency turns one query into sixteen.
+   */
+  private async rolesByUser(
+    userIds: Types.ObjectId[],
+  ): Promise<
+    Map<string, { _id: Types.ObjectId; name: string; slug: string }[]>
+  > {
+    const byUser = new Map<
+      string,
+      { _id: Types.ObjectId; name: string; slug: string }[]
+    >();
+    if (!userIds.length) return byUser;
+
+    const links = await this.userRoleModel
+      .find({ userId: { $in: userIds } })
+      .select({ userId: 1, roleId: 1 })
+      .lean();
+    if (!links.length) return byUser;
+
+    const roles = await this.roleModel
+      .find({ _id: { $in: links.map((link) => link.roleId) } })
+      .select({ name: 1, slug: 1 })
+      .lean();
+    const roleById = new Map(roles.map((role) => [role._id.toString(), role]));
+
+    for (const link of links) {
+      const role = roleById.get(link.roleId.toString());
+      if (!role) continue;
+      const key = link.userId.toString();
+      const list = byUser.get(key) ?? [];
+      list.push({ _id: role._id, name: role.name, slug: role.slug });
+      byUser.set(key, list);
+    }
+    return byUser;
+  }
+
+  async findByAgency(agencyId: string): Promise<AgencyUserListItem[]> {
+    const users = await this.userModel
       .find({
         agencyId: new Types.ObjectId(agencyId),
         isPlatformAdmin: { $ne: true },
       })
       .select('-passwordHash -inviteToken -passwordResetToken')
-      .populate('roleIds', 'name slug')
       .lean();
+
+    const byUser = await this.rolesByUser(users.map((user) => user._id));
+    return users.map((user) => ({
+      ...user,
+      roleIds: byUser.get(user._id.toString()) ?? [],
+    }));
   }
 
   async findById(
@@ -82,19 +148,29 @@ export class UsersService {
         agencyId: new Types.ObjectId(agencyId),
       })
       .select('-passwordHash -inviteToken -passwordResetToken')
-      .populate('roleIds', 'name slug permissions')
       .lean();
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    const [effectivePermissions, roleDefaultPermissions] = await Promise.all([
-      this.permissionsService.resolveForUser(user as UserDocument),
-      this.permissionsService.resolveRoleDefaults(user as UserDocument),
-    ]);
+    const [effectivePermissions, roleDefaultPermissions, byUser, overrides] =
+      await Promise.all([
+        this.permissionsService.resolveForUser(user as UserDocument),
+        this.permissionsService.resolveRoleDefaults(user as UserDocument),
+        this.rolesByUser([user._id]),
+        this.roleAssignments.userOverrides(user._id),
+      ]);
 
+    // The response keeps the shape the web already consumes — `roleIds` as
+    // populated role objects, and the overrides as two string arrays — even
+    // though all three now come from join collections rather than fields on the
+    // user. Changing the wire format here would be a second, unrelated migration
+    // for every caller.
     return {
       ...user,
+      roleIds: byUser.get(user._id.toString()) ?? [],
+      permissionGrants: overrides.grants,
+      permissionRevokes: overrides.revokes,
       effectivePermissions,
       roleDefaultPermissions,
     };
@@ -130,11 +206,23 @@ export class UsersService {
       // A random unusable secret, not a known placeholder: until the invite is
       // accepted there is no password, and this row must never be loggable into.
       passwordHash: await bcrypt.hash(randomBytes(16).toString('hex'), 12),
-      roleIds: input.roleIds.map((id) => new Types.ObjectId(id)),
       firstName: input.firstName,
       lastName: input.lastName,
       isActive: false,
     });
+
+    // The inviter is the actor. Owner protection does not fire on a brand-new
+    // user — there is no owner role to strip — but routing through the one
+    // writer is what keeps that true as the rules grow.
+    await this.roleAssignments.setUserRoles(
+      {
+        userId: input.invitedByUserId ?? user._id.toString(),
+        isPlatformAdmin: false,
+      },
+      input.agencyId,
+      user._id,
+      input.roleIds,
+    );
 
     return this.issueInvite(user, input.invitedByUserId);
   }
@@ -202,10 +290,11 @@ export class UsersService {
    * the end. Without that call the old token keeps working until it expires.
    */
   async deactivateUser(
+    actor: ActingUser,
     agencyId: string,
     userId: string,
-    actorUserId?: string,
   ): Promise<ReleasedWork> {
+    const actorUserId = actor.userId;
     if (!Types.ObjectId.isValid(userId)) {
       throw new NotFoundException('User not found');
     }
@@ -243,7 +332,10 @@ export class UsersService {
       );
     }
 
-    await this.assertNotLastAgencyOwner(agencyId, userId);
+    // Policy first (an owner may not remove another owner), then integrity
+    // (the agency may never be left with none). Both live in
+    // OwnerProtectionService so RolesService enforces the identical rules.
+    await this.ownerProtection.assertMayDeactivate(actor, agencyId, userId);
 
     user.isActive = false;
     user.deactivatedAt = new Date();
@@ -306,40 +398,129 @@ export class UsersService {
   }
 
   /**
-   * Refuse to remove the only person who can administer the agency.
+   * Email an active employee a link to set a new password (PAC-79).
    *
-   * Without this an owner can remove the other owner, then be removed
-   * themselves by nobody — leaving an agency with users, data and billing but
-   * no one able to invite, assign roles or manage permissions. Recovering that
-   * needs a platform admin and a database edit.
+   * The way back in for the 14 migrated users, whose `passwordHash` is 24 random
+   * bytes from the SmartSuite import rather than a bcrypt digest — so
+   * `bcrypt.compare` can never match, and they cannot be re-invited either
+   * because `findPendingInvite` refuses an active user.
+   *
+   * Modelled on {@link issueInvite}, with three deliberate departures:
+   *
+   * 1. **The stored token is a digest, not the token.** `inviteToken` is stored
+   *    raw; do not copy that here. A database read must not yield a working
+   *    credential.
+   * 2. **Hours, not days.** An owner triggers this on demand and can tell the
+   *    person it is coming, so the link should not still work tomorrow.
+   * 3. **`isActive` is never touched.** A reset is not a reactivation.
    */
-  private async assertNotLastAgencyOwner(
+  async sendPasswordReset(
     agencyId: string,
     userId: string,
-  ): Promise<void> {
-    const ownerRole = await this.roleModel
-      .findOne({ agencyId: new Types.ObjectId(agencyId), slug: 'agency_owner' })
-      .select('_id')
-      .lean();
-    if (!ownerRole) return;
+  ): Promise<PasswordResetResponse> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
 
-    const isOwner = await this.userModel.exists({
+    const user = await this.userModel.findOne({
       _id: new Types.ObjectId(userId),
-      roleIds: ownerRole._id,
-    });
-    if (!isOwner) return;
-
-    const remainingOwners = await this.userModel.countDocuments({
+      // Scoping by agency is what stops one tenant resetting another's people.
       agencyId: new Types.ObjectId(agencyId),
-      roleIds: ownerRole._id,
-      isActive: true,
-      _id: { $ne: new Types.ObjectId(userId) },
+      // Platform admins are not the agency's to manage, and `findByAgency`
+      // already hides them — a 404 keeps the two consistent.
+      isPlatformAdmin: { $ne: true },
     });
-    if (remainingOwners === 0) {
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    /*
+     * Order matters, and this check must come before the `isActive` one below:
+     * both states have `isActive: false`, so testing that first would answer a
+     * removed employee with "they have not accepted their invite yet".
+     *
+     * `deactivateUser` clears the reset fields precisely so a removed employee
+     * cannot walk back in through this flow. Re-minting here would undo that in
+     * one call, which is the whole reason this endpoint refuses rather than
+     * treating a deactivated user as just another row.
+     */
+    if (user.deactivatedAt) {
       throw new ConflictException(
-        'This is the agency’s only owner. Assign the owner role to someone else first.',
+        'That user was removed from the agency. Reactivate them first.',
       );
     }
+    if (!user.isActive) {
+      throw new ConflictException(
+        'That user has not accepted their invite yet. Resend the invite instead.',
+      );
+    }
+
+    const cooldownSeconds = passwordResetCooldownSeconds(
+      this.configService.get<string>('PASSWORD_RESET_COOLDOWN_SECONDS'),
+    );
+    const lastSentAt = user.passwordResetLastSentAt?.getTime();
+    if (lastSentAt) {
+      const elapsedSeconds = (Date.now() - lastSentAt) / 1000;
+      if (elapsedSeconds < cooldownSeconds) {
+        const wait = Math.ceil(cooldownSeconds - elapsedSeconds);
+        throw new ConflictException(
+          `A reset link was just sent to this address. Try again in ${wait} second${wait === 1 ? '' : 's'}.`,
+        );
+      }
+    }
+
+    const resetToken = mintResetToken();
+    const expiryHours = passwordResetExpiryHours(
+      this.configService.get<string>('PASSWORD_RESET_EXPIRY_HOURS'),
+    );
+    const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
+
+    // Only the digest is persisted. The raw token exists in the email and, in
+    // development, in the response below — nowhere else, ever.
+    user.passwordResetToken = hashResetToken(resetToken);
+    user.passwordResetExpiresAt = expiresAt;
+    user.passwordResetLastSentAt = new Date();
+    /*
+     * One live credential per account. In practice an active user has no
+     * pending invite — `findPendingInvite` and the guards above make the two
+     * states disjoint — so this is belt-and-braces, kept so the invariant holds
+     * by construction rather than by a chain of reasoning.
+     */
+    user.inviteToken = undefined;
+    user.inviteTokenExpiresAt = undefined;
+    await user.save();
+
+    const resetUrl = this.buildPasswordResetUrl(resetToken);
+    const agencyName = await this.resolveAgencyName(user.agencyId);
+
+    // Same guarantee as `issueInvite`: both callers reach here with an agency
+    // (the user was loaded scoped by one), and the event schema would otherwise
+    // reject an empty string with a message about hex digits.
+    if (!user.agencyId) {
+      throw new Error(
+        `Cannot reset password for user ${user._id.toString()}: no agencyId on the record.`,
+      );
+    }
+
+    await this.mailService.sendPasswordResetEmail({
+      userId: user._id.toString(),
+      agencyId: user.agencyId.toString(),
+      branchId: user.branchId?.toString() ?? null,
+      to: user.email,
+      recipientName: fullName(user.firstName, user.lastName),
+      agencyName,
+      resetUrl,
+      expiresAt,
+    });
+
+    return {
+      userId: user._id.toString(),
+      resetUrl,
+      expiresAt: expiresAt.toISOString(),
+      // Withheld in production, where the email is the only delivery channel.
+      // See `exposeTokensForDev`.
+      ...(this.exposeTokensForDev() ? { resetToken } : {}),
+    };
   }
 
   /**
@@ -403,7 +584,7 @@ export class UsersService {
       // production because mail delivery is a logging stub (see `MailService`) —
       // without it there is no way to walk the flow locally or in e2e. Remove
       // this the moment a real transport lands.
-      ...(this.exposeInviteToken() ? { inviteToken } : {}),
+      ...(this.exposeTokensForDev() ? { inviteToken } : {}),
     };
   }
 
@@ -472,8 +653,27 @@ export class UsersService {
     return `${base}/auth/accept-invite?token=${token}`;
   }
 
-  private exposeInviteToken(): boolean {
+  /**
+   * Whether to hand the raw token back in the response body.
+   *
+   * Shared by the invite and password-reset flows on purpose: two copies of this
+   * predicate is how one of them ends up leaking a live credential in production
+   * after somebody "cleans up" the other.
+   */
+  private exposeTokensForDev(): boolean {
     return this.configService.get<string>('NODE_ENV') !== 'production';
+  }
+
+  /**
+   * Absolute, for the same reason {@link buildInviteUrl} is — this is opened
+   * from an email client, which has no origin to resolve a relative path
+   * against.
+   */
+  private buildPasswordResetUrl(token: string): string {
+    const base = this.configService
+      .get<string>('APP_BASE_URL', 'http://localhost:5173')
+      .replace(/\/+$/, '');
+    return `${base}/auth/reset-password?token=${token}`;
   }
 
   private async resolveAgencyName(
@@ -497,7 +697,17 @@ export class UsersService {
     return fullName(user.firstName, user.lastName);
   }
 
+  /**
+   * Replace a user's roles.
+   *
+   * `actor` is threaded from `request.access` because owner protection needs to
+   * know *who* is asking: an owner may give up their own owner role, but only a
+   * platform admin may take it off someone else. The check lives in
+   * `RoleAssignmentsService.setUserRoles`, so it cannot be skipped by a caller
+   * that forgets.
+   */
   async updateRoles(
+    actor: ActingUser,
     agencyId: string,
     userId: string,
     roleIds: string[],
@@ -512,9 +722,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    user.roleIds = roleIds.map((id) => new Types.ObjectId(id));
-    await user.save();
-    await this.accessResolver.invalidateUser(userId);
+    await this.roleAssignments.setUserRoles(actor, agencyId, userId, roleIds);
     return this.findById(agencyId, userId);
   }
 
@@ -584,10 +792,12 @@ export class UsersService {
     const revokeList = [...revokes];
     this.assertPagePermissions([...grantList, ...revokeList]);
 
-    user.permissionGrants = grantList;
-    user.permissionRevokes = revokeList;
-    await user.save();
-    await this.accessResolver.invalidateUser(userId);
+    await this.roleAssignments.setUserOverrides(
+      agencyId,
+      userId,
+      grantList,
+      revokeList,
+    );
 
     return this.findById(agencyId, userId);
   }

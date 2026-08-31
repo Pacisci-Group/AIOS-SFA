@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AddLeadButton } from "@/components/leads/AddLeadButton";
+import { MailersButton } from "@/components/leads/MailersButton";
 import { ShareLinkButton } from "@/components/leads/ShareLinkButton";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
@@ -89,6 +90,10 @@ export default function LeadsPage() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {/* Both secondary actions collapse to icons below `sm`; only Add New
+              Lead keeps its label there. Three labelled buttons plus the
+              hamburger overflow a 375px header. */}
+          <MailersButton />
           <ShareLinkButton />
           <AddLeadButton />
         </div>

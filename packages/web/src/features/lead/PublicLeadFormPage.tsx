@@ -114,6 +114,9 @@ export default function PublicLeadFormPage() {
             <LeadIntakeForm
               key={formKey}
               variant="public"
+              // Address autocomplete has no session to authenticate with here,
+              // so it routes through the link's own public endpoint (PAC-60).
+              shareToken={token}
               submitting={mutation.isPending}
               errorMessage={error}
               submitLabel="Submit"
