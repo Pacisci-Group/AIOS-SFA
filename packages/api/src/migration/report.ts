@@ -234,3 +234,22 @@ export function printReport(report: MigrationReport): void {
   }
   console.log(line);
 }
+
+/**
+ * Thrown when a run dies partway, carrying the report gathered so far.
+ *
+ * A migration is minutes of work across ~21 stages, and a dropped SmartSuite
+ * connection at stage 12 used to discard every number the first eleven had
+ * produced along with the stack trace — leaving an operator with no record of
+ * what had already landed. The partial report travels with the failure instead,
+ * so the caller can print and write it exactly as it would a successful one.
+ */
+export class MigrationRunError extends Error {
+  constructor(
+    readonly report: MigrationReport,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'MigrationRunError';
+  }
+}

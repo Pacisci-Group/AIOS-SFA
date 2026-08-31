@@ -122,7 +122,9 @@ export class OwnerProtectionService {
     const targetIsOwner = await this.isOwner(agencyId, targetUserId);
     if (!targetIsOwner) return;
 
-    const keepsOwnerRole = nextRoleIds.some((id) => id === ownerRoleId.toString());
+    const keepsOwnerRole = nextRoleIds.some(
+      (id) => id === ownerRoleId.toString(),
+    );
     if (keepsOwnerRole) return;
 
     if (actor.userId !== targetUserId) {
@@ -179,10 +181,7 @@ export class OwnerProtectionService {
    * Rule (c) applied to the role itself: deleting the owner role would remove
    * everyone's ownership at once.
    */
-  async assertRoleIsDeletable(
-    agencyId: string,
-    roleId: string,
-  ): Promise<void> {
+  async assertRoleIsDeletable(agencyId: string, roleId: string): Promise<void> {
     const ownerRoleId = await this.ownerRoleId(agencyId);
     if (ownerRoleId && ownerRoleId.toString() === roleId) {
       throw new ConflictException(

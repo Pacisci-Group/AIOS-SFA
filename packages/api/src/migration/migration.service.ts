@@ -110,6 +110,7 @@ import {
   MigrationReport,
   createReport,
   emptyStat,
+  MigrationRunError,
   recordRejection,
 } from './report';
 
@@ -180,9 +181,56 @@ interface DealRef {
   isTest: boolean;
 }
 
+/**
+ * Stages in `run()`, for the `[n/N]` progress label. Purely cosmetic — drift
+ * mislabels a log line, it cannot break the run — but keep it in step with the
+ * `this.step(...)` calls in `run()`.
+ */
+const MIGRATION_STEP_COUNT = 21;
+
+/**
+ * How many failed rows to log as they happen. A table that fails wholesale
+ * would otherwise produce thousands of identical warnings and bury the stage
+ * lines; the full list always survives in the JSON report.
+ */
+const ERROR_LOG_LIMIT = 25;
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+/**
+ * The stat split an operator actually reads, with the zero-valued parts left
+ * out so a clean table logs one short line and a troubled one stands out.
+ */
+function summarizeStat(stat: CollectionStat): string {
+  const parts = [`${stat.fetched} fetched`, `${stat.migrated} migrated`];
+  // Only worth saying when it disagrees with what we actually pulled.
+  if (stat.source && stat.source !== stat.fetched) {
+    parts.push(`${stat.source} at source`);
+  }
+  if (stat.skipped) parts.push(`${stat.skipped} skipped`);
+  if (stat.excludedTest) parts.push(`${stat.excludedTest} test`);
+  if (stat.rejectedValues) parts.push(`${stat.rejectedValues} rejected values`);
+  const links = stat.producerLinks;
+  if (links) {
+    parts.push(
+      `producers ${links.linked} linked/${links.unresolved} unresolved/` +
+        `${links.absent} unattributed`,
+    );
+  }
+  return parts.join(', ');
+}
+
 @Injectable()
 export class MigrationService {
   private readonly logger = new Logger('Migration');
+  /** Position in the `run()` sequence, for the `[n/N]` progress label. */
+  private stepIndex = 0;
+  /** Row errors logged live so far; the rest are left to the JSON report. */
+  private loggedErrors = 0;
 
   constructor(
     @InjectModel(Agency.name) private readonly agencyModel: Model<Agency>,
@@ -225,113 +273,263 @@ export class MigrationService {
   async run(options: MigrationOptions): Promise<MigrationReport> {
     const report = createReport(options.dryRun);
     const started = Date.now();
+    this.stepIndex = 0;
+    this.loggedErrors = 0;
     const ss = new SmartSuiteClient(loadSmartSuiteConfig());
 
-    const ctx = await this.resolveTenant(options, report);
+    this.logger.log(
+      `Migration starting — agency=${options.agencySlug} branch=${options.branchSlug} ` +
+        `pageSize=${options.pageSize}` +
+        (options.dryRun ? ' (DRY RUN — nothing is written)' : ''),
+    );
 
-    const producers = await this.migrateUsers(ss, ctx, options, report);
-    report.producers.mapped = producers.size;
+    try {
+      const ctx = await this.step(report, 'Tenant', null, () =>
+        this.resolveTenant(options, report),
+      );
 
-    const households = await this.migrateHouseholds(
-      ss,
-      ctx,
-      producers,
-      options,
-      report,
-    );
-    await this.migrateContacts(ss, ctx, households, options, report);
-    const leads = await this.migrateLeads(ss, ctx, producers, options, report);
+      const producers = await this.step(report, 'Users', 'users', () =>
+        this.migrateUsers(ss, ctx, options, report),
+      );
+      report.producers.mapped = producers.size;
 
-    // Legacy id -> Mongo `_id`, so recaps and deals can be written with real
-    // `leadId` refs rather than only the `legacyLeadId` string. Leads are
-    // migrated before both, so this map is always complete by the time it is
-    // read; the same holds for `households` and, below, `quoteIds`.
-    const leadIds = new Map(leads.map((lead) => [lead.legacyId, lead.id]));
+      const households = await this.step(
+        report,
+        'Households',
+        'households',
+        () => this.migrateHouseholds(ss, ctx, producers, options, report),
+      );
+      await this.step(report, 'Contacts', 'contacts', () =>
+        this.migrateContacts(ss, ctx, households, options, report),
+      );
+      const leads = await this.step(report, 'Leads', 'leads', () =>
+        this.migrateLeads(ss, ctx, producers, options, report),
+      );
 
-    const quotes = await this.migrateQuoteRecaps(
-      ss,
-      ctx,
-      producers,
-      households,
-      leadIds,
-      options,
-      report,
-    );
-    const quoteIds = new Map(quotes.map((quote) => [quote.legacyId, quote.id]));
+      // Legacy id -> Mongo `_id`, so recaps and deals can be written with real
+      // `leadId` refs rather than only the `legacyLeadId` string. Leads are
+      // migrated before both, so this map is always complete by the time it is
+      // read; the same holds for `households` and, below, `quoteIds`.
+      const leadIds = new Map(leads.map((lead) => [lead.legacyId, lead.id]));
 
-    const deals = await this.migrateDeals(
-      ss,
-      ctx,
-      producers,
-      households,
-      leadIds,
-      quoteIds,
-      options,
-      report,
-    );
-    const policies = await this.migratePolicies(
-      ss,
-      ctx,
-      households,
-      deals,
-      options,
-      report,
-    );
-    await this.migrateAuditItems(ss, ctx, deals, options, report);
-    await this.migrateDealAudits(ss, ctx, deals, options, report);
-    /*
-     * Must follow both passes (PAC-72). Items import before roll-ups, so an
-     * item cannot know its parent's `_id` at import time, and legacy has no
-     * audit assignee at all. Without this the hand-off board — which pages over
-     * `dealAudits` and scopes on `auditAssignee` — shows nothing for any
-     * migrated deal.
-     */
-    await this.reconcileAudits(ctx);
-    await this.migrateAuditTemplates(ss, ctx, options, report);
-    await this.migrateInterestedParties(
-      ss,
-      ctx,
-      households,
-      policies,
-      options,
-      report,
-    );
-    await this.migratePriorInsurance(
-      ss,
-      ctx,
-      producers,
-      households,
-      deals,
-      options,
-      report,
-    );
-    await this.migratePriorPolicies(
-      ss,
-      ctx,
-      households,
-      deals,
-      options,
-      report,
-    );
-    await this.migrateServiceTickets(
-      ss,
-      ctx,
-      producers,
-      households,
-      policies,
-      options,
-      report,
-    );
-    await this.migrateProducerAssignments(ss, ctx, producers, options, report);
-    await this.migrateCrmRotations(ss, ctx, producers, options, report);
-    await this.migrateTimeOffRequests(ss, ctx, producers, options, report);
+      const quotes = await this.step(
+        report,
+        'Quote Recaps',
+        'quoteRecaps',
+        () =>
+          this.migrateQuoteRecaps(
+            ss,
+            ctx,
+            producers,
+            households,
+            leadIds,
+            options,
+            report,
+          ),
+      );
+      const quoteIds = new Map(
+        quotes.map((quote) => [quote.legacyId, quote.id]),
+      );
 
-    await this.deriveProducerGoals(ctx, producers, report);
-    await this.deriveActivities(ctx, leads, quotes, deals, report);
+      const deals = await this.step(report, 'Deals', 'deals', () =>
+        this.migrateDeals(
+          ss,
+          ctx,
+          producers,
+          households,
+          leadIds,
+          quoteIds,
+          options,
+          report,
+        ),
+      );
+      const policies = await this.step(report, 'Policies', 'policies', () =>
+        this.migratePolicies(ss, ctx, households, deals, options, report),
+      );
+      await this.step(report, 'Audit items', 'dealAuditItems', () =>
+        this.migrateAuditItems(ss, ctx, deals, options, report),
+      );
+      await this.step(report, 'Deal audits', 'dealAudits', () =>
+        this.migrateDealAudits(ss, ctx, deals, options, report),
+      );
+      /*
+       * Must follow both passes (PAC-72). Items import before roll-ups, so an
+       * item cannot know its parent's `_id` at import time, and legacy has no
+       * audit assignee at all. Without this the hand-off board — which pages over
+       * `dealAudits` and scopes on `auditAssignee` — shows nothing for any
+       * migrated deal.
+       */
+      await this.step(report, 'Audit reconciliation', null, () =>
+        this.reconcileAudits(ctx),
+      );
+      await this.step(report, 'Audit templates', 'auditTemplates', () =>
+        this.migrateAuditTemplates(ss, ctx, options, report),
+      );
+      await this.step(report, 'Interested parties', 'interestedParties', () =>
+        this.migrateInterestedParties(
+          ss,
+          ctx,
+          households,
+          policies,
+          options,
+          report,
+        ),
+      );
+      await this.step(report, 'Prior insurance', 'priorInsurance', () =>
+        this.migratePriorInsurance(
+          ss,
+          ctx,
+          producers,
+          households,
+          deals,
+          options,
+          report,
+        ),
+      );
+      await this.step(report, 'Prior policies', 'priorPolicies', () =>
+        this.migratePriorPolicies(ss, ctx, households, deals, options, report),
+      );
+      await this.step(report, 'Service tickets', 'serviceTickets', () =>
+        this.migrateServiceTickets(
+          ss,
+          ctx,
+          producers,
+          households,
+          policies,
+          options,
+          report,
+        ),
+      );
+      await this.step(
+        report,
+        'Producer assignments',
+        'producerAssignments',
+        () =>
+          this.migrateProducerAssignments(ss, ctx, producers, options, report),
+      );
+      await this.step(report, 'CRM rotations', 'crmRotations', () =>
+        this.migrateCrmRotations(ss, ctx, producers, options, report),
+      );
+      await this.step(report, 'Time-off requests', 'timeOffRequests', () =>
+        this.migrateTimeOffRequests(ss, ctx, producers, options, report),
+      );
 
+      await this.step(report, 'Producer goals (derived)', null, () =>
+        this.deriveProducerGoals(ctx, producers, report),
+      );
+      await this.step(report, 'Activities (derived)', null, () =>
+        this.deriveActivities(ctx, leads, quotes, deals, report),
+      );
+    } catch (err) {
+      /*
+       * Stamp and report the partial run before rethrowing. Everything the
+       * completed stages measured is still true and still worth having; the
+       * caller decides how loudly to surface it.
+       */
+      this.finish(report, started, false);
+      throw new MigrationRunError(report, err);
+    }
+
+    this.finish(report, started, true);
+    return report;
+  }
+
+  /** Stamp the run's end on the report and log the closing tally. */
+  private finish(
+    report: MigrationReport,
+    started: number,
+    completed: boolean,
+  ): void {
     report.finishedAt = new Date().toISOString();
     report.durationMs = Date.now() - started;
-    return report;
+    this.logSummary(report, completed);
+  }
+
+  /**
+   * Run one stage with uniform progress logging.
+   *
+   * Each stage used to log a single bespoke line of its own choosing, so a run
+   * that died partway — as a dropped SmartSuite connection will make it — left
+   * no record of which stage was in flight, how far the run had got, or how
+   * long anything took. The outcome line is built from the stage's own
+   * `CollectionStat`, which is already where the migrated/skipped/rejected
+   * split lives, so stages need no per-stage logging code of their own.
+   */
+  private async step<T>(
+    report: MigrationReport,
+    label: string,
+    statKey: string | null,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const tag = `[${++this.stepIndex}/${MIGRATION_STEP_COUNT}] ${label}`;
+    this.logger.log(`${tag} — starting`);
+    const started = Date.now();
+    try {
+      const result = await fn();
+      const stat = statKey ? report.collections[statKey] : undefined;
+      this.logger.log(
+        `${tag} — done in ${formatMs(Date.now() - started)}` +
+          (stat ? ` — ${summarizeStat(stat)}` : ''),
+      );
+      return result;
+    } catch (err) {
+      /*
+       * Name the stage on the way past, then rethrow untouched. The error
+       * itself says what broke but not where in a 21-stage run, and "where" is
+       * the first thing an operator needs in order to resume.
+       */
+      this.logger.error(
+        `${tag} — FAILED after ${formatMs(Date.now() - started)}: ${(err as Error).message}`,
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * Record a row that failed to write, and say so while the run is still going.
+   *
+   * These used to accumulate silently and surface only in the closing report,
+   * so a run that died later lost every one of them — and a run that succeeded
+   * gave no clue *when* the bad rows went past. Capped at
+   * {@link ERROR_LOG_LIMIT} lines: the JSON report keeps the full list.
+   */
+  private recordError(report: MigrationReport, message: string): void {
+    report.errors.push(message);
+    if (this.loggedErrors < ERROR_LOG_LIMIT) {
+      this.loggedErrors++;
+      this.logger.warn(`row failed: ${message}`);
+      if (this.loggedErrors === ERROR_LOG_LIMIT) {
+        this.logger.warn(
+          '… further row failures will not be logged (see the JSON report).',
+        );
+      }
+    }
+  }
+
+  /** Closing tally, so the log file ends with the numbers without the report. */
+  private logSummary(report: MigrationReport, completed: boolean): void {
+    const collections = Object.entries(report.collections);
+    const migrated = collections.reduce((sum, [, s]) => sum + s.migrated, 0);
+    const skipped = collections.reduce((sum, [, s]) => sum + s.skipped, 0);
+    const outcome = completed
+      ? 'Migration finished'
+      : `Migration ABORTED at stage ${this.stepIndex}/${MIGRATION_STEP_COUNT}, after`;
+    this.logger.log(
+      `${outcome} ${formatMs(report.durationMs ?? 0)} — ` +
+        `${migrated} rows written across ${collections.length} collections, ` +
+        `${skipped} skipped, ${report.derived.activities} activities and ` +
+        `${report.derived.producerGoals} goals derived, ` +
+        `${report.errors.length} errors`,
+    );
+    if (report.errors.length) {
+      // The report prints these too, but only on a run that reaches the end.
+      this.logger.warn(
+        `${report.errors.length} row(s) failed to write; first ${Math.min(
+          report.errors.length,
+          ERROR_LOG_LIMIT,
+        )} are logged above and all are in the JSON report.`,
+      );
+    }
   }
 
   /** Resolve a legacy link id to a Mongo ObjectId via a prebuilt map. */
@@ -452,7 +650,8 @@ export class MigrationService {
         stat.migrated += ctx.dryRun ? 0 : 1;
       } catch (err) {
         stat.skipped++;
-        report.errors.push(
+        this.recordError(
+          report,
           `user ${legacyId} (${email}): ${(err as Error).message}`,
         );
       }
@@ -2170,7 +2369,8 @@ export class MigrationService {
       return id;
     } catch (err) {
       stat.skipped++;
-      report.errors.push(
+      this.recordError(
+        report,
         `${model.modelName} ${legacyId}: ${(err as Error).message}`,
       );
       return undefined;

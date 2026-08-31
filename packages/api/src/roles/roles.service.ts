@@ -276,7 +276,11 @@ export class RolesService {
     if (!role) {
       throw new NotFoundException('Role not found');
     }
-    if (role.isSystemTemplate && input.name && slugify(input.name) !== role.slug) {
+    if (
+      role.isSystemTemplate &&
+      input.name &&
+      slugify(input.name) !== role.slug
+    ) {
       throw new ConflictException(
         'A system role can be renamed for display, but its slug is referenced by code and cannot change.',
       );

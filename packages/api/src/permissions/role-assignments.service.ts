@@ -116,7 +116,9 @@ export class RoleAssignmentsService {
    * the shared `PERMISSION_BY_KEY` check catches a typo before the database
    * round trip.
    */
-  private async resolveKeys(keys: string[]): Promise<Map<string, Types.ObjectId>> {
+  private async resolveKeys(
+    keys: string[],
+  ): Promise<Map<string, Types.ObjectId>> {
     const unique = [...new Set(keys)];
     const unknown = unique.filter((key) => !PERMISSION_BY_KEY.has(key));
     if (unknown.length) {
@@ -264,7 +266,9 @@ export class RoleAssignmentsService {
   }
 
   /** The role ids a user holds. */
-  async userRoleIds(userId: string | Types.ObjectId): Promise<Types.ObjectId[]> {
+  async userRoleIds(
+    userId: string | Types.ObjectId,
+  ): Promise<Types.ObjectId[]> {
     const rows = await this.userRoleModel
       .find({ userId: new Types.ObjectId(userId.toString()) })
       .select({ roleId: 1 })
@@ -343,7 +347,9 @@ export class RoleAssignmentsService {
       .select({ permissionKey: 1, effect: 1 })
       .lean();
     return {
-      grants: rows.filter((r) => r.effect === 'grant').map((r) => r.permissionKey),
+      grants: rows
+        .filter((r) => r.effect === 'grant')
+        .map((r) => r.permissionKey),
       revokes: rows
         .filter((r) => r.effect === 'revoke')
         .map((r) => r.permissionKey),

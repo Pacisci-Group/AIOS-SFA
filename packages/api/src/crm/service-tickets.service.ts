@@ -184,7 +184,9 @@ export class ServiceTicketsService {
       agencyId,
       isPlatformAdmin: { $ne: true },
       isActive: { $ne: false },
-      _id: { $in: [...roleSlugsByUser.keys()].map((id) => new Types.ObjectId(id)) },
+      _id: {
+        $in: [...roleSlugsByUser.keys()].map((id) => new Types.ObjectId(id)),
+      },
     };
     // Agency-wide scopes see every CRM; narrower scopes stay inside the branch.
     if (access.dataScope !== DataScope.Agency && access.branchId) {
