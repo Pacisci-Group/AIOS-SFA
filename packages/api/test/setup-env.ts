@@ -29,6 +29,15 @@ process.env.APP_BASE_URL = 'http://localhost:5173';
 // `APP_BASE_URL` above is.
 process.env.INVITE_RESEND_COOLDOWN_SECONDS = '60';
 
+// Password reset (PAC-79). Both pinned for exactly the reason
+// `INVITE_RESEND_COOLDOWN_SECONDS` above is: the suite *exercises* the cooldown
+// (immediate second reset -> 409, then clears `passwordResetLastSentAt` in Mongo
+// to reach the success path), so a developer's local `0` would silently turn
+// that assertion into a 201. The expiry is pinned so the "expired token" test
+// can reason about a known window rather than the developer's `.env`.
+process.env.PASSWORD_RESET_COOLDOWN_SECONDS = '60';
+process.env.PASSWORD_RESET_EXPIRY_HOURS = '24';
+
 // Throttler storage is in-memory and process-wide, so a tight public-intake
 // limit would bleed 429s into unrelated describe blocks. Raise the limits for
 // the suite; the rate-limit block spins up its own app with tight values.
@@ -52,6 +61,12 @@ process.env.PUBLIC_ADDRESS_LINK_DAILY_LIMIT =
   process.env.PUBLIC_ADDRESS_LINK_DAILY_LIMIT ?? '100000';
 process.env.ADDRESS_LOOKUP_RATE_LIMIT =
   process.env.ADDRESS_LOOKUP_RATE_LIMIT ?? '100000';
+process.env.PASSWORD_RESET_ISSUE_RATE_LIMIT =
+  process.env.PASSWORD_RESET_ISSUE_RATE_LIMIT ?? '100000';
+process.env.PASSWORD_RESET_PREVIEW_RATE_LIMIT =
+  process.env.PASSWORD_RESET_PREVIEW_RATE_LIMIT ?? '100000';
+process.env.PASSWORD_RESET_SUBMIT_RATE_LIMIT =
+  process.env.PASSWORD_RESET_SUBMIT_RATE_LIMIT ?? '100000';
 
 // Address autocomplete (PAC-60). The suite asserts the *unconfigured* behaviour
 // — `{ available: false }` and a 200 rather than a 5xx — so a developer with a

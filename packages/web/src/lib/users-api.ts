@@ -102,6 +102,38 @@ export function resendInvite(userId: string) {
   });
 }
 
+/**
+ * `POST /users/:userId/password-reset` response (PAC-79).
+ *
+ * `resetToken` is **absent in production**, where the email is the only
+ * delivery channel. Treat it as optional rather than assuming the dev shape.
+ */
+export interface PasswordResetResponse {
+  userId: string;
+  /** Absolute reset URL. */
+  resetUrl: string;
+  /** ISO-8601. Hours away, not days. */
+  expiresAt: string;
+  /** Dev/test only. */
+  resetToken?: string;
+}
+
+/**
+ * Email an active employee a link to set a new password.
+ *
+ * The way back in for users the SmartSuite migration left with an unusable
+ * password hash: they cannot log in, and they cannot be re-invited because the
+ * invite endpoints refuse an active user.
+ *
+ * Issuing a new link invalidates any previous one, and completing the reset
+ * ends every session that user had open.
+ */
+export function sendPasswordReset(userId: string) {
+  return apiFetch<PasswordResetResponse>(`/users/${userId}/password-reset`, {
+    method: 'POST',
+  });
+}
+
 /** Revoke a pending invite. The invited row disappears from the directory. */
 export function revokeInvite(userId: string) {
   return apiFetch<void>(`/users/${userId}/invite`, { method: 'DELETE' });

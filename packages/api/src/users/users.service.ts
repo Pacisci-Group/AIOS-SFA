@@ -17,10 +17,15 @@ import {
   permissionsToPageLevel,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { hashResetToken, mintResetToken } from '../common/crypto/reset-token';
 import {
   inviteExpiryDays,
   inviteResendCooldownSeconds,
 } from '../config/invite.config';
+import {
+  passwordResetCooldownSeconds,
+  passwordResetExpiryHours,
+} from '../config/password-reset.config';
 import { MailService } from '../mail/mail.service';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
@@ -43,6 +48,7 @@ import { UserRole } from '../permissions/schemas/user-role.schema';
 import {
   AgencyUserListItem,
   InviteResponse,
+  PasswordResetResponse,
   UserDetailResponse,
 } from './users.types';
 
@@ -84,7 +90,9 @@ export class UsersService {
    */
   private async rolesByUser(
     userIds: Types.ObjectId[],
-  ): Promise<Map<string, { _id: Types.ObjectId; name: string; slug: string }[]>> {
+  ): Promise<
+    Map<string, { _id: Types.ObjectId; name: string; slug: string }[]>
+  > {
     const byUser = new Map<
       string,
       { _id: Types.ObjectId; name: string; slug: string }[]
@@ -390,6 +398,132 @@ export class UsersService {
   }
 
   /**
+   * Email an active employee a link to set a new password (PAC-79).
+   *
+   * The way back in for the 14 migrated users, whose `passwordHash` is 24 random
+   * bytes from the SmartSuite import rather than a bcrypt digest — so
+   * `bcrypt.compare` can never match, and they cannot be re-invited either
+   * because `findPendingInvite` refuses an active user.
+   *
+   * Modelled on {@link issueInvite}, with three deliberate departures:
+   *
+   * 1. **The stored token is a digest, not the token.** `inviteToken` is stored
+   *    raw; do not copy that here. A database read must not yield a working
+   *    credential.
+   * 2. **Hours, not days.** An owner triggers this on demand and can tell the
+   *    person it is coming, so the link should not still work tomorrow.
+   * 3. **`isActive` is never touched.** A reset is not a reactivation.
+   */
+  async sendPasswordReset(
+    agencyId: string,
+    userId: string,
+  ): Promise<PasswordResetResponse> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+
+    const user = await this.userModel.findOne({
+      _id: new Types.ObjectId(userId),
+      // Scoping by agency is what stops one tenant resetting another's people.
+      agencyId: new Types.ObjectId(agencyId),
+      // Platform admins are not the agency's to manage, and `findByAgency`
+      // already hides them — a 404 keeps the two consistent.
+      isPlatformAdmin: { $ne: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    /*
+     * Order matters, and this check must come before the `isActive` one below:
+     * both states have `isActive: false`, so testing that first would answer a
+     * removed employee with "they have not accepted their invite yet".
+     *
+     * `deactivateUser` clears the reset fields precisely so a removed employee
+     * cannot walk back in through this flow. Re-minting here would undo that in
+     * one call, which is the whole reason this endpoint refuses rather than
+     * treating a deactivated user as just another row.
+     */
+    if (user.deactivatedAt) {
+      throw new ConflictException(
+        'That user was removed from the agency. Reactivate them first.',
+      );
+    }
+    if (!user.isActive) {
+      throw new ConflictException(
+        'That user has not accepted their invite yet. Resend the invite instead.',
+      );
+    }
+
+    const cooldownSeconds = passwordResetCooldownSeconds(
+      this.configService.get<string>('PASSWORD_RESET_COOLDOWN_SECONDS'),
+    );
+    const lastSentAt = user.passwordResetLastSentAt?.getTime();
+    if (lastSentAt) {
+      const elapsedSeconds = (Date.now() - lastSentAt) / 1000;
+      if (elapsedSeconds < cooldownSeconds) {
+        const wait = Math.ceil(cooldownSeconds - elapsedSeconds);
+        throw new ConflictException(
+          `A reset link was just sent to this address. Try again in ${wait} second${wait === 1 ? '' : 's'}.`,
+        );
+      }
+    }
+
+    const resetToken = mintResetToken();
+    const expiryHours = passwordResetExpiryHours(
+      this.configService.get<string>('PASSWORD_RESET_EXPIRY_HOURS'),
+    );
+    const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
+
+    // Only the digest is persisted. The raw token exists in the email and, in
+    // development, in the response below — nowhere else, ever.
+    user.passwordResetToken = hashResetToken(resetToken);
+    user.passwordResetExpiresAt = expiresAt;
+    user.passwordResetLastSentAt = new Date();
+    /*
+     * One live credential per account. In practice an active user has no
+     * pending invite — `findPendingInvite` and the guards above make the two
+     * states disjoint — so this is belt-and-braces, kept so the invariant holds
+     * by construction rather than by a chain of reasoning.
+     */
+    user.inviteToken = undefined;
+    user.inviteTokenExpiresAt = undefined;
+    await user.save();
+
+    const resetUrl = this.buildPasswordResetUrl(resetToken);
+    const agencyName = await this.resolveAgencyName(user.agencyId);
+
+    // Same guarantee as `issueInvite`: both callers reach here with an agency
+    // (the user was loaded scoped by one), and the event schema would otherwise
+    // reject an empty string with a message about hex digits.
+    if (!user.agencyId) {
+      throw new Error(
+        `Cannot reset password for user ${user._id.toString()}: no agencyId on the record.`,
+      );
+    }
+
+    await this.mailService.sendPasswordResetEmail({
+      userId: user._id.toString(),
+      agencyId: user.agencyId.toString(),
+      branchId: user.branchId?.toString() ?? null,
+      to: user.email,
+      recipientName: fullName(user.firstName, user.lastName),
+      agencyName,
+      resetUrl,
+      expiresAt,
+    });
+
+    return {
+      userId: user._id.toString(),
+      resetUrl,
+      expiresAt: expiresAt.toISOString(),
+      // Withheld in production, where the email is the only delivery channel.
+      // See `exposeTokensForDev`.
+      ...(this.exposeTokensForDev() ? { resetToken } : {}),
+    };
+  }
+
+  /**
    * Mint a token onto an existing inactive user and mail the link. Shared by
    * first invite and resend so the two can never drift on expiry or content.
    */
@@ -450,7 +584,7 @@ export class UsersService {
       // production because mail delivery is a logging stub (see `MailService`) —
       // without it there is no way to walk the flow locally or in e2e. Remove
       // this the moment a real transport lands.
-      ...(this.exposeInviteToken() ? { inviteToken } : {}),
+      ...(this.exposeTokensForDev() ? { inviteToken } : {}),
     };
   }
 
@@ -519,8 +653,27 @@ export class UsersService {
     return `${base}/auth/accept-invite?token=${token}`;
   }
 
-  private exposeInviteToken(): boolean {
+  /**
+   * Whether to hand the raw token back in the response body.
+   *
+   * Shared by the invite and password-reset flows on purpose: two copies of this
+   * predicate is how one of them ends up leaking a live credential in production
+   * after somebody "cleans up" the other.
+   */
+  private exposeTokensForDev(): boolean {
     return this.configService.get<string>('NODE_ENV') !== 'production';
+  }
+
+  /**
+   * Absolute, for the same reason {@link buildInviteUrl} is — this is opened
+   * from an email client, which has no origin to resolve a relative path
+   * against.
+   */
+  private buildPasswordResetUrl(token: string): string {
+    const base = this.configService
+      .get<string>('APP_BASE_URL', 'http://localhost:5173')
+      .replace(/\/+$/, '');
+    return `${base}/auth/reset-password?token=${token}`;
   }
 
   private async resolveAgencyName(
