@@ -32,10 +32,12 @@ tests {
 
   test("carries the mailer identity fields (PAC-73)", function () {
     const agency = res.getBody().find((a) => a.slug === "smith-family-agency");
-    expect(agency, "seeded agency is present").to.exist;
-    // Set by the core seed. `ticker` resolves BigQuery rows to a tenant;
-    // `allstateAgencyId` is what an uploaded file's `agencyid` is checked
-    // against. Without them the backfill imports nothing and every upload warns.
+    expect(agency, "migrated agency is present (run the SmartSuite migration)").to.exist;
+    // Set by the SmartSuite migration, which provisions this tenant — NOT by
+    // the core seed, which creates no agency. `ticker` resolves BigQuery rows
+    // to a tenant; `allstateAgencyId` is what an uploaded file's `agencyid` is
+    // checked against. Without them the backfill imports nothing and every
+    // upload warns.
     expect(agency.ticker).to.equal("SFA");
     expect(agency.allstateAgencyId).to.equal("A0B9049");
   });

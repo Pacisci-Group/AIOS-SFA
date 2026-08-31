@@ -126,7 +126,7 @@ The client lifecycle is a **4-phase, session-isolated form pipeline** (forms com
 - **CRM** (scope: branch; clients, crm_service, deal_audits, onboardings, dashboard:read)
 - **Data Team** (scope: agency; dashboard, command_center, management, owner_dashboard, performance, leaderboard reads)
 
-Seed (`src/seed/seed.ts`) creates agency "Smith Family Agency", a Main branch, super admin, and an agency owner.
+Seed (`src/seed/seed.ts`) is platform data only — super admin, carriers, permissions; it creates **no agency**. The SmartSuite migration provisions agency "Smith Family Agency" + Main branch + roles + audit templates, and imports only the users SmartSuite has (no owner account). The demo seed provisions its own `demo-agency`.
 
 ---
 

@@ -54,14 +54,16 @@ applies identically in both modes.
 
 > **Three ways to populate Mongo:**
 > - `api:seed:dev` — **core / platform-required seed only**: the platform super
->   admin (the one login), plus an **empty tenant scaffold** (1 agency, 1 branch,
->   5 role templates) that the migration imports into. **No demo login users, no
->   CRM data.** This is the minimum required for the app to function and is what
->   Docker runs on API startup. Global catalog data (plans, feature definitions,
->   constants) is seeded here too as those collections come online. For a
->   populated agency to test against, use `api:seed:demo:dev` instead.
+>   admin (the one login), the carrier catalog and the permission vocabulary.
+>   It creates **no agency at all** — an agency is tenant data, provisioned by
+>   whoever creates that tenant (the migration for the real one, the demo seed
+>   for a throwaway one). **No demo login users, no CRM data.** This is the
+>   minimum required for the app to function and is what Docker runs on API
+>   startup. For a populated agency to test against, use `api:seed:demo:dev`.
 > - `api:seed:demo:dev` — **full synthetic demo tenant** for local build/test
->   (`src/seed/demo/`): the same "Smith Family Agency" + a 2nd branch, a complete
+>   (`src/seed/demo/`): its own "Demo Agency" (slug `demo-agency`, kept separate
+>   from the migration's `smith-family-agency` so the two never mix) + a 2nd
+>   branch, a complete
 >   role roster (owner, manager, 5 producers, 2 CRMs, data team — all
 >   `ChangeMe123!`), and ~500 realistic CRM records across **every** collection
 >   (households, contacts, leads, quotes, deals, policies, audit/hand-off items,

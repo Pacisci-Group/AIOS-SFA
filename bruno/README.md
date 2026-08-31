@@ -124,7 +124,7 @@ bru run "Deal Audits" --env Local
 | var | default | purpose |
 |---|---|---|
 | `baseUrl` | `http://localhost:4000/api/v1` | API root |
-| `producerEmail` | `producer@smithfamily.local` | demo Producer login |
+| `producerEmail` | `producer@demoagency.local` | demo Producer login |
 | `password` | `ChangeMe123!` | demo `SEED_DEFAULT_PASSWORD` |
 | `accessToken` / `refreshToken` / `branchId` | *(runtime only)* | set by **Login** |
 

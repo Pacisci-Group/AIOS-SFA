@@ -200,7 +200,7 @@ async function run() {
   );
   const ticketsService = app.get(ServiceTicketsService);
 
-  const agency = await agencyModel.findOne({ slug: 'smith-family-agency' });
+  const agency = await agencyModel.findOne({ slug: 'demo-agency' });
   const branch = await branchModel.findOne({
     agencyId: agency?._id,
     slug: 'main',

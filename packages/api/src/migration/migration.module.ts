@@ -66,6 +66,11 @@ import {
   AuditTemplate,
   AuditTemplateSchema,
 } from '../audit-templates/schemas/audit-template.schema';
+import { PermissionsModule } from '../permissions/permissions.module';
+import {
+  AgencyRole,
+  AgencyRoleSchema,
+} from '../roles/schemas/agency-role.schema';
 import { MigrationService } from './migration.service';
 
 /**
@@ -87,6 +92,11 @@ import { MigrationService } from './migration.service';
     // global Mongo helpers have to be imported here to get `SequenceService`
     // (the household counter is seeded at the end of the household import).
     MongoModule,
+    // The migration provisions the tenant it imports into (agency, branch,
+    // default roles, audit templates), so it needs `RoleAssignmentsService`
+    // for `seedDefaultRoles`. Same standalone-module trick `DemoSeedModule`
+    // uses. It creates no users beyond the ones SmartSuite supplies.
+    PermissionsModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       { name: Branch.name, schema: BranchSchema },
@@ -109,6 +119,7 @@ import { MigrationService } from './migration.service';
       { name: CrmRotation.name, schema: CrmRotationSchema },
       { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
       { name: AuditTemplate.name, schema: AuditTemplateSchema },
+      { name: AgencyRole.name, schema: AgencyRoleSchema },
     ]),
   ],
   providers: [MigrationService],

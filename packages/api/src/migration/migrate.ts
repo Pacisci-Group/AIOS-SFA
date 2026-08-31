@@ -19,6 +19,20 @@ function parseOptions(argv: string[]): MigrationOptions {
     dryRun: has('--dry-run'),
     agencySlug: value('--agency', 'smith-family-agency'),
     branchSlug: value('--branch', 'main'),
+    agencyName: value('--agency-name', 'Smith Family Agency'),
+    branchName: value('--branch-name', 'Main'),
+    // Mailer identity (PAC-73). Defaults are Smith Family Agency's, since this
+    // migration exists to import their book; a different tenant must pass both
+    // or step 3 (BigQuery -> mailers) attributes nothing to it.
+    ticker: value('--ticker', 'SFA'),
+    allstateAgencyId: value('--allstate-id', 'A0B9049'),
+    /*
+     * The migrated user promoted to Agency Owner. A real person from the legacy
+     * book, not a synthetic account — and the only way anyone gets into the
+     * tenant, since every other migrated user has an unusable password hash and
+     * no roles. Pass `--owner-email ''` to skip the step.
+     */
+    ownerEmail: value('--owner-email', 'davidhowad@allstate.com'),
     pageSize: parseInt(value('--page-size', '500'), 10) || 500,
   };
 }
