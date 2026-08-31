@@ -21,7 +21,6 @@ export interface DefaultRoleTemplate {
   grantsAllEnabledModules?: boolean;
 }
 
-/** Fixed system role templates — permissions are not editable by agency owners. */
 export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
   {
     name: 'Agency Owner',
