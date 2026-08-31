@@ -228,18 +228,22 @@ run_step() {
 
 # ── Steps, in dependency order ──────────────────────────────────────────────
 #
-# 1 must be first: the migration imports INTO the agency + branch scaffold the
-#   core seed creates and resolves producers against its default roles. It also
-#   creates the agency owner, which is the only login that can administer the
-#   tenant afterwards (set SEED_AGENCY_OWNER_EMAIL / _PASSWORD).
-# 2 is the SmartSuite import. It writes its own refs and match keys — there is
-#   no follow-up repair pass to run.
-# 3 needs only the agency ticker map from step 1, not step 2. Last because it is
-#   the longest-running and the least coupled: a failure here leaves a complete
-#   CRM dataset behind.
+# 1 must be first, but it creates NO agency: it is platform-required data only
+#   (super admin, carrier catalog, permission vocabulary). Step 2 needs the
+#   permission catalog before it can seed the tenant's default roles.
+# 2 is the SmartSuite import, and it provisions the tenant it imports into —
+#   agency, branch, default roles, audit templates. It creates NO users beyond
+#   the ones SmartSuite supplies, and promotes one of them to Agency Owner
+#   (--owner-email) so the tenant has an administrator. That owner still needs a
+#   one-time unlock via platform impersonation — see the README. It writes its
+#   own refs and match keys; there is no follow-up repair pass to run.
+# 3 needs the agency's `ticker`, which step 2 stamps — so it now depends on 2,
+#   not just 1. `--only 3` against a database that has never run step 2 will
+#   attribute nothing. Last because it is the longest-running: a failure here
+#   leaves a complete CRM dataset behind.
 
-run_step 1 "Core seed (admin, scaffold, owner)" seed            seed/seed
-run_step 2 "SmartSuite -> Mongo"                migrate         migration/migrate \
+run_step 1 "Core seed (platform data only)"     seed            seed/seed
+run_step 2 "SmartSuite -> Mongo (+ tenant)"     migrate         migration/migrate \
   ${DRY_RUN:+--dry-run}
 run_step 3 "BigQuery -> mailers"                migrate:mailers migration/mailers/import-bigquery-mailers \
   ${DRY_RUN:+--dry-run} ${MAILER_LIMIT:+--limit} ${MAILER_LIMIT:+$MAILER_LIMIT}

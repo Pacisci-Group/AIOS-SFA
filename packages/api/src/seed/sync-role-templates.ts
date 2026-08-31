@@ -14,7 +14,9 @@ import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
  * union-upserts a template change onto existing role documents — but nothing
  * calls it for agencies nobody re-seeds:
  *
- * - the core seed (`seed.ts`) only touches `slug: 'smith-family-agency'`;
+ * - the core seed (`seed.ts`) creates no agency at all, so it calls it for none;
+ * - the migration and the demo seed each call it only for the one tenant they
+ *   provision (`smith-family-agency` / `demo-agency`);
  * - `platform.service.ts` only runs it when an agency is **created**.
  *
  * So a new page permission on a template (PAC-38 added `clients:write` to

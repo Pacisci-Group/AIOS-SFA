@@ -49,10 +49,10 @@ docs {
 
   Every request in this folder needs `agency:users:write` or
   `agency:users:read`, and the collection-level bearer belongs to
-  `producer@smithfamily.local`, who holds **neither** — a producer inviting a
+  `producer@demoagency.local`, who holds **neither** — a producer inviting a
   user gets a `403`. So this captures `ownerAccessToken` and the invite requests
   reference it explicitly via `auth:bearer`.
 
   Requires the demo seed (`npm run api:seed:demo:dev`), which creates
-  `owner@smithfamily.local` with the Agency Owner role.
+  `owner@demoagency.local` with the Agency Owner role.
 }

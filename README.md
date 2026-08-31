@@ -31,7 +31,8 @@ npm run api:dev             # http://localhost:4000/api/v1
 npm run web:dev             # http://localhost:5173
 ```
 
-Sign in as the demo agency owner: `owner@smithfamily.local` / `ChangeMe123!`.
+Sign in as the demo agency owner: `owner@demoagency.local` / `ChangeMe123!`
+(from `npm run api:seed:demo:dev` — the migrated agency has no login of its own).
 
 ### The two run modes
 

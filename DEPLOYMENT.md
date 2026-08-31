@@ -281,11 +281,24 @@ import the CRM from SmartSuite, import the mailer history from BigQuery.
 `scripts/migration/run-migration.sh` runs them with a preflight, a per-step log
 and `--from <n>` to resume — see the header comment in the script itself.
 
-Step 1 also creates the agency owner when `SEED_AGENCY_OWNER_EMAIL` and
-`SEED_AGENCY_OWNER_PASSWORD` are set, and skips it when they are not. Set them
-for the first production bring-up: without an owner the tenant has no login that
-can administer it, and there is no way to bootstrap one afterwards — the platform
-super admin holds no `agency:*` permission, so inviting the first user 403s.
+Step 2 provisions the tenant (agency, branch, default roles, audit templates)
+but creates **no users beyond the ones SmartSuite supplies**, and each of those
+gets an unusable password hash and no roles. So after a bring-up the agency has
+**no login that can administer it**, and there is no way to bootstrap one from
+inside the app — the platform super admin holds no `agency:*` permission, so
+inviting the first user 403s, and the platform endpoints cover agency CRUD and
+module toggles only.
+
+Step 2 therefore promotes one migrated user to Agency Owner (`--owner-email`,
+default `davidhowad@allstate.com`) — a real person from the legacy book, never a
+synthetic account. That gives them every `agency:*` permission, so they can
+assign roles and send password-reset emails to the rest of the team.
+
+They still need one manual unlock, because their migrated password hash is
+unusable and there is no public "forgot password" endpoint: log in as the
+platform super admin, `POST /auth/impersonate/:userId` as the owner, then
+`POST /users/:userId/password-reset` for that same user to email them a reset
+link. After that the tenant is self-sufficient.
 
 Run it **on the droplet**, in `--mode compose`. Two reasons it is not run from a
 laptop:

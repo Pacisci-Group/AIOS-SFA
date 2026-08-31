@@ -13,6 +13,9 @@ import { reconcileDealAudits } from '../deal-audits/audit-reconcile';
 import { Agency } from '../platform/schemas/agency.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
+import { RoleAssignmentsService } from '../permissions/role-assignments.service';
+import { AgencyRole } from '../roles/schemas/agency-role.schema';
+import { provisionTenant } from '../seed/provision-tenant';
 import { SequenceService } from '../common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../households/household-ref';
 import { Household } from '../households/schemas/household.schema';
@@ -135,6 +138,17 @@ export interface MigrationOptions {
   dryRun: boolean;
   agencySlug: string;
   branchSlug: string;
+  /** Display names, used only when this run is the one creating the tenant. */
+  agencyName: string;
+  branchName: string;
+  /** Mailer identity stamped on the agency — see `provisionTenant`. */
+  ticker?: string;
+  allstateAgencyId?: string;
+  /**
+   * The migrated user to promote to Agency Owner, by email. Empty string
+   * disables the step and leaves the agency with no administrator.
+   */
+  ownerEmail?: string;
   pageSize: number;
 }
 
@@ -186,7 +200,7 @@ interface DealRef {
  * mislabels a log line, it cannot break the run — but keep it in step with the
  * `this.step(...)` calls in `run()`.
  */
-const MIGRATION_STEP_COUNT = 21;
+const MIGRATION_STEP_COUNT = 22;
 
 /**
  * How many failed rows to log as they happen. A table that fails wholesale
@@ -267,6 +281,9 @@ export class MigrationService {
     private readonly timeOffRequestModel: Model<TimeOffRequest>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
+    @InjectModel(AgencyRole.name)
+    private readonly roleModel: Model<AgencyRole>,
+    private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
 
@@ -292,6 +309,10 @@ export class MigrationService {
         this.migrateUsers(ss, ctx, options, report),
       );
       report.producers.mapped = producers.size;
+
+      await this.step(report, 'Agency owner', null, () =>
+        this.assignAgencyOwner(ctx, options, report),
+      );
 
       const households = await this.step(
         report,
@@ -552,34 +573,106 @@ export class MigrationService {
   // Tenant
   // ---------------------------------------------------------------------------
 
+  /**
+   * Provision the tenant this run imports into.
+   *
+   * The migration owns this, not the core seed: an agency is tenant data, and
+   * the core seed is platform-required data that must be safe to run anywhere.
+   * Find-or-create throughout, so a resumed run (`--from 2`) reconciles the
+   * agency it already made rather than failing or duplicating it.
+   *
+   * In dry-run nothing is provisioned — an existing tenant is resolved if there
+   * is one, and otherwise a throwaway context is returned so the fetch-and-count
+   * pass can still report on every table.
+   */
   private async resolveTenant(
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<TenantCtx> {
+    if (options.dryRun) return this.resolveTenantDryRun(options, report);
+
+    const tenant = await provisionTenant(
+      {
+        agencyModel: this.agencyModel,
+        branchModel: this.branchModel,
+        auditTemplateModel: this.auditTemplateModel,
+        roleAssignments: this.roleAssignments,
+      },
+      {
+        slug: options.agencySlug,
+        name: options.agencyName,
+        branchSlug: options.branchSlug,
+        branchName: options.branchName,
+        ticker: options.ticker,
+        allstateAgencyId: options.allstateAgencyId,
+      },
+    );
+
+    this.logger.log(
+      `Tenant: agency ${options.agencySlug} ${tenant.agencyCreated ? 'created' : 'already present'}, ` +
+        `branch ${options.branchSlug} ${tenant.branchCreated ? 'created' : 'already present'}, ` +
+        `default roles seeded, audit templates ${tenant.templates.created} created/` +
+        `${tenant.templates.refreshed} present`,
+    );
+
+    /*
+     * No synthetic owner is created. The only users in a migrated agency are the
+     * ones that came from SmartSuite — inventing an account here would put a row
+     * in the book that no legacy record backs.
+     *
+     * The cost is that nobody can log into the tenant immediately: migrated
+     * users get an unmatchable password hash and no roles, and the platform
+     * super admin resolves to ALL_PLATFORM_PERMISSIONS only (no `agency:*`), so
+     * it cannot grant them any. Granting the owner role to a real migrated user
+     * is a deliberate, separate act — see the migration README.
+     */
+    report.agency = {
+      id: tenant.agencyId.toString(),
+      slug: options.agencySlug,
+    };
+    report.branch = {
+      id: tenant.branchId.toString(),
+      slug: options.branchSlug,
+    };
+    return {
+      agencyId: tenant.agencyId.toString(),
+      branchId: tenant.branchId.toString(),
+      agencyObjectId: tenant.agencyId,
+      branchObjectId: tenant.branchId,
+      dryRun: options.dryRun,
+    };
+  }
+
+  /** Resolve without provisioning, so `--dry-run` writes nothing at all. */
+  private async resolveTenantDryRun(
     options: MigrationOptions,
     report: MigrationReport,
   ): Promise<TenantCtx> {
     const agency = await this.agencyModel
       .findOne({ slug: options.agencySlug })
       .lean();
-    if (!agency) {
-      throw new Error(
-        `Agency '${options.agencySlug}' not found. Run the API seed first (npm run seed:dev).`,
+    const branch = agency
+      ? await this.branchModel
+          .findOne({ agencyId: agency._id, slug: options.branchSlug })
+          .lean()
+      : null;
+
+    if (!agency || !branch) {
+      this.logger.warn(
+        `Tenant: agency '${options.agencySlug}' would be created (dry run — not written)`,
       );
     }
-    const branch = await this.branchModel
-      .findOne({ agencyId: agency._id, slug: options.branchSlug })
-      .lean();
-    if (!branch) {
-      throw new Error(
-        `Branch '${options.branchSlug}' not found for agency '${options.agencySlug}'.`,
-      );
-    }
-    report.agency = { id: agency._id.toString(), slug: agency.slug };
-    report.branch = { id: branch._id.toString(), slug: branch.slug };
+    const agencyObjectId = agency?._id ?? new Types.ObjectId();
+    const branchObjectId = branch?._id ?? new Types.ObjectId();
+
+    report.agency = { id: agencyObjectId.toString(), slug: options.agencySlug };
+    report.branch = { id: branchObjectId.toString(), slug: options.branchSlug };
     return {
-      agencyId: agency._id.toString(),
-      branchId: branch._id.toString(),
-      agencyObjectId: agency._id,
-      branchObjectId: branch._id,
-      dryRun: options.dryRun,
+      agencyId: agencyObjectId.toString(),
+      branchId: branchObjectId.toString(),
+      agencyObjectId,
+      branchObjectId,
+      dryRun: true,
     };
   }
 
@@ -661,6 +754,82 @@ export class MigrationService {
       `Users: fetched ${stat.fetched}, mapped ${map.size} producers`,
     );
     return map;
+  }
+
+  /**
+   * Promote one migrated user to Agency Owner.
+   *
+   * The migrated agency deliberately contains only people from the legacy book,
+   * so its administrator has to be one of them — nothing here invents an
+   * account. Named by email rather than chosen heuristically: "who runs this
+   * agency" is not derivable from a SmartSuite user row, and guessing would
+   * hand somebody agency-wide access nobody chose.
+   *
+   * This is what makes the tenant reachable at all. Every migrated user gets an
+   * unmatchable password hash and no roles, and the only doors in — an invite
+   * token and a password-reset token — are both issued by endpoints requiring
+   * `agency:users:write`. Granting that here gives exactly one person the
+   * ability to open those doors for everyone else.
+   */
+  private async assignAgencyOwner(
+    ctx: TenantCtx,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const email = options.ownerEmail?.toLowerCase().trim();
+    if (!email) {
+      this.logger.warn(
+        'Agency owner: none requested (--owner-email) — the migrated agency ' +
+          'will have no administrator',
+      );
+      return;
+    }
+    if (ctx.dryRun) {
+      this.logger.log(`Agency owner: would promote ${email} (dry run)`);
+      return;
+    }
+
+    const user = await this.userModel
+      .findOne({ agencyId: ctx.agencyObjectId, email })
+      .select('_id')
+      .lean();
+    if (!user) {
+      /*
+       * Deliberately a warning, not a throw. The import itself is sound and
+       * re-running it would not help — the fix is either a different
+       * `--owner-email` or the address being corrected in SmartSuite. Recorded
+       * on the report so it cannot scroll past unnoticed.
+       */
+      const message =
+        `Agency owner: '${email}' is not among the migrated users — ` +
+        'the agency has no administrator. Re-run with --owner-email <a ' +
+        'migrated address>.';
+      this.logger.warn(message);
+      report.errors.push(message);
+      return;
+    }
+
+    const ownerRole = await this.roleModel
+      .findOne({ agencyId: ctx.agencyObjectId, slug: 'agency_owner' })
+      .select('_id')
+      .lean();
+    if (!ownerRole) {
+      throw new Error(
+        'agency_owner role missing — provisionTenant should have created it',
+      );
+    }
+
+    // Through the join, never a field on the user: `RoleAssignmentsService` is
+    // the only writer of `userRoles` and is what invalidates the resolved
+    // permission cache. The platform-admin actor is what clears the
+    // owner-protection check, exactly as tenant provisioning does elsewhere.
+    await this.roleAssignments.setUserRoles(
+      { userId: user._id.toString(), isPlatformAdmin: true },
+      ctx.agencyObjectId,
+      user._id,
+      [ownerRole._id],
+    );
+    this.logger.log(`Agency owner: ${email} granted the Agency Owner role`);
   }
 
   /**
