@@ -63,6 +63,18 @@ tests {
       expect(items[i].lastActivityAt >= items[i - 1].lastActivityAt).to.equal(true);
     }
   });
+
+  // The above filters undated rows out, so it passed even when they sorted to
+  // the TOP and filled the whole card — which is exactly what happened on
+  // migrated data (PAC-80). This is the assertion that would have caught it.
+  test("never-touched leads sort after touched ones", function () {
+    const items = res.getBody().items;
+    const lastDated = items.reduce((acc, i, n) => (i.lastActivityAt ? n : acc), -1);
+    const firstUndated = items.findIndex((i) => !i.lastActivityAt);
+    if (firstUndated !== -1) {
+      expect(lastDated).to.be.below(firstUndated);
+    }
+  });
 }
 
 docs {
@@ -89,6 +101,15 @@ docs {
   up with Warm only when the producer has fewer than `limit` Hot leads. That is
   two index-served queries rather than one `$in` plus an in-memory sort, so
   "Hot always outranks Warm" holds by construction.
+
+  Within a temperature, **leads with a `lastActivityAt` come before leads
+  without one** (PAC-80). A lead nobody has ever touched has no staleness, only
+  a missing field, and Mongo sorts a missing value *before* every real date — so
+  on migrated data the 564 never-touched leads filled the card and pushed out
+  every lead the producer actually needed to call. Undated rows now follow, in a
+  stable `_id` order. Two more index-served queries, for the same reason as
+  above: `$ne: null` is a range bound and `: null` an equality bound, both served
+  by `{ agencyId, producerId, temperature, lastActivityAt }`.
 
   Leads in a **terminal status** (Sold, Converted, Not Qualified, Lost, Closed)
   are excluded however hot they were left — expanded through the raw SmartSuite

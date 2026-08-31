@@ -15,10 +15,13 @@ import {
   LeadDetailQuoteRecapSummary,
   LEAD_SOURCE_NONE,
   UpdateLeadResult,
+  normalizeContactRole,
   normalizeLeadSource,
   normalizeLeadStatus,
   normalizeInsuranceMonth,
   normalizePolicyType,
+  normalizePriorPolicyCancellationStatus,
+  normalizePriorPolicyType,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import {
@@ -630,7 +633,7 @@ export class LeadDetailService {
       dateOfBirth: dateOnly(contact.dateOfBirth),
       email: first(contact.emails),
       phone: first(contact.phones),
-      role: contact.roleInHousehold ?? null,
+      role: normalizeContactRole(contact.roleInHousehold) || null,
       isPrimary,
     };
   }
@@ -771,11 +774,20 @@ export class LeadDetailService {
   private toPriorPolicy(policy: PriorPolicyDocument): LeadDetailPriorPolicy {
     return {
       id: policy._id.toString(),
-      policyType: policy.policyType
-        ? normalizePolicyType(policy.policyType)
-        : null,
+      /*
+       * ⚠ `normalizePriorPolicyType`, NOT `normalizePolicyType` (PAC-80).
+       *
+       * This is a *prior* policy, whose type codes (`XT6s7`/`fr4Ge`/`RWdTl`)
+       * come from a different SmartSuite field than a live policy's. They also
+       * collide with the Prior Insurance table's cancellation-responsibility
+       * codes, so the global policy-type map must never learn them — and this
+       * call site is the reason that matters in practice rather than in theory.
+       */
+      policyType: normalizePriorPolicyType(policy.policyType) || null,
       previousCarrier: policy.previousCarrier ?? null,
-      cancellationStatus: policy.cancellationStatus ?? null,
+      cancellationStatus:
+        normalizePriorPolicyCancellationStatus(policy.cancellationStatus) ||
+        null,
       needsCancellation: policy.needsCancellation ?? null,
       cancellationDate: dateOnly(policy.cancellationDate),
       accordFormNeeded: policy.accordFormNeeded ?? null,

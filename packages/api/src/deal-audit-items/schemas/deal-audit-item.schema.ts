@@ -155,9 +155,18 @@ export class DealAuditItem extends TenantRecord {
    * `dueAt` is still `in_progress` / failed until a human resolves it.
    *
    * Optional with no default: items generated before this field existed simply
-   * have none, match neither board filter, and are never overdue. There is no
-   * backfill, because retro-stamping a deadline onto old items would
-   * manufacture an overdue backlog nobody agreed to.
+   * have none, match neither board filter, and are never overdue. There is still
+   * no *backfill* — retro-stamping a deadline onto documents already in Mongo
+   * would manufacture an overdue backlog nobody agreed to.
+   *
+   * ⚠ The SmartSuite **import** is the one exception, and it is not a backfill
+   * (PAC-80). It stamps `firstCreatedAt + AUDIT_ITEM_DUE_DAYS` on the items it
+   * writes, because an imported item genuinely was raised on that date and
+   * genuinely is still open — so the deadline is a fact being recorded, not one
+   * being invented. The practical consequence is that a freshly-migrated agency
+   * starts with a large overdue list. That is the state of their book, which is
+   * what the board exists to show; without it both `due` filters answer nothing
+   * at all on migrated data.
    */
   @Prop({ type: Date })
   dueAt?: Date;

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { AccessContext, ContactDetail } from '@sfa/shared';
+import { normalizeContactRole } from '@sfa/shared';
 import { Model } from 'mongoose';
 import {
   normalizeEmail,
@@ -143,7 +144,7 @@ export class ContactsService {
         : null,
       email: contact.emails?.[0] ?? null,
       phone: contact.phones?.[0] ?? null,
-      role: contact.roleInHousehold ?? null,
+      role: normalizeContactRole(contact.roleInHousehold) || null,
       isPrimary: contact.isPrimary ?? false,
     };
   }

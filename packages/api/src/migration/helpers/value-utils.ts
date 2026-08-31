@@ -37,7 +37,27 @@ export function toDate(value: unknown): Date | undefined {
   }
   if (isDict(value)) {
     if (value.date) return toDate(value.date);
-    if (isDict(value.on)) return toDate(value.on.date ?? value.on);
+    /*
+     * SmartSuite's system timestamps (`first_created`, `last_updated`) arrive as
+     * `{ by, on }`, and `on` is a **plain ISO string** on every table in
+     * `docs/smartsuite-tables/*` — not a nested date object.
+     *
+     * ⚠ This used to be guarded by `isDict(value.on)`, which is false for a
+     * string, so the branch never fired and every system timestamp in the import
+     * was silently dropped. That one predicate is why `dealAuditItems.
+     * firstCreatedAt` was unset on all 4,548 rows — which in turn collapsed
+     * `dealAudits.oldestOpenAt` onto the migration's own `createdAt` and made the
+     * hand-off board's "oldest first" ordering meaningless — and why
+     * `leads.lastActivityAt` was null on 564 of 967, filling the Hot Leads panel
+     * with never-touched leads.
+     *
+     * Recursing on `value.on` handles both shapes: a string parses directly, and
+     * a nested `{ date }` unwraps one more level. The SmartSuite *date field*
+     * type does produce the nested form, so both are real and both are tested.
+     */
+    if (value.on) {
+      return toDate(isDict(value.on) ? (value.on.date ?? value.on) : value.on);
+    }
     if (value.from_date) return toDate(value.from_date);
   }
   return undefined;
