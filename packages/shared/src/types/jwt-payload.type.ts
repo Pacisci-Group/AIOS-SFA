@@ -31,6 +31,23 @@ export interface JwtPayload {
    */
   tokenVersion?: number;
   /**
+   * The platform admin acting as this user, when the session was minted by
+   * `POST /auth/impersonate/:userId` (PAC-70). Absent on every ordinary login.
+   *
+   * **Provenance only — never an authorization input.** `sub` is the target
+   * user, so every guard resolves the target's real `AccessContext` from the
+   * store and the session can do exactly what they can do, no more. This claim
+   * exists so the API can say who is really behind a request and so the client
+   * can show a banner.
+   *
+   * ⚠ Deliberately on the token and **not** on {@link AccessContext}. The
+   * resolved context is what `PermissionCache` serializes and is keyed by user
+   * id alone — putting a per-session field there would both need a cache version
+   * bump and leak one admin's impersonation into the target's own cached
+   * context.
+   */
+  impersonatedBy?: string;
+  /**
    * Issued-at, in seconds. Added by `jsonwebtoken` at sign time and passed
    * straight through by `JwtStrategy.validate`; declared here because it is
    * genuinely present, not because anything authorizes off it.
