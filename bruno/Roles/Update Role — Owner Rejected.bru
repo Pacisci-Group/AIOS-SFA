@@ -1,0 +1,47 @@
+meta {
+  name: Update Role — Owner Rejected
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{baseUrl}}/roles/{{ownerRoleId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+body:json {
+  {
+    "levels": [
+      { "moduleKey": "leads", "level": "none" }
+    ]
+  }
+}
+
+tests {
+  test("refuses to edit the owner role", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # PATCH /roles/:ownerRoleId — rejected
+
+  Pins the guard rather than testing a feature.
+
+  The Agency Owner role carries `grantsAllEnabledModules: true`: its access is
+  computed as "read + write on every module the agency has enabled", not stored
+  as a page matrix. Accepting a level edit would either silently do nothing or,
+  worse, look like it worked.
+
+  It also closes a real hole. Before this check, an owner could `PATCH` their own
+  role and strip the `agency:*` capabilities from it — the web rendered the role
+  read-only, but the API never agreed.
+
+  **Expected:** `409 Conflict` — *"The Agency Owner role always has full access
+  to every enabled module and cannot be edited."*
+}

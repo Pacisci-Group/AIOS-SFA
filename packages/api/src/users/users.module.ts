@@ -15,6 +15,10 @@ import {
   ServiceTicket,
   ServiceTicketSchema,
 } from '../crm/schemas/service-ticket.schema';
+import {
+  UserRole,
+  UserRoleSchema,
+} from '../permissions/schemas/user-role.schema';
 import { User, UserSchema } from './schemas/user.schema';
 import { UserWorkReleaseService } from './user-work-release.service';
 import { UsersController } from './users.controller';
@@ -28,6 +32,7 @@ import { UsersService } from './users.service';
       { name: User.name, schema: UserSchema },
       { name: AgencyRole.name, schema: AgencyRoleSchema },
       { name: Agency.name, schema: AgencySchema },
+      { name: UserRole.name, schema: UserRoleSchema },
       // Read by `UserWorkReleaseService` when an employee is removed. Schemas
       // only — the CRM *services* are not imported, so removing a user does not
       // drag the CRM module's dependency graph into this one.

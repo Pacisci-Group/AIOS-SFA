@@ -388,10 +388,10 @@ export class LeadDetailService {
   /**
    * The lead's quote recaps, newest first.
    *
-   * ⚠ The legacy fallback is load-bearing, not defensive. The migration writes
-   * only `legacyLeadId` on recaps and `backfill-deal-refs` repairs deals rather
-   * than these — so a plain `{ leadId }` query returns nothing for *every*
-   * migrated lead, and the quote block would be empty on all real data.
+   * ⚠ The legacy fallback is load-bearing, not defensive. A recap imported
+   * before the migration resolved `leadId` carries only `legacyLeadId`, so a
+   * plain `{ leadId }` query returns nothing for such leads and the quote block
+   * would be empty on exactly the oldest data.
    *
    * When the fallback hits, the refs are backfilled fire-and-forget: each lead
    * repairs itself the first time it is viewed, exactly as

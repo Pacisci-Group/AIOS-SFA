@@ -1,0 +1,69 @@
+meta {
+  name: Change User Roles
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{baseUrl}}/users/{{invitedUserId}}/roles
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+body:json {
+  {
+    "roleIds": ["{{inviteRoleId}}"]
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the populated roles", function () {
+    const body = res.getBody();
+    expect(body.roleIds).to.be.an("array").with.lengthOf(1);
+    expect(body.roleIds[0]).to.have.property("slug");
+  });
+}
+
+docs {
+  # PATCH /users/:userId/roles — replace a user's roles
+
+  **Module:** none (`@SkipModule()`).
+  **Permission:** `agency:users:write`
+
+  Runs against the **invited** row from *Invite User*, before *Revoke Invite*
+  deletes it — deliberately not against the producer, whose `own` data scope the
+  Leads / Performance / Leaderboard folders depend on.
+
+  A full replacement, not a merge. A user may hold several roles: their
+  permissions union, and their data scope collapses to the **widest** of the
+  roles held — so pairing Producer (`own`) with Data Team (`agency`) gives agency
+  scope on everything.
+
+  The assignment lives in the `userRoles` collection. The response still returns
+  `roleIds` as populated `{ _id, name, slug }` objects, unchanged from when it
+  was an array on the user document.
+
+  ## Owner protection
+
+  | Situation | Result |
+  |---|---|
+  | Adding the owner role to anyone | Allowed — this is how a second owner comes to exist. |
+  | An owner giving up **their own** owner role, with another owner present | Allowed. |
+  | An owner giving up their own owner role as the **last** owner | `409` — the agency would have nobody able to administer it. |
+  | Taking the owner role off **someone else** | `403` — platform administrators only. |
+
+  ## Errors
+  - `400 Bad Request` — a role id that is not a valid ObjectId, or belongs to
+    another agency.
+  - `403 Forbidden` — missing `agency:users:write`, or the owner rule above.
+  - `404 Not Found` — no such user in this agency.
+  - `409 Conflict` — the last-owner rule.
+}

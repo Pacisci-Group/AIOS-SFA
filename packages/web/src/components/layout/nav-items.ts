@@ -112,7 +112,9 @@ export const NAV_SECTIONS: NavSection[] = [
         to: "/settings/roles",
         label: "Roles & Permissions",
         icon: KeyRound,
-        permission: "agency:users:permissions",
+        // Must match the route guard and what the page actually calls
+        // (`GET /roles`). See the note on the route in `App.tsx`.
+        permission: "agency:roles:read",
       },
     ],
   },

@@ -4,9 +4,11 @@ import { Connection, Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import {
+  AgencyPermission,
   DataScope,
   DEFAULT_ROLE_TEMPLATES,
   ModuleKey,
+  PlatformPermission,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
@@ -304,18 +306,37 @@ describe('SFA API (e2e)', () => {
       }
     });
 
-    it('PATCH /api/v1/roles/:roleId — preserves owner admin permissions', async () => {
-      const res = await request(app.getHttpServer())
+    /**
+     * The owner role's access is a rule — everything the agency has enabled —
+     * not a stored page matrix, so editing its levels would either do nothing
+     * or appear to work. The web has always rendered it read-only; the API
+     * used to disagree, which let an owner PATCH their own admin permissions
+     * away.
+     */
+    it('PATCH /api/v1/roles/:roleId — refuses to edit the owner role', async () => {
+      await request(app.getHttpServer())
         .patch(`/api/v1/roles/${seed.ownerRoleId}`)
+        .set(authHeader(ownerToken))
+        .send({ levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
+        .expect(409);
+    });
+
+    it('PATCH /api/v1/roles/:roleId — preserves admin permissions on an editable role', async () => {
+      // The throwaway role, never Producer: this replaces the whole page matrix,
+      // so editing a role other tests depend on would strip their access and
+      // fail them somewhere else entirely.
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/roles/${seed.editableRoleId}`)
         .set(authHeader(ownerToken))
         .send({ levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
         .expect(200);
 
-      // Page levels change, but agency-admin permissions are never dropped.
+      // Page levels change; any agency-admin permission on the role survives.
       const body = res.body as { permissions: string[] };
-      expect(body.permissions).toContain('agency:roles:read');
-      expect(body.permissions).toContain('agency:roles:write');
       expect(body.permissions).toContain('leads:read');
+      expect(
+        body.permissions.filter((p) => p.startsWith('platform:')),
+      ).toHaveLength(0);
     });
 
     it('PATCH /api/v1/roles/:roleId — forbidden for producer', async () => {
@@ -416,6 +437,73 @@ describe('SFA API (e2e)', () => {
       expect(body.effectivePermissions).toContain('clients:read');
     });
 
+    /**
+     * The two halves of a role's permission set are independently optional, and
+     * each preserves the other when omitted. Worth three cases rather than one:
+     * sending only `levels` is what the web did for its whole life, and sending
+     * only `adminPermissions` wiping the page matrix is the exact bug this
+     * asymmetry exists to prevent.
+     */
+    describe('PATCH /api/v1/roles/:roleId — agency capabilities', () => {
+      const patchRole = (body: Record<string, unknown>) =>
+        request(app.getHttpServer())
+          .patch(`/api/v1/roles/${seed.editableRoleId}`)
+          .set(authHeader(ownerToken))
+          .send(body);
+
+      it('grants a capability alongside a page level', async () => {
+        const res = await patchRole({
+          levels: [{ moduleKey: ModuleKey.Leads, level: 'write' }],
+          adminPermissions: [AgencyPermission.ChangeLogsRead],
+        }).expect(200);
+
+        const { permissions } = res.body as { permissions: string[] };
+        expect(permissions).toContain(AgencyPermission.ChangeLogsRead);
+        expect(permissions).toContain('leads:write');
+        expect(permissions).toContain('leads:read');
+      });
+
+      it('preserves page levels when only capabilities are sent', async () => {
+        const res = await patchRole({
+          adminPermissions: [AgencyPermission.ChangeLogsRead],
+        }).expect(200);
+
+        const { permissions } = res.body as { permissions: string[] };
+        expect(permissions).toContain('leads:write');
+      });
+
+      it('preserves capabilities when only levels are sent', async () => {
+        const res = await patchRole({
+          levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }],
+        }).expect(200);
+
+        expect((res.body as { permissions: string[] }).permissions).toContain(
+          AgencyPermission.ChangeLogsRead,
+        );
+      });
+
+      it('treats an empty array as "remove them all"', async () => {
+        const res = await patchRole({ adminPermissions: [] }).expect(200);
+
+        const { permissions } = res.body as { permissions: string[] };
+        expect(permissions).not.toContain(AgencyPermission.ChangeLogsRead);
+        // …without taking the page levels with them.
+        expect(permissions).toContain('leads:read');
+      });
+
+      /**
+       * Rejected rather than filtered. `platform:*` is above the tenant
+       * boundary, so an agency owner granting themselves one would be an
+       * escalation out of their own tenant — and a silent drop would show in
+       * the UI as saved when nothing was stored.
+       */
+      it('refuses a platform permission', async () => {
+        await patchRole({
+          adminPermissions: [PlatformPermission.AgenciesWrite],
+        }).expect(400);
+      });
+    });
+
     it('PATCH /api/v1/users/:userId/roles', async () => {
       const res = await request(app.getHttpServer())
         .patch(`/api/v1/users/${invitedUserId}/roles`)
@@ -423,7 +511,11 @@ describe('SFA API (e2e)', () => {
         .send({ roleIds: [seed.producerRoleId] })
         .expect(200);
 
-      expect((res.body as { roleIds: string[] }).roleIds.length).toBe(1);
+      // The response still carries populated roles, even though the assignment
+      // now lives in `userRoles` rather than on the user document.
+      const body = res.body as { roleIds: { _id: string; slug: string }[] };
+      expect(body.roleIds).toHaveLength(1);
+      expect(body.roleIds[0]._id).toBe(seed.producerRoleId);
     });
 
     it('PATCH /api/v1/users/:userId/permissions — per-page overrides', async () => {

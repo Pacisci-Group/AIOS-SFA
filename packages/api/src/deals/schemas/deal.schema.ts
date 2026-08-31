@@ -323,9 +323,9 @@ DealSchema.index(
 DealSchema.index({ agencyId: 1, leadId: 1, soldDate: -1 });
 
 /**
- * Its legacy fallback. `backfill-deal-refs` populates `leadId` on migrated
- * deals, but only for agencies where it has actually been run, so the read path
- * must still be able to find a deal by the lead's SmartSuite id.
+ * Its legacy fallback. The migration resolves `leadId` on import now, but a
+ * deal imported before it did carries only the SmartSuite id, so the read path
+ * must still be able to find a deal that way.
  *
  * Partial, never `sparse` — see the `submissionToken` index below.
  */

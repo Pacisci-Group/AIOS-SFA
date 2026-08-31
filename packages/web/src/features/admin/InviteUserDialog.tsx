@@ -37,7 +37,11 @@ export function InviteUserDialog() {
   const [open, setOpen] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const allowed = can("agency:users:write");
+  // Both, because the dialog does both: `POST /users/invite` needs
+  // `agency:users:write`, and its role picker calls `GET /roles`, which needs
+  // `agency:roles:read`. Gating on the first alone opened the dialog for a role
+  // that then got an empty picker and a 403 in the console.
+  const allowed = can("agency:users:write") && can("agency:roles:read");
 
   const rolesQuery = useQuery({
     queryKey: ["roles"],

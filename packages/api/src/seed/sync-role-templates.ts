@@ -3,7 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { AppModule } from '../app.module';
 import { AccessResolverService } from '../permissions/access-resolver.service';
-import { PermissionsService } from '../permissions/permissions.service';
+import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 
 /**
@@ -15,9 +15,7 @@ import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
  * calls it for agencies nobody re-seeds:
  *
  * - the core seed (`seed.ts`) only touches `slug: 'smith-family-agency'`;
- * - `platform.service.ts` only runs it when an agency is **created**;
- * - `migrate-permissions.ts` deliberately backfills only `agency:`/`platform:`
- *   strings, so it never delivers a page permission.
+ * - `platform.service.ts` only runs it when an agency is **created**.
  *
  * So a new page permission on a template (PAC-38 added `clients:write` to
  * Producer) reaches a freshly-seeded dev database and nowhere else. Every
@@ -43,7 +41,7 @@ async function syncRoleTemplates() {
   const agencyModel = app.get<Model<AgencyDocument>>(
     getModelToken(Agency.name),
   );
-  const permissionsService = app.get(PermissionsService);
+  const roleAssignments = app.get(RoleAssignmentsService);
   const accessResolver = app.get(AccessResolverService);
 
   const agencies = await agencyModel.find().select('slug name').lean();
@@ -57,7 +55,7 @@ async function syncRoleTemplates() {
   for (const agency of agencies) {
     const id = agency._id.toString();
     try {
-      await permissionsService.seedDefaultRoles(agency._id);
+      await roleAssignments.seedDefaultRoles(agency._id);
       // Without this, already-resolved contexts keep the old permission set
       // until the safety TTL expires.
       await accessResolver.invalidateAgency(id);

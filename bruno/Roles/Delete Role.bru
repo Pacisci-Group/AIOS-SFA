@@ -1,0 +1,44 @@
+meta {
+  name: Delete Role
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{baseUrl}}/roles/{{createdRoleId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /roles/:roleId — delete a custom role
+
+  **Module:** none (`@SkipModule()`).
+  **Permission:** `agency:roles:write`
+
+  Last in the folder on purpose: it removes the role *Create Role* made, so a
+  full run leaves no residue — the same discipline as `Users/Revoke Invite.bru`.
+
+  Deleting cascades to `rolePermissions` and `userRoles`, and the holders' cached
+  permissions are invalidated **before** the delete — afterwards there is no role
+  left to resolve holders by.
+
+  ## Errors — three refusals, for three different reasons
+  - `409 Conflict` — **a system role.** Its slug is referenced by code. Remove it
+    from everyone who holds it instead.
+  - `409 Conflict` — **the owner role.** The agency would have nobody able to
+    administer it.
+  - `409 Conflict` — **someone still holds it.** Deleting would silently strip
+    their access; the message names the count.
+  - `404 Not Found` — no such role in this agency.
+  - `403 Forbidden` — missing `agency:roles:write`.
+}

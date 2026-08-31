@@ -129,6 +129,27 @@ export function getUser(userId: string) {
   return apiFetch<AgencyUserDetail>(`/users/${userId}`);
 }
 
+/**
+ * Replace a user's roles.
+ *
+ * `PATCH /users/:id/roles` has existed since day one with no client and no
+ * caller, which is why the invite dialog's "Adjustable afterwards" was untrue.
+ *
+ * A full replacement, not a merge. Multiple roles union their permissions and
+ * take the **widest** data scope of the set.
+ *
+ * The API owns the owner-protection rules — an owner may give up their own
+ * owner role but not someone else's (403), and never the last one (409).
+ * Surface the server's message rather than re-deriving those rules here; the
+ * client cannot see who else holds the role.
+ */
+export function updateUserRoles(userId: string, roleIds: string[]) {
+  return apiFetch<AgencyUserDetail>(`/users/${userId}/roles`, {
+    method: 'PATCH',
+    body: JSON.stringify({ roleIds }),
+  });
+}
+
 export function updateUserPermissions(
   userId: string,
   overrides: PageLevelOverride[],

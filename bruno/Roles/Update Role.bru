@@ -1,0 +1,112 @@
+meta {
+  name: Update Role
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/roles/{{createdRoleId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+body:json {
+  {
+    "description": "Renamed and re-scoped by the Bruno collection.",
+    "dataScope": "own",
+    "levels": [
+      { "moduleKey": "leads", "level": "write" },
+      { "moduleKey": "dashboard", "level": "read" }
+    ],
+    "adminPermissions": ["agency:changelogs:read"]
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("write implies read", function () {
+    expect(res.getBody().permissions).to.include.members([
+      "leads:read",
+      "leads:write",
+      "dashboard:read",
+    ]);
+  });
+
+  test("applies the metadata too", function () {
+    expect(res.getBody().dataScope).to.equal("own");
+  });
+
+  test("grants the agency capability", function () {
+    expect(res.getBody().permissions).to.include("agency:changelogs:read");
+  });
+
+  test("never grants a platform permission", function () {
+    const platform = res
+      .getBody()
+      .permissions.filter((p) => p.startsWith("platform:"));
+    expect(platform).to.eql([]);
+  });
+}
+
+docs {
+  # PATCH /roles/:roleId — update a role
+
+  **Module:** none (`@SkipModule()`).
+  **Permission:** `agency:roles:write`
+
+  One endpoint takes both the role's metadata and its page-permission matrix,
+  and applies whichever parts are present. `{ levels }` alone is the shape the
+  web has always sent, so this stays backward compatible.
+
+  ## Body — all fields optional
+
+  | Field | Type | Notes |
+  |---|---|---|
+  | name | string, 2–60 | A **system role** can be renamed for display, but its slug is referenced by code and never changes. |
+  | description | string, ≤240 | |
+  | dataScope | `own` \| `branch` \| `agency` | Changing it invalidates every holder's cached permissions — a stale scope is a user reading rows they should no longer see. |
+  | levels | `{ moduleKey, level }[]` | `level` is `none` \| `read` \| `write`. Replaces the whole page matrix. |
+  | adminPermissions | `string[]` | The `agency:*` capabilities the role grants. Replaces the whole set. |
+
+  ## Both permission fields are independently optional
+
+  **Omitting one preserves it; sending `[]` clears it.** So `{ levels }` alone —
+  which is what the web sent for its whole life — leaves the role's capabilities
+  untouched, and `{ adminPermissions }` alone leaves the page matrix untouched.
+  The checks are for `undefined` rather than falsiness precisely so an empty
+  array stays a real instruction.
+
+  ⚠ `platform:*` is preserved and **never settable here**, whatever is passed.
+  Those permissions sit above the tenant boundary; an agency owner granting
+  themselves one would be a privilege escalation out of their own tenant.
+  Passing one is a `400` rather than a silent drop — a silently ignored
+  permission would show in the UI as saved when it was never stored.
+
+  ## How levels are applied
+
+  - `write` expands to both `{module}:read` and `{module}:write`; `write` always
+    implies `read`.
+  - Levels for modules the agency has **not** enabled are dropped silently — the
+    permission would be filtered out at resolution time anyway.
+  - Existing `agency:*` / `platform:*` permissions on the role are **preserved**
+    and cannot be added or removed here. Admin capabilities are not part of the
+    page model.
+  - Every holder's cached permission set is invalidated.
+
+  ## Errors
+  - `404 Not Found` — no such role in this agency.
+  - `409 Conflict` — the role has `grantsAllEnabledModules` (Agency Owner). Its
+    access is a *rule* — everything the agency has enabled — not a stored matrix,
+    so editing its levels would either do nothing or appear to work. The web has
+    always rendered it read-only; the API used to disagree, which let an owner
+    PATCH their own admin permissions away.
+  - `409 Conflict` — renaming a system role in a way that would change its slug.
+  - `403 Forbidden` — missing `agency:roles:write`.
+}

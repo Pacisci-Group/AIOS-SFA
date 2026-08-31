@@ -34,7 +34,17 @@ import {
   UserWorkReleaseService,
   type ReleasedWork,
 } from './user-work-release.service';
-import { InviteResponse, UserDetailResponse } from './users.types';
+import { RoleAssignmentsService } from '../permissions/role-assignments.service';
+import {
+  ActingUser,
+  OwnerProtectionService,
+} from '../permissions/owner-protection.service';
+import { UserRole } from '../permissions/schemas/user-role.schema';
+import {
+  AgencyUserListItem,
+  InviteResponse,
+  UserDetailResponse,
+} from './users.types';
 
 /**
  * Per-user overrides only ever move a user between page levels, so every
@@ -54,22 +64,70 @@ export class UsersService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
+    @InjectModel(UserRole.name) private userRoleModel: Model<UserRole>,
     private permissionsService: PermissionsService,
+    private roleAssignments: RoleAssignmentsService,
+    private ownerProtection: OwnerProtectionService,
     private accessResolver: AccessResolverService,
     private mailService: MailService,
     private configService: ConfigService,
     private workRelease: UserWorkReleaseService,
   ) {}
 
-  findByAgency(agencyId: string) {
-    return this.userModel
+  /**
+   * Roles for a set of users, as the `{ _id, name, slug }` shape the web has
+   * always received from `.populate('roleIds')`.
+   *
+   * Replaces that populate now that the assignment lives in `userRoles`. Batched
+   * over all the users at once — the alternative, a lookup per row, is how a
+   * 15-person agency turns one query into sixteen.
+   */
+  private async rolesByUser(
+    userIds: Types.ObjectId[],
+  ): Promise<Map<string, { _id: Types.ObjectId; name: string; slug: string }[]>> {
+    const byUser = new Map<
+      string,
+      { _id: Types.ObjectId; name: string; slug: string }[]
+    >();
+    if (!userIds.length) return byUser;
+
+    const links = await this.userRoleModel
+      .find({ userId: { $in: userIds } })
+      .select({ userId: 1, roleId: 1 })
+      .lean();
+    if (!links.length) return byUser;
+
+    const roles = await this.roleModel
+      .find({ _id: { $in: links.map((link) => link.roleId) } })
+      .select({ name: 1, slug: 1 })
+      .lean();
+    const roleById = new Map(roles.map((role) => [role._id.toString(), role]));
+
+    for (const link of links) {
+      const role = roleById.get(link.roleId.toString());
+      if (!role) continue;
+      const key = link.userId.toString();
+      const list = byUser.get(key) ?? [];
+      list.push({ _id: role._id, name: role.name, slug: role.slug });
+      byUser.set(key, list);
+    }
+    return byUser;
+  }
+
+  async findByAgency(agencyId: string): Promise<AgencyUserListItem[]> {
+    const users = await this.userModel
       .find({
         agencyId: new Types.ObjectId(agencyId),
         isPlatformAdmin: { $ne: true },
       })
       .select('-passwordHash -inviteToken -passwordResetToken')
-      .populate('roleIds', 'name slug')
       .lean();
+
+    const byUser = await this.rolesByUser(users.map((user) => user._id));
+    return users.map((user) => ({
+      ...user,
+      roleIds: byUser.get(user._id.toString()) ?? [],
+    }));
   }
 
   async findById(
@@ -82,19 +140,29 @@ export class UsersService {
         agencyId: new Types.ObjectId(agencyId),
       })
       .select('-passwordHash -inviteToken -passwordResetToken')
-      .populate('roleIds', 'name slug permissions')
       .lean();
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    const [effectivePermissions, roleDefaultPermissions] = await Promise.all([
-      this.permissionsService.resolveForUser(user as UserDocument),
-      this.permissionsService.resolveRoleDefaults(user as UserDocument),
-    ]);
+    const [effectivePermissions, roleDefaultPermissions, byUser, overrides] =
+      await Promise.all([
+        this.permissionsService.resolveForUser(user as UserDocument),
+        this.permissionsService.resolveRoleDefaults(user as UserDocument),
+        this.rolesByUser([user._id]),
+        this.roleAssignments.userOverrides(user._id),
+      ]);
 
+    // The response keeps the shape the web already consumes — `roleIds` as
+    // populated role objects, and the overrides as two string arrays — even
+    // though all three now come from join collections rather than fields on the
+    // user. Changing the wire format here would be a second, unrelated migration
+    // for every caller.
     return {
       ...user,
+      roleIds: byUser.get(user._id.toString()) ?? [],
+      permissionGrants: overrides.grants,
+      permissionRevokes: overrides.revokes,
       effectivePermissions,
       roleDefaultPermissions,
     };
@@ -130,11 +198,23 @@ export class UsersService {
       // A random unusable secret, not a known placeholder: until the invite is
       // accepted there is no password, and this row must never be loggable into.
       passwordHash: await bcrypt.hash(randomBytes(16).toString('hex'), 12),
-      roleIds: input.roleIds.map((id) => new Types.ObjectId(id)),
       firstName: input.firstName,
       lastName: input.lastName,
       isActive: false,
     });
+
+    // The inviter is the actor. Owner protection does not fire on a brand-new
+    // user — there is no owner role to strip — but routing through the one
+    // writer is what keeps that true as the rules grow.
+    await this.roleAssignments.setUserRoles(
+      {
+        userId: input.invitedByUserId ?? user._id.toString(),
+        isPlatformAdmin: false,
+      },
+      input.agencyId,
+      user._id,
+      input.roleIds,
+    );
 
     return this.issueInvite(user, input.invitedByUserId);
   }
@@ -202,10 +282,11 @@ export class UsersService {
    * the end. Without that call the old token keeps working until it expires.
    */
   async deactivateUser(
+    actor: ActingUser,
     agencyId: string,
     userId: string,
-    actorUserId?: string,
   ): Promise<ReleasedWork> {
+    const actorUserId = actor.userId;
     if (!Types.ObjectId.isValid(userId)) {
       throw new NotFoundException('User not found');
     }
@@ -243,7 +324,10 @@ export class UsersService {
       );
     }
 
-    await this.assertNotLastAgencyOwner(agencyId, userId);
+    // Policy first (an owner may not remove another owner), then integrity
+    // (the agency may never be left with none). Both live in
+    // OwnerProtectionService so RolesService enforces the identical rules.
+    await this.ownerProtection.assertMayDeactivate(actor, agencyId, userId);
 
     user.isActive = false;
     user.deactivatedAt = new Date();
@@ -303,43 +387,6 @@ export class UsersService {
     await this.accessResolver.invalidateUser(userId);
 
     return this.findById(agencyId, userId);
-  }
-
-  /**
-   * Refuse to remove the only person who can administer the agency.
-   *
-   * Without this an owner can remove the other owner, then be removed
-   * themselves by nobody — leaving an agency with users, data and billing but
-   * no one able to invite, assign roles or manage permissions. Recovering that
-   * needs a platform admin and a database edit.
-   */
-  private async assertNotLastAgencyOwner(
-    agencyId: string,
-    userId: string,
-  ): Promise<void> {
-    const ownerRole = await this.roleModel
-      .findOne({ agencyId: new Types.ObjectId(agencyId), slug: 'agency_owner' })
-      .select('_id')
-      .lean();
-    if (!ownerRole) return;
-
-    const isOwner = await this.userModel.exists({
-      _id: new Types.ObjectId(userId),
-      roleIds: ownerRole._id,
-    });
-    if (!isOwner) return;
-
-    const remainingOwners = await this.userModel.countDocuments({
-      agencyId: new Types.ObjectId(agencyId),
-      roleIds: ownerRole._id,
-      isActive: true,
-      _id: { $ne: new Types.ObjectId(userId) },
-    });
-    if (remainingOwners === 0) {
-      throw new ConflictException(
-        'This is the agency’s only owner. Assign the owner role to someone else first.',
-      );
-    }
   }
 
   /**
@@ -497,7 +544,17 @@ export class UsersService {
     return fullName(user.firstName, user.lastName);
   }
 
+  /**
+   * Replace a user's roles.
+   *
+   * `actor` is threaded from `request.access` because owner protection needs to
+   * know *who* is asking: an owner may give up their own owner role, but only a
+   * platform admin may take it off someone else. The check lives in
+   * `RoleAssignmentsService.setUserRoles`, so it cannot be skipped by a caller
+   * that forgets.
+   */
   async updateRoles(
+    actor: ActingUser,
     agencyId: string,
     userId: string,
     roleIds: string[],
@@ -512,9 +569,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    user.roleIds = roleIds.map((id) => new Types.ObjectId(id));
-    await user.save();
-    await this.accessResolver.invalidateUser(userId);
+    await this.roleAssignments.setUserRoles(actor, agencyId, userId, roleIds);
     return this.findById(agencyId, userId);
   }
 
@@ -584,10 +639,12 @@ export class UsersService {
     const revokeList = [...revokes];
     this.assertPagePermissions([...grantList, ...revokeList]);
 
-    user.permissionGrants = grantList;
-    user.permissionRevokes = revokeList;
-    await user.save();
-    await this.accessResolver.invalidateUser(userId);
+    await this.roleAssignments.setUserOverrides(
+      agencyId,
+      userId,
+      grantList,
+      revokeList,
+    );
 
     return this.findById(agencyId, userId);
   }

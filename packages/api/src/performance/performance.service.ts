@@ -130,8 +130,8 @@ export class PerformanceService {
            * null-household row into one bucket inflates the average without
            * bound on migrated data, and dropping them counts their premium in
            * the numerator while omitting them from the denominator. Counting
-           * each separately can only understate the average, and it converges
-           * on the true value as `backfill:deal-refs` fills the refs in.
+           * each separately can only understate the average, and rows the
+           * migration did resolve a household for are counted correctly.
            *
            * The `h:`/`l:`/`r:` prefixes stop a legacy string id from ever
            * colliding with a stringified ObjectId.

@@ -123,12 +123,12 @@ npm run test:e2e           # API e2e tests
 >   without it. Re-runnable: upserts on the control-number key, so a second run
 >   appends what is new and updates what changed.
 >
-> **After migrating, run `api:backfill:deal-refs:dev`** (deal/recap links +
-> policy match keys) — it only rewrites data already in Mongo, so it needs no
-> credentials and is safe to re-run. Household `HH-…` references need no
-> backfill: the migration and the demo seed each reconcile them at the end of
-> their household pass, so whichever one populated the database leaves the
-> numbering consistent.
+> **Nothing needs running after the migration.** It writes its own cross-record
+> refs (`leadId` / `householdId` / `quoteRecapId`), its own match keys
+> (`policies.policyNumberKey`, `quoteRecaps.quoteDateYmd`) and reconciles
+> household `HH-…` numbering at the end of its household pass. The repair passes
+> that used to follow it were for databases migrated by older code and have been
+> removed — a run against real data found them doing nothing.
 
 ---
 
@@ -154,10 +154,10 @@ each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 ## 5. API — permission & tenancy spine (`packages/api` + `packages/shared`)
 
 - **Hierarchy:** `Platform (Super Admin) → Agency (tenant) → Branch → User`.
-- **Global guards** (in `app.module.ts`): `JwtAuthGuard` → `TenantGuard` → `BranchGuard` → `ModuleGuard` → `PermissionsGuard`.
+- **Global guards** (in `app.module.ts`, order load-bearing): `JwtAuthGuard` → `AccessContextGuard` → `TenantGuard` → `BranchGuard` → `ModuleGuard` → `PermissionsGuard`. `AccessContextGuard` resolves the effective permission set from MongoDB into `request.access`; the rest read from there. The JWT carries **no** permissions.
 - **Data scopes:** `own` · `branch` · `agency`.
 - **Module keys** (`shared/src/enums/module-key.enum.ts`): `dashboard, leads, quote_recaps, mailers, crm_service, clients, deal_audits, onboardings, management, owner_dashboard, command_center, performance, leaderboard`. Toggled per agency by Super Admin; disabled ⇒ hidden nav + API 403.
-- **Permissions** (`shared/src/permissions/permission.constants.ts`): `"<module>:<read|write>"` + `platform:*` / `agency:*`. Effective set resolved in `resolve-permissions.ts` (role perms + grants − revokes, filtered to agency-enabled modules).
+- **Permissions** (`shared/src/permissions/permission.constants.ts`): `"<module>:<read|write>"` + `platform:*` / `agency:*` — 39 strings, described as rows by `PERMISSION_CATALOG` and seeded into the global `permissions` collection. **Relational RBAC**: `rolePermissions`, `userRoles` and `userPermissions` are join collections, written *only* by `RoleAssignmentsService` — a second writer would bypass cache invalidation and the owner-protection checks. Effective set still resolved by the unchanged pure `resolve-permissions.ts` (role perms + grants − revokes, filtered to agency-enabled modules); only the loader is relational, because the permission *strings* are the contract for 91 guard decorators and the whole web app.
 - **Default role templates** (`shared/src/permissions/default-role-templates.ts`): Agency Owner (agency) · Branch Manager (branch) · Producer (**own**: `dashboard:read, leads:r/w, quote_recaps:r/w, performance:read, leaderboard:read`) · CRM (branch) · Data Team (agency).
 - **Migration key:** `User`/`TenantRecord` carry `legacySmartSuiteId`. The core seed (`src/seed/seed.ts`) is **platform-required data only** — it creates the **platform super admin** plus an **empty tenant scaffold** (agency "Smith Family Agency" + Main branch + default roles) as the migration target. It creates **no demo login users and no CRM data**; a fully populated agency comes from the demo seed (`src/seed/demo/`).
 - **Schemas exist; read path does not.** Mongoose schemas now exist for every domain collection (`src/<domain>/schemas/*.schema.ts`, most extending `src/common/schemas/tenant-record.schema.ts`) and are populated by the SmartSuite→Mongo migration (`src/migration/`). The HTTP **feature controllers are still stubs** (`src/feature-modules/feature.controllers.ts`) returning `{ status: 'ready' }` — add real query services/DTOs there as dashboards get wired.
@@ -181,7 +181,7 @@ Fillout** and is net-new scope.
 ## 7. Cross-cutting product rules
 
 - **Allstate color identity**; full **light + dark** themes.
-- **Permission-based** UI gating (not RBAC).
+- **Permission-based** UI gating. Roles are real (and relational), but every gate checks a *permission*, never a role name — `usePermissions().can(...)`, never `user.roles.includes(...)`. Role names are display only.
 - **Dynamic data:** global fuzzy omni-search; **real-time faceted filtering** (instant, no "Apply" button); **data masking** (raw IDs shown as human-readable labels, e.g. `TKT-2026-004`).
 - **Layout:** asymmetric **60/40** or **3-column** splits on detail pages.
 
@@ -324,7 +324,7 @@ Chakra, etc.).
   Two API traps are written up in `docs/tanstack-form-spike-findings.md` —
   read it before touching the Sold wizard's per-card validation.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
-- **Changing the *options* of an existing index needs a migration script.** Mongoose's `autoIndex` only creates indexes that are missing — it never rebuilds one whose options changed. Editing the schema therefore fixes only collections created *afterwards*, and silently leaves existing ones on the old definition (this is how the `agencyId + legacySmartSuiteId` dedupe index stayed `sparse` on three collections after being corrected to a partial filter, breaking lead creation with E11000). Copy `src/migration/backfill/fix-legacy-dedupe-indexes.ts`: discover affected collections by index name rather than hard-coding them, check for conflicting data *before* dropping, and keep it idempotent.
+- **Changing the *options* of an existing index needs a migration script.** Mongoose's `autoIndex` only creates indexes that are missing — it never rebuilds one whose options changed. Editing the schema therefore fixes only collections created *afterwards*, and silently leaves existing ones on the old definition (this is how the `agencyId + legacySmartSuiteId` dedupe index stayed `sparse` on three collections after being corrected to a partial filter, breaking lead creation with E11000). Write a one-off script that discovers affected collections by index name rather than hard-coding them (which collections are stale depends on when each was created, so it differs per environment), checks for conflicting data *before* dropping — rebuilding a unique index over real duplicates fails, and failing after the drop leaves no uniqueness at all — and stays idempotent. `git log -- packages/api/src/migration/backfill/fix-legacy-dedupe-indexes.ts` has a worked example; the script itself was deleted once production had no database old enough to need it.
 - **`createdBy` / `updatedBy` are stamped for you — except on `bulkWrite`.** `authorshipPlugin` (`src/common/mongo/authorship.plugin.ts`) is registered connection-wide and fills both fields from the request context for `save()`/`create()`, `updateOne`, `updateMany`, `findOneAndUpdate` and `insertMany` on every schema extending `TenantRecord`. **`Model.bulkWrite()` bypasses Mongoose middleware entirely**, so a bulk call site that should record an author must spread `authorshipForInsert()` into the document itself — see `AuditGenerationService.buildItem`. Writes with no request context (migration, seeds, the worker) leave both null, which reads as "system"; never mint a placeholder user id, and never backfill.
 - Run each package's `lint` (`npm run lint -w @sfa/api` / `-w @sfa/web`) before finishing.
 - Prefer real Mongoose schemas + services over extending the mock data / stubs when wiring a dashboard.

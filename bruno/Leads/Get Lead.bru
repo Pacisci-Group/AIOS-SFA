@@ -181,10 +181,10 @@ docs {
 
   ## Behaviour worth knowing
 
-  **Migrated records are found by their legacy ids.** The SmartSuite migration
-  writes only `legacyLeadId` on quote recaps and deals — `backfill-deal-refs`
-  repairs deals, never recaps — so a plain `leadId` lookup would return nothing
-  for every migrated lead. When the primary lookup misses, the service falls
+  **Migrated records are found by their legacy ids.** A quote recap or deal
+  imported before the migration resolved `leadId` carries only `legacyLeadId`,
+  so a plain `leadId` lookup returns nothing for it. When the primary lookup
+  misses, the service falls
   back to `legacyLeadId` and then **backfills the ref fire-and-forget**: each
   lead repairs itself the first time it is viewed, so the second read is fast.
   The same self-healing already applies to `householdId`.

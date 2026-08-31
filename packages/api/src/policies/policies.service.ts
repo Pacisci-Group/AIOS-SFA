@@ -327,9 +327,9 @@ export class PoliciesService {
    *
    * `Policy` carries no lead ref; the only route is `dealId → deal.leadId`, and
    * three real cases break it — a policy with no deal (migrated, or
-   * household-only), a migrated deal whose refs predate
-   * `backfill-deal-refs`, and a CRM policy transfer. Such a row can never
-   * appear on the Lead Detail timeline, which queries `{ agencyId, leadId }`.
+   * household-only), a deal imported before the migration resolved its refs,
+   * and a CRM policy transfer. Such a row can never appear on the Lead Detail
+   * timeline, which queries `{ agencyId, leadId }`.
    *
    * It is still recorded, because the alternative is an audit log that silently
    * omits exactly the edits made to the oldest and least-verifiable records.

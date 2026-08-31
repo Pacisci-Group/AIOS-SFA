@@ -15,6 +15,29 @@ export interface InviteResponse {
   inviteToken?: string;
 }
 
+/**
+ * A user in the agency directory.
+ *
+ * Explicit rather than inferred from `lean()` — the hydrated Mongoose type is
+ * too large for TypeScript to serialize, and this is the contract the web codes
+ * against. `roleIds` keeps its populated `{ _id, name, slug }` shape even though
+ * the assignment now lives in the `userRoles` join.
+ */
+export interface AgencyUserListItem {
+  _id: unknown;
+  agencyId?: unknown;
+  branchId?: unknown;
+  email: string;
+  roleIds: { _id: unknown; name: string; slug: string }[];
+  isPlatformAdmin: boolean;
+  firstName?: string;
+  lastName?: string;
+  isActive: boolean;
+  deactivatedAt?: Date | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export interface UserDetailResponse {
   _id: unknown;
   agencyId?: unknown;

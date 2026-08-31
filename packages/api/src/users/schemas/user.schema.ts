@@ -17,16 +17,22 @@ export class User {
   @Prop({ required: true })
   passwordHash: string;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'AgencyRole' }], default: [] })
-  roleIds: Types.ObjectId[];
-
-  /** Page permissions added on top of role defaults by the agency owner. */
-  @Prop({ type: [String], default: [] })
-  permissionGrants: string[];
-
-  /** Page permissions removed from role defaults by the agency owner. */
-  @Prop({ type: [String], default: [] })
-  permissionRevokes: string[];
+  /*
+   * Roles and permission overrides are NOT stored here.
+   *
+   * They live in the `userRoles` and `userPermissions` join collections, and
+   * `RoleAssignmentsService` is the only thing that writes them. What used to
+   * be `roleIds[]`, `permissionGrants[]` and `permissionRevokes[]` on this
+   * document moved out so a role can be queried from either side — which is
+   * what `AccessResolverService.invalidateRole` and the CRM assignee picker
+   * both need — and so an override can record who granted it and when.
+   *
+   * Read them through `RoleAssignmentsService.userRoleIds` /
+   * `.userOverrides`, or get the resolved set from
+   * `PermissionsService.buildAccessContext`. Never re-add an array here: two
+   * places to look is how a role assignment ends up invisible to cache
+   * invalidation.
+   */
 
   @Prop({ default: false })
   isPlatformAdmin: boolean;

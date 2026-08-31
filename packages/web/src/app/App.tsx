@@ -408,8 +408,14 @@ export function App() {
               </Route>
 
               {/* Owner-only role & per-user permission management */}
+              {/*
+                `agency:roles:read`, not `agency:users:permissions`: this page
+                calls `GET /roles` and saves with `PATCH /roles/:id`. Gating on
+                the users permission let a role holding that but not
+                `agency:roles:*` reach the page and 403 on save.
+              */}
               <Route
-                element={<RequirePermission permission="agency:users:permissions" />}
+                element={<RequirePermission permission="agency:roles:read" />}
               >
                 <Route
                   path="/settings/roles"

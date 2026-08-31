@@ -1,5 +1,12 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
-import { Public } from '../common/decorators/access.decorators';
+import type { JwtPayload } from '@sfa/shared';
+import {
+  Public,
+  SkipBranch,
+  SkipModule,
+  SkipTenant,
+} from '../common/decorators/access.decorators';
+import { CurrentUser } from '../common/decorators/user.decorators';
 import { AuthService } from './auth.service';
 import { AcceptInviteDto, LoginDto, RefreshTokenDto } from './dto/auth.dto';
 
@@ -11,6 +18,25 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  /**
+   * The caller's own identity and current permissions.
+   *
+   * Authenticated but otherwise ungated — `@SkipTenant`/`@SkipBranch` because a
+   * platform admin has no agency or branch, and asking "who am I" must work for
+   * them too.
+   *
+   * The client keeps this blob and reads permissions from it; without this
+   * endpoint it could only refresh at login or token refresh, so a permission
+   * change took up to the token lifetime to reach a signed-in browser.
+   */
+  @Get('me')
+  @SkipTenant()
+  @SkipBranch()
+  @SkipModule()
+  me(@CurrentUser() user: JwtPayload) {
+    return this.authService.me(user.sub);
   }
 
   @Public()

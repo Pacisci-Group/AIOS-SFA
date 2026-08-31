@@ -11,8 +11,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import type { AccessContext } from '@sfa/shared';
 import { AgencyPermission, JwtPayload, PageLevelOverride } from '@sfa/shared';
-import { AgencyId, CurrentUser } from '../common/decorators/user.decorators';
+import {
+  Access,
+  AgencyId,
+  CurrentUser,
+} from '../common/decorators/user.decorators';
 import {
   RequirePermissions,
   SkipModule,
@@ -108,10 +113,10 @@ export class UsersController {
   @RequirePermissions(AgencyPermission.UsersWrite)
   deactivate(
     @AgencyId() agencyId: string,
-    @CurrentUser() actor: JwtPayload | undefined,
+    @Access() access: AccessContext,
     @Param('userId') userId: string,
   ) {
-    return this.usersService.deactivateUser(agencyId, userId, actor?.sub);
+    return this.usersService.deactivateUser(access, agencyId, userId);
   }
 
   /** Restore a removed employee. Does not restore the work released on removal. */
@@ -125,10 +130,16 @@ export class UsersController {
   @RequirePermissions(AgencyPermission.UsersWrite)
   updateRoles(
     @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
     @Param('userId') userId: string,
     @Body() body: { roleIds: string[] },
   ) {
-    return this.usersService.updateRoles(agencyId, userId, body.roleIds);
+    return this.usersService.updateRoles(
+      access,
+      agencyId,
+      userId,
+      body.roleIds,
+    );
   }
 
   @Patch(':userId/permissions')
