@@ -1,0 +1,78 @@
+meta {
+  name: Presign Avatar Upload
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/me/avatar/uploads
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{profileAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "headshot.png",
+    "contentType": "image/png"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("avatarKey", res.getBody().key);
+    bru.setVar("avatarUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("namespaces the key to this user, not just the agency", function () {
+    // Stricter than the branding presign: `avatars/<userId>` is part of the
+    // fixed prefix, so `assertKeyOwnership` on commit is per-user exact — one
+    // producer can never commit a colleague's upload.
+    expect(res.getBody().key).to.match(
+      /^agencies\/[a-f0-9]{24}\/avatars\/[a-f0-9]{24}\//
+    );
+    expect(res.getBody().key).to.contain(bru.getVar("profileUserId"));
+  });
+
+  test("pins the content type the PUT must send", function () {
+    expect(res.getBody().requiredHeaders["Content-Type"]).to.equal("image/png");
+  });
+}
+
+docs {
+  # POST /me/avatar/uploads — presign a profile-photo upload (PAC-81)
+
+  **Module:** none. **Permission:** none beyond a valid access token.
+
+  Same two-step shape as the branding logo: the browser PUTs the bytes
+  straight to storage, then commits the key via `PATCH /me/avatar`. The API
+  never handles the file.
+
+  **Body**
+  | field       | type   | rules                                       |
+  |-------------|--------|---------------------------------------------|
+  | filename    | string | 1–200 chars; sanitised into the key         |
+  | contentType | enum   | `image/png` \| `image/jpeg` \| `image/webp` |
+
+  SVG is excluded for the same stored-XSS reason as branding images — see
+  `Presign Logo Upload` in the White Label folder.
+
+  **Response `201`** — `{ key, uploadUrl, requiredHeaders, expiresIn }`. Keys
+  are minted under `agencies/<scope>/avatars/<userId>/…` (`scope` is the
+  caller's agency id, or `platform` for a platform admin).
+
+  **Errors** — `400` unsupported type · `401` · `503` storage unconfigured.
+}

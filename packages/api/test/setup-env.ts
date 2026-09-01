@@ -77,6 +77,14 @@ process.env.PASSWORD_RESET_PREVIEW_RATE_LIMIT =
   process.env.PASSWORD_RESET_PREVIEW_RATE_LIMIT ?? '100000';
 process.env.PASSWORD_RESET_SUBMIT_RATE_LIMIT =
   process.env.PASSWORD_RESET_SUBMIT_RATE_LIMIT ?? '100000';
+// PAC-81: the self-service forgot-password windows and the change-password
+// limit, raised for the same in-memory-throttler reason as everything above.
+process.env.PASSWORD_RESET_REQUEST_RATE_LIMIT =
+  process.env.PASSWORD_RESET_REQUEST_RATE_LIMIT ?? '100000';
+process.env.PASSWORD_RESET_REQUEST_HOURLY_LIMIT =
+  process.env.PASSWORD_RESET_REQUEST_HOURLY_LIMIT ?? '100000';
+process.env.CHANGE_PASSWORD_RATE_LIMIT =
+  process.env.CHANGE_PASSWORD_RATE_LIMIT ?? '100000';
 
 // Address autocomplete (PAC-60). The suite asserts the *unconfigured* behaviour
 // — `{ available: false }` and a 200 rather than a 5xx — so a developer with a

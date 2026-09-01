@@ -44,6 +44,15 @@ export class User {
   lastName?: string;
 
   /**
+   * Object key of the user's profile photo (PAC-81). A pointer only — the
+   * bytes live in object storage and are streamed by `GET /me/avatar`. Keys
+   * are per-user (`agencies/<scope>/avatars/<userId>/…`), so ownership checks
+   * are exact.
+   */
+  @Prop()
+  avatarKey?: string;
+
+  /**
    * ⚠ `isActive: false` alone does **not** mean "pending invite".
    *
    * It meant exactly that until removal landed, and a good deal of code was

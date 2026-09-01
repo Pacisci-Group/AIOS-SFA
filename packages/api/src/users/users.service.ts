@@ -26,6 +26,10 @@ import {
   passwordResetCooldownSeconds,
   passwordResetExpiryHours,
 } from '../config/password-reset.config';
+import {
+  HostTenantResolver,
+  type HostTenant,
+} from '../common/tenancy/host-tenant.resolver';
 import { TenantUrlService } from '../common/tenancy/tenant-url.service';
 import { TenantBrandingService } from '../tenant-branding/tenant-branding.service';
 import { MailService } from '../mail/mail.service';
@@ -82,6 +86,7 @@ export class UsersService {
     private workRelease: UserWorkReleaseService,
     private tenantUrls: TenantUrlService,
     private tenantBranding: TenantBrandingService,
+    private hostResolver: HostTenantResolver,
   ) {}
 
   /**
@@ -473,6 +478,30 @@ export class UsersService {
       }
     }
 
+    const { resetToken, resetUrl, expiresAt } =
+      await this.mintAndSendReset(user);
+
+    return {
+      userId: user._id.toString(),
+      resetUrl,
+      expiresAt: expiresAt.toISOString(),
+      // Withheld in production, where the email is the only delivery channel.
+      // See `exposeTokensForDev`.
+      ...(this.exposeTokensForDev() ? { resetToken } : {}),
+    };
+  }
+
+  /**
+   * The mint-and-email core shared by the admin trigger above and the public
+   * self-service request below (PAC-81), extracted so the two entry points can
+   * never drift on expiry, digesting, URL host or email content. Assumes the
+   * caller has already decided this user *may* receive a link — eligibility
+   * and cooldown live at the entry points, because they answer differently
+   * (loud 409s for an owner, silence for the public).
+   */
+  private async mintAndSendReset(
+    user: UserDocument,
+  ): Promise<{ resetToken: string; resetUrl: string; expiresAt: Date }> {
     const resetToken = mintResetToken();
     const expiryHours = passwordResetExpiryHours(
       this.configService.get<string>('PASSWORD_RESET_EXPIRY_HOURS'),
@@ -480,15 +509,15 @@ export class UsersService {
     const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
 
     // Only the digest is persisted. The raw token exists in the email and, in
-    // development, in the response below — nowhere else, ever.
+    // development, in the admin response — nowhere else, ever.
     user.passwordResetToken = hashResetToken(resetToken);
     user.passwordResetExpiresAt = expiresAt;
     user.passwordResetLastSentAt = new Date();
     /*
      * One live credential per account. In practice an active user has no
-     * pending invite — `findPendingInvite` and the guards above make the two
-     * states disjoint — so this is belt-and-braces, kept so the invariant holds
-     * by construction rather than by a chain of reasoning.
+     * pending invite — `findPendingInvite` and the eligibility checks make the
+     * two states disjoint — so this is belt-and-braces, kept so the invariant
+     * holds by construction rather than by a chain of reasoning.
      */
     user.inviteToken = undefined;
     user.inviteTokenExpiresAt = undefined;
@@ -500,9 +529,9 @@ export class UsersService {
     );
     const agencyName = await this.resolveAgencyName(user.agencyId);
 
-    // Same guarantee as `issueInvite`: both callers reach here with an agency
-    // (the user was loaded scoped by one), and the event schema would otherwise
-    // reject an empty string with a message about hex digits.
+    // Same guarantee as `issueInvite`: every caller reaches here with an
+    // agency (loaded scoped by one, or filtered above), and the event schema
+    // would otherwise reject an empty string with a message about hex digits.
     if (!user.agencyId) {
       throw new Error(
         `Cannot reset password for user ${user._id.toString()}: no agencyId on the record.`,
@@ -520,14 +549,75 @@ export class UsersService {
       expiresAt,
     });
 
-    return {
-      userId: user._id.toString(),
-      resetUrl,
-      expiresAt: expiresAt.toISOString(),
-      // Withheld in production, where the email is the only delivery channel.
-      // See `exposeTokensForDev`.
-      ...(this.exposeTokensForDev() ? { resetToken } : {}),
-    };
+    return { resetToken, resetUrl, expiresAt };
+  }
+
+  /**
+   * The public "Forgot password?" entry point (PAC-81). Reuses the exact same
+   * token scheme as the admin trigger — one credential namespace, one email.
+   *
+   * **Every refusal is silent.** The route always answers the same 202, so
+   * this method must not leak *why* nothing was sent: an unknown address, a
+   * deactivated user, a pending invite, a platform admin, a cooldown, or an
+   * address that belongs to a different host all look identical from outside.
+   * The admin path above stays loud (404/409) because its caller is
+   * authenticated and entitled to the reason.
+   *
+   * The host check mirrors {@link AuthService.assertBelongsOnHost} without
+   * throwing: a reset link is only mailed when the request arrived on a host
+   * the account could actually sign in on. Without it, this route would
+   * happily mint links for any tenant's users from any other tenant's domain.
+   */
+  async requestPasswordResetByEmail(
+    email: string,
+    host: HostTenant | undefined,
+  ): Promise<void> {
+    if (!host || host.kind === 'unknown') {
+      return;
+    }
+
+    const user = await this.userModel.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return;
+    }
+
+    // Platform admins are deliberately outside self-service: the reset email
+    // event requires an agency, and an account with platform-wide authority
+    // should not be resettable from an unauthenticated form anyway.
+    if (user.isPlatformAdmin || !user.agencyId) {
+      return;
+    }
+
+    if (host.kind === 'agency') {
+      if (user.agencyId.toString() !== host.agencyId) {
+        return;
+      }
+    } else {
+      // Platform host: open only to agencies with no domain of their own —
+      // the same bootstrap fallback `HostTenantGuard` and login apply.
+      const hasDomains = await this.hostResolver.agencyHasDomains(
+        user.agencyId.toString(),
+      );
+      if (hasDomains) {
+        return;
+      }
+    }
+
+    // Deactivated or never-activated accounts get nothing: a reset is not a
+    // reactivation, and an invitee's way in is their invite link.
+    if (user.deactivatedAt || !user.isActive) {
+      return;
+    }
+
+    const cooldownSeconds = passwordResetCooldownSeconds(
+      this.configService.get<string>('PASSWORD_RESET_COOLDOWN_SECONDS'),
+    );
+    const lastSentAt = user.passwordResetLastSentAt?.getTime();
+    if (lastSentAt && (Date.now() - lastSentAt) / 1000 < cooldownSeconds) {
+      return;
+    }
+
+    await this.mintAndSendReset(user);
   }
 
   /**

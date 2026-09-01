@@ -27,6 +27,9 @@ tests {
       "id",
       "email",
       "name",
+      "firstName",
+      "lastName",
+      "avatarUrl",
       "roles",
       "agencyId",
       "branchId",
@@ -34,6 +37,7 @@ tests {
       "scope",
       "dataScope",
       "isPlatformAdmin",
+      "impersonatedBy",
     );
   });
 }
@@ -70,15 +74,25 @@ docs {
     "id": "…",
     "email": "owner@demoagency.local",
     "name": "Agency Owner",
+    "firstName": "Agency",
+    "lastName": "Owner",
+    "avatarUrl": "/me/avatar?v=1a2b3c4d",
     "roles": ["Agency Owner"],
     "agencyId": "…",
     "branchId": null,
     "permissions": ["agency:roles:read", "leads:read", "…"],
     "scope": "agency",
     "dataScope": "agency",
-    "isPlatformAdmin": false
+    "isPlatformAdmin": false,
+    "impersonatedBy": null
   }
   ```
+
+  `firstName`/`lastName` are the raw halves behind `name` (PAC-81), for the
+  profile form. `avatarUrl` is null until a photo is committed; when set it is
+  a **relative, authenticated** path (`GET /me/avatar`) carrying a
+  key-derived cache-buster — fetch it with the bearer header, never from a
+  bare `<img src>`.
 
   `roles` are display names — never branch on them. `permissions` is the
   authority, and `dataScope` is the widest across the roles the user holds.

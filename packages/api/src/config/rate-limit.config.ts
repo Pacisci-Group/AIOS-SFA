@@ -89,6 +89,32 @@ export const PASSWORD_RESET_SUBMIT_RATE_LIMIT = limitFromEnv(
 );
 
 /**
+ * `POST /auth/forgot-password` — the self-service request entry point (PAC-81).
+ * Two windows, like the intake limits: the per-minute one stops a burst, the
+ * hourly one catches a slow enumeration drip that would sit under it all day.
+ * The response is uniform regardless of whether the account exists, so the
+ * throttle is what bounds how fast anyone can probe at all.
+ */
+export const PASSWORD_RESET_REQUEST_RATE_LIMIT = limitFromEnv(
+  'PASSWORD_RESET_REQUEST_RATE_LIMIT',
+  5,
+);
+export const PASSWORD_RESET_REQUEST_HOURLY_LIMIT = limitFromEnv(
+  'PASSWORD_RESET_REQUEST_HOURLY_LIMIT',
+  15,
+);
+
+/**
+ * `POST /auth/change-password` — authenticated, but the surface is a stolen
+ * session brute-forcing the *current* password, so it gets a tight limit. The
+ * per-user damage cap is that every success ends every other session.
+ */
+export const CHANGE_PASSWORD_RATE_LIMIT = limitFromEnv(
+  'CHANGE_PASSWORD_RATE_LIMIT',
+  5,
+);
+
+/**
  * `POST /address/*` — authenticated address autocomplete (PAC-60).
  *
  * Generous, because unlike the intake limits this one guards a *billed* call

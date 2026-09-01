@@ -77,6 +77,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const fresh = await queryClient.fetchQuery({
       queryKey: ['auth', 'me'],
       queryFn: fetchMe,
+      // Without this, `fetchQuery` serves the cached blob whenever it is
+      // younger than the client-wide default staleTime — so a profile edit
+      // made within ~30s of the last fetch silently never reached the UI
+      // (PAC-81). Every caller of this function has just *changed* something;
+      // "fresh enough" is exactly wrong here.
+      staleTime: 0,
     });
     setUser(fresh);
   }, [queryClient]);

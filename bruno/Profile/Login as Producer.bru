@@ -1,0 +1,45 @@
+meta {
+  name: Login as Producer
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{producerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Captured under its OWN names, not `accessToken` — overwriting the
+  // collection bearer would silently re-run every later folder as this login.
+  if (res.getStatus() === 201) {
+    bru.setVar("profileAccessToken", res.getBody().accessToken);
+    bru.setVar("profileUserId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /auth/login — as the demo producer
+
+  Seeds `profileAccessToken` / `profileUserId` for this folder. The `/me/*`
+  endpoints identify the caller from the token's `sub` alone — no request in
+  this folder ever names a user id in the URL.
+}

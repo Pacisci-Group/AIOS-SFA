@@ -1,0 +1,38 @@
+meta {
+  name: Upload Avatar
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{avatarUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: image/png
+}
+
+body:text {
+  not-a-real-png-but-storage-does-not-care
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw upload (step 2 of 3)
+
+  Not an API endpoint: this goes straight to object storage using the URL from
+  `Presign Avatar Upload`. `auth: none` is load-bearing — a bearer header
+  would break the S3 signature — and the `Content-Type` must match the signed
+  one. See `Upload Quote Document` for the full story.
+
+  The bytes are irrelevant to the API: the commit step reads back the object's
+  **stored type and size** via `HeadObject`, which is why this stub passes as
+  a "PNG" — the stored type is the signed header, not the content.
+}

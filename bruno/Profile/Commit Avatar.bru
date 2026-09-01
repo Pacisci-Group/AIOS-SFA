@@ -1,0 +1,60 @@
+meta {
+  name: Commit Avatar
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/me/avatar
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{profileAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "key": "{{avatarKey}}"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the blob now carries a versioned avatar URL", function () {
+    // Relative path + key-derived cache-buster, never a presigned URL — the
+    // blob sits in localStorage indefinitely and must not rot.
+    expect(res.getBody().avatarUrl).to.match(/^\/me\/avatar\?v=[0-9a-f]{8}$/);
+  });
+}
+
+docs {
+  # PATCH /me/avatar — commit or remove the profile photo (PAC-81)
+
+  **Module:** none. **Permission:** none beyond a valid access token.
+
+  **Body** — `key` is `clearable`: the presigned key commits it, `null`
+  removes the current photo.
+
+  A key is only stored after the object behind it is inspected:
+  `assertKeyOwnership` proves this user's presign minted it (per-user prefix),
+  and `HeadObject` proves what actually landed is a raster type within the
+  2 MB cap — a presigned PUT signs only the content type, so the stored stat
+  is the sole server-side evidence.
+
+  **Response `200`** — the full auth-user blob; `avatarUrl` is
+  `/me/avatar?v=<hash>` (or `null` after a clear).
+
+  **Errors**
+  - `400` — foreign/malformed key, upload never completed, too large, or the
+    stored type is not PNG/JPEG/WebP.
+  - `401` — no/expired token or deactivated user.
+}
