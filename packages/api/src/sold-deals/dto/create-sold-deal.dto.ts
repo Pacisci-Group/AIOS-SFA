@@ -1,4 +1,9 @@
-import { CANCELLED_BY_OPTIONS, CARRIER_OTHER, POLICY_TYPES } from '@sfa/shared';
+import {
+  CANCELLED_BY_OPTIONS,
+  CARRIER_OTHER,
+  MAX_POLICY_ITEM_COUNT,
+  POLICY_TYPES,
+} from '@sfa/shared';
 import type { SoldPolicyDiscounts } from '@sfa/shared';
 import { z } from 'zod';
 import { policyNumberKey } from '../../policies/policy-number';
@@ -175,7 +180,9 @@ export const policyBaseSchema = z.object({
     .number()
     .int('Whole numbers only')
     .min(1, 'At least 1 item')
-    .max(99, 'Too many'),
+    // Shared with the migration, which rejects legacy counts that exceed it
+    // (PAC-80). One definition, so validation and import cannot drift.
+    .max(MAX_POLICY_ITEM_COUNT, 'Too many'),
   /**
    * The signed new business application for this policy (PAC-56 #23).
    *
@@ -287,7 +294,10 @@ const soldPolicySchema = policyBaseSchema
     // The prior agent (PAC-65 #10). Required now, where it used to be an
     // "Optional"-placeholdered free-text — the service team calls this person
     // to chase the cancellation and the declarations page.
-    if (!policy.priorInsurance.none && !policy.priorInsurance.agentName?.trim()) {
+    if (
+      !policy.priorInsurance.none &&
+      !policy.priorInsurance.agentName?.trim()
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Name the prior agent.',

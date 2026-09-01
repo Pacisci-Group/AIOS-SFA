@@ -1,5 +1,6 @@
 import { createFormHook } from "@tanstack/react-form";
 import {
+  AddressAutocompleteField,
   CheckboxField,
   NumberField,
   SelectField,
@@ -33,6 +34,7 @@ export const { useAppForm, withForm, withFieldGroup } = createFormHook({
     SelectField,
     CheckboxField,
     TextareaField,
+    AddressAutocompleteField,
   },
   formComponents: {},
   fieldContext,

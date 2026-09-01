@@ -75,11 +75,14 @@ export const DealAuditsController = createFeatureController(
  * Likewise no `LeaderboardController` stub: PAC-13 replaced it with the real
  * `LeaderboardModule` (`src/leaderboard`), and no `CrmServiceController` stub:
  * the CSR work replaced it with the real `CrmModule` (`src/crm`).
+ *
+ * And no `MailersController` stub: PAC-61 replaced it with the real
+ * agency-facing controller in `src/mailers`, which serves
+ * `GET /mailers/:controlNumber` and `POST /mailers/log-lead` behind the Mailers
+ * drawer. `MailersModule` had already claimed `platform/mailers`, so the stub
+ * did not collide until the agency-facing route landed — at which point it had
+ * to go in the same commit, for the reason above.
  */
-export const MailersController = createFeatureController(
-  'mailers',
-  ModuleKey.Mailers,
-);
 export const OnboardingsController = createFeatureController(
   'onboardings',
   ModuleKey.Onboardings,

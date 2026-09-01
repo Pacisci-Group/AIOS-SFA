@@ -42,6 +42,25 @@ export class AccessContextGuard implements CanActivate {
       throw new UnauthorizedException('User is inactive or no longer exists');
     }
 
+    /*
+     * The only thing that ends an already-issued session (PAC-79). Deactivation
+     * is handled above — `resolve` returns null for an inactive user — but a
+     * password reset leaves the user active, so without this a token stolen
+     * before the reset would keep working until it expired.
+     *
+     * ⚠ Both sides read `?? 0` on purpose. A token signed before PAC-79 has no
+     * claim, and a cache entry written before PAC-79 deserializes without the
+     * field; comparing `undefined` to `0` would 401 the entire estate for the
+     * length of a rolling deploy. Reading both as 0 makes those cases compare
+     * equal, and only a real bump — which invalidates the cache as it happens —
+     * produces a mismatch.
+     */
+    if ((jwt.tokenVersion ?? 0) !== (access.tokenVersion ?? 0)) {
+      throw new UnauthorizedException(
+        'Your password was changed. Please sign in again.',
+      );
+    }
+
     request.access = access;
     /*
      * The earliest point an acting user is known. `RequestContextMiddleware`

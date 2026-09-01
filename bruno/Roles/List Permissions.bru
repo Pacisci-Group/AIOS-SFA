@@ -1,0 +1,87 @@
+meta {
+  name: List Permissions
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/permissions
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("covers the whole vocabulary", function () {
+    expect(res.getBody()).to.be.an("array").with.length.of.at.least(39);
+  });
+
+  test("carries display metadata, not just keys", function () {
+    const first = res.getBody()[0];
+    expect(first).to.have.property("key");
+    expect(first).to.have.property("label");
+    expect(first).to.have.property("kind");
+    expect(first).to.have.property("group");
+  });
+}
+
+docs {
+  # GET /permissions — the permission catalog
+
+  Every permission the system recognises, with the label, description and
+  grouping a role editor needs. Sorted by `kind` then `sortOrder`.
+
+  **Module:** none (`@SkipModule()`) — administering permissions cannot depend
+  on which pages the agency has switched on.
+  **Permission:** `agency:roles:read`
+  **Data scope:** not applicable; the catalog is global.
+
+  ## Why global rows
+
+  The catalog carries no `agencyId`. The 39 permission strings are compiled into
+  91 guard decorators, so a per-agency catalog would let configuration delete a
+  permission the code still requires — which denies everyone, with no error
+  anywhere. Per-tenant availability is a separate question, answered by
+  `agency.modules[key].enabled` and applied when a user's set is resolved.
+
+  ## Query params
+
+  | Param | Type | Notes |
+  |---|---|---|
+  | includeDeprecated | `"true"` | Include retired keys. Off by default: they are kept only because `rolePermissions` rows may still reference them, and offering one in a picker would invite granting a permission nothing checks. |
+
+  ## Response
+
+  ```json
+  [
+    {
+      "_id": "…",
+      "key": "leads:read",
+      "kind": "module",
+      "moduleKey": "leads",
+      "resource": "leads",
+      "action": "read",
+      "label": "View Leads",
+      "description": "Priority contact list and lead records.",
+      "group": "Pages",
+      "sortOrder": 10,
+      "assignableToUser": true,
+      "isDeprecated": false
+    }
+  ]
+  ```
+
+  `kind` is `module` (a page, 26 of them), `agency` (an admin capability, 8) or
+  `platform` (above the tenant boundary, 5). Only `module` permissions have
+  `assignableToUser: true` — admin capabilities come from role membership alone.
+
+  ## Errors
+  - `401 Unauthorized` — no or invalid token.
+  - `403 Forbidden` — missing `agency:roles:read`.
+}

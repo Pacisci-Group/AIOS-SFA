@@ -181,10 +181,10 @@ docs {
 
   ## Behaviour worth knowing
 
-  **Migrated records are found by their legacy ids.** The SmartSuite migration
-  writes only `legacyLeadId` on quote recaps and deals — `backfill-deal-refs`
-  repairs deals, never recaps — so a plain `leadId` lookup would return nothing
-  for every migrated lead. When the primary lookup misses, the service falls
+  **Migrated records are found by their legacy ids.** A quote recap or deal
+  imported before the migration resolved `leadId` carries only `legacyLeadId`,
+  so a plain `leadId` lookup returns nothing for it. When the primary lookup
+  misses, the service falls
   back to `legacyLeadId` and then **backfills the ref fire-and-forget**: each
   lead repairs itself the first time it is viewed, so the second read is fast.
   The same self-healing already applies to `householdId`.
@@ -255,7 +255,7 @@ docs {
   > ⚠ **You will not see a `field_changed` row in this collection.** They are
   > excluded from the query itself for any caller without
   > `agency:changelogs:read` — owners and managers hold it, producers do not —
-  > and `Auth/Login.bru` authenticates as `producer@smithfamily.local`. The
+  > and `Auth/Login.bru` authenticates as `producer@demoagency.local`. The
   > entry count legitimately differs by role. Log in as the agency owner to see
   > them.
 
@@ -375,7 +375,7 @@ docs {
   | policiesOfInterest | array           | `{ policyType, itemCount, propertyAddress }` captured at intake (PAC-56 #2); `[]` on migrated leads |
   | propertyAddress    | object \| null  | **lead-level** dwelling — migrated records and pre-PAC-56-#14 leads only; read the per-row one first |
   | agingDays          | int             | recomputed live, **not** the stale migrated value          |
-  | intakeChannel      | enum \| null    | `internal` \| `share_link`; `null` on migrated leads       |
+  | intakeChannel      | enum \| null    | `internal` \| `share_link` \| `mailer`; `null` on migrated leads |
   | primaryContact     | object \| null  | DOB is `YYYY-MM-DD`, never a timestamp                    |
   | household          | object \| null  | `null` when the lead has no household (a migrated gap)     |
   | latestQuoteRecap   | object \| null  | newest by `quoteDate`                                      |

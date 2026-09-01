@@ -1,0 +1,122 @@
+meta {
+  name: Public Address Autocomplete
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/public/address/{{shareLinkToken}}/autocomplete
+  body: json
+  auth: none
+}
+
+script:pre-request {
+  // Hand-rolled rather than `crypto.randomUUID()` — Bruno's script sandbox is
+  // QuickJS and has no `require`. The API only asks for 8-64 opaque characters.
+  bru.setVar(
+    "publicAddressSessionToken",
+    "bru-pub-" +
+      Math.random().toString(36).slice(2) +
+      Math.random().toString(36).slice(2),
+  );
+}
+
+body:json {
+  {
+    "input": "4821 North Maple",
+    "sessionToken": "{{publicAddressSessionToken}}"
+  }
+}
+
+tests {
+  test("returns 200 OK without any Authorization header", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the same { available, suggestions } envelope as the authenticated route", function () {
+    const body = res.getBody();
+    expect(body.available).to.be.a("boolean");
+    expect(body.suggestions).to.be.an("array");
+  });
+
+  test("never leaks the API key or Google's raw payload", function () {
+    const raw = JSON.stringify(res.getBody());
+    expect(raw).to.not.include("AIza");
+    expect(raw).to.not.include("addressComponents");
+    expect(raw).to.not.include("googleapis.com");
+  });
+}
+
+docs {
+  # POST /public/address/:token/autocomplete — address lookup on the public form (PAC-60)
+
+  The same type-ahead as `POST /address/autocomplete`, reachable from the
+  unauthenticated share-link intake form. **Public** (`@Public()`): no JWT, no
+  `AccessContext`, and all six global guards bypassed.
+
+  ## Every check the guard chain would have made is repeated by hand
+  Via `ShareLinkAccessService.resolve` — the *same* implementation
+  `GET /public/lead-form/:token` and `POST /public/leads/:token` use:
+
+  1. token shape (43-char base64url — a cheap pre-DB filter, **not** a security control)
+  2. the link exists and is active
+  3. the agency exists and is `active`
+  4. the `leads` module is enabled for that agency
+  5. the link's producer is still an active user
+
+  Every rejection returns the **same** `404 This form is no longer available.`,
+  so the endpoint cannot be used to learn whether a token ever existed, whether
+  it was revoked, or which agency it belonged to. It was extracted into a shared
+  service rather than copied for exactly this reason: a second hand-written
+  implementation drifts, and the way it drifts is by becoming more helpful.
+  Pinned by `packages/api/test/public-address.e2e-spec.ts`.
+
+  ## Why the browser cannot just call Google directly
+  This endpoint is the whole reason PAC-60 proxies Places instead of dropping in
+  `<gmp-place-autocomplete>`. That element needs an API key **in the browser**,
+  and this form is an anonymous share link — the key would be trivially scraped.
+  HTTP-referrer restriction is the usual mitigation, but the referrer here is by
+  definition public and spoofable.
+
+  ## Three layers of spend control
+  | Layer | Guards against | Where |
+  |---|---|---|
+  | Quota cap on the Google key | everything; the only **hard** stop (budgets merely alert) | GCP console |
+  | Per-IP `@Throttle` | one machine hammering | this route |
+  | **Per-share-link daily cap** | one scraped link driven from **many** IPs | `ShareLink.addressLookupCount` |
+
+  The third is the one that matters. Per-IP throttling structurally cannot see a
+  distributed hit on a single link, and every request is billed by Google.
+
+  ⚠ **Over the per-link cap the answer is `200 { available: false }`, not `429`** —
+  a deliberate difference from the intake limits. The client latches
+  `available: false` and stops asking for the rest of the page session, the
+  submitter types the address by hand, and the form still submits. A 429 would
+  paint an error on a form that is working fine. A **lost lead is the expensive
+  outcome here, not a lost autocomplete.**
+
+  ## Response `200`
+  Identical shape to the authenticated route:
+  ```json
+  { "available": true, "suggestions": [ { "placeId": "ChIJ...", "primaryText": "...", "secondaryText": "..." } ] }
+  ```
+
+  ## ⚠ Tests assert the envelope, never real predictions
+  A dev machine will usually have no `GOOGLE_MAPS_API_KEY`, so this answers
+  `{ "available": false, "suggestions": [] }` and that is a pass.
+
+  ## Rate limiting
+  `30 / minute` and `200 / hour` per IP (`PUBLIC_ADDRESS_RATE_LIMIT`,
+  `PUBLIC_ADDRESS_HOURLY_LIMIT`), plus `500 / day` per share link
+  (`PUBLIC_ADDRESS_LINK_DAILY_LIMIT`).
+  ⚠ The first two must be **real environment variables** — `@Throttle` bakes
+  them into decorator metadata before `ConfigModule` runs dotenv.
+
+  ## Errors
+  - `400 Bad Request` — `input` under 3 characters, or a missing/oversized `sessionToken`.
+  - `404 Not Found` — any problem with the link, agency, module or producer. One message for all of them.
+  - `429 Too Many Requests` — per-IP rate limit exceeded.
+
+  ## Run order
+  After **Leads › Share Links › Create Share Link**, which sets `shareLinkToken`.
+}

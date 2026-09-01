@@ -1,0 +1,76 @@
+meta {
+  name: Update User Permissions
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/users/{{invitedUserId}}/permissions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+body:json {
+  {
+    "overrides": [
+      { "moduleKey": "clients", "level": "read" }
+    ]
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("stores only the difference from role defaults", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("effectivePermissions");
+    expect(body).to.have.property("roleDefaultPermissions");
+  });
+}
+
+docs {
+  # PATCH /users/:userId/permissions — per-user overrides
+
+  **Module:** none (`@SkipModule()`).
+  **Permission:** `agency:users:permissions`
+
+  Runs against the invited row, for the same reason as *Change User Roles*.
+
+  The caller submits the level they want per page; the service diffs each page
+  against the user's **role defaults** and stores only the differences, as grant
+  and revoke rows in `userPermissions`.
+
+  That diff is the important part: a page left at its role default stores
+  nothing, so the user keeps inheriting later changes to the role. Storing an
+  absolute set would freeze them at today's permissions forever.
+
+  ## Body
+
+  | Field | Type | Notes |
+  |---|---|---|
+  | overrides | `{ moduleKey, level }[]` | `level` is `none` \| `read` \| `write`. Pages not listed keep their role default. Modules the agency has not enabled are ignored. |
+
+  ## Only page permissions
+
+  `agency:*` and `platform:*` can never be granted per user — they come from role
+  membership alone. The catalog marks this as `assignableToUser: false`, and the
+  service rejects anything else.
+
+  ## Response
+
+  `UserDetailResponse`, including `effectivePermissions` (what the user actually
+  has) and `roleDefaultPermissions` (what their roles alone would give). The UI
+  marks a page as overridden by comparing the two.
+
+  ## Errors
+  - `400 Bad Request` — a permission outside the page model, or the same
+    permission both granted and revoked.
+  - `403 Forbidden` — missing `agency:users:permissions`.
+  - `404 Not Found` — no such user in this agency.
+}

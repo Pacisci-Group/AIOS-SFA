@@ -14,8 +14,13 @@ import { PermissionCache } from './permission-cache';
  * never read again.
  *
  * `v2` = `roleIds` added for polymorphic ownership (PAC-72).
+ * `v3` = relational RBAC — permissions, roles and overrides resolved from the
+ *        `permissions` / `rolePermissions` / `userRoles` / `userPermissions`
+ *        collections instead of arrays on the user and role documents.
+ * `v4` = `tokenVersion` added so a password reset can end live sessions
+ *        (PAC-79).
  */
-const KEY_PREFIX = 'sfa:perm:v2:';
+const KEY_PREFIX = 'sfa:perm:v4:';
 
 /**
  * Redis-backed cache for resolved access contexts. Entries carry a safety TTL

@@ -1,0 +1,76 @@
+meta {
+  name: Create Role
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/roles
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+body:json {
+  {
+    "name": "Bruno Test Role",
+    "description": "Created by the Bruno collection; deleted at the end.",
+    "dataScope": "branch"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) bru.setVar("createdRoleId", res.getBody()._id);
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("is a custom role, never a system one", function () {
+    expect(res.getBody().isSystemTemplate).to.equal(false);
+    expect(res.getBody().grantsAllEnabledModules).to.equal(false);
+  });
+
+  test("derives a slug from the name", function () {
+    expect(res.getBody().slug).to.equal("bruno_test_role");
+  });
+
+  test("starts with no permissions", function () {
+    expect(res.getBody().permissions).to.eql([]);
+  });
+}
+
+docs {
+  # POST /roles — create a custom role
+
+  **Module:** none (`@SkipModule()`).
+  **Permission:** `agency:roles:write`
+
+  ## Body
+
+  | Field | Type | Notes |
+  |---|---|---|
+  | name | string, 2–60 | Required. The slug is derived from it (`Branch Manager` → `branch_manager`). |
+  | description | string, ≤240 | Optional. |
+  | dataScope | `own` \| `branch` \| `agency` | Optional, defaults to **`own`** — the narrowest. A new role silently seeing the whole agency would be the wrong direction to fail in. |
+
+  `isSystemTemplate` and `grantsAllEnabledModules` are forced to `false` and are
+  **not settable over HTTP, ever**: the first would make the role undeletable,
+  and the second would mint a second all-access role outside the owner-protection
+  rules.
+
+  A new role grants nothing until permissions are set — see *Update Role*.
+
+  ## Errors
+  - `400 Bad Request` — name missing, too short/long, or containing no usable
+    characters for a slug.
+  - `409 Conflict` — a role with that slug already exists in the agency. Checked
+    explicitly rather than left to the unique `(agencyId, slug)` index, so the
+    caller gets a sentence instead of a duplicate-key error.
+  - `403 Forbidden` — missing `agency:roles:write`.
+}

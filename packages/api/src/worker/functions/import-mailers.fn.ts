@@ -1,3 +1,4 @@
+import { pipeline } from 'stream/promises';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { parse } from 'csv-parse';
@@ -215,7 +216,28 @@ export class ImportMailersFn implements InngestFunctionProvider {
       trim: true,
     });
 
-    body.pipe(parser);
+    // `pipeline`, **never** `body.pipe(parser)`.
+    //
+    // `pipe()` does not forward a source error to its destination. When object
+    // storage aborted the response mid-file — which it does to any client that
+    // stops reading for ~30s, and a slow write batch is exactly that — the
+    // parser was told nothing at all: no `error`, no `end`. The `for await` in
+    // `importMailerRows` then waited on a row that could never arrive, so the
+    // step never settled, the `catch` below never ran, the run stayed
+    // `importing` for ever and `retries` never engaged. A job that hangs is
+    // strictly worse than one that fails, because nothing downstream can see it.
+    //
+    // `pipeline` destroys both streams with the error, so the same abort now
+    // surfaces as a throw the handler records and Inngest retries. The retry is
+    // safe because every write is an upsert on the dedupe key.
+    //
+    // Fired and not awaited on purpose: the returned promise settles only once
+    // the parser is fully consumed, which is what `importMailerRows` is doing
+    // below. Awaiting it here would deadlock. The `catch` is what keeps a
+    // rejection from surfacing as an unhandled rejection in the race where
+    // `pipeline` rejects fractionally before the consumer observes the
+    // destroyed parser — the consumer is what actually reports the failure.
+    pipeline(body, parser).catch(() => undefined);
 
     return importMailerRows(
       parser,

@@ -1,5 +1,9 @@
 import { Phone, Mail, MapPin, Star, Shield, Car } from "lucide-react";
 import type { ContactSummary, HouseholdView } from "@sfa/shared";
+import {
+  isActiveHouseholdStatus,
+  normalizeHouseholdStatus,
+} from "@sfa/shared";
 import { SectionLabel } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -78,9 +82,15 @@ function addressLines(address: Record<string, unknown> | null) {
   return { line1, rest };
 }
 
-/** The green "live" treatment is only honest for a genuinely active record. */
+/**
+ * The green "live" treatment is only honest for a genuinely active record.
+ *
+ * `isActiveHouseholdStatus` rather than a bare `/active/i` (PAC-80): 2,095 of
+ * 2,519 migrated households store the code `b5qvJ`, which the regex never
+ * matched — so every one of them rendered grey and read as inactive.
+ */
 function statusClass(status: string | null) {
-  return /active/i.test(status ?? "")
+  return isActiveHouseholdStatus(status)
     ? "bg-success/12 text-success"
     : "bg-muted text-muted-foreground";
 }
@@ -138,7 +148,7 @@ interface HouseholdProfileProps {
 export function HouseholdProfile({ household, isDemo = false }: HouseholdProfileProps) {
   const primaryContact = household.contacts.find((c) => c.isPrimary);
 
-  const status = household.status ?? "Unknown";
+  const status = normalizeHouseholdStatus(household.status) || "Unknown";
   // Falling back to the primary contact is real data, not a placeholder.
   const contactName =
     household.primaryContactName ?? fullName(primaryContact) ?? "—";
@@ -158,7 +168,7 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
         <div className="flex flex-wrap items-center justify-between gap-2">
           <SectionLabel>Status</SectionLabel>
           <Badge size="sm" variant="ghost" className={cn("gap-1.5", statusClass(household.status))}>
-            {/active/i.test(status) && (
+            {isActiveHouseholdStatus(household.status) && (
               <span
                 aria-hidden
                 className="size-2 animate-pulse rounded-full bg-success"

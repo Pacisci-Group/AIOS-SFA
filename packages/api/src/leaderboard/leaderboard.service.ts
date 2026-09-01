@@ -157,6 +157,9 @@ export class LeaderboardService {
       month,
       officeTotalPremium,
       producerCount: ranked.length,
+      // Lets the card distinguish "nobody hit their goal" from "nobody has one"
+      // (PAC-80). On migrated data this is 0 for every month.
+      goalsConfigured: goalByProducer.size,
       self,
       entries,
     };

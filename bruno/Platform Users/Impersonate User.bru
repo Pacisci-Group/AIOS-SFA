@@ -1,0 +1,115 @@
+meta {
+  name: Impersonate User
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/impersonate/{{currentUserId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:post-response {
+  // Captured under its own name for the same reason `platformAccessToken` is:
+  // this is a *producer* token, and overwriting `accessToken` would silently
+  // re-scope every request that runs after this folder.
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    bru.setVar("impersonatedAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    // 201, matching `Auth/Login` — the controller does not override the
+    // POST default.
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns the same envelope as a normal login", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("accessToken");
+    expect(body).to.have.property("refreshToken");
+    expect(body).to.have.property("user");
+  });
+
+  test("the session belongs to the target, not the admin", function () {
+    const user = res.getBody().user;
+    expect(user.id).to.equal(bru.getVar("currentUserId"));
+    expect(user.isPlatformAdmin).to.equal(false);
+  });
+
+  test("the target's real scope and permissions apply", function () {
+    // The whole security argument for this endpoint: an impersonated session is
+    // resolved from the store like any other, so it can do exactly what the
+    // target can do and nothing more. A producer is `own`-scoped and holds no
+    // platform permission, however powerful the admin who minted the token is.
+    const user = res.getBody().user;
+    expect(user.dataScope).to.equal("own");
+    expect(user.permissions).to.not.include("platform:users:impersonate");
+    expect(user.permissions).to.not.include("platform:agencies:read");
+  });
+
+  test("records who is really behind the session", function () {
+    expect(res.getBody().user.impersonatedBy).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /auth/impersonate/:userId — act as another user
+
+  **Module:** none (`@SkipModule()`, `@SkipTenant()`, `@SkipBranch()`).
+  **Permission:** `platform:users:impersonate`
+
+  Mints a session as another user without their password. Returns **exactly** the
+  `POST /auth/login` envelope, so any client can use the two interchangeably —
+  the only addition is `user.impersonatedBy`.
+
+  Runs after **Platform Mailers**, which captures `platformAccessToken`; the
+  target is the producer whose id `Auth › Login` captured as `currentUserId`.
+  (Folders run alphabetically, so `Platform Users` sorts after `Platform
+  Mailers` — see the collection docs' *Run order*.)
+
+  ## Why the session is safe
+
+  `sub` is the **target**, so `AccessContextGuard` resolves *their* live
+  permissions, data scope and tenant from the database exactly as it would for
+  their own login. `impersonatedBy` rides along as provenance and is never an
+  authorization input. An impersonated session therefore cannot do anything the
+  target could not — which is why no other guard needed to learn a special case.
+
+  ## Refusals
+
+  These bound the **target**, not the caller:
+
+  | Situation | Result |
+  |---|---|
+  | Target is another platform admin | `403` — this must not be a sideways climb into a peer's authority, and the audit trail would name the wrong person. |
+  | Target is inactive | `404` — a deprovisioned account must not be reachable by a second route. |
+  | Target does not exist | `404`, with the same body as "inactive" — who exists in another tenant is not something this confirms. |
+  | Target is yourself | `400` — you are already signed in as them. |
+  | Caller lacks `platform:users:impersonate` | `403` |
+
+  ## Audit
+
+  Every issued session appends a row to `impersonationEvents`
+  (`actorUserId`, `targetUserId`, `agencyId`, `issuedAt`) and logs a `warn`. The
+  write happens **before** the tokens are returned and is not fire-and-forget: if
+  it fails the request 500s, because an unaudited impersonation is worse than a
+  failed one.
+
+  It records the *issuing* of a session, not what was subsequently done with it —
+  tokens are stateless and carry no session id, so there is nothing to correlate
+  later requests against.
+
+  ## Why it is not implied by `isPlatformAdmin`
+
+  A separate permission string keeps "can administer agencies" and "can act as a
+  person" independently grantable, so this can be revoked without demoting an
+  admin. It is not in any default role template; a super admin holds it via
+  `ALL_PLATFORM_PERMISSIONS`.
+}

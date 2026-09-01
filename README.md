@@ -31,7 +31,8 @@ npm run api:dev             # http://localhost:4000/api/v1
 npm run web:dev             # http://localhost:5173
 ```
 
-Sign in as the demo agency owner: `owner@smithfamily.local` / `ChangeMe123!`.
+Sign in as the demo agency owner: `owner@demoagency.local` / `ChangeMe123!`
+(from `npm run api:seed:demo:dev` — the migrated agency has no login of its own).
 
 ### The two run modes
 
@@ -120,8 +121,9 @@ Three ways to populate MongoDB:
 | `npm run api:seed:demo:dev` | **Full synthetic demo tenant** — a complete role roster and ~500 realistic records across every collection. Deterministic and idempotent; pass `--fresh` to purge and reseed. **Use this for local development.** |
 | `npm run api:migrate:dev` | The real **SmartSuite → Mongo** import. Needs SmartSuite credentials; run the core seed first. |
 
-After migrating, run `npm run api:backfill:deal-refs:dev` — it only rewrites
-data already in Mongo, so it needs no credentials and is safe to re-run.
+Nothing needs running after the migration — it writes its own refs, match keys
+and household numbering. For a full bring-up (seed → migrate → mailers) in one
+resumable, logged run, use `./scripts/migration/run-migration.sh`.
 
 ---
 

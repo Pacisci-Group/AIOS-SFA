@@ -156,6 +156,29 @@ describe('SmartSuite value extraction', () => {
       toDate({ on: { date: '2026-01-15T05:18:12Z' } })?.getUTCMonth(),
     ).toBe(0);
   });
+
+  it('reads the { by, on: string } system-timestamp shape', () => {
+    /*
+     * The shape every table in `docs/smartsuite-tables/*` documents for
+     * `first_created` / `last_updated` — `on` is a plain ISO string, not a
+     * nested date object.
+     *
+     * This returned `undefined` until PAC-80, which is why `firstCreatedAt` was
+     * unset on all 4,548 migrated audit items (collapsing the hand-off board's
+     * "oldest first" sort onto the migration's own timestamp) and
+     * `lastActivityAt` was null on 564 of 967 leads.
+     */
+    const parsed = toDate({
+      by: '65550784e0d0dcc6fe3fc3aa',
+      on: '2026-01-21T22:32:45.080000Z',
+    });
+    expect(parsed?.toISOString()).toBe('2026-01-21T22:32:45.080Z');
+  });
+
+  it('returns undefined for a system timestamp that was never set', () => {
+    expect(toDate({ by: 'someone', on: null })).toBeUndefined();
+    expect(toDate({ on: { date: null } })).toBeUndefined();
+  });
   it('derives YYYYMMDD from a date', () => {
     expect(toYmd(new Date('2025-08-12T00:00:00Z'))).toBe(20250812);
   });

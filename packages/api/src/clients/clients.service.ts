@@ -13,6 +13,11 @@ import {
   PolicySearchResult,
   PolicySummary,
   PolicyView,
+  normalizeCarrier,
+  normalizeContactRole,
+  normalizeHouseholdStatus,
+  normalizePolicyStatus,
+  normalizePolicyType,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
@@ -403,7 +408,10 @@ function toHouseholdSummary(
   return {
     id: String(household._id),
     name: household.name ?? null,
-    status: household.status ?? null,
+    // Normalized on read as well as on import (PAC-80). The re-import heals this
+    // database; this is what keeps a code renderable in one migrated by older
+    // code, and what stops `b5qvJ` reaching a badge if one ever reappears.
+    status: normalizeHouseholdStatus(household.status) || null,
     primaryContactName: household.primaryContactName ?? null,
     totalActivePolicies: household.totalActivePolicies ?? 0,
   };
@@ -413,10 +421,10 @@ function toPolicySummary(policy: Policy & { _id: unknown }): PolicySummary {
   return {
     id: String(policy._id),
     policyNumber: policy.policyNumber ?? null,
-    policyType: policy.policyType ?? null,
-    carrier: policy.carrier ?? null,
+    policyType: normalizePolicyType(policy.policyType) || null,
+    carrier: normalizeCarrier(policy.carrier) || null,
     active: policy.active ?? false,
-    policyStatus: policy.policyStatus ?? null,
+    policyStatus: normalizePolicyStatus(policy.policyStatus) || null,
     premium: policy.premium ?? 0,
     items: policy.items ?? 0,
     effectiveDate: toIso(policy.effectiveDate),
@@ -432,7 +440,7 @@ function toContactSummary(contact: Contact & { _id: unknown }): ContactSummary {
     lastName: contact.lastName ?? null,
     emails: contact.emails ?? [],
     phones: contact.phones ?? [],
-    roleInHousehold: contact.roleInHousehold ?? null,
+    roleInHousehold: normalizeContactRole(contact.roleInHousehold) || null,
     isPrimary: contact.isPrimary ?? false,
     dateOfBirth: toIso(contact.dateOfBirth),
   };

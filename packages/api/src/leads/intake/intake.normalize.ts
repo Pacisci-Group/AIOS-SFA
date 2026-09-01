@@ -105,12 +105,31 @@ export function buildAddressKey(
 }
 
 /**
+ * Prefix for every channel whose namespace is a constant.
+ *
+ * `share_link` is excluded because its namespace carries the link id, so it is
+ * built per call below rather than looked up here.
+ */
+const CHANNEL_PREFIX: Record<Exclude<IntakeChannel, 'share_link'>, string> = {
+  internal: 'WEB',
+  mailer: 'MAIL',
+};
+
+/**
  * Namespace a client-supplied submission token by channel.
  *
  * Legacy used a bare `FILLOUT|{submissionId}`. Ours carries the channel (and the
  * share link, when there is one) so a client-chosen UUID can never collide with
  * a Fillout token or with another link's, and the stored value is legible when
  * you're staring at a duplicate in the database.
+ *
+ * `mailer` (PAC-61) namespaces to `MAIL|`, the equivalent of legacy's
+ * `mail_log_token`. The token it is handed is the mailer's own stable
+ * normalized control-number key, **not** what the producer typed — the two
+ * printed forms of one control number are different strings, so keying on the
+ * input would let the same mailer be logged twice, once per form. Adding the
+ * prefix here rather than at the call site keeps every channel's namespace in
+ * the one function that owns the no-collision rule.
  */
 export function buildSubmissionToken(
   channel: IntakeChannel,
@@ -120,6 +139,8 @@ export function buildSubmissionToken(
   const token = raw?.trim();
   if (!token) return null;
   const prefix =
-    channel === 'share_link' ? `SHARE|${shareLinkId ?? 'unknown'}` : 'WEB';
+    channel === 'share_link'
+      ? `SHARE|${shareLinkId ?? 'unknown'}`
+      : CHANNEL_PREFIX[channel];
   return `${prefix}|${token.toUpperCase()}`;
 }

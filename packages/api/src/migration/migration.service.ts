@@ -13,10 +13,15 @@ import { reconcileDealAudits } from '../deal-audits/audit-reconcile';
 import { Agency } from '../platform/schemas/agency.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
+import { RoleAssignmentsService } from '../permissions/role-assignments.service';
+import { AgencyRole } from '../roles/schemas/agency-role.schema';
+import { provisionTenant } from '../seed/provision-tenant';
 import { SequenceService } from '../common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../households/household-ref';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
+import { auditItemDueAt } from '../audit-generation/audit-due';
+import { normalizePolicyNumber } from '../policies/policy-number';
 import { quoteDateYmd } from '../quote-recaps/quote.normalize';
 import { QuoteRecap } from '../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../deals/schemas/deal.schema';
@@ -75,9 +80,25 @@ import {
   toYmd,
 } from './helpers/value-utils';
 import {
+  MAX_POLICIES_PER_RECORD,
+  isPlausibleItemCount,
+  isPlausiblePolicyCount,
   isTestRecord,
+  maxPlausibleItemCount,
+  normalizeCancellationResponsibility,
+  normalizeContactRole,
+  normalizeHouseholdStatus,
   normalizeLeadSource,
+  normalizeLegacyTicketCategory,
+  normalizeLegacyTicketStatus,
+  normalizePolicyStatus,
   normalizePolicyType,
+  normalizePriorPolicyCancellationStatus,
+  normalizePriorPolicyType,
+  normalizeTimeOffDecision,
+  normalizeTimeOffRequestType,
+  normalizeTimeOffStatus,
+  normalizeTimeOffType,
 } from '@sfa/shared';
 import {
   daysSince,
@@ -86,17 +107,48 @@ import {
   policyTypeLabels,
   resolvePremium,
 } from './helpers/derive';
+import { recentChicagoMonths } from '../performance/performance.range';
 import {
   CollectionStat,
   MigrationReport,
   createReport,
   emptyStat,
+  MigrationRunError,
+  recordRejection,
 } from './report';
+
+/**
+ * Marks the goal rows this import owns, so a future goal-setting UI's rows are
+ * distinguishable from derived ones and a re-run can tell them apart.
+ */
+const GOAL_SOURCE = 'migration:user-monthly-goal';
+
+/**
+ * How many months of producer goals to write, counting back from the current
+ * Chicago month.
+ *
+ * A year, because SmartSuite holds one standing goal with no month dimension and
+ * the leaderboard is queryable per month: writing only the current one left
+ * every historical month blank and expired the goals at the next rollover. A
+ * year is the range a Motivation Hub is ever asked about.
+ */
+const GOAL_MONTHS_WRITTEN = 12;
 
 export interface MigrationOptions {
   dryRun: boolean;
   agencySlug: string;
   branchSlug: string;
+  /** Display names, used only when this run is the one creating the tenant. */
+  agencyName: string;
+  branchName: string;
+  /** Mailer identity stamped on the agency — see `provisionTenant`. */
+  ticker?: string;
+  allstateAgencyId?: string;
+  /**
+   * The migrated user to promote to Agency Owner, by email. Empty string
+   * disables the step and leaves the agency with no administrator.
+   */
+  ownerEmail?: string;
   pageSize: number;
 }
 
@@ -143,9 +195,56 @@ interface DealRef {
   isTest: boolean;
 }
 
+/**
+ * Stages in `run()`, for the `[n/N]` progress label. Purely cosmetic — drift
+ * mislabels a log line, it cannot break the run — but keep it in step with the
+ * `this.step(...)` calls in `run()`.
+ */
+const MIGRATION_STEP_COUNT = 22;
+
+/**
+ * How many failed rows to log as they happen. A table that fails wholesale
+ * would otherwise produce thousands of identical warnings and bury the stage
+ * lines; the full list always survives in the JSON report.
+ */
+const ERROR_LOG_LIMIT = 25;
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+/**
+ * The stat split an operator actually reads, with the zero-valued parts left
+ * out so a clean table logs one short line and a troubled one stands out.
+ */
+function summarizeStat(stat: CollectionStat): string {
+  const parts = [`${stat.fetched} fetched`, `${stat.migrated} migrated`];
+  // Only worth saying when it disagrees with what we actually pulled.
+  if (stat.source && stat.source !== stat.fetched) {
+    parts.push(`${stat.source} at source`);
+  }
+  if (stat.skipped) parts.push(`${stat.skipped} skipped`);
+  if (stat.excludedTest) parts.push(`${stat.excludedTest} test`);
+  if (stat.rejectedValues) parts.push(`${stat.rejectedValues} rejected values`);
+  const links = stat.producerLinks;
+  if (links) {
+    parts.push(
+      `producers ${links.linked} linked/${links.unresolved} unresolved/` +
+        `${links.absent} unattributed`,
+    );
+  }
+  return parts.join(', ');
+}
+
 @Injectable()
 export class MigrationService {
   private readonly logger = new Logger('Migration');
+  /** Position in the `run()` sequence, for the `[n/N]` progress label. */
+  private stepIndex = 0;
+  /** Row errors logged live so far; the rest are left to the JSON report. */
+  private loggedErrors = 0;
 
   constructor(
     @InjectModel(Agency.name) private readonly agencyModel: Model<Agency>,
@@ -182,119 +281,276 @@ export class MigrationService {
     private readonly timeOffRequestModel: Model<TimeOffRequest>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
+    @InjectModel(AgencyRole.name)
+    private readonly roleModel: Model<AgencyRole>,
+    private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
 
   async run(options: MigrationOptions): Promise<MigrationReport> {
     const report = createReport(options.dryRun);
     const started = Date.now();
+    this.stepIndex = 0;
+    this.loggedErrors = 0;
     const ss = new SmartSuiteClient(loadSmartSuiteConfig());
 
-    const ctx = await this.resolveTenant(options, report);
+    this.logger.log(
+      `Migration starting — agency=${options.agencySlug} branch=${options.branchSlug} ` +
+        `pageSize=${options.pageSize}` +
+        (options.dryRun ? ' (DRY RUN — nothing is written)' : ''),
+    );
 
-    const producers = await this.migrateUsers(ss, ctx, options, report);
-    report.producers.mapped = producers.size;
+    try {
+      const ctx = await this.step(report, 'Tenant', null, () =>
+        this.resolveTenant(options, report),
+      );
 
-    const households = await this.migrateHouseholds(
-      ss,
-      ctx,
-      producers,
-      options,
-      report,
-    );
-    await this.migrateContacts(ss, ctx, households, options, report);
-    const leads = await this.migrateLeads(ss, ctx, producers, options, report);
+      const producers = await this.step(report, 'Users', 'users', () =>
+        this.migrateUsers(ss, ctx, options, report),
+      );
+      report.producers.mapped = producers.size;
 
-    // Legacy id -> Mongo `_id`, so recaps and deals can be written with real
-    // `leadId` refs rather than only the `legacyLeadId` string. Leads are
-    // migrated before both, so this map is always complete by the time it is
-    // read; the same holds for `households` and, below, `quoteIds`.
-    const leadIds = new Map(leads.map((lead) => [lead.legacyId, lead.id]));
+      await this.step(report, 'Agency owner', null, () =>
+        this.assignAgencyOwner(ctx, options, report),
+      );
 
-    const quotes = await this.migrateQuoteRecaps(
-      ss,
-      ctx,
-      producers,
-      households,
-      leadIds,
-      options,
-      report,
-    );
-    const quoteIds = new Map(quotes.map((quote) => [quote.legacyId, quote.id]));
+      const households = await this.step(
+        report,
+        'Households',
+        'households',
+        () => this.migrateHouseholds(ss, ctx, producers, options, report),
+      );
+      await this.step(report, 'Contacts', 'contacts', () =>
+        this.migrateContacts(ss, ctx, households, options, report),
+      );
+      const leads = await this.step(report, 'Leads', 'leads', () =>
+        this.migrateLeads(ss, ctx, producers, options, report),
+      );
 
-    const deals = await this.migrateDeals(
-      ss,
-      ctx,
-      producers,
-      households,
-      leadIds,
-      quoteIds,
-      options,
-      report,
-    );
-    const policies = await this.migratePolicies(
-      ss,
-      ctx,
-      households,
-      deals,
-      options,
-      report,
-    );
-    await this.migrateAuditItems(ss, ctx, deals, options, report);
-    await this.migrateDealAudits(ss, ctx, deals, options, report);
-    /*
-     * Must follow both passes (PAC-72). Items import before roll-ups, so an
-     * item cannot know its parent's `_id` at import time, and legacy has no
-     * audit assignee at all. Without this the hand-off board — which pages over
-     * `dealAudits` and scopes on `auditAssignee` — shows nothing for any
-     * migrated deal.
-     */
-    await this.reconcileAudits(ctx);
-    await this.migrateAuditTemplates(ss, ctx, options, report);
-    await this.migrateInterestedParties(
-      ss,
-      ctx,
-      households,
-      policies,
-      options,
-      report,
-    );
-    await this.migratePriorInsurance(
-      ss,
-      ctx,
-      producers,
-      households,
-      deals,
-      options,
-      report,
-    );
-    await this.migratePriorPolicies(
-      ss,
-      ctx,
-      households,
-      deals,
-      options,
-      report,
-    );
-    await this.migrateServiceTickets(
-      ss,
-      ctx,
-      producers,
-      households,
-      policies,
-      options,
-      report,
-    );
-    await this.migrateProducerAssignments(ss, ctx, producers, options, report);
-    await this.migrateCrmRotations(ss, ctx, producers, options, report);
-    await this.migrateTimeOffRequests(ss, ctx, producers, options, report);
+      // Legacy id -> Mongo `_id`, so recaps and deals can be written with real
+      // `leadId` refs rather than only the `legacyLeadId` string. Leads are
+      // migrated before both, so this map is always complete by the time it is
+      // read; the same holds for `households` and, below, `quoteIds`.
+      const leadIds = new Map(leads.map((lead) => [lead.legacyId, lead.id]));
 
-    await this.deriveProducerGoals(ctx, producers, report);
-    await this.deriveActivities(ctx, leads, quotes, deals, report);
+      const quotes = await this.step(
+        report,
+        'Quote Recaps',
+        'quoteRecaps',
+        () =>
+          this.migrateQuoteRecaps(
+            ss,
+            ctx,
+            producers,
+            households,
+            leadIds,
+            options,
+            report,
+          ),
+      );
+      const quoteIds = new Map(
+        quotes.map((quote) => [quote.legacyId, quote.id]),
+      );
 
+      const deals = await this.step(report, 'Deals', 'deals', () =>
+        this.migrateDeals(
+          ss,
+          ctx,
+          producers,
+          households,
+          leadIds,
+          quoteIds,
+          options,
+          report,
+        ),
+      );
+      const policies = await this.step(report, 'Policies', 'policies', () =>
+        this.migratePolicies(ss, ctx, households, deals, options, report),
+      );
+      await this.step(report, 'Audit items', 'dealAuditItems', () =>
+        this.migrateAuditItems(ss, ctx, deals, options, report),
+      );
+      await this.step(report, 'Deal audits', 'dealAudits', () =>
+        this.migrateDealAudits(ss, ctx, deals, options, report),
+      );
+      /*
+       * Must follow both passes (PAC-72). Items import before roll-ups, so an
+       * item cannot know its parent's `_id` at import time, and legacy has no
+       * audit assignee at all. Without this the hand-off board — which pages over
+       * `dealAudits` and scopes on `auditAssignee` — shows nothing for any
+       * migrated deal.
+       */
+      await this.step(report, 'Audit reconciliation', null, () =>
+        this.reconcileAudits(ctx),
+      );
+      await this.step(report, 'Audit templates', 'auditTemplates', () =>
+        this.migrateAuditTemplates(ss, ctx, options, report),
+      );
+      await this.step(report, 'Interested parties', 'interestedParties', () =>
+        this.migrateInterestedParties(
+          ss,
+          ctx,
+          households,
+          policies,
+          options,
+          report,
+        ),
+      );
+      await this.step(report, 'Prior insurance', 'priorInsurance', () =>
+        this.migratePriorInsurance(
+          ss,
+          ctx,
+          producers,
+          households,
+          deals,
+          options,
+          report,
+        ),
+      );
+      await this.step(report, 'Prior policies', 'priorPolicies', () =>
+        this.migratePriorPolicies(ss, ctx, households, deals, options, report),
+      );
+      await this.step(report, 'Service tickets', 'serviceTickets', () =>
+        this.migrateServiceTickets(
+          ss,
+          ctx,
+          producers,
+          households,
+          policies,
+          options,
+          report,
+        ),
+      );
+      await this.step(
+        report,
+        'Producer assignments',
+        'producerAssignments',
+        () =>
+          this.migrateProducerAssignments(ss, ctx, producers, options, report),
+      );
+      await this.step(report, 'CRM rotations', 'crmRotations', () =>
+        this.migrateCrmRotations(ss, ctx, producers, options, report),
+      );
+      await this.step(report, 'Time-off requests', 'timeOffRequests', () =>
+        this.migrateTimeOffRequests(ss, ctx, producers, options, report),
+      );
+
+      await this.step(report, 'Producer goals (derived)', null, () =>
+        this.deriveProducerGoals(ctx, producers, report),
+      );
+      await this.step(report, 'Activities (derived)', null, () =>
+        this.deriveActivities(ctx, leads, quotes, deals, report),
+      );
+    } catch (err) {
+      /*
+       * Stamp and report the partial run before rethrowing. Everything the
+       * completed stages measured is still true and still worth having; the
+       * caller decides how loudly to surface it.
+       */
+      this.finish(report, started, false);
+      throw new MigrationRunError(report, err);
+    }
+
+    this.finish(report, started, true);
+    return report;
+  }
+
+  /** Stamp the run's end on the report and log the closing tally. */
+  private finish(
+    report: MigrationReport,
+    started: number,
+    completed: boolean,
+  ): void {
     report.finishedAt = new Date().toISOString();
     report.durationMs = Date.now() - started;
-    return report;
+    this.logSummary(report, completed);
+  }
+
+  /**
+   * Run one stage with uniform progress logging.
+   *
+   * Each stage used to log a single bespoke line of its own choosing, so a run
+   * that died partway — as a dropped SmartSuite connection will make it — left
+   * no record of which stage was in flight, how far the run had got, or how
+   * long anything took. The outcome line is built from the stage's own
+   * `CollectionStat`, which is already where the migrated/skipped/rejected
+   * split lives, so stages need no per-stage logging code of their own.
+   */
+  private async step<T>(
+    report: MigrationReport,
+    label: string,
+    statKey: string | null,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const tag = `[${++this.stepIndex}/${MIGRATION_STEP_COUNT}] ${label}`;
+    this.logger.log(`${tag} — starting`);
+    const started = Date.now();
+    try {
+      const result = await fn();
+      const stat = statKey ? report.collections[statKey] : undefined;
+      this.logger.log(
+        `${tag} — done in ${formatMs(Date.now() - started)}` +
+          (stat ? ` — ${summarizeStat(stat)}` : ''),
+      );
+      return result;
+    } catch (err) {
+      /*
+       * Name the stage on the way past, then rethrow untouched. The error
+       * itself says what broke but not where in a 21-stage run, and "where" is
+       * the first thing an operator needs in order to resume.
+       */
+      this.logger.error(
+        `${tag} — FAILED after ${formatMs(Date.now() - started)}: ${(err as Error).message}`,
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * Record a row that failed to write, and say so while the run is still going.
+   *
+   * These used to accumulate silently and surface only in the closing report,
+   * so a run that died later lost every one of them — and a run that succeeded
+   * gave no clue *when* the bad rows went past. Capped at
+   * {@link ERROR_LOG_LIMIT} lines: the JSON report keeps the full list.
+   */
+  private recordError(report: MigrationReport, message: string): void {
+    report.errors.push(message);
+    if (this.loggedErrors < ERROR_LOG_LIMIT) {
+      this.loggedErrors++;
+      this.logger.warn(`row failed: ${message}`);
+      if (this.loggedErrors === ERROR_LOG_LIMIT) {
+        this.logger.warn(
+          '… further row failures will not be logged (see the JSON report).',
+        );
+      }
+    }
+  }
+
+  /** Closing tally, so the log file ends with the numbers without the report. */
+  private logSummary(report: MigrationReport, completed: boolean): void {
+    const collections = Object.entries(report.collections);
+    const migrated = collections.reduce((sum, [, s]) => sum + s.migrated, 0);
+    const skipped = collections.reduce((sum, [, s]) => sum + s.skipped, 0);
+    const outcome = completed
+      ? 'Migration finished'
+      : `Migration ABORTED at stage ${this.stepIndex}/${MIGRATION_STEP_COUNT}, after`;
+    this.logger.log(
+      `${outcome} ${formatMs(report.durationMs ?? 0)} — ` +
+        `${migrated} rows written across ${collections.length} collections, ` +
+        `${skipped} skipped, ${report.derived.activities} activities and ` +
+        `${report.derived.producerGoals} goals derived, ` +
+        `${report.errors.length} errors`,
+    );
+    if (report.errors.length) {
+      // The report prints these too, but only on a run that reaches the end.
+      this.logger.warn(
+        `${report.errors.length} row(s) failed to write; first ${Math.min(
+          report.errors.length,
+          ERROR_LOG_LIMIT,
+        )} are logged above and all are in the JSON report.`,
+      );
+    }
   }
 
   /** Resolve a legacy link id to a Mongo ObjectId via a prebuilt map. */
@@ -317,34 +573,106 @@ export class MigrationService {
   // Tenant
   // ---------------------------------------------------------------------------
 
+  /**
+   * Provision the tenant this run imports into.
+   *
+   * The migration owns this, not the core seed: an agency is tenant data, and
+   * the core seed is platform-required data that must be safe to run anywhere.
+   * Find-or-create throughout, so a resumed run (`--from 2`) reconciles the
+   * agency it already made rather than failing or duplicating it.
+   *
+   * In dry-run nothing is provisioned — an existing tenant is resolved if there
+   * is one, and otherwise a throwaway context is returned so the fetch-and-count
+   * pass can still report on every table.
+   */
   private async resolveTenant(
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<TenantCtx> {
+    if (options.dryRun) return this.resolveTenantDryRun(options, report);
+
+    const tenant = await provisionTenant(
+      {
+        agencyModel: this.agencyModel,
+        branchModel: this.branchModel,
+        auditTemplateModel: this.auditTemplateModel,
+        roleAssignments: this.roleAssignments,
+      },
+      {
+        slug: options.agencySlug,
+        name: options.agencyName,
+        branchSlug: options.branchSlug,
+        branchName: options.branchName,
+        ticker: options.ticker,
+        allstateAgencyId: options.allstateAgencyId,
+      },
+    );
+
+    this.logger.log(
+      `Tenant: agency ${options.agencySlug} ${tenant.agencyCreated ? 'created' : 'already present'}, ` +
+        `branch ${options.branchSlug} ${tenant.branchCreated ? 'created' : 'already present'}, ` +
+        `default roles seeded, audit templates ${tenant.templates.created} created/` +
+        `${tenant.templates.refreshed} present`,
+    );
+
+    /*
+     * No synthetic owner is created. The only users in a migrated agency are the
+     * ones that came from SmartSuite — inventing an account here would put a row
+     * in the book that no legacy record backs.
+     *
+     * The cost is that nobody can log into the tenant immediately: migrated
+     * users get an unmatchable password hash and no roles, and the platform
+     * super admin resolves to ALL_PLATFORM_PERMISSIONS only (no `agency:*`), so
+     * it cannot grant them any. Granting the owner role to a real migrated user
+     * is a deliberate, separate act — see the migration README.
+     */
+    report.agency = {
+      id: tenant.agencyId.toString(),
+      slug: options.agencySlug,
+    };
+    report.branch = {
+      id: tenant.branchId.toString(),
+      slug: options.branchSlug,
+    };
+    return {
+      agencyId: tenant.agencyId.toString(),
+      branchId: tenant.branchId.toString(),
+      agencyObjectId: tenant.agencyId,
+      branchObjectId: tenant.branchId,
+      dryRun: options.dryRun,
+    };
+  }
+
+  /** Resolve without provisioning, so `--dry-run` writes nothing at all. */
+  private async resolveTenantDryRun(
     options: MigrationOptions,
     report: MigrationReport,
   ): Promise<TenantCtx> {
     const agency = await this.agencyModel
       .findOne({ slug: options.agencySlug })
       .lean();
-    if (!agency) {
-      throw new Error(
-        `Agency '${options.agencySlug}' not found. Run the API seed first (npm run seed:dev).`,
+    const branch = agency
+      ? await this.branchModel
+          .findOne({ agencyId: agency._id, slug: options.branchSlug })
+          .lean()
+      : null;
+
+    if (!agency || !branch) {
+      this.logger.warn(
+        `Tenant: agency '${options.agencySlug}' would be created (dry run — not written)`,
       );
     }
-    const branch = await this.branchModel
-      .findOne({ agencyId: agency._id, slug: options.branchSlug })
-      .lean();
-    if (!branch) {
-      throw new Error(
-        `Branch '${options.branchSlug}' not found for agency '${options.agencySlug}'.`,
-      );
-    }
-    report.agency = { id: agency._id.toString(), slug: agency.slug };
-    report.branch = { id: branch._id.toString(), slug: branch.slug };
+    const agencyObjectId = agency?._id ?? new Types.ObjectId();
+    const branchObjectId = branch?._id ?? new Types.ObjectId();
+
+    report.agency = { id: agencyObjectId.toString(), slug: options.agencySlug };
+    report.branch = { id: branchObjectId.toString(), slug: options.branchSlug };
     return {
-      agencyId: agency._id.toString(),
-      branchId: branch._id.toString(),
-      agencyObjectId: agency._id,
-      branchObjectId: branch._id,
-      dryRun: options.dryRun,
+      agencyId: agencyObjectId.toString(),
+      branchId: branchObjectId.toString(),
+      agencyObjectId,
+      branchObjectId,
+      dryRun: true,
     };
   }
 
@@ -401,8 +729,13 @@ export class MigrationService {
             legacySmartSuiteId: legacyId,
           },
           {
+            // A random, unusable secret — not a bcrypt hash, so `bcrypt.compare`
+            // can never match it and a migrated row is never loggable into.
+            // Roles are NOT assigned here: SmartSuite's role field does not map
+            // onto this system's roles, and guessing would hand people access
+            // nobody chose. An owner assigns them from /settings/users; the
+            // first owner comes from the core seed.
             passwordHash: randomBytes(24).toString('hex'),
-            roleIds: [],
           },
           ctx.dryRun,
         );
@@ -410,7 +743,8 @@ export class MigrationService {
         stat.migrated += ctx.dryRun ? 0 : 1;
       } catch (err) {
         stat.skipped++;
-        report.errors.push(
+        this.recordError(
+          report,
           `user ${legacyId} (${email}): ${(err as Error).message}`,
         );
       }
@@ -422,16 +756,130 @@ export class MigrationService {
     return map;
   }
 
+  /**
+   * Promote one migrated user to Agency Owner.
+   *
+   * The migrated agency deliberately contains only people from the legacy book,
+   * so its administrator has to be one of them — nothing here invents an
+   * account. Named by email rather than chosen heuristically: "who runs this
+   * agency" is not derivable from a SmartSuite user row, and guessing would
+   * hand somebody agency-wide access nobody chose.
+   *
+   * This is what makes the tenant reachable at all. Every migrated user gets an
+   * unmatchable password hash and no roles, and the only doors in — an invite
+   * token and a password-reset token — are both issued by endpoints requiring
+   * `agency:users:write`. Granting that here gives exactly one person the
+   * ability to open those doors for everyone else.
+   */
+  private async assignAgencyOwner(
+    ctx: TenantCtx,
+    options: MigrationOptions,
+    report: MigrationReport,
+  ): Promise<void> {
+    const email = options.ownerEmail?.toLowerCase().trim();
+    if (!email) {
+      this.logger.warn(
+        'Agency owner: none requested (--owner-email) — the migrated agency ' +
+          'will have no administrator',
+      );
+      return;
+    }
+    if (ctx.dryRun) {
+      this.logger.log(`Agency owner: would promote ${email} (dry run)`);
+      return;
+    }
+
+    const user = await this.userModel
+      .findOne({ agencyId: ctx.agencyObjectId, email })
+      .select('_id')
+      .lean();
+    if (!user) {
+      /*
+       * Deliberately a warning, not a throw. The import itself is sound and
+       * re-running it would not help — the fix is either a different
+       * `--owner-email` or the address being corrected in SmartSuite. Recorded
+       * on the report so it cannot scroll past unnoticed.
+       */
+      const message =
+        `Agency owner: '${email}' is not among the migrated users — ` +
+        'the agency has no administrator. Re-run with --owner-email <a ' +
+        'migrated address>.';
+      this.logger.warn(message);
+      report.errors.push(message);
+      return;
+    }
+
+    const ownerRole = await this.roleModel
+      .findOne({ agencyId: ctx.agencyObjectId, slug: 'agency_owner' })
+      .select('_id')
+      .lean();
+    if (!ownerRole) {
+      throw new Error(
+        'agency_owner role missing — provisionTenant should have created it',
+      );
+    }
+
+    // Through the join, never a field on the user: `RoleAssignmentsService` is
+    // the only writer of `userRoles` and is what invalidates the resolved
+    // permission cache. The platform-admin actor is what clears the
+    // owner-protection check, exactly as tenant provisioning does elsewhere.
+    await this.roleAssignments.setUserRoles(
+      { userId: user._id.toString(), isPlatformAdmin: true },
+      ctx.agencyObjectId,
+      user._id,
+      [ownerRole._id],
+    );
+    this.logger.log(`Agency owner: ${email} granted the Agency Owner role`);
+  }
+
+  /**
+   * Resolve a SmartSuite producer link to one of our users.
+   *
+   * Accounts for the outcome three ways (PAC-80), because "no producer" has two
+   * very different causes and only one of them is a bug we could fix:
+   *
+   * - `linked` — resolved.
+   * - `unresolved` — the source names a producer we did not import. A real
+   *   defect, and the only one worth chasing.
+   * - `absent` — the source record has no producer at all. **This used to return
+   *   silently**, which is why 441 of 1,652 migrated deals had no `producerId`
+   *   and the report still read `Unmapped: 0`. They are unattributed in
+   *   SmartSuite, so there is nothing to repair — but an unattributed quarter of
+   *   the book is a fact the operator should be told, not one they should have
+   *   to discover by querying Mongo.
+   *
+   * The distinction matters downstream: an unattributed deal counts toward
+   * agency-scoped scorecards and the leaderboard's office total, but toward no
+   * producer's own card and no ranked row — so the office total will legitimately
+   * exceed the sum of the rows.
+   */
   private resolveProducer(
     legacyProducerId: string | undefined,
     producers: Map<string, ProducerEntry>,
+    stat: CollectionStat,
     report: MigrationReport,
   ): ProducerEntry | undefined {
-    if (!legacyProducerId) return undefined;
-    const entry = producers.get(legacyProducerId);
-    if (!entry && !report.producers.unmapped.includes(legacyProducerId)) {
-      report.producers.unmapped.push(legacyProducerId);
+    const links = (stat.producerLinks ??= {
+      linked: 0,
+      unresolved: 0,
+      absent: 0,
+    });
+
+    if (!legacyProducerId) {
+      links.absent++;
+      return undefined;
     }
+
+    const entry = producers.get(legacyProducerId);
+    if (!entry) {
+      links.unresolved++;
+      if (!report.producers.unmapped.includes(legacyProducerId)) {
+        report.producers.unmapped.push(legacyProducerId);
+      }
+      return undefined;
+    }
+
+    links.linked++;
     return entry;
   }
 
@@ -489,7 +937,9 @@ export class MigrationService {
           householdRef:
             refSeq === null ? undefined : formatHouseholdRef(refSeq),
           name,
-          status: selectCode(rec[HOUSEHOLD_FIELDS.status]),
+          status: normalizeHouseholdStatus(
+            selectCode(rec[HOUSEHOLD_FIELDS.status]),
+          ),
           propertyAddress: this.asObject(rec[HOUSEHOLD_FIELDS.propertyAddress]),
           mailingAddress: this.asObject(rec[HOUSEHOLD_FIELDS.mailingAddress]),
           primaryEmails: this.deepEmails(rec[HOUSEHOLD_FIELDS.primaryEmail]),
@@ -583,7 +1033,9 @@ export class MigrationService {
           emails: toStringArray(rec[CONTACT_FIELDS.email]),
           phones: toPhoneArray(rec[CONTACT_FIELDS.phone]),
           dateOfBirth: toDate(rec[CONTACT_FIELDS.dateOfBirth]),
-          roleInHousehold: selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
+          roleInHousehold: normalizeContactRole(
+            selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
+          ),
           isPrimary: toBool(rec[CONTACT_FIELDS.isPrimary]),
           notes: toText(rec[CONTACT_FIELDS.notes]),
           householdId: this.ref(legacyHouseholdId, households),
@@ -640,6 +1092,7 @@ export class MigrationService {
       const producer = this.resolveProducer(
         firstLinkedId(rec[LEAD_FIELDS.producer]),
         producers,
+        stat,
         report,
       );
       const createdDate = toDate(rec[LEAD_FIELDS.createdDate]);
@@ -696,7 +1149,7 @@ export class MigrationService {
    * strings. Historically only the legacy ids were written, which left every
    * migrated recap unreachable from `GET /leads/:id` — that query is
    * `{ agencyId, leadId }` — and made `quoteRecaps.leadId` useless for
-   * reporting. `backfill-deal-refs` repaired deals but never these.
+   * reporting.
    *
    * An unresolved link stays `undefined` rather than being guessed at; Mongoose
    * strips it from the `$set`, so the `legacy*` string remains the only record
@@ -733,6 +1186,7 @@ export class MigrationService {
       const producer = this.resolveProducer(
         firstLinkedId(rec[QUOTE_RECAP_FIELDS.producer]),
         producers,
+        stat,
         report,
       );
       const test = isTestRecord(null, producer?.name, toText(rec.title));
@@ -746,6 +1200,19 @@ export class MigrationService {
       const leadId = this.ref(legacyLeadId, leadIds);
       if (legacyLeadId && !leadId) unlinked++;
 
+      /*
+       * Normalized to canonical labels (PAC-39). This field historically stored
+       * raw SmartSuite choice codes while `deals.policyTypes` and the demo seed
+       * stored labels; because `persist` `$set`s the field, a re-run heals the
+       * code-holding documents already in Mongo.
+       *
+       * Hoisted out of the document literal because `itemCount` is bounded by
+       * its length (PAC-80).
+       */
+      const productsQuoted = this.selectCodes(
+        rec[QUOTE_RECAP_FIELDS.productsQuoted],
+      ).map(normalizePolicyType);
+
       const id = await this.persist(
         this.quoteRecapModel,
         ctx,
@@ -753,19 +1220,24 @@ export class MigrationService {
         {
           title: toText(rec.title),
           quoteDate,
-          // The Quoted scorecard's bucket key (PAC-10). Written on import so a
-          // freshly migrated agency needs no backfill pass; `backfill:deal-refs`
-          // exists for agencies migrated before PAC-9.
+          // The Quoted scorecard's bucket key (PAC-10). Written on import, so
+          // a migrated agency needs no follow-up pass — recaps written before
+          // PAC-9 are invisible to every range query until a re-run heals them.
           quoteDateYmd: quoteDate ? quoteDateYmd(quoteDate) : undefined,
           premium: toNumber(rec[QUOTE_RECAP_FIELDS.premium]),
-          itemCount: toNumber(rec[QUOTE_RECAP_FIELDS.items]),
-          // Normalized to canonical labels (PAC-39). This field historically
-          // stored raw SmartSuite choice codes while `deals.policyTypes` and
-          // the demo seed stored labels; because `persist` `$set`s the field, a
-          // re-run heals the code-holding documents already in Mongo.
-          productsQuoted: this.selectCodes(
-            rec[QUOTE_RECAP_FIELDS.productsQuoted],
-          ).map(normalizePolicyType),
+          /*
+           * Bounded by how many products the recap actually quotes — one recap
+           * holds `itemCount: 3228`, which is its own *premium* (3228.98) typed
+           * into the items field.
+           */
+          itemCount: this.plausibleItemCount(
+            rec[QUOTE_RECAP_FIELDS.items],
+            productsQuoted.length,
+            legacyId,
+            'itemCount',
+            stat,
+          ),
+          productsQuoted,
           // "Insurance X Month" (PAC-56 #16). Mapped to the month label at
           // write, not left as SmartSuite's choice UUID — the read paths
           // normalize too, so a re-run heals recaps imported before this.
@@ -811,10 +1283,11 @@ export class MigrationService {
   /**
    * Deals (Sold Log).
    *
-   * Resolves the same refs `backfill-deal-refs` was written to repair
-   * (`leadId`, `householdId`, `quoteRecapId`) at import time instead. The
-   * backfill stays — it is the only remedy for databases migrated before this
-   * — but a fresh migration no longer needs it.
+   * Resolves `leadId`, `householdId` and `quoteRecapId` at import time. These
+   * used to be left as `legacy*` strings for a follow-up pass to repair, which
+   * meant a migrated deal had no traversable link to its lead or household —
+   * audit generation and CRM assignment both resolve the client through
+   * `householdId`, and the hand-off board showed "Unknown Client" without it.
    */
   private async migrateDeals(
     ss: SmartSuiteClient,
@@ -854,6 +1327,7 @@ export class MigrationService {
       const producer = this.resolveProducer(
         firstLinkedId(rec[DEAL_FIELDS.producer]),
         producers,
+        stat,
         report,
       );
       const test = isTestRecord(leadSource, clientName, producer?.name);
@@ -873,6 +1347,20 @@ export class MigrationService {
       const leadId = this.ref(legacyLeadId, leadIds);
       if (legacyLeadId && !leadId) unlinked++;
 
+      /*
+       * Read before `itemCount`, which is bounded *by* it — a 2-policy bundle
+       * cannot hold 662 items.
+       *
+       * Bounded itself, and this ordering matters: the policy count is the item
+       * count's structural denominator, so a nonsense one would *widen* the
+       * ceiling instead of narrowing it and let the very values we are rejecting
+       * back through.
+       */
+      const rawPolicyCount = toNumber(rec[DEAL_FIELDS.policyCount]);
+      const policyCount = isPlausiblePolicyCount(rawPolicyCount)
+        ? rawPolicyCount
+        : this.rejectPolicyCount(rawPolicyCount, legacyId, stat);
+
       const id = await this.persist(
         this.dealModel,
         ctx,
@@ -885,8 +1373,14 @@ export class MigrationService {
             toNumber(rec[DEAL_FIELDS.soldDateYmd]) || toYmd(soldDate),
           premium,
           premiumSource: source,
-          itemCount: toNumber(rec[DEAL_FIELDS.totalItems]),
-          policyCount: toNumber(rec[DEAL_FIELDS.policyCount]),
+          itemCount: this.plausibleItemCount(
+            rec[DEAL_FIELDS.totalItems],
+            policyCount,
+            legacyId,
+            'itemCount',
+            stat,
+          ),
+          policyCount,
           dealType: deriveDealType(isBundle, policyLabels),
           isBundle,
           policyTypes: policyLabels,
@@ -1004,10 +1498,46 @@ export class MigrationService {
           clientName,
           producerName,
           producerId: deal?.producerId,
-          daysOpen:
-            toNumber(rec[DEAL_AUDIT_ITEM_FIELDS.daysOpen]) ||
-            daysSince(firstCreatedAt),
+          /*
+           * Derived, never imported.
+           *
+           * Legacy `Days Open` (`s939cb7bec`) is
+           * `DATEDIFF(completion-or-today, sold_date)` — operands reversed in
+           * SmartSuite itself, so it evaluates to `sold − completion` and every
+           * migrated row imported a *negative* (−171, −176, −198…). Worse, it
+           * measures distance from the **sold date**, not from when the item was
+           * raised, which is what the board means by "open".
+           *
+           * `daysSince(firstCreatedAt)` is the same quantity
+           * `DealAuditsService.loadChecklists` recomputes on read and
+           * `AuditGenerationService.buildItem` writes at creation, so a migrated
+           * item and an app-created one now agree.
+           */
+          daysOpen: daysSince(firstCreatedAt),
           firstCreatedAt,
+          /*
+           * The same 7-day rule an app-generated item gets, measured from when
+           * the item was actually raised (PAC-80).
+           *
+           * Without this the board's Overdue / Due Soon filters answer *nothing*
+           * on an imported agency: `dealAudits.dueAt` is a `$min` over open
+           * items' `dueAt`, so a null on every item leaves a null on every audit,
+           * and both filters exclude a missing `dueAt` by design.
+           *
+           * ⚠ This deliberately reverses the "no backfill" note that used to sit
+           * on `DealAuditItem.dueAt`. That note was about not retro-stamping
+           * documents *already in Mongo*, where a manufactured backlog would be
+           * an invention. Importing a legacy row is a different act: these items
+           * genuinely were raised years ago and genuinely are still open, so
+           * "overdue" is the truth about them, and a hand-off board that reports
+           * a real backlog is doing its job. Expect the imported set to land
+           * overdue on day one — that is the finding, not a bug.
+           *
+           * Undefined when `firstCreatedAt` is missing, rather than dated from
+           * the migration run: a deadline measured from when we happened to
+           * import is not a fact about the item.
+           */
+          dueAt: firstCreatedAt ? auditItemDueAt(firstCreatedAt) : undefined,
           isTestRecord: test,
         },
         stat,
@@ -1053,13 +1583,25 @@ export class MigrationService {
       const test = deal?.isTest ?? false;
       if (test) stat.excludedTest++;
 
+      const policyNumber = toText(rec[POLICY_FIELDS.policyNumber]);
+
       const id = await this.persist(
         this.policyModel,
         ctx,
         legacyId,
         {
-          policyNumber: toText(rec[POLICY_FIELDS.policyNumber]),
-          policyType: selectCode(rec[POLICY_FIELDS.policyType]),
+          policyNumber,
+          // The normalized match key behind `GET /policies/check` (PAC-40).
+          // Written here rather than by a follow-up pass: without it the dedupe
+          // check silently matches nothing for every migrated policy, which is
+          // worse than having no check — a producer is told a number is free
+          // when it is not. `null` for anything under
+          // MIN_POLICY_NUMBER_KEY_LENGTH usable characters, because a match on
+          // two or three digits carries no information.
+          policyNumberKey: normalizePolicyNumber(policyNumber),
+          policyType: normalizePolicyType(
+            selectCode(rec[POLICY_FIELDS.policyType]),
+          ),
           // Mapped at write as well as normalized on read (PAC-56 #19): the raw
           // `B4tEH` was being rendered to users, and mapping only on read would
           // leave the stored value un-matchable against the carrier catalog.
@@ -1069,8 +1611,28 @@ export class MigrationService {
           expirationDate: toDate(rec[POLICY_FIELDS.expirationDate]),
           renewalDate: toDate(rec[POLICY_FIELDS.renewalDate]),
           premium: toNumber(rec[POLICY_FIELDS.premium]),
-          items: toNumber(rec[POLICY_FIELDS.items]),
-          policyStatus: selectCode(rec[POLICY_FIELDS.policyStatus]),
+          /*
+           * The leaf where the junk actually lives (PAC-80).
+           *
+           * `Deals.Total Items` is a *rollup* over the policies' `Items`, so
+           * validating only the deal would leave the source of `875,244,687`
+           * intact — and that policy is rendered directly on the household card
+           * via `clients.service.ts`. Confirmed in the migrated data: one policy
+           * has `items: 875244684` and `policyNumber: '875244684'`, the number
+           * typed into the wrong field.
+           *
+           * A policy *is* one policy, so the bound is a single policy's ceiling.
+           */
+          items: this.plausibleItemCount(
+            rec[POLICY_FIELDS.items],
+            1,
+            legacyId,
+            'items',
+            stat,
+          ),
+          policyStatus: normalizePolicyStatus(
+            selectCode(rec[POLICY_FIELDS.policyStatus]),
+          ),
           notes: toText(rec[POLICY_FIELDS.notes]),
           householdId: this.ref(legacyHouseholdId, households),
           legacyHouseholdId,
@@ -1342,8 +1904,13 @@ export class MigrationService {
         legacyId,
         {
           title: toText(rec[PRIOR_INSURANCE_FIELDS.title]),
-          cancellationResponsibility: selectCode(
-            rec[PRIOR_INSURANCE_FIELDS.cancellationResponsibility],
+          /*
+           * Its own vocabulary, not the prior-*policy* one, despite sharing
+           * field id `sb3cc60eb5` and the codes `XT6s7`/`fr4Ge` with it. Here
+           * they mean SFA Call / Customer Call; there they mean Auto / Home.
+           */
+          cancellationResponsibility: normalizeCancellationResponsibility(
+            selectCode(rec[PRIOR_INSURANCE_FIELDS.cancellationResponsibility]),
           ),
           cancelledPreviousInsurance: selectCode(
             rec[PRIOR_INSURANCE_FIELDS.cancelledPreviousInsurance],
@@ -1424,8 +1991,18 @@ export class MigrationService {
         legacyId,
         {
           title: toText(rec[PRIOR_POLICY_FIELDS.title]),
-          cancellationStatus: selectCode(rec[PRIOR_POLICY_FIELDS.status]),
-          policyType: selectCode(rec[PRIOR_POLICY_FIELDS.policyType]),
+          cancellationStatus: normalizePriorPolicyCancellationStatus(
+            selectCode(rec[PRIOR_POLICY_FIELDS.status]),
+          ),
+          /*
+           * Prior policies use their OWN type vocabulary, never
+           * `normalizePolicyType`. Its codes (`XT6s7`/`fr4Ge`) collide with
+           * the Prior Insurance table's cancellation-responsibility codes,
+           * so a shared map would render one as the other.
+           */
+          policyType: normalizePriorPolicyType(
+            selectCode(rec[PRIOR_POLICY_FIELDS.policyType]),
+          ),
           needsCancellation: selectCode(
             rec[PRIOR_POLICY_FIELDS.needsCancellation],
           ),
@@ -1503,13 +2080,23 @@ export class MigrationService {
           title: toText(rec[SERVICE_TICKET_FIELDS.title]),
           createdDate:
             toDate(rec[SERVICE_TICKET_FIELDS.createdDate]) ?? firstCreatedAt,
-          category: selectCode(rec[SERVICE_TICKET_FIELDS.category]),
+          category: normalizeLegacyTicketCategory(
+            selectCode(rec[SERVICE_TICKET_FIELDS.category]),
+          ),
           priority: selectCode(rec[SERVICE_TICKET_FIELDS.priority]),
           dueDate: toDate(rec[SERVICE_TICKET_FIELDS.dueDate]),
-          status: selectCode(rec[SERVICE_TICKET_FIELDS.status]),
+          status: normalizeLegacyTicketStatus(
+            selectCode(rec[SERVICE_TICKET_FIELDS.status]),
+          ),
           dateResolved: toDate(rec[SERVICE_TICKET_FIELDS.dateResolved]),
+          /*
+           * Unlike the deal-audit-item formula, this one is the right way round
+           * (`DATEDIFF(first_created, TODAY())`, example `"65"`), so the source
+           * value is trusted — but clamped, because a future `first_created`
+           * would still yield a negative, and "open for −3 days" is not a thing.
+           */
           daysOpen:
-            toNumber(rec[SERVICE_TICKET_FIELDS.daysOpen]) ||
+            Math.max(0, toNumber(rec[SERVICE_TICKET_FIELDS.daysOpen])) ||
             daysSince(firstCreatedAt),
           clientName,
           crmName: toText(rec[SERVICE_TICKET_FIELDS.crmName]),
@@ -1682,11 +2269,19 @@ export class MigrationService {
           title: toText(rec[TIME_OFF_REQUEST_FIELDS.title]),
           startDate: toDate(rec[TIME_OFF_REQUEST_FIELDS.startDate]),
           endDate: toDate(rec[TIME_OFF_REQUEST_FIELDS.endDate]),
-          requestType: selectCode(rec[TIME_OFF_REQUEST_FIELDS.requestType]),
+          requestType: normalizeTimeOffRequestType(
+            selectCode(rec[TIME_OFF_REQUEST_FIELDS.requestType]),
+          ),
           hoursRequested: toNumber(rec[TIME_OFF_REQUEST_FIELDS.hoursRequested]),
-          status: selectCode(rec[TIME_OFF_REQUEST_FIELDS.status]),
-          type: selectCode(rec[TIME_OFF_REQUEST_FIELDS.type]),
-          decision: selectCode(rec[TIME_OFF_REQUEST_FIELDS.decision]),
+          status: normalizeTimeOffStatus(
+            selectCode(rec[TIME_OFF_REQUEST_FIELDS.status]),
+          ),
+          type: normalizeTimeOffType(
+            selectCode(rec[TIME_OFF_REQUEST_FIELDS.type]),
+          ),
+          decision: normalizeTimeOffDecision(
+            selectCode(rec[TIME_OFF_REQUEST_FIELDS.decision]),
+          ),
           producerId: this.userRef(legacyProducerId, producers),
           legacyProducerId,
         },
@@ -1706,11 +2301,34 @@ export class MigrationService {
     producers: Map<string, ProducerEntry>,
     report: MigrationReport,
   ): Promise<void> {
-    const month = new Date().toISOString().slice(0, 7); // YYYY-MM
+    /*
+     * Chicago, not UTC (PAC-80).
+     *
+     * `new Date().toISOString().slice(0, 7)` disagrees with the
+     * `currentChicagoMonth()` the leaderboard queries with for the first five or
+     * six hours of every month, so a migration run just after midnight UTC on
+     * the 1st wrote goals into a month nothing would ask for.
+     */
+    const months = recentChicagoMonths(GOAL_MONTHS_WRITTEN);
+    const withoutGoal: string[] = [];
     let created = 0;
+
     for (const [legacyId, entry] of producers) {
-      if (entry.monthlyGoal <= 0) continue;
-      if (!ctx.dryRun) {
+      if (entry.monthlyGoal <= 0) {
+        withoutGoal.push(entry.name);
+        continue;
+      }
+      /*
+       * One row per month in the window, not just the current one.
+       *
+       * SmartSuite's "Monthly Goal" is a single standing scalar with no month
+       * dimension, so writing it for one month made every other month
+       * unanswerable — `?month=2026-07` returned no goals at all, and the
+       * current month's rows silently stopped applying the moment the month
+       * rolled over.
+       */
+      for (const month of months) {
+        if (ctx.dryRun) continue;
         await this.producerGoalModel.updateOne(
           {
             agencyId: ctx.agencyId,
@@ -1722,16 +2340,32 @@ export class MigrationService {
               branchId: ctx.branchId,
               goalPremium: entry.monthlyGoal,
               legacyProducerId: legacyId,
-              source: 'migration:user-monthly-goal',
+              source: GOAL_SOURCE,
             },
           },
           { upsert: true },
         );
+        created++;
       }
-      created++;
     }
+
     report.derived.producerGoals = created;
-    this.logger.log(`Producer goals: ${created} for ${month}`);
+    report.derived.producersWithoutGoal = withoutGoal;
+
+    /*
+     * Say *why* when the answer is zero.
+     *
+     * "Producer goals: 0 for 2026-08" reads as a bug in the migration. It is
+     * not: SmartSuite's Monthly Goal is empty for every user in this workspace,
+     * so there is nothing to import and the Motivation Hub has no percentages to
+     * show. That is a data-entry fact somebody can act on, and it is worth one
+     * line of output to make it actionable rather than mysterious.
+     */
+    this.logger.log(
+      created > 0
+        ? `Producer goals: ${created} rows across ${months.length} months`
+        : `Producer goals: 0 rows — ${withoutGoal.length} of ${producers.size} users have Monthly Goal = 0 in SmartSuite, so "% to goal" will be blank`,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1819,6 +2453,59 @@ export class MigrationService {
   // ---------------------------------------------------------------------------
 
   /**
+   * An item count the source record could not honestly have held (PAC-80).
+   *
+   * Legacy "items" fields contain typos of a different order to the usual
+   * missing-value problem: one deal holds `875244687`, which is the policy
+   * number of one of its own policies. `PerformanceService` sums this field, so
+   * a single such row set the Producer Dashboard's entire Sold card.
+   *
+   * Rejected values fall back to a **derived** count rather than to zero, so the
+   * row keeps a defensible number: a deal with 2 policies reads as 2 items, not
+   * as 0. Zero is only used when there is nothing to derive from.
+   *
+   * ⚠ Returns a number, never `undefined`. Mongoose strips `undefined` from a
+   * `$set`, so an `undefined` here would be a silent no-op — and the 875-million
+   * value already in Mongo would survive the very re-run meant to heal it.
+   */
+  private plausibleItemCount(
+    raw: unknown,
+    policyCount: number | undefined,
+    legacyId: string,
+    field: string,
+    stat: CollectionStat,
+  ): number {
+    const value = toNumber(raw);
+    if (isPlausibleItemCount(value, policyCount)) return value;
+
+    const replacedWith = policyCount && policyCount > 0 ? policyCount : 0;
+    recordRejection(stat, {
+      legacyId,
+      field,
+      value,
+      limit: maxPlausibleItemCount(policyCount),
+      replacedWith,
+    });
+    return replacedWith;
+  }
+
+  /** {@link plausibleItemCount}'s counterpart for the policy count itself. */
+  private rejectPolicyCount(
+    value: number,
+    legacyId: string,
+    stat: CollectionStat,
+  ): number {
+    recordRejection(stat, {
+      legacyId,
+      field: 'policyCount',
+      value,
+      limit: MAX_POLICIES_PER_RECORD,
+      replacedWith: 0,
+    });
+    return 0;
+  }
+
+  /**
    * Idempotent upsert for a tenant-scoped, SmartSuite-sourced record keyed on
    * { agencyId, legacySmartSuiteId }. Updates the report stat and returns the
    * Mongo _id (a throwaway ObjectId in dry-run).
@@ -1851,7 +2538,8 @@ export class MigrationService {
       return id;
     } catch (err) {
       stat.skipped++;
-      report.errors.push(
+      this.recordError(
+        report,
         `${model.modelName} ${legacyId}: ${(err as Error).message}`,
       );
       return undefined;

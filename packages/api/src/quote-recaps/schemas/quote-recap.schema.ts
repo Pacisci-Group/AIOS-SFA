@@ -210,8 +210,8 @@ export class QuoteRecap extends TenantRecord {
    * `../quote.normalize`, which reads Chicago or UTC parts depending on the
    * recap's provenance — see that docblock.
    *
-   * Optional: every recap written before PAC-9 lacks it until
-   * `backfill:deal-refs` has run.
+   * Optional only for recaps written before PAC-9; the migration has set it
+   * on every import since.
    */
   @Prop({ index: true })
   quoteDateYmd?: number;
@@ -255,9 +255,9 @@ QuoteRecapSchema.index({ agencyId: 1, householdId: 1, createdAt: -1 });
 QuoteRecapSchema.index({ agencyId: 1, leadId: 1, quoteDate: -1 });
 
 /**
- * The lead-detail legacy fallback (PAC-38). The migration writes only
- * `legacyLeadId` on recaps — `backfill-deal-refs` repairs deals, never these —
- * so without this lookup the quote block is empty for every migrated lead.
+ * The lead-detail legacy fallback (PAC-38). A recap imported before the
+ * migration resolved `leadId` carries only `legacyLeadId`, so without this
+ * lookup the quote block is empty for every such lead.
  *
  * Partial, **never** `sparse`, for the reason spelled out on the
  * `submissionToken` index below.

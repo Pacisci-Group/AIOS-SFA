@@ -4,13 +4,16 @@ import { Connection, Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import {
+  AgencyPermission,
   DataScope,
   DEFAULT_ROLE_TEMPLATES,
   ModuleKey,
+  PlatformPermission,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
 import type {
   ContactDetail,
@@ -187,6 +190,157 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Impersonation (PAC-70)', () => {
+    type Session = {
+      accessToken: string;
+      user: {
+        id: string;
+        dataScope: string;
+        permissions: string[];
+        impersonatedBy: string | null;
+        isPlatformAdmin: boolean;
+      };
+    };
+
+    const me = async (token: string): Promise<Session['user']> => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/auth/me')
+        .set(authHeader(token))
+        .expect(200);
+      return res.body as Session['user'];
+    };
+
+    let producerUserId: string;
+    let superAdminUserId: string;
+    let secondAdminUserId: string;
+
+    beforeAll(async () => {
+      producerUserId = (await me(producerToken)).id;
+      superAdminUserId = (await me(superAdminToken)).id;
+
+      // A second platform admin, so the "never sideways" guard can actually be
+      // exercised. Impersonating *yourself* short-circuits on a different check,
+      // so without a peer here that refusal would go untested.
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const peer = await userModel.create({
+        email: 'peer-admin@sfa.local',
+        passwordHash: await bcrypt.hash(TEST_PASSWORD, 10),
+        firstName: 'Peer',
+        lastName: 'Admin',
+        isPlatformAdmin: true,
+        isActive: true,
+      });
+      secondAdminUserId = peer._id.toString();
+    });
+
+    it('mints a session that IS the target, not a hybrid', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${producerUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(201);
+
+      const body = res.body as Session;
+      expect(body.user.id).toBe(producerUserId);
+      expect(body.user.isPlatformAdmin).toBe(false);
+      /*
+       * The security argument for the whole endpoint: `sub` is the target, so
+       * every guard resolves the target's real context from the store. However
+       * powerful the admin who minted it, the session is `own`-scoped and holds
+       * no platform permission — including the one that minted it.
+       */
+      expect(body.user.dataScope).toBe('own');
+      expect(body.user.permissions).not.toContain('platform:users:impersonate');
+      expect(body.user.permissions).not.toContain('platform:agencies:read');
+      expect(body.user.impersonatedBy).toBe(superAdminUserId);
+    });
+
+    it('the minted token works, and is confined to the target', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${producerUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(201);
+      const token = (res.body as Session).accessToken;
+
+      // Reaches what the producer reaches...
+      await request(app.getHttpServer())
+        .get('/api/v1/performance?range=mtd')
+        .set(authHeader(token))
+        .expect(200);
+
+      // ...and nothing the admin could. A token that still opened platform
+      // routes would mean impersonation had widened, not narrowed, authority.
+      await request(app.getHttpServer())
+        .get('/api/v1/platform/agencies')
+        .set(authHeader(token))
+        .expect(403);
+
+      // `/me` reports the provenance, so a client can render a banner.
+      expect((await me(token)).impersonatedBy).toBe(superAdminUserId);
+    });
+
+    it('an ordinary login carries no impersonation marker', async () => {
+      // `null`, not absent — the web stores this blob, and an omitted key would
+      // leave a stale banner up after switching back to a real login.
+      expect((await me(producerToken)).impersonatedBy).toBeNull();
+    });
+
+    it('refuses to impersonate another platform admin', async () => {
+      // Sideways into a peer's authority is the one direction this must never
+      // go — the audit row would name the wrong person for whatever followed.
+      // Downwards into a tenant is the only direction.
+      await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${secondAdminUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(403);
+    });
+
+    it('refuses to impersonate a deactivated user', async () => {
+      // A deprovisioned account must not be reachable by a second route, and
+      // the refusal is a 404 — indistinguishable from "no such user", so this
+      // cannot confirm who exists either.
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const gone = await userModel.create({
+        email: 'gone-user@sfa.local',
+        passwordHash: await bcrypt.hash(TEST_PASSWORD, 10),
+        agencyId: new Types.ObjectId(seed.agencyId),
+        branchId: new Types.ObjectId(seed.branchId),
+        isActive: false,
+      });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${gone._id.toString()}`)
+        .set(authHeader(superAdminToken))
+        .expect(404);
+      expect((res.body as { message: string }).message).toBe('User not found');
+    });
+
+    it('refuses to impersonate yourself', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${superAdminUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(400);
+    });
+
+    it('says nothing about who exists', async () => {
+      // Byte-identical to the inactive-user response: this endpoint reaches
+      // every tenant, so a distinguishable 404 would be an enumeration oracle.
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/auth/impersonate/000000000000000000000000')
+        .set(authHeader(superAdminToken))
+        .expect(404);
+      expect((res.body as { message: string }).message).toBe('User not found');
+    });
+
+    it('is not something an agency owner can do', async () => {
+      // The capability is `platform:`-namespaced, so it is unreachable from
+      // inside a tenant however senior the caller is there.
+      await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${producerUserId}`)
+        .set(authHeader(ownerToken))
+        .expect(403);
+    });
+  });
+
   describe('Platform (Super Admin)', () => {
     it('GET /api/v1/platform/agencies', async () => {
       const res = await request(app.getHttpServer())
@@ -304,18 +458,37 @@ describe('SFA API (e2e)', () => {
       }
     });
 
-    it('PATCH /api/v1/roles/:roleId — preserves owner admin permissions', async () => {
-      const res = await request(app.getHttpServer())
+    /**
+     * The owner role's access is a rule — everything the agency has enabled —
+     * not a stored page matrix, so editing its levels would either do nothing
+     * or appear to work. The web has always rendered it read-only; the API
+     * used to disagree, which let an owner PATCH their own admin permissions
+     * away.
+     */
+    it('PATCH /api/v1/roles/:roleId — refuses to edit the owner role', async () => {
+      await request(app.getHttpServer())
         .patch(`/api/v1/roles/${seed.ownerRoleId}`)
+        .set(authHeader(ownerToken))
+        .send({ levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
+        .expect(409);
+    });
+
+    it('PATCH /api/v1/roles/:roleId — preserves admin permissions on an editable role', async () => {
+      // The throwaway role, never Producer: this replaces the whole page matrix,
+      // so editing a role other tests depend on would strip their access and
+      // fail them somewhere else entirely.
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/roles/${seed.editableRoleId}`)
         .set(authHeader(ownerToken))
         .send({ levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }] })
         .expect(200);
 
-      // Page levels change, but agency-admin permissions are never dropped.
+      // Page levels change; any agency-admin permission on the role survives.
       const body = res.body as { permissions: string[] };
-      expect(body.permissions).toContain('agency:roles:read');
-      expect(body.permissions).toContain('agency:roles:write');
       expect(body.permissions).toContain('leads:read');
+      expect(
+        body.permissions.filter((p) => p.startsWith('platform:')),
+      ).toHaveLength(0);
     });
 
     it('PATCH /api/v1/roles/:roleId — forbidden for producer', async () => {
@@ -416,6 +589,73 @@ describe('SFA API (e2e)', () => {
       expect(body.effectivePermissions).toContain('clients:read');
     });
 
+    /**
+     * The two halves of a role's permission set are independently optional, and
+     * each preserves the other when omitted. Worth three cases rather than one:
+     * sending only `levels` is what the web did for its whole life, and sending
+     * only `adminPermissions` wiping the page matrix is the exact bug this
+     * asymmetry exists to prevent.
+     */
+    describe('PATCH /api/v1/roles/:roleId — agency capabilities', () => {
+      const patchRole = (body: Record<string, unknown>) =>
+        request(app.getHttpServer())
+          .patch(`/api/v1/roles/${seed.editableRoleId}`)
+          .set(authHeader(ownerToken))
+          .send(body);
+
+      it('grants a capability alongside a page level', async () => {
+        const res = await patchRole({
+          levels: [{ moduleKey: ModuleKey.Leads, level: 'write' }],
+          adminPermissions: [AgencyPermission.ChangeLogsRead],
+        }).expect(200);
+
+        const { permissions } = res.body as { permissions: string[] };
+        expect(permissions).toContain(AgencyPermission.ChangeLogsRead);
+        expect(permissions).toContain('leads:write');
+        expect(permissions).toContain('leads:read');
+      });
+
+      it('preserves page levels when only capabilities are sent', async () => {
+        const res = await patchRole({
+          adminPermissions: [AgencyPermission.ChangeLogsRead],
+        }).expect(200);
+
+        const { permissions } = res.body as { permissions: string[] };
+        expect(permissions).toContain('leads:write');
+      });
+
+      it('preserves capabilities when only levels are sent', async () => {
+        const res = await patchRole({
+          levels: [{ moduleKey: ModuleKey.Leads, level: 'read' }],
+        }).expect(200);
+
+        expect((res.body as { permissions: string[] }).permissions).toContain(
+          AgencyPermission.ChangeLogsRead,
+        );
+      });
+
+      it('treats an empty array as "remove them all"', async () => {
+        const res = await patchRole({ adminPermissions: [] }).expect(200);
+
+        const { permissions } = res.body as { permissions: string[] };
+        expect(permissions).not.toContain(AgencyPermission.ChangeLogsRead);
+        // …without taking the page levels with them.
+        expect(permissions).toContain('leads:read');
+      });
+
+      /**
+       * Rejected rather than filtered. `platform:*` is above the tenant
+       * boundary, so an agency owner granting themselves one would be an
+       * escalation out of their own tenant — and a silent drop would show in
+       * the UI as saved when nothing was stored.
+       */
+      it('refuses a platform permission', async () => {
+        await patchRole({
+          adminPermissions: [PlatformPermission.AgenciesWrite],
+        }).expect(400);
+      });
+    });
+
     it('PATCH /api/v1/users/:userId/roles', async () => {
       const res = await request(app.getHttpServer())
         .patch(`/api/v1/users/${invitedUserId}/roles`)
@@ -423,7 +663,11 @@ describe('SFA API (e2e)', () => {
         .send({ roleIds: [seed.producerRoleId] })
         .expect(200);
 
-      expect((res.body as { roleIds: string[] }).roleIds.length).toBe(1);
+      // The response still carries populated roles, even though the assignment
+      // now lives in `userRoles` rather than on the user document.
+      const body = res.body as { roleIds: { _id: string; slug: string }[] };
+      expect(body.roleIds).toHaveLength(1);
+      expect(body.roleIds[0]._id).toBe(seed.producerRoleId);
     });
 
     it('PATCH /api/v1/users/:userId/permissions — per-page overrides', async () => {
@@ -432,9 +676,10 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .send({
           overrides: [
-            // Grant read on a page the producer role lacks.
-            { moduleKey: ModuleKey.Mailers, level: 'read' },
             // Downgrade a page the producer role has write on to read only.
+            // (The Producer template has held `mailers:write` since before
+            // PAC-73; this line used to claim the role lacked the page.)
+            { moduleKey: ModuleKey.Mailers, level: 'read' },
             { moduleKey: ModuleKey.Leads, level: 'read' },
           ],
         })
@@ -751,6 +996,412 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  /**
+   * Admin-triggered password reset (PAC-79).
+   *
+   * Like the invite block above, this covers the lifecycle rather than each
+   * endpoint alone: the guarantees that matter are relationships between calls.
+   * A reset must kill the previous link, a used link must not work twice, and a
+   * reset must end sessions that were live when it happened.
+   *
+   * ⚠ Every test here works on a user it creates itself. Resetting one of the
+   * seeded personas would bump their `tokenVersion` and silently 401 the shared
+   * `ownerToken` / `producerToken` for every later describe block in this file.
+   */
+  describe('Admin-triggered password reset (PAC-79)', () => {
+    const server = () => request(app.getHttpServer());
+    let userModel: Model<User>;
+
+    let seq = 0;
+    const freshEmail = () => `pac79-reset-${++seq}@sfa.local`;
+
+    const ORIGINAL_PASSWORD = 'OriginalPass123!';
+    const NEW_PASSWORD = 'BrandNewReset123!';
+
+    interface ResetBody {
+      userId: string;
+      resetUrl: string;
+      expiresAt: string;
+      resetToken?: string;
+    }
+
+    /** What the server stores: the digest, never the token. */
+    const digest = (token: string) =>
+      createHash('sha256').update(token).digest('hex');
+
+    /**
+     * An active user of this agency, made the only way the API allows —
+     * invite, then accept. `sendPasswordReset` refuses anyone who has not
+     * accepted, so there is no shortcut here.
+     */
+    async function activeUser(email = freshEmail()) {
+      const invited = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({
+          email,
+          roleIds: [seed.producerRoleId],
+          branchId: seed.branchId,
+          firstName: 'Reset',
+          lastName: 'Target',
+        })
+        .expect(201);
+
+      const { userId, inviteToken } = invited.body as {
+        userId: string;
+        inviteToken?: string;
+      };
+      await server()
+        .post('/api/v1/auth/accept-invite')
+        .send({ token: inviteToken, password: ORIGINAL_PASSWORD })
+        .expect(201);
+
+      return { userId, email };
+    }
+
+    async function sendReset(userId: string, token = ownerToken) {
+      const res = await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(token))
+        .expect(201);
+      return res.body as ResetBody;
+    }
+
+    /**
+     * Step past the per-user cooldown without sleeping. The cooldown is real —
+     * "refused inside the cooldown" below asserts it — so any test wanting a
+     * second successful reset has to clear it explicitly.
+     */
+    async function clearResetCooldown(userId: string) {
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $unset: { passwordResetLastSentAt: 1 } },
+      );
+    }
+
+    async function expireResetToken(userId: string) {
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $set: { passwordResetExpiresAt: new Date(Date.now() - 1000) } },
+      );
+    }
+
+    beforeAll(() => {
+      userModel = app.get<Model<User>>(getModelToken(User.name));
+    });
+
+    it('POST /users/:id/password-reset — stores a digest, never the token', async () => {
+      // The one departure from the invite flow that the ticket was explicit
+      // about: `inviteToken` is stored raw, and this must not copy it. A
+      // database read must not yield a working credential.
+      const { userId } = await activeUser();
+      const { resetToken, resetUrl, expiresAt } = await sendReset(userId);
+
+      const stored = await userModel.findById(userId).lean();
+      expect(stored?.passwordResetToken).toBeTruthy();
+      expect(stored?.passwordResetToken).not.toBe(resetToken);
+      expect(stored?.passwordResetToken).toBe(digest(resetToken!));
+      expect(stored?.passwordResetToken).toMatch(/^[0-9a-f]{64}$/);
+
+      // Absolute, for the same reason the invite URL is: an email client has no
+      // origin to resolve a relative path against.
+      expect(resetUrl.startsWith('http://localhost:5173/')).toBe(true);
+      expect(resetUrl).toContain('/auth/reset-password?token=');
+      expect(new Date(expiresAt).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('POST /users/:id/password-reset — forbidden for a CSR and a producer', async () => {
+      const { userId } = await activeUser();
+
+      await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(csrToken))
+        .expect(403);
+      await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(producerToken))
+        .expect(403);
+    });
+
+    it('POST /users/:id/password-reset — refused inside the per-user cooldown', async () => {
+      const { userId } = await activeUser();
+      await sendReset(userId);
+
+      const res = await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(ownerToken))
+        .expect(409);
+      expect((res.body as { message: string }).message).toMatch(/try again/i);
+    });
+
+    it('POST /users/:id/password-reset — a second issue kills the first link', async () => {
+      const { userId } = await activeUser();
+      const first = await sendReset(userId);
+      await clearResetCooldown(userId);
+      const second = await sendReset(userId);
+
+      expect(second.resetToken).toBeTruthy();
+      expect(second.resetToken).not.toBe(first.resetToken);
+
+      // The security property, not a detail: re-issuing is the owner's recovery
+      // when a link goes astray, so the stray one has to stop working.
+      await server()
+        .get(`/api/v1/auth/password-reset/${first.resetToken}`)
+        .expect(404);
+      await server()
+        .get(`/api/v1/auth/password-reset/${second.resetToken}`)
+        .expect(200);
+    });
+
+    it('POST /users/:id/password-reset — 409 for a user who has not accepted their invite', async () => {
+      const invited = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({ email: freshEmail(), roleIds: [seed.producerRoleId] })
+        .expect(201);
+      const { userId } = invited.body as { userId: string };
+
+      const res = await server()
+        .post(`/api/v1/users/${userId}/password-reset`)
+        .set(authHeader(ownerToken))
+        .expect(409);
+      expect((res.body as { message: string }).message).toMatch(/invite/i);
+    });
+
+    it('POST /users/:id/password-reset — clears any pending invite token', async () => {
+      // Belt-and-braces: the guards already make "invited" and "active"
+      // disjoint, so this state should not arise. Asserted because the
+      // invariant the code claims is "one live credential per account", and an
+      // invariant nothing checks is a comment.
+      const { userId } = await activeUser();
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(userId) },
+        {
+          $set: {
+            inviteToken: 'left-behind-token',
+            inviteTokenExpiresAt: new Date(Date.now() + 60_000),
+          },
+        },
+      );
+
+      await sendReset(userId);
+
+      const after = await userModel.findById(userId).lean();
+      expect(after?.inviteToken).toBeUndefined();
+      expect(after?.inviteTokenExpiresAt).toBeUndefined();
+    });
+
+    it('GET /auth/password-reset/:token — public preview discloses only three fields', async () => {
+      const { userId, email } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+
+      const res = await server()
+        .get(`/api/v1/auth/password-reset/${resetToken}`)
+        .expect(200);
+
+      const body = res.body as { email: string; agencyName: string };
+      expect(body.email).toBe(email);
+      expect(body.agencyName).toBeTruthy();
+
+      // Narrower than the invite preview on purpose — no `roleNames`. A
+      // forwarded link should not answer "what can this person do?".
+      expect(Object.keys(body).sort()).toEqual([
+        'agencyName',
+        'email',
+        'expiresAt',
+      ]);
+    });
+
+    it('GET /auth/password-reset/:token — 404 unknown, 410 expired', async () => {
+      await server()
+        .get('/api/v1/auth/password-reset/not-a-real-token')
+        .expect(404);
+
+      const { userId } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+      await expireResetToken(userId);
+
+      // 410 rather than 404 so the page can tell them to ask for another,
+      // which is actionable, instead of a generic failure.
+      await server()
+        .get(`/api/v1/auth/password-reset/${resetToken}`)
+        .expect(410);
+    });
+
+    it('POST /auth/reset-password — sets the password, signs in, and cannot be replayed', async () => {
+      const { userId, email } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+
+      const done = await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: NEW_PASSWORD })
+        .expect(201);
+
+      const body = done.body as {
+        accessToken: string;
+        user: { email: string; permissions: string[] };
+      };
+      expect(body.user.email).toBe(email);
+      // The returned pair is what lands them in the app already signed in, so
+      // it has to actually work — including against the version bump this same
+      // call just made.
+      expect(body.user.permissions).toContain('leads:read');
+      await server()
+        .get('/api/v1/leads')
+        .set(authHeader(body.accessToken))
+        .expect(200);
+
+      // The new password is live and the old one is not.
+      await login(app, email, NEW_PASSWORD);
+      await server()
+        .post('/api/v1/auth/login')
+        .send({ email, password: ORIGINAL_PASSWORD })
+        .expect(401);
+
+      // Single use — the token is cleared on success, so a forwarded or
+      // browser-cached link cannot take the account over a second time.
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: 'ThirdPartyPass123!' })
+        .expect(401);
+      await server()
+        .get(`/api/v1/auth/password-reset/${resetToken}`)
+        .expect(404);
+
+      const after = await userModel.findById(userId).lean();
+      expect(after?.passwordResetToken).toBeUndefined();
+      expect(after?.passwordResetExpiresAt).toBeUndefined();
+    });
+
+    it('POST /auth/reset-password — invalidates sessions that were live at the time', async () => {
+      // The acceptance criterion the ticket's stated mechanism could not meet:
+      // `accessResolver.invalidateUser` only drops a cache entry, and the user
+      // is still active, so they re-resolve fine. `tokenVersion` is what makes
+      // this pass.
+      const { userId, email } = await activeUser();
+      const live = await login(app, email, ORIGINAL_PASSWORD);
+
+      // The attacker's token works right up until the reset.
+      await server()
+        .get('/api/v1/auth/me')
+        .set(authHeader(live.accessToken))
+        .expect(200);
+
+      const { resetToken } = await sendReset(userId);
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: NEW_PASSWORD })
+        .expect(201);
+
+      await server()
+        .get('/api/v1/auth/me')
+        .set(authHeader(live.accessToken))
+        .expect(401);
+
+      // And the refresh token cannot mint a replacement — without that check a
+      // reset would lock them out for fifteen minutes and then hand them a new
+      // token.
+      await server()
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: live.refreshToken })
+        .expect(401);
+    });
+
+    it('POST /auth/reset-password — does not reactivate, and leaves isActive alone', async () => {
+      const { userId } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: NEW_PASSWORD })
+        .expect(201);
+
+      const after = await userModel.findById(userId).lean();
+      expect(after?.isActive).toBe(true);
+      expect(after?.deactivatedAt).toBeNull();
+    });
+
+    it('POST /auth/reset-password — 401 on an expired token', async () => {
+      const { userId } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+      await expireResetToken(userId);
+
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: NEW_PASSWORD })
+        .expect(401);
+    });
+
+    it('POST /auth/reset-password — rejects a password under 8 characters', async () => {
+      const { userId } = await activeUser();
+      const { resetToken } = await sendReset(userId);
+
+      await server()
+        .post('/api/v1/auth/reset-password')
+        .send({ token: resetToken, password: 'short' })
+        .expect(400);
+    });
+
+    describe('a removed employee cannot walk back in', () => {
+      it('POST /users/:id/password-reset — 409 for a deactivated user', async () => {
+        const { userId } = await activeUser();
+        await server()
+          .delete(`/api/v1/users/${userId}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        const res = await server()
+          .post(`/api/v1/users/${userId}/password-reset`)
+          .set(authHeader(ownerToken))
+          .expect(409);
+        // Not "they have not accepted their invite" — both states have
+        // `isActive: false`, and answering with the wrong one would send the
+        // owner to the wrong remedy.
+        expect((res.body as { message: string }).message).toMatch(/removed/i);
+      });
+
+      it('a link minted before the removal dies with it', async () => {
+        const { userId } = await activeUser();
+        const { resetToken } = await sendReset(userId);
+
+        await server()
+          .delete(`/api/v1/users/${userId}`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        // `deactivateUser` clears the reset fields precisely so the link in
+        // their inbox stops working.
+        await server()
+          .get(`/api/v1/auth/password-reset/${resetToken}`)
+          .expect(404);
+        await server()
+          .post('/api/v1/auth/reset-password')
+          .send({ token: resetToken, password: NEW_PASSWORD })
+          .expect(401);
+      });
+    });
+
+    it('POST /users/:id/password-reset — 404 for a platform admin', async () => {
+      // Platform admins are not the agency's to manage, and `findByAgency`
+      // already hides them — so from inside the agency that user does not
+      // exist, and 404 keeps the two consistent. The same query scopes by
+      // `agencyId`, which is what stops one tenant resetting another's people.
+      const platformAdmin = await userModel
+        .findOne({ email: seed.superAdminEmail })
+        .lean();
+      await server()
+        .post(`/api/v1/users/${platformAdmin!._id.toString()}/password-reset`)
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    it('POST /users/:id/password-reset — 404 for a malformed id', async () => {
+      await server()
+        .post('/api/v1/users/not-an-object-id/password-reset')
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+  });
+
   describe('Client records (multi-permission OR gate)', () => {
     // `GET /households/:id` and `GET /policies/:id` accept `clients:read` OR
     // `crm_service:read`, because these records render both on the Clients
@@ -915,8 +1566,10 @@ describe('SFA API (e2e)', () => {
       // `{status:'ready'}` stubs — each is covered by its own describe block
       // below. The `files` stub was removed with PAC-39: it borrowed the
       // `quote_recaps` gate and the real file API is now
-      // `POST /quote-recaps/quote-document/presign`.
-      { path: 'mailers', module: ModuleKey.Mailers },
+      // `POST /quote-recaps/quote-document/presign`. `mailers` left this list
+      // with PAC-61, which replaced its stub with the real agency-facing
+      // controller — `GET /mailers/:controlNumber`, covered by
+      // `mailer-lookup.e2e-spec.ts`.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
       { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
@@ -970,7 +1623,11 @@ describe('SFA API (e2e)', () => {
         .expect(403);
     });
 
-    it('GET /api/v1/mailers — module disabled', async () => {
+    it('GET /api/v1/mailers/:controlNumber — module disabled', async () => {
+      // Repointed by PAC-61 from the bare `GET /mailers` stub to the real
+      // lookup route. **403, not 404, is the assertion**: `ModuleGuard` runs
+      // before the handler, so a disabled module must reject the request
+      // outright rather than let it through to report that no mailer matched.
       await request(app.getHttpServer())
         .patch(`/api/v1/platform/agencies/${seed.agencyId}/modules`)
         .set(authHeader(superAdminToken))
@@ -978,7 +1635,7 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       await request(app.getHttpServer())
-        .get('/api/v1/mailers')
+        .get('/api/v1/mailers/NOSUCHQCN123')
         .set(authHeader(ownerToken))
         .expect(403);
 
@@ -1004,10 +1661,7 @@ describe('SFA API (e2e)', () => {
      * `{ module }` — so the echo is worth asserting: it proves *which*
      * controller answered, not merely that something did.
      */
-    const csrStubReads = [
-      { path: 'dashboard', module: ModuleKey.Dashboard },
-      { path: 'mailers', module: ModuleKey.Mailers },
-    ];
+    const csrStubReads = [{ path: 'dashboard', module: ModuleKey.Dashboard }];
 
     it.each(csrStubReads)(
       'GET /api/v1/$path — CSR can read',
@@ -1040,6 +1694,23 @@ describe('SFA API (e2e)', () => {
       },
     );
 
+    /*
+     * `mailers` joined the real modules with PAC-61 and has no collection
+     * route to `GET` — only `GET /mailers/:controlNumber`.
+     *
+     * **404, not 403, is the assertion that matters**, for the same reason as
+     * the leads probe below: a 403 would mean the guard chain rejected the CSR
+     * for lacking `mailers:read`; a 404 means it let them through and no mailer
+     * carried that number. So this pins the permission while asserting nothing
+     * about any particular mailer.
+     */
+    it('GET /api/v1/mailers/:controlNumber — CSR passes the read gate (real module)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/mailers/NOSUCHQCN123')
+        .set(authHeader(csrToken))
+        .expect(404);
+    });
+
     it('GET /api/v1/crm/service-tickets — CSR can read (real module)', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/v1/crm/service-tickets')
@@ -1049,12 +1720,18 @@ describe('SFA API (e2e)', () => {
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    // Still a stub, so the bare `PATCH /mailers` write probe still answers.
-    it('PATCH /api/v1/mailers — CSR can write', async () => {
+    /*
+     * Was `PATCH /mailers` against the stub until PAC-61 deleted it. The real
+     * mailer write is `POST /mailers/log-lead`, which needs `mailers:read` AND
+     * `leads:write` — the CSR holds both, so a 404 (no such mailer) proves the
+     * pair resolved, where a 403 would mean one of them did not.
+     */
+    it('POST /api/v1/mailers/log-lead — CSR passes both write gates', async () => {
       await request(app.getHttpServer())
-        .patch('/api/v1/mailers')
+        .post('/api/v1/mailers/log-lead')
         .set(authHeader(csrToken))
-        .expect(200);
+        .send({ controlNumber: 'NOSUCHQCN123' })
+        .expect(404);
     });
 
     /*
@@ -1168,8 +1845,8 @@ describe('SFA API (e2e)', () => {
       // `performance` (PAC-10/11) and `leaderboard` (PAC-13) are real read-only
       // modules now, with no mutating handler at all, so neither can appear in
       // this list. `crm/service-tickets` is a real module (CrmModule) with its
-      // own describe block too.
-      { path: 'mailers', module: ModuleKey.Mailers },
+      // own describe block too. `mailers` left with PAC-61 — its write is
+      // `POST /mailers/log-lead`, probed on its own below.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
       { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
@@ -1211,6 +1888,22 @@ describe('SFA API (e2e)', () => {
         expect(body.status).toBe('updated');
       },
     );
+
+    /*
+     * The `mailers` write, which left `mutatingFeatureRoutes` with PAC-61.
+     *
+     * A strictly better probe than the bare `PATCH /mailers` it replaces: the
+     * read-only user holds `mailers:read` on every module but no `leads:write`,
+     * and `POST /mailers/log-lead` requires *both*. So this pins the AND-set on
+     * that route rather than merely re-proving that read does not imply write.
+     */
+    it('POST /api/v1/mailers/log-lead — read-only user is forbidden', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/mailers/log-lead')
+        .set(authHeader(readOnlyToken))
+        .send({ controlNumber: 'NOSUCHQCN123' })
+        .expect(403);
+    });
 
     // NOTE: the "read-only user can read a read-only page" test that lived here
     // moved into `Leaderboard / Motivation Hub (PAC-13)` below, where it now
@@ -4146,10 +4839,21 @@ describe('SFA API (e2e)', () => {
         householdId: household._id,
       });
 
+      /*
+       * Prior policies carry their OWN type codes, from a different SmartSuite
+       * field than a live policy's (PAC-80). The fixture used to seed the
+       * Policies-table codes `Zgsh3`/`eCEuV` here, which no prior policy in the
+       * migrated data actually holds — all 131 coded rows use these.
+       *
+       * The distinction is load-bearing: `XT6s7` and `fr4Ge` also mean "SFA
+       * Call" and "Customer Call" on the Prior Insurance table, which is why
+       * they must never enter the global policy-type map. See
+       * `prior-policy.spec.ts`.
+       */
       await priorPolicyModel.create([
         {
           ...base,
-          policyType: 'Zgsh3',
+          policyType: 'XT6s7',
           previousCarrier: 'State Farm',
           cancellationStatus: 'Pending',
           dealId: deal._id,
@@ -4157,7 +4861,7 @@ describe('SFA API (e2e)', () => {
         },
         {
           ...base,
-          policyType: 'eCEuV',
+          policyType: 'fr4Ge',
           previousCarrier: 'State Farm',
           cancellationStatus: 'Complete',
           dealId: deal._id,

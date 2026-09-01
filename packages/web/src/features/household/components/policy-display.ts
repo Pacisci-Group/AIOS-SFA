@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { PolicySummary } from "@sfa/shared";
+import { normalizePolicyStatus } from "@sfa/shared";
 import { premiumTermSuffix } from "@sfa/shared";
 
 /**
@@ -92,9 +93,15 @@ const DEFAULT_STYLE = {
  * Normalize the free-text `policyStatus` from the migrated records into the
  * three buckets the cards can render. Unknown values fall back to the policy's
  * `active` flag.
+ *
+ * Runs `normalizePolicyStatus` first (PAC-80): the substring tests below were
+ * written against labels, and a migrated policy stored the raw code `QsrnM`, so
+ * every one of them fell straight through to the `active` flag. `Quoted` still
+ * falls through, deliberately — the cards have no bucket for it and the flag is
+ * the better answer than inventing one.
  */
 function toCardStatus(policy: PolicySummary): DisplayPolicy["status"] {
-  const raw = (policy.policyStatus ?? "").toLowerCase();
+  const raw = normalizePolicyStatus(policy.policyStatus).toLowerCase();
   if (raw.includes("pending")) return "Pending";
   if (raw.includes("laps") || raw.includes("cancel")) return "Lapsed";
   if (raw.includes("active")) return "Active";

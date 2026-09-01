@@ -6,6 +6,7 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { PublicLeadsController } from './public-leads.controller';
 import { PublicLeadsService } from './public-leads.service';
 import { ShareLink, ShareLinkSchema } from './schemas/share-link.schema';
+import { ShareLinkAccessService } from './share-link-access.service';
 import { ShareLinksController } from './share-links.controller';
 import { ShareLinksService } from './share-links.service';
 
@@ -23,6 +24,14 @@ import { ShareLinksService } from './share-links.service';
     LeadsModule,
   ],
   controllers: [ShareLinksController, PublicLeadsController],
-  providers: [ShareLinksService, PublicLeadsService],
+  providers: [ShareLinksService, PublicLeadsService, ShareLinkAccessService],
+  /*
+   * `ShareLinkAccessService` + the `ShareLink` model are exported for
+   * `AddressModule`'s public routes (PAC-60), which are `@Public()` and must
+   * therefore repeat every check the guard chain would have made. Exporting the
+   * one implementation is what stops a second, hand-copied version drifting
+   * into being more helpful about which tokens exist.
+   */
+  exports: [ShareLinkAccessService, MongooseModule],
 })
 export class ShareLinksModule {}

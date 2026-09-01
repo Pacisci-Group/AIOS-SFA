@@ -71,7 +71,7 @@ import {
   AuditTemplateSchema,
 } from '../../audit-templates/schemas/audit-template.schema';
 import { Mailer, MailerSchema } from '../../mailers/schemas/mailer.schema';
-import { PermissionsService } from '../../permissions/permissions.service';
+import { PermissionsModule } from '../../permissions/permissions.module';
 import { DemoSeedService } from './demo-seed.service';
 
 /**
@@ -95,6 +95,11 @@ import { DemoSeedService } from './demo-seed.service';
     // for `SequenceService`, which lifts the household counter past the block
     // the seed claims.
     MongoModule,
+    // Imported rather than providing `PermissionsService` directly: role
+    // assignment now needs the resolver, owner protection and the three join
+    // models, and re-listing that set here would be a second definition to keep
+    // in step.
+    PermissionsModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       { name: Branch.name, schema: BranchSchema },
@@ -121,6 +126,6 @@ import { DemoSeedService } from './demo-seed.service';
       { name: Mailer.name, schema: MailerSchema },
     ]),
   ],
-  providers: [DemoSeedService, PermissionsService],
+  providers: [DemoSeedService],
 })
 export class DemoSeedModule {}

@@ -6,7 +6,9 @@ import { ALL_MODULE_KEYS, DataScope } from '@sfa/shared';
 import { Branch } from '../../src/branches/schemas/branch.schema';
 import { Contact } from '../../src/contacts/schemas/contact.schema';
 import { Household } from '../../src/households/schemas/household.schema';
-import { PermissionsService } from '../../src/permissions/permissions.service';
+import { RoleAssignmentsService } from '../../src/permissions/role-assignments.service';
+import { Permission } from '../../src/permissions/schemas/permission.schema';
+import { seedPermissions } from '../../src/seed/permissions.seed';
 import { Agency } from '../../src/platform/schemas/agency.schema';
 import { Policy } from '../../src/policies/schemas/policy.schema';
 import { AgencyRole } from '../../src/roles/schemas/agency-role.schema';
@@ -58,7 +60,10 @@ export async function seedTestData(
   const branchModel = app.get<Model<Branch>>(getModelToken(Branch.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
   const roleModel = app.get<Model<AgencyRole>>(getModelToken(AgencyRole.name));
-  const permissionsService = app.get(PermissionsService);
+  const roleAssignments = app.get(RoleAssignmentsService);
+  const permissionModel = app.get<Model<Permission>>(
+    getModelToken(Permission.name),
+  );
 
   const modules = Object.fromEntries(
     ALL_MODULE_KEYS.map((key) => [key, { enabled: true }]),
@@ -71,7 +76,13 @@ export async function seedTestData(
     modules,
   });
 
-  await permissionsService.seedDefaultRoles(agency._id);
+  // Before any role: `setRolePermissions` resolves every key to a catalog row
+  // and refuses one it cannot find, so a missing catalog fails role seeding
+  // loudly rather than producing roles that silently grant nothing. The core
+  // seed orders these the same way.
+  await seedPermissions(permissionModel);
+
+  await roleAssignments.seedDefaultRoles(agency._id);
 
   const branch = await branchModel.create({
     agencyId: agency._id,
@@ -99,10 +110,17 @@ export async function seedTestData(
     agencyId: agency._id,
     name: 'Read Only',
     slug: 'read_only',
-    permissions: ALL_MODULE_KEYS.map((key) => `${key}:read`),
     dataScope: DataScope.Agency,
     isSystemTemplate: false,
   });
+  // Through the join — a `permissions:` array on the role document is silently
+  // dropped now that the field is gone, which would leave this role granting
+  // nothing and every guardrail test asserting the wrong thing.
+  await roleAssignments.setRolePermissions(
+    agency._id,
+    readOnlyRole._id,
+    ALL_MODULE_KEYS.map((key) => `${key}:read`),
+  );
 
   // A throwaway role for role-editing tests to mutate freely, so the shared
   // read-only role above stays pristine for the page-level guardrail suite.
@@ -110,10 +128,14 @@ export async function seedTestData(
     agencyId: agency._id,
     name: 'Editable Test Role',
     slug: 'editable_test',
-    permissions: ALL_MODULE_KEYS.map((key) => `${key}:read`),
     dataScope: DataScope.Agency,
     isSystemTemplate: false,
   });
+  await roleAssignments.setRolePermissions(
+    agency._id,
+    editableRole._id,
+    ALL_MODULE_KEYS.map((key) => `${key}:read`),
+  );
 
   const superAdminEmail = 'test-super-admin@sfa.local';
   const ownerEmail = 'test-owner@sfa.local';
@@ -131,22 +153,20 @@ export async function seedTestData(
     isActive: true,
   });
 
-  await userModel.create({
+  const ownerUser = await userModel.create({
     agencyId: agency._id,
     email: ownerEmail,
     passwordHash,
-    roleIds: ownerRole ? [ownerRole._id] : [],
     firstName: 'Test',
     lastName: 'Owner',
     isActive: true,
   });
 
-  await userModel.create({
+  const producerUser = await userModel.create({
     agencyId: agency._id,
     branchId: branch._id,
     email: producerEmail,
     passwordHash,
-    roleIds: producerRole ? [producerRole._id] : [],
     firstName: 'Test',
     lastName: 'Producer',
     isActive: true,
@@ -157,7 +177,6 @@ export async function seedTestData(
     branchId: branch._id,
     email: csrEmail,
     passwordHash,
-    roleIds: csrRole ? [csrRole._id] : [],
     firstName: 'Test',
     lastName: 'Csr',
     isActive: true,
@@ -168,11 +187,31 @@ export async function seedTestData(
     branchId: branch._id,
     email: readOnlyEmail,
     passwordHash,
-    roleIds: [readOnlyRole._id],
     firstName: 'Test',
     lastName: 'ReadOnly',
     isActive: true,
   });
+
+  // Roles go through `RoleAssignmentsService`, the only writer of `userRoles`.
+  // Creating the join rows by hand here would leave every fixture user with no
+  // roles and therefore no permissions — which fails essentially the whole
+  // suite, in a way that looks like an authorization bug rather than a fixture
+  // one. The seed acts as a platform admin so it can assign the owner role.
+  const seedActor = { userId: ownerUser._id.toString(), isPlatformAdmin: true };
+  const assignments: [typeof ownerUser, typeof ownerRole][] = [
+    [ownerUser, ownerRole],
+    [producerUser, producerRole],
+    [csrUser, csrRole],
+    [readOnlyUser, readOnlyRole],
+  ];
+  for (const [user, role] of assignments) {
+    await roleAssignments.setUserRoles(
+      seedActor,
+      agency._id,
+      user._id,
+      role ? [role._id] : [],
+    );
+  }
 
   // ── Client records ──────────────────────────────────────────────────────
   // NOTE: these collections extend `TenantRecord`, whose agencyId/branchId are

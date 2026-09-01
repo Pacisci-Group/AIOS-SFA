@@ -12,6 +12,10 @@
 > - `./sfaforms` → standalone Next.js prototype of the Lead→Quote→Sold→Audit
 >   intake forms (localStorage mock API), **behavioural reference for the native
 >   forms** replacing Fillout — see `.claude/rules/sfaforms-reference.md`.
+>
+> **Never edit, create, or delete anything under `./SFA`, `./agencyops_fe_mockups`
+> or `./sfaforms`.** They are read-only reference checkouts; all work goes in
+> `packages/*`.
 
 ---
 
@@ -29,106 +33,20 @@ JWT auth + native forms.
 
 ## 2. Monorepo layout & stack
 
-npm workspaces (`workspaces: ["packages/*"]`, Node >= 20):
-
-| Package | Stack | State |
-|---|---|---|
-| `packages/web` | React 18, **Vite 6**, TypeScript, **Tailwind 4**, **shadcn/ui (Radix UI primitives)**, React Router 7, TanStack Query, **TanStack Form + zod**, Recharts, lucide-react | Auth + **permission-management pages wired to the API**; the 7 mockup dashboards still render **hard-coded mock data** (Producer Dashboard data widgets being wired now) |
-| `packages/api` | **NestJS 11**, **Mongoose 8 (MongoDB)**, JWT/passport, class-validator | Full **permission/multi-tenancy spine** + **Mongoose schemas for all ~22 domain collections** + a **SmartSuite→Mongo migration**; the HTTP **feature controllers are still stubs** returning `{ status: 'ready' }` (real query services/DTOs not wired yet) |
-| `packages/shared` | Shared enums / permission constants / types / role templates | Source of truth for module keys & permissions |
+| Package | State |
+|---|---|
+| `packages/web` | Auth + **permission-management pages wired to the API**; the 7 mockup dashboards still render **hard-coded mock data** (Producer Dashboard data widgets being wired now) |
+| `packages/api` | Full **permission/multi-tenancy spine** + **Mongoose schemas for all ~22 domain collections** + a **SmartSuite→Mongo migration**; the HTTP **feature controllers are still stubs** returning `{ status: 'ready' }` (real query services/DTOs not wired yet) |
+| `packages/shared` | Source of truth for module keys & permissions |
 
 ---
 
 ## 3. Running it
 
-Env first: copy `.env.example` → `.env`. That one file serves **both** run modes
-— every value in it is the host-mode (localhost) value, and the compose `api`
-service overrides the few addresses that differ (`MONGODB_URI`, `CORS_ORIGIN`,
-`REDIS_URL`, `STORAGE_*`) with compose-network ones. Never edit `.env` to switch
-modes. Deployment notes in `DEPLOYMENT.md`.
-
-### Two run modes
-
-Split by **compose profile** in `docker-compose.yml`: `mongo`, `minio` and
-`redis` (+ the two one-shot init containers) carry no profile so they start in
-both modes; `api` and `web` sit behind `profiles: [app]`.
-
-**a) Backing services in Docker, app on the host — the default dev loop.** Real
-watch mode on both packages.
-
-```bash
-make dev                   # Mongo + MinIO + Redis only (alias: make infra)
-npm run api:seed:demo:dev  # first run against an empty DB (see below)
-npm run api:dev            # NestJS API (watch)  -> :4000
-npm run web:dev            # Vite web app        -> :5173
-```
-
-**Nothing auto-seeds in this mode** — the auto-seed lives in the containerized
-API's start command, which isn't running.
-
-**b) Everything in Docker.** Verifies the built images; no hot reload.
-
-```bash
-make up                    # build + start all six services
-```
-
-The two modes both want ports 4000/5173, so they can't run at once — `make dev`
-stops the app containers for you. `make down` tears down either.
-
-- Web: `http://localhost:5173` · API: `http://localhost:4000/api/v1`
-- Mongo: `mongodb://localhost:27017/sfa` · MinIO: `:9000` (console `:9001`) · Redis: `:6379`
-
-Every service is published on its **standard default port** — nothing is
-remapped, so any client's out-of-the-box connection settings just work.
-
-Redis is **optional at runtime**: the API caches resolved permission sets only
-when `REDIS_URL` is set, otherwise it reads MongoDB per request. The container
-runs regardless, so uncommenting `REDIS_URL` in `.env` is the whole switch and it
-applies identically in both modes.
-
-Other workspace scripts (from repo root — see `package.json`):
-
-```bash
-npm run shared:build       # build shared package
-npm run api:seed:dev       # core seed: super admin + empty tenant scaffold (agency, branch, roles)
-npm run api:seed:demo:dev  # seed a full synthetic demo tenant (CRM data for local testing)
-npm run api:migrate:dev    # run SmartSuite -> Mongo migration (dev)
-npm run test:e2e           # API e2e tests
-```
-
-> **Three ways to populate Mongo:**
-> - `api:seed:dev` — **core / platform-required seed only**: the platform super
->   admin (the one login), plus an **empty tenant scaffold** (1 agency, 1 branch,
->   5 role templates) that the migration imports into. **No demo login users, no
->   CRM data.** This is the minimum required for the app to function and is what
->   Docker runs on API startup. Global catalog data (plans, feature definitions,
->   constants) is seeded here too as those collections come online. For a
->   populated agency to test against, use `api:seed:demo:dev` instead.
-> - `api:seed:demo:dev` — **full synthetic demo tenant** for local build/test
->   (`src/seed/demo/`): the same "Smith Family Agency" + a 2nd branch, a complete
->   role roster (owner, manager, 5 producers, 2 CRMs, data team — all
->   `ChangeMe123!`), and ~500 realistic CRM records across **every** collection
->   (households, contacts, leads, quotes, deals, policies, audit/hand-off items,
->   service tickets, goals, activities, …). Deterministic (fixed RNG seed) and
->   **idempotent** (upserts on stable `demo:*` keys); pass `--fresh` to purge and
->   reseed. No SmartSuite/network needed. "Pat Producer"
->   (`producer@smithfamily.local`) is the data-rich hero for the Producer Dashboard.
-> - `api:migrate:dev` — real **SmartSuite → Mongo** import; needs SmartSuite
->   credentials (run `api:seed:dev` first).
-> - `api:migrate:mailers:dev` — **BigQuery → Mongo** backfill of the legacy
->   mailer history (arch decision O2, resolved as *import*). Needs GCP
->   credentials (`BQ_*` + `GOOGLE_APPLICATION_CREDENTIALS_JSON`) and is a
->   **production deploy step**, not part of local development — the Super Admin
->   RTP upload and the demo seed both populate a working `mailers` collection
->   without it. Re-runnable: upserts on the control-number key, so a second run
->   appends what is new and updates what changed.
->
-> **After migrating, run `api:backfill:deal-refs:dev`** (deal/recap links +
-> policy match keys) — it only rewrites data already in Mongo, so it needs no
-> credentials and is safe to re-run. Household `HH-…` references need no
-> backfill: the migration and the demo seed each reconcile them at the end of
-> their household pass, so whichever one populated the database leaves the
-> numbering consistent.
+Two run modes (backing services in Docker with the app on the host, or
+everything in Docker), the three ways to populate Mongo, and what each seed /
+migration actually writes: **invoke the `running-the-stack` skill**
+(`.claude/skills/running-the-stack/SKILL.md`). Deployment notes in `DEPLOYMENT.md`.
 
 ---
 
@@ -139,28 +57,25 @@ Dev "Screen Navigator" at `/` (`src/pages/DevNavPage.tsx`) links all 7; routes i
 each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 (read-only symlink — see `.claude/rules/figma-mockups-reference.md`).
 
-| Screen | Route | Persona | Design mockup folder |
-|---|---|---|---|
-| **Producer Dashboard** ← current focus | `/dashboard/producer` | Sales producer (`DataScope = own`) | `Insurance-Producer-Dashboard` |
-| Lead Details | `/leads/:id`, `/leads/demo` | Producer | `Insurance-Lead-Details` |
-| Management v1 | `/dashboard/management` | Owner + Manager | `Insurance-Management-Dashboard` |
-| Management v2 (actually an "Agency Command Center" / lead-distribution board — clarify intent) | `/dashboard/management-alt` | Owner/Manager | `Insurance-Management-Dashboard-2` |
-| Service Dashboard | `/crm/service` | Service rep | `Insurance-Service-Dashboard-Design` |
-| Ticket Workspace | `/crm/tickets` | CRM/service | `Insurance-Dashboard-Design` |
-| Household Details | `/clients/:id`, `/clients/demo` | 360° client view | `Insurance-Household-Details` |
+| Screen | Route | Persona |
+|---|---|---|
+| **Producer Dashboard** ← current focus | `/dashboard/producer` | Sales producer (`DataScope = own`) |
+| Lead Details | `/leads/:id`, `/leads/demo` | Producer |
+| Management v1 | `/dashboard/management` | Owner + Manager |
+| Management v2 (actually an "Agency Command Center" / lead-distribution board — clarify intent) | `/dashboard/management-alt` | Owner/Manager |
+| Service Dashboard | `/crm/service` | Service rep |
+| Ticket Workspace | `/crm/tickets` | CRM/service |
+| Household Details | `/clients/:id`, `/clients/demo` | 360° client view |
 
 ---
 
 ## 5. API — permission & tenancy spine (`packages/api` + `packages/shared`)
 
-- **Hierarchy:** `Platform (Super Admin) → Agency (tenant) → Branch → User`.
-- **Global guards** (in `app.module.ts`): `JwtAuthGuard` → `TenantGuard` → `BranchGuard` → `ModuleGuard` → `PermissionsGuard`.
-- **Data scopes:** `own` · `branch` · `agency`.
-- **Module keys** (`shared/src/enums/module-key.enum.ts`): `dashboard, leads, quote_recaps, mailers, crm_service, clients, deal_audits, onboardings, management, owner_dashboard, command_center, performance, leaderboard`. Toggled per agency by Super Admin; disabled ⇒ hidden nav + API 403.
-- **Permissions** (`shared/src/permissions/permission.constants.ts`): `"<module>:<read|write>"` + `platform:*` / `agency:*`. Effective set resolved in `resolve-permissions.ts` (role perms + grants − revokes, filtered to agency-enabled modules).
-- **Default role templates** (`shared/src/permissions/default-role-templates.ts`): Agency Owner (agency) · Branch Manager (branch) · Producer (**own**: `dashboard:read, leads:r/w, quote_recaps:r/w, performance:read, leaderboard:read`) · CRM (branch) · Data Team (agency).
-- **Migration key:** `User`/`TenantRecord` carry `legacySmartSuiteId`. The core seed (`src/seed/seed.ts`) is **platform-required data only** — it creates the **platform super admin** plus an **empty tenant scaffold** (agency "Smith Family Agency" + Main branch + default roles) as the migration target. It creates **no demo login users and no CRM data**; a fully populated agency comes from the demo seed (`src/seed/demo/`).
-- **Schemas exist; read path does not.** Mongoose schemas now exist for every domain collection (`src/<domain>/schemas/*.schema.ts`, most extending `src/common/schemas/tenant-record.schema.ts`) and are populated by the SmartSuite→Mongo migration (`src/migration/`). The HTTP **feature controllers are still stubs** (`src/feature-modules/feature.controllers.ts`) returning `{ status: 'ready' }` — add real query services/DTOs there as dashboards get wired.
+**Hierarchy:** `Platform (Super Admin) → Agency (tenant) → Branch → User`;
+**data scopes** `own` · `branch` · `agency`. The global guard chain order is
+load-bearing and the permission *strings* are the contract for the guards and the
+whole web app — full detail in `packages/api/CLAUDE.md`, which loads whenever you
+work under `packages/api`.
 
 ---
 
@@ -181,7 +96,7 @@ Fillout** and is net-new scope.
 ## 7. Cross-cutting product rules
 
 - **Allstate color identity**; full **light + dark** themes.
-- **Permission-based** UI gating (not RBAC).
+- **Permission-based** UI gating. Roles are real (and relational), but every gate checks a *permission*, never a role name — `usePermissions().can(...)`, never `user.roles.includes(...)`. Role names are display only.
 - **Dynamic data:** global fuzzy omni-search; **real-time faceted filtering** (instant, no "Apply" button); **data masking** (raw IDs shown as human-readable labels, e.g. `TKT-2026-004`).
 - **Layout:** asymmetric **60/40** or **3-column** splits on detail pages.
 
@@ -207,7 +122,8 @@ temperature/aging that aren't first-class in legacy payloads. See
 
 - Team **Paciscigroup**, project **SFA**, issue prefix **`PAC-`** (Linear MCP available).
 - **PAC-6** — Platform Rebuild architecture & migration plan (**Done**; mirrors `docs/SYSTEM_ARCHITECTURE.md`).
-- **PAC-7** — [Epic] Producer Dashboard (**in progress**). Done sub-stories: **PAC-8** (dashboard shell + page-level read/write permission model), **PAC-18** (SmartSuite→Mongo migration), **PAC-25** (authz resolved from backend store, not JWT). In progress: **PAC-12** (Deals Pending Service Hand-off board, read). Remaining: scorecards (PAC-10/11), time-range filter (PAC-9), leaderboard (PAC-13), hot leads + quick actions (PAC-15/16), add-lead + ⌘K omni-search (PAC-17), resolve hand-off item (PAC-14).
+- **PAC-7** — [Epic] Producer Dashboard (**in progress**). Sub-story breakdown and
+  live status: read Linear (MCP available) rather than this file.
 - **PAC-19** — [Epic] CSR Role & Pages (backlog).
 
 ---
@@ -243,80 +159,12 @@ temperature/aging that aren't first-class in legacy payloads. See
 The web app is built on **shadcn/ui** — Radix UI primitives + Tailwind, with the
 component **source copied into the repo** (we own & edit it). This is the base for
 the whole app; do **not** introduce a second component library (MUI, Radix Themes,
-Chakra, etc.).
+Chakra, etc.). **Style with design tokens from `src/styles/theme.css`, never
+hard-coded hex/inline styles, and keep light + dark at parity.**
 
-- **Primitives live in `src/components/ui/`** and are managed by the shadcn CLI —
-  add new ones with `npx shadcn@latest add <component>` (from `packages/web`),
-  don't hand-write them. Config is `packages/web/components.json`
-  (style `new-york`, `cssVariables: true`, icon library `lucide`).
-- **`cn` util is `@/lib/utils`** (shadcn convention). Use it for dynamic classes;
-  do not use Tailwind `@apply`.
-- **Generated `radix-ui` (unified package)** backs the primitives — the older
-  individual `@radix-ui/react-*` deps are legacy and being removed.
-- **Compose, don't fork.** Build features from `ui/` primitives (`Card`, `Button`,
-  `Table`, `Badge`, `Dialog`, `Sheet`, …). App-specific composites live in the
-  relevant `features/*` folder, never in `components/ui`. Add variants via `cva`
-  inside the primitive rather than one-off wrappers.
-- **Style with design tokens, never hard-coded hex/inline styles.** The mockup
-  palette is encoded as CSS-variable tokens in `src/styles/theme.css`
-  (`bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`,
-  `border-border`, `text-primary` = Allstate sky, `text-success` = emerald,
-  `text-destructive` = amber). **Tokens theme automatically; raw palette values
-  do not.** ⚠ `--accent` is **not** the brand emerald — it is shadcn's subtle
-  hover/focus surface (`focus:bg-accent` on every menu item, `hover:bg-accent` on
-  ghost buttons, `bg-accent` on `Skeleton`). It held emerald until PAC-56, which
-  is why menus and skeletons rendered green. The brand emerald is `--success`. `theme.css` defines the light theme on `:root` and the navy brand
-  theme on `.dark`, so anything written as `amber-500`, `slate-400`,
-  `white/[0.04]` or a hex literal is a *dark-only* value that will be wrong —
-  often invisible — on the light theme. Reach for the token
-  (`text-destructive`, `text-muted-foreground`, `border-border`, `bg-sunken`)
-  first. Note the two are not interchangeable even where they look it: Tailwind
-  v4's `amber-500` is `oklch(0.769 0.188 70.08)`, which is *not* quite
-  `--destructive`'s `#F59E0B`.
-- **Theme mechanics.** `app/ThemeProvider.tsx` (next-themes) owns the
-  `light`/`dark` class on `<html>`; an inline script in `index.html` writes it
-  before first paint to avoid a flash. It defaults to **dark** with system
-  detection **off** on purpose — the navy theme is what the app shipped as, and
-  enabling system detection would silently repaint every existing user whose OS
-  is light. When a light fix would shift the dark rendering, pin the original
-  with a `dark:` override rather than accepting the drift (see
-  `components/form/FormError.tsx`).
-- **3 prototype dashboards remain** (management, management-alt, service). They
-  are **not** light-theme clean and are not meant to be — they are slated for
-  replacement, and they still reference `--emerald`, `--red`, `--amber` and
-  `--font-mono`, which are defined nowhere and render transparent. Don't copy
-  those patterns into new work.
-- The **ticket workspace, household detail and policy detail** used to be on
-  that list and no longer are: they render inside `AppShell`, compose `ui/`
-  primitives, follow `TYPOGRAPHY.md`, and are light+dark clean. The eight
-  `--kpi-*` variables they relied on are **deleted** from `theme.css` — they
-  were declared only under `.dark`, so every one of them rendered as no colour
-  on the light theme. Their replacements are the theme tokens plus the
-  `X-600 dark:X-400` pairs in `features/tickets/components/ticket-data.ts` and
-  `features/household/components/policy-display.ts`, which follow the same rules
-  as `lead-display.ts`. Never add a colour variable to `.dark` without a `:root`
-  counterpart.
-- The detail-page card shell is **`components/common/DetailCard.tsx`**
-  (`DetailCard` / `SectionLabel` / `DataRow`). It lived in `features/lead/` until
-  the ticket, household and policy pages had each grown their own card idiom;
-  compose it rather than hand-writing another card header.
-- **We own UI/UX. The mockups are the starting point, not a contract.** There is
-  no dedicated designer on this team, and the product owner has said explicitly
-  that UI/UX calls are ours. `./agencyops_fe_mockups` is where a screen's layout,
-  spacing and visual language come *from* (see
-  `.claude/rules/figma-mockups-reference.md`) — but where a mockup produces
-  something confusing, unreadable or unbuildable against the real data, **improve
-  it rather than porting the problem**. Three standing constraints on that
-  freedom: stay inside the **shadcn/ui design language** (compose `ui/`
-  primitives, add variants via `cva`, no second component library), stay inside
-  the **`theme.css` token palette**, and keep **light + dark** at parity. Say in
-  the PR what you changed and why, so it can be put to the owner in one batch.
-  Where the design asks for data we do not capture, the honest move is to say so
-  (see the docblock on `QuoteRecapCard.tsx`), not to render empty rows.
-- **Follow the type & sizing scale** in `packages/web/src/styles/TYPOGRAPHY.md` —
-  text roles, icon sizes, radii and the "every clickable thing goes through
-  `Button`" rule. It exists because the first pass over Leads/Lead Detail drifted
-  into three competing label tiers and the same pill at three sizes.
+The full rules — token traps, theme mechanics, the typography scale, and how much
+freedom we have over the mockups — live in `packages/web/CLAUDE.md`, which loads
+whenever you work under `packages/web`.
 
 ### General
 
@@ -338,7 +186,7 @@ Chakra, etc.).
   Two API traps are written up in `docs/tanstack-form-spike-findings.md` —
   read it before touching the Sold wizard's per-card validation.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
-- **Changing the *options* of an existing index needs a migration script.** Mongoose's `autoIndex` only creates indexes that are missing — it never rebuilds one whose options changed. Editing the schema therefore fixes only collections created *afterwards*, and silently leaves existing ones on the old definition (this is how the `agencyId + legacySmartSuiteId` dedupe index stayed `sparse` on three collections after being corrected to a partial filter, breaking lead creation with E11000). Copy `src/migration/backfill/fix-legacy-dedupe-indexes.ts`: discover affected collections by index name rather than hard-coding them, check for conflicting data *before* dropping, and keep it idempotent.
+- **Changing the *options* of an existing index needs a migration script.** Mongoose's `autoIndex` only creates indexes that are missing — it never rebuilds one whose options changed. Editing the schema therefore fixes only collections created *afterwards*, and silently leaves existing ones on the old definition (this is how the `agencyId + legacySmartSuiteId` dedupe index stayed `sparse` on three collections after being corrected to a partial filter, breaking lead creation with E11000). Write a one-off script that discovers affected collections by index name rather than hard-coding them (which collections are stale depends on when each was created, so it differs per environment), checks for conflicting data *before* dropping — rebuilding a unique index over real duplicates fails, and failing after the drop leaves no uniqueness at all — and stays idempotent. `git log -- packages/api/src/migration/backfill/fix-legacy-dedupe-indexes.ts` has a worked example; the script itself was deleted once production had no database old enough to need it.
 - **`createdBy` / `updatedBy` are stamped for you — except on `bulkWrite`.** `authorshipPlugin` (`src/common/mongo/authorship.plugin.ts`) is registered connection-wide and fills both fields from the request context for `save()`/`create()`, `updateOne`, `updateMany`, `findOneAndUpdate` and `insertMany` on every schema extending `TenantRecord`. **`Model.bulkWrite()` bypasses Mongoose middleware entirely**, so a bulk call site that should record an author must spread `authorshipForInsert()` into the document itself — see `AuditGenerationService.buildItem`. Writes with no request context (migration, seeds, the worker) leave both null, which reads as "system"; never mint a placeholder user id, and never backfill.
 - Run each package's `lint` (`npm run lint -w @sfa/api` / `-w @sfa/web`) before finishing.
 - Prefer real Mongoose schemas + services over extending the mock data / stubs when wiring a dashboard.

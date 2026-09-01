@@ -227,3 +227,19 @@ export async function login(email: string, password: string) {
 }
 
 export { API_BASE };
+
+/**
+ * The caller's identity and *current* permissions, straight from the API.
+ *
+ * The stored `user` blob is only rewritten at login, token refresh and
+ * accept-invite, so without this a permission change did not reach a signed-in
+ * browser until the access token refreshed — the API enforced it immediately
+ * while the UI kept offering actions that had started 403ing.
+ *
+ * Re-stores the blob so a reload picks up the fresh set too.
+ */
+export async function fetchMe(): Promise<AuthUser> {
+  const user = await apiFetch<AuthUser>('/auth/me');
+  setStoredUser(user);
+  return user;
+}

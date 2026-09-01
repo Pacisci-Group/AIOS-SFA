@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InngestService } from '../inngest/inngest.service';
-import { inviteRequested } from '../inngest/events';
-import { InviteEmailPayload } from './mail.types';
+import { inviteRequested, passwordResetRequested } from '../inngest/events';
+import { InviteEmailPayload, PasswordResetEmailPayload } from './mail.types';
 
 /**
  * The single seam every outbound email goes through.
@@ -27,7 +27,7 @@ import { InviteEmailPayload } from './mail.types';
  * has. So a bad address no longer surfaces synchronously to the owner — it
  * surfaces as a failed run and a `failed` row in `emailMessages`. Until the
  * users list reads that status back, a bounced invite is invisible in the UI.
- * That is a known gap, not an oversight; it is why `exposeInviteToken()` in
+ * That is a known gap, not an oversight; it is why `exposeTokensForDev()` in
  * `UsersService` is deliberately still in place.
  */
 @Injectable()
@@ -36,17 +36,26 @@ export class MailService {
 
   /** Request the "you've been invited" email. */
   async sendInviteEmail(payload: InviteEmailPayload): Promise<void> {
-    await this.deliver(payload);
+    await this.deliverInvite(payload);
+  }
+
+  /** Request the "set a new password" email (PAC-79). */
+  async sendPasswordResetEmail(
+    payload: PasswordResetEmailPayload,
+  ): Promise<void> {
+    await this.deliverPasswordReset(payload);
   }
 
   /**
-   * The transport boundary.
+   * The transport boundary — one private method per event.
    *
-   * Still the one method to replace if the async architecture ever changes —
-   * the shape the previous stub established has been kept for exactly that
-   * reason.
+   * Still the layer to replace if the async architecture ever changes; the
+   * shape the original stub established has been kept for exactly that reason.
+   * A single `deliver` typed to one payload was tried and rejected: widening it
+   * to a union means every caller's fields become optional, which is precisely
+   * the check worth keeping on a payload that carries a bearer credential.
    */
-  private async deliver(payload: InviteEmailPayload): Promise<void> {
+  private async deliverInvite(payload: InviteEmailPayload): Promise<void> {
     await this.inngest.send(inviteRequested, {
       userId: payload.userId,
       agencyId: payload.agencyId,
@@ -60,6 +69,22 @@ export class MailService {
       // The catalog carries instants as ISO strings, never `Date` — Inngest
       // rejects schemas with transforms, and an event is JSON on the wire
       // regardless. See `inngest/events/email.events.ts`.
+      expiresAt: payload.expiresAt.toISOString(),
+    });
+  }
+
+  private async deliverPasswordReset(
+    payload: PasswordResetEmailPayload,
+  ): Promise<void> {
+    await this.inngest.send(passwordResetRequested, {
+      userId: payload.userId,
+      agencyId: payload.agencyId,
+      branchId: payload.branchId,
+      to: payload.to,
+      recipientName: payload.recipientName,
+      agencyName: payload.agencyName,
+      resetUrl: payload.resetUrl,
+      // ISO, never `Date` — same reason as the invite above.
       expiresAt: payload.expiresAt.toISOString(),
     });
   }

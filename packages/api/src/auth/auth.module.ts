@@ -7,6 +7,10 @@ import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import {
+  ImpersonationEvent,
+  ImpersonationEventSchema,
+} from './schemas/impersonation-event.schema';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
@@ -16,6 +20,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       { name: User.name, schema: UserSchema },
       // For the agency name on the public invite preview (PAC-58).
       { name: Agency.name, schema: AgencySchema },
+      // The impersonation audit trail (PAC-70).
+      { name: ImpersonationEvent.name, schema: ImpersonationEventSchema },
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

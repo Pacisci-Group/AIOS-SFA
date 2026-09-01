@@ -27,6 +27,14 @@ tests {
     expect(body.entries).to.be.an("array");
   });
 
+  // Lets the card tell "nobody hit their goal" apart from "nobody has one"
+  // (PAC-80). An aggregate count, so it adds nothing to the privacy surface.
+  test("reports how many producers have a goal this month", function () {
+    const body = res.getBody();
+    expect(body.goalsConfigured).to.be.a("number");
+    expect(body.goalsConfigured).to.be.at.most(body.producerCount);
+  });
+
   // THE PRIVACY CONTRACT. This is why a producer is allowed to read the whole
   // agency here at all — see the docs below. If this test ever fails, the
   // endpoint has started leaking colleagues' numbers.
@@ -94,6 +102,7 @@ docs {
     "month": "2026-08",
     "officeTotalPremium": 46071,
     "producerCount": 5,
+    "goalsConfigured": 5,
     "self": {
       "producerId": "6a70...156",
       "rank": 1,

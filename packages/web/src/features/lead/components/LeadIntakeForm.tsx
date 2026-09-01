@@ -1,5 +1,6 @@
 import { SELECTABLE_LEAD_SOURCE_OPTIONS } from "@sfa/shared";
 import { useMemo, useState } from "react";
+import { AddressFields } from "@/components/address/AddressFields";
 import { FormError, FormGrid, FormSection } from "@/components/form";
 import { PolicyList } from "@/components/policies/PolicyList";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,15 @@ interface LeadIntakeFormProps {
   errorMessage: string | null;
   submitLabel?: string;
   onSubmit: (values: LeadIntakeFormValues) => void;
+  /**
+   * The share-link token, on the public variant only (PAC-60).
+   *
+   * Address autocomplete on an unauthenticated page cannot use the normal
+   * endpoint, so it routes through `/public/address/:token/*` — which
+   * re-verifies the link by hand and spends that link's daily lookup allowance.
+   * Omitted everywhere else, which selects the authenticated endpoint.
+   */
+  shareToken?: string;
 }
 
 const leadSourceOptions = SELECTABLE_LEAD_SOURCE_OPTIONS.map((o) => ({
@@ -90,6 +100,7 @@ export function LeadIntakeForm({
   errorMessage,
   submitLabel = "Create lead",
   onSubmit,
+  shareToken,
 }: LeadIntakeFormProps) {
   const isPublic = variant === "public";
   // One schema for the whole component: `validators` below and the per-step
@@ -270,46 +281,12 @@ export function LeadIntakeForm({
     ),
 
     address: (
-      <FormGrid>
-          <form.AppField name="address.street">
-            {(f) => (
-              <f.TextField
-                label="Street"
-                autoComplete="address-line1"
-                className="sm:col-span-2"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="address.city">
-            {(f) => (
-              <f.TextField
-                label="City"
-                autoComplete="address-level2"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="address.state">
-            {(f) => (
-              <f.TextField
-                label="State"
-                autoComplete="address-level1"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="address.zip">
-            {(f) => (
-              <f.TextField
-                label="ZIP"
-                inputMode="numeric"
-                autoComplete="postal-code"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-      </FormGrid>
+      <AddressFields
+        form={form}
+        fields="address"
+        shareToken={shareToken}
+        inputClassName="bg-card border-border"
+      />
     ),
 
     leadSource: (
@@ -488,6 +465,7 @@ export function LeadIntakeForm({
                   initial={editor.initial}
                   isEdit={editor.index !== null}
                   householdAddress={householdAddress}
+                  shareToken={shareToken}
                   onSave={(policy) => {
                     if (editor.index === null) {
                       form.pushFieldValue("policiesOfInterest", policy);

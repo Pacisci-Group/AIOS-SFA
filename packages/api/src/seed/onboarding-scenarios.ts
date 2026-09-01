@@ -24,7 +24,12 @@ import { User } from '../users/schemas/user.schema';
  * deletes its own chains first, so you can reset between test passes without
  * touching the main seed's data.
  *
- *   npm run seed:onboarding -w @sfa/api
+ *   npx ts-node -r tsconfig-paths/register src/seed/onboarding-scenarios.ts
+ *
+ * Run directly rather than through an npm script — the same bargain
+ * `scroll-fixtures.ts`, `post-sale-fixture.ts` and `renewal-scenarios.ts` make.
+ * These are dev fixtures for manual QA, not part of any bring-up, and keeping
+ * them out of `package.json` keeps that list to the scripts a deploy runs.
  *
  * Timings come from the real scheduler (`scheduleSteps`), so these fixtures
  * cannot drift away from how production actually schedules a chain.
@@ -117,7 +122,7 @@ async function run() {
     getModelToken(Onboarding.name),
   );
 
-  const agency = await agencyModel.findOne({ slug: 'smith-family-agency' });
+  const agency = await agencyModel.findOne({ slug: 'demo-agency' });
   const branch = await branchModel.findOne({
     agencyId: agency?._id,
     slug: 'main',

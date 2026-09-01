@@ -50,6 +50,18 @@ export interface LeaderboardResponse {
   officeTotalPremium: number;
   /** Producers with sales or a goal this month — the size of the field. */
   producerCount: number;
+  /**
+   * How many of them have a goal for this month (PAC-80).
+   *
+   * `0` is the migrated state: SmartSuite's "Monthly Goal" is empty for every
+   * user, so every `attainmentPct` is `null` and every progress bar is empty.
+   * The card needs to *say* that rather than render a column of em dashes, which
+   * reads as universal failure rather than as missing configuration.
+   *
+   * An aggregate count, so it touches none of the privacy contract above — it is
+   * not a dollar figure and names nobody.
+   */
+  goalsConfigured: number;
   /** `null` for a caller who is not a producer (an owner or manager looking on). */
   self: LeaderboardSelf | null;
   entries: LeaderboardEntry[];
