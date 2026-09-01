@@ -8,15 +8,15 @@
 # manual step between "agency adds a domain" and "the domain works".
 #
 # Caddy's **on-demand TLS** obtains a certificate at first request for a host it
-# has never seen — but only after asking the API whether that host is one we
+# has never seen - but only after asking the API whether that host is one we
 # actually serve (`/public/domains/allow`). Without that gate a public IP on
 # port 443 lets anyone make us request certificates for arbitrary names until
 # Let's Encrypt rate-limits the whole account, so the `ask` directive is not
 # optional.
 #
-# ## ⚠ Changing this file replaces the droplet
-# `user_data` cannot be edited in place. Any change here — including switching
-# an existing Nginx droplet to this — destroys and recreates the instance. Plan
+# ## !! Changing this file replaces the droplet
+# `user_data` cannot be edited in place. Any change here - including switching
+# an existing Nginx droplet to this - destroys and recreates the instance. Plan
 # it, do it on `dev` first, and expect to re-run the seed. See DEPLOYMENT.md.
 package_update: true
 package_upgrade: true
@@ -51,10 +51,10 @@ write_files:
       # The platform host and every agency subdomain, on one wildcard
       # certificate.
       #
-      # ⚠ A wildcard requires the **DNS-01** challenge, which needs a Caddy
+      # !! A wildcard requires the **DNS-01** challenge, which needs a Caddy
       # build carrying the DNS plugin for the zone's provider and an API token
       # for it. Neither is installed here, so this block is commented out and
-      # subdomains fall through to on-demand TLS below — which works, at the
+      # subdomains fall through to on-demand TLS below - which works, at the
       # cost of a one-request latency spike the first time each new subdomain is
       # visited. Uncomment once a plugin build is in place:
       #
@@ -65,7 +65,7 @@ write_files:
 
       # Bare-IP access over plain HTTP. Kept because the deploy workflow's
       # health check runs against http://<droplet_ip>/api/v1/health, which has
-      # to work before any DNS record exists — and an IP can never have a
+      # to work before any DNS record exists - and an IP can never have a
       # certificate, so it must not be redirected to HTTPS.
       http://{$DROPLET_IP} {
           reverse_proxy 127.0.0.1:8080
@@ -83,7 +83,7 @@ write_files:
       #
       # `Host` is passed through untouched (Caddy's default for reverse_proxy),
       # which is what lets the API resolve the tenant from it. Do NOT add a
-      # `header_up Host` override here — it would make every request look like
+      # `header_up Host` override here - it would make every request look like
       # it arrived on one hostname and collapse every tenant into one.
       https:// {
           tls {
@@ -99,7 +99,7 @@ write_files:
       Deploy with: docker compose -f docker-compose.prod.yml up -d
       Place .env in /opt/sfa/.env before starting.
 
-      TLS is automatic — Caddy obtains a certificate the first time each
+      TLS is automatic - Caddy obtains a certificate the first time each
       hostname is requested, after checking it against the API's
       /public/domains/allow gate. There is no enable-tls.sh any more.
 
@@ -111,7 +111,7 @@ write_files:
 
 runcmd:
   - apt-get install -y ca-certificates curl gnupg ufw debian-keyring debian-archive-keyring apt-transport-https
-  # Caddy's own apt repository — the Ubuntu archive's package is far behind and
+  # Caddy's own apt repository - the Ubuntu archive's package is far behind and
   # predates several on-demand TLS fixes.
   - curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   - curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
@@ -131,7 +131,7 @@ runcmd:
   #
   # BASE_DOMAIN is deliberately NOT set here. It is referenced only by the
   # commented-out wildcard block, and `var.domain` is the full platform host
-  # (`dev.example.com`), not the parent zone — setting it from that would put a
+  # (`dev.example.com`), not the parent zone - setting it from that would put a
   # plausible-looking wrong value in the environment for whoever uncomments it.
   # Add it explicitly, alongside the DNS plugin token, at that point.
   - ["bash", "-c", "mkdir -p /etc/systemd/system/caddy.service.d && printf '[Service]\\nEnvironment=DROPLET_IP=%s\\n' \"$(curl -s --max-time 5 http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address || echo 0.0.0.0)\" > /etc/systemd/system/caddy.service.d/override.conf"]
