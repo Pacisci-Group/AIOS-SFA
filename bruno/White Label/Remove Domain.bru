@@ -1,0 +1,39 @@
+meta {
+  name: Remove Domain
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{baseUrl}}/agency/domains/{{customDomainId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /agency/domains/:domainId
+
+  Give up a hostname. The agency stops answering on it, and Caddy stops being
+  allowed to obtain a certificate for it (see **Caddy TLS Gate**).
+
+  **Module** — none. **Permission** — `agency:domains:write`.
+  **Response** — `204`, no body.
+
+  **Errors**
+  - `403` — caller lacks `agency:domains:write`.
+  - `404` — no such domain in this agency.
+
+  ## Chaining
+  Deletes the row **Add Custom Domain** created, so a repeated `bru run` neither
+  collides on the platform-wide unique `hostname` index nor accumulates dead
+  domains.
+}

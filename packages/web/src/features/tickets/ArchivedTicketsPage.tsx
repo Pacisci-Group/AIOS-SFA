@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Archive } from "lucide-react";
-import { SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from "@sfa/shared";
+import { AlertCircle, ChevronRight } from "lucide-react";
+import { ModuleKey, SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from "@sfa/shared";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { Button } from "@/components/ui/button";
+import { usePermissions } from "@/hooks/usePermissions";
+import { cn } from "@/lib/utils";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import type { TicketStatus } from "./components/ticket-data";
@@ -25,8 +28,17 @@ const ARCHIVED_KEY = ["service-tickets", "archived"];
  */
 export default function ArchivedTicketsPage() {
   const queryClient = useQueryClient();
+  const { canWrite } = usePermissions();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  /**
+   * Which of the two stacked panes is showing below `lg`. Ignored above it.
+   * A `?ticket=` deep link opens straight onto that ticket — see the longer
+   * note on `TicketWorkspacePage`.
+   */
+  const [mobilePane, setMobilePane] = useState<"queue" | "workspace">(() =>
+    searchParams.get("ticket") ? "workspace" : "queue",
+  );
 
   const ticketsQuery = useQuery({
     queryKey: ARCHIVED_KEY,
@@ -78,6 +90,7 @@ export default function ArchivedTicketsPage() {
 
   const handleSelect = (id: string) => {
     setSelectedTicketId(id);
+    setMobilePane("workspace");
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -93,40 +106,57 @@ export default function ArchivedTicketsPage() {
     // two-column split, same internal scrolling, and `AppShell` is
     // `min-h-screen` rather than a pinned parent to measure against.
     <AppShell>
-      <div className="flex-1 flex flex-col min-w-0 h-screen min-h-0 overflow-hidden bg-background font-sans">
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        {/* Page header */}
-        <div className="bg-card border-b border-border px-5 py-2.5 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
+      <div className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:gap-4 md:px-6">
+          <div className="flex min-w-0 items-center gap-2 md:gap-3">
             <MobileNav className="-ml-1" />
-            <Link
-              to="/crm/service"
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            <nav
+              aria-label="Breadcrumb"
+              className="hidden items-center gap-1.5 text-sm text-muted-foreground sm:flex"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              Service Dashboard
-            </Link>
-            <div>
-              <h2 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                <Archive className="w-3.5 h-3.5 text-muted-foreground" />
-                Archived Tickets
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                {ticketsQuery.isLoading
-                  ? "Loading archived tickets…"
-                  : `${tickets.length} ticket${tickets.length !== 1 ? "s" : ""} resolved more than ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
+              <Link
+                to="/crm/service"
+                className="transition-colors hover:text-foreground"
+              >
+                Service
+              </Link>
+              <ChevronRight aria-hidden className="size-4" />
+            </nav>
+            <div className="min-w-0">
+              <h1 className="text-lg font-semibold tracking-tight">
+                Archived tickets
+              </h1>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {ticketsQuery.isLoading || ticketsQuery.isError
+                  ? " "
+                  : `${tickets.length} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
               </p>
             </div>
           </div>
-        </div>
+        </header>
 
         {ticketsQuery.isError ? (
-          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-            Failed to load archived tickets. Please retry.
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <AlertCircle aria-hidden className="size-5 text-destructive" />
+            <p className="text-sm text-muted-foreground">
+              Couldn't load archived tickets.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void ticketsQuery.refetch()}
+            >
+              Retry
+            </Button>
           </div>
         ) : (
-          <div className="flex flex-1 min-h-0 overflow-hidden">
-            <div className="w-[40%] shrink-0 min-h-0 overflow-hidden">
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div
+              className={cn(
+                "min-h-0 w-full shrink-0 overflow-hidden lg:block lg:w-[40%]",
+                mobilePane === "workspace" && "hidden",
+              )}
+            >
               <TicketFeed
                 tickets={tickets}
                 selectedId={selectedTicketId}
@@ -136,9 +166,20 @@ export default function ArchivedTicketsPage() {
               />
             </div>
 
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div
+              className={cn(
+                "min-h-0 flex-1 overflow-hidden lg:block",
+                mobilePane === "queue" && "hidden",
+              )}
+            >
               <WorkspacePanel
                 ticket={selectedTicket}
+                onBack={() => setMobilePane("queue")}
+                // Reopening an archived ticket happens through the status
+                // picker, so this page has to pass the same gate the live
+                // workspace does — without it the picker renders read-only and
+                // there is no way back out of the archive.
+                canWrite={canWrite(ModuleKey.CrmService)}
                 isMutating={statusMutation.isPending || noteMutation.isPending}
                 onChangeStatus={(id, status) =>
                   statusMutation.mutate({ id, status })
@@ -150,7 +191,6 @@ export default function ArchivedTicketsPage() {
             </div>
           </div>
         )}
-      </div>
       </div>
     </AppShell>
   );

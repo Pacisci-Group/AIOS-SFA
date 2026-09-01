@@ -9,7 +9,8 @@ import {
   SkipModule,
   SkipTenant,
 } from '../common/decorators/access.decorators';
-import { CurrentUser } from '../common/decorators/user.decorators';
+import { CurrentUser, HostTenant } from '../common/decorators/user.decorators';
+import type { HostTenant as ResolvedHostTenant } from '../common/tenancy/host-tenant.resolver';
 import {
   MINUTE_MS,
   PASSWORD_RESET_PREVIEW_RATE_LIMIT,
@@ -23,14 +24,20 @@ import {
   ResetPasswordDto,
 } from './dto/auth.dto';
 
+/**
+ * Every route here is `@Public()`, so `HostTenantGuard` does not run and each
+ * one carries the host restriction itself — that is what `@HostTenant()` is
+ * doing in these signatures. Omitting it on a new route in this controller
+ * would quietly open a way to mint a token on any hostname.
+ */
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Public()
   @Post('login')
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  login(@Body() dto: LoginDto, @HostTenant() host: ResolvedHostTenant) {
+    return this.authService.login(dto, host);
   }
 
   /**
@@ -81,8 +88,11 @@ export class AuthController {
 
   @Public()
   @Post('refresh')
-  refresh(@Body() dto: RefreshTokenDto) {
-    return this.authService.refresh(dto.refreshToken);
+  refresh(
+    @Body() dto: RefreshTokenDto,
+    @HostTenant() host: ResolvedHostTenant,
+  ) {
+    return this.authService.refresh(dto.refreshToken, host);
   }
 
   /**
@@ -97,8 +107,11 @@ export class AuthController {
 
   @Public()
   @Post('accept-invite')
-  acceptInvite(@Body() dto: AcceptInviteDto) {
-    return this.authService.acceptInvite(dto);
+  acceptInvite(
+    @Body() dto: AcceptInviteDto,
+    @HostTenant() host: ResolvedHostTenant,
+  ) {
+    return this.authService.acceptInvite(dto, host);
   }
 
   /**
@@ -130,7 +143,10 @@ export class AuthController {
   @Throttle({
     short: { limit: PASSWORD_RESET_SUBMIT_RATE_LIMIT, ttl: MINUTE_MS },
   })
-  resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.authService.resetPassword(dto);
+  resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @HostTenant() host: ResolvedHostTenant,
+  ) {
+    return this.authService.resetPassword(dto, host);
   }
 }

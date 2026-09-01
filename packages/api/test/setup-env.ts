@@ -16,6 +16,16 @@ process.env.JWT_REFRESH_EXPIRES = '7d';
 // origin to compare against rather than depending on the developer's `.env`.
 process.env.APP_BASE_URL = 'http://localhost:5173';
 
+// White labelling. `HostTenantGuard` binds a session to the hostname it was
+// created on, and `AuthService` refuses to mint one on a host that resolves to
+// no tenant. Supertest talks to the in-process server as `127.0.0.1:<port>`,
+// which is not the platform host derived from `APP_BASE_URL` above — so without
+// this every `login()` in the suite returns 401 and effectively the whole e2e
+// run fails on the first `beforeAll`. Pinning the platform host to the address
+// supertest actually uses is what puts the suite back on the platform-host
+// path, which is where it was written to run.
+process.env.PLATFORM_HOST = '127.0.0.1';
+
 // The cooldown is *exercised* by the suite (immediate resend → 409), which
 // clears `inviteLastSentAt` directly in Mongo to reach the success path so no
 // test has to sleep. It therefore needs a non-zero value, and it needs one that

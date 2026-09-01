@@ -5,6 +5,7 @@ import { SendInviteEmailFn } from './functions/send-invite-email.fn';
 import { SendPasswordResetEmailFn } from './functions/send-password-reset-email.fn';
 import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { MailDeliveryService } from './email/mail-delivery.service';
+import { SenderIdentityService } from './email/sender-identity.service';
 import { mailTransportProvider } from './email/mail-transport.provider';
 import {
   EmailMessage,
@@ -63,6 +64,9 @@ import { StorageModule } from '../storage/storage.module';
   providers: [
     WorkerIndexesService,
     mailTransportProvider,
+    // Resolves the per-agency `From:`/`Reply-To`. Reads the `Agency` document
+    // (registered above) — a schema, which the worker import boundary allows.
+    SenderIdentityService,
     MailDeliveryService,
     // Inngest functions. Each is an @Injectable so its handler can inject
     // services; InngestRegistry (in src/inngest/) collects them by decorator,

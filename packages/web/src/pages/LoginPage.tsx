@@ -1,7 +1,8 @@
 import { FormEvent, useState } from 'react';
-import { Shield } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/auth-context';
+import { useTenant } from '@/contexts/tenant-context';
+import { BrandLockup } from '@/components/common/BrandMark';
 import { ApiError } from '@/lib/api-client';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -11,6 +12,7 @@ import { FormError } from '@/components/form';
 
 export function LoginPage() {
   const { login } = useAuth();
+  const { branding } = useTenant();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -34,17 +36,7 @@ export function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
-        <div className="flex items-center gap-3 mb-8 justify-center">
-          <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-            <Shield size={20} className="text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-foreground tracking-tight">AgencyOps</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
-              Operations Platform
-            </p>
-          </div>
-        </div>
+        <BrandLockup size="md" className="mb-8 justify-center" />
 
         <Card className="p-6 gap-4 border-border">
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -91,9 +83,16 @@ export function LoginPage() {
               {loading ? 'Signing in…' : 'Sign in'}
             </Button>
 
-            <p className="text-[10px] text-muted-foreground text-center pt-2">
-              Use seed credentials from .env (SEED_AGENCY_OWNER_EMAIL)
-            </p>
+            {/*
+              A developer hint, so it is shown only on the platform host. On an
+              agency's own domain this is a page their staff and no one else
+              sees, and telling them to read our .env reads as a broken deploy.
+            */}
+            {branding.kind === 'platform' && (
+              <p className="text-[10px] text-muted-foreground text-center pt-2">
+                Use seed credentials from .env (SEED_AGENCY_OWNER_EMAIL)
+              </p>
+            )}
           </form>
         </Card>
       </div>

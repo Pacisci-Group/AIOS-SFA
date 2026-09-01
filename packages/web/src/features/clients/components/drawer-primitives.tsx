@@ -45,7 +45,7 @@ export function DrawerSkeleton() {
 
 export function DrawerError({ message }: { message?: string }) {
   return (
-    <p className="text-sm text-red-400">
+    <p className="text-sm text-destructive">
       {message ?? 'Could not load this record.'}
     </p>
   );

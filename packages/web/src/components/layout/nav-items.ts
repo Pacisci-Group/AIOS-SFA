@@ -1,6 +1,9 @@
 import {
+  AtSign,
   BarChart3,
+  Globe,
   KeyRound,
+  Palette,
   LayoutDashboard,
   Ticket,
   TrendingUp,
@@ -115,6 +118,24 @@ export const NAV_SECTIONS: NavSection[] = [
         // Must match the route guard and what the page actually calls
         // (`GET /roles`). See the note on the route in `App.tsx`.
         permission: "agency:roles:read",
+      },
+      {
+        to: "/settings/branding",
+        label: "Branding",
+        icon: Palette,
+        permission: "agency:branding:read",
+      },
+      {
+        to: "/settings/domains",
+        label: "Domains",
+        icon: Globe,
+        permission: "agency:domains:read",
+      },
+      {
+        to: "/settings/email",
+        label: "Email",
+        icon: AtSign,
+        permission: "agency:email:read",
       },
     ],
   },

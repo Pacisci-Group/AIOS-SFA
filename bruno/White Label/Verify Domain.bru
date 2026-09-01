@@ -1,0 +1,66 @@
+meta {
+  name: Verify Domain
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/agency/domains/{{customDomainId}}/verify
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("fails for a domain whose records do not exist", function () {
+    // `example.com` publishes no `_sfa-verify` TXT record for us, so this is the
+    // expected outcome in the collection. A `failed` result is data, not an
+    // error — the owner needs to see why.
+    expect(res.getBody().status).to.equal("failed");
+    expect(res.getBody().lastError).to.be.a("string").and.not.be.empty;
+  });
+
+  test("records when it was checked", function () {
+    expect(res.getBody().lastCheckedAt).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /agency/domains/:domainId/verify
+
+  Re-check a custom domain's DNS and activate it if ownership is proven.
+
+  **Module** — none. **Permission** — `agency:domains:write`.
+
+  Idempotent and safe to hammer: it is a read of public DNS, and an owner
+  watching for propagation will press it repeatedly. An already-`active` domain
+  is returned unchanged rather than erroring.
+
+  ## What counts as proof
+  A `TXT` record at `_sfa-verify.<domain>` matching the row's token. Control of
+  a subdomain of the zone is control of the zone — the standard every ACME and
+  SaaS custom-domain flow uses.
+
+  **Pointing DNS at us is checked but is *not* proof.** Anyone can CNAME their
+  own domain at our IP; that says nothing about who owns the name. So a domain
+  whose TXT record is correct is activated **even if the CNAME/A record has not
+  propagated yet**, with the routing problem reported in `lastError` — the DNS
+  propagation the owner is waiting on is the same propagation that would fail
+  that check.
+
+  **Response `200`** — the domain row. `status` becomes `active` (with
+  `verifiedAt` set) or `failed` (with `lastError` explaining what to fix).
+  A `failed` verification is **not** an HTTP error.
+
+  **Errors**
+  - `400` — the domain needs no verification (it is a platform subdomain).
+  - `403` — caller lacks `agency:domains:write`.
+  - `404` — no such domain **in this agency**. Scoped in the query, so another
+    tenant's domain is indistinguishable from one that does not exist.
+}

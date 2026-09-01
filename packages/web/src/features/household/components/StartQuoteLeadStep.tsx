@@ -2,6 +2,7 @@ import type { HouseholdView } from "@sfa/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, ArrowLeft, Loader2, Plus } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { LeadIntakeForm } from "@/features/lead/components/LeadIntakeForm";
@@ -260,14 +261,13 @@ function LeadOption({ lead, selected }: { lead: LeadRow; selected: boolean }) {
           <span className="truncate text-sm font-medium text-foreground">
             {lead.name}
           </span>
-          <span
-            className={cn(
-              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium",
-              statusBadgeClass(lead.status),
-            )}
+          <Badge
+            size="sm"
+            variant="ghost"
+            className={cn("shrink-0", statusBadgeClass(lead.status))}
           >
             {lead.status}
-          </span>
+          </Badge>
         </span>
         <span className="mt-0.5 block truncate text-xs text-muted-foreground">
           {[lead.leadSource, contact].filter(Boolean).join(" · ") ||

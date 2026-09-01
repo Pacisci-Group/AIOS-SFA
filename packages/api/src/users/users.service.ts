@@ -26,6 +26,8 @@ import {
   passwordResetCooldownSeconds,
   passwordResetExpiryHours,
 } from '../config/password-reset.config';
+import { TenantUrlService } from '../common/tenancy/tenant-url.service';
+import { TenantBrandingService } from '../tenant-branding/tenant-branding.service';
 import { MailService } from '../mail/mail.service';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
@@ -78,6 +80,8 @@ export class UsersService {
     private mailService: MailService,
     private configService: ConfigService,
     private workRelease: UserWorkReleaseService,
+    private tenantUrls: TenantUrlService,
+    private tenantBranding: TenantBrandingService,
   ) {}
 
   /**
@@ -490,7 +494,10 @@ export class UsersService {
     user.inviteTokenExpiresAt = undefined;
     await user.save();
 
-    const resetUrl = this.buildPasswordResetUrl(resetToken);
+    const resetUrl = await this.buildPasswordResetUrl(
+      resetToken,
+      user.agencyId?.toString() ?? null,
+    );
     const agencyName = await this.resolveAgencyName(user.agencyId);
 
     // Same guarantee as `issueInvite`: both callers reach here with an agency
@@ -542,13 +549,21 @@ export class UsersService {
     user.inviteLastSentAt = new Date();
     await user.save();
 
-    const inviteUrl = this.buildInviteUrl(inviteToken);
-
-    const [agencyName, roleNames, inviterName] = await Promise.all([
+    const agencyIdString = user.agencyId?.toString() ?? null;
+    const [baseUrl, agencyName, roleNames, inviterName] = await Promise.all([
+      this.tenantUrls.baseUrlFor(agencyIdString),
       this.resolveAgencyName(user.agencyId),
       this.permissionsService.resolveRoleNames(user),
       this.resolveUserName(invitedByUserId),
     ]);
+
+    const inviteUrl = `${baseUrl}/auth/accept-invite?token=${inviteToken}`;
+
+    // Same origin as the invite link, so the logo is fetched from the host the
+    // invitee is about to visit — and so a tenant with its own domain never
+    // makes a mail client load an asset from a name the recipient has never
+    // heard of.
+    const brand = await this.resolveEmailBrand(agencyIdString, baseUrl);
 
     // `agencyId` is optional on the schema (a platform super admin has none)
     // but is guaranteed on both paths into here: `inviteUser` sets it from a
@@ -573,6 +588,7 @@ export class UsersService {
       roleNames,
       inviteUrl,
       expiresAt,
+      brand,
     });
 
     return {
@@ -646,11 +662,29 @@ export class UsersService {
    * Absolute, because the link is opened from an email client that has no origin
    * to resolve a relative path against.
    */
-  private buildInviteUrl(token: string): string {
-    const base = this.configService
-      .get<string>('APP_BASE_URL', 'http://localhost:5173')
-      .replace(/\/+$/, '');
-    return `${base}/auth/accept-invite?token=${token}`;
+  /**
+   * The agency's identity for the email masthead, or `undefined` to fall back
+   * to the platform wordmark.
+   *
+   * The logo URL is made **absolute against the same base as the invite link**.
+   * It cannot be a relative path (a mail client has no origin to resolve it
+   * against) and it cannot be a presigned storage URL (those expire, and an
+   * invite may sit unread for days — a broken image in a "set your password"
+   * email is exactly the thing that makes it look like phishing).
+   */
+  private async resolveEmailBrand(
+    agencyId: string | null,
+    baseUrl: string,
+  ): Promise<{ name: string; logoUrl: string | null } | undefined> {
+    if (!agencyId) return undefined;
+
+    const branding = await this.tenantBranding.forAgency(agencyId);
+    if (branding.kind !== 'agency') return undefined;
+
+    return {
+      name: branding.name,
+      logoUrl: branding.logoUrl ? `${baseUrl}${branding.logoUrl}` : null,
+    };
   }
 
   /**
@@ -665,14 +699,23 @@ export class UsersService {
   }
 
   /**
-   * Absolute, for the same reason {@link buildInviteUrl} is — this is opened
-   * from an email client, which has no origin to resolve a relative path
-   * against.
+   * Absolute, for the same reason the invite link is — this is opened from an
+   * email client, which has no origin to resolve a relative path against.
+   *
+   * Built on the **recipient's own agency host** (`TenantUrlService`), never on
+   * `APP_BASE_URL`: `HostTenantGuard` binds a session to the hostname it was
+   * created on, and `AuthService.resetPassword` refuses to mint one on a host
+   * the user does not belong to — so a link on the platform base URL is not
+   * merely off-brand, it is a link that cannot be completed.
    */
-  private buildPasswordResetUrl(token: string): string {
-    const base = this.configService
-      .get<string>('APP_BASE_URL', 'http://localhost:5173')
-      .replace(/\/+$/, '');
+  private async buildPasswordResetUrl(
+    token: string,
+    agencyId: string | null,
+  ): Promise<string> {
+    const base = (await this.tenantUrls.baseUrlFor(agencyId)).replace(
+      /\/+$/,
+      '',
+    );
     return `${base}/auth/reset-password?token=${token}`;
   }
 

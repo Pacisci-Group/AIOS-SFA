@@ -170,6 +170,7 @@ whenever you work under `packages/web`.
 
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
+- **Anything that builds a user-facing URL must go through `TenantUrlService.baseUrlFor(agencyId)`**, never `APP_BASE_URL` / `PUBLIC_FORM_BASE_URL` directly. A link on the wrong host is not merely off-brand — `HostTenantGuard` rejects the recipient there, so the link is broken. Same for the logo URL in an email, which must be absolute and unauthenticated.
 - **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.claude/rules/api-bruno-docs.md` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
 - Forms: prefer **TanStack Form** + `zod` (wired via Standard Schema — pass the

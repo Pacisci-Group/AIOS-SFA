@@ -8,15 +8,22 @@ import {
   Loader2,
   Lock,
   PhoneCall,
+  RefreshCw,
   ShoppingCart,
+  type LucideIcon,
 } from "lucide-react";
 import { RENEWAL_OUTCOME_LABELS, premiumTermSuffix } from "@sfa/shared";
+import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
+import { DisabledHint } from "@/components/common/DisabledHint";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   getRenewalCycle,
   type RenewalOutcome,
   type RenewalStepKey,
   type RenewalStepRef,
 } from "@/lib/service-tickets-api";
+import { cn } from "@/lib/utils";
 
 interface RenewalPanelProps {
   step: RenewalStepRef;
@@ -25,6 +32,63 @@ interface RenewalPanelProps {
   onTogglePolicy: (policyId: string, discussed: boolean) => void;
   onCompleteStep: (stepKey: RenewalStepKey, outcome?: RenewalOutcome) => void;
   onChangeOutcome: (outcome: RenewalOutcome) => void;
+}
+
+type StepState = "done" | "overdue" | "actionable" | "scheduled";
+
+const STATE_CONFIG: Record<
+  StepState,
+  { icon: LucideIcon; tone: string; tint: string }
+> = {
+  done: { icon: CheckCircle2, tone: "text-success", tint: "bg-success/12" },
+  overdue: {
+    icon: AlertTriangle,
+    tone: "text-red-600 dark:text-red-400",
+    tint: "bg-red-500/12",
+  },
+  actionable: { icon: PhoneCall, tone: "text-primary", tint: "bg-primary/12" },
+  scheduled: {
+    icon: Lock,
+    tone: "text-muted-foreground",
+    tint: "bg-muted",
+  },
+};
+
+/** Stated in two places; kept as a constant so they cannot drift apart. */
+const TICK_POLICIES_REASON = "Tick every policy first.";
+
+/**
+ * The two decisions a renewal review can end in, and how each one reads.
+ *
+ * ⚠ The `dark:bg-*` duplicates are **load-bearing, not redundant.** These tints
+ * are applied over `Button variant="outline"`, whose own base carries
+ * `dark:bg-input/30` / `dark:border-input`. `cn` is tailwind-merge: a
+ * `dark:`-modified class of ours *replaces* the primitive's (same property, same
+ * modifier), whereas an unmodified `bg-*` merely sits beside it — and loses in
+ * dark, because `.dark\:bg-input\/30:is(.dark *)` is specificity (0,2,0) against
+ * our (0,1,0). Without the pair, the selected outcome is indistinguishable from
+ * the unselected one on the navy theme, which is the app's default.
+ */
+const OUTCOME_TONE: Record<RenewalOutcome, string> = {
+  took_renewal: "bg-success/12 dark:bg-success/12 text-success",
+  shopping:
+    "bg-amber-500/15 dark:bg-amber-500/15 text-amber-700 dark:text-amber-500",
+};
+
+const OUTCOME_ICON: Record<RenewalOutcome, LucideIcon> = {
+  took_renewal: CheckCircle2,
+  shopping: ShoppingCart,
+};
+
+/** The recorded decision, once the review is closed. */
+function OutcomeBadge({ outcome }: { outcome: RenewalOutcome }) {
+  const Icon = OUTCOME_ICON[outcome];
+  return (
+    <Badge size="lg" variant="ghost" className={cn("gap-1.5", OUTCOME_TONE[outcome])}>
+      <Icon aria-hidden />
+      {RENEWAL_OUTCOME_LABELS[outcome]}
+    </Badge>
+  );
 }
 
 /**
@@ -65,7 +129,7 @@ export function RenewalPanel({
     allDiscussed &&
     (!needsOutcome || outcome !== null);
 
-  const state = step.completedAt
+  const state: StepState = step.completedAt
     ? "done"
     : step.isOverdue
       ? "overdue"
@@ -73,222 +137,279 @@ export function RenewalPanel({
         ? "actionable"
         : "scheduled";
 
-  const stateConfig = {
-    done: { icon: CheckCircle2, color: "text-[var(--kpi-green)]", wrap: "bg-[var(--kpi-green)]/10" },
-    overdue: { icon: AlertTriangle, color: "text-[#EF4444]", wrap: "bg-[#EF4444]/10" },
-    actionable: { icon: PhoneCall, color: "text-[#0076A8]", wrap: "bg-[#0076A8]/10" },
-    scheduled: { icon: Lock, color: "text-muted-foreground", wrap: "bg-white/5" },
-  }[state];
+  const stateConfig = STATE_CONFIG[state];
   const StateIcon = stateConfig.icon;
 
+  /** Why Complete is unavailable, or `undefined` when it is not. */
+  const blockedReason = canComplete
+    ? undefined
+    : !canWrite
+      ? "You do not have write access."
+      : !step.isActionable
+        ? "This call has not opened yet."
+        : !allDiscussed
+          ? TICK_POLICIES_REASON
+          : needsOutcome && !outcome
+            ? "Record the renewal decision first."
+            : undefined;
+
+  // The visible line under the button repeats every reason except the
+  // tick-every-policy one, which the checklist already states right where the
+  // ticking happens. Saying it twice on one card reads as nagging.
+  const blockedNotice =
+    blockedReason === TICK_POLICIES_REASON ? undefined : blockedReason;
+
   return (
-    <div className="rounded-lg border border-border bg-card p-4 space-y-4">
-      {/* Header: which call, and where it sits */}
-      <div className="flex items-start gap-3">
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${stateConfig.wrap}`}>
-          <StateIcon className={`w-4 h-4 ${stateConfig.color}`} />
+    <DetailCard
+      title="Renewal outreach"
+      icon={RefreshCw}
+      action={
+        <span className="text-sm text-muted-foreground">
+          Step {step.sequence} of {step.totalSteps}
+        </span>
+      }
+    >
+      <div className="space-y-5">
+        {/* Header: which call, and where it sits */}
+        <div className="flex items-start gap-3">
+          <span
+            aria-hidden
+            className={cn(
+              "flex size-8 shrink-0 items-center justify-center rounded-full",
+              stateConfig.tint,
+            )}
+          >
+            <StateIcon className={cn("size-4", stateConfig.tone)} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-medium text-card-foreground">
+              {step.label}
+            </p>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              {step.daysUntilRenewal >= 0
+                ? `Policy renews in ${step.daysUntilRenewal} day${step.daysUntilRenewal === 1 ? "" : "s"}`
+                : `Policy renewed ${Math.abs(step.daysUntilRenewal)} day${Math.abs(step.daysUntilRenewal) === 1 ? "" : "s"} ago`}
+              {step.mergedFrom.length > 0 &&
+                " · annual review merged into this call"}
+            </p>
+          </div>
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold text-foreground">{step.label}</h3>
-            <span className="text-[10px] text-muted-foreground">
-              Step {step.sequence} of {step.totalSteps}
+
+        {/* Policy checklist — the point of the panel */}
+        <section>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <SectionLabel>Policies on this renewal</SectionLabel>
+            <span className="text-sm tabular-nums text-muted-foreground">
+              {policies.filter((p) => p.discussedAt).length} of {policies.length}{" "}
+              discussed
             </span>
           </div>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {step.daysUntilRenewal >= 0
-              ? `Policy renews in ${step.daysUntilRenewal} day${step.daysUntilRenewal === 1 ? "" : "s"}`
-              : `Policy renewed ${Math.abs(step.daysUntilRenewal)} day${Math.abs(step.daysUntilRenewal) === 1 ? "" : "s"} ago`}
-            {step.mergedFrom.length > 0 && " · annual review merged into this call"}
-          </p>
-        </div>
-      </div>
 
-      {/* Policy checklist — the point of the panel */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-foreground">Policies on this renewal</span>
-          <span className="text-[10px] text-muted-foreground">
-            {policies.filter((p) => p.discussedAt).length} of {policies.length} discussed
-          </span>
-        </div>
+          {cycleQuery.isPending && (
+            <p className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
+              <Loader2 aria-hidden className="size-4 animate-spin" />
+              Loading policies…
+            </p>
+          )}
 
-        {cycleQuery.isPending && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-            <Loader2 size={12} className="animate-spin" />
-            Loading policies…
+          <div className="space-y-1">
+            {policies.map((policy) => {
+              const discussed = Boolean(policy.discussedAt);
+              return (
+                <button
+                  key={policy.policyId}
+                  type="button"
+                  disabled={!canWrite || Boolean(step.completedAt) || isMutating}
+                  onClick={() => onTogglePolicy(policy.policyId, !discussed)}
+                  className="flex w-full items-center gap-2.5 rounded-md bg-sunken px-3 py-2 text-left transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:hover:bg-sunken"
+                >
+                  {discussed ? (
+                    <CheckCircle2
+                      aria-hidden
+                      className="size-4 shrink-0 text-success"
+                    />
+                  ) : (
+                    <Circle
+                      aria-hidden
+                      className="size-4 shrink-0 text-muted-foreground"
+                    />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-foreground">
+                      {policy.policyType}
+                      <span className="ml-2 font-normal tabular-nums text-muted-foreground">
+                        {policy.policyNumber}
+                      </span>
+                    </span>
+                    {policy.carrier && (
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        {policy.carrier}
+                        {policy.premium > 0 &&
+                          ` · $${policy.premium.toLocaleString()}${premiumTermSuffix(policy.policyType)}`}
+                      </span>
+                    )}
+                  </span>
+                  {discussed && policy.discussedByName && (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {policy.discussedByName}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {!allDiscussed && !step.completedAt && policies.length > 0 && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Tick every policy as you cover it — the call cannot be closed until
+              all are discussed.
+            </p>
+          )}
+        </section>
+
+        {/* Outcome — only on the renewal review, on both tracks */}
+        {step.requiresOutcome && (
+          <section>
+            <SectionLabel className="mb-2">Renewal decision</SectionLabel>
+            {step.completedAt && step.outcome ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <OutcomeBadge outcome={step.outcome} />
+                {canWrite && (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    disabled={isMutating}
+                    onClick={() =>
+                      onChangeOutcome(
+                        step.outcome === "took_renewal"
+                          ? "shopping"
+                          : "took_renewal",
+                      )
+                    }
+                  >
+                    Change
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(["took_renewal", "shopping"] as const).map((option) => {
+                  const Icon = OUTCOME_ICON[option];
+                  const selected = outcome === option;
+                  return (
+                    <Button
+                      key={option}
+                      variant="outline"
+                      size="sm"
+                      disabled={!canWrite || !step.isActionable || isMutating}
+                      onClick={() => setOutcome(option)}
+                      aria-pressed={selected}
+                      className={cn(
+                        selected && [
+                          OUTCOME_TONE[option],
+                          // Paired for the same reason as the tints above:
+                          // `outline` carries `dark:border-input`.
+                          "border-current/40 dark:border-current/40",
+                        ],
+                      )}
+                    >
+                      <Icon />
+                      {RENEWAL_OUTCOME_LABELS[option]}
+                    </Button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Complete */}
+        {!step.completedAt && (
+          <div>
+            {/* The hint has to sit on a wrapper: `Button` is
+                `disabled:pointer-events-none`, so a `title` on it is never
+                hovered — and this is the only place the blocking reason is
+                surfaced at all. See `DisabledHint`. */}
+            <DisabledHint className="w-full" hint={blockedReason}>
+              <Button
+                className="w-full"
+                disabled={!canComplete}
+                onClick={() => onCompleteStep(step.stepKey, outcome ?? undefined)}
+              >
+                {isMutating ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <PhoneCall />
+                )}
+                Complete {step.label}
+              </Button>
+            </DisabledHint>
+            {/* Said in visible copy as well as the tooltip: a hover hint never
+                reaches a keyboard or screen-reader user, and a Complete button
+                that refuses without saying why is the whole complaint. */}
+            {blockedNotice && (
+              <p className="mt-2 text-sm text-muted-foreground">
+                {blockedNotice}
+              </p>
+            )}
           </div>
         )}
 
-        <div className="space-y-1">
-          {policies.map((policy) => {
-            const discussed = Boolean(policy.discussedAt);
-            return (
-              <button
-                key={policy.policyId}
-                disabled={!canWrite || Boolean(step.completedAt) || isMutating}
-                onClick={() => onTogglePolicy(policy.policyId, !discussed)}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-secondary/40 hover:bg-secondary/70 disabled:hover:bg-secondary/40 disabled:cursor-not-allowed transition-colors text-left"
-              >
-                {discussed ? (
-                  <CheckCircle2 className="w-4 h-4 text-[var(--kpi-green)] flex-shrink-0" />
-                ) : (
-                  <Circle className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium text-foreground">
-                    {policy.policyType}
-                    <span className="text-muted-foreground font-normal font-mono ml-2">
-                      {policy.policyNumber}
-                    </span>
-                  </div>
-                  {policy.carrier && (
-                    <div className="text-[10px] text-muted-foreground mt-0.5">
-                      {policy.carrier}
-                      {policy.premium > 0 &&
-                        ` · $${policy.premium.toLocaleString()}${premiumTermSuffix(policy.policyType)}`}
-                    </div>
+        {/* Chain: both calls, or the single merged one */}
+        {cycle && (
+          <section className="border-t border-border pt-4">
+            <SectionLabel className="mb-2">Outreach</SectionLabel>
+            <ol className="space-y-1.5">
+              {cycle.chain.map((link) => (
+                <li
+                  key={link.stepKey}
+                  className="flex items-center gap-2 text-sm"
+                >
+                  {link.completedAt ? (
+                    <CheckCircle2
+                      aria-hidden
+                      className="size-4 shrink-0 text-success"
+                    />
+                  ) : link.isOverdue ? (
+                    <AlertTriangle
+                      aria-hidden
+                      className="size-4 shrink-0 text-red-600 dark:text-red-400"
+                    />
+                  ) : link.isActionable ? (
+                    <PhoneCall
+                      aria-hidden
+                      className="size-4 shrink-0 text-primary"
+                    />
+                  ) : (
+                    <CalendarClock
+                      aria-hidden
+                      className="size-4 shrink-0 text-muted-foreground"
+                    />
                   )}
-                </div>
-                {discussed && policy.discussedByName && (
-                  <span className="text-[10px] text-muted-foreground flex-shrink-0">
-                    {policy.discussedByName}
+                  <span
+                    className={
+                      link.stepKey === step.stepKey
+                        ? "font-semibold text-foreground"
+                        : "text-muted-foreground"
+                    }
+                  >
+                    {link.label}
                   </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {!allDiscussed && !step.completedAt && policies.length > 0 && (
-          <p className="text-[10px] text-muted-foreground mt-2">
-            Tick every policy as you cover it — the call cannot be closed until all are discussed.
-          </p>
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {link.completedAt
+                      ? "done"
+                      : link.ticketId
+                        ? link.isActionable
+                          ? "open"
+                          : "scheduled"
+                        : "not scheduled"}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
         )}
       </div>
-
-      {/* Outcome — only on the renewal review, on both tracks */}
-      {step.requiresOutcome && (
-        <div>
-          <span className="text-xs font-semibold text-foreground">Renewal decision</span>
-          {step.completedAt && step.outcome ? (
-            <div className="flex items-center gap-2 mt-2">
-              <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold ${
-                  step.outcome === "took_renewal"
-                    ? "bg-[var(--kpi-green)]/10 text-[var(--kpi-green)]"
-                    : "bg-[#F59E0B]/10 text-[#F59E0B]"
-                }`}
-              >
-                {step.outcome === "took_renewal" ? (
-                  <CheckCircle2 size={12} />
-                ) : (
-                  <ShoppingCart size={12} />
-                )}
-                {RENEWAL_OUTCOME_LABELS[step.outcome]}
-              </span>
-              {canWrite && (
-                <button
-                  disabled={isMutating}
-                  onClick={() =>
-                    onChangeOutcome(
-                      step.outcome === "took_renewal" ? "shopping" : "took_renewal",
-                    )
-                  }
-                  className="text-[10px] text-muted-foreground hover:text-foreground underline disabled:opacity-40"
-                >
-                  Change
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2 mt-2">
-              {(["took_renewal", "shopping"] as const).map((option) => (
-                <button
-                  key={option}
-                  disabled={!canWrite || !step.isActionable || isMutating}
-                  onClick={() => setOutcome(option)}
-                  className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                    outcome === option
-                      ? option === "took_renewal"
-                        ? "bg-[var(--kpi-green)]/15 border-[var(--kpi-green)]/40 text-[var(--kpi-green)]"
-                        : "bg-[#F59E0B]/15 border-[#F59E0B]/40 text-[#F59E0B]"
-                      : "bg-secondary border-transparent text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {option === "took_renewal" ? <CheckCircle2 size={12} /> : <ShoppingCart size={12} />}
-                  {RENEWAL_OUTCOME_LABELS[option]}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Complete */}
-      {!step.completedAt && (
-        <button
-          disabled={!canComplete}
-          onClick={() => onCompleteStep(step.stepKey, outcome ?? undefined)}
-          title={
-            !canWrite
-              ? "You do not have write access"
-              : !step.isActionable
-                ? "This call has not opened yet"
-                : !allDiscussed
-                  ? "Tick every policy first"
-                  : needsOutcome && !outcome
-                    ? "Record the renewal decision first"
-                    : undefined
-          }
-          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-[#0076A8] text-xs font-semibold text-white hover:bg-[#0076A8]/85 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          {isMutating ? <Loader2 size={13} className="animate-spin" /> : <PhoneCall size={13} />}
-          Complete {step.label}
-        </button>
-      )}
-
-      {/* Chain: both calls, or the single merged one */}
-      {cycle && (
-        <div className="pt-3 border-t border-border">
-          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
-            Outreach
-          </span>
-          <ol className="mt-2 space-y-1.5">
-            {cycle.chain.map((link) => (
-              <li key={link.stepKey} className="flex items-center gap-2 text-xs">
-                {link.completedAt ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-[var(--kpi-green)] flex-shrink-0" />
-                ) : link.isOverdue ? (
-                  <AlertTriangle className="w-3.5 h-3.5 text-[#EF4444] flex-shrink-0" />
-                ) : link.isActionable ? (
-                  <PhoneCall className="w-3.5 h-3.5 text-[#0076A8] flex-shrink-0" />
-                ) : (
-                  <CalendarClock className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                )}
-                <span
-                  className={
-                    link.stepKey === step.stepKey
-                      ? "font-semibold text-foreground"
-                      : "text-muted-foreground"
-                  }
-                >
-                  {link.label}
-                </span>
-                <span className="ml-auto text-[10px] text-muted-foreground">
-                  {link.completedAt
-                    ? "done"
-                    : link.ticketId
-                      ? link.isActionable
-                        ? "open"
-                        : "scheduled"
-                      : "not scheduled"}
-                </span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-    </div>
+    </DetailCard>
   );
 }

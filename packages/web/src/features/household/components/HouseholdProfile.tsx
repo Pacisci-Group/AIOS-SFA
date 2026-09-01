@@ -4,12 +4,17 @@ import {
   isActiveHouseholdStatus,
   normalizeHouseholdStatus,
 } from "@sfa/shared";
+import { SectionLabel } from "@/components/common/DetailCard";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
 
 interface Member {
   name: string;
   role: string;
   initials: string;
-  color: string;
+  tone: string;
+  tint: string;
   isPrimary?: boolean;
   isDriver?: boolean;
 }
@@ -21,7 +26,20 @@ interface Member {
  */
 const demoTags = ["Multi-Policy", "Auto-Pay", "Paperless", "Renewal Due: Aug"];
 
-const MEMBER_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7", "#ec4899"];
+/**
+ * Avatar accents, cycled by roster position.
+ *
+ * Paired classes rather than the raw hex these used to be — the tiles were
+ * built as `${hex}20` / `${hex}40` string concatenations in an inline `style`,
+ * which Tailwind cannot see and the theme cannot re-tint.
+ */
+const MEMBER_ACCENTS = [
+  { tone: "text-sky-600 dark:text-sky-400", tint: "bg-sky-400/12" },
+  { tone: "text-success", tint: "bg-success/12" },
+  { tone: "text-amber-600 dark:text-amber-500", tint: "bg-amber-500/15" },
+  { tone: "text-violet-600 dark:text-violet-400", tint: "bg-violet-400/12" },
+  { tone: "text-pink-600 dark:text-pink-400", tint: "bg-pink-400/12" },
+];
 
 function initialsOf(name: string) {
   return name
@@ -47,7 +65,7 @@ function toMembers(household: HouseholdView): Member[] {
       name,
       role,
       initials: initialsOf(name),
-      color: MEMBER_COLORS[i % MEMBER_COLORS.length],
+      ...MEMBER_ACCENTS[i % MEMBER_ACCENTS.length],
       isPrimary: contact.isPrimary,
       isDriver: /driver/i.test(role),
     };
@@ -71,55 +89,47 @@ function addressLines(address: Record<string, unknown> | null) {
  * 2,519 migrated households store the code `b5qvJ`, which the regex never
  * matched — so every one of them rendered grey and read as inactive.
  */
-function statusStyle(status: string | null) {
+function statusClass(status: string | null) {
   return isActiveHouseholdStatus(status)
-    ? { background: "#052e16", color: "#4ade80", border: "1px solid #166534" }
-    : {
-        background: "var(--secondary)",
-        color: "var(--muted-foreground)",
-        border: "1px solid var(--border)",
-      };
+    ? "bg-success/12 text-success"
+    : "bg-muted text-muted-foreground";
 }
 
 /** Contact rows are links only when there is something to link to. */
 function ContactRow({
-  icon,
+  icon: Icon,
+  iconTone,
   value,
   caption,
   href,
 }: {
-  icon: React.ReactNode;
+  icon: typeof Phone;
+  iconTone: string;
   value: string;
   caption: string;
   href?: string;
 }) {
   const body = (
     <>
-      {icon}
-      <div>
-        <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>
+      <Icon aria-hidden className={cn("size-4 shrink-0", iconTone)} />
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium text-foreground">
           {value}
-        </p>
-        <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-          {caption}
-        </p>
-      </div>
+        </span>
+        <span className="block text-xs text-muted-foreground">{caption}</span>
+      </span>
     </>
   );
 
-  const className = "flex items-center gap-2.5 px-3 py-2 rounded-lg";
+  const className =
+    "flex items-center gap-2.5 rounded-md bg-muted px-3 py-2 text-left";
   if (!href) {
-    return (
-      <div className={className} style={{ background: "var(--muted)" }}>
-        {body}
-      </div>
-    );
+    return <div className={className}>{body}</div>;
   }
   return (
     <a
       href={href}
-      className={`${className} transition-colors hover:bg-white/5`}
-      style={{ background: "var(--muted)" }}
+      className={cn(className, "transition-colors hover:bg-accent")}
     >
       {body}
     </a>
@@ -138,9 +148,10 @@ interface HouseholdProfileProps {
 export function HouseholdProfile({ household, isDemo = false }: HouseholdProfileProps) {
   const primaryContact = household.contacts.find((c) => c.isPrimary);
 
-  const name = household.name ?? "Unnamed household";
+  // Normalised, not raw (PAC-80): most migrated records carry an opaque code
+  // rather than a word. The name and the `HH-…` record number are rendered by
+  // the page header, so neither is recomputed here.
   const status = normalizeHouseholdStatus(household.status) || "Unknown";
-  const recordLabel = `HH-${household.id.slice(-6).toUpperCase()}`;
   // Falling back to the primary contact is real data, not a placeholder.
   const contactName =
     household.primaryContactName ?? fullName(primaryContact) ?? "—";
@@ -153,113 +164,135 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
     // Same as the portfolio column: a scrolling block rather than a flex
     // column, so these sections stack at their natural height instead of
     // compressing to fit.
-    <div className="h-full min-h-0 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
-      {/* Header */}
-      <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="flex items-start justify-between mb-1">
-          <div>
-            <p className="text-xs font-mono" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-              {recordLabel}
-            </p>
-            <h1 className="mt-0.5" style={{ color: "var(--foreground)" }}>{name}</h1>
-          </div>
-          <span
-            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs"
-            style={statusStyle(household.status)}
-          >
-            {/active/i.test(status) && (
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+    <div className="h-full min-h-0 overflow-y-auto">
+      {/* Status. The household's name *and* its `HH-…` record number are both
+          in the page header, so neither is repeated here. */}
+      <div className="border-b border-border px-4 py-4 md:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <SectionLabel>Status</SectionLabel>
+          <Badge size="sm" variant="ghost" className={cn("gap-1.5", statusClass(household.status))}>
+            {isActiveHouseholdStatus(household.status) && (
+              <span
+                aria-hidden
+                className="size-2 animate-pulse rounded-full bg-success"
+              />
             )}
             {status}
-          </span>
+          </Badge>
         </div>
 
         {isDemo && (
-          <div className="flex flex-wrap gap-1.5 mt-3">
+          <div className="mt-3 flex flex-wrap gap-1.5">
             {demoTags.map((tag) => (
-              <span key={tag} className="px-2 py-0.5 rounded text-xs" style={{ background: "var(--secondary)", color: "var(--muted-foreground)", border: "1px solid var(--border)" }}>
+              <Badge key={tag} size="sm" variant="outline" className="text-muted-foreground">
                 {tag}
-              </span>
+              </Badge>
             ))}
           </div>
         )}
       </div>
 
       {/* Primary Contact */}
-      <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
-        <p className="text-xs uppercase tracking-widest mb-3" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-          Primary Contact
-        </p>
+      <div className="border-b border-border px-4 py-4 md:px-5">
+        <SectionLabel className="mb-3">Primary contact</SectionLabel>
 
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: "#1e3a5f", border: "2px solid #3b82f6" }}>
-            <span className="text-sm font-semibold text-blue-400">{initialsOf(contactName)}</span>
-          </div>
-          <div>
-            <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>{contactName}</p>
-            <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+        <div className="mb-4 flex items-center gap-3">
+          <span
+            aria-hidden
+            className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/12 text-sm font-semibold text-primary"
+          >
+            {initialsOf(contactName)}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-base font-medium text-foreground">
+              {contactName}
+            </p>
+            <p className="truncate text-sm text-muted-foreground">
               {primaryContact?.roleInHousehold ?? "Account holder"}
             </p>
           </div>
           {primaryContact && (
-            <div className="ml-auto">
-              <Star size={14} className="text-amber-400 fill-amber-400" />
-            </div>
+            <Star
+              aria-label="Primary contact"
+              className="ml-auto size-4 shrink-0 fill-amber-500 text-amber-600 dark:fill-amber-400 dark:text-amber-400"
+            />
           )}
         </div>
 
         <div className="flex flex-col gap-2">
           <ContactRow
-            icon={<Phone size={14} style={{ color: "#3b82f6" }} />}
+            icon={Phone}
+            iconTone="text-primary"
             value={phone ?? "—"}
             caption={phone ? "Mobile · Click to call" : "No phone on file"}
             href={phone ? `tel:${phone.replace(/[^\d+]/g, "")}` : undefined}
           />
           <ContactRow
-            icon={<Mail size={14} style={{ color: "#10b981" }} />}
+            icon={Mail}
+            iconTone="text-success"
             value={email ?? "—"}
             caption={email ? "Primary email" : "No email on file"}
             href={email ? `mailto:${email}` : undefined}
           />
-          <div className="flex items-start gap-2.5 px-3 py-2 rounded-lg" style={{ background: "var(--muted)" }}>
-            <MapPin size={14} style={{ color: "var(--muted-foreground)", marginTop: "2px" }} />
-            <div>
-              <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>{address.line1 || "—"}</p>
-              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>{address.rest || "—"}</p>
-            </div>
+          <div className="flex items-start gap-2.5 rounded-md bg-muted px-3 py-2">
+            <MapPin
+              aria-hidden
+              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-foreground">
+                {address.line1 || "—"}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {address.rest || "—"}
+              </span>
+            </span>
           </div>
         </div>
       </div>
 
       {/* Household Roster */}
-      <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
-        <p className="text-xs uppercase tracking-widest mb-3" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-          Household Roster
-        </p>
+      <div className="border-b border-border px-4 py-4 md:px-5">
+        <SectionLabel className="mb-3">Household roster</SectionLabel>
         <div className="flex flex-col gap-2">
           {members.length === 0 && (
-            <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-              No contacts on file.
-            </p>
+            <p className="text-sm text-muted-foreground">No contacts on file.</p>
           )}
           {members.map((m) => (
             <div
               key={m.name}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors hover:bg-white/5"
-              style={{ border: "1px solid var(--border)", background: "var(--muted)" }}
+              className="flex items-center gap-3 rounded-md border border-border bg-muted px-3 py-2.5"
             >
-              <div
-                className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold"
-                style={{ background: `${m.color}20`, color: m.color, border: `1px solid ${m.color}40` }}
+              <span
+                aria-hidden
+                className={cn(
+                  "flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+                  m.tint,
+                  m.tone,
+                )}
               >
                 {m.initials}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">
+                  {m.name}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {m.role}
+                </p>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium truncate" style={{ color: "var(--foreground)" }}>{m.name}</p>
-                <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>{m.role}</p>
-              </div>
-              {m.isPrimary && <Shield size={12} style={{ color: "#3b82f6" }} />}
-              {m.isDriver && <Car size={12} style={{ color: "#f59e0b" }} />}
+              {m.isPrimary && (
+                <Shield
+                  aria-label="Primary insured"
+                  className="size-4 shrink-0 text-primary"
+                />
+              )}
+              {m.isDriver && (
+                <Car
+                  aria-label="Driver"
+                  className="size-4 shrink-0 text-amber-600 dark:text-amber-500"
+                />
+              )}
             </div>
           ))}
         </div>
@@ -269,18 +302,20 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
           as a risk metric an agent could act on, so a live record must not
           show a number we did not calculate. */}
       {isDemo && (
-        <div className="p-5">
-          <p className="text-xs uppercase tracking-widest mb-3" style={{ color: "var(--muted-foreground)", fontFamily: "'JetBrains Mono', monospace" }}>
-            Retention Score
+        <div className="px-4 py-4 md:px-5">
+          <SectionLabel className="mb-3">Retention score</SectionLabel>
+          <div className="mb-2 flex items-end gap-2">
+            <span className="text-3xl font-semibold tabular-nums text-success">
+              87
+            </span>
+            <span className="mb-1 text-sm text-muted-foreground">
+              / 100 · High
+            </span>
+          </div>
+          <Progress value={87} className="h-1.5" />
+          <p className="mt-2 text-sm text-muted-foreground">
+            Last renewal: Aug 2024 · No lapses
           </p>
-          <div className="flex items-end gap-2 mb-2">
-            <span className="text-3xl font-semibold" style={{ color: "#4ade80", fontFamily: "'JetBrains Mono', monospace" }}>87</span>
-            <span className="text-xs mb-1" style={{ color: "var(--muted-foreground)" }}>/ 100 · High</span>
-          </div>
-          <div className="w-full h-1.5 rounded-full" style={{ background: "var(--secondary)" }}>
-            <div className="h-full rounded-full" style={{ width: "87%", background: "linear-gradient(90deg, #3b82f6, #4ade80)" }} />
-          </div>
-          <p className="text-xs mt-2" style={{ color: "var(--muted-foreground)" }}>Last renewal: Aug 2024 · No lapses</p>
         </div>
       )}
     </div>

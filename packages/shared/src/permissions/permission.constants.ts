@@ -67,6 +67,29 @@ export const AgencyPermission = {
    * that flag — and an already-seeded agency needs `npm run api:sync:roles`.
    */
   ChangeLogsRead: 'agency:changelogs:read',
+  /**
+   * White-labelling (§ the white-label epic). Three pairs rather than one
+   * because they carry three very different blast radii, and an owner may well
+   * want to delegate the harmless one without the other two:
+   *
+   * | Pair | Worst case if misused |
+   * |---|---|
+   * | `branding` | A wrong logo. Cosmetic, instantly reversible. |
+   * | `domains`  | The agency's app is unreachable at its own hostname. |
+   * | `email`    | Every invite and share link stops arriving. |
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, for
+   * the same three reasons written up there — a bare `branding:read` would be
+   * read as a *module* key by `resolvePermissionSet`'s enabled-module filter
+   * and dropped, and `RolesService.updateLevels` would discard it the first
+   * time an owner touched the role matrix.
+   */
+  BrandingRead: 'agency:branding:read',
+  BrandingWrite: 'agency:branding:write',
+  DomainsRead: 'agency:domains:read',
+  DomainsWrite: 'agency:domains:write',
+  EmailRead: 'agency:email:read',
+  EmailWrite: 'agency:email:write',
 } as const;
 
 export type ModuleAction = 'read' | 'write';

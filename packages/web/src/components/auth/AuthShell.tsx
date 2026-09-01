@@ -1,4 +1,4 @@
-import { Shield } from 'lucide-react';
+import { BrandLockup } from '@/components/common/BrandMark';
 import { Card } from '@/components/ui/card';
 
 /**
@@ -12,24 +12,16 @@ import { Card } from '@/components/ui/card';
  * ⚠ `LoginPage` still holds a third, inline copy of this markup. Folding it in
  * is worth doing, but not inside a password-reset change: restyling the sign-in
  * page is risk with no payoff here.
+ *
+ * The masthead is `BrandLockup`, not a hardcoded wordmark: these pages are
+ * reached on the agency's own hostname, so the invitee must see the agency they
+ * are joining rather than the platform name.
  */
 export function AuthShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
-        <div className="flex items-center gap-3 mb-8 justify-center">
-          <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-            <Shield size={20} className="text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-foreground tracking-tight">
-              AgencyOps
-            </h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
-              Operations Platform
-            </p>
-          </div>
-        </div>
+        <BrandLockup size="md" className="mb-8 justify-center" />
         <Card className="p-6 gap-4 border-border">{children}</Card>
       </div>
     </div>

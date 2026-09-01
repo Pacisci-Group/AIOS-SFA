@@ -14,6 +14,10 @@ import * as bcrypt from 'bcrypt';
 import { Model, Types } from 'mongoose';
 import { AccessContext, JwtPayload } from '@sfa/shared';
 import { hashResetToken } from '../common/crypto/reset-token';
+import {
+  HostTenantResolver,
+  type HostTenant,
+} from '../common/tenancy/host-tenant.resolver';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
@@ -38,9 +42,10 @@ export class AuthService {
     private accessResolver: AccessResolverService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private hostResolver: HostTenantResolver,
   ) {}
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, host: HostTenant | undefined) {
     const user = await this.userModel.findOne({
       email: dto.email.toLowerCase(),
     });
@@ -53,18 +58,18 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    await this.assertBelongsOnHost(user, host);
+
     return this.issueTokens(user);
   }
 
-  async refresh(refreshToken: string) {
+  async refresh(refreshToken: string, host: HostTenant | undefined) {
+    let user: UserDocument | null;
     try {
       const payload = this.jwtService.verify<JwtPayload>(refreshToken, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       });
-      const user = await this.userModel.findById(payload.sub);
-      if (!user || !user.isActive) {
-        throw new UnauthorizedException('Invalid refresh token');
-      }
+      user = await this.userModel.findById(payload.sub);
       /*
        * Refresh tokens are stateless — there is no revocation list, and this is
        * the only check standing between a stolen one and an endless supply of
@@ -72,12 +77,81 @@ export class AuthService {
        * access tokens; without it here, a password reset would lock an attacker
        * out for fifteen minutes and then hand them a new token (PAC-79).
        */
-      if ((payload.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+      if (user && (payload.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
         throw new UnauthorizedException('Invalid refresh token');
       }
-      return this.issueTokens(user);
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    // Outside the catch on purpose. Inside it, the specific "wrong agency for
+    // this address" message would be caught by this method's own handler and
+    // rewritten to "Invalid refresh token" — the SPA would show a session
+    // expiry for what is actually a host mismatch, and the user would keep
+    // signing in on the wrong address forever.
+    await this.assertBelongsOnHost(user, host);
+
+    return this.issueTokens(user);
+  }
+
+  /**
+   * The host restriction, applied at the moment tokens are issued.
+   *
+   * `HostTenantGuard` already enforces this on every authenticated request, so
+   * this is **not** the security boundary — it is the user-facing half. Without
+   * it the credentials are accepted, the SPA stores a token, and the very next
+   * call 403s: the user sees a working login followed by an app that will not
+   * load, with no explanation. Here they get a sentence at the form.
+   *
+   * ## What it deliberately does not do
+   * It runs **after** the password check, and only after. Running it first would
+   * turn the login form into an agency-membership oracle: anyone could type an
+   * address and learn from the error whether it belongs to this agency. Past the
+   * password check the caller has already proven they hold the account, so the
+   * specific message tells them nothing they did not know.
+   *
+   * A wrong password on a wrong host therefore still reads "Invalid
+   * credentials", which is the correct answer to both questions at once.
+   */
+  private async assertBelongsOnHost(
+    user: UserDocument,
+    host: HostTenant | undefined,
+  ): Promise<void> {
+    // No resolved host means the middleware did not run. Fail closed: an
+    // unresolvable host is exactly the case `HostTenantGuard` 404s on, so
+    // issuing a token here would mint one that cannot be used.
+    if (!host || host.kind === 'unknown') {
+      throw new UnauthorizedException(
+        'No application is served on this address.',
+      );
+    }
+
+    if (host.kind === 'platform') {
+      if (user.isPlatformAdmin) {
+        return;
+      }
+      // An agency with no domain of its own has nowhere else to sign in, so the
+      // platform host stays open to it. Mirrors `HostTenantGuard` exactly — if
+      // these two ever disagree, one of them produces a login that succeeds and
+      // is then refused on the next request. See that guard for the full
+      // reasoning.
+      const agencyId = user.agencyId?.toString();
+      if (agencyId && !(await this.hostResolver.agencyHasDomains(agencyId))) {
+        return;
+      }
+      throw new UnauthorizedException(
+        'Sign in on your agency’s own address to use this account.',
+      );
+    }
+
+    if (user.isPlatformAdmin || user.agencyId?.toString() !== host.agencyId) {
+      throw new UnauthorizedException(
+        'This account is not part of the agency at this address.',
+      );
     }
   }
 
@@ -121,7 +195,7 @@ export class AuthService {
     };
   }
 
-  async acceptInvite(dto: AcceptInviteDto) {
+  async acceptInvite(dto: AcceptInviteDto, host: HostTenant | undefined) {
     const user = await this.userModel.findOne({
       inviteToken: dto.token,
       inviteTokenExpiresAt: { $gt: new Date() },
@@ -129,6 +203,16 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('Invalid or expired invite token');
     }
+
+    // Checked before the password is written, so a link opened on the wrong
+    // host leaves the invite intact and re-usable on the right one. Doing it
+    // after would consume the token and lock the invitee out of an account they
+    // have not yet reached — the invite is single-use.
+    //
+    // In practice this is belt-and-braces: `TenantUrlService` builds the invite
+    // URL from the agency's own primary host, so a correctly-generated link
+    // already lands here. It catches the hand-edited and the stale-domain case.
+    await this.assertBelongsOnHost(user, host);
 
     user.passwordHash = await bcrypt.hash(dto.password, 12);
     user.inviteToken = undefined;
@@ -197,7 +281,7 @@ export class AuthService {
    * touched. Resetting a password must never reactivate an account, and the
    * checks below mean a deactivated user cannot reach this line anyway.
    */
-  async resetPassword(dto: ResetPasswordDto) {
+  async resetPassword(dto: ResetPasswordDto, host: HostTenant | undefined) {
     const user = await this.userModel.findOne({
       passwordResetToken: hashResetToken(dto.token),
       passwordResetExpiresAt: { $gt: new Date() },
@@ -215,6 +299,12 @@ export class AuthService {
     if (!user.isActive || user.deactivatedAt) {
       throw new UnauthorizedException('Invalid or expired reset token');
     }
+
+    // Same rule as login/refresh/accept-invite: a session may only be minted on
+    // the host that owns the user. Holding a valid reset link is not a licence
+    // to sign in at another agency's address. Placed after the token checks so
+    // it cannot be used to probe which agency an unknown token belongs to.
+    await this.assertBelongsOnHost(user, host);
 
     user.passwordHash = await bcrypt.hash(dto.password, 12);
     // One-time use: the token dies here, whether or not it had expired.

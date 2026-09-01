@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { AccessContext, DataScope, ShareLinkRow } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
-import { PUBLIC_FORM_BASE_URL } from '../config/public-form.config';
+import { TenantUrlService } from '../common/tenancy/tenant-url.service';
 import { CreateShareLinkDto } from './dto/create-share-link.dto';
 import { ShareLink, ShareLinkDocument } from './schemas/share-link.schema';
 import { generateShareLinkToken } from './share-link-token';
@@ -29,6 +29,7 @@ export class ShareLinksService {
     @InjectModel(ShareLink.name)
     private readonly shareLinkModel: Model<ShareLinkDocument>,
     private readonly tenancy: TenantContextResolver,
+    private readonly tenantUrls: TenantUrlService,
   ) {}
 
   /** Mint a link for the caller. Never for anyone else — see the DTO. */
@@ -38,6 +39,7 @@ export class ShareLinksService {
     dto: CreateShareLinkDto,
   ): Promise<ShareLinkRow> {
     const tenant = await this.tenancy.resolve(access, branchId);
+    const baseUrl = await this.tenantUrls.baseUrlFor(tenant.agencyId);
     const producerId = new Types.ObjectId(access.userId);
 
     for (let attempt = 1; attempt <= TOKEN_INSERT_ATTEMPTS; attempt++) {
@@ -52,7 +54,7 @@ export class ShareLinksService {
           submissionCount: 0,
           createdById: producerId,
         });
-        return this.toRow(created);
+        return this.toRow(created, baseUrl);
       } catch (error) {
         if (isDuplicateKeyError(error) && attempt < TOKEN_INSERT_ATTEMPTS) {
           this.logger.warn(
@@ -79,11 +81,12 @@ export class ShareLinksService {
     // nobody has asked for, and each row exposes a working credential.
     filter.producerId = new Types.ObjectId(access.userId);
 
-    const records = await this.shareLinkModel
-      .find(filter)
-      .sort({ createdAt: -1 });
+    const [records, baseUrl] = await Promise.all([
+      this.shareLinkModel.find(filter).sort({ createdAt: -1 }),
+      this.tenantUrls.baseUrlFor(access.agencyId),
+    ]);
 
-    return { items: records.map((record) => this.toRow(record)) };
+    return { items: records.map((record) => this.toRow(record, baseUrl)) };
   }
 
   /**
@@ -97,15 +100,18 @@ export class ShareLinksService {
     branchId: string | null,
     id: string,
   ): Promise<ShareLinkRow> {
-    const link = await this.loadOwnedLink(access, branchId, id);
-    if (!link.isActive) return this.toRow(link);
+    const [link, baseUrl] = await Promise.all([
+      this.loadOwnedLink(access, branchId, id),
+      this.tenantUrls.baseUrlFor(access.agencyId),
+    ]);
+    if (!link.isActive) return this.toRow(link, baseUrl);
 
     link.isActive = false;
     link.revokedAt = new Date();
     link.revokedById = new Types.ObjectId(access.userId);
     await link.save();
 
-    return this.toRow(link);
+    return this.toRow(link, baseUrl);
   }
 
   /**
@@ -147,11 +153,19 @@ export class ShareLinksService {
     return link;
   }
 
-  private toRow(link: ShareLinkDocument): ShareLinkRow {
+  /**
+   * @param baseUrl The agency's own public origin, resolved once per request by
+   * the caller rather than per row — every row in one response belongs to the
+   * same agency, so a lookup per row would be the same query repeated.
+   *
+   * A share link on the agency's own domain is the point: the producer sends it
+   * to a prospect, and it should read as the agency's, not ours.
+   */
+  private toRow(link: ShareLinkDocument, baseUrl: string): ShareLinkRow {
     return {
       id: link._id.toString(),
       token: link.token,
-      url: `${PUBLIC_FORM_BASE_URL}/f/lead/${link.token}`,
+      url: `${baseUrl}/f/lead/${link.token}`,
       label: link.label ?? null,
       isActive: link.isActive,
       submissionCount: link.submissionCount,

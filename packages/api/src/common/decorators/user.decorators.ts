@@ -1,5 +1,6 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { AccessContext, JwtPayload } from '@sfa/shared';
+import type { HostTenant as ResolvedHostTenant } from '../tenancy/host-tenant.resolver';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 
 export const CurrentUser = createParamDecorator(
@@ -19,6 +20,24 @@ export const Access = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): AccessContext => {
     const request = ctx.switchToHttp().getRequest<{ access: AccessContext }>();
     return request.access;
+  },
+);
+
+/**
+ * Which tenant the request's hostname names, as resolved by
+ * `HostTenantMiddleware`.
+ *
+ * ⚠ Derived from the client-controlled `Host` header. Read it to decide what to
+ * *show* (branding) or to *restrict* (`HostTenantGuard`); never to decide what a
+ * caller may read or write — `@Access()` is the authority for that.
+ *
+ * Always defined on a routed request, but typed optional so a handler cannot
+ * quietly assume otherwise if the middleware is ever scoped to fewer routes.
+ */
+export const HostTenant = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): ResolvedHostTenant | undefined => {
+    const request = ctx.switchToHttp().getRequest<AuthenticatedRequest>();
+    return request.hostTenant;
   },
 );
 

@@ -271,7 +271,7 @@ export function PriorityTicketQueue({
                                 <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
                                 {c.label}
                                 {s === ticket.status && (
-                                  <CheckCircle2 className="w-3 h-3 ml-auto text-[var(--kpi-green)]" />
+                                  <CheckCircle2 className="w-3 h-3 ml-auto text-success" />
                                 )}
                               </button>
                             );

@@ -1,8 +1,11 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Check, Lock, Star } from "lucide-react";
-import { listOnboardingsForHousehold } from "@/lib/service-tickets-api";
 import type { OnboardingChainStep, OnboardingView } from "@sfa/shared";
+import { SectionLabel } from "@/components/common/DetailCard";
+import { Badge } from "@/components/ui/badge";
+import { listOnboardingsForHousehold } from "@/lib/service-tickets-api";
+import { cn } from "@/lib/utils";
 
 /**
  * The client's onboarding journey.
@@ -25,10 +28,8 @@ export function HouseholdOnboarding({ householdId }: { householdId?: string }) {
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Onboarding
-      </h3>
+    <div className="border-b border-border px-4 py-4 md:px-5">
+      <SectionLabel className="mb-3">Onboarding</SectionLabel>
       <div className="space-y-4">
         {onboardings.map((onboarding) => (
           <OnboardingBlock key={onboarding.id} onboarding={onboarding} />
@@ -44,20 +45,22 @@ function OnboardingBlock({ onboarding }: { onboarding: OnboardingView }) {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">
+        <span className="text-sm text-muted-foreground">
           Started {shortDate(onboarding.startedAt)}
         </span>
-        <span
-          className={`rounded px-1.5 py-0.5 text-[11px] ${
+        <Badge
+          size="sm"
+          variant="ghost"
+          className={
             onboarding.isComplete
-              ? "bg-[var(--kpi-green-bg,rgba(34,197,94,0.15))] text-[var(--kpi-green)]"
+              ? "bg-success/12 text-success"
               : "bg-muted text-muted-foreground"
-          }`}
+          }
         >
           {onboarding.isComplete
             ? "Complete"
             : `${done} of ${onboarding.chain.length} calls`}
-        </span>
+        </Badge>
       </div>
 
       <ol className="space-y-1">
@@ -74,23 +77,27 @@ function ChainRow({ link }: { link: OnboardingChainStep }) {
     <>
       <span className="shrink-0">
         {link.completedAt ? (
-          <Check className="h-3.5 w-3.5 text-[var(--kpi-green)]" />
+          <Check aria-hidden className="size-4 text-success" />
         ) : link.isOverdue ? (
-          <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+          <AlertTriangle
+            aria-hidden
+            className="size-4 text-red-600 dark:text-red-400"
+          />
         ) : link.isActionable ? (
-          <Star className="h-3.5 w-3.5 text-[var(--kpi-blue)]" />
+          <Star aria-hidden className="size-4 text-primary" />
         ) : (
-          <Lock className="h-3 w-3 text-muted-foreground" />
+          <Lock aria-hidden className="size-4 text-muted-foreground" />
         )}
       </span>
       <span
-        className={
-          link.completedAt ? "text-muted-foreground" : "text-foreground"
-        }
+        className={cn(
+          "truncate",
+          link.completedAt ? "text-muted-foreground" : "text-foreground",
+        )}
       >
         {link.sequence}. {link.label}
       </span>
-      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
         {link.completedAt
           ? shortDate(link.completedAt)
           : link.ticketId
@@ -105,11 +112,11 @@ function ChainRow({ link }: { link: OnboardingChainStep }) {
   // A scheduled call has a ticket that is hidden from the queue; linking to it
   // is the only way to reach it before it opens.
   return (
-    <li className="text-xs">
+    <li className="text-sm">
       {link.ticketId ? (
         <Link
           to={`/crm/tickets?ticket=${link.ticketId}`}
-          className="flex items-center gap-2 rounded px-1 py-1 transition-colors hover:bg-muted"
+          className="flex items-center gap-2 rounded-md px-1 py-1 transition-colors hover:bg-accent"
         >
           {label}
         </Link>
