@@ -634,10 +634,14 @@ export default function App() {
         </div>
       </div>
 
-      {/* Sticky Mailer Button */}
+      {/* Sticky Mailer Button.
+          `bottom-20`, not `bottom-6`: the app-wide "Report a bug" FAB
+          (`features/bug-report/ReportBugWidget`) is mounted on every signed-in
+          page and owns `bottom-6 right-6`. This is the one page that had its
+          own corner button, so it stacks above it. */}
       <button
         onClick={openMailer}
-        className={`fixed bottom-6 right-6 flex items-center gap-2.5 px-5 py-3 rounded-xl font-semibold text-sm shadow-2xl transition-all duration-200 hover:scale-105 active:scale-100 z-50 ${
+        className={`fixed bottom-20 right-6 flex items-center gap-2.5 px-5 py-3 rounded-xl font-semibold text-sm shadow-2xl transition-all duration-200 hover:scale-105 active:scale-100 z-50 ${
           sidecarState === "mailer"
             ? "bg-success text-white shadow-emerald-900/50"
             : "bg-success text-white shadow-emerald-900/30 hover:bg-emerald-500"

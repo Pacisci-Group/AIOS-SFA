@@ -1,0 +1,59 @@
+meta {
+  name: Create Bug Report (Too Short)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/bug-reports
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "description": "broken"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("names the field rather than failing opaquely", function () {
+    const errors = res.getBody().errors;
+    expect(errors.fieldErrors).to.have.property("description");
+  });
+}
+
+docs {
+  # POST /bug-reports — the minimum-description floor
+
+  Pins the one piece of validation that is a *product* decision rather than a
+  type check: a report has to say something. "broken" is six characters and is
+  rejected; the floor is ten (`MIN_BUG_DESCRIPTION_LENGTH` in `@sfa/shared`,
+  which the widget's submit button also reads, so the client and the API agree
+  on the same number).
+
+  The rest of the body is optional — no severity, no screenshots and no context
+  is a perfectly valid report, and this request proves that too by omitting all
+  three and still failing only on the description.
+
+  ## Response `400`
+  ```json
+  {
+    "message": "Validation failed",
+    "errors": {
+      "formErrors": [],
+      "fieldErrors": {
+        "description": ["Please describe the problem in at least 10 characters."]
+      }
+    }
+  }
+  ```
+}
