@@ -38,6 +38,10 @@ import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request
 import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema';
 import { Activity } from '../../activities/schemas/activity.schema';
 import { RoleAssignmentsService } from '../../permissions/role-assignments.service';
+import { Permission } from '../../permissions/schemas/permission.schema';
+import { Carrier } from '../../carriers/schemas/carrier.schema';
+import { seedPermissions } from '../permissions.seed';
+import { seedCarriers } from '../carriers.seed';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
 import {
   INSURANCE_MONTHS,
@@ -227,6 +231,9 @@ export class DemoSeedService {
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     @InjectModel(Mailer.name) private readonly mailerModel: Model<Mailer>,
+    @InjectModel(Permission.name)
+    private readonly permissionModel: Model<Permission>,
+    @InjectModel(Carrier.name) private readonly carrierModel: Model<Carrier>,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
@@ -235,6 +242,15 @@ export class DemoSeedService {
     this.summary = {};
     const rng = createRng(options.seed);
 
+    // Platform-global catalogs, before any tenant data. The skill documents
+    // `seed:demo:dev` as the first command against an empty database, so the
+    // demo seed cannot assume the core seed ran: `seedDefaultRoles` resolves
+    // every permission key to a catalog `_id` and hard-fails on an empty
+    // `permissions` collection, and an empty carrier catalog forces every sold
+    // deal through the "Other" escape. Both seeds are idempotent upserts on
+    // tenant-agnostic rows, so re-running after the core seed is a no-op.
+    await this.seedPlatformCatalogs();
+
     const { ctx } = await this.seedTenancy(options);
     if (options.fresh) {
       await this.purge(ctx.agencyId);
@@ -242,7 +258,7 @@ export class DemoSeedService {
 
     const team = await this.seedTeam(ctx, options.password);
     const producers = team.filter((m) => m.spec.roleSlug === 'producer');
-    const crms = team.filter((m) => m.spec.roleSlug === 'crm');
+    const crms = team.filter((m) => m.spec.roleSlug === 'csr');
 
     const households = await this.seedHouseholds(ctx, crms, rng);
     const contactsByHousehold = await this.seedContacts(ctx, households, rng);
@@ -309,6 +325,18 @@ export class DemoSeedService {
       logins,
       sampleMailerControlNumbers: mailers.slice(0, 3),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Platform-global catalogs: permission vocabulary + carriers
+  // ---------------------------------------------------------------------------
+
+  private async seedPlatformCatalogs(): Promise<void> {
+    const permissions = await seedPermissions(this.permissionModel);
+    this.inc('permissions', permissions.created + permissions.updated);
+
+    const carriers = await seedCarriers(this.carrierModel);
+    this.inc('carriers', carriers.created);
   }
 
   // ---------------------------------------------------------------------------

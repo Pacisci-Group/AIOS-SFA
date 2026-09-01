@@ -15,7 +15,7 @@ import {
 } from '../audit-templates.seed';
 
 export type RoleSlug =
-  'agency_owner' | 'branch_manager' | 'producer' | 'crm' | 'data_team';
+  'agency_owner' | 'branch_manager' | 'producer' | 'csr' | 'data_team';
 
 export type BranchSlug = 'main' | 'north';
 
@@ -115,7 +115,7 @@ export const TEAM: TeamMemberSpec[] = [
     email: 'casey.kim@demoagency.local',
     firstName: 'Casey',
     lastName: 'Kim',
-    roleSlug: 'crm',
+    roleSlug: 'csr',
     branch: 'main',
   },
   {
@@ -123,7 +123,7 @@ export const TEAM: TeamMemberSpec[] = [
     email: 'robin.diaz@demoagency.local',
     firstName: 'Robin',
     lastName: 'Diaz',
-    roleSlug: 'crm',
+    roleSlug: 'csr',
     branch: 'north',
   },
   {

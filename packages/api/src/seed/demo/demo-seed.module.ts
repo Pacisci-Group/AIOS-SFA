@@ -71,6 +71,7 @@ import {
   AuditTemplateSchema,
 } from '../../audit-templates/schemas/audit-template.schema';
 import { Mailer, MailerSchema } from '../../mailers/schemas/mailer.schema';
+import { Carrier, CarrierSchema } from '../../carriers/schemas/carrier.schema';
 import { PermissionsModule } from '../../permissions/permissions.module';
 import { DemoSeedService } from './demo-seed.service';
 
@@ -124,6 +125,7 @@ import { DemoSeedService } from './demo-seed.service';
       { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
       { name: AuditTemplate.name, schema: AuditTemplateSchema },
       { name: Mailer.name, schema: MailerSchema },
+      { name: Carrier.name, schema: CarrierSchema },
     ]),
   ],
   providers: [DemoSeedService],

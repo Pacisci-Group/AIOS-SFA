@@ -68,7 +68,7 @@ describe('page-level permission model', () => {
       );
     });
 
-    it.each(['producer', 'csr', 'crm', 'data_team'])(
+    it.each(['producer', 'csr', 'data_team'])(
       'is withheld from %s',
       (slug) => {
         expect(holder(slug).permissions).not.toContain(
