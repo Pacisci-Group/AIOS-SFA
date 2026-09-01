@@ -2,16 +2,12 @@ import { NestFactory } from '@nestjs/core';
 import * as bcrypt from 'bcrypt';
 import { Model } from 'mongoose';
 import { getModelToken } from '@nestjs/mongoose';
-import { ALL_MODULE_KEYS } from '@sfa/shared';
 import { AppModule } from '../app.module';
-import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
-import { Branch } from '../branches/schemas/branch.schema';
 import { Carrier } from '../carriers/schemas/carrier.schema';
-import { PermissionsService } from '../permissions/permissions.service';
-import { Agency } from '../platform/schemas/agency.schema';
+import { Permission } from '../permissions/schemas/permission.schema';
 import { User } from '../users/schemas/user.schema';
-import { seedAuditTemplates } from './audit-templates.seed';
 import { seedCarriers } from './carriers.seed';
+import { seedPermissions } from './permissions.seed';
 
 /**
  * Core seed — platform-required data only.
@@ -20,26 +16,29 @@ import { seedCarriers } from './carriers.seed';
  * to run in every environment (including production) and on API startup:
  *   1. The platform super admin (so the platform can be logged into and agencies
  *      provisioned).
- *   2. Global catalog / feature data (plans, feature definitions, constants) —
- *      see the marked section below as these collections come online.
- *   3. A single empty tenant scaffold (Smith Family Agency + Main branch +
- *      default roles) that the SmartSuite -> Mongo migration imports into.
+ *   2. Global catalog / feature data — the carrier catalog and the permission
+ *      vocabulary. Both are tenant-agnostic rows.
  *
- * It intentionally does NOT create demo users or any CRM data. For a fully
- * populated agency to build/test against, use the demo seed instead
- * (`npm run seed:demo:dev`, see `src/seed/demo`).
+ * It creates **no agency**. An agency is tenant data, and provisioning one is
+ * the job of whoever is creating that tenant:
+ *   - the real agency comes from the SmartSuite migration
+ *     (`npm run migrate:dev`, which owns agency + branch + roles + audit
+ *     templates, creates no users but the migrated ones, and promotes one of
+ *     those to Agency Owner so the tenant has an administrator);
+ *   - a throwaway populated agency comes from the demo seed
+ *     (`npm run seed:demo:dev`, see `src/seed/demo`).
+ *
+ * Anything added here must be required for the app to function at all. If it
+ * belongs to an agency, it belongs in one of those two instead.
  */
 async function seed() {
   const app = await NestFactory.createApplicationContext(AppModule);
 
-  const agencyModel = app.get<Model<Agency>>(getModelToken(Agency.name));
-  const branchModel = app.get<Model<Branch>>(getModelToken(Branch.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
-  const auditTemplateModel = app.get<Model<AuditTemplate>>(
-    getModelToken(AuditTemplate.name),
-  );
   const carrierModel = app.get<Model<Carrier>>(getModelToken(Carrier.name));
-  const permissionsService = app.get(PermissionsService);
+  const permissionModel = app.get<Model<Permission>>(
+    getModelToken(Permission.name),
+  );
 
   // ---------------------------------------------------------------------------
   // 1. Platform super admin (required for the app to function)
@@ -85,72 +84,21 @@ async function seed() {
     `Carriers seeded (${carriers.created} created, ${carriers.refreshed} already present)`,
   );
 
-  // ---------------------------------------------------------------------------
-  // 3. Empty tenant scaffold — migration target (no demo users, no CRM data)
-  // ---------------------------------------------------------------------------
-  const modules = Object.fromEntries(
-    ALL_MODULE_KEYS.map((key) => [key, { enabled: true }]),
-  );
-
-  // The mailer identity fields (PAC-73). `ticker` is how the BigQuery backfill
-  // attributes a row to this tenant; `allstateAgencyId` is what an uploaded RTP
-  // file's `agencyid` column is cross-checked against. Both are reconciled on
-  // an existing agency rather than only set on create, because the scaffold
-  // predates them and a database seeded before PAC-73 would otherwise import
-  // nothing and warn on every upload.
-  const mailerIdentity = { ticker: 'SFA', allstateAgencyId: 'A0B9049' };
-
-  let agency = await agencyModel.findOne({ slug: 'smith-family-agency' });
-  if (!agency) {
-    agency = await agencyModel.create({
-      name: 'Smith Family Agency',
-      slug: 'smith-family-agency',
-      status: 'active',
-      modules,
-      ...mailerIdentity,
-    });
-    console.log('Created agency: Smith Family Agency');
-  } else {
-    await agencyModel.updateOne({ _id: agency._id }, { $set: mailerIdentity });
-    console.log('Agency already exists, mailer identity reconciled');
-  }
-
-  await permissionsService.seedDefaultRoles(agency._id);
-  console.log('Default agency roles seeded');
-
-  let branch = await branchModel.findOne({
-    agencyId: agency._id,
-    slug: 'main',
-  });
-  if (!branch) {
-    branch = await branchModel.create({
-      agencyId: agency._id,
-      name: 'Main',
-      slug: 'main',
-      isDefault: true,
-    });
-    console.log('Created branch: Main');
-  } else {
-    console.log('Branch already exists, skipping create');
-  }
-
-  // Post-sale audit checklist (PAC-40). Platform-required, not demo data:
-  // `AuditGenerationService` resolves computed titles against this collection
-  // by exact name, so an agency without it books sold deals that generate no
-  // service hand-off at all — silently, because generation is best-effort.
-  const templates = await seedAuditTemplates(
-    auditTemplateModel,
-    agency._id.toString(),
-    branch._id.toString(),
-  );
+  // The permission vocabulary as rows, for `rolePermissions` and
+  // `userPermissions` to reference. Must precede role seeding:
+  // `setRolePermissions` resolves each key to a catalog id and refuses one it
+  // cannot find, so a missing catalog fails loudly instead of producing roles
+  // that grant nothing.
+  const permissions = await seedPermissions(permissionModel);
   console.log(
-    `Audit templates seeded (${templates.created} created, ${templates.refreshed} already present)`,
+    `Permissions seeded (${permissions.created} created, ${permissions.updated} updated, ${permissions.deprecated} deprecated)`,
   );
 
   console.log('\nCore seed complete.');
   console.log(`Super Admin: ${superAdminEmail} / ${superAdminPassword}`);
+  console.log('No agency was created — this seed is platform data only.');
   console.log(
-    'Tenant scaffold ready: Smith Family Agency / Main branch (empty).',
+    'For the real agency + its data, run: ./scripts/migration/run-migration.sh',
   );
   console.log(
     'For a populated agency to test against, run: npm run seed:demo:dev',

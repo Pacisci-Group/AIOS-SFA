@@ -36,11 +36,22 @@ export interface TeamMemberSpec {
  * across two branches, two CRMs, and a data-team analyst. Every account uses the
  * shared demo password so you can log in as any role to exercise permission
  * gating and data scopes.
+ *
+ * ## Why `@demoagency.local` and not `@smithfamily.local`
+ *
+ * `User.email` is **globally unique**, not unique per agency. These rows are
+ * upserted by email, so any address shared with the real tenant is not a
+ * duplicate — it is a *move*. When this list used `owner@smithfamily.local`
+ * (the migration's `SEED_AGENCY_OWNER_EMAIL`) running the demo seed after a
+ * migration reassigned the migrated agency's owner to the demo tenant and
+ * overwrote its `legacySmartSuiteId`, leaving the real agency with no login at
+ * all. Keeping the two domains apart is what makes the seeds independent —
+ * a separate agency slug alone is not enough.
  */
 export const TEAM: TeamMemberSpec[] = [
   {
     key: 'owner',
-    email: 'owner@smithfamily.local',
+    email: 'owner@demoagency.local',
     firstName: 'Olivia',
     lastName: 'Smith',
     roleSlug: 'agency_owner',
@@ -48,7 +59,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'manager',
-    email: 'manager@smithfamily.local',
+    email: 'manager@demoagency.local',
     firstName: 'Taylor',
     lastName: 'Nguyen',
     roleSlug: 'branch_manager',
@@ -56,7 +67,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'producer',
-    email: 'producer@smithfamily.local',
+    email: 'producer@demoagency.local',
     firstName: 'Pat',
     lastName: 'Producer',
     roleSlug: 'producer',
@@ -65,7 +76,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'producer-alex',
-    email: 'alex.rivera@smithfamily.local',
+    email: 'alex.rivera@demoagency.local',
     firstName: 'Alex',
     lastName: 'Rivera',
     roleSlug: 'producer',
@@ -74,7 +85,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'producer-jordan',
-    email: 'jordan.blake@smithfamily.local',
+    email: 'jordan.blake@demoagency.local',
     firstName: 'Jordan',
     lastName: 'Blake',
     roleSlug: 'producer',
@@ -83,7 +94,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'producer-sam',
-    email: 'sam.torres@smithfamily.local',
+    email: 'sam.torres@demoagency.local',
     firstName: 'Sam',
     lastName: 'Torres',
     roleSlug: 'producer',
@@ -92,7 +103,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'producer-morgan',
-    email: 'morgan.lee@smithfamily.local',
+    email: 'morgan.lee@demoagency.local',
     firstName: 'Morgan',
     lastName: 'Lee',
     roleSlug: 'producer',
@@ -101,7 +112,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'crm-casey',
-    email: 'casey.kim@smithfamily.local',
+    email: 'casey.kim@demoagency.local',
     firstName: 'Casey',
     lastName: 'Kim',
     roleSlug: 'crm',
@@ -109,7 +120,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'crm-robin',
-    email: 'robin.diaz@smithfamily.local',
+    email: 'robin.diaz@demoagency.local',
     firstName: 'Robin',
     lastName: 'Diaz',
     roleSlug: 'crm',
@@ -117,7 +128,7 @@ export const TEAM: TeamMemberSpec[] = [
   },
   {
     key: 'data-dana',
-    email: 'dana.park@smithfamily.local',
+    email: 'dana.park@demoagency.local',
     firstName: 'Dana',
     lastName: 'Park',
     roleSlug: 'data_team',
@@ -226,6 +237,39 @@ export const CITIES: CitySpec[] = [
   { city: 'Evanston', state: 'IL', zip: '60201' },
   { city: 'Joliet', state: 'IL', zip: '60431' },
   { city: 'Champaign', state: 'IL', zip: '61820' },
+];
+
+export interface MailerCitySpec extends CitySpec {
+  /** Zero-padded Census county FIPS, as the source column ships it. */
+  countyFips: string;
+}
+
+/**
+ * Mailer addresses are **Oklahoma**, unlike the Illinois {@link CITIES} the
+ * rest of the demo tenant uses.
+ *
+ * Not cosmetic. The Mailers drawer resolves `county` through a state-keyed FIPS
+ * table (`common/mailers/county-names.ts`) that today carries Oklahoma only, so
+ * an Illinois row could never exercise the county row however plausible its
+ * FIPS code looked. The seed also stamps `market: 'Tulsa' | 'Oklahoma City'`
+ * and a 918 `agencyPhone` on these records, which had been sitting on Illinois
+ * addresses since PAC-73.
+ *
+ * Real cities, real zips, real county codes — each `countyFips` is the county
+ * the city actually sits in, and all seventeen codes in the committed RTP
+ * fixture are Oklahoma too.
+ */
+export const MAILER_CITIES: MailerCitySpec[] = [
+  { city: 'Tulsa', state: 'OK', zip: '74133', countyFips: '143' },
+  { city: 'Broken Arrow', state: 'OK', zip: '74012', countyFips: '143' },
+  { city: 'Owasso', state: 'OK', zip: '74055', countyFips: '143' },
+  { city: 'Bixby', state: 'OK', zip: '74008', countyFips: '143' },
+  { city: 'Bartlesville', state: 'OK', zip: '74006', countyFips: '147' },
+  { city: 'Oklahoma City', state: 'OK', zip: '73142', countyFips: '109' },
+  { city: 'Edmond', state: 'OK', zip: '73013', countyFips: '109' },
+  { city: 'Claremore', state: 'OK', zip: '74017', countyFips: '131' },
+  { city: 'Sapulpa', state: 'OK', zip: '74066', countyFips: '037' },
+  { city: 'Guthrie', state: 'OK', zip: '73044', countyFips: '083' },
 ];
 
 export const STREET_NAMES = [

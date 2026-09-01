@@ -59,6 +59,12 @@ docs {
     the dashboard's Hot Leads panel (PAC-15) and activity logging (PAC-16).
     - **Share Links** — generate / list / revoke a producer's public intake
       links (PAC-37).
+    - **Address** — Google-backed address autocomplete for every address field
+      (PAC-60). Under **Leads** rather than a folder of its own for the same
+      ordering reason as activity logging: a top-level `Address` folder would
+      sort **before `Auth`** and run with no `accessToken`. Its tests assert
+      the response *envelope* only — a machine with no `GOOGLE_MAPS_API_KEY`
+      gets `{ available: false }`, which is a pass.
   - **Performance** — Sold + Quoted scorecards for a time range
     (PAC-10 / PAC-11, read).
   - **Public Intake** — the unauthenticated share-link form: render + submit,

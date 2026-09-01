@@ -83,3 +83,52 @@ export const inviteRequested = eventType('email/invite.requested.v1', {
 
 /** The rendered payload an invite template receives. */
 export type InviteRequestedData = z.infer<typeof inviteRequestedSchema>;
+
+/**
+ * An agency administrator triggered a password reset for one of their people
+ * and they need the "set a new password" link (PAC-79).
+ *
+ * Emitted by `UsersService.sendPasswordReset` through `MailService`. Every issue
+ * mints a fresh token and therefore a different `resetUrl`, so the consumer's
+ * idempotency key treats a second reset as a distinct event and sends it.
+ */
+const passwordResetRequestedSchema = z.object({
+  ...eventEnvelope,
+  /** The user resetting. Present so the consumer can record delivery. */
+  userId: objectId,
+  agencyId: objectId,
+  /** Null for a user not pinned to a branch. */
+  branchId: objectId.nullable(),
+  /** Already lowercased by the caller. */
+  to: z.string().email(),
+  /** Null when both name fields are blank. */
+  recipientName: z.string().nullable(),
+  /**
+   * The agency, for the "an administrator at X" line.
+   *
+   * ⚠ There is deliberately no field naming *which* administrator — see
+   * `PasswordResetEmailPayload`. Adding one is a product decision with a
+   * social-engineering cost, not a missing field.
+   */
+  agencyName: z.string(),
+  /**
+   * Absolute reset URL, built on the recipient's own agency host
+   * (`TenantUrlService`) and falling back to `APP_BASE_URL`.
+   *
+   * ⚠ A **bearer credential**, and a stronger one than `inviteUrl` above: it
+   * takes over an account that already exists and has data in it. Never logged
+   * in production, never persisted on the delivery record.
+   */
+  resetUrl: z.string().url(),
+  expiresAt: isoDateTime,
+});
+
+export const passwordResetRequested = eventType(
+  'email/password-reset.requested.v1',
+  { schema: passwordResetRequestedSchema },
+);
+
+/** The rendered payload a password-reset template receives. */
+export type PasswordResetRequestedData = z.infer<
+  typeof passwordResetRequestedSchema
+>;

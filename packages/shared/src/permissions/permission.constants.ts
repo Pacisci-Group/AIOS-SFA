@@ -17,6 +17,20 @@ export const PlatformPermission = {
   MailersRead: 'platform:mailers:read',
   /** Upload an RTP file and commit the mailers it produces (PAC-73). */
   MailersWrite: 'platform:mailers:write',
+  /**
+   * Mint a session as another user, without their password (PAC-70).
+   *
+   * The strongest capability on the platform: it hands the holder every
+   * permission the target has, inside the target's own tenant. Deliberately a
+   * separate string rather than something `isPlatformAdmin` implies, so that
+   * "can administer agencies" and "can act as a person" stay independently
+   * grantable — and so revoking it does not require demoting an admin.
+   *
+   * What bounds it is the target, not the caller: `AuthService.impersonate`
+   * refuses another platform admin, so this can never be used to climb sideways
+   * into a peer's authority, only downwards into a tenant's.
+   */
+  UsersImpersonate: 'platform:users:impersonate',
 } as const;
 
 /** Agency administration permissions (Agency Owner manages users/branches). */

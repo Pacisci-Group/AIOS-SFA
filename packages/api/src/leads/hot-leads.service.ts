@@ -106,15 +106,40 @@ export class HotLeadsService {
         status: { $nin: terminalLeadStatusValues() },
       };
 
-      const batch = await this.leadModel
-        .find(filter)
-        // Ascending: stalest first. `_id` is a stable tiebreaker so a card of
-        // never-touched leads doesn't reshuffle between refreshes.
-        .sort({ lastActivityAt: 1, _id: 1 })
-        .limit(query.limit - records.length)
-        .lean<HotLeadLean[]>();
+      /*
+       * Ascending: stalest first — but a lead nobody has ever touched has no
+       * staleness, only a missing field, and Mongo sorts a missing value
+       * *before* every real date. On migrated data 564 of 967 leads had no
+       * `lastActivityAt`, so they filled the entire card and pushed out every
+       * lead the producer actually needed to call.
+       *
+       * Two passes rather than one: dated rows oldest-first, then undated ones
+       * in a stable `_id` order. Deliberately not an `$ifNull` in an
+       * aggregation — both of these are served by
+       * `{ agencyId, producerId, temperature, lastActivityAt }`, since a
+       * `$ne: null` is a range bound and a `: null` an equality bound, whereas
+       * an in-memory sort would give up the index the panel was built around.
+       *
+       * `_id` is the tiebreaker in both, so the card does not reshuffle between
+       * refreshes.
+       */
+      const remaining = () => query.limit - records.length;
 
-      records.push(...batch);
+      const dated = await this.leadModel
+        .find({ ...filter, lastActivityAt: { $ne: null } })
+        .sort({ lastActivityAt: 1, _id: 1 })
+        .limit(remaining())
+        .lean<HotLeadLean[]>();
+      records.push(...dated);
+
+      if (remaining() > 0) {
+        const undated = await this.leadModel
+          .find({ ...filter, lastActivityAt: null })
+          .sort({ _id: 1 })
+          .limit(remaining())
+          .lean<HotLeadLean[]>();
+        records.push(...undated);
+      }
     }
 
     const summaries = await this.latestActivityByLead(

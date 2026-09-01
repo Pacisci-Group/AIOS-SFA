@@ -1,0 +1,213 @@
+meta {
+  name: Address Autocomplete
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/address/autocomplete
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:pre-request {
+  // One token for the whole address-entry session: these keystrokes plus the
+  // Place Details call in `Resolve Address` are billed as one session only if
+  // both carry the same value. Minted here, consumed there.
+  //
+  // Hand-rolled rather than `crypto.randomUUID()` — Bruno's script sandbox is
+  // QuickJS and has no `require`. The API only asks for 8-64 opaque characters.
+  bru.setVar(
+    "addressSessionToken",
+    "bru-" +
+      Math.random().toString(36).slice(2) +
+      Math.random().toString(36).slice(2),
+  );
+}
+
+body:json {
+  {
+    "input": "4821 North Maple",
+    "sessionToken": "{{addressSessionToken}}"
+  }
+}
+
+script:post-response {
+  // Capture a real place id for `Resolve Address` when a key is configured.
+  //
+  // Falls back to a sentinel rather than "" so the next request still exercises
+  // the service: an empty placeId would be rejected by the zod pipe and never
+  // reach `AddressService`, hiding the unconfigured 200 that is the whole point
+  // of the fail-open contract.
+  const first = (res.getBody().suggestions || [])[0];
+  bru.setVar("addressPlaceId", first ? first.placeId : "no-key-configured");
+}
+
+tests {
+  test("returns 200 OK", function () {
+    // Always 200 — this endpoint fails open. See the docs block.
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the { available, suggestions } envelope", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("available");
+    expect(body.available).to.be.a("boolean");
+    expect(body.suggestions).to.be.an("array");
+  });
+
+  test("every suggestion is clickable and human-readable", function () {
+    for (const s of res.getBody().suggestions) {
+      expect(s.placeId).to.be.a("string").and.not.equal("");
+      expect(s.primaryText).to.be.a("string").and.not.equal("");
+      expect(s).to.have.property("secondaryText");
+    }
+  });
+
+  test("never returns raw Google fields or anything key-shaped", function () {
+    const raw = JSON.stringify(res.getBody());
+    // The proxy exists so the browser never sees Google's payload or key.
+    expect(raw).to.not.include("AIza");
+    expect(raw).to.not.include("addressComponents");
+    expect(raw).to.not.include("googleapis.com");
+  });
+
+  test("rejects an input too short to be worth a billed request", function () {
+    // Documented here rather than as a second request: the 3-character floor is
+    // a cost control, not a UX rule, and it belongs next to the happy path.
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # POST /address/autocomplete — Google-backed address predictions (PAC-60)
+
+  Type-ahead behind every address field in the app: the New Lead household
+  address, the per-policy property address on the Lead and Quote Recap policy
+  drawers, and the Sold wizard's escrow card. Restores what SmartSuite's native
+  `address` field did for free before the rebuild.
+
+  - **Module:** any of `leads`, `quote_recaps`, `deal_audits`, `crm_service`
+  - **Permission:** any of `leads:write`, `quote_recaps:write`,
+    `deal_audits:write`, `crm_service:write`
+  - **Data scope:** none — the response is third-party data derived from what the
+    caller just typed, and touches no tenant record.
+
+  > **Why an OR gate over four modules, and no `ModuleKey.Address`?** Address
+  > entry is not owned by one page. A producer types one on New Lead (`leads`),
+  > a Quote Recap author on the policy drawer (`quote_recaps`), a producer again
+  > in the Sold wizard (`deal_audits`), and a CSR in Policy Transfer
+  > (`crm_service`) — and a CSR holds no `deal_audits` at all. Gating on any
+  > single key would 403 at least one of them, on a control whose only job is to
+  > save typing.
+  >
+  > A dedicated module key was rejected for the same reason `GET /carriers` has
+  > none: `PAGES` is one entry per module key, so it would add a row to the
+  > permission matrix for something that is not a page, and hand every agency a
+  > switch that silently breaks address entry on four forms.
+  >
+  > `write`, not `read` — this exists to help someone *fill in* a form.
+
+  ## Why POST and not GET
+  A partially-typed home address in a query string lands in the API access log,
+  in every proxy along the path, and in whatever aggregates them. The body keeps
+  it out of all three.
+
+  ## Request
+  ```json
+  {
+    "input": "4821 North Maple",
+    "sessionToken": "3519edfe-0f75-4a30-bfe4-7cbd89340b2c"
+  }
+  ```
+
+  | Field | Rule |
+  |---|---|
+  | `input` | 3–200 chars, trimmed. Below three, predictions return everything and help nobody — the floor is a cost control, and the client debounces on top of it. |
+  | `sessionToken` | 8–64 chars, opaque. Bounded rather than pattern-matched: we mint UUIDs, but the web client has a fallback generator for non-secure contexts (`crypto.randomUUID` is undefined over plain http on a LAN address), and pinning the format would break the day it fires. |
+
+  ## Response `200`
+  ```json
+  {
+    "available": true,
+    "suggestions": [
+      {
+        "placeId": "ChIJ...",
+        "primaryText": "4821 N Maple Ave",
+        "secondaryText": "Oklahoma City, OK, USA"
+      }
+    ]
+  }
+  ```
+
+  Predictions are restricted to `street_address` in the `US` — businesses and
+  cities are noise in a field that wants a mailing address, and non-US addresses
+  are out of scope for PAC-60.
+
+  ## ⚠ This endpoint fails open — read `available`, not the status
+  **It is always `200`.** A missing API key, a revoked key, an API not enabled on
+  the GCP project, a timeout and a Google outage all come back `200` with an
+  empty `suggestions` array; `available` is what distinguishes them:
+
+  | `available` | Meaning | What the client does |
+  |---|---|---|
+  | `true`, suggestions present | normal | render the dropdown |
+  | `true`, suggestions empty | nothing matched, or a transient blip | no dropdown this keystroke, keep asking |
+  | `false` | no key, revoked key, API not enabled | stop asking for the rest of the page session; the field degrades to a plain text input |
+
+  Throwing `503` was considered and rejected: this fires on a debounced
+  keystroke, so it would mean an error toast per keystroke and a log line per
+  keystroke for a feature whose entire job is to save typing. Temperament-wise
+  this sits with the permission cache (degrade quietly, the request still works)
+  rather than the mail transport (shout, because the email is gone).
+
+  **The integration can never block a submission** — an explicit PAC-60
+  acceptance criterion, and it is held structurally rather than by convention:
+  no submit path in this API calls Google, and nothing here writes to form
+  state or adds a validation rule. A rural or new-build address Google has never
+  heard of still submits.
+
+  ## Billing
+  The `sessionToken` bundles the keystrokes of one address entry with the
+  terminating `POST /address/resolve`. Note the first 12 autocomplete requests
+  in a session are still billed individually — only requests beyond the 12th
+  fall under the free session SKU — so the client's 250 ms debounce is a real
+  cost lever, not just a UX one.
+
+  Spend is capped in three layers: a quota cap on the Google key (the only hard
+  stop — budgets merely alert), this route's per-IP throttle, and, on the public
+  share-link variant, a per-link daily cap.
+
+  ## ⚠ Tests assert the envelope, never real predictions
+  A dev machine will usually have **no `GOOGLE_MAPS_API_KEY`**, so this request
+  answers `{ "available": false, "suggestions": [] }` and that is a pass.
+  Asserting that predictions come back would make the collection red for
+  everyone without a key, which is most of the team.
+
+  ## Rate limiting
+  `120 requests / minute / IP` by default (`ADDRESS_LOOKUP_RATE_LIMIT`).
+  ⚠ Must be set as a **real environment variable** — `@Throttle` bakes the
+  number into decorator metadata when the controller class is imported, which is
+  before `ConfigModule` runs dotenv. A value in `.env` is silently ignored.
+
+  ## Errors
+  - `400 Bad Request` — `input` shorter than 3 characters, or a missing/oversized
+    `sessionToken`.
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — none of the four modules enabled, or none of the four write
+    permissions held.
+  - `429 Too Many Requests` — rate limit exceeded.
+
+  ## Why this lives under `Leads` and not in a folder of its own
+  Same reason as activity logging: the CLI walks folders alphabetically, and a
+  top-level `Address` folder would sort **before `Auth`** and run with no
+  `accessToken`.
+
+  ## Run order
+  Needs only `Auth/Login`. Sets `addressSessionToken` (consumed by
+  `Resolve Address`) and `addressPlaceId` (empty when no key is configured).
+}

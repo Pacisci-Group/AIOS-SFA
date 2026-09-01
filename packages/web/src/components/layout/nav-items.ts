@@ -5,7 +5,6 @@ import {
   KeyRound,
   Palette,
   LayoutDashboard,
-  Mail,
   Ticket,
   TrendingUp,
   Users,
@@ -44,12 +43,15 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Users,
         module: ModuleKey.Leads,
       },
-      {
-        to: "/mailers",
-        label: "Mailer",
-        icon: Mail,
-        module: ModuleKey.Mailers,
-      },
+      /*
+       * No "Mailer" entry. It pointed at `/mailers`, a route that has never
+       * existed in `App.tsx` — PAC-22 (a standalone Mailer page) was cancelled
+       * and PAC-61 put one explicitly out of scope. Harmless while
+       * `mailers:read` was rare, but PAC-61 gave that permission to every role,
+       * which would have promoted a hidden dead link into a universally visible
+       * one leading to a blank screen. Mailers are reached from the drawer in
+       * the Leads page header instead.
+       */
       {
         to: "/performance",
         label: "My Performance",
@@ -113,7 +115,9 @@ export const NAV_SECTIONS: NavSection[] = [
         to: "/settings/roles",
         label: "Roles & Permissions",
         icon: KeyRound,
-        permission: "agency:users:permissions",
+        // Must match the route guard and what the page actually calls
+        // (`GET /roles`). See the note on the route in `App.tsx`.
+        permission: "agency:roles:read",
       },
       {
         to: "/settings/branding",

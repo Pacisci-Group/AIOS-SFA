@@ -37,7 +37,7 @@ import { CrmRotation } from '../../crm-rotations/schemas/crm-rotation.schema';
 import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request.schema';
 import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema';
 import { Activity } from '../../activities/schemas/activity.schema';
-import { PermissionsService } from '../../permissions/permissions.service';
+import { RoleAssignmentsService } from '../../permissions/role-assignments.service';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
 import {
   INSURANCE_MONTHS,
@@ -58,6 +58,7 @@ import {
   FIRST_NAMES,
   LAST_NAMES,
   LEAD_SOURCE_CODES,
+  MAILER_CITIES,
   DEMO_LEAD_UNQUOTED_STATUSES,
   POLICY_TYPE_SETS,
   SERVICE_CATEGORIES,
@@ -226,7 +227,7 @@ export class DemoSeedService {
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     @InjectModel(Mailer.name) private readonly mailerModel: Model<Mailer>,
-    private readonly permissionsService: PermissionsService,
+    private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
 
@@ -342,7 +343,7 @@ export class DemoSeedService {
       this.inc('branches');
     }
 
-    await this.permissionsService.seedDefaultRoles(agencyObjectId);
+    await this.roleAssignments.seedDefaultRoles(agencyObjectId);
 
     return {
       ctx: {
@@ -392,7 +393,6 @@ export class DemoSeedService {
           $set: {
             agencyId: ctx.agencyObjectId,
             branchId: branchObjectId,
-            roleIds: roleId ? [roleId] : [],
             firstName: spec.firstName,
             lastName: spec.lastName,
             isActive: true,
@@ -402,6 +402,16 @@ export class DemoSeedService {
           $setOnInsert: { passwordHash },
         },
         { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+      // Through the join, and through the one writer — a direct `userRoles`
+      // insert would skip cache invalidation and the owner-protection checks.
+      // The seed acts as a platform admin: it must be able to assign the owner
+      // role on a fresh tenant.
+      await this.roleAssignments.setUserRoles(
+        { userId: user._id.toString(), isPlatformAdmin: true },
+        ctx.agencyObjectId,
+        user._id,
+        roleId ? [roleId] : [],
       );
       this.inc('users');
       team.push({
@@ -830,7 +840,7 @@ export class DemoSeedService {
    * Deals are no longer drawn independently: the lead, its household, its
    * producer and its quote all come from the same chain, so `GET /leads/:id`
    * resolves a real deal and `deals.quoteRecapId` points at the recap that
-   * became the sale — the three refs `backfill-deal-refs` exists to repair.
+   * became the sale, matching what the SmartSuite migration produces.
    *
    * A lead without a household is skipped rather than paired with an unrelated
    * one; that only happens if no households were seeded.
@@ -1567,7 +1577,7 @@ export class DemoSeedService {
 
       const first = rng.pick(FIRST_NAMES);
       const last = rng.pick(LAST_NAMES);
-      const city = rng.pick(CITIES);
+      const city = rng.pick(MAILER_CITIES);
       const dwelling = rng.int(180, 900) * 1000;
       const monthly = rng.int(90, 260);
 
@@ -1596,8 +1606,17 @@ export class DemoSeedService {
               zip5: city.zip,
               // Zero-padded FIPS, as the real column ships it. Seeded as a
               // string so anything rendering it hits the same case production
-              // will.
-              county: String(rng.int(1, 199)).padStart(3, '0'),
+              // will, and a *real* Oklahoma code so the drawer can resolve it
+              // to a county name — a random one would leave that row blank
+              // forever and the resolution path untested.
+              //
+              // Every fifth mailer gets none, on purpose: the drawer omits the
+              // county row rather than dashing it when the code is missing or
+              // unmapped, and that branch needs something to exercise it.
+              // Offset so the gap misses the first three — those are the ones
+              // printed as samples at the end of the seed, and the number a
+              // developer copies out of the log should show the whole drawer.
+              county: i % 5 === 4 ? undefined : city.countyFips,
             },
             squareFeet: rng.int(1200, 4600),
             yearBuilt: rng.int(1955, 2020),

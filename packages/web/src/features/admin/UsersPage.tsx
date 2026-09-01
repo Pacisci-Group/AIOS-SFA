@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { InviteRowActions } from './InviteRowActions';
+import { PasswordResetRowActions } from './PasswordResetRowActions';
 import { InviteUserDialog } from './InviteUserDialog';
 import { UserRowActions } from './UserRowActions';
 
@@ -223,13 +224,16 @@ export default function UsersPage() {
                 </div>
 
                 {/* Actions sit above the stretched link so their clicks don't
-                    navigate. The two components partition the rows between them
-                    by status — `InviteRowActions` takes pending invites,
-                    `UserRowActions` takes active and deactivated ones — so at
-                    most one renders, and a caller without `agency:users:write`
-                    gets neither, leaving just the chevron. */}
+                    navigate. Each component decides for itself which rows it
+                    serves, by status: `InviteRowActions` takes pending invites,
+                    `UserRowActions` takes active and deactivated ones, and
+                    `PasswordResetRowActions` takes active ones only. So an
+                    invited row shows one group and an active row shows two,
+                    while a caller without `agency:users:write` gets none of
+                    them, leaving just the chevron. */}
                 <div className="relative z-10 flex items-center gap-2 justify-self-end">
                   <InviteRowActions user={user} />
+                  <PasswordResetRowActions user={user} />
                   <UserRowActions user={user} />
                   <ChevronRight
                     size={16}

@@ -26,6 +26,7 @@ import {
   MINUTE_MS,
 } from './config/rate-limit.config';
 import { ActivitiesModule } from './activities/activities.module';
+import { AddressModule } from './address/address.module';
 import { AgencyDomainsModule } from './agency-domains/agency-domains.module';
 import { AgencyEmailModule } from './agency-email/agency-email.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
@@ -157,6 +158,11 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // assertion in "Leads (PAC-38 detail)".
     ShareLinksModule,
     LeadsModule,
+    // Google-backed address autocomplete for every address field (PAC-60).
+    // After ShareLinksModule because the public variant reuses its share-link
+    // resolution, and routing on `address` / `public/address` collides with
+    // nothing above.
+    AddressModule,
     ContactsModule,
     QuoteRecapsModule,
     // The Sold wizard's carrier vocabulary (PAC-56 #19). Also registers the

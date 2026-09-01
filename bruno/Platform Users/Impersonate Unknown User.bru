@@ -1,0 +1,42 @@
+meta {
+  name: Impersonate Unknown User
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/impersonate/000000000000000000000000
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 404 Not Found", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("says nothing about who exists", function () {
+    // The same body an *inactive* target produces. A platform admin can reach
+    // every tenant, so a distinguishable response here would turn this endpoint
+    // into a cross-tenant user-enumeration oracle.
+    expect(res.getBody().message).to.equal("User not found");
+  });
+}
+
+docs {
+  # POST /auth/impersonate/:userId — unknown target
+
+  The non-disclosure case, pinned so it cannot regress into a helpful error.
+
+  A well-formed but unused ObjectId returns `404 User not found` — byte for byte
+  what an **inactive** user returns. The endpoint is reachable by an account that
+  can see every tenant, so distinguishing "no such user" from "exists but
+  disabled" would make it a user-enumeration oracle across the whole platform.
+
+  A malformed id (not 24 hex characters) is a Mongoose `CastError` and surfaces
+  as `400`, which leaks nothing either way.
+}

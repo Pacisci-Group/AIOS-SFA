@@ -126,7 +126,7 @@ The client lifecycle is a **4-phase, session-isolated form pipeline** (forms com
 - **CRM** (scope: branch; clients, crm_service, deal_audits, onboardings, dashboard:read)
 - **Data Team** (scope: agency; dashboard, command_center, management, owner_dashboard, performance, leaderboard reads)
 
-Seed (`src/seed/seed.ts`) creates agency "Smith Family Agency", a Main branch, super admin, and an agency owner.
+Seed (`src/seed/seed.ts`) is platform data only — super admin, carriers, permissions; it creates **no agency**. The SmartSuite migration provisions agency "Smith Family Agency" + Main branch + roles + audit templates, and imports only the users SmartSuite has (no owner account). The demo seed provisions its own `demo-agency`.
 
 ---
 
@@ -189,3 +189,24 @@ The Producer Dashboard's **"Deals Pending Service Hand-off"** panel = the front-
 - ⏸ **Paused before creating user stories** (per user). Resume by revising Producer Dashboard stories with pipeline context, then confirming Q1–Q5 above.
 
 **Recommended first action in the new session:** confirm the 5 open questions, then finalize + emit the Producer Dashboard user stories.
+
+### Mailers — both halves shipped (PAC-73 + PAC-61)
+
+Mailers no longer live in BigQuery at read time. **PAC-73** created the `mailers`
+collection plus the RTP upload and the BigQuery backfill; **PAC-61** added the
+agency-facing read path — a **Mailers** button on the Leads page opening a
+drawer that resolves a Quote Control Number and logs the recipient as a lead
+through the existing `LeadIntakeService`.
+
+Two endpoints: `GET /mailers/:controlNumber` (`mailers:read`) and
+`POST /mailers/log-lead` (`mailers:read` **and** `leads:write`). Either printed
+form of the control number resolves, and logging is idempotent per mailer across
+both forms.
+
+**`docs/mailers-handoff.md` §7 is the record** of what PAC-61 settled — the
+premium presentation, the campaign line, the Oklahoma-only county table, the two
+places the ticket's literal spec was wrong, and the one known gap left open.
+
+⚠ **Existing agencies need `npm run api:sync:roles`**: PAC-61 gave `mailers:read`
+to every role template, and editing a template does not touch already-seeded
+roles.

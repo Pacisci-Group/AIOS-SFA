@@ -1,51 +1,12 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Check, Eye, EyeOff, X } from 'lucide-react';
 import { useAuth } from '@/contexts/auth-context';
-import { BrandLockup } from '@/components/common/BrandMark';
 import { ApiError } from '@/lib/api-client';
 import { acceptInvite, getInvitePreview } from '@/lib/invite-api';
+import { AuthShell } from '@/components/auth/AuthShell';
+import { SetPasswordForm } from '@/components/auth/SetPasswordForm';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { FormError } from '@/components/form';
-import { cn } from '@/lib/utils';
-
-/**
- * Must match `AcceptInviteDto`'s `@MinLength(8)` in the API. Kept as a named
- * constant so the two are obviously paired — if the server rule is tightened,
- * this is the line to change with it, or the form will happily submit passwords
- * the API then rejects.
- */
-const MIN_PASSWORD_LENGTH = 8;
-
-function AuthShell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md">
-        <BrandLockup size="md" className="mb-8 justify-center" />
-        <Card className="p-6 gap-4 border-border">{children}</Card>
-      </div>
-    </div>
-  );
-}
-
-/** A live pass/fail hint, not a validation message — hence no error styling. */
-function Rule({ met, children }: { met: boolean; children: React.ReactNode }) {
-  return (
-    <li
-      className={cn(
-        'flex items-center gap-1.5 text-xs',
-        met ? 'text-success' : 'text-muted-foreground',
-      )}
-    >
-      {met ? <Check size={12} /> : <X size={12} />}
-      {children}
-    </li>
-  );
-}
 
 /**
  * Set a password from an emailed invite link (PAC-58 Scope 4).
@@ -57,10 +18,10 @@ function Rule({ met, children }: { met: boolean; children: React.ReactNode }) {
  * or an employee on a shared machine where a colleague is still signed in, could
  * never reach the page. Same placement and reasoning as `/f/lead/:token`.
  *
- * Styling deliberately mirrors `LoginPage` — these are the two pages a person
- * sees before they are anybody, and they should look like one product. Both
- * share {@link AuthShell}; if PAC-5 restyles login, move that component into a
- * shared location rather than letting the two drift.
+ * Styling deliberately mirrors `LoginPage` — these are the pages a person sees
+ * before they are anybody, and they should look like one product. The shell and
+ * the password fields now live in `components/auth/`, shared with
+ * `ResetPasswordPage`, which is the same page with different copy.
  */
 export default function AcceptInvitePage() {
   const [searchParams] = useSearchParams();
@@ -68,11 +29,7 @@ export default function AcceptInvitePage() {
   const navigate = useNavigate();
   const { adoptSession } = useAuth();
 
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [reveal, setReveal] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   const inviteQuery = useQuery({
     queryKey: ['invite', token],
@@ -83,10 +40,6 @@ export default function AcceptInvitePage() {
     retry: false,
     staleTime: Infinity,
   });
-
-  const longEnough = password.length >= MIN_PASSWORD_LENGTH;
-  const matches = password.length > 0 && password === confirm;
-  const canSubmit = longEnough && matches && !submitting;
 
   const status = useMemo(() => {
     if (!token) return 'invalid' as const;
@@ -101,12 +54,8 @@ export default function AcceptInvitePage() {
     return 'valid' as const;
   }, [token, inviteQuery.isLoading, inviteQuery.isError, inviteQuery.error]);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!canSubmit) return;
-
+  async function handleSubmit(password: string) {
     setSubmitError(null);
-    setSubmitting(true);
     try {
       const result = await acceptInvite(token, password);
       // `acceptInvite` already persisted the tokens; this tells React about the
@@ -121,8 +70,6 @@ export default function AcceptInvitePage() {
           ? err.message
           : 'Could not set your password. Try again.',
       );
-    } finally {
-      setSubmitting(false);
     }
   }
 
@@ -173,122 +120,46 @@ export default function AcceptInvitePage() {
 
   return (
     <AuthShell>
-      <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-        <div className="space-y-1">
-          <h2 className="text-foreground font-semibold text-base">
-            You’ve been invited to {invite.agencyName}
-          </h2>
-          {/*
-            The invited address is shown as **text, not a field**. The token
-            already determines the account, so an input — even a read-only one —
-            would be asking for something the page is not actually collecting,
-            and reads as a step the invitee has to complete. Setting the password
-            is the only thing they do here.
-
-            It is still displayed rather than dropped: it tells whoever opened
-            the link which account they are about to activate, which matters on a
-            shared machine or a forwarded email.
-          */}
-          <p className="text-sm text-muted-foreground">
-            {roles && (
-              <>
-                You’ll join as <span className="text-foreground">{roles}</span>.{' '}
-              </>
-            )}
-            Set a password for{' '}
-            <span className="text-foreground">{invite.email}</span> to finish.
-          </p>
-        </div>
-
-        <FormError>{submitError}</FormError>
-
+      <div className="space-y-1">
+        <h2 className="text-foreground font-semibold text-base">
+          You’ve been invited to {invite.agencyName}
+        </h2>
         {/*
-          Present but not rendered, purely so password managers file the saved
-          credential under the right account instead of prompting for a username
-          on the next sign-in. `autocomplete="username"` next to
-          `new-password` is the pairing browsers look for.
+          The invited address is shown as **text, not a field**. The token
+          already determines the account, so an input — even a read-only one —
+          would be asking for something the page is not actually collecting,
+          and reads as a step the invitee has to complete. Setting the password
+          is the only thing they do here.
+
+          It is still displayed rather than dropped: it tells whoever opened
+          the link which account they are about to activate, which matters on a
+          shared machine or a forwarded email.
         */}
-        <input
-          type="text"
-          name="username"
-          autoComplete="username"
-          value={invite.email}
-          readOnly
-          hidden
-          aria-hidden="true"
-          tabIndex={-1}
-        />
-
-        <div className="space-y-1.5">
-          <Label
-            htmlFor="invite-password"
-            className="text-xs text-muted-foreground"
-          >
-            Password
-          </Label>
-          <div className="relative">
-            <Input
-              id="invite-password"
-              type={reveal ? 'text' : 'password'}
-              autoComplete="new-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="bg-input border-border pr-10"
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setReveal((v) => !v)}
-              className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              aria-label={reveal ? 'Hide password' : 'Show password'}
-              aria-pressed={reveal}
-            >
-              {reveal ? <EyeOff size={14} /> : <Eye size={14} />}
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label
-            htmlFor="invite-confirm"
-            className="text-xs text-muted-foreground"
-          >
-            Confirm password
-          </Label>
-          <Input
-            id="invite-confirm"
-            type={reveal ? 'text' : 'password'}
-            autoComplete="new-password"
-            required
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            className="bg-input border-border"
-          />
-        </div>
-
-        <ul className="space-y-1">
-          <Rule met={longEnough}>
-            At least {MIN_PASSWORD_LENGTH} characters
-          </Rule>
-          <Rule met={matches}>Both passwords match</Rule>
-        </ul>
-
-        <Button
-          type="submit"
-          variant="brand"
-          disabled={!canSubmit}
-          className="w-full"
-        >
-          {submitting ? 'Setting your password…' : 'Set password and sign in'}
-        </Button>
-
-        <p className="text-[10px] text-muted-foreground text-center pt-2">
-          This link expires on{' '}
-          {new Date(invite.expiresAt).toLocaleDateString()}.
+        <p className="text-sm text-muted-foreground">
+          {roles && (
+            <>
+              You’ll join as <span className="text-foreground">{roles}</span>.{' '}
+            </>
+          )}
+          Set a password for{' '}
+          <span className="text-foreground">{invite.email}</span> to finish.
         </p>
-      </form>
+      </div>
+
+      <SetPasswordForm
+        email={invite.email}
+        idPrefix="invite"
+        submitLabel="Set password and sign in"
+        pendingLabel="Setting your password…"
+        error={submitError}
+        onSubmit={handleSubmit}
+        footer={
+          <>
+            This link expires on{' '}
+            {new Date(invite.expiresAt).toLocaleDateString()}.
+          </>
+        }
+      />
     </AuthShell>
   );
 }

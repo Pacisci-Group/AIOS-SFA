@@ -140,9 +140,9 @@ docs {
   Net-new: legacy had no per-household metric at all. A row's household identity
   is resolved through a fallback ladder — `householdId`, else
   `legacyHouseholdId`, else **the row's own id**, meaning an unattributed row
-  counts as its own household. That can only *understate* the average, and it
-  converges on the true value as `npm run backfill:deal-refs:dev` fills the refs
-  in. Collapsing null-household rows into one bucket would inflate it without
+  counts as its own household. That can only *understate* the average, and the
+  migration resolves `householdId` on import so it applies to very little real
+  data. Collapsing null-household rows into one bucket would inflate it without
   bound on migrated data.
 
   ## Errors
@@ -153,6 +153,6 @@ docs {
   - `403 Forbidden` — `performance` module disabled, or missing
     `performance:read`.
 
-  > **Tip:** log in as `producer@smithfamily.local` — the demo seed makes them
+  > **Tip:** log in as `producer@demoagency.local` — the demo seed makes them
   > the data-rich producer for this dashboard.
 }

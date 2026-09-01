@@ -33,6 +33,18 @@ export const CANONICAL_LEAD_SOURCES: Record<string, string> = {
 };
 
 /**
+ * Mailer (PAC-61). Every lead logged from a direct-mail piece carries this,
+ * set server-side and never read from the request.
+ *
+ * Legacy branched on `Campaign_Number.startsWith('JYA')` to pick `ymZHL`
+ * instead. No `Campaign_Number` in this data can match — every value is
+ * `Week_Number-NN` — and Carl confirms JYA had separate logic and arrived
+ * through a different bulk upload, so the branch is unreachable and is not
+ * ported.
+ */
+export const MAILER_LEAD_SOURCE_CODE = 'WCO7l';
+
+/**
  * Extra Deal "Fillout Lead Source" (s989aa45e7) codes that are not in the canonical
  * 14 — folded into their closest canonical bucket where sensible, else kept labeled.
  */

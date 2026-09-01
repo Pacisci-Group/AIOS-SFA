@@ -130,6 +130,31 @@ export function currentChicagoMonth(now: Date = new Date()): string {
 }
 
 /**
+ * The last `count` goal months in Chicago, newest first, including this one.
+ *
+ * The migration writes a producer goal per month across this window (PAC-80).
+ * SmartSuite stores a single standing "Monthly Goal" with no month dimension,
+ * so writing it into only the run-month left every other month goal-less — the
+ * leaderboard's `?month=` is answerable for one month and blank for the rest,
+ * and the current month's goals expire silently at the rollover.
+ */
+export function recentChicagoMonths(
+  count: number,
+  now: Date = new Date(),
+): string[] {
+  const today = chicagoParts(now);
+  const months: string[] = [];
+  for (let back = 0; back < count; back++) {
+    // Step back through the 1st of each month; `Date.UTC` normalizes the
+    // year boundary, the same trick `addDays` relies on.
+    const anchor = new Date(Date.UTC(today.year, today.month - 1 - back, 1));
+    const month = String(anchor.getUTCMonth() + 1).padStart(2, '0');
+    months.push(`${anchor.getUTCFullYear()}-${month}`);
+  }
+  return months;
+}
+
+/**
  * Resolve a range key into the half-open window every dashboard read uses.
  *
  * | key | window (Chicago calendar days) |

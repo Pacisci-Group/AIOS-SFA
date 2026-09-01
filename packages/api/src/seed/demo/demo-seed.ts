@@ -11,8 +11,15 @@ function parseOptions(argv: string[]): DemoSeedOptions {
     return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
   };
   return {
-    agencySlug: value('--agency', 'smith-family-agency'),
-    agencyName: value('--agency-name', 'Smith Family Agency'),
+    /*
+     * Deliberately NOT the migration's `smith-family-agency`. The demo seed
+     * upserts its agency and purges `demo:`-prefixed rows under it, so sharing
+     * a slug with the migration target would mix throwaway data into the real
+     * book and let `--fresh` run against it. Separate slugs let a dev hold both
+     * in one database.
+     */
+    agencySlug: value('--agency', 'demo-agency'),
+    agencyName: value('--agency-name', 'Demo Agency'),
     fresh: has('--fresh'),
     seed:
       parseInt(value('--seed', String(DEMO_CONFIG.seed)), 10) ||

@@ -47,7 +47,12 @@ export function MotivationHub() {
             Leaderboard
           </span>
         </div>
-        <span className="text-[10px] text-muted-foreground">Monthly Goal</span>
+        {/* The header names what the rows are measured against, so it has to
+            change when nothing has a goal — otherwise it promises a column of
+            percentages the card cannot show (PAC-80). */}
+        <span className="text-[10px] text-muted-foreground">
+          {data && data.goalsConfigured === 0 ? "By Premium" : "Monthly Goal"}
+        </span>
       </div>
 
       {!allowed ? (
@@ -90,6 +95,21 @@ export function MotivationHub() {
           </div>
 
           <div className="flex flex-col gap-2 pt-2 border-t border-border">
+            {/*
+              Say why the percentages are missing (PAC-80).
+
+              With no goals stored, every `attainmentPct` is null and every row
+              renders an em dash and an empty bar — which reads as "nobody is
+              hitting their target" rather than "nobody has one". `rankRows`
+              already falls through to premium order in this case, so the board
+              is still correctly ranked; it just is not ranked by what the header
+              would otherwise claim.
+            */}
+            {data.entries.length > 0 && data.goalsConfigured === 0 && (
+              <p className="pb-1 text-[10px] text-muted-foreground">
+                Monthly goals aren&rsquo;t set yet — ranked by premium.
+              </p>
+            )}
             {data.entries.length === 0 ? (
               <p className="py-4 text-center text-xs text-muted-foreground">
                 No sales recorded this month yet.

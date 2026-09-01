@@ -19,6 +19,10 @@ import {
   AgencyRole,
   AgencyRoleSchema,
 } from '../roles/schemas/agency-role.schema';
+import {
+  UserRole,
+  UserRoleSchema,
+} from '../permissions/schemas/user-role.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { LeadTicketsService } from './lead-tickets.service';
 import { ServiceTicketsController } from './service-tickets.controller';
@@ -58,6 +62,7 @@ import {
     MongooseModule.forFeature([
       { name: ServiceTicket.name, schema: ServiceTicketSchema },
       { name: User.name, schema: UserSchema },
+      { name: UserRole.name, schema: UserRoleSchema },
       // The lead behind a `Quote` ticket. Registered as a schema rather than by
       // importing `LeadsModule`, which would close a cycle — `LeadsModule`
       // imports this module for `LeadTicketsService`.

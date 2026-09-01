@@ -229,12 +229,25 @@ export function ShareLinkDialog({ open, onOpenChange }: ShareLinkDialogProps) {
   );
 }
 
-/** Trigger for {@link ShareLinkDialog}; gates itself on `leads:write`. */
+/**
+ * Trigger for {@link ShareLinkDialog}; gates itself on `leads:write`.
+ *
+ * Icon-only below `sm` (PAC-61). The Leads header now carries three actions
+ * plus the mobile-nav hamburger, and three labelled buttons overflow a 375px
+ * viewport — `AddLeadButton` already anticipated exactly this in its own
+ * comment. `aria-label` is load-bearing rather than decorative: without it the
+ * collapsed state is an unlabelled icon button.
+ */
 export function ShareLinkTrigger({ onClick }: { onClick: () => void }) {
   return (
-    <Button type="button" variant="outline" onClick={onClick}>
+    <Button
+      type="button"
+      variant="outline"
+      onClick={onClick}
+      aria-label="Share form"
+    >
       <Link2 size={15} />
-      Share form
+      <span className="hidden sm:inline">Share form</span>
     </Button>
   );
 }
