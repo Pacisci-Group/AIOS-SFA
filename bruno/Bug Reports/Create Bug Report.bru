@@ -1,0 +1,110 @@
+meta {
+  name: Create Bug Report
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/bug-reports
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "description": "The leaderboard still shows last month's numbers after I record a sale.\nSteps: record a sold deal, go back to the dashboard, the Motivation Hub total is unchanged.",
+    "severity": "high",
+    "screenshots": [
+      {
+        "key": "{{bugScreenshotKey}}",
+        "filename": "leaderboard-stale.png",
+        "contentType": "image/png",
+        "size": 20480
+      }
+    ],
+    "context": {
+      "url": "http://localhost:5173/dashboard/producer?range=month",
+      "route": "/dashboard/producer",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Bruno/CLI",
+      "viewport": { "width": 1512, "height": 916 },
+      "theme": "dark"
+    }
+  }
+}
+
+script:post-response {
+  // Read back by `Platform Bug Reports`, which sorts after this folder.
+  if (res.getStatus() === 201) {
+    bru.setVar("bugReportId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a receipt, not the triage record", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(body).to.have.property("createdAt");
+    // The reporter must not be handed the status or the internal notes.
+    expect(body).to.not.have.property("status");
+    expect(body).to.not.have.property("internalNotes");
+  });
+}
+
+docs {
+  # POST /bug-reports — file a report (step 3 of 3)
+
+  What the floating "Report a bug" widget submits, from any signed-in surface.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** **none** — any authenticated caller. See
+    `Presign Screenshot` for why.
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+  - **Rate limit:** `BUG_REPORT_RATE_LIMIT` (default 10) per minute.
+
+  ## Body
+  | field       | type   | rules                                              |
+  |-------------|--------|-----------------------------------------------------|
+  | description | string | 10–5,000 chars                                      |
+  | severity    | enum   | `low` \| `normal` \| `high` \| `blocking` (default `normal`) |
+  | screenshots | array  | ≤ 5, each `{ key, filename, contentType, size }`     |
+  | context     | object | all fields optional — url, route, userAgent, viewport, theme |
+
+  ## What the server does not take your word for
+
+  - **Identity.** `reportedBy`, `reporterEmail`, `reporterName`, `agencyId` and
+    `branchId` come from `request.access` and the user document, never from the
+    body. There is no way to file a report as somebody else.
+  - **Screenshot ownership.** Every `key` is re-checked against the caller's own
+    `agencies/<agencyId>/bug-reports/<userId>/` prefix. A key from anywhere else
+    is a `400`.
+  - **Screenshot size and type.** Re-read from storage with `HeadObject`. A
+    presigned PUT signs only the content type, so the declared `size` is a claim
+    about a file the API has never seen.
+  - **A key that was presigned but never uploaded to** is **dropped**, and the
+    report is still created. Losing one screenshot beats losing the report it was
+    attached to.
+
+  `context` is client-supplied and only ever displayed. Nothing authorizes off it.
+
+  ## Response `201`
+  ```json
+  { "id": "68f3…c21", "createdAt": "2026-09-01T14:22:07.113Z" }
+  ```
+
+  A receipt, not the record: the reporter never sees `status` or
+  `internalNotes`. Reading a report is `platform:bugs:read`.
+
+  ## Errors
+  - `400 Bad Request` — description under 10 chars, more than 5 screenshots, or
+    a screenshot key the caller was not issued.
+  - `401 Unauthorized` — missing/expired token.
+  - `429 Too Many Requests` — over the per-minute limit.
+}

@@ -1,0 +1,61 @@
+meta {
+  name: Upload Screenshot
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{bugScreenshotUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: image/png
+}
+
+body:text {
+  not-a-real-png-see-the-docs-block
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw screenshot upload (step 2 of 3)
+
+  Not an API endpoint: this goes **straight to object storage** using the URL
+  from `Presign Screenshot`. Same three-step chain as
+  `Quote Recaps/Upload Quote Document` and `Deal Audits/Upload Audit Attachment`.
+
+  - **Auth:** `none` — deliberately. The collection-level bearer would be sent
+    on this request and **break the S3 signature**; a presigned URL carries its
+    own credentials.
+
+  ## Why this exists
+
+  `Create Bug Report` calls `HeadObject` on every declared key and **drops** the
+  ones nothing was uploaded to, so without a real PUT the screenshot would
+  silently vanish from the report and the chain would prove nothing.
+
+  ## Why the body is not a real PNG
+
+  Storage holds opaque bytes and the API never decodes them — `statObject` reads
+  only the size and the recorded content type. Nothing anywhere in the pipeline
+  parses an image, so a text stand-in exercises exactly the same path. The
+  four-line "PDF" in `Upload Quote Document` is the same trick for the same
+  reason.
+
+  ## Headers
+  `Content-Type` **must** match the signed value (`requiredHeaders` from the
+  presign response) or storage rejects the PUT with a 403 that says nothing
+  useful.
+
+  ## Response
+  - `200 OK` — object stored; the key can now be attached to a report.
+  - `403 Forbidden` — signature mismatch: usually an `Authorization` header
+    being sent, a differing `Content-Type`, or an expired URL.
+}

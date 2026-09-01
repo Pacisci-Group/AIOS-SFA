@@ -9,6 +9,7 @@ import { RequirePermission } from '@/components/layout/RequirePermission';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
+import { ReportBugWidget } from '@/features/bug-report/ReportBugWidget';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -61,6 +62,9 @@ const SuperAdminHomePage = lazy(
 );
 const AddMailersPage = lazy(
   () => import('@/features/platform/AddMailersPage'),
+);
+const BugReportsPage = lazy(
+  () => import('@/features/platform/BugReportsPage'),
 );
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
@@ -493,6 +497,28 @@ export function App() {
                     }
                   />
                 </Route>
+                {/* The queue gates on `:read`; the status/notes controls on it
+                    call a `:write` endpoint, so an operator holding only read
+                    can open the page and will be refused on save. Every
+                    platform admin holds both (`ALL_PLATFORM_PERMISSIONS`), so
+                    that split only matters if the permission is ever narrowed. */}
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={PlatformPermission.BugsRead}
+                      redirectTo="/admin"
+                    />
+                  }
+                >
+                  <Route
+                    path="/admin/bugs"
+                    element={
+                      <LazyPage>
+                        <BugReportsPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
               </Route>
             </Route>
 
@@ -541,6 +567,13 @@ export function App() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+
+          {/* Inside `BrowserRouter` but outside `Routes`: it renders on every
+              signed-in surface (tenant pages, the Super Admin panel, the dev
+              navigator) without any of them having to mount it, and it needs a
+              router context to record which page a report came from. It renders
+              nothing when signed out. */}
+          <ReportBugWidget />
           </BrowserRouter>
           {/* `sonner` was installed but never mounted, so `toast()` silently
               no-opped. Used by the share-link dialog's copy action. */}

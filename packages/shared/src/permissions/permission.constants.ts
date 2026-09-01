@@ -31,6 +31,19 @@ export const PlatformPermission = {
    * into a peer's authority, only downwards into a tenant's.
    */
   UsersImpersonate: 'platform:users:impersonate',
+  /**
+   * Read the in-app bug-report queue.
+   *
+   * ⚠ There is no agency-facing counterpart, and adding one is a decision
+   * rather than an omission: reports arrive from every tenant, name the
+   * screens and data the reporter was looking at, and are triaged by whoever
+   * operates the platform. **Filing** a report needs no permission at all —
+   * `POST /bug-reports` declares none, so every authenticated user can reach
+   * it whatever their modules. Reading them is what is restricted.
+   */
+  BugsRead: 'platform:bugs:read',
+  /** Set a report's triage status and internal notes. */
+  BugsWrite: 'platform:bugs:write',
 } as const;
 
 /** Agency administration permissions (Agency Owner manages users/branches). */

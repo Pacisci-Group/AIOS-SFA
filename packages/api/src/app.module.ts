@@ -27,6 +27,7 @@ import { ActivitiesModule } from './activities/activities.module';
 import { AddressModule } from './address/address.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
+import { BugReportsModule } from './bug-reports/bug-reports.module';
 import { CarriersModule } from './carriers/carriers.module';
 import { ClientsModule } from './clients/clients.module';
 import { CrmModule } from './crm/crm.module';
@@ -166,6 +167,11 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // `platform/mailers`, so it does not collide with the `mailers` module
     // stub still served by FeatureModulesModule for the agency-facing page.
     MailersModule,
+    // "Report a bug" (reporter side) + the Super Admin queue that reads it.
+    // Routes on `bug-reports` and `platform/bug-reports`, neither of which is
+    // a prefix of anything above, so its position here carries no ordering
+    // constraint — unlike PoliciesModule and ShareLinksModule.
+    BugReportsModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,
