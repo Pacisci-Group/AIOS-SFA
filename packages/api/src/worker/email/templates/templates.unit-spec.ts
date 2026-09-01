@@ -73,6 +73,8 @@ describe('email template registry', () => {
     it('produces html wrapped in the shared layout', () => {
       const { html } = template.render(data);
       expect(html).toContain('<!doctype html>');
+      // The fixtures carry no `brand`, which is the pre-white-label shape every
+      // event still in the queue has. They must render the platform wordmark.
       expect(html).toContain('AgencyOps');
     });
   });
@@ -143,9 +145,70 @@ describe('invite template', () => {
 
     it('still produces a usable subject with no inviter', () => {
       const subject = inviteTemplate.subject(inviteData({ inviterName: null }));
-      expect(subject).toBe(
-        'Someone invited you to Smith Family Agency on AgencyOps',
+      expect(subject).toBe('Someone invited you to Smith Family Agency');
+    });
+  });
+
+  /**
+   * White-labelling. The two branches that matter are "agency has a logo" and
+   * "no brand on the event at all" — the second is not hypothetical, it is
+   * every invite already in the queue at the moment this deploys.
+   */
+  describe('branding', () => {
+    const BRAND = {
+      name: 'Texas Holdings',
+      logoUrl: 'https://texasholdings.com/api/v1/public/tenant/logo',
+    };
+
+    it('renders the agency logo as the masthead', () => {
+      const { html } = inviteTemplate.render(inviteData({ brand: BRAND }));
+      expect(html).toContain(`src="${BRAND.logoUrl}"`);
+    });
+
+    it('names the agency in the image alt text', () => {
+      // Outlook and Gmail block remote images by default. With images off, the
+      // alt text is the only thing identifying who sent this.
+      const { html } = inviteTemplate.render(inviteData({ brand: BRAND }));
+      expect(html).toContain('alt="Texas Holdings"');
+    });
+
+    it('names the agency in the document title and footer', () => {
+      const { html } = inviteTemplate.render(inviteData({ brand: BRAND }));
+      expect(html).toContain('<title>Texas Holdings</title>');
+      expect(html).toContain('automated message from Texas Holdings');
+    });
+
+    it('names the agency in the text part', () => {
+      // Where the images-off case ultimately lands.
+      const { text } = inviteTemplate.render(inviteData({ brand: BRAND }));
+      expect(text).toContain('automated message from Texas Holdings');
+    });
+
+    it('falls back to a wordmark when the agency has no logo', () => {
+      const { html } = inviteTemplate.render(
+        inviteData({ brand: { name: 'Texas Holdings', logoUrl: null } }),
       );
+      expect(html).not.toContain('<img');
+      expect(html).toContain('Texas Holdings');
+    });
+
+    it('renders the platform identity for an event carrying no brand', () => {
+      // The in-flight-queue case at deploy: the field is optional precisely so
+      // this renders rather than throwing.
+      const { html, text } = inviteTemplate.render(inviteData());
+      expect(html).toContain('<title>AgencyOps</title>');
+      expect(html).not.toContain('<img');
+      expect(text).toContain('automated message from Smith Family Agency');
+    });
+
+    it('escapes markup in a branded agency name', () => {
+      const { html } = inviteTemplate.render(
+        inviteData({
+          brand: { name: '<script>alert(1)</script>', logoUrl: null },
+        }),
+      );
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
     });
   });
 });

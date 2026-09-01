@@ -24,24 +24,38 @@ function formatExpiry(isoDateTime: string): string {
   });
 }
 
+/**
+ * What to call the product in the body copy.
+ *
+ * White-labelled, so this is the agency's own name — "join Texas Holdings on
+ * Texas Holdings" would be absurd, which is why the platform name only appears
+ * when there is no agency brand to use. Falls back through the event's
+ * `agencyName`, which every invite has carried since before branding existed.
+ */
+function brandName(data: InviteRequestedData): string {
+  return data.brand?.name ?? data.agencyName;
+}
+
 export const inviteTemplate: Template<InviteRequestedData> = {
   key: 'invite',
 
   subject: (data) =>
-    `${data.inviterName ?? SOMEONE} invited you to ${data.agencyName} on AgencyOps`,
+    `${data.inviterName ?? SOMEONE} invited you to ${data.agencyName}`,
 
   render: (data) => {
     const inviter = data.inviterName ?? SOMEONE;
     const recipient = data.recipientName ?? THERE;
     const roles = data.roleNames.join(', ') || 'no role yet';
     const expiry = formatExpiry(data.expiresAt);
+    const brand = brandName(data);
 
     const html = layout({
+      brand: data.brand ?? undefined,
       preheader: `${inviter} invited you to join ${data.agencyName}.`,
       body: [
         paragraph(`Hi ${recipient},`),
         paragraph(
-          `${inviter} has invited you to join ${data.agencyName} on AgencyOps as ${roles}.`,
+          `${inviter} has invited you to join ${data.agencyName} as ${roles}.`,
         ),
         paragraph('Set your password to get started.'),
         button('Set your password', data.inviteUrl),
@@ -56,17 +70,19 @@ export const inviteTemplate: Template<InviteRequestedData> = {
       ].join('\n'),
     });
 
+    // The text part is where the images-off case ultimately lands, so the
+    // sender's identity has to be legible here without any markup at all.
     const text = [
       `Hi ${recipient},`,
       '',
-      `${inviter} has invited you to join ${data.agencyName} on AgencyOps as ${roles}.`,
+      `${inviter} has invited you to join ${data.agencyName} as ${roles}.`,
       '',
       'Set your password to get started:',
       data.inviteUrl,
       '',
       `This link expires on ${expiry}.`,
       '',
-      'This is an automated message from AgencyOps. Please do not reply to it.',
+      `This is an automated message from ${brand}. Please do not reply to it.`,
     ].join('\n');
 
     return { html, text };

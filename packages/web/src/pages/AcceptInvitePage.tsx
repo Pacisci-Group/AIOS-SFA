@@ -1,8 +1,9 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Check, Eye, EyeOff, Shield, X } from 'lucide-react';
+import { Check, Eye, EyeOff, X } from 'lucide-react';
 import { useAuth } from '@/contexts/auth-context';
+import { BrandLockup } from '@/components/common/BrandMark';
 import { ApiError } from '@/lib/api-client';
 import { acceptInvite, getInvitePreview } from '@/lib/invite-api';
 import { Button } from '@/components/ui/button';
@@ -24,19 +25,7 @@ function AuthShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
-        <div className="flex items-center gap-3 mb-8 justify-center">
-          <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-            <Shield size={20} className="text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-foreground tracking-tight">
-              AgencyOps
-            </h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
-              Operations Platform
-            </p>
-          </div>
-        </div>
+        <BrandLockup size="md" className="mb-8 justify-center" />
         <Card className="p-6 gap-4 border-border">{children}</Card>
       </div>
     </div>

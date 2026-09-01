@@ -1,7 +1,9 @@
-import { LogOut, Shield } from "lucide-react";
+import { LogOut } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/auth-context";
+import { useTenant } from "@/contexts/tenant-context";
+import { BrandMark } from "@/components/common/BrandMark";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -64,17 +66,29 @@ export function RailTooltip({
   );
 }
 
-/** The shield mark, and the wordmark when there is room for it. */
+/**
+ * The agency's mark, and its name when there is room for it.
+ *
+ * "Agency Portal" is kept as the caption rather than the tenant's own tagline:
+ * this is the app shell, and the caption's job here is to say *where you are*,
+ * not to repeat marketing copy the user already saw on the login page.
+ */
 export function SidebarBrand({ collapsed = false }: { collapsed?: boolean }) {
+  const { branding } = useTenant();
+
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary">
-        <Shield className="size-4 text-primary-foreground" />
-      </div>
+      {/* The collapsed rail is 56px wide, so the mark is pinned square there —
+          a wider cap would push it under the toggle. Expanded, `sm` already
+          keeps it near-square so the agency name beside it is not crowded. */}
+      <BrandMark
+        size="sm"
+        className={cn('rounded-md', collapsed && 'max-w-[32px]')}
+      />
       {!collapsed && (
         <div className="min-w-0">
-          <p className="text-sm leading-tight font-bold tracking-[0.01em] text-sidebar-accent-foreground">
-            AgencyOps
+          <p className="truncate text-sm leading-tight font-bold tracking-[0.01em] text-sidebar-accent-foreground">
+            {branding.name}
           </p>
           <p className="text-xs leading-tight tracking-wide text-muted-foreground uppercase">
             Agency Portal

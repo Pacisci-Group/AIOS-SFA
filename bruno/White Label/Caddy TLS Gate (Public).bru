@@ -1,0 +1,51 @@
+meta {
+  name: Caddy TLS Gate (Public)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/public/domains/allow?domain=nope.invalid
+  auth: none
+}
+
+params:query {
+  domain: nope.invalid
+}
+
+tests {
+  test("refuses a hostname we do not serve", function () {
+    // The whole defence against certificate-issuance abuse. If this ever
+    // answered 200 for an arbitrary domain, anyone could point a name at our IP
+    // and make us burn a shared Let's Encrypt rate limit.
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # GET /public/domains/allow?domain=
+
+  Caddy's **on-demand TLS `ask` endpoint**. Caddy calls it before requesting a
+  certificate for a hostname it has never seen; `200` means go ahead, anything
+  else means refuse the connection.
+
+  **Module** — none. **Permission** — none, `@Public()`.
+
+  Answers `200` only for an `active` agency domain or the platform host, and
+  `404` otherwise. This is the only thing standing between a public IP on port
+  443 and an attacker making us request certificates for arbitrary domains until
+  Let's Encrypt rate-limits the whole account.
+
+  **Deliberately returns no body.** Caddy reads the status code only, and a body
+  would be an unauthenticated disclosure of which domains we serve.
+
+  ## Caddyfile
+  ```caddyfile
+  {
+    on_demand_tls {
+      ask http://127.0.0.1:4000/api/v1/public/domains/allow
+    }
+  }
+  ```
+  Caddy appends `?domain=<host>` itself.
+}

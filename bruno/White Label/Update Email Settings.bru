@@ -1,0 +1,73 @@
+meta {
+  name: Update Email Settings
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/agency/email
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "fromName": "Texas Holdings",
+    "replyTo": "service@texasholdings.com"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the agency name reaches the From header", function () {
+    expect(res.getBody().effectiveFrom).to.contain('"Texas Holdings"');
+  });
+
+  test("still sends from the platform address", function () {
+    // No verified sending domain, so the address half must stay ours. The
+    // agency is surfaced through the display name and Reply-To.
+    expect(res.getBody().sendingStatus).to.equal("platform");
+  });
+}
+
+docs {
+  # PATCH /agency/email
+
+  Set the display name, sending mailbox and reply-to.
+
+  **Module** — none. **Permission** — `agency:email:write`.
+
+  **Body** — every field `clearable` (`null` removes, omitted leaves alone):
+  | field         | type           | rules |
+  |---------------|----------------|-------|
+  | fromName      | string \| null | ≤ 60 chars. Display name in `From:` |
+  | fromLocalPart | string \| null | ≤ 64 chars, `[a-z0-9._-]`. Only takes effect once a domain is verified |
+  | replyTo       | string \| null | a valid email, ≤ 160 chars |
+
+  **None of these needs verification.** `fromName` and `replyTo` carry no
+  authentication requirement at all — which is the point: setting `replyTo` is
+  the one-field way for an agency to get replies into their own inbox with no
+  DNS work whatsoever.
+
+  The display name is **quoted and stripped of quotes, backslashes and CRLF**
+  before it reaches the header. An agency name is user-supplied text being
+  interpolated into a mail header; a bare quote splits it into two addresses and
+  a CRLF starts a new header. That is injection, not a formatting nit.
+
+  **Response `200`** — the same shape as **Get Email Settings**.
+
+  **Errors**
+  - `400` — malformed local part or reply-to address.
+  - `403` — caller lacks `agency:email:write`.
+}

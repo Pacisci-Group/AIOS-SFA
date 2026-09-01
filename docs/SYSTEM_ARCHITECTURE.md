@@ -76,7 +76,11 @@ A permission-based insurance agency operations platform where:
 ### Out of scope (initial release)
 
 - Payment processing / billing between agencies and platform
-- White-label per-agency branding (can be added later)
+- ~~White-label per-agency branding~~ — **delivered.** Per-agency hostnames
+  (platform subdomain or custom domain), logo/name through the app and outbound
+  email, and per-agency email sender identity. The hostname is a security
+  boundary, not just branding: a session is bound to the host it was created on.
+  Still deferred within it: per-agency **colour** themes.
 - Mobile native apps (PWA remains supported)
 
 ---

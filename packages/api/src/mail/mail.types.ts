@@ -28,8 +28,23 @@ export interface InviteEmailPayload {
   inviterName: string | null;
   /** Human-readable role names the invitee has been assigned. */
   roleNames: string[];
-  /** Absolute accept-invite URL, built from `APP_BASE_URL`. */
+  /**
+   * Absolute accept-invite URL, on the invitee's **own agency's** primary host
+   * (`TenantUrlService.baseUrlFor`), falling back to `APP_BASE_URL`.
+   *
+   * The host matters: `HostTenantGuard` binds a session to the hostname it was
+   * created on, so a link pointing anywhere else is one the invitee cannot
+   * complete.
+   */
   inviteUrl: string;
   /** When the link stops working, for the "expires in N days" line. */
   expiresAt: Date;
+  /**
+   * The agency's logo and display name, so the email looks like the dashboard
+   * the invitee is being sent to.
+   *
+   * Optional because it must survive an agency that has set no branding, and
+   * because the template has to render without it — see the event schema.
+   */
+  brand?: { name: string; logoUrl: string | null };
 }

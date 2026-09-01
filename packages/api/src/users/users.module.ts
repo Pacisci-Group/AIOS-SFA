@@ -15,6 +15,7 @@ import {
   ServiceTicket,
   ServiceTicketSchema,
 } from '../crm/schemas/service-ticket.schema';
+import { TenantBrandingModule } from '../tenant-branding/tenant-branding.module';
 import { User, UserSchema } from './schemas/user.schema';
 import { UserWorkReleaseService } from './user-work-release.service';
 import { UsersController } from './users.controller';
@@ -24,6 +25,9 @@ import { UsersService } from './users.service';
   imports: [
     PermissionsModule,
     MailModule,
+    // For the agency logo + display name on the invite email, so it matches
+    // the dashboard the invitee is being sent to.
+    TenantBrandingModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: AgencyRole.name, schema: AgencyRoleSchema },

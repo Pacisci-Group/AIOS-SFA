@@ -41,10 +41,13 @@ module "droplet" {
   enable_reserved_ip   = var.enable_reserved_ip
   tags                 = local.all_tags
 
+  # `enable_tls` is deliberately NOT passed any more. The edge is Caddy, which
+  # obtains certificates on demand for every hostname the app says it serves —
+  # there is no boot-time issuance step left to switch on or off. The variable
+  # survives because `web_origin` above still needs to know the scheme.
   user_data = templatefile("${path.module}/../../modules/droplet/templates/cloud-init.yaml.tpl", {
     ssh_public_key = var.ssh_public_key
     domain         = var.domain
-    enable_tls     = var.enable_tls
     certbot_email  = var.certbot_email
   })
 }

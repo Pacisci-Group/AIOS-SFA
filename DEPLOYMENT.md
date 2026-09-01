@@ -67,6 +67,7 @@ All of these are **required** — the deploy fails preflight if any is empty.
 | `GHCR_PULL_USER` | GitHub username/bot with `read:packages` |
 | `GHCR_PULL_TOKEN` | PAT with `read:packages` (droplet pulls images) |
 | `PUBLIC_FORM_BASE_URL` | Public site URL; share links are built as `<base>/f/lead/{token}` |
+| `PLATFORM_HOST` | The one **hostname** (not URL) the super-admin app answers on, e.g. `app.smithfamily.agency`. Access control, not cosmetics: agency users are refused here and platform admins are refused on agency hosts. A wrong value presents as "nobody can log in". |
 | `STORAGE_ENDPOINT` | `terraform output -raw spaces_endpoint` |
 | `STORAGE_REGION` | `terraform output -raw spaces_region` |
 | `STORAGE_BUCKET` | `terraform output -raw spaces_bucket` |
@@ -77,6 +78,11 @@ Optional tuning knobs for the public intake routes, defaulted in
 `packages/api/src/config/rate-limit.config.ts` if left unset: `RATE_LIMIT_SHORT`,
 `RATE_LIMIT_LONG`, `PUBLIC_FORM_RATE_LIMIT`, `PUBLIC_INTAKE_RATE_LIMIT`,
 `PUBLIC_INTAKE_HOURLY_LIMIT`.
+
+Optional white-label settings (see "White labelling: agency domains" below):
+`BASE_DOMAIN` — the parent zone agency subdomains are issued under; unset
+disables subdomains, custom domains still work. `PUBLIC_SERVER_IPS` — public
+IP(s), so the settings UI can tell an owner what to put in an A record.
 
 > Image push uses the built-in `GITHUB_TOKEN` (no secret needed). The droplet
 > needs its own read token to pull from GHCR. `GHCR_PULL_USER`/`GHCR_PULL_TOKEN`
@@ -215,15 +221,21 @@ docker compose -f /opt/sfa/docker-compose.prod.yml logs api | grep -i transactio
    cd /opt/sfa
    docker compose -f docker-compose.prod.yml run --rm api node packages/api/dist/seed/seed.js
    ```
-6. Enable TLS later, once DNS is wired (SSH to droplet):
-   ```bash
-   sudo /opt/sfa/enable-tls.sh          # or: sudo certbot --nginx -d dev.example.com
-   ```
+6. **TLS needs no step.** The edge is Caddy with on-demand issuance: the first
+   HTTPS request for a hostname triggers a Let's Encrypt certificate, provided
+   the app says it serves that name. Point DNS at the droplet and load the site.
+
    Switching to HTTPS changes the browser's `Origin`, so update `CORS_ORIGIN`,
    `PUBLIC_FORM_BASE_URL` and `spaces_cors_origins` at the same time — otherwise
    uploads start failing preflight while everything else keeps working.
 7. Verify:
-   - `http://<droplet_ip>/api/v1/health` (or the domain once DNS/TLS is set)
+   - `http://<droplet_ip>/api/v1/health` — plain HTTP on the bare IP is served
+     deliberately (an IP can never hold a certificate), which is why the deploy
+     health check keeps working before DNS exists.
+   - `https://<domain>/` — a valid certificate, obtained on first load.
+   - API log names the platform host and the subdomain zone
+     (`Platform host: … ; agency subdomains: …`). A wrong `PLATFORM_HOST` shows
+     up here and nowhere else until someone fails to log in.
    - API log says `MongoDB transactions available` (see above)
    - one real document upload through the UI, end to end — this is the only
      check that actually exercises the presign + bucket CORS path
@@ -263,15 +275,71 @@ Deviations from dev worth knowing:
   Compass/mongosh; production has no standing hole in the database perimeter. Add a
   named entry only when someone genuinely needs it, and remove it the same day.
 - **DNS is manual**, same as dev (`enable_dns = false`) — the zone is at GoDaddy. Point
-  an `app` A record at `terraform output -raw droplet_ip` (the reserved IP).
+  an `app` A record at `terraform output -raw droplet_ip` (the reserved IP), and a
+  **wildcard `*` A record at the same IP** if agencies are to get subdomains.
 - **No auto-seed and no demo data.** Run `seed.js` once by hand after TLS is up (see
   "First deploy checklist" step 5). Do **not** run `seed:demo` or `api:migrate`.
 
-Ordering that matters: `enable_tls = true` is set from the first apply because
-`user_data` cannot be changed in place — flipping it later would **replace the droplet**.
-First-boot Certbot fails (DNS does not point at the reserved IP yet); cloud-init treats
-that as non-fatal. Finish with `sudo /opt/sfa/enable-tls.sh` once the A record resolves,
-then seed.
+Ordering that matters: **`user_data` cannot be changed in place** — any edit to
+`cloud-init.yaml.tpl` replaces the droplet. That includes the Nginx → Caddy
+switch, so do it on `dev` first and expect to re-run the seed afterwards.
+
+TLS itself no longer has an ordering constraint: Caddy issues a certificate the
+first time each hostname is requested, so DNS can be wired before or after the
+apply.
+
+## White labelling: agency domains
+
+Each agency can serve the app on a subdomain of ours
+(`texasholdings.smithfamily.agency`) or on a domain they own
+(`texasholdings.com`). Both are added by the **agency owner** in
+**Settings → Domains**; there is no operator step per domain.
+
+### What the platform needs, once
+
+| Setting | Where | Notes |
+|---|---|---|
+| `PLATFORM_HOST` | Environment secret | The one hostname the super-admin app answers on. **Required** — it decides who may sign in where. |
+| `BASE_DOMAIN` | Environment secret | Parent zone for agency subdomains. Optional; unset disables subdomains. |
+| `PUBLIC_SERVER_IPS` | Environment secret | Public IP(s), so the UI can tell an owner what to put in an A record. |
+| Wildcard `*` A record | DNS (GoDaddy) | Points `*.<BASE_DOMAIN>` at the reserved IP. |
+
+### How TLS happens
+
+Caddy is configured with **on-demand TLS**. Before requesting a certificate for
+a hostname it has not seen, it calls
+`GET /api/v1/public/domains/allow?domain=<host>` on the API. A `200` means the
+domain is `active` for some agency (or is the platform host); anything else and
+Caddy refuses the connection without contacting Let's Encrypt.
+
+That gate is load-bearing. The droplet has a public IP answering on 443, so
+without it anyone could point a domain at us and make us request certificates
+until the account hits a Let's Encrypt rate limit — which would then block
+issuance for our real domains too.
+
+Agency subdomains currently go through the same on-demand path rather than a
+wildcard certificate, because a wildcard needs the DNS-01 challenge and hence a
+Caddy build carrying the zone provider's DNS plugin. The Caddyfile has the
+wildcard block written out and commented, with what is required to enable it.
+
+### When a tenant says their domain does not work
+
+On the droplet, in order:
+
+```bash
+# 1. Does the app consider the domain live? Must be 200.
+curl -sI "http://127.0.0.1:4000/api/v1/public/domains/allow?domain=texasholdings.com"
+
+# 2. What did Caddy try to do?
+journalctl -u caddy -n 100 --no-pager
+
+# 3. Does DNS actually point here?
+dig +short texasholdings.com
+```
+
+Step 1 failing means the domain is still `pending` or `failed` in the app — the
+owner has not published the TXT record, or it has not propagated. That is
+self-service in Settings → Domains, not an operator fix.
 
 ## Rollback
 

@@ -1,0 +1,85 @@
+meta {
+  name: Set Sending Domain
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{baseUrl}}/agency/email/sending-domain
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "domain": "texasholdings.com"
+  }
+}
+
+tests {
+  test("is unavailable without a provider key", function () {
+    // Local development has no RESEND_API_KEY, so `UnavailableEmailProvider`
+    // refuses. Refusing is correct: a stub that returned "verified" would make
+    // the worker build a `From:` on an unverified domain, and the first real
+    // send would fail non-retriably.
+    expect([201, 503]).to.include(res.getStatus());
+  });
+
+  test("never lands verified", function () {
+    if (res.getStatus() === 201) {
+      expect(res.getBody().sendingStatus).to.equal("pending");
+    }
+  });
+}
+
+docs {
+  # POST /agency/email/sending-domain
+
+  Register a domain with the email provider (Resend) and return the DNS records
+  the agency has to publish.
+
+  **Module** — none. **Permission** — `agency:email:write`.
+
+  **Body** — `{ "domain": "texasholdings.com" }`. Normalised server-side.
+
+  ## This is a different domain from `agency/domains`
+  Deliberately separate, and they verify independently:
+  - an **app** hostname needs a CNAME/A record at the edge, verified by us;
+  - a **sending** domain needs DKIM/SPF/DMARC at the registrar, verified by the
+    provider.
+
+  An agency may well use `texasholdings.com` for both. That is two DNS record
+  sets doing two jobs.
+
+  ## Always lands `pending`
+  `SenderIdentityService` keys off `sendingStatus` to decide whether it may send
+  from the domain, and an optimistic `verified` here does not delay an email —
+  it **loses** it. Resend rejects an unverified `From:` with
+  `invalid_from_address`, which `ResendTransport` treats as non-retriable. Until
+  verification passes, mail keeps going out from the platform address, which is
+  correct behaviour rather than a degradation.
+
+  Registering a second domain replaces the first, including at the provider —
+  two live records would leave no way to say which one `fromLocalPart` belongs
+  to.
+
+  **Response `201`** — the **Get Email Settings** shape with `sendingStatus:
+  "pending"` and `dnsRecords` populated (SPF `MX` + `TXT`, DKIM `CNAME`/`TXT`,
+  tracking `CNAME`). The records are cached on the agency so a page reload
+  between attempts still shows them.
+
+  **Errors**
+  - `400` — malformed domain.
+  - `403` — caller lacks `agency:email:write`.
+  - `409` — that domain is already verified for this agency.
+  - `503` — `RESEND_API_KEY` is not configured, or the provider rejected the
+    request. Email keeps sending from the platform address.
+}

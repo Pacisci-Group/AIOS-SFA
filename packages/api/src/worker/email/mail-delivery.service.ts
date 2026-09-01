@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import { Model } from 'mongoose';
@@ -10,6 +9,7 @@ import {
   type TemplateKey,
 } from './templates/registry';
 import { EmailMessage, type EmailStatus } from './schemas/email-message.schema';
+import { SenderIdentityService } from './sender-identity.service';
 
 /** Everything needed to record a delivery against the run that produced it. */
 export interface DeliveryContext {
@@ -29,15 +29,13 @@ export interface SentEmail extends SendResult {
   bodyHash: string;
 }
 
-const DEFAULT_FROM = 'AgencyOps <onboarding@resend.dev>';
-
 @Injectable()
 export class MailDeliveryService {
   private readonly logger = new Logger(MailDeliveryService.name);
 
   constructor(
     private readonly transport: MailTransport,
-    private readonly config: ConfigService,
+    private readonly sender: SenderIdentityService,
     @InjectModel(EmailMessage.name)
     private readonly messages: Model<EmailMessage>,
   ) {}
@@ -57,6 +55,14 @@ export class MailDeliveryService {
     templateKey: K,
     data: TemplateData<K>,
     idempotencyKey: string,
+    /**
+     * Whose agency this is sent on behalf of, for the `From:` header.
+     *
+     * Passed explicitly rather than read off `data`, even though every payload
+     * happens to carry an `agencyId` today: the sender is a *delivery* decision
+     * and should not depend on a field a future template might not have.
+     */
+    agencyId?: string | null,
   ): Promise<SentEmail> {
     const template = EMAIL_TEMPLATES[templateKey] as {
       subject: (d: TemplateData<K>) => string;
@@ -65,8 +71,7 @@ export class MailDeliveryService {
 
     const subject = template.subject(data);
     const { html, text } = template.render(data);
-    const from = this.resolveFrom();
-    const replyTo = this.config.get<string>('MAIL_REPLY_TO') ?? '';
+    const { from, replyTo } = await this.sender.resolve(agencyId);
     const to = (data as { to: string }).to;
 
     const result = await this.transport.send(
@@ -110,18 +115,5 @@ export class MailDeliveryService {
     this.logger.log(
       `Recorded ${status} email template=${sent.templateKey} provider=${sent.providerMessageId}`,
     );
-  }
-
-  /**
-   * The `From` header.
-   *
-   * Always the platform's own verified domain — never the agency's. Sending
-   * `From: <an unverified agency domain>` fails SPF/DKIM, lands in spam, and
-   * damages the sending reputation of the domain that *is* verified. Per-agency
-   * verified identities are a later phase; until then the agency is surfaced
-   * through the display name and `Reply-To`.
-   */
-  private resolveFrom(): string {
-    return this.config.get<string>('MAIL_DEFAULT_FROM') ?? DEFAULT_FROM;
   }
 }

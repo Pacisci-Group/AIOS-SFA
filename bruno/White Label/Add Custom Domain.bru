@@ -1,0 +1,123 @@
+meta {
+  name: Add Custom Domain
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/agency/domains
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  // A fresh hostname every run. `hostname` is unique platform-wide and a repeat
+  // is answered with 409 by design, so a hard-coded value would pass once and
+  // fail on every subsequent `bru run`. **Remove Domain** deletes it again at
+  // the end of the folder.
+  bru.setVar("customDomain", `wl-${Date.now()}.example.com`);
+}
+
+body:json {
+  {
+    "hostname": "{{customDomain}}",
+    "kind": "custom"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("customDomainId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("lands pending, never active", function () {
+    // DNS has not been proven. An optimistic `active` here would hand the
+    // hostname — which is unique platform-wide — to whoever asked first.
+    expect(res.getBody().status).to.equal("pending");
+  });
+
+  test("returns the DNS records to publish", function () {
+    const names = res.getBody().dnsInstructions.map((r) => r.type);
+    expect(names).to.include("TXT");
+  });
+
+  test("the TXT record carries a verification token", function () {
+    const txt = res.getBody().dnsInstructions.find((r) => r.type === "TXT");
+    expect(txt.name).to.contain("_sfa-verify.");
+    expect(txt.value).to.match(/^sfa-verify=[0-9a-f]{32}$/);
+  });
+}
+
+docs {
+  # POST /agency/domains
+
+  Claim a hostname for the caller's agency.
+
+  **Module** — none. **Permission** — `agency:domains:write`.
+
+  **Body**
+  | field    | type   | rules                                  |
+  |----------|--------|----------------------------------------|
+  | hostname | string | 3–253 chars; normalised server-side (lowercased, scheme/path/port/trailing-dot stripped) |
+  | kind     | enum   | `subdomain` \| `custom`                |
+
+  `kind` is declared rather than inferred from the string on purpose: a typo in
+  a platform subdomain (`…smithfamily.agencyy`) would otherwise be silently
+  accepted as a custom domain the owner then has to verify and cannot.
+
+  ## The two kinds behave differently
+  - **`subdomain`** — a single free label directly under `BASE_DOMAIN`. Created
+    **`active` immediately**: we control that zone, the wildcard DNS record
+    already resolves it and the wildcard certificate already covers it, so there
+    is nothing to prove. Two levels deep (`a.b.base`) is rejected — one wildcard
+    certificate matches exactly one label, so it would activate and then fail
+    TLS in the browser.
+  - **`custom`** — created **`pending`** with a 16-byte verification token and
+    the DNS records to publish. Serves nothing until **Verify Domain** passes.
+
+  The first `active` domain an agency gets automatically becomes its primary, so
+  outbound links start using it without anyone discovering the setting.
+
+  **Response `201`** — the same row shape as **List Domains**, with
+  `dnsInstructions` populated:
+  ```json
+  {
+    "id": "...",
+    "hostname": "texasholdings.com",
+    "kind": "custom",
+    "status": "pending",
+    "isPrimary": false,
+    "dnsInstructions": [
+      { "type": "TXT",   "name": "_sfa-verify.texasholdings.com", "value": "sfa-verify=<32 hex>", "purpose": "Proves you control this domain." },
+      { "type": "CNAME", "name": "texasholdings.com", "value": "app.smithfamily.agency", "purpose": "Sends visitors to your app. Use this for a subdomain." },
+      { "type": "A",     "name": "texasholdings.com", "value": "<PUBLIC_SERVER_IPS>", "purpose": "Use this instead of the CNAME if you are pointing the bare domain — an apex domain cannot use a CNAME." }
+    ]
+  }
+  ```
+  Both a CNAME and an A record are offered because **an apex domain cannot carry
+  a CNAME** (RFC 1034). The A row appears only when `PUBLIC_SERVER_IPS` is set.
+
+  **Errors**
+  - `400` — malformed hostname; a `subdomain` that is not a direct child of
+    `BASE_DOMAIN`; a `subdomain` when `BASE_DOMAIN` is unset; a `custom` domain
+    that *is* inside our zone (it must be added as a subdomain, which is what
+    keeps the reserved-label check from being bypassable).
+  - `403` — caller lacks `agency:domains:write`.
+  - `409` — the hostname is taken (by this agency or another — the message
+    differs, the status does not), or the requested subdomain label is reserved
+    (`app`, `api`, `www`, `admin`, …; see `RESERVED_SUBDOMAIN_LABELS`).
+}

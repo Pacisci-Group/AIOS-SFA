@@ -1,0 +1,86 @@
+meta {
+  name: Get Tenant Branding (Public)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/public/tenant
+  auth: none
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("identifies the host as platform or agency", function () {
+    expect(["platform", "agency"]).to.include(res.getBody().kind);
+  });
+
+  test("always names something renderable", function () {
+    // The whole point of the fallback chain: no caller should ever have to
+    // render an empty wordmark.
+    expect(res.getBody().name).to.be.a("string").and.not.be.empty;
+  });
+}
+
+docs {
+  # GET /public/tenant
+
+  What the SPA boots from: which agency (if any) owns the hostname this request
+  arrived on, and what to render as its identity.
+
+  **Module** — none. **Permission** — none, `@Public()`. It has to work before
+  anyone has signed in, because the login page itself is branded.
+
+  **How the tenant is chosen** — from the request's own `Host` header, resolved
+  against the `agencyDomains` collection by `HostTenantResolver`. There is no
+  parameter; to test a tenant locally, send a `Host` header or map the name in
+  `/etc/hosts` (see below).
+
+  **Response `200`**
+  ```json
+  {
+    "kind": "agency",
+    "agencyId": "...",
+    "name": "Texas Holdings",
+    "tagline": "Agency Portal",
+    "logoUrl": "/api/v1/public/tenant/logo?variant=light",
+    "logoDarkUrl": "/api/v1/public/tenant/logo?variant=dark",
+    "faviconUrl": "/api/v1/public/tenant/favicon"
+  }
+  ```
+
+  On the platform host the same shape comes back with `kind: "platform"`,
+  `agencyId: null`, `name: "AgencyOps"` and every URL `null` — the platform mark
+  is a bundled asset in the web app, not an upload.
+
+  The URLs are **paths on the requesting origin**, deliberately. Same-origin
+  keeps every tenant domain out of the object storage CORS allow-list (a static
+  Terraform list), and a stable path is cacheable where a presigned URL is not.
+
+  **Errors**
+  - `404` — the hostname belongs to no agency and is not the platform host. The
+    same answer `HostTenantGuard` gives, so this cannot be used to enumerate
+    tenants.
+
+  ⚠ **The web client must treat this `404` as definitive**, not as a failed
+  request. It originally fell back to the platform brand on *any* error, which
+  rendered a convincing "AgencyOps" sign-in form on an address where every
+  subsequent request is refused by `HostTenantGuard` — correct credentials, then
+  an unexplained failure. `fetchTenantBranding` now separates a `404` (show
+  "this address isn't set up", no form) from a transient network/5xx failure
+  (keep the last known brand and a working form, so an outage does not block the
+  page people use to report it).
+
+  ## Testing a tenant host locally
+  ```
+  # /etc/hosts
+  127.0.0.1  app.sfa.local texasholdings.sfa.local
+  ```
+  Set `PLATFORM_HOST=app.sfa.local`, then either browse the name directly or:
+  ```bash
+  curl -H 'Host: texasholdings.sfa.local' http://localhost:4000/api/v1/public/tenant
+  ```
+}

@@ -131,16 +131,20 @@ data already in Mongo, so it needs no credentials and is safe to re-run.
 
 `Platform (Super Admin) → Agency (tenant) → Branch → User`.
 
-Every request passes seven global guards, in order (`app.module.ts`):
+Every request passes eight global guards, in order (`app.module.ts`):
 
 `TrustedProxyThrottlerGuard` → `JwtAuthGuard` → `AccessContextGuard` →
-`TenantGuard` → `BranchGuard` → `ModuleGuard` → `PermissionsGuard`
+`HostTenantGuard` → `TenantGuard` → `BranchGuard` → `ModuleGuard` →
+`PermissionsGuard`
 
 - **Module keys** (`dashboard`, `leads`, `crm_service`, …) are toggled per
   agency by a super admin. Disabled means hidden nav *and* a 403 from the API.
 - **Permissions** are `<module>:<read|write>` plus `platform:*` / `agency:*`.
   The effective set is role permissions + per-user grants − revokes, filtered to
   the agency's enabled modules.
+- **Hostname binds the session.** `HostTenantGuard` refuses a token used on a
+  hostname belonging to another agency, so white-labelling is a boundary rather
+  than a coat of paint. See "White labelling" below.
 - **Data scopes** are `own` · `branch` · `agency`.
 - Authorization is resolved **live from the database**, not read off the JWT, so
   a permission change takes effect on the user's next request rather than at
@@ -148,6 +152,54 @@ Every request passes seven global guards, in order (`app.module.ts`):
 
 Keep every enum, permission string and role template in `packages/shared` —
 never hard-code or duplicate them.
+
+### White labelling
+
+Each agency can serve the app on its own hostname — a subdomain of ours
+(`texasholdings.smithfamily.agency`) or a domain they own (`texasholdings.com`)
+— and it carries their logo and name through the app **and** into every outbound
+email.
+
+The hostname is not decoration. `HostTenantResolver` maps it to an agency via
+the `agencyDomains` collection, and `HostTenantGuard` refuses any session used on
+a hostname belonging to a different agency; the platform host admits super
+admins only. A token minted on one tenant's host is rejected on another's.
+
+- **Owners self-serve** at `/settings/branding`, `/settings/domains` and
+  `/settings/email`, behind `agency:branding:*`, `agency:domains:*` and
+  `agency:email:*`.
+- **Custom domains prove ownership** with a `_sfa-verify` TXT record before they
+  serve anything — `hostname` is unique platform-wide, so without proof the first
+  agency to type a name would take it from whoever actually owns it.
+- **TLS is automatic.** Caddy obtains a certificate on first request, gated by
+  `GET /public/domains/allow` so we cannot be made to request certificates for
+  domains we do not serve.
+- **Logo assets:** square PNG/WebP with transparency, **256 × 256** (renders at
+  32px, so 256 covers 4× displays); browser icon **128 × 128**; 2 MB cap; no SVG
+  (it is executable markup served from our origin). The app renders it beside
+  the agency name and inside a 56px collapsed rail, which is why square is the
+  requirement rather than a preference — a wide banner is scaled to fit and ends
+  up a sliver. Exact boxes live in `components/common/BrandMark.tsx`.
+- **Email** carries the same logo, and an agency may verify its own sending
+  domain. Until it verifies, mail goes out from the platform address under the
+  agency's display name — sending from an unverified domain is rejected
+  outright, so the fallback is deliberate.
+
+An agency with **no domain yet** may still sign in on the platform host — it has
+nowhere else to go, and without that exception deploying this would lock every
+existing agency out. It closes the moment that agency gets its first domain.
+
+Set `PLATFORM_HOST` (and `BASE_DOMAIN` for subdomains). To exercise it locally:
+
+```bash
+echo "127.0.0.1  app.sfa.local texasholdings.sfa.local" | sudo tee -a /etc/hosts
+# then set PLATFORM_HOST / BASE_DOMAIN in .env and restart both dev servers
+```
+
+The dev server needs `changeOrigin: false`, an IPv4 `host` and `allowedHosts` for
+this to work at all — all three are set and explained in
+`packages/web/vite.config.ts`. Symptoms if one regresses: every tenant renders
+the platform brand, a blank page, or `Blocked request. This host is not allowed.`
 
 ### Asynchronous work
 

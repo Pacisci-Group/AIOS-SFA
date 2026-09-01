@@ -38,6 +38,18 @@ export function setTokens(accessToken: string, refreshToken: string) {
 const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
 
 /**
+ * Key prefixes preserved alongside {@link PRESERVED_UI_PREFERENCE_KEYS}, for
+ * entries whose exact key is not known ahead of time.
+ *
+ * Today: the white-label branding cache, keyed `tenant:<host>`. It describes
+ * the **host**, not the person signed into it — it holds an agency's public
+ * name and logo URL, which is exactly what the next visitor to that address
+ * sees on the login page anyway. Wiping it on logout would make the very next
+ * paint flash "AgencyOps" at someone who has never seen that name.
+ */
+const PRESERVED_UI_PREFERENCE_PREFIXES = ['tenant:'] as const;
+
+/**
  * Wipe every trace of the session from the browser. Clears the whole
  * localStorage and sessionStorage rather than individual keys so no cached
  * data (tokens, user, branch selection, or anything added later) can leak
@@ -49,7 +61,10 @@ const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
  */
 export function clearTokens() {
   try {
-    const preserved = PRESERVED_UI_PREFERENCE_KEYS.map(
+    const prefixed = Object.keys(localStorage).filter((key) =>
+      PRESERVED_UI_PREFERENCE_PREFIXES.some((prefix) => key.startsWith(prefix)),
+    );
+    const preserved = [...PRESERVED_UI_PREFERENCE_KEYS, ...prefixed].map(
       (key) => [key, localStorage.getItem(key)] as const,
     );
 

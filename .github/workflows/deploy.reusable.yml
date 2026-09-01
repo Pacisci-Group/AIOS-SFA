@@ -126,6 +126,17 @@ jobs:
           STORAGE_ACCESS_KEY_ID: ${{ secrets.STORAGE_ACCESS_KEY_ID }}
           STORAGE_SECRET_ACCESS_KEY: ${{ secrets.STORAGE_SECRET_ACCESS_KEY }}
           PUBLIC_FORM_BASE_URL: ${{ secrets.PUBLIC_FORM_BASE_URL }}
+          # White labelling. PLATFORM_HOST is required for the same reason
+          # APP_BASE_URL is, but with a louder failure: it decides who may sign
+          # in on which hostname. Left unset it falls back to the host of
+          # APP_BASE_URL, which is usually right — but "usually" is not a
+          # property you want on an access-control setting, so it is named
+          # explicitly. BASE_DOMAIN and PUBLIC_SERVER_IPS stay optional: without
+          # them agency subdomains and A-record guidance are simply unavailable,
+          # which is a missing feature rather than a broken deploy.
+          PLATFORM_HOST: ${{ secrets.PLATFORM_HOST }}
+          BASE_DOMAIN: ${{ secrets.BASE_DOMAIN }}
+          PUBLIC_SERVER_IPS: ${{ secrets.PUBLIC_SERVER_IPS }}
           # Async work. RESEND_API_KEY belongs in this list for exactly the
           # reason STORAGE_ENDPOINT does: unset, the worker falls back to a
           # transport that logs instead of sending. The app boots, the health
@@ -145,7 +156,8 @@ jobs:
                     JWT_REFRESH_SECRET CORS_ORIGIN APP_BASE_URL GHCR_PULL_USER
                     GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION
                     STORAGE_BUCKET STORAGE_ACCESS_KEY_ID
-                    STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL"
+                    STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL
+                    PLATFORM_HOST"
 
           # The async secrets are required only where Inngest is turned on, so
           # an environment that predates async work keeps deploying unchanged.
@@ -239,6 +251,9 @@ jobs:
             # Base URL used to build shareable public intake links. Unset, the API
             # falls back to http://localhost:5173 and every shared link is dead.
             PUBLIC_FORM_BASE_URL=${{ secrets.PUBLIC_FORM_BASE_URL }}
+            PLATFORM_HOST=${{ secrets.PLATFORM_HOST }}
+            BASE_DOMAIN=${{ secrets.BASE_DOMAIN }}
+            PUBLIC_SERVER_IPS=${{ secrets.PUBLIC_SERVER_IPS }}
 
             # Rate limits for the public (unauthenticated) intake routes. Optional —
             # unset resolves to the defaults in config/rate-limit.config.ts, which
@@ -257,7 +272,7 @@ jobs:
             #
             # Binds the api container to the droplet's PRIVATE IP so the Inngest
             # droplet can invoke functions over the VPC. Never 0.0.0.0: that
-            # endpoint is raw Express middleware none of the seven global guards
+            # endpoint is raw Express middleware none of the eight global guards
             # see, and its only authentication is the Inngest request signature.
             API_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4000
             INNGEST_BASE_URL=${{ secrets.INNGEST_BASE_URL }}

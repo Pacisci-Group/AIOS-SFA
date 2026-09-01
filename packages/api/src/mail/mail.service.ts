@@ -57,6 +57,10 @@ export class MailService {
       inviterName: payload.inviterName,
       roleNames: payload.roleNames,
       inviteUrl: payload.inviteUrl,
+      // Omitted rather than sent as `undefined`-valued when the agency has no
+      // branding: the schema field is optional, and an explicit key would still
+      // be a key the far side has to interpret.
+      ...(payload.brand ? { brand: payload.brand } : {}),
       // The catalog carries instants as ISO strings, never `Date` — Inngest
       // rejects schemas with transforms, and an event is JSON on the wire
       // regardless. See `inngest/events/email.events.ts`.

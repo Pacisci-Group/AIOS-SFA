@@ -3,6 +3,8 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ModuleKey, PlatformPermission } from '@sfa/shared';
 import { AuthProvider } from '@/contexts/auth-context';
+import { TenantProvider, useTenant } from '@/contexts/tenant-context';
+import { UnknownHostPage } from '@/pages/UnknownHostPage';
 import { ThemeProvider } from '@/app/ThemeProvider';
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/layout/ProtectedRoute';
 import { RequirePermission } from '@/components/layout/RequirePermission';
@@ -56,6 +58,11 @@ const RolePermissionsPage = lazy(
   () => import('@/features/admin/RolePermissionsPage'),
 );
 const UsersPage = lazy(() => import('@/features/admin/UsersPage'));
+const BrandingPage = lazy(() => import('@/features/settings/BrandingPage'));
+const DomainsPage = lazy(() => import('@/features/settings/DomainsPage'));
+const EmailSenderPage = lazy(
+  () => import('@/features/settings/EmailSenderPage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
@@ -75,6 +82,22 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+/**
+ * Short-circuits the whole app when the hostname serves no tenant.
+ *
+ * Placed **inside** `TenantProvider` (it needs the resolution) but **outside**
+ * `AuthProvider` and the router, so an unrecognised host never reaches a login
+ * form or a route at all — see `UnknownHostPage` for why that matters.
+ *
+ * Renders children while the first fetch is in flight rather than blocking on
+ * it: gating every cold load on a network round-trip to spare a mistyped domain
+ * one frame of the login page is the wrong trade.
+ */
+function TenantGate({ children }: { children: React.ReactNode }) {
+  const { unknownHost } = useTenant();
+  return unknownHost ? <UnknownHostPage /> : <>{children}</>;
+}
 
 function PageLoader() {
   return (
@@ -132,6 +155,10 @@ export function App() {
           rather than per call site (first needed by the dashboard's lead quick
           actions, PAC-16). */}
       <TooltipProvider delayDuration={200}>
+        {/* Above `AuthProvider` on purpose: the login and accept-invite pages
+            are branded, and both render before anyone is authenticated. */}
+        <TenantProvider>
+        <TenantGate>
         <AuthProvider>
           <BrowserRouter>
           <Routes>
@@ -429,6 +456,48 @@ export function App() {
                 />
               </Route>
 
+              {/*
+                White-label settings. Three separate permissions rather than
+                one, matching three very different blast radii — see the
+                docblock on `AgencyPermission`.
+              */}
+              <Route
+                element={<RequirePermission permission="agency:branding:read" />}
+              >
+                <Route
+                  path="/settings/branding"
+                  element={
+                    <LazyPage>
+                      <BrandingPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+              <Route
+                element={<RequirePermission permission="agency:domains:read" />}
+              >
+                <Route
+                  path="/settings/domains"
+                  element={
+                    <LazyPage>
+                      <DomainsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+              <Route
+                element={<RequirePermission permission="agency:email:read" />}
+              >
+                <Route
+                  path="/settings/email"
+                  element={
+                    <LazyPage>
+                      <EmailSenderPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               {/* Owner-only user directory */}
               <Route
                 element={<RequirePermission permission="agency:users:read" />}
@@ -525,6 +594,8 @@ export function App() {
               no-opped. Used by the share-link dialog's copy action. */}
           <Toaster richColors position="top-right" />
         </AuthProvider>
+        </TenantGate>
+        </TenantProvider>
       </TooltipProvider>
     </QueryClientProvider>
     </ThemeProvider>
