@@ -30,7 +30,7 @@ export class TenantUrlService {
   ) {}
 
   /**
-   * `https://<the agency's primary host>`, or the platform default when the
+   * The agency's primary host as an origin, or the platform default when the
    * agency has no active domain yet.
    *
    * The fallback is not a nicety — it is what keeps invites working for every
@@ -38,12 +38,33 @@ export class TenantUrlService {
    * window between "created" and "domain verified". An agency in that state is
    * still served on the platform host, so the link it produces is correct.
    *
-   * Always `https`. The one caller that legitimately wants plain HTTP is local
-   * development, and there the env fallback already carries its own scheme.
+   * The scheme and port come from `APP_BASE_URL`, not a hard-coded `https`.
+   * In production that is `https://` with no port, so the result is exactly
+   * `https://<host>`. Locally it is `http://…:5173`, and an agency host there
+   * is `http://texasholdings.sfa.local:5173` — the address Vite actually
+   * serves — rather than an `https://` link nothing answers. That matters
+   * beyond convenience since PAC-70: the impersonation handoff navigates the
+   * browser to this origin, so a dead scheme is a dead feature in dev.
    */
   async baseUrlFor(agencyId: string | null | undefined): Promise<string> {
     const hostname = await this.primaryHostFor(agencyId);
-    return hostname ? `https://${hostname}` : this.platformBaseUrl();
+    return hostname ? this.originFor(hostname) : this.platformBaseUrl();
+  }
+
+  /**
+   * `<scheme>//<hostname>[:<port>]`, with scheme and port inherited from the
+   * platform base URL. Falls back to `https://` if that URL does not parse —
+   * an unparseable `APP_BASE_URL` is a deploy bug, and a secure link is the
+   * safer wrong answer.
+   */
+  private originFor(hostname: string): string {
+    try {
+      const platform = new URL(this.platformBaseUrl());
+      const port = platform.port ? `:${platform.port}` : '';
+      return `${platform.protocol}//${hostname}${port}`;
+    } catch {
+      return `https://${hostname}`;
+    }
   }
 
   /**

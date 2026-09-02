@@ -109,6 +109,13 @@ export interface AuthUser {
    * redirect to `/welcome/agency`.
    */
   agencySetupPending: boolean;
+  /**
+   * The operator's user id when this session was minted by impersonation
+   * (PAC-70), else `null`. Provenance only — the API never reads it back, and
+   * the UI shows no banner by product decision; it is here so the stored blob
+   * matches what `/auth/me` returns.
+   */
+  impersonatedBy?: string | null;
 }
 
 export function getStoredUser(): AuthUser | null {

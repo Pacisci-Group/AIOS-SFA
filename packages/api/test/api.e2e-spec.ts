@@ -51,6 +51,8 @@ import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
 import { StorageService } from '../src/storage/storage.service';
 import { User } from '../src/users/schemas/user.schema';
+import { AgencyDomain } from '../src/platform/schemas/agency-domain.schema';
+import { HostTenantResolver } from '../src/common/tenancy/host-tenant.resolver';
 import { authHeader, login } from './helpers/auth.helper';
 import {
   seedTestData,
@@ -193,6 +195,7 @@ describe('SFA API (e2e)', () => {
   describe('Impersonation (PAC-70)', () => {
     type Session = {
       accessToken: string;
+      appBaseUrl: string;
       user: {
         id: string;
         dataScope: string;
@@ -252,6 +255,48 @@ describe('SFA API (e2e)', () => {
       expect(body.user.permissions).not.toContain('platform:users:impersonate');
       expect(body.user.permissions).not.toContain('platform:agencies:read');
       expect(body.user.impersonatedBy).toBe(superAdminUserId);
+      // The test agency has no domain, so the session is used on the platform
+      // host — `APP_BASE_URL` as pinned by `setup-env.ts`.
+      expect(body.appBaseUrl).toBe('http://localhost:5173');
+    });
+
+    it('points the client at the target agency’s own host', async () => {
+      // The whole reason `appBaseUrl` exists: once an agency has an active
+      // domain, its users are refused on the platform host, so the panel has
+      // to carry the session to that origin. Only the *other* agency gets a
+      // domain here — one on the main test agency would flip every fixture
+      // user's host binding and 401 the rest of the suite.
+      const domains = app.get<Model<AgencyDomain>>(
+        getModelToken(AgencyDomain.name),
+      );
+      const resolver = app.get(HostTenantResolver);
+      const domain = await domains.create({
+        agencyId: new Types.ObjectId(seed.otherAgencyId),
+        hostname: 'other-agency.sfa.local',
+        kind: 'subdomain',
+        status: 'active',
+        isPrimary: true,
+      });
+      resolver.invalidate();
+      try {
+        const res = await request(app.getHttpServer())
+          .post(`/api/v1/auth/impersonate/${seed.otherAgencyUserId}`)
+          .set(authHeader(superAdminToken))
+          .expect(201);
+        const body = res.body as Session;
+        // Scheme and port inherited from `APP_BASE_URL`, host from the domain.
+        expect(body.appBaseUrl).toBe('http://other-agency.sfa.local:5173');
+
+        // And the minted token really is unusable here: `HostTenantGuard`
+        // refuses a domain-bearing agency's user on the platform host.
+        await request(app.getHttpServer())
+          .get('/api/v1/auth/me')
+          .set(authHeader(body.accessToken))
+          .expect(403);
+      } finally {
+        await domains.deleteOne({ _id: domain._id });
+        resolver.invalidate();
+      }
     });
 
     it('the minted token works, and is confined to the target', async () => {
@@ -274,8 +319,62 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(token))
         .expect(403);
 
-      // `/me` reports the provenance, so a client can render a banner.
+      // `/me` reports the provenance, so a client can tell.
       expect((await me(token)).impersonatedBy).toBe(superAdminUserId);
+    });
+
+    it('can write as the target — impersonation is not read-only', async () => {
+      // Product decision (PAC-70): the operator gets everything the target
+      // can do, including writes, and the record is attributed to the target.
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${producerUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(201);
+      const token = (res.body as Session).accessToken;
+
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/leads')
+        .set(authHeader(token))
+        .send({
+          primaryContact: {
+            firstName: 'Imper',
+            lastName: 'Sonated',
+            dateOfBirth: '1990-01-01',
+            phone: '(555) 777-8888',
+            email: 'imper.sonated@example.com',
+          },
+          address: {
+            street: '1 Handoff Way',
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74101',
+          },
+          members: [],
+          leadSourceCode: 'WCO7l',
+        })
+        .expect(201);
+
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const lead = await leadModel.findById(
+        (created.body as { id: string }).id,
+      );
+      expect(lead).not.toBeNull();
+      expect(lead!.producerId?.toString()).toBe(producerUserId);
+
+      // Leave nothing behind: the Leads list block later counts the
+      // producer's own leads exactly, and intake also created a household and
+      // contact for this one.
+      const householdId = (lead as { householdId?: Types.ObjectId })
+        .householdId;
+      await leadModel.deleteOne({ _id: lead!._id });
+      if (householdId) {
+        await app
+          .get<Model<Contact>>(getModelToken(Contact.name))
+          .deleteMany({ householdId: householdId.toString() });
+        await app
+          .get<Model<Household>>(getModelToken(Household.name))
+          .deleteOne({ _id: householdId });
+      }
     });
 
     it('an ordinary login carries no impersonation marker', async () => {
@@ -286,8 +385,7 @@ describe('SFA API (e2e)', () => {
 
     it('refuses to impersonate another platform admin', async () => {
       // Sideways into a peer's authority is the one direction this must never
-      // go — the audit row would name the wrong person for whatever followed.
-      // Downwards into a tenant is the only direction.
+      // go. Downwards into a tenant is the only direction.
       await request(app.getHttpServer())
         .post(`/api/v1/auth/impersonate/${secondAdminUserId}`)
         .set(authHeader(superAdminToken))

@@ -22,6 +22,7 @@ export * from './domain/lead-temperature';
 export * from './domain/mailer';
 export * from './domain/mailer-control-number';
 export * from './domain/performance';
+export * from './domain/platform-user';
 export * from './domain/policy-check';
 export * from './domain/policy-edit';
 export * from './domain/policy-number';

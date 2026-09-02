@@ -62,6 +62,12 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Platform Mailers | Commit Import | `POST /platform/mailers/imports/:runId/commit` | **PAC-73** — the only call that writes. 409s unless the run is `previewed` and any agency mismatch was confirmed. |
 | Platform Mailers | List Imports | `GET /platform/mailers/imports` | **PAC-73** — an agency's recent runs. `platform:mailers:read`. |
 | Platform Mailers | Get Import Run (After Commit) | `GET /platform/mailers/imports/:runId` | **PAC-73** — proves the write happened: `created + updated === 1` on every run, because the upsert dedupes. |
+| Platform Users | List Users | `GET /platform/users` | **PAC-70** — the cross-agency user directory. `platform:users:read`. Paginated; `q` reaches agency and role *names*, not just the user's own fields. |
+| Platform Users | List Users (Filtered) | `GET /platform/users` | **PAC-70** — `roleSlugs=producer,csr` is ORed (slugs, not ids — a role's id differs per agency); `q=demo` hits the agency name. |
+| Platform Users | List Roles | `GET /platform/users/roles` | **PAC-70** — one `{slug, name}` per distinct slug across the platform; the Role filter's options. |
+| Platform Users | List Users (Forbidden) | `GET /platform/users` | **PAC-70** — a tenant user (the inherited producer token) gets 403. |
+| Platform Users | Impersonate User | `POST /auth/impersonate/:userId` | **PAC-70** — a session *as* the target, resolved from the store. `platform:users:impersonate`. Returns the login envelope plus `appBaseUrl`, the origin the session must be used on. Deliberately not audited. |
+| Platform Users | Impersonate Unknown User | `POST /auth/impersonate/:userId` | **PAC-70** — unknown and inactive targets are the same 404, so the endpoint is not a cross-tenant enumeration oracle. |
 | Public Intake | Get Form / Submit | `/public/lead-form/:token`, `/public/leads/:token` | **PAC-37** — unauthenticated share-link intake. |
 | Quote Recaps | Get Lead Context | `GET /quote-recaps/context` | **PAC-39** — lead + household header for the form. `quote_recaps:read`. |
 | Quote Recaps | Presign Quote Document | `POST /quote-recaps/quote-document/presign` | **PAC-39** — carrier-quote upload URL. `quote_recaps:write`. |
@@ -91,8 +97,8 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 >
 > **Folder order matters when running the whole collection.** The CLI walks
 > folders alphabetically (`Auth` → `Deal Audits` → `Leads` → `Mailers` →
-> `Performance` → `Platform Mailers` → `Policies` → `Public Intake` →
-> `Quote Recaps` → `Sold Deals`), and the downstream chains
+> `Performance` → `Platform Mailers` → `Platform Users` → `Policies` →
+> `Public Intake` → `Quote Recaps` → `Sold Deals`), and the downstream chains
 > reuse ids captured earlier: Quote Recaps and Sold Deals both need
 > `createdLeadId` from **Leads › Create Lead**, and the PAC-38 contact requests
 > need `primaryContactId` from **Leads › Get Lead** (which in turn needs

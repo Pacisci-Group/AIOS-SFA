@@ -21,8 +21,8 @@ export default function SuperAdminHomePage() {
           Platform operations
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Tools that sit above the tenant boundary. Anything marked coming soon
-          is not built yet.
+          Tools that sit above the tenant boundary. Greyed-out areas are not
+          built yet.
         </p>
       </div>
 

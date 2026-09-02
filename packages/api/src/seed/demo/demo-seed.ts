@@ -10,16 +10,29 @@ function parseOptions(argv: string[]): DemoSeedOptions {
     const i = argv.indexOf(flag);
     return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
   };
+  /*
+   * Deliberately NOT the migration's `smith-family-agency`. The demo seed
+   * upserts its agency and purges `demo:`-prefixed rows under it, so sharing
+   * a slug with the migration target would mix throwaway data into the real
+   * book and let `--fresh` run against it. Separate slugs let a dev hold both
+   * in one database.
+   */
+  const agencySlug = value('--agency', 'demo-agency');
   return {
-    /*
-     * Deliberately NOT the migration's `smith-family-agency`. The demo seed
-     * upserts its agency and purges `demo:`-prefixed rows under it, so sharing
-     * a slug with the migration target would mix throwaway data into the real
-     * book and let `--fresh` run against it. Separate slugs let a dev hold both
-     * in one database.
-     */
-    agencySlug: value('--agency', 'demo-agency'),
+    agencySlug,
     agencyName: value('--agency-name', 'Demo Agency'),
+    /*
+     * The default tenant keeps `demoagency.local` (see `demo-data.ts` for why
+     * it is not `smithfamily.local`). Any other slug gets its own domain, so a
+     * second run such as `--agency texas-holdings` *adds* a tenant instead of
+     * re-homing the first one's roster — `User.email` is globally unique.
+     */
+    emailDomain: value(
+      '--email-domain',
+      agencySlug === 'demo-agency'
+        ? 'demoagency.local'
+        : `${agencySlug.replace(/-/g, '')}.local`,
+    ),
     fresh: has('--fresh'),
     seed:
       parseInt(value('--seed', String(DEMO_CONFIG.seed)), 10) ||

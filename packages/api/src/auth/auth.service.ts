@@ -3,7 +3,6 @@ import {
   ForbiddenException,
   GoneException,
   Injectable,
-  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -12,13 +11,14 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
-import { Model, Types } from 'mongoose';
+import { Model } from 'mongoose';
 import { AccessContext, AgencyPermission, JwtPayload } from '@sfa/shared';
 import { hashResetToken } from '../common/crypto/reset-token';
 import {
   HostTenantResolver,
   type HostTenant,
 } from '../common/tenancy/host-tenant.resolver';
+import { TenantUrlService } from '../common/tenancy/tenant-url.service';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
@@ -30,25 +30,18 @@ import {
   ResetPasswordDto,
 } from './dto/auth.dto';
 import { InvitePreview, PasswordResetPreview } from './auth.types';
-import {
-  ImpersonationEvent,
-  ImpersonationEventDocument,
-} from './schemas/impersonation-event.schema';
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
-
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
-    @InjectModel(ImpersonationEvent.name)
-    private impersonationEventModel: Model<ImpersonationEventDocument>,
     private permissionsService: PermissionsService,
     private accessResolver: AccessResolverService,
     private jwtService: JwtService,
     private configService: ConfigService,
     private hostResolver: HostTenantResolver,
+    private tenantUrls: TenantUrlService,
   ) {}
 
   async login(dto: LoginDto, host: HostTenant | undefined) {
@@ -514,11 +507,22 @@ export class AuthService {
    * rather than the caller:
    *
    * - **Never another platform admin.** Otherwise this is a sideways climb into
-   *   a peer's authority, and the audit trail would name the wrong person for
-   *   whatever they then did. Downwards into a tenant is the only direction.
+   *   a peer's authority. Downwards into a tenant is the only direction.
    * - **Never an inactive user**, matching {@link login} — a deprovisioned
    *   account must not be reachable by a second route.
-   * - **Never yourself**, which would only produce a confusing audit row.
+   * - **Never yourself** — the caller is already signed in as that user.
+   *
+   * **Deliberately not audited, logged or announced.** Product decision
+   * (PAC-70, 2026-09-02): impersonation is a plain support tool with no
+   * strings attached. Do not reintroduce an events collection here.
+   *
+   * **`appBaseUrl`** is the one addition to the login envelope. The session has
+   * to be *used* on the target's own host — `HostTenantGuard` refuses a
+   * domain-bearing agency's user on the platform host and a platform admin on
+   * an agency host — and browser storage is per origin, so the client cannot
+   * simply keep the tokens where it is. It navigates to
+   * `<appBaseUrl>/auth/impersonate` carrying them, and that page stores them
+   * in the right origin.
    */
   async impersonate(actor: JwtPayload, targetUserId: string) {
     if (actor.sub === targetUserId) {
@@ -536,26 +540,10 @@ export class AuthService {
     }
 
     const session = await this.issueTokens(target, actor.sub);
-
-    /*
-     * Audited after the tokens are minted but before they are returned, and
-     * deliberately not fire-and-forget: if we cannot record who took this
-     * session, the session is not handed out. A failed write here is a 500,
-     * which is the correct outcome — an unaudited impersonation is worse than a
-     * failed one.
-     */
-    await this.impersonationEventModel.create({
-      actorUserId: new Types.ObjectId(actor.sub),
-      targetUserId: target._id,
-      agencyId: target.agencyId ?? null,
-      issuedAt: new Date(),
-    });
-
-    this.logger.warn(
-      `Impersonation: ${actor.sub} issued a session as ${target.email} (${target._id.toString()})`,
+    const appBaseUrl = await this.tenantUrls.baseUrlFor(
+      target.agencyId?.toString() ?? null,
     );
-
-    return session;
+    return { ...session, appBaseUrl };
   }
 
   private async issueTokens(user: UserDocument, impersonatedBy?: string) {

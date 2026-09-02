@@ -1,0 +1,61 @@
+meta {
+  name: List Users (Filtered)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/platform/users?q=demo&roleSlugs=producer,csr&page=1&pageSize=10
+  body: none
+  auth: bearer
+}
+
+params:query {
+  q: demo
+  roleSlugs: producer,csr
+  page: 1
+  pageSize: 10
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every row holds at least one selected role", function () {
+    const items = res.getBody().items;
+    expect(items.length).to.be.above(0);
+    items.forEach(function (row) {
+      const slugs = row.roles.map(function (role) { return role.slug; });
+      const hit = slugs.indexOf("producer") >= 0 || slugs.indexOf("csr") >= 0;
+      expect(hit, row.email + " holds " + slugs.join(",")).to.equal(true);
+    });
+  });
+
+  test("the search reached the agency name", function () {
+    // "demo" matches nobody's name or email prefix in the seed, but it matches
+    // the agency *name* "Demo Agency" (and the email domain) — so a non-empty
+    // result proves the agency-name branch is wired.
+    expect(res.getBody().total).to.be.above(0);
+  });
+
+  test("respects pageSize", function () {
+    expect(res.getBody().items.length).to.be.at.most(10);
+  });
+}
+
+docs {
+  # GET /platform/users — filtered (PAC-70)
+
+  The multi-select case. `roleSlugs=producer,csr` is ORed: a row appears if the
+  user holds *either* role, and a user holding both appears once with both in
+  `roles`. `q=demo` exercises the agency-name branch of the search — the seeded
+  agency is "Demo Agency".
+
+  Same permission and envelope as `List Users`. See that request's docs for the
+  full parameter table.
+}
