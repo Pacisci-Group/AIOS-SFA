@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
 import { Model, Types } from 'mongoose';
 import { AccessContext, JwtPayload } from '@sfa/shared';
 import { hashResetToken } from '../common/crypto/reset-token';
@@ -22,7 +23,12 @@ import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import { AcceptInviteDto, LoginDto, ResetPasswordDto } from './dto/auth.dto';
+import {
+  AcceptInviteDto,
+  ChangePasswordDto,
+  LoginDto,
+  ResetPasswordDto,
+} from './dto/auth.dto';
 import { InvitePreview, PasswordResetPreview } from './auth.types';
 import {
   ImpersonationEvent,
@@ -330,6 +336,59 @@ export class AuthService {
   }
 
   /**
+   * Authenticated self-service password change (PAC-81).
+   *
+   * The credential half of the profile page. Mirrors {@link resetPassword}
+   * from the hash down — same cost, same one-live-credential clearing, same
+   * bump-save-invalidate-issue ordering — with a current-password check in
+   * place of a token.
+   *
+   * Any authenticated session may call this, impersonated ones included
+   * (product call) — the current-password check below is the identity proof
+   * either way, and it applies to everyone equally.
+   *
+   * One deliberate departure from the usual error shapes: **a wrong current
+   * password is a `400`, never a `401`.** The web client's fetch wrapper
+   * treats a 401 as a dead session — refresh, retry, then wipe tokens — so a
+   * 401 here would sign the user out for a typo.
+   *
+   * Returns a fresh token pair: the `tokenVersion` bump below invalidates the
+   * very token that authenticated this request, so without the new pair the
+   * caller's next request would 401.
+   */
+  async changePassword(payload: JwtPayload, dto: ChangePasswordDto) {
+    const user = await this.userModel.findById(payload.sub);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const valid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!valid) {
+      throw new BadRequestException('Current password is incorrect.');
+    }
+
+    user.passwordHash = await bcrypt.hash(dto.newPassword, 12);
+    // One live credential per account: a password change by any route burns
+    // any pending reset link (and, belt-and-braces, any invite token).
+    user.passwordResetToken = undefined;
+    user.passwordResetExpiresAt = undefined;
+    user.passwordResetLastSentAt = undefined;
+    user.inviteToken = undefined;
+    user.inviteTokenExpiresAt = undefined;
+    // Same load-bearing order as `resetPassword`: bump, save, invalidate,
+    // then issue off the same in-memory doc so the returned pair carries the
+    // new version while every other live session dies.
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+    await user.save();
+    await this.accessResolver.invalidateUser(user._id.toString());
+
+    // Forwarded so an impersonated session stays *marked* as impersonated on
+    // the fresh pair — dropping it here would silently launder the provenance
+    // (and the client's banner) the moment the password changed.
+    return this.issueTokens(user, payload.impersonatedBy);
+  }
+
+  /**
    * The `user` blob returned by login, refresh, accept-invite and `GET /me`.
    *
    * Factored out so those four can never drift: the whole value of `/me` is
@@ -351,6 +410,18 @@ export class AuthService {
       name:
         [user.firstName, user.lastName].filter(Boolean).join(' ').trim() ||
         null,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      /**
+       * A stable relative path, not a presigned URL (PAC-81). The blob sits in
+       * the client's `localStorage` indefinitely, so anything that expires
+       * would rot there; the client fetches this path with its own auth
+       * header. `v` is a cache-buster derived from the key — same convention
+       * as the tenant logo — so replacing the photo changes the URL.
+       */
+      avatarUrl: user.avatarKey
+        ? `/me/avatar?v=${createHash('sha1').update(user.avatarKey).digest('hex').slice(0, 8)}`
+        : null,
       roles,
       agencyId: access.agencyId,
       branchId: access.branchId,

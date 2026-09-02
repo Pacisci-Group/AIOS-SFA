@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { JwtPayload } from '@sfa/shared';
 import { PlatformPermission } from '@sfa/shared';
@@ -12,13 +12,20 @@ import {
 import { CurrentUser, HostTenant } from '../common/decorators/user.decorators';
 import type { HostTenant as ResolvedHostTenant } from '../common/tenancy/host-tenant.resolver';
 import {
+  CHANGE_PASSWORD_RATE_LIMIT,
+  HOUR_MS,
   MINUTE_MS,
   PASSWORD_RESET_PREVIEW_RATE_LIMIT,
+  PASSWORD_RESET_REQUEST_HOURLY_LIMIT,
+  PASSWORD_RESET_REQUEST_RATE_LIMIT,
   PASSWORD_RESET_SUBMIT_RATE_LIMIT,
 } from '../config/rate-limit.config';
+import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import {
   AcceptInviteDto,
+  ChangePasswordDto,
+  ForgotPasswordDto,
   LoginDto,
   RefreshTokenDto,
   ResetPasswordDto,
@@ -32,7 +39,12 @@ import {
  */
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    // For the forgot-password request only — the mint-and-email path is owned
+    // by `UsersService` (PAC-79) and this route is just its public entry point.
+    private usersService: UsersService,
+  ) {}
 
   @Public()
   @Post('login')
@@ -112,6 +124,60 @@ export class AuthController {
     @HostTenant() host: ResolvedHostTenant,
   ) {
     return this.authService.acceptInvite(dto, host);
+  }
+
+  /**
+   * Authenticated self-service password change (PAC-81).
+   *
+   * `@SkipTenant`/`@SkipBranch`/`@SkipModule` for the same reason `GET /me`
+   * skips them: changing your own password must work for a platform admin
+   * too, and it is not a module an agency can switch off. Open to any
+   * authenticated session — the current-password check is the identity proof.
+   * The one error shape that matters (wrong current password is a `400`, not
+   * a `401`) lives on `AuthService.changePassword`.
+   *
+   * Returns a fresh token pair — the change invalidates the very token that
+   * authenticated the request.
+   */
+  @Post('change-password')
+  @SkipTenant()
+  @SkipBranch()
+  @SkipModule()
+  @Throttle({
+    short: { limit: CHANGE_PASSWORD_RATE_LIMIT, ttl: MINUTE_MS },
+  })
+  changePassword(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(user, dto);
+  }
+
+  /**
+   * The self-service "Forgot password?" request (PAC-81). The one route in
+   * this controller whose response deliberately says nothing: always `202`
+   * with the same message, whether or not the address exists, belongs on this
+   * host, or is inside its resend cooldown — anything else is an account
+   * oracle on an unauthenticated route. The silence lives in
+   * `UsersService.requestPasswordResetByEmail`; the two throttle windows here
+   * are what bound how fast anyone can probe.
+   */
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(202)
+  @Throttle({
+    short: { limit: PASSWORD_RESET_REQUEST_RATE_LIMIT, ttl: MINUTE_MS },
+    long: { limit: PASSWORD_RESET_REQUEST_HOURLY_LIMIT, ttl: HOUR_MS },
+  })
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @HostTenant() host: ResolvedHostTenant,
+  ) {
+    await this.usersService.requestPasswordResetByEmail(dto.email, host);
+    return {
+      message:
+        'If an account exists for that address, a password reset link is on its way.',
+    };
   }
 
   /**

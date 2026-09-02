@@ -43,25 +43,36 @@ interface SetPasswordFormProps {
   /** Rendered above the fields. The caller owns error mapping. */
   error?: string | null;
   /**
-   * Called with the chosen password. **Must not reject** — the caller catches
-   * and surfaces through `error`, and this component only uses the promise to
-   * know when to stop showing the pending state.
+   * Called with the chosen password — and, when {@link requireCurrent} is set,
+   * the current one. **Must not reject** — the caller catches and surfaces
+   * through `error`, and this component only uses the promise to know when to
+   * stop showing the pending state.
    */
-  onSubmit: (password: string) => Promise<void>;
+  onSubmit: (password: string, currentPassword?: string) => Promise<void>;
+  /**
+   * Ask for the current password first (PAC-81). This turns the token-link
+   * form into the authenticated change-password form: the labels become
+   * "New password", and the current-password field carries
+   * `autocomplete="current-password"` so password managers offer the old
+   * credential there and file the new one correctly.
+   */
+  requireCurrent?: boolean;
   /** Small print under the button, e.g. when the link expires. */
   footer?: React.ReactNode;
 }
 
 /**
- * Choose and confirm a password from an emailed link.
+ * Choose and confirm a password.
  *
- * Shared by the accept-invite (PAC-58) and password-reset (PAC-79) pages, which
- * are the same form with different copy around it.
+ * Shared by the accept-invite (PAC-58) and password-reset (PAC-79) pages —
+ * the same form with different copy around it — and, with
+ * {@link SetPasswordFormProps.requireCurrent}, by the profile page's
+ * change-password card (PAC-81).
  *
  * Deliberately hand-rolled `useState` rather than `useAppForm`: there is no
  * `PasswordField` in `components/form/fields/` — `TextField`'s `type` union
  * excludes `password` on purpose — so going through TanStack Form would mean
- * inventing a field component for these two screens alone. The rest of the app's
+ * inventing a field component for these screens alone. The rest of the app's
  * forms are unaffected by that choice; this one matches `LoginPage`.
  */
 export function SetPasswordForm({
@@ -71,8 +82,10 @@ export function SetPasswordForm({
   pendingLabel,
   error,
   onSubmit,
+  requireCurrent = false,
   footer,
 }: SetPasswordFormProps) {
+  const [current, setCurrent] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [reveal, setReveal] = useState(false);
@@ -80,7 +93,9 @@ export function SetPasswordForm({
 
   const longEnough = password.length >= MIN_PASSWORD_LENGTH;
   const matches = password.length > 0 && password === confirm;
-  const canSubmit = longEnough && matches && !submitting;
+  const canSubmit =
+    longEnough && matches && (!requireCurrent || current.length > 0) &&
+    !submitting;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -88,7 +103,7 @@ export function SetPasswordForm({
 
     setSubmitting(true);
     try {
-      await onSubmit(password);
+      await onSubmit(password, requireCurrent ? current : undefined);
     } finally {
       setSubmitting(false);
     }
@@ -115,12 +130,32 @@ export function SetPasswordForm({
         tabIndex={-1}
       />
 
+      {requireCurrent && (
+        <div className="space-y-1.5">
+          <Label
+            htmlFor={`${idPrefix}-current`}
+            className="text-xs text-muted-foreground"
+          >
+            Current password
+          </Label>
+          <Input
+            id={`${idPrefix}-current`}
+            type={reveal ? 'text' : 'password'}
+            autoComplete="current-password"
+            required
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            className="bg-input border-border"
+          />
+        </div>
+      )}
+
       <div className="space-y-1.5">
         <Label
           htmlFor={`${idPrefix}-password`}
           className="text-xs text-muted-foreground"
         >
-          Password
+          {requireCurrent ? 'New password' : 'Password'}
         </Label>
         <div className="relative">
           <Input
@@ -151,7 +186,7 @@ export function SetPasswordForm({
           htmlFor={`${idPrefix}-confirm`}
           className="text-xs text-muted-foreground"
         >
-          Confirm password
+          {requireCurrent ? 'Confirm new password' : 'Confirm password'}
         </Label>
         <Input
           id={`${idPrefix}-confirm`}

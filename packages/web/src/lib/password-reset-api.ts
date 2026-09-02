@@ -47,6 +47,23 @@ export function getPasswordResetPreview(token: string) {
 }
 
 /**
+ * The self-service "Forgot password?" request (PAC-81).
+ *
+ * Always resolves with the same message whether or not the address exists —
+ * the API deliberately says nothing else, so a failure here is a network
+ * problem or a rate limit, never "no such account".
+ *
+ * `publicFetch` for the same reason as everything else in this file, and one
+ * more: the person using this form *by definition* cannot authenticate.
+ */
+export function requestPasswordReset(email: string) {
+  return publicFetch<{ message: string }>('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+/**
  * Set the new password and sign in.
  *
  * Returns a full token pair so the user lands in the app already authenticated

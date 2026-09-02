@@ -40,3 +40,23 @@ export class ResetPasswordDto {
   @MinLength(8)
   password: string;
 }
+
+/**
+ * `POST /auth/change-password` (PAC-81). Only the new password carries the
+ * 8-character floor — the current one is whatever it is, and a length rule on
+ * it would lock out anyone whose password predates the rule.
+ */
+export class ChangePasswordDto {
+  @IsNotEmpty()
+  currentPassword: string;
+
+  @IsNotEmpty()
+  @MinLength(8)
+  newPassword: string;
+}
+
+/** `POST /auth/forgot-password` (PAC-81) — public, so validation is the only gate. */
+export class ForgotPasswordDto {
+  @IsEmail()
+  email: string;
+}

@@ -71,6 +71,8 @@ const AddMailersPage = lazy(
 );
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
+const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
+const ProfilePage = lazy(() => import('@/features/settings/ProfilePage'));
 const UserPermissionsPage = lazy(
   () => import('@/features/admin/UserPermissionsPage'),
 );
@@ -435,6 +437,21 @@ export function App() {
                 />
               </Route>
 
+              {/*
+                The signed-in user's own profile (PAC-81). Deliberately the
+                one `/settings/*` route with **no** `RequirePermission` gate:
+                everyone owns their own profile, including a platform admin
+                who holds no agency permission at all.
+              */}
+              <Route
+                path="/settings/profile"
+                element={
+                  <LazyPage>
+                    <ProfilePage />
+                  </LazyPage>
+                }
+              />
+
               {/* Owner-only role & per-user permission management */}
               {/*
                 `agency:roles:read`, not `agency:users:permissions`: this page
@@ -604,6 +621,20 @@ export function App() {
               element={
                 <LazyPage>
                   <ResetPasswordPage />
+                </LazyPage>
+              }
+            />
+
+            {/* Request a reset link — the entry point into the page above
+                (PAC-81). Outside both guards for the same reasons: the people
+                it serves cannot sign in, and a signed-in user checking the
+                flow must not be redirected away. Must sit above the
+                catch-all. */}
+            <Route
+              path="/auth/forgot-password"
+              element={
+                <LazyPage>
+                  <ForgotPasswordPage />
                 </LazyPage>
               }
             />

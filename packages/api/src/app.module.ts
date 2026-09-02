@@ -46,6 +46,7 @@ import { FeatureModulesModule } from './feature-modules/feature-modules.module';
 import { HealthController } from './health.controller';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PlatformModule } from './platform/platform.module';
+import { ProfileModule } from './profile/profile.module';
 import { RolesModule } from './roles/roles.module';
 import { ShareLinksModule } from './share-links/share-links.module';
 import { SoldDealsModule } from './sold-deals/sold-deals.module';
@@ -130,6 +131,9 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     BranchesModule,
     RolesModule,
     UsersModule,
+    // Self-service profile (`/me/*`, PAC-81). Own prefix, so no route-ordering
+    // hazards with anything above.
+    ProfileModule,
     /*
      * Must precede **CrmModule**, not merely ClientsModule, so `/policies/check`
      * is registered ahead of `/policies/:id`. "check" is not a valid ObjectId,

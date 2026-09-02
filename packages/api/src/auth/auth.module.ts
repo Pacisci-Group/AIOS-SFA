@@ -5,6 +5,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import {
@@ -16,6 +17,10 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 @Module({
   imports: [
     PermissionsModule,
+    // For the public forgot-password entry point (PAC-81): the mint-and-email
+    // path lives on `UsersService` (PAC-79) and is not duplicated here. No
+    // cycle — nothing UsersModule imports reaches back into AuthModule.
+    UsersModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       // For the agency name on the public invite preview (PAC-58).

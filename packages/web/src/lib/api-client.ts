@@ -84,6 +84,15 @@ export interface AuthUser {
   email: string;
   /** Full name from firstName/lastName, or null if not set. */
   name: string | null;
+  /** The raw name halves, for the profile form (PAC-81). */
+  firstName: string | null;
+  lastName: string | null;
+  /**
+   * Relative API path of the profile photo, or null when none is set (PAC-81).
+   * Stable (it carries a cache-buster, not a signature), but **authenticated**
+   * — fetch it with {@link apiFetchBlob}, never point an `<img src>` at it.
+   */
+  avatarUrl: string | null;
   /** Human-readable role names (e.g. ["Owner"]). For display only. */
   roles: string[];
   agencyId: string | null;
@@ -181,6 +190,38 @@ export async function apiFetch<T>(
   }
 
   return res.json() as Promise<T>;
+}
+
+/**
+ * `apiFetch` for binary responses — same auth header and 401-refresh-retry,
+ * but resolves to a `Blob` instead of parsing JSON.
+ *
+ * Exists for the profile photo (PAC-81): `GET /me/avatar` is authenticated,
+ * and an `<img src>` cannot send an `Authorization` header — so the bytes are
+ * fetched here and rendered through an object URL instead.
+ */
+export async function apiFetchBlob(path: string): Promise<Blob> {
+  const headers = new Headers();
+  let token = getAccessToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  let res = await fetch(`${API_BASE}${path}`, { headers });
+
+  if (res.status === 401 && getRefreshToken()) {
+    token = await refreshAccessToken();
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+      res = await fetch(`${API_BASE}${path}`, { headers });
+    }
+  }
+
+  if (!res.ok) {
+    throw new ApiError(res.statusText, res.status);
+  }
+
+  return res.blob();
 }
 
 /**
