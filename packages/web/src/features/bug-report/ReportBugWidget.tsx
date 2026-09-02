@@ -47,6 +47,31 @@ const ReportBugDialog = lazy(() =>
  * never floats over an open modal, and above page content. It claims the
  * bottom-right corner app-wide: the "Fast Log Mailer" button on
  * `/dashboard/management-alt` was moved up to `bottom-20` to yield to it.
+ *
+ * ## Colour
+ *
+ * An amber **tint**, not a solid fill. `variant="secondary"` left it at
+ * `--secondary` — #F1F5F9 on a #F8FAFC page, near-invisible in the light theme,
+ * which is the opposite of what a reporter needs to be.
+ *
+ * `--destructive` is the app's amber, and amber is the only hue with real
+ * separation from this slate-and-blue chrome — so the hue does the spotting and
+ * the fill can stay low: a 15% wash behind a 40% border and a solid icon,
+ * deepening to 25% on hover. Loud enough to find from across the page, quiet
+ * enough to sit in the corner of every screen all day. A solid `--primary` disc
+ * would read as the page's own main CTA, and a solid `--destructive` one as an
+ * error state; a tint reads as the persistent utility it is.
+ *
+ * The token rather than raw `amber-*` (per `packages/web/CLAUDE.md`) is what
+ * makes this work in both themes with no `dark:` override — `--destructive`
+ * is #B45309 on light and #F59E0B on dark, each already tuned for its
+ * background, so the icon clears 4.5:1 either way. `cn` in `button.tsx` is
+ * tailwind-merge, so these override the variant's `bg-`/`text-` and the base
+ * `border-border` cleanly while keeping its focus ring.
+ *
+ * Note this borrows the *error* token for a non-error affordance. It is the
+ * only amber in the palette; if a `--warning` or `--notice` token is ever added,
+ * this should move to it.
  */
 export function ReportBugWidget() {
   const { isAuthenticated } = useAuth();
@@ -78,7 +103,7 @@ export function ReportBugWidget() {
             variant="secondary"
             aria-label="Report a bug"
             onClick={openDialog}
-            className="fixed bottom-6 right-6 z-40 size-11 rounded-full border border-border shadow-lg"
+            className="fixed bottom-6 right-6 z-40 size-11 rounded-full border border-destructive/40 bg-destructive/15 text-destructive shadow-lg hover:bg-destructive/25"
           >
             <Bug className="size-5" />
           </Button>
