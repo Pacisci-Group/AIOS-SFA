@@ -194,10 +194,11 @@ describe('Agency onboarding (e2e)', () => {
       const agencyRoles = await roles
         .find({ agencyId: new Types.ObjectId(result.agency.id) })
         .lean();
-      expect(agencyRoles).toHaveLength(5);
+      expect(agencyRoles).toHaveLength(6);
       expect(agencyRoles.map((r) => r.slug).sort()).toEqual([
         'agency_owner',
         'branch_manager',
+        'crm',
         'csr',
         'data_team',
         'producer',

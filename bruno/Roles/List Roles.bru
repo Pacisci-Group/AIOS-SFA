@@ -27,13 +27,14 @@ tests {
     expect(res.getStatus()).to.equal(200);
   });
 
-  test("includes the five system roles", function () {
+  test("includes the six system roles", function () {
     const slugs = res.getBody().map((r) => r.slug);
     expect(slugs).to.include.members([
       "agency_owner",
       "branch_manager",
       "producer",
       "csr",
+      "crm",
       "data_team",
     ]);
   });

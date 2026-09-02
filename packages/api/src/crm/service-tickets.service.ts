@@ -2292,7 +2292,7 @@ function mergeCyclePolicy(
 }
 
 /** Roles whose holders can be a ticket's Assigned Client Relation Manager. */
-const ASSIGNABLE_ROLE_SLUGS = ['csr'];
+const ASSIGNABLE_ROLE_SLUGS = ['csr', 'crm'];
 
 const CATEGORY_PREFIX: Record<string, string> = {
   Onboarding: 'ONBD',

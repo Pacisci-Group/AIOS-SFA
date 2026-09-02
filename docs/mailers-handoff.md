@@ -252,7 +252,8 @@ literally and present neither as "our quote".
   <https://docs.google.com/document/d/1OJsDM2wEq_JQ81YmLjPk59Hjj8LON9FTDPaZPs3WFHk/edit>
 - Unrelated but flagged in the same scrum: a role is named **CRM** and should be **CSR**.
   Abu Bakar is fixing dev data; `packages/shared/src/permissions/default-role-templates.ts`
-  still says `CRM`, so the code needs it too.
+  still says `CRM`, so the code needs it too. **Reversed 2026-09-02:** Asad
+  reinstated CRM as its own role next to CSR; both templates exist.
 
 ---
 

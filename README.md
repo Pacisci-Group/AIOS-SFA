@@ -117,7 +117,7 @@ Three ways to populate MongoDB:
 
 | Command | What you get |
 |---|---|
-| `npm run api:seed:dev` | **Platform minimum.** The super admin, plus an empty tenant scaffold (1 agency, 1 branch, 5 role templates) for the migration to import into. No demo users, no CRM data. This is what Docker runs on API startup. |
+| `npm run api:seed:dev` | **Platform minimum.** The super admin, plus an empty tenant scaffold (1 agency, 1 branch, 6 role templates) for the migration to import into. No demo users, no CRM data. This is what Docker runs on API startup. |
 | `npm run api:seed:demo:dev` | **Full synthetic demo tenant** — a complete role roster and ~500 realistic records across every collection. Deterministic and idempotent; pass `--fresh` to purge and reseed. **Use this for local development.** |
 | `npm run api:migrate:dev` | The real **SmartSuite → Mongo** import. Needs SmartSuite credentials; run the core seed first. |
 
