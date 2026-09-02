@@ -210,3 +210,43 @@ places the ticket's literal spec was wrong, and the one known gap left open.
 ⚠ **Existing agencies need `npm run api:sync:roles`**: PAC-61 gave `mailers:read`
 to every role template, and editing a template does not touch already-seeded
 roles.
+
+### Super Admin — user directory and impersonation (PAC-70)
+
+**Find / Impersonate User** is live in the Super Admin panel at `/admin/users`.
+Product decision (2026-09-02): impersonation is a plain support tool with **no
+strings attached** — full write access as the target, no audit trail, no
+notification, no banner, no "return to admin". The operator logs out when done.
+PR #44's `impersonationEvents` collection was removed; drop it by hand
+(`db.impersonationEvents.drop()`) wherever that PR was deployed.
+
+Endpoints, all under the platform guard stack:
+- `GET /platform/users` — cross-agency directory, `platform:users:read`.
+  `q` matches name, email, **agency name** and **role name**; `agencyIds[]` and
+  `roleSlugs[]` are multi-select and ORed. Roles filter by **slug**, not id,
+  because `producer` has a different id in every agency. Two-phase query
+  (resolve agency/role matches to ids, then one `users` find), no new indexes.
+- `GET /platform/users/roles` — one `{slug, name}` per distinct slug, for the
+  Role filter.
+- `POST /auth/impersonate/:userId` (`platform:users:impersonate`) now returns
+  the login envelope **plus `appBaseUrl`**.
+
+**The handoff is the non-obvious part.** `HostTenantGuard` refuses a
+domain-bearing agency's user on the platform host and a platform admin on any
+agency host, and `localStorage` is per origin — so the panel cannot keep the
+minted tokens where it is. It navigates the **same tab** to
+`<appBaseUrl>/auth/impersonate#accessToken=…&refreshToken=…`; that page (outside
+both route guards) stores the tokens in the target origin, calls `/auth/me`,
+scrubs the fragment with `replaceState`, and redirects to `/`. Fragment, not
+query string, so the tokens never reach any server or proxy log. Same tab, so a
+no-domain agency (whose handoff lands on the platform origin) replaces the
+operator's session explicitly rather than splitting it across tabs.
+`TenantUrlService.baseUrlFor` now inherits scheme and port from `APP_BASE_URL`
+so the handoff origin is reachable locally (`http://x.sfa.local:5173`, not a dead
+`https://`); production output is unchanged.
+
+Local testing of the cross-host case needs `PLATFORM_HOST`/`BASE_DOMAIN` in
+`.env`, `/etc/hosts` entries, and an active `agencyDomains` row. For a second
+populated tenant: `npm run api:seed:demo:dev -- --agency texas-holdings
+--agency-name "Texas Holdings"` (the roster gets its own email domain now, so it
+adds rather than moves users).

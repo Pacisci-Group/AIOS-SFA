@@ -83,8 +83,10 @@ export class AuthController {
    * The refusals that bound it (never a platform admin, never an inactive user,
    * never yourself) live in `AuthService.impersonate`.
    *
-   * Returns exactly what `POST /auth/login` returns, so a client — or Bruno —
-   * can use it interchangeably. The only difference is `user.impersonatedBy`.
+   * Returns what `POST /auth/login` returns, so a client — or Bruno — can use
+   * it interchangeably, plus `appBaseUrl`: the origin the session must be used
+   * on (see `AuthService.impersonate`). `user.impersonatedBy` is the only
+   * other difference.
    */
   @Post('impersonate/:userId')
   @SkipTenant()

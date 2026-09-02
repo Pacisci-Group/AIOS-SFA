@@ -48,6 +48,34 @@ describe('TenantUrlService', () => {
   });
 
   /**
+   * Local development serves every host on `http://…:5173`. A hard-coded
+   * `https://` would make every agency-host link dead in dev — including the
+   * impersonation handoff (PAC-70), which navigates the browser to this origin.
+   */
+  it('inherits scheme and port from the platform base URL', async () => {
+    const config = {
+      get: (key: string) =>
+        key === 'APP_BASE_URL' ? 'http://app.sfa.local:5173' : undefined,
+    } as unknown as ConfigService;
+    const svc = new TenantUrlService(
+      modelReturning({ hostname: 'texasholdings.sfa.local' }),
+      config,
+    );
+    expect(await svc.baseUrlFor(AGENCY_ID)).toBe(
+      'http://texasholdings.sfa.local:5173',
+    );
+  });
+
+  it('stays https with no port when the platform base URL is', async () => {
+    // Production: byte-identical to the pre-PAC-70 behaviour.
+    const url = await service({ hostname: 'texasholdings.com' }).baseUrlFor(
+      AGENCY_ID,
+    );
+    expect(url).not.toMatch(/:\d+$/);
+    expect(url.startsWith('https://')).toBe(true);
+  });
+
+  /**
    * The case that keeps existing agencies working. An agency onboarded before
    * white-labelling — or one created five minutes ago — has no domain yet, and
    * its invites must still point somewhere that works.

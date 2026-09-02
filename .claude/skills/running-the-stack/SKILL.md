@@ -70,7 +70,12 @@ applies identically in both modes.
 >   service tickets, goals, activities, …). Deterministic (fixed RNG seed) and
 >   **idempotent** (upserts on stable `demo:*` keys); pass `--fresh` to purge and
 >   reseed. No SmartSuite/network needed. "Pat Producer"
->   (`producer@smithfamily.local`) is the data-rich hero for the Producer Dashboard.
+>   (`producer@demoagency.local`) is the data-rich hero for the Producer Dashboard.
+>   **A second tenant:** `-- --agency texas-holdings --agency-name "Texas Holdings"`
+>   adds another fully populated agency (its roster gets `@texasholdings.local`
+>   addresses, or `--email-domain <domain>`), leaving the first untouched — what
+>   the Super Admin's cross-agency user directory and impersonation (PAC-70)
+>   need to be meaningful locally.
 > - `api:migrate:dev` — real **SmartSuite → Mongo** import; needs SmartSuite
 >   credentials (run `api:seed:dev` first).
 > - `api:migrate:mailers:dev` — **BigQuery → Mongo** backfill of the legacy

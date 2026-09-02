@@ -1,0 +1,57 @@
+meta {
+  name: List Roles
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/platform/users/roles
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns one option per distinct slug", function () {
+    const rows = res.getBody();
+    expect(rows).to.be.an("array");
+    const slugs = rows.map(function (row) { return row.slug; });
+    expect(slugs).to.include("producer");
+    expect(new Set(slugs).size).to.equal(slugs.length);
+    rows.forEach(function (row) {
+      expect(row.name).to.be.a("string");
+    });
+  });
+}
+
+docs {
+  # GET /platform/users/roles — Role filter options (PAC-70)
+
+  One `{ slug, name }` per distinct role slug across **every** agency, sorted by
+  name. Drives the Role multi-select on the user directory; the slug is what
+  `GET /platform/users?roleSlugs=` matches on.
+
+  - **Permission:** `platform:users:read` (the directory's own permission — this
+    exists only to serve its filter, so it does not imply any `platform:roles:*`
+    capability).
+
+  Owners can rename a template role, so two agencies may show `producer` under
+  different names. The name returned is the alphabetically first, so it is the
+  same on every load.
+
+  ## Response `200`
+  ```json
+  [
+    { "slug": "agency_owner", "name": "Agency Owner" },
+    { "slug": "csr", "name": "CSR" },
+    { "slug": "producer", "name": "Producer" }
+  ]
+  ```
+}

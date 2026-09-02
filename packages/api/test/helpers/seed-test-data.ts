@@ -51,6 +51,14 @@ export interface TestSeedContext {
   otherBranchHouseholdId: string;
   /** In a different agency entirely. */
   otherAgencyHouseholdId: string;
+  /**
+   * The second agency and its one user, for the cross-agency user directory
+   * (PAC-70). The user holds **two** roles (`producer` + `csr`) so the Role
+   * filter's OR semantics and "appears once" can both be asserted.
+   */
+  otherAgencyId: string;
+  otherAgencyUserId: string;
+  otherAgencyUserEmail: string;
 }
 
 export async function seedTestData(
@@ -322,7 +330,41 @@ export async function seedTestData(
     status: 'Active',
   });
 
+  // A populated second tenant, so the cross-agency user directory (PAC-70) has
+  // something to find outside the main agency. Its user holds two roles on
+  // purpose — see `TestSeedContext.otherAgencyUserId`.
+  await roleAssignments.seedDefaultRoles(otherAgency._id);
+  const otherAgencyBranch = await branchModel.create({
+    agencyId: otherAgency._id,
+    name: 'Other Agency Branch',
+    slug: 'other-agency-branch',
+    isDefault: true,
+  });
+  const otherAgencyUserEmail = 'other-producer@sfa.local';
+  const otherAgencyUser = await userModel.create({
+    agencyId: otherAgency._id,
+    branchId: otherAgencyBranch._id,
+    email: otherAgencyUserEmail,
+    passwordHash,
+    firstName: 'Other',
+    lastName: 'Producer',
+    isActive: true,
+  });
+  const otherAgencyRoles = await roleModel
+    .find({ agencyId: otherAgency._id, slug: { $in: ['producer', 'csr'] } })
+    .select({ _id: 1 })
+    .lean();
+  await roleAssignments.setUserRoles(
+    { userId: otherAgencyUser._id.toString(), isPlatformAdmin: true },
+    otherAgency._id,
+    otherAgencyUser._id,
+    otherAgencyRoles.map((role) => role._id),
+  );
+
   return {
+    otherAgencyId: otherAgency._id.toString(),
+    otherAgencyUserId: otherAgencyUser._id.toString(),
+    otherAgencyUserEmail,
     agencyId: agency._id.toString(),
     branchId: branch._id.toString(),
     householdId: household._id.toString(),

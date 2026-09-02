@@ -69,6 +69,12 @@ const SuperAdminHomePage = lazy(
 const AddMailersPage = lazy(
   () => import('@/features/platform/AddMailersPage'),
 );
+const PlatformUsersPage = lazy(
+  () => import('@/features/platform/PlatformUsersPage'),
+);
+const ImpersonateHandoffPage = lazy(
+  () => import('@/pages/ImpersonateHandoffPage'),
+);
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
@@ -543,7 +549,7 @@ export function App() {
 
                 `/admin` gates on `platform:agencies:read` because every
                 platform admin holds it (`ALL_PLATFORM_PERMISSIONS`), so it is
-                the cheapest "is this a platform operator" test. The one live
+                the cheapest "is this a platform operator" test. Each live
                 feature gates on its own permission and falls back to the panel
                 rather than to `/`, which would bounce the operator out of it.
               */}
@@ -575,6 +581,26 @@ export function App() {
                     element={
                       <LazyPage>
                         <AddMailersPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+                {/* Find / Impersonate User (PAC-70). Gated on the directory's
+                    read permission; the Impersonate action inside gates itself
+                    on `platform:users:impersonate`. */}
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={PlatformPermission.UsersRead}
+                      redirectTo="/admin"
+                    />
+                  }
+                >
+                  <Route
+                    path="/admin/users"
+                    element={
+                      <LazyPage>
+                        <PlatformUsersPage />
                       </LazyPage>
                     }
                   />
@@ -635,6 +661,23 @@ export function App() {
               element={
                 <LazyPage>
                   <ForgotPasswordPage />
+                </LazyPage>
+              }
+            />
+
+            {/* Impersonation landing (PAC-70). The Super Admin panel navigates
+                the browser here, on the *target agency's* origin, with a fresh
+                session in the URL fragment. Outside both guards: there is no
+                session on this origin yet (`ProtectedRoute` would bounce to
+                /login), and when the agency has no domain this IS the platform
+                host, where the operator's own session is live
+                (`PublicOnlyRoute` would redirect them away). Must sit above the
+                catch-all. */}
+            <Route
+              path="/auth/impersonate"
+              element={
+                <LazyPage>
+                  <ImpersonateHandoffPage />
                 </LazyPage>
               }
             />

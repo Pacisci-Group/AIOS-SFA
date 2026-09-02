@@ -1,0 +1,29 @@
+meta {
+  name: List Users (Forbidden)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/platform/users
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 403 Forbidden for a tenant user", function () {
+    // `auth: inherit` is the collection's `{{accessToken}}` — the producer
+    // `Auth › Login` signed in. A tenant user holds no `platform:*` string, so
+    // the guard refuses before the service runs.
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /platform/users — forbidden for a tenant user (PAC-70)
+
+  Pins the boundary: the cross-agency directory answers **403** to anyone
+  without `platform:users:read`, and no tenant role grants that. An agency
+  owner sees their own roster at `GET /users`; this endpoint is not a wider
+  version of it.
+}

@@ -37,8 +37,12 @@ tests {
       "scope",
       "dataScope",
       "isPlatformAdmin",
+      // `null` on a real login; the operator's id on an impersonated session
+      // (PAC-70). Always present so the web's stored blob never keeps a stale
+      // value after switching back to an ordinary login.
       "impersonatedBy",
     );
+    expect(res.getBody().impersonatedBy).to.equal(null);
   });
 }
 

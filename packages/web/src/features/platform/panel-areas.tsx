@@ -19,7 +19,8 @@ export interface PanelArea {
 /**
  * The Super Admin panel's areas (PAC-73).
  *
- * Only **Add Mailers** is live. The rest are shown disabled with "Coming soon"
+ * **Find / Impersonate User** (PAC-70) and **Add Mailers** are live. The rest
+ * are shown disabled with "Coming soon"
  * so the shape of the product reads at a glance — a panel with one tile looks
  * like a broken page, and hiding the others would hide the roadmap from the
  * people the panel is for. Nothing navigates anywhere it cannot go, and there
@@ -40,6 +41,7 @@ export const PANEL_AREAS: PanelArea[] = [
     key: "users",
     label: "Find / Impersonate User",
     description: "Search across every tenant and step into a session.",
+    to: "/admin/users",
     icon: UserSearch,
   },
   {

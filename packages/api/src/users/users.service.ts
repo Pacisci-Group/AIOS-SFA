@@ -50,7 +50,6 @@ import {
   ActingUser,
   OwnerProtectionService,
 } from '../permissions/owner-protection.service';
-import { UserRole } from '../permissions/schemas/user-role.schema';
 import {
   AgencyUserListItem,
   InviteResponse,
@@ -76,7 +75,6 @@ export class UsersService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
-    @InjectModel(UserRole.name) private userRoleModel: Model<UserRole>,
     private permissionsService: PermissionsService,
     private roleAssignments: RoleAssignmentsService,
     private ownerProtection: OwnerProtectionService,
@@ -89,48 +87,6 @@ export class UsersService {
     private hostResolver: HostTenantResolver,
   ) {}
 
-  /**
-   * Roles for a set of users, as the `{ _id, name, slug }` shape the web has
-   * always received from `.populate('roleIds')`.
-   *
-   * Replaces that populate now that the assignment lives in `userRoles`. Batched
-   * over all the users at once — the alternative, a lookup per row, is how a
-   * 15-person agency turns one query into sixteen.
-   */
-  private async rolesByUser(
-    userIds: Types.ObjectId[],
-  ): Promise<
-    Map<string, { _id: Types.ObjectId; name: string; slug: string }[]>
-  > {
-    const byUser = new Map<
-      string,
-      { _id: Types.ObjectId; name: string; slug: string }[]
-    >();
-    if (!userIds.length) return byUser;
-
-    const links = await this.userRoleModel
-      .find({ userId: { $in: userIds } })
-      .select({ userId: 1, roleId: 1 })
-      .lean();
-    if (!links.length) return byUser;
-
-    const roles = await this.roleModel
-      .find({ _id: { $in: links.map((link) => link.roleId) } })
-      .select({ name: 1, slug: 1 })
-      .lean();
-    const roleById = new Map(roles.map((role) => [role._id.toString(), role]));
-
-    for (const link of links) {
-      const role = roleById.get(link.roleId.toString());
-      if (!role) continue;
-      const key = link.userId.toString();
-      const list = byUser.get(key) ?? [];
-      list.push({ _id: role._id, name: role.name, slug: role.slug });
-      byUser.set(key, list);
-    }
-    return byUser;
-  }
-
   async findByAgency(agencyId: string): Promise<AgencyUserListItem[]> {
     const users = await this.userModel
       .find({
@@ -140,7 +96,9 @@ export class UsersService {
       .select('-passwordHash -inviteToken -passwordResetToken')
       .lean();
 
-    const byUser = await this.rolesByUser(users.map((user) => user._id));
+    const byUser = await this.roleAssignments.rolesForUsers(
+      users.map((user) => user._id),
+    );
     return users.map((user) => ({
       ...user,
       roleIds: byUser.get(user._id.toString()) ?? [],
@@ -166,7 +124,7 @@ export class UsersService {
       await Promise.all([
         this.permissionsService.resolveForUser(user as UserDocument),
         this.permissionsService.resolveRoleDefaults(user as UserDocument),
-        this.rolesByUser([user._id]),
+        this.roleAssignments.rolesForUsers([user._id]),
         this.roleAssignments.userOverrides(user._id),
       ]);
 
