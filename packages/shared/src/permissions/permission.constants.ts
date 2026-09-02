@@ -18,6 +18,15 @@ export const PlatformPermission = {
   /** Upload an RTP file and commit the mailers it produces (PAC-73). */
   MailersWrite: 'platform:mailers:write',
   /**
+   * Search the cross-agency user directory in the Super Admin panel (PAC-70).
+   *
+   * The only read that returns users from *every* tenant. Separate from
+   * `UsersImpersonate` so "can find a person" and "can act as a person" stay
+   * independently grantable — an operator who triages support tickets needs
+   * the first without the second.
+   */
+  UsersRead: 'platform:users:read',
+  /**
    * Mint a session as another user, without their password (PAC-70).
    *
    * The strongest capability on the platform: it hands the holder every

@@ -21,6 +21,13 @@ import {
 import { UserPermission } from './schemas/user-permission.schema';
 import { UserRole } from './schemas/user-role.schema';
 
+/** A role as a list view shows it: id for wiring, name and slug for display. */
+export interface AssignedRole {
+  _id: Types.ObjectId;
+  name: string;
+  slug: string;
+}
+
 /**
  * The **only** writer of `userRoles`, `rolePermissions` and `userPermissions`.
  *
@@ -274,6 +281,44 @@ export class RoleAssignmentsService {
       .select({ roleId: 1 })
       .lean();
     return rows.map((row) => row.roleId);
+  }
+
+  /**
+   * The roles held by each of several users, for a list view.
+   *
+   * Batched over all the users at once — the alternative, a lookup per row, is
+   * how a 15-person agency turns one query into sixteen. Users with no role are
+   * simply absent from the map. Shared by the agency user list and the platform
+   * user directory (PAC-70), which is why it lives here rather than on
+   * `UsersService`.
+   */
+  async rolesForUsers(
+    userIds: Types.ObjectId[],
+  ): Promise<Map<string, AssignedRole[]>> {
+    const byUser = new Map<string, AssignedRole[]>();
+    if (!userIds.length) return byUser;
+
+    const links = await this.userRoleModel
+      .find({ userId: { $in: userIds } })
+      .select({ userId: 1, roleId: 1 })
+      .lean();
+    if (!links.length) return byUser;
+
+    const roles = await this.roleModel
+      .find({ _id: { $in: links.map((link) => link.roleId) } })
+      .select({ name: 1, slug: 1 })
+      .lean();
+    const roleById = new Map(roles.map((role) => [role._id.toString(), role]));
+
+    for (const link of links) {
+      const role = roleById.get(link.roleId.toString());
+      if (!role) continue;
+      const key = link.userId.toString();
+      const list = byUser.get(key) ?? [];
+      list.push({ _id: role._id, name: role.name, slug: role.slug });
+      byUser.set(key, list);
+    }
+    return byUser;
   }
 
   /**

@@ -80,6 +80,17 @@ import { mailerControlNumberKeys } from '../../common/mailers/mailer-control-num
 export interface DemoSeedOptions {
   agencySlug: string;
   agencyName: string;
+  /**
+   * The domain of every team member's email, e.g. `demoagency.local`.
+   *
+   * `User.email` is globally unique and the roster is upserted by email, so
+   * two agencies seeded with the same domain would *move* one roster into the
+   * other tenant rather than add a second. Each agency gets its own domain
+   * (derived from the slug unless `--email-domain` says otherwise), which is
+   * what makes `--agency texas-holdings` add a second populated tenant for
+   * cross-agency features like the Super Admin user directory (PAC-70).
+   */
+  emailDomain: string;
   fresh: boolean;
   seed: number;
   password: string;
@@ -110,6 +121,8 @@ interface Ctx {
 
 interface TeamMember {
   spec: TeamMemberSpec;
+  /** `spec.email` re-domained for this agency — the address actually stored. */
+  email: string;
   userId: Types.ObjectId;
   branchSlug: BranchSlug;
   branchId: string;
@@ -256,7 +269,7 @@ export class DemoSeedService {
       await this.purge(ctx.agencyId);
     }
 
-    const team = await this.seedTeam(ctx, options.password);
+    const team = await this.seedTeam(ctx, options);
     const producers = team.filter((m) => m.spec.roleSlug === 'producer');
     const crms = team.filter((m) => m.spec.roleSlug === 'csr');
 
@@ -313,7 +326,7 @@ export class DemoSeedService {
     const mailers = await this.seedMailers(ctx, rng);
 
     const logins = team.map((m) => ({
-      email: m.spec.email,
+      email: m.email,
       role: m.spec.roleSlug,
       password: options.password,
     }));
@@ -388,8 +401,20 @@ export class DemoSeedService {
   // Users: platform super admin + full role roster
   // ---------------------------------------------------------------------------
 
-  private async seedTeam(ctx: Ctx, password: string): Promise<TeamMember[]> {
-    const passwordHash = await bcrypt.hash(password, 10);
+  private async seedTeam(
+    ctx: Ctx,
+    options: DemoSeedOptions,
+  ): Promise<TeamMember[]> {
+    const passwordHash = await bcrypt.hash(options.password, 10);
+    // The default tenant keeps its historical keys so an existing database
+    // reseeds in place; any other slug gets its own namespace, because
+    // `legacySmartSuiteId` is globally unique on `users` and a second agency
+    // must not steal the first one's rows.
+    const isDefaultTenant = options.agencySlug === 'demo-agency';
+    const userLegacyId = (key: string) =>
+      isDefaultTenant
+        ? `demo:user:${key}`
+        : `demo:${options.agencySlug}:user:${key}`;
 
     // Platform super admin (no agency) — reconciled, not counted as team.
     const superAdminEmail =
@@ -415,8 +440,9 @@ export class DemoSeedService {
     for (const spec of TEAM) {
       const roleId = roleIdBySlug.get(spec.roleSlug);
       const branchObjectId = ctx.branchObjectIdBySlug[spec.branch];
+      const email = spec.email.replace(/@.*$/, `@${options.emailDomain}`);
       const user = await this.userModel.findOneAndUpdate(
-        { email: spec.email },
+        { email },
         {
           $set: {
             agencyId: ctx.agencyObjectId,
@@ -425,7 +451,7 @@ export class DemoSeedService {
             lastName: spec.lastName,
             isActive: true,
             isPlatformAdmin: false,
-            legacySmartSuiteId: `demo:user:${spec.key}`,
+            legacySmartSuiteId: userLegacyId(spec.key),
           },
           $setOnInsert: { passwordHash },
         },
@@ -444,6 +470,7 @@ export class DemoSeedService {
       this.inc('users');
       team.push({
         spec,
+        email,
         userId: user._id,
         branchSlug: spec.branch,
         branchId: ctx.branchIdBySlug[spec.branch],
