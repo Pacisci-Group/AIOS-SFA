@@ -1,4 +1,20 @@
-import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
+
+/**
+ * `class-transformer` types `TransformFnParams.value` as `any`, so an inline
+ * arrow returning it trips `no-unsafe-return`. Narrowing to `unknown` at the
+ * boundary keeps the lint honest; the `@Is*` decorators assert the type.
+ */
+const trim = ({ value }: { value: unknown }): unknown =>
+  typeof value === 'string' ? value.trim() : value;
 
 export class LoginDto {
   @IsEmail()
@@ -21,6 +37,27 @@ export class AcceptInviteDto {
   @IsNotEmpty()
   @MinLength(8)
   password: string;
+
+  /**
+   * Optional name corrections (PAC-69).
+   *
+   * The invitee's names are already on the record — the inviter typed them —
+   * and the onboarding wizard shows them prefilled so they can be fixed before
+   * the account goes live. Optional because the accept-invite page shipped
+   * without them and an older client sends neither; absent means "leave what is
+   * there", which is not the same as clearing it.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  @Transform(trim)
+  firstName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  @Transform(trim)
+  lastName?: string;
 }
 
 /**

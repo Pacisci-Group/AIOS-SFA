@@ -37,6 +37,11 @@ tests {
       "scope",
       "dataScope",
       "isPlatformAdmin",
+      // PAC-69. Recomputed on every `/auth/me` rather than cached with the
+      // permission set: it flips the moment an owner finishes their agency's
+      // first-run setup, and the client reads `me` far more often than a cache
+      // TTL would turn over.
+      "agencySetupPending",
       // `null` on a real login; the operator's id on an impersonated session
       // (PAC-70). Always present so the web's stored blob never keeps a stale
       // value after switching back to an ordinary login.

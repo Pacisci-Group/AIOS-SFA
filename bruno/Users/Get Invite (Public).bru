@@ -21,14 +21,27 @@ tests {
     expect(body.roleNames).to.be.an("array").that.is.not.empty;
   });
 
-  test("discloses nothing beyond the four documented fields", function () {
+  test("an employee invite has no agency setup waiting behind it", function () {
+    // True only for the owner of a freshly onboarded agency (PAC-69).
+    expect(res.getBody().agencySetupPending).to.equal(false);
+  });
+
+  test("discloses nothing beyond the documented fields", function () {
     // The non-disclosure contract. This is an unauthenticated endpoint, so a new
     // field appearing here is a leak to anyone holding a forwarded link — this
     // test is meant to fail when one is added without thought.
+    //
+    // The three PAC-69 added were held to the same rule: `firstName` and
+    // `lastName` are what the inviter typed and already appear in the greeting
+    // of the email the link came from, and `agencySetupPending` is a fact about
+    // the *agency's* setup state rather than about the person.
     expect(Object.keys(res.getBody()).sort()).to.eql([
       "agencyName",
+      "agencySetupPending",
       "email",
       "expiresAt",
+      "firstName",
+      "lastName",
       "roleNames",
     ]);
   });
@@ -47,12 +60,24 @@ docs {
     "email": "pending@example.com",
     "agencyName": "Smith Family Agency",
     "roleNames": ["Producer"],
-    "expiresAt": "2026-08-24T09:00:00.000Z"
+    "expiresAt": "2026-08-24T09:00:00.000Z",
+    "firstName": "Pending",
+    "lastName": "Invitee",
+    "agencySetupPending": false
   }
   ```
 
   Every field is something the holder of the emailed link already knows. No user
-  id, no name, nothing that would turn a token into a directory lookup.
+  id, nothing that would turn a token into a directory lookup.
+
+  The last three arrived with PAC-69 and were held to the same rule.
+  `firstName` / `lastName` are what the inviter typed and already appear in the
+  greeting of the email the link came from — they let the onboarding wizard show
+  the names prefilled rather than asking the invitee to retype what is already on
+  the record. `agencySetupPending` is a fact about the **agency's** setup state,
+  not about the person: it is true only for the owner of a freshly onboarded
+  agency, and is here so the wizard can size its step counter ("Step 1 of 5")
+  before any session exists.
 
   **Errors**
   - `410 Gone` — the token is valid but expired. The page tells the invitee to

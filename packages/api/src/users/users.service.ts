@@ -52,7 +52,10 @@ import {
 } from '../permissions/owner-protection.service';
 import {
   AgencyUserListItem,
+  InviteKind,
   InviteResponse,
+  InviteUserInput,
+  MintedInvite,
   PasswordResetResponse,
   UserDetailResponse,
 } from './users.types';
@@ -152,15 +155,22 @@ export class UsersService {
    * outcome. Sending first and creating second would mean a delivered link
    * pointing at no account.
    */
-  async inviteUser(input: {
-    agencyId: string;
-    branchId?: string;
-    email: string;
-    roleIds: string[];
-    firstName?: string;
-    lastName?: string;
-    invitedByUserId?: string;
-  }): Promise<InviteResponse> {
+  async inviteUser(input: InviteUserInput): Promise<InviteResponse> {
+    const user = await this.createPendingUser(input);
+    return this.issueInvite(user, input.invitedByUserId);
+  }
+
+  /**
+   * The account half of an invite: validate, create the inactive row, assign
+   * roles. **Sends nothing.**
+   *
+   * Split out of {@link inviteUser} for agency onboarding (PAC-69), which needs
+   * the two halves on opposite sides of a rollback boundary — the tenant it
+   * creates must be undoable while the write is in flight, and must *not* be
+   * undone once an email has been requested. Everything the ordinary invite
+   * path does is unchanged; it simply calls these in sequence.
+   */
+  async createPendingUser(input: InviteUserInput): Promise<UserDocument> {
     await this.validateRoles(input.agencyId, input.roleIds);
 
     const email = input.email.toLowerCase();
@@ -181,17 +191,24 @@ export class UsersService {
     // The inviter is the actor. Owner protection does not fire on a brand-new
     // user — there is no owner role to strip — but routing through the one
     // writer is what keeps that true as the rules grow.
+    //
+    // `isPlatformAdmin` is passed through rather than hard-coded false: a
+    // platform operator onboarding an agency (PAC-69) assigns the Agency Owner
+    // role, and `assertMayChangeOwnerRole` reserves that for platform accounts.
+    // It happens to be permitted either way here — the user is brand new and
+    // holds no owner role to change — but a false claim about who is acting is
+    // not the thing to leave lying around in an authorization call.
     await this.roleAssignments.setUserRoles(
       {
         userId: input.invitedByUserId ?? user._id.toString(),
-        isPlatformAdmin: false,
+        isPlatformAdmin: input.invitedByIsPlatformAdmin ?? false,
       },
       input.agencyId,
       user._id,
       input.roleIds,
     );
 
-    return this.issueInvite(user, input.invitedByUserId);
+    return user;
   }
 
   /**
@@ -586,6 +603,18 @@ export class UsersService {
     user: UserDocument,
     invitedByUserId?: string,
   ): Promise<InviteResponse> {
+    const minted = await this.mintInviteToken(user);
+    await this.dispatchInviteEmail(user, minted, invitedByUserId);
+    return this.inviteResponse(user, minted);
+  }
+
+  /**
+   * Mint a fresh invite token onto the user and save it. **Sends nothing.**
+   *
+   * Issuing a token invalidates any previous one, which is what makes a resend
+   * revoke the old link.
+   */
+  async mintInviteToken(user: UserDocument): Promise<MintedInvite> {
     const inviteToken = randomBytes(32).toString('hex');
     const expiryDays = inviteExpiryDays(
       this.configService.get<string>('INVITE_EXPIRY_DAYS'),
@@ -597,24 +626,80 @@ export class UsersService {
     user.inviteLastSentAt = new Date();
     await user.save();
 
+    const baseUrl = await this.tenantUrls.baseUrlFor(
+      user.agencyId?.toString() ?? null,
+    );
+
+    return {
+      inviteToken,
+      expiresAt,
+      inviteUrl: `${baseUrl}/auth/accept-invite?token=${inviteToken}`,
+      baseUrl,
+    };
+  }
+
+  /**
+   * Ask the async platform to deliver the invite for an already-minted token.
+   *
+   * ⚠ **A caller that rolls back on failure must not call this inside the
+   * rollback region.** `InngestService.send` records the event before handing
+   * it to Inngest, and the event-log sweep replays a stranded row later; the
+   * send function mails whatever the payload says without re-reading the user.
+   * So a "delete the tenant, the email failed" path produces a real email with
+   * a link to a deleted account. Commit first, dispatch last — which is exactly
+   * what `AgencyProvisioningService` does with it.
+   */
+  async dispatchInviteEmail(
+    user: UserDocument,
+    minted: MintedInvite,
+    invitedByUserId?: string,
+    options?: { kind?: InviteKind },
+  ): Promise<void> {
+    try {
+      await this.buildAndSendInvite(user, minted, invitedByUserId, options);
+    } catch (error) {
+      /*
+       * Nothing was sent, so nothing should look like it was.
+       *
+       * `inviteLastSentAt` is what the resend cooldown is measured from, and
+       * `mintInviteToken` stamps it before this runs. Left in place after a
+       * failed dispatch it tells the very person trying to recover — an owner
+       * whose invite errored, or an operator looking at a failed onboarding —
+       * "an invite was just sent to this address", which is both false and the
+       * exact opposite of the action they need to take.
+       *
+       * ⚠ It does mean a *replayed* event (the event-log sweep) and a manual
+       * resend can both reach the recipient. That is the better failure: the
+       * resend rotates the token, so the second link is the working one, and
+       * two emails beats a locked-out owner.
+       */
+      user.inviteLastSentAt = undefined;
+      await user.save();
+      throw error;
+    }
+  }
+
+  private async buildAndSendInvite(
+    user: UserDocument,
+    minted: MintedInvite,
+    invitedByUserId?: string,
+    options?: { kind?: InviteKind },
+  ): Promise<void> {
     const agencyIdString = user.agencyId?.toString() ?? null;
-    const [baseUrl, agencyName, roleNames, inviterName] = await Promise.all([
-      this.tenantUrls.baseUrlFor(agencyIdString),
+    const [agencyName, roleNames, inviterName] = await Promise.all([
       this.resolveAgencyName(user.agencyId),
       this.permissionsService.resolveRoleNames(user),
       this.resolveUserName(invitedByUserId),
     ]);
 
-    const inviteUrl = `${baseUrl}/auth/accept-invite?token=${inviteToken}`;
-
     // Same origin as the invite link, so the logo is fetched from the host the
     // invitee is about to visit — and so a tenant with its own domain never
     // makes a mail client load an asset from a name the recipient has never
     // heard of.
-    const brand = await this.resolveEmailBrand(agencyIdString, baseUrl);
+    const brand = await this.resolveEmailBrand(agencyIdString, minted.baseUrl);
 
     // `agencyId` is optional on the schema (a platform super admin has none)
-    // but is guaranteed on both paths into here: `inviteUser` sets it from a
+    // but is guaranteed on every path into here: `inviteUser` sets it from a
     // required input, and `resendInvite` loads the user scoped by it. Asserting
     // rather than defaulting keeps that guarantee visible — the event schema
     // would otherwise reject an empty string with a message about hex digits,
@@ -634,21 +719,25 @@ export class UsersService {
       agencyName,
       inviterName,
       roleNames,
-      inviteUrl,
-      expiresAt,
+      inviteUrl: minted.inviteUrl,
+      expiresAt: minted.expiresAt,
       brand,
+      ...(options?.kind ? { kind: options.kind } : {}),
     });
+  }
 
+  /** The `POST /users/invite` body, shared by both halves of the flow. */
+  inviteResponse(user: UserDocument, minted: MintedInvite): InviteResponse {
     return {
       userId: user._id.toString(),
-      inviteUrl,
-      expiresAt: expiresAt.toISOString(),
+      inviteUrl: minted.inviteUrl,
+      expiresAt: minted.expiresAt.toISOString(),
       // The raw token is a bearer credential and the email is its delivery
       // channel, so it is withheld in production. It is still returned outside
       // production because mail delivery is a logging stub (see `MailService`) —
       // without it there is no way to walk the flow locally or in e2e. Remove
       // this the moment a real transport lands.
-      ...(this.exposeTokensForDev() ? { inviteToken } : {}),
+      ...(this.exposeTokensForDev() ? { inviteToken: minted.inviteToken } : {}),
     };
   }
 
@@ -658,7 +747,7 @@ export class UsersService {
    * would be useless. Checked explicitly rather than leaning on the unique
    * `email` index, which can only report that *something* collided.
    */
-  private async assertEmailAvailable(email: string): Promise<void> {
+  async assertEmailAvailable(email: string): Promise<void> {
     const existing = await this.userModel
       .findOne({ email })
       .select('isActive')

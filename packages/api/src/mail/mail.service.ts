@@ -70,6 +70,9 @@ export class MailService {
       // branding: the schema field is optional, and an explicit key would still
       // be a key the far side has to interpret.
       ...(payload.brand ? { brand: payload.brand } : {}),
+      // Same reasoning for `kind`: absent means the employee invite this always
+      // was, so an ordinary invite puts no key on the wire at all.
+      ...(payload.kind ? { kind: payload.kind } : {}),
       // The catalog carries instants as ISO strings, never `Date` — Inngest
       // rejects schemas with transforms, and an event is JSON on the wire
       // regardless. See `inngest/events/email.events.ts`.

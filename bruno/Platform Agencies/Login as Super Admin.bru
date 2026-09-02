@@ -1,0 +1,58 @@
+meta {
+  name: Login as Super Admin
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{adminEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Its own variable rather than overwriting `accessToken`: the folders that run
+  // after this one are producer-scoped, and a platform token would fail every
+  // one of them — a platform admin holds `platform:*` and no module permission.
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    bru.setVar("platformAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("holds the platform agency permissions", function () {
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("platform:agencies:read");
+    expect(perms).to.include("platform:agencies:write");
+  });
+}
+
+docs {
+  # POST /auth/login — sign in as the platform super admin
+
+  Seeded by `npm run api:seed:dev` as `admin@sfa.local`. Duplicated from the
+  **Platform Mailers** folder because each Bruno folder is self-contained — the
+  CLI runs folders alphabetically and no folder may depend on another having
+  set a variable.
+
+  - **Module:** none (`@Public()`)
+  - **Permission:** none
+
+  ## Errors
+  - `401 Unauthorized` — wrong credentials, or the core seed has not been run.
+}

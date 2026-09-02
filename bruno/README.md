@@ -46,6 +46,13 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
 | Policies | Check Policy Number | `GET /policies/check` | **PAC-40** — Sold wizard Card 3 dedupe. `deal_audits:read`. |
+| Platform Agencies | Login as Super Admin | `POST /auth/login` | **PAC-69** — the platform operator. Each folder is self-contained, so this is duplicated rather than shared with **Platform Mailers**. |
+| Platform Agencies | Check Availability | `GET /platform/agencies/availability` | **PAC-69** — live slug/email/ticker checks for the onboarding wizard. `platform:agencies:read`. Mints the timestamped identity the rest of the folder uses. |
+| Platform Agencies | Onboard Agency | `POST /platform/agencies` | **PAC-69** — agency + roles + first branch + audit templates + invited owner, in one call. `platform:agencies:write`. A failed invite email is still a **201** with `emailStatus: "failed"` — see its docs. |
+| Platform Agencies | Resend Owner Invite (Cooldown) | `POST /platform/agencies/:id/owner-invite/resend` | **PAC-69** — asserts the per-user cooldown refuses a resend seconds after onboarding. The 200 path needs a failed dispatch (which clears the stamp) and is covered by e2e. |
+| Platform Agencies | Get / Accept Owner Invite (Public) | `GET /auth/invite/:token`, `POST /auth/accept-invite` | **PAC-69** — the owner's half: preview carries `firstName`/`lastName`/`agencySetupPending`, accept takes optional name corrections. `auth: none`. |
+| Platform Agencies | Get / Complete Agency Setup | `GET`/`POST /agency/setup…` | **PAC-69** — the owner's first-run wizard state. `agency:branding:read` / `:write`. `complete` is idempotent. |
+| Platform Agencies | Check Availability (After Onboarding) | `GET /platform/agencies/availability` | **PAC-69** — the same query, now answering "taken". Paired with the first so neither depends on which agencies happen to exist locally. |
 | Platform Mailers | Login as Super Admin | `POST /auth/login` | **PAC-73** — the platform operator (`admin@sfa.local`). Captures `platformAccessToken` separately: a platform account holds no module permissions, so it would 403 every other folder. |
 | Platform Mailers | List Agencies | `GET /platform/agencies` | **PAC-73** — the Add Mailers agency picker. `platform:agencies:read`. Selects by slug, not `[0]` — the list has no guaranteed order. |
 | Platform Mailers | Presign Import | `POST /platform/mailers/imports/presign` | **PAC-73** — RTP upload URL. `platform:mailers:write`. |
@@ -146,3 +153,10 @@ bru run "Deal Audits" --env Local
 - Keep each request's `docs` block current — it is the source of API context for
   humans and agents. As new PAC tickets land, add a folder/request here in the
   same shape (meta → verb → params/headers/body → tests → docs).
+- **Folders are self-contained.** The CLI walks them alphabetically and a folder
+  must not depend on another having set a variable, which is why more than one
+  has its own `Login as …` request.
+- ⚠ **`Platform Agencies` leaves an agency behind on every run.** There is no
+  delete-agency endpoint, and onboarding is the one flow here that creates a
+  whole tenant. Its slug and owner email are timestamped so repeated runs do not
+  collide; drop the database if the accumulation ever matters.

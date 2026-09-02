@@ -12,7 +12,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { Model } from 'mongoose';
-import { AccessContext, JwtPayload } from '@sfa/shared';
+import { AccessContext, AgencyPermission, JwtPayload } from '@sfa/shared';
 import { hashResetToken } from '../common/crypto/reset-token';
 import {
   HostTenantResolver,
@@ -179,11 +179,14 @@ export class AuthService {
       throw new GoneException('This invite has expired');
     }
 
-    const [agency, roleNames] = await Promise.all([
+    const [agency, roleNames, permissions] = await Promise.all([
       user.agencyId
-        ? this.agencyModel.findById(user.agencyId).select('name').lean()
+        ? this.agencyModel.findById(user.agencyId).select('name setup').lean()
         : null,
       this.permissionsService.resolveRoleNames(user),
+      // Resolvable for an inactive user: permission resolution never checks
+      // `isActive`, and `agency:*` strings survive the enabled-module filter.
+      this.permissionsService.resolveForUser(user),
     ]);
 
     return {
@@ -191,6 +194,14 @@ export class AuthService {
       agencyName: agency?.name ?? 'your agency',
       roleNames,
       expiresAt: expiresAt.toISOString(),
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      // Gated on the *permission*, never on the role slug — the project rule is
+      // that a role name is display only. Anyone who could complete the setup
+      // is anyone who could do its writes.
+      agencySetupPending:
+        agency?.setup?.status === 'pending' &&
+        permissions.includes(AgencyPermission.BrandingWrite),
     };
   }
 
@@ -212,6 +223,15 @@ export class AuthService {
     // URL from the agency's own primary host, so a correctly-generated link
     // already lands here. It catches the hand-edited and the stale-domain case.
     await this.assertBelongsOnHost(user, host);
+
+    // Only when sent. An older client omits them, and an omitted name must
+    // leave the inviter's value alone rather than clearing it.
+    if (dto.firstName !== undefined) {
+      user.firstName = dto.firstName || undefined;
+    }
+    if (dto.lastName !== undefined) {
+      user.lastName = dto.lastName || undefined;
+    }
 
     user.passwordHash = await bcrypt.hash(dto.password, 12);
     user.inviteToken = undefined;
@@ -395,6 +415,7 @@ export class AuthService {
     user: UserDocument,
     access: AccessContext,
     roles: string[],
+    agencySetupPending: boolean,
     impersonatedBy?: string,
   ) {
     return {
@@ -423,6 +444,15 @@ export class AuthService {
       dataScope: access.dataScope,
       isPlatformAdmin: access.isPlatformAdmin,
       /**
+       * Whether this user still has their agency's first-run setup to finish
+       * (PAC-69). Drives the redirect into `/welcome/agency`.
+       *
+       * Recomputed on every `/auth/me`, not cached with the permission set: it
+       * flips the moment the owner presses Finish, and the client polls `me`
+       * far more often than a cache TTL would turn over.
+       */
+      agencySetupPending,
+      /**
        * Present only on an impersonated session (PAC-70), so a client can show
        * a banner. `null` rather than omitted, because the web stores this blob
        * and an absent key would leave a stale `true` behind after switching
@@ -449,7 +479,13 @@ export class AuthService {
       this.permissionsService.buildAccessContext(user),
       this.permissionsService.resolveRoleNames(user),
     ]);
-    return this.toAuthUser(user, access, roles, impersonatedBy);
+    return this.toAuthUser(
+      user,
+      access,
+      roles,
+      await this.agencySetupPending(access),
+      impersonatedBy,
+    );
   }
 
   /**
@@ -546,7 +582,42 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      user: this.toAuthUser(user, access, roles, impersonatedBy),
+      user: this.toAuthUser(
+        user,
+        access,
+        roles,
+        await this.agencySetupPending(access),
+        impersonatedBy,
+      ),
     };
+  }
+
+  /**
+   * Does this caller still owe their agency its first-run setup? (PAC-69)
+   *
+   * Short-circuits on the permission before touching the database, so the
+   * overwhelming majority of sessions — every producer, CSR and platform admin —
+   * pay nothing for it, and only an owner costs one projected lookup.
+   *
+   * Deliberately **not** a field on `AccessContext`: that object is what
+   * `PermissionCache` serializes, so adding to it means bumping the Redis key
+   * prefix and invalidating every cached context on deploy, for a flag that has
+   * nothing to do with authorization.
+   */
+  private async agencySetupPending(access: AccessContext): Promise<boolean> {
+    if (
+      !access.agencyId ||
+      !access.permissions.includes(AgencyPermission.BrandingWrite)
+    ) {
+      return false;
+    }
+    const agency = await this.agencyModel
+      .findById(access.agencyId)
+      .select('setup')
+      .lean();
+    // ⚠ `.lean()` skips schema defaults, so an agency created before this
+    // feature reads back `undefined` — and those are exactly the ones that must
+    // count as complete.
+    return agency?.setup?.status === 'pending';
   }
 }

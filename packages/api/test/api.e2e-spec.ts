@@ -459,14 +459,98 @@ describe('SFA API (e2e)', () => {
       expect((res.body as { slug: string }).slug).toBe('test-agency');
     });
 
+    /**
+     * The onboarding body (PAC-69). The route used to take `{ name, slug }` and
+     * produce an agency nobody could log into; the full-tenant assertions live
+     * in `agency-onboarding.e2e-spec.ts`, and this covers the route's contract
+     * in the main suite.
+     */
+    const onboardBody = (slug: string) => ({
+      agency: { name: 'New Agency', slug },
+      branch: {
+        name: 'Main',
+        address: { street: '1 Main St', city: 'Austin' },
+      },
+      modules: [ModuleKey.Dashboard, ModuleKey.Leads],
+      owner: {
+        firstName: 'New',
+        lastName: 'Owner',
+        email: `owner-${slug}@example.com`,
+      },
+    });
+
     it('POST /api/v1/platform/agencies', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/platform/agencies')
         .set(authHeader(superAdminToken))
-        .send({ name: 'New Agency', slug: 'new-agency' })
+        .send(onboardBody('new-agency'))
         .expect(201);
 
-      expect((res.body as { slug: string }).slug).toBe('new-agency');
+      const body = res.body as {
+        agency: { slug: string };
+        branch: { name: string };
+        owner: { email: string; emailStatus: string; inviteToken?: string };
+      };
+      expect(body.agency.slug).toBe('new-agency');
+      expect(body.branch.name).toBe('Main');
+      expect(body.owner.email).toBe('owner-new-agency@example.com');
+      expect(body.owner.emailStatus).toBe('queued');
+      // Outside production the raw token comes back, so the flow is walkable.
+      expect(body.owner.inviteToken).toBeTruthy();
+    });
+
+    it('POST /api/v1/platform/agencies — rejects a malformed slug', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/platform/agencies')
+        .set(authHeader(superAdminToken))
+        .send({
+          ...onboardBody('not-a-slug'),
+          agency: { name: 'Bad Slug', slug: 'Not A Slug' },
+        })
+        .expect(400);
+    });
+
+    it('POST /api/v1/platform/agencies — rejects a duplicate slug', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/platform/agencies')
+        .set(authHeader(superAdminToken))
+        .send(onboardBody('test-agency'))
+        .expect(409);
+    });
+
+    it('POST /api/v1/platform/agencies — rejects a duplicate owner email', async () => {
+      const body = onboardBody('another-agency');
+      await request(app.getHttpServer())
+        .post('/api/v1/platform/agencies')
+        .set(authHeader(superAdminToken))
+        .send({ ...body, owner: { ...body.owner, email: seed.ownerEmail } })
+        .expect(409);
+    });
+
+    it('GET /api/v1/platform/agencies/availability', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/platform/agencies/availability')
+        .query({ slug: 'test-agency', email: 'nobody-at-all@example.com' })
+        .set(authHeader(superAdminToken))
+        .expect(200);
+
+      const body = res.body as {
+        slugAvailable: boolean | null;
+        emailAvailable: boolean | null;
+        tickerAvailable: boolean | null;
+      };
+      expect(body.slugAvailable).toBe(false);
+      expect(body.emailAvailable).toBe(true);
+      // Not asked about, so no opinion — rather than a default of "free".
+      expect(body.tickerAvailable).toBeNull();
+    });
+
+    it('POST /api/v1/platform/agencies — forbidden for agency owner', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/platform/agencies')
+        .set(authHeader(ownerToken))
+        .send(onboardBody('owner-cannot'))
+        .expect(403);
     });
 
     it('PATCH /api/v1/platform/agencies/:agencyId/modules', async () => {
@@ -935,17 +1019,34 @@ describe('SFA API (e2e)', () => {
         agencyName: string;
         roleNames: string[];
         expiresAt: string;
+        firstName: string | null;
+        lastName: string | null;
+        agencySetupPending: boolean;
       };
       expect(body.email).toBe(email);
       expect(body.agencyName).toBeTruthy();
       expect(body.roleNames.length).toBeGreaterThan(0);
+      // An ordinary employee invite: no agency setup waiting behind it.
+      expect(body.agencySetupPending).toBe(false);
 
-      // The non-disclosure contract: an unauthenticated caller holding a
-      // forwarded link learns nothing beyond what the email already told them.
+      /*
+       * The non-disclosure contract: an unauthenticated caller holding a
+       * forwarded link learns nothing beyond what the email already told them.
+       *
+       * The three fields PAC-69 added are held to the same rule. `firstName`
+       * and `lastName` are what the inviter typed and already appear in the
+       * greeting of the email the link came from; `agencySetupPending` is a
+       * fact about the *agency's* setup state, not about the person, and it is
+       * here so the wizard can size its step counter before a session exists.
+       * Anything added later has to survive the same question.
+       */
       expect(Object.keys(body).sort()).toEqual([
         'agencyName',
+        'agencySetupPending',
         'email',
         'expiresAt',
+        'firstName',
+        'lastName',
         'roleNames',
       ]);
     });
