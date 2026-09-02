@@ -271,7 +271,9 @@ export class DemoSeedService {
 
     const team = await this.seedTeam(ctx, options);
     const producers = team.filter((m) => m.spec.roleSlug === 'producer');
-    const crms = team.filter((m) => m.spec.roleSlug === 'csr');
+    const crms = team.filter(
+      (m) => m.spec.roleSlug === 'csr' || m.spec.roleSlug === 'crm',
+    );
 
     const households = await this.seedHouseholds(ctx, crms, rng);
     const contactsByHousehold = await this.seedContacts(ctx, households, rng);

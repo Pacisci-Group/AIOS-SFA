@@ -15,7 +15,7 @@ import {
 } from '../audit-templates.seed';
 
 export type RoleSlug =
-  'agency_owner' | 'branch_manager' | 'producer' | 'csr' | 'data_team';
+  'agency_owner' | 'branch_manager' | 'producer' | 'csr' | 'crm' | 'data_team';
 
 export type BranchSlug = 'main' | 'north';
 
@@ -33,7 +33,7 @@ export interface TeamMemberSpec {
 
 /**
  * The demo agency's org chart: one owner, one branch manager, five producers
- * across two branches, two CRMs, and a data-team analyst. Every account uses the
+ * across two branches, two CSRs, two CRMs, and a data-team analyst. Every account uses the
  * shared demo password so you can log in as any role to exercise permission
  * gating and data scopes.
  *
@@ -124,6 +124,22 @@ export const TEAM: TeamMemberSpec[] = [
     firstName: 'Robin',
     lastName: 'Diaz',
     roleSlug: 'csr',
+    branch: 'north',
+  },
+  {
+    key: 'crm-priya',
+    email: 'priya.natarajan@demoagency.local',
+    firstName: 'Priya',
+    lastName: 'Natarajan',
+    roleSlug: 'crm',
+    branch: 'main',
+  },
+  {
+    key: 'crm-marcus',
+    email: 'marcus.bell@demoagency.local',
+    firstName: 'Marcus',
+    lastName: 'Bell',
+    roleSlug: 'crm',
     branch: 'north',
   },
   {

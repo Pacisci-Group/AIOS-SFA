@@ -64,7 +64,7 @@ applies identically in both modes.
 >   (`src/seed/demo/`): its own "Demo Agency" (slug `demo-agency`, kept separate
 >   from the migration's `smith-family-agency` so the two never mix) + a 2nd
 >   branch, a complete
->   role roster (owner, manager, 5 producers, 2 CSRs, data team — all
+>   role roster (owner, manager, 5 producers, 2 CSRs, 2 CRMs, data team — all
 >   `ChangeMe123!`), and ~500 realistic CRM records across **every** collection
 >   (households, contacts, leads, quotes, deals, policies, audit/hand-off items,
 >   service tickets, goals, activities, …). Deterministic (fixed RNG seed) and
