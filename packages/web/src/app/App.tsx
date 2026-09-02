@@ -1,8 +1,8 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ModuleKey, PlatformPermission } from '@sfa/shared';
-import { AuthProvider } from '@/contexts/auth-context';
+import { AgencyPermission, ModuleKey, PlatformPermission } from '@sfa/shared';
+import { AuthProvider, useAuth } from '@/contexts/auth-context';
 import { TenantProvider, useTenant } from '@/contexts/tenant-context';
 import { UnknownHostPage } from '@/pages/UnknownHostPage';
 import { ThemeProvider } from '@/app/ThemeProvider';
@@ -69,6 +69,12 @@ const SuperAdminHomePage = lazy(
 const AddMailersPage = lazy(
   () => import('@/features/platform/AddMailersPage'),
 );
+const OnboardAgencyPage = lazy(
+  () => import('@/features/platform/onboard/OnboardAgencyPage'),
+);
+const AgencySetupPage = lazy(
+  () => import('@/features/agency-setup/AgencySetupPage'),
+);
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
@@ -123,12 +129,25 @@ function LazyPage({ children }: { children: React.ReactNode }) {
  */
 function RoleLanding() {
   const { canRead, can } = usePermissions();
+  const { user } = useAuth();
 
   // A platform operator holds only `platform:*` and no module permissions, so
   // without this they fall all the way through to the dev navigator — a page
   // full of tenant dashboards they cannot open (PAC-73).
   if (can(PlatformPermission.AgenciesRead)) {
     return <Navigate to="/admin" replace />;
+  }
+  /*
+   * An owner who has not finished their agency's first-run setup goes there
+   * first (PAC-69) — the case being an owner who closed the tab partway through
+   * the invite wizard, who would otherwise have no route back to it.
+   *
+   * Server-resolved on every `/auth/me`, not a client guess, and it clears the
+   * moment they finish *or skip*: skipping completes the setup precisely so this
+   * redirect cannot become a thing they have to dismiss on every sign-in.
+   */
+  if (user?.agencySetupPending) {
+    return <Navigate to="/welcome/agency" replace />;
   }
   if (canRead(ModuleKey.Management)) {
     return <Navigate to="/dashboard/management" replace />;
@@ -547,6 +566,26 @@ export function App() {
                 feature gates on its own permission and falls back to the panel
                 rather than to `/`, which would bounce the operator out of it.
               */}
+              {/* Phase 2 of agency onboarding, on its own (PAC-69) — where
+                  `RoleLanding` sends an owner who has not finished it. Gated on
+                  `agency:branding:write`, the permission its steps actually
+                  write with, so nobody else can reach a wizard whose every
+                  action would 403. */}
+              <Route
+                element={
+                  <RequirePermission permission={AgencyPermission.BrandingWrite} />
+                }
+              >
+                <Route
+                  path="/welcome/agency"
+                  element={
+                    <LazyPage>
+                      <AgencySetupPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               <Route
                 element={
                   <RequirePermission
@@ -575,6 +614,27 @@ export function App() {
                     element={
                       <LazyPage>
                         <AddMailersPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+                {/* Onboarding writes a whole tenant, so it gates on the write
+                    permission rather than the panel's read one, and falls back
+                    to the panel rather than to `/` — which would bounce the
+                    operator out of the surface they are working in. */}
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={PlatformPermission.AgenciesWrite}
+                      redirectTo="/admin"
+                    />
+                  }
+                >
+                  <Route
+                    path="/admin/agencies/onboard"
+                    element={
+                      <LazyPage>
+                        <OnboardAgencyPage />
                       </LazyPage>
                     }
                   />

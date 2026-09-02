@@ -79,3 +79,46 @@ export interface UserDetailResponse {
   createdAt?: Date;
   updatedAt?: Date;
 }
+
+/**
+ * What creating an invited user needs. Shared by `POST /users/invite` and by
+ * agency onboarding (PAC-69), which drives the same two halves — account, then
+ * email — across a rollback boundary.
+ */
+export interface InviteUserInput {
+  agencyId: string;
+  branchId?: string;
+  email: string;
+  roleIds: string[];
+  firstName?: string;
+  lastName?: string;
+  invitedByUserId?: string;
+  /**
+   * Whether the inviter is a platform account.
+   *
+   * Reaches `OwnerProtectionService.assertMayChangeOwnerRole`, which reserves
+   * assigning the Agency Owner role for platform operators. Only the onboarding
+   * path sets it; the tenant-side invite dialog leaves it false.
+   */
+  invitedByIsPlatformAdmin?: boolean;
+}
+
+/** A minted-but-not-yet-sent invite. See `UsersService.mintInviteToken`. */
+export interface MintedInvite {
+  inviteToken: string;
+  expiresAt: Date;
+  /** Absolute accept-invite URL, on the recipient's own agency host. */
+  inviteUrl: string;
+  /** The host the URL was built from, reused for the email's logo. */
+  baseUrl: string;
+}
+
+/**
+ * Which invite this is, so the email can say the right thing.
+ *
+ * `employee` (the default, and what an omitted value means) is "X invited you
+ * to join Y". `owner` is the agency's first account, created by a platform
+ * operator during onboarding — nobody at the agency invited them, and being
+ * told "Super Admin invited you" is both confusing and slightly alarming.
+ */
+export type InviteKind = 'employee' | 'owner';

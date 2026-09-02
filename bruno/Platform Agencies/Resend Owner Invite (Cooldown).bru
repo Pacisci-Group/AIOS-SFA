@@ -1,0 +1,69 @@
+meta {
+  name: Resend Owner Invite (Cooldown)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/platform/agencies/{{onboardedAgencyId}}/owner-invite/resend
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 409 inside the per-user cooldown", function () {
+    // Onboarding sent an invite a second ago, so this is the cooldown doing its
+    // job. It is asserted rather than worked around: an operator hammering
+    // Resend must not be able to mail the same person repeatedly, and the
+    // global rate limits are per IP and would not stop it.
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("says how long to wait", function () {
+    expect(res.getBody().message).to.match(/just sent|second/i);
+  });
+}
+
+docs {
+  # POST /platform/agencies/:agencyId/owner-invite/resend — resend the owner's invite
+
+  The recovery path when onboarding came back with `owner.emailStatus: "failed"`,
+  or when the link expired before it was used.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:agencies:write`
+  - **Data scope:** none — above the tenant boundary.
+
+  ## Why this exists rather than reusing `POST /users/:userId/invite/resend`
+  That route is gated on `agency:users:write`, and a platform account resolves to
+  `ALL_PLATFORM_PERMISSIONS` and **no** agency permission at all. Without this
+  endpoint, recovering a failed delivery would need a database edit.
+
+  Internally it calls the same `UsersService.resendInvite`, so the cooldown,
+  token rotation and the "already accepted" / "was removed" guards are the ones
+  the tenant's own users list is held to. Issuing a new token **invalidates the
+  previous link**.
+
+  ## Why this request asserts a 409
+  It runs seconds after **Onboard Agency**, which sent an invite — so the
+  per-user cooldown (`INVITE_RESEND_COOLDOWN_SECONDS`, 60s) correctly refuses it.
+  Reaching the `200` needs either a 60-second wait, which no collection run
+  should contain, or the case it actually exists for: a **failed** dispatch,
+  which clears `inviteLastSentAt` precisely so the person recovering from it is
+  not told "an invite was just sent to this address" when none was. That path is
+  covered by `test/agency-onboarding.e2e-spec.ts`.
+
+  ## Response `200`
+  Same `owner` object `POST /platform/agencies` returns, with a fresh
+  `inviteUrl`, `expiresAt` and `emailStatus: "queued"`.
+
+  ## Errors
+  - `404 Not Found` — unknown agency, or it has no owner.
+  - `409 Conflict` — the owner has already accepted, or a resend was issued
+    inside the per-user cooldown.
+  - `403 Forbidden` — not a platform account.
+}

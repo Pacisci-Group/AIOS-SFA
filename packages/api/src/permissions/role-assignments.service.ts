@@ -276,6 +276,17 @@ export class RoleAssignmentsService {
     return rows.map((row) => row.roleId);
   }
 
+  /** The users holding a role. The inverse of {@link userRoleIds}. */
+  async roleUserIds(
+    roleId: string | Types.ObjectId,
+  ): Promise<Types.ObjectId[]> {
+    const rows = await this.userRoleModel
+      .find({ roleId: new Types.ObjectId(roleId.toString()) })
+      .select({ userId: 1 })
+      .lean();
+    return rows.map((row) => row.userId);
+  }
+
   /**
    * Replace a user's per-permission overrides.
    *
@@ -368,5 +379,26 @@ export class RoleAssignmentsService {
     const user = new Types.ObjectId(userId.toString());
     await this.userRoleModel.deleteMany({ userId: user });
     await this.userPermissionModel.deleteMany({ userId: user });
+  }
+
+  /**
+   * Remove every assignment belonging to an agency.
+   *
+   * Used by one caller: `AgencyProvisioningService` rolling back a failed
+   * onboarding (PAC-69). It is here rather than as a `deleteMany` in that
+   * service because this class is the **only** writer of these three
+   * collections — a rule that exists so cache invalidation, owner protection
+   * and catalog validation cannot be bypassed, and that a rollback path is
+   * exactly as able to break as a happy path.
+   *
+   * ⚠ Only safe on an agency being destroyed. It does not invalidate cached
+   * access contexts, because the only agency this is ever called for is one
+   * whose users were created seconds ago and never signed in.
+   */
+  async purgeAgency(agencyId: string | Types.ObjectId): Promise<void> {
+    const agency = new Types.ObjectId(agencyId.toString());
+    await this.rolePermissionModel.deleteMany({ agencyId: agency });
+    await this.userRoleModel.deleteMany({ agencyId: agency });
+    await this.userPermissionModel.deleteMany({ agencyId: agency });
   }
 }

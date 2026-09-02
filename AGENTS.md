@@ -77,6 +77,13 @@ load-bearing and the permission *strings* are the contract for the guards and th
 whole web app — full detail in `packages/api/CLAUDE.md`, which loads whenever you
 work under `packages/api`.
 
+A tenant is created one of three ways: the **SmartSuite migration** (the real
+agency), the **demo seed** (a throwaway one), or the Super Admin panel's
+**Onboard Agency** wizard (PAC-69) at `/admin/agencies/onboard`, which is the
+only one that also creates a user — the agency's owner, invited by email. The
+owner then completes a two-phase onboarding: personal (name + password) and a
+skippable agency white-label phase, tracked by `Agency.setup`.
+
 ---
 
 ## 6. Domain model — Lead → Quote → Sold → Audit pipeline

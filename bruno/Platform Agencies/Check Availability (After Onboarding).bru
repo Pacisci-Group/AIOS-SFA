@@ -1,0 +1,49 @@
+meta {
+  name: Check Availability (After Onboarding)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/platform/agencies/availability?slug={{onboardSlug}}&email={{onboardOwnerEmail}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  slug: {{onboardSlug}}
+  email: {{onboardOwnerEmail}}
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("now reports both as taken", function () {
+    // The same query that answered "free" before the folder ran. Proves the
+    // check reflects committed writes rather than a cached or static answer —
+    // and that onboarding really did create both the agency and the owner.
+    expect(res.getBody().slugAvailable).to.equal(false);
+    expect(res.getBody().emailAvailable).to.equal(false);
+  });
+}
+
+docs {
+  # GET /platform/agencies/availability — the same check, after the write
+
+  The mirror of **Check Availability** at the top of this folder: the identity
+  that was free before **Onboard Agency** ran must read as taken afterwards.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:agencies:read`
+
+  Deliberately paired rather than folded into one request. Asserting "taken"
+  against a hard-coded slug would depend on whether the local database has been
+  through the SmartSuite migration or only the demo seed; asserting it against
+  the slug this run just created depends on nothing.
+}

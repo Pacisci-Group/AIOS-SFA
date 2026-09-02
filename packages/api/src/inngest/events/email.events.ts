@@ -75,6 +75,18 @@ const inviteRequestedSchema = z.object({
       logoUrl: z.string().url().nullable(),
     })
     .optional(),
+  /**
+   * Which invite this is, so the template can say the right thing (PAC-69).
+   *
+   * `owner` is an agency's first account, created by a platform operator during
+   * onboarding: nobody at the agency invited them, so the employee copy's
+   * "{inviter} invited you" would name a stranger from another company.
+   *
+   * Optional for the same reason `brand` is — an event queued before this
+   * deployed carries no `kind`, and the template must render it as the employee
+   * invite it was rather than failing the run at parse time.
+   */
+  kind: z.enum(['employee', 'owner']).optional(),
 });
 
 export const inviteRequested = eventType('email/invite.requested.v1', {

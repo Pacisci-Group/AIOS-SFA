@@ -47,6 +47,11 @@ export interface InviteEmailPayload {
    * because the template has to render without it — see the event schema.
    */
   brand?: { name: string; logoUrl: string | null };
+  /**
+   * Which invite this is (PAC-69). Absent means `employee`, which is what every
+   * invite was before agency onboarding existed.
+   */
+  kind?: 'employee' | 'owner';
 }
 
 /**

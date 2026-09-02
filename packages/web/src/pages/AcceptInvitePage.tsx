@@ -1,11 +1,10 @@
-import { useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useMemo } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { useAuth } from '@/contexts/auth-context';
 import { ApiError } from '@/lib/api-client';
-import { acceptInvite, getInvitePreview } from '@/lib/invite-api';
+import { getInvitePreview } from '@/lib/invite-api';
 import { AuthShell } from '@/components/auth/AuthShell';
-import { SetPasswordForm } from '@/components/auth/SetPasswordForm';
+import { InviteWizard } from '@/features/agency-setup/InviteWizard';
 import { Button } from '@/components/ui/button';
 
 /**
@@ -26,10 +25,6 @@ import { Button } from '@/components/ui/button';
 export default function AcceptInvitePage() {
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') ?? '';
-  const navigate = useNavigate();
-  const { adoptSession } = useAuth();
-
-  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const inviteQuery = useQuery({
     queryKey: ['invite', token],
@@ -53,25 +48,6 @@ export default function AcceptInvitePage() {
     }
     return 'valid' as const;
   }, [token, inviteQuery.isLoading, inviteQuery.isError, inviteQuery.error]);
-
-  async function handleSubmit(password: string) {
-    setSubmitError(null);
-    try {
-      const result = await acceptInvite(token, password);
-      // `acceptInvite` already persisted the tokens; this tells React about the
-      // session so `ProtectedRoute` lets them through on the very next render.
-      adoptSession(result.user);
-      // `/` is the role landing, which routes them to the dashboard their new
-      // permissions actually grant.
-      navigate('/', { replace: true });
-    } catch (err) {
-      setSubmitError(
-        err instanceof ApiError
-          ? err.message
-          : 'Could not set your password. Try again.',
-      );
-    }
-  }
 
   if (status === 'loading') {
     return (
@@ -116,50 +92,25 @@ export default function AcceptInvitePage() {
   }
 
   const invite = inviteQuery.data!;
-  const roles = invite.roleNames.join(', ');
 
   return (
-    <AuthShell>
+    // Wider for an owner: their flow includes the branding step, which needs
+    // room for three upload rows and the preview.
+    <AuthShell width={invite.agencySetupPending ? 'md' : 'sm'}>
       <div className="space-y-1">
         <h2 className="text-foreground font-semibold text-base">
-          You’ve been invited to {invite.agencyName}
+          {invite.agencySetupPending
+            ? `Let’s set up ${invite.agencyName}`
+            : `You’ve been invited to ${invite.agencyName}`}
         </h2>
-        {/*
-          The invited address is shown as **text, not a field**. The token
-          already determines the account, so an input — even a read-only one —
-          would be asking for something the page is not actually collecting,
-          and reads as a step the invitee has to complete. Setting the password
-          is the only thing they do here.
-
-          It is still displayed rather than dropped: it tells whoever opened
-          the link which account they are about to activate, which matters on a
-          shared machine or a forwarded email.
-        */}
         <p className="text-sm text-muted-foreground">
-          {roles && (
-            <>
-              You’ll join as <span className="text-foreground">{roles}</span>.{' '}
-            </>
-          )}
-          Set a password for{' '}
-          <span className="text-foreground">{invite.email}</span> to finish.
+          {invite.agencySetupPending
+            ? 'Your agency has been created and this account runs it. A few short steps and you’re in.'
+            : 'A couple of details and a password, and you’re in.'}
         </p>
       </div>
 
-      <SetPasswordForm
-        email={invite.email}
-        idPrefix="invite"
-        submitLabel="Set password and sign in"
-        pendingLabel="Setting your password…"
-        error={submitError}
-        onSubmit={handleSubmit}
-        footer={
-          <>
-            This link expires on{' '}
-            {new Date(invite.expiresAt).toLocaleDateString()}.
-          </>
-        }
-      />
+      <InviteWizard token={token} preview={invite} />
     </AuthShell>
   );
 }

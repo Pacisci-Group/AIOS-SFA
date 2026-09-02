@@ -14,6 +14,26 @@ export interface InvitePreview {
   roleNames: string[];
   /** ISO-8601. */
   expiresAt: string;
+  /**
+   * The names the inviter typed, so the wizard's first step arrives filled in
+   * rather than asking the invitee to retype what is already on the record
+   * (PAC-69). Null when the invite was created without them — the seed and the
+   * migration both do.
+   *
+   * Passes the forwarded-link test: these already appear in the greeting of the
+   * email the link came from.
+   */
+  firstName: string | null;
+  lastName: string | null;
+  /**
+   * Whether accepting this invite leads into the agency's own first-run setup —
+   * true only for the owner of a freshly onboarded agency (PAC-69).
+   *
+   * Here rather than discovered after sign-in so the wizard can show a correct
+   * step count from the first screen: "Step 1 of 5", not "Step 1 of 2" followed
+   * by three more steps appearing.
+   */
+  agencySetupPending: boolean;
 }
 
 /**

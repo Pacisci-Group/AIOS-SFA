@@ -2,8 +2,8 @@ import {
   Building2,
   Mail,
   Megaphone,
+  Rocket,
   UserSearch,
-  Upload,
   type LucideIcon,
 } from "lucide-react";
 
@@ -19,11 +19,11 @@ export interface PanelArea {
 /**
  * The Super Admin panel's areas (PAC-73).
  *
- * Only **Add Mailers** is live. The rest are shown disabled with "Coming soon"
- * so the shape of the product reads at a glance — a panel with one tile looks
- * like a broken page, and hiding the others would hide the roadmap from the
- * people the panel is for. Nothing navigates anywhere it cannot go, and there
- * are no fake screens behind any of them.
+ * **Onboard Agency** (PAC-69) and **Add Mailers** are live. The rest are shown
+ * disabled with "Coming soon" so the shape of the product reads at a glance —
+ * hiding them would hide the roadmap from the people the panel is for. Nothing
+ * navigates anywhere it cannot go, and there are no fake screens behind any of
+ * them.
  *
  * ⚠ **Add Mailers is last and is temporary.** PAC-71 folds it into Mailer
  * Campaigns and deletes it; when that lands, remove this entry and the route,
@@ -46,7 +46,8 @@ export const PANEL_AREAS: PanelArea[] = [
     key: "onboard",
     label: "Onboard Agency",
     description: "Guided setup: agency, first branch, modules, owner invite.",
-    icon: Upload,
+    to: "/admin/agencies/onboard",
+    icon: Rocket,
   },
   {
     key: "campaigns",

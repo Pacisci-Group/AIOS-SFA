@@ -13,6 +13,17 @@ export interface InvitePreview {
   roleNames: string[];
   /** ISO-8601. */
   expiresAt: string;
+  /** What the inviter typed, so the wizard's name step arrives prefilled. */
+  firstName: string | null;
+  lastName: string | null;
+  /**
+   * Whether accepting leads into the agency's own first-run setup — true only
+   * for the owner of a freshly onboarded agency (PAC-69).
+   *
+   * Read **before** the first step renders, so the step counter is right from
+   * the start rather than growing by three once the session exists.
+   */
+  agencySetupPending: boolean;
 }
 
 export interface AcceptInviteResult {
@@ -45,10 +56,16 @@ export function getInvitePreview(token: string) {
  * already authenticated — this stores the session rather than bouncing them to
  * `/login` to type a password they set two seconds ago.
  */
-export async function acceptInvite(token: string, password: string) {
+export async function acceptInvite(
+  token: string,
+  password: string,
+  names?: { firstName?: string; lastName?: string },
+) {
   const data = await publicFetch<AcceptInviteResult>('/auth/accept-invite', {
     method: 'POST',
-    body: JSON.stringify({ token, password }),
+    // Names omitted rather than sent empty when the caller has none: absent
+    // means "keep what the inviter typed", where `''` would clear it.
+    body: JSON.stringify({ token, password, ...(names ?? {}) }),
   });
 
   setTokens(data.accessToken, data.refreshToken);

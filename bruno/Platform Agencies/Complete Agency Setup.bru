@@ -1,0 +1,75 @@
+meta {
+  name: Complete Agency Setup
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/agency/setup/complete
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{onboardOwnerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "skipped": true
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    // 200, not 201 — this updates a sub-document, it creates nothing.
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("marks it complete and records that it was skipped", function () {
+    expect(res.getBody().status).to.equal("complete");
+    expect(res.getBody().brandingSkipped).to.equal(true);
+    expect(res.getBody().completedAt).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /agency/setup/complete — finish the first-run setup (PAC-69)
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `agency:branding:write`
+  - **Data scope:** the caller's own agency (`@SkipBranch()`).
+
+  ## Body
+  ```json
+  { "skipped": true }
+  ```
+
+  `skipped` records that the owner pressed "Skip for now" rather than filling
+  the white-label step in. **Either way the setup completes** — skipping is a
+  decision, and an owner who is not ready to think about logos should not be
+  asked again on every sign-in. It is kept because "completed" and "actually
+  branded" are different questions, and the second is the one worth a nudge
+  later.
+
+  ## Idempotent
+  A second call returns the state as it stands rather than conflicting. An owner
+  who finishes in two tabs, or re-submits after a flaky response, has done
+  nothing wrong, and a 409 there would strand them on the last step of a wizard
+  that had already succeeded.
+
+  ## Response `200`
+  ```json
+  { "status": "complete", "completedAt": "2026-09-02T…Z", "brandingSkipped": true }
+  ```
+
+  Once complete, `/auth/me` reports `agencySetupPending: false` and the app stops
+  redirecting the owner to `/welcome/agency`.
+
+  ## Errors
+  - `403 Forbidden` — lacks `agency:branding:write`.
+}

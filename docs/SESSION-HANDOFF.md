@@ -210,3 +210,42 @@ places the ticket's literal spec was wrong, and the one known gap left open.
 ⚠ **Existing agencies need `npm run api:sync:roles`**: PAC-61 gave `mailers:read`
 to every role template, and editing a template does not touch already-seeded
 roles.
+
+### Agency onboarding from the Super Admin panel (PAC-69)
+
+An operator now stands up a whole tenant from `/admin/agencies/onboard`, and the
+agency's owner is walked through their own first-run setup. This is the third
+provisioning path (after the SmartSuite migration and the demo seed) and the
+**only one that creates a user**.
+
+`POST /platform/agencies` replaced its unvalidated `{name, slug}` body — which
+created an agency nobody could sign into and no record could be written to —
+with a zod DTO and `AgencyProvisioningService`: agency → default roles → first
+branch → audit templates → invited Agency Owner. Alongside it,
+`GET /platform/agencies/availability` (live slug/email/ticker checks) and
+`POST /platform/agencies/:agencyId/owner-invite/resend`.
+
+**Three decisions worth carrying forward:**
+
+1. **The invite email is dispatched outside the rollback and is never undone.**
+   `InngestService.send` records the event before handing it over and the sweep
+   replays a stranded row, so rolling the tenant back on a delivery failure
+   would mail a live link to a deleted account. A failed dispatch is reported as
+   `emailStatus: 'failed'` on a **201**, not an error.
+2. **`TransactionRunner` is deliberately not used** — on a replica set it takes
+   the transaction path, where its compensation registry is a no-op, and none of
+   the collaborators accept a session. It would have looked atomic while leaking
+   roles, templates and the user. An explicit undo stack instead.
+3. **A failed invite dispatch now clears `inviteLastSentAt`** (every invite path,
+   not just onboarding), so the person recovering from one is not told "an invite
+   was just sent to this address" when none was.
+
+`Agency.setup` tracks the owner's wizard and **defaults to `complete`**, so no
+migration was needed and no existing owner is pushed into it. ⚠ `.lean()` does
+not apply schema defaults, so a document predating the field reads back
+`undefined` — null-guard rather than trusting the default.
+
+**Still open:** there is no delete-agency endpoint, so every Bruno run of the
+`Platform Agencies` folder leaves one agency behind, and a mis-typed onboarding
+can only be undone in the database. The panel's Agencies directory (PAC-68) is
+still unbuilt, so an onboarded agency cannot be viewed or edited afterwards.

@@ -37,6 +37,11 @@ tests {
       "scope",
       "dataScope",
       "isPlatformAdmin",
+      // PAC-69. Recomputed on every `/auth/me` rather than cached with the
+      // permission set: it flips the moment an owner finishes their agency's
+      // first-run setup, and the client reads `me` far more often than a cache
+      // TTL would turn over.
+      "agencySetupPending",
       "impersonatedBy",
     );
   });

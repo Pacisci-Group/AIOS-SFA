@@ -1,0 +1,161 @@
+meta {
+  name: Onboard Agency
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/platform/agencies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "agency": {
+      "name": "PAC-69 Test Agency",
+      "slug": "{{onboardSlug}}"
+    },
+    "branch": {
+      "name": "Main",
+      "address": {
+        "street": "1 Main St",
+        "city": "Oklahoma City",
+        "state": "Oklahoma",
+        "zip": "73102"
+      }
+    },
+    "modules": ["dashboard", "leads", "clients", "performance"],
+    "owner": {
+      "firstName": "Pac",
+      "lastName": "Owner",
+      "email": "{{onboardOwnerEmail}}"
+    }
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    const body = res.getBody();
+    bru.setVar("onboardedAgencyId", body.agency.id);
+    // Dev/test only — absent in production, where the email is the only
+    // delivery channel. See the docs block.
+    bru.setVar("onboardInviteToken", body.owner.inviteToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("creates the agency and its first branch", function () {
+    const body = res.getBody();
+    expect(body.agency.slug).to.equal(bru.getVar("onboardSlug"));
+    expect(body.branch.name).to.equal("Main");
+  });
+
+  test("invites the owner", function () {
+    const owner = res.getBody().owner;
+    expect(owner.email).to.equal(bru.getVar("onboardOwnerEmail"));
+    // Absolute, and on the agency's own host — `HostTenantGuard` binds a
+    // session to the hostname it was created on, so a link anywhere else is one
+    // the owner cannot complete.
+    expect(owner.inviteUrl).to.match(/^https?:\/\//);
+    expect(owner.inviteUrl).to.contain("/auth/accept-invite?token=");
+  });
+
+  test("reports how the invite email went", function () {
+    // `queued` normally. `failed` is still a 201 — see the docs block.
+    expect(["queued", "failed"]).to.include(res.getBody().owner.emailStatus);
+  });
+}
+
+docs {
+  # POST /platform/agencies — onboard a whole tenant (PAC-69)
+
+  Creates, in one call: the agency with the chosen module entitlements, its five
+  default roles, its first branch, its post-sale audit checklist, and an invited
+  **Agency Owner** who is emailed a link to set a password.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:agencies:write`
+  - **Data scope:** none — above the tenant boundary.
+
+  ## What this replaced
+  The route used to take `{ name, slug }` and create the agency document plus
+  roles — no branch and no user, so nothing could be written to the tenant
+  (`TenantRecord.branchId` is required) and nobody could sign in.
+
+  ## Atomic in effect, with one deliberate exception
+  A failure anywhere in the sequence rolls back every write, and re-submitting
+  after a fix succeeds. The **invite email is outside that boundary**: it is
+  dispatched after the tenant is committed and is never rolled back, because
+  `InngestService.send` records the event before handing it over and the
+  event-log sweep replays a stranded row — so undoing the tenant would mail a
+  live link to a deleted account.
+
+  A dispatch failure is therefore reported as `owner.emailStatus: "failed"` on a
+  **201**, not an error. The tenant is correct; only the notification is
+  missing. Recover with **Resend Owner Invite**.
+
+  ## Body
+  ```json
+  {
+    "agency": { "name": "Acme Insurance", "slug": "acme-insurance",
+                "ticker": "ACM", "allstateAgencyId": "A0B9049" },
+    "branch": { "name": "Main", "address": { "street": "…", "city": "…",
+                "state": "…", "zip": "…" } },
+    "modules": ["dashboard", "leads"],
+    "owner": { "firstName": "Ada", "lastName": "Owner", "email": "ada@acme.test" }
+  }
+  ```
+
+  `agency.ticker` and `agency.allstateAgencyId` are optional but consequential
+  (PAC-73): without them the agency imports no mailers and warns on every RTP
+  upload. `branch.name` defaults to `Main` and its address is optional.
+  `modules` is the enabled set — anything omitted is created disabled, not
+  absent.
+
+  The slug must match `^[a-z0-9]+(?:-[a-z0-9]+)*$`: it becomes the agency's
+  subdomain the moment they add one.
+
+  ## Response `201`
+  ```json
+  {
+    "agency": { "id": "…", "name": "…", "slug": "…" },
+    "branch": { "id": "…", "name": "Main" },
+    "owner": {
+      "userId": "…", "email": "…",
+      "inviteUrl": "https://…/auth/accept-invite?token=…",
+      "expiresAt": "2026-09-09T…Z",
+      "emailStatus": "queued",
+      "inviteToken": "…"
+    }
+  }
+  ```
+
+  `owner.inviteToken` is a **bearer credential** and is returned only outside
+  production, so the flow can be walked locally where mail goes to a log.
+
+  ## Errors
+  - `400 Bad Request` — malformed slug, missing owner name, invalid email,
+    unknown module key.
+  - `409 Conflict` — the slug or ticker belongs to another agency, or the owner
+    address already belongs to an account (the message distinguishes an existing
+    member from a pending invite).
+  - `403 Forbidden` — not a platform account.
+
+  ## ⚠ Residue
+  There is no delete-agency endpoint, so every `bru run` of this folder leaves
+  one agency behind. The slug and owner email are timestamped by **Check
+  Availability** so repeated runs do not collide.
+}

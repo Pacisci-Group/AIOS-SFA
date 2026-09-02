@@ -101,6 +101,14 @@ export interface AuthUser {
   scope: string;
   dataScope: string;
   isPlatformAdmin: boolean;
+  /**
+   * Whether this user still owes their agency its first-run setup (PAC-69).
+   *
+   * True only for the owner of an agency onboarded through the Super Admin
+   * panel, and only until they finish or skip it. Drives `RoleLanding`'s
+   * redirect to `/welcome/agency`.
+   */
+  agencySetupPending: boolean;
 }
 
 export function getStoredUser(): AuthUser | null {

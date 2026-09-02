@@ -1,6 +1,6 @@
-import type { ModuleEntitlements } from '@sfa/shared';
+import type { AgencySetupStatus, ModuleEntitlements } from '@sfa/shared';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { HydratedDocument, Types } from 'mongoose';
 
 export type AgencyDocument = HydratedDocument<Agency>;
 
@@ -108,6 +108,49 @@ export class AgencyEmailSettings {
 export const AgencyEmailSettingsSchema =
   SchemaFactory.createForClass(AgencyEmailSettings);
 
+/**
+ * Where this agency is in its own first-run setup (PAC-69).
+ *
+ * ## Why the default is `complete`
+ * Backwards, until you notice who the exceptions are. Every agency that exists
+ * today was created by the SmartSuite migration, the demo seed or a test
+ * fixture — none of which has an owner waiting to be walked through anything,
+ * and all of which would otherwise be marked `pending` and start redirecting
+ * their owners into a wizard the day this deployed. Only
+ * `AgencyProvisioningService` writes `pending`, and it does so explicitly.
+ *
+ * That also means **no migration script**: an existing document with no `setup`
+ * sub-document reads as complete. ⚠ Readers must null-guard rather than lean on
+ * the default — `.lean()` does not apply schema defaults, so a lean read of an
+ * older agency yields `undefined`, not `{ status: 'complete' }`.
+ */
+@Schema({ _id: false })
+export class AgencySetup {
+  @Prop({
+    type: String,
+    default: 'complete',
+    enum: ['pending', 'complete'],
+  })
+  status: AgencySetupStatus;
+
+  @Prop({ type: Date, default: null })
+  completedAt: Date | null;
+
+  /** Who finished it — the owner, not the operator who created the agency. */
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  completedByUserId: Types.ObjectId | null;
+
+  /**
+   * Whether the white-label step was skipped rather than filled in.
+   *
+   * Kept because "completed" and "actually branded" are different questions,
+   * and the second one is the one worth a nudge later.
+   */
+  @Prop({ default: false })
+  brandingSkipped: boolean;
+}
+export const AgencySetupSchema = SchemaFactory.createForClass(AgencySetup);
+
 @Schema({ timestamps: true, collection: 'agencies' })
 export class Agency {
   @Prop({ required: true, trim: true })
@@ -136,6 +179,10 @@ export class Agency {
   /** Sender identity for outbound email. See {@link AgencyEmailSettings}. */
   @Prop({ type: AgencyEmailSettingsSchema, default: () => ({}) })
   email: AgencyEmailSettings;
+
+  /** First-run setup state. See {@link AgencySetup} for why it defaults to done. */
+  @Prop({ type: AgencySetupSchema, default: () => ({}) })
+  setup: AgencySetup;
 
   /**
    * The three-letter ticker that prefixes this agency's mailer `FileName`

@@ -51,6 +51,7 @@ import { RolesModule } from './roles/roles.module';
 import { ShareLinksModule } from './share-links/share-links.module';
 import { SoldDealsModule } from './sold-deals/sold-deals.module';
 import { StorageModule } from './storage/storage.module';
+import { AgencySetupModule } from './agency-setup/agency-setup.module';
 import { TenantBrandingModule } from './tenant-branding/tenant-branding.module';
 import { UsersModule } from './users/users.module';
 import { ENV_FILE_PATH } from './config/env.config';
@@ -128,6 +129,10 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     AgencyDomainsModule,
     AgencyEmailModule,
     TenantBrandingModule,
+    // The owner's first-run setup flag (PAC-69). Sits with the white-label
+    // modules because that is the wizard it gates, and routes under its own
+    // `agency/setup` prefix.
+    AgencySetupModule,
     BranchesModule,
     RolesModule,
     UsersModule,
