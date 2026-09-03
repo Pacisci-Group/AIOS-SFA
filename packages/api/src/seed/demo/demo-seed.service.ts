@@ -31,7 +31,7 @@ import { AuditTemplate } from '../../audit-templates/schemas/audit-template.sche
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
-import { ServiceTicket } from '../../service-tickets/schemas/service-ticket.schema';
+import { ServiceTicket } from '../../crm/schemas/service-ticket.schema';
 import { ProducerAssignment } from '../../producer-assignments/schemas/producer-assignment.schema';
 import { CrmRotation } from '../../crm-rotations/schemas/crm-rotation.schema';
 import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request.schema';

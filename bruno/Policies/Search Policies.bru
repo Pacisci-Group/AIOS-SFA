@@ -60,7 +60,7 @@ docs {
   ## Query params
   | Param | Required | Notes |
   |---|---|---|
-  | `q` | no | Case-insensitive match on `policyNumber`, `policyType`, or `carrier`. Blank/omitted returns the first page unfiltered, so the picker has rows before the user types. Regex-escaped — a term is never compiled as a pattern |
+  | `q` | no | Case-insensitive match on `policyNumber`, `policyType`, `carrier`, or the **owning household's** `name` / `primaryContactName`. Blank/omitted returns the first page unfiltered, so the picker has rows before the user types. Regex-escaped — a term is never compiled as a pattern |
   | `limit` | no | 1–50, default 20 |
   | `householdId` | no | Mongo id. Restricts results to that household's policies |
 
@@ -73,6 +73,14 @@ docs {
   A well-formed id that is out of the caller's scope (another agency or branch)
   returns `[]` — **never** the unfiltered list. Silently widening on an id the
   caller cannot see would defeat the filter exactly when it matters.
+
+  ### `q` also matches the client
+  Every row is *labelled* with the household that owns the policy, so a user
+  reading a list of client names types one — which matches none of the policy's
+  own fields. The households are resolved first (capped at 500, so one broad
+  term cannot build an unbounded `$in`) and ORed in as a `householdId` clause.
+  Combined with `householdId`, the two AND: the name search narrows within the
+  one household rather than escaping it.
 
   ## Response
   `PolicySearchResult[]` — `PolicySummary` plus `householdId` / `householdName`,

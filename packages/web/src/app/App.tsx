@@ -31,6 +31,9 @@ const TicketWorkspacePage = lazy(
 const ArchivedTicketsPage = lazy(
   () => import('@/features/tickets/ArchivedTicketsPage'),
 );
+const HouseholdsListPage = lazy(
+  () => import('@/features/household/HouseholdsListPage'),
+);
 const HouseholdDetailsPage = lazy(
   () => import('@/features/household/HouseholdDetailsPage'),
 );
@@ -119,7 +122,7 @@ function RoleLanding() {
     return <Navigate to="/crm/service" replace />;
   }
   if (canRead(ModuleKey.Clients)) {
-    return <Navigate to="/clients/demo" replace />;
+    return <Navigate to="/clients" replace />;
   }
   if (canRead(ModuleKey.Leads)) {
     return <Navigate to="/leads" replace />;
@@ -283,6 +286,18 @@ export function App() {
                   <RequirePermission permission={`${ModuleKey.Clients}:read`} />
                 }
               >
+                {/* The Clients list (PAC-89). `clients:read` only — unlike
+                    `/clients/:id` below, which a CSR also reaches from a ticket.
+                    That split mirrors the API: the index requires
+                    `clients:read`, the record accepts either page permission. */}
+                <Route
+                  path="/clients"
+                  element={
+                    <LazyPage>
+                      <HouseholdsListPage />
+                    </LazyPage>
+                  }
+                />
                 <Route
                   path="/clients/demo"
                   element={
