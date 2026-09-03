@@ -1,7 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/auth-context';
-import { useTenant } from '@/contexts/tenant-context';
 import { BrandLockup } from '@/components/common/BrandMark';
 import { ApiError } from '@/lib/api-client';
 import { Card } from '@/components/ui/card';
@@ -12,7 +11,6 @@ import { FormError } from '@/components/form';
 
 export function LoginPage() {
   const { login } = useAuth();
-  const { branding } = useTenant();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -90,17 +88,6 @@ export function LoginPage() {
             >
               {loading ? 'Signing in…' : 'Sign in'}
             </Button>
-
-            {/*
-              A developer hint, so it is shown only on the platform host. On an
-              agency's own domain this is a page their staff and no one else
-              sees, and telling them to read our .env reads as a broken deploy.
-            */}
-            {branding.kind === 'platform' && (
-              <p className="text-[10px] text-muted-foreground text-center pt-2">
-                Use seed credentials from .env (SEED_AGENCY_OWNER_EMAIL)
-              </p>
-            )}
           </form>
         </Card>
       </div>
