@@ -30,7 +30,7 @@ import { Activity } from '../activities/schemas/activity.schema';
 import { ProducerGoal } from '../producer-goals/schemas/producer-goal.schema';
 import { Contact } from '../contacts/schemas/contact.schema';
 import { Policy } from '../policies/schemas/policy.schema';
-import { ServiceTicket } from '../service-tickets/schemas/service-ticket.schema';
+import { ServiceTicket } from '../crm/schemas/service-ticket.schema';
 import { DealAudit } from '../deal-audits/schemas/deal-audit.schema';
 import { InterestedParty } from '../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../prior-insurance/schemas/prior-insurance.schema';
