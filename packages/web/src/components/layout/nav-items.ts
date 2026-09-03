@@ -1,16 +1,14 @@
 import {
-  AtSign,
   BarChart3,
-  Globe,
-  KeyRound,
-  Palette,
   LayoutDashboard,
+  SlidersHorizontal,
   Ticket,
   TrendingUp,
   Users,
   type LucideIcon,
 } from "lucide-react";
 import { ModuleKey } from "@sfa/shared";
+import { SETTINGS_PERMISSIONS } from "@/features/settings/settings-sections";
 
 export type NavItem = {
   to: string;
@@ -20,6 +18,14 @@ export type NavItem = {
   module?: ModuleKey;
   /** Exact permission string required (for `agency:*` admin capabilities). */
   permission?: string;
+  /**
+   * Visible when the user holds **at least one** of these.
+   *
+   * For an entry that opens a hub rather than a page — Workspace Settings lists
+   * five separately-gated sections, and anyone who can reach one of them should
+   * be able to reach the list.
+   */
+  anyOf?: string[];
 };
 
 export type NavSection = {
@@ -103,39 +109,23 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: "Administration",
+    /*
+     * One entry, not the five this section used to hold.
+     *
+     * Agency Users · Roles & Permissions · Branding · Domains · Email were five
+     * permanent rows of *configuration* sitting level with the four screens
+     * people actually work in — and the list grows every time a settings page
+     * is added. They live behind the hub at `/settings` now
+     * (`features/settings/settings-sections.ts` is the catalogue), which is
+     * also the one place their permissions are declared.
+     */
+    title: "Workspace",
     items: [
       {
-        to: "/settings/users",
-        label: "Agency Users",
-        icon: Users,
-        permission: "agency:users:read",
-      },
-      {
-        to: "/settings/roles",
-        label: "Roles & Permissions",
-        icon: KeyRound,
-        // Must match the route guard and what the page actually calls
-        // (`GET /roles`). See the note on the route in `App.tsx`.
-        permission: "agency:roles:read",
-      },
-      {
-        to: "/settings/branding",
-        label: "Branding",
-        icon: Palette,
-        permission: "agency:branding:read",
-      },
-      {
-        to: "/settings/domains",
-        label: "Domains",
-        icon: Globe,
-        permission: "agency:domains:read",
-      },
-      {
-        to: "/settings/email",
-        label: "Email",
-        icon: AtSign,
-        permission: "agency:email:read",
+        to: "/settings",
+        label: "Workspace Settings",
+        icon: SlidersHorizontal,
+        anyOf: SETTINGS_PERMISSIONS,
       },
     ],
   },
@@ -145,9 +135,9 @@ export const NAV_SECTIONS: NavSection[] = [
  * Whether `to` is the section of the app the user is currently in.
  *
  * Prefix-matching rather than `NavLink`'s `end` behaviour, so "Leads" stays lit
- * on `/leads/:id` and "Agency Users" on `/settings/users/:id/permissions` —
- * with an exact match those pages highlighted nothing at all, which read as the
- * nav losing its place. The trailing slash is what keeps `/dashboard/management`
+ * on `/leads/:id` and "Workspace Settings" on every `/settings/*` page — with an
+ * exact match those pages highlighted nothing at all, which read as the nav
+ * losing its place. The trailing slash is what keeps `/dashboard/management`
  * from claiming `/dashboard/management-alt`.
  */
 export function isNavItemActive(pathname: string, to: string): boolean {

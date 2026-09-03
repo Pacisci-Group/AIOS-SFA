@@ -42,7 +42,7 @@ export default function UserPermissionsPage() {
 
   if (userQuery.isError || !userQuery.data) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-background text-slate-400 text-sm">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-background text-muted-foreground text-sm">
         <p>User not found.</p>
         <Link to="/settings/users" className="text-primary">
           Back to users

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
+import { SectionLabel } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -163,9 +164,7 @@ function Stat({
     <>
       {!first && <div className={cn("w-px", accent.bar, "opacity-15")} />}
       <div>
-        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
-          {stat.label}
-        </p>
+        <SectionLabel>{stat.label}</SectionLabel>
         <p className="text-sm text-foreground mt-0.5 font-semibold">
           {stat.value}
         </p>

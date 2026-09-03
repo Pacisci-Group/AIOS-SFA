@@ -258,9 +258,9 @@ export default function EmailSenderPage() {
                         onClick={() => verify.mutate()}
                       >
                         {verify.isPending ? (
-                          <Loader2 size={14} className="animate-spin" />
+                          <Loader2 className="size-4 animate-spin" />
                         ) : (
-                          <RefreshCw size={14} />
+                          <RefreshCw className="size-4" />
                         )}
                         {verify.isPending ? 'Checking…' : 'Verify'}
                       </Button>
@@ -272,7 +272,7 @@ export default function EmailSenderPage() {
                       onClick={() => clear.mutate()}
                       className="text-muted-foreground hover:text-destructive"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 className="size-4" />
                       Use our address instead
                     </Button>
                   </div>
@@ -379,7 +379,7 @@ function CopyButton({ value }: { value: string }) {
         });
       }}
     >
-      {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+      {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
     </Button>
   );
 }

@@ -14,10 +14,15 @@ import type { InviteUserInput } from "@/lib/users-api";
  * (Producer, CSR, Branch Manager) rather than composable grants. Widened to a
  * multi-select later, this is the only file that changes shape.
  *
- * **No `branchId`.** The invite form deliberately does not assign a branch for
- * now; invitees land with `branchId` unset and are placed afterwards.
- * `InviteUserDto.branchId` stays optional on the API, so restoring the picker is
- * a change to this file plus `InviteUserDialog` and nothing else.
+ * `branchId` is **optional here though the picker always has a selection**: it
+ * is prefilled with the agency's default branch, but the picker only renders
+ * when `GET /branches` answers, and that call needs `agency:branches:read` —
+ * a permission the invite itself does not require. Making it required would
+ * turn a 403 on a secondary read into an unsubmittable form; instead the
+ * invitee lands branchless, exactly as they did before the picker existed.
+ * (Branchless is still a dead end — nothing reassigns a branch after the
+ * invite yet — which is why the picker defaults to a real branch rather than
+ * to "none".)
  */
 export const inviteFormSchema = z.object({
   firstName: z.string().trim().min(1, "First name is required").max(100),
@@ -29,6 +34,7 @@ export const inviteFormSchema = z.object({
     .email("Enter a valid email")
     .max(160),
   roleId: z.string().min(1, "Pick a role"),
+  branchId: z.string().optional(),
 });
 
 export type InviteFormValues = z.infer<typeof inviteFormSchema>;
@@ -38,6 +44,7 @@ export const EMPTY_INVITE: InviteFormValues = {
   lastName: "",
   email: "",
   roleId: "",
+  branchId: "",
 };
 
 /** Form state → wire body. Lowercasing is repeated server-side; both matter. */
@@ -45,6 +52,9 @@ export function toInviteUserInput(values: InviteFormValues): InviteUserInput {
   return {
     email: values.email.trim().toLowerCase(),
     roleIds: [values.roleId],
+    // Omitted rather than sent empty: `''` fails `@IsMongoId` with a 400,
+    // where absent is the documented "place them later" case.
+    ...(values.branchId ? { branchId: values.branchId } : {}),
     firstName: values.firstName.trim(),
     lastName: values.lastName.trim(),
   };

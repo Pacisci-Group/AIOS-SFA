@@ -172,7 +172,7 @@ function DomainCard({
           <Badge className={badge.className}>{badge.label}</Badge>
           {domain.isPrimary && (
             <Badge className="bg-primary/12 text-primary">
-              <Star size={11} className="mr-1" />
+              <Star className="size-3 mr-1" />
               Primary
             </Badge>
           )}
@@ -205,9 +205,9 @@ function DomainCard({
               onClick={onVerify}
             >
               {verifying ? (
-                <Loader2 size={14} className="animate-spin" />
+                <Loader2 className="size-4 animate-spin" />
               ) : (
-                <RefreshCw size={14} />
+                <RefreshCw className="size-4" />
               )}
               {verifying ? 'Checking…' : 'Verify'}
             </Button>
@@ -219,7 +219,7 @@ function DomainCard({
               disabled={busy}
               onClick={onMakePrimary}
             >
-              <Star size={14} />
+              <Star className="size-4" />
               Use for links
             </Button>
           )}
@@ -230,7 +230,7 @@ function DomainCard({
             onClick={onRemove}
             className="text-muted-foreground hover:text-destructive"
           >
-            <Trash2 size={14} />
+            <Trash2 className="size-4" />
             Remove
           </Button>
         </div>
@@ -301,7 +301,7 @@ function CopyButton({ value }: { value: string }) {
         });
       }}
     >
-      {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+      {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
     </Button>
   );
 }

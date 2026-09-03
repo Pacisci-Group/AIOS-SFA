@@ -59,14 +59,10 @@ export default function AcceptInvitePage() {
 
   if (status === 'expired') {
     return (
-      <AuthShell>
-        <h2 className="text-foreground font-semibold text-base">
-          This invite has expired
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Invite links are only valid for a short time. Ask your agency owner to
-          send you a new one.
-        </p>
+      <AuthShell
+        title="This invite has expired"
+        description="Invite links are only valid for a short time. Ask your agency owner to send you a new one."
+      >
         <Button asChild variant="outline" className="w-full">
           <Link to="/login">Back to sign in</Link>
         </Button>
@@ -76,14 +72,10 @@ export default function AcceptInvitePage() {
 
   if (status === 'invalid') {
     return (
-      <AuthShell>
-        <h2 className="text-foreground font-semibold text-base">
-          This invite link isn’t valid
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          It may already have been used, or the link may be incomplete. Ask your
-          agency owner to send you a new one.
-        </p>
+      <AuthShell
+        title="This invite link isn’t valid"
+        description="It may already have been used, or the link may be incomplete. Ask your agency owner to send you a new one."
+      >
         <Button asChild variant="outline" className="w-full">
           <Link to="/login">Back to sign in</Link>
         </Button>
@@ -96,20 +88,19 @@ export default function AcceptInvitePage() {
   return (
     // Wider for an owner: their flow includes the branding step, which needs
     // room for three upload rows and the preview.
-    <AuthShell width={invite.agencySetupPending ? 'md' : 'sm'}>
-      <div className="space-y-1">
-        <h2 className="text-foreground font-semibold text-base">
-          {invite.agencySetupPending
-            ? `Let’s set up ${invite.agencyName}`
-            : `You’ve been invited to ${invite.agencyName}`}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          {invite.agencySetupPending
-            ? 'Your agency has been created and this account runs it. A few short steps and you’re in.'
-            : 'A couple of details and a password, and you’re in.'}
-        </p>
-      </div>
-
+    <AuthShell
+      width={invite.agencySetupPending ? 'md' : 'sm'}
+      title={
+        invite.agencySetupPending
+          ? `Let’s set up ${invite.agencyName}`
+          : `You’ve been invited to ${invite.agencyName}`
+      }
+      description={
+        invite.agencySetupPending
+          ? 'Your agency has been created and this account runs it. A few short steps and you’re in.'
+          : 'A couple of details and a password, and you’re in.'
+      }
+    >
       <InviteWizard token={token} preview={invite} />
     </AuthShell>
   );

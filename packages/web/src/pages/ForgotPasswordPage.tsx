@@ -46,16 +46,17 @@ export default function ForgotPasswordPage() {
 
   if (sent) {
     return (
-      <AuthShell>
-        <h2 className="text-foreground font-semibold text-base">
-          Check your email
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          If an account exists for{' '}
-          <span className="text-foreground">{email.trim()}</span>, a password
-          reset link is on its way. The link is valid for a limited time and
-          can only be used once.
-        </p>
+      <AuthShell
+        title="Check your email"
+        description={
+          <>
+            If an account exists for{' '}
+            <span className="text-foreground">{email.trim()}</span>, a password
+            reset link is on its way. The link is valid for a limited time and
+            can only be used once.
+          </>
+        }
+      >
         <Button asChild variant="outline" className="w-full">
           <Link to="/login">Back to sign in</Link>
         </Button>
@@ -64,27 +65,23 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <AuthShell>
+    <AuthShell
+      title="Reset your password"
+      description="Enter the email you sign in with and we’ll send you a link to set a new password."
+      footer={
+        <Link
+          to="/login"
+          className="text-sm text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+        >
+          Back to sign in
+        </Link>
+      }
+    >
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-        <div className="space-y-1">
-          <h2 className="text-foreground font-semibold text-base">
-            Reset your password
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Enter the email you sign in with and we’ll send you a link to set a
-            new password.
-          </p>
-        </div>
-
         <FormError>{error}</FormError>
 
         <div className="space-y-1.5">
-          <Label
-            htmlFor="forgot-email"
-            className="text-xs text-muted-foreground"
-          >
-            Email
-          </Label>
+          <Label htmlFor="forgot-email">Email</Label>
           <Input
             id="forgot-email"
             type="email"
@@ -104,15 +101,6 @@ export default function ForgotPasswordPage() {
         >
           {submitting ? 'Sending…' : 'Send reset link'}
         </Button>
-
-        <p className="text-center">
-          <Link
-            to="/login"
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            Back to sign in
-          </Link>
-        </p>
       </form>
     </AuthShell>
   );

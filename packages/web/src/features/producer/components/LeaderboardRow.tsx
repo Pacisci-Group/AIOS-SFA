@@ -34,13 +34,13 @@ export function LeaderboardRow({ entry }: LeaderboardRowProps) {
 
   return (
     <div className="flex items-center gap-2">
-      <span className={cn("text-[10px] w-4 text-center shrink-0 font-bold", rankTone)}>
+      <span className={cn("w-4 shrink-0 text-center text-xs font-bold", rankTone)}>
         {entry.rank}
       </span>
 
       <div
         className={cn(
-          "w-6 h-6 rounded-full flex items-center justify-center text-[9px] shrink-0 font-bold",
+          "flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-bold",
           entry.isSelf
             ? "bg-primary/20 text-primary border border-primary/35"
             : "bg-muted text-muted-foreground",
@@ -59,7 +59,7 @@ export function LeaderboardRow({ entry }: LeaderboardRowProps) {
           >
             {entry.name}
           </span>
-          <span className="text-[10px] shrink-0 text-muted-foreground">
+          <span className="shrink-0 text-xs text-muted-foreground">
             {/* An em dash, never `0%` — no goal means unknown attainment, and
                 an empty bar next to real sales reads as failure. */}
             {hasGoal ? `${entry.attainmentPct}%` : "—"}
