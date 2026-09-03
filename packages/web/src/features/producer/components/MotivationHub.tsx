@@ -1,6 +1,7 @@
 import { AlertCircle, Trophy } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { ModuleKey } from "@sfa/shared";
+import { SectionLabel } from "@/components/common/DetailCard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -50,7 +51,7 @@ export function MotivationHub() {
         {/* The header names what the rows are measured against, so it has to
             change when nothing has a goal — otherwise it promises a column of
             percentages the card cannot show (PAC-80). */}
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {data && data.goalsConfigured === 0 ? "By Premium" : "Monthly Goal"}
         </span>
       </div>
@@ -86,9 +87,7 @@ export function MotivationHub() {
       ) : (
         <>
           <div>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
-              Office Total
-            </p>
+            <SectionLabel className="mb-1">Office Total</SectionLabel>
             <p className="text-foreground text-[1.4rem] font-bold -tracking-[0.02em] leading-none">
               {formatCurrency(data.officeTotalPremium)}
             </p>
@@ -106,7 +105,7 @@ export function MotivationHub() {
               would otherwise claim.
             */}
             {data.entries.length > 0 && data.goalsConfigured === 0 && (
-              <p className="pb-1 text-[10px] text-muted-foreground">
+              <p className="pb-1 text-xs text-muted-foreground">
                 Monthly goals aren&rsquo;t set yet — ranked by premium.
               </p>
             )}

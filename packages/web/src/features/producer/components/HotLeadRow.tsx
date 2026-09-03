@@ -1,5 +1,6 @@
 import { Clock, Star } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Badge } from "@/components/ui/badge";
 import type { HotLeadRow as HotLead } from "@/lib/leads-api";
 import { cn } from "@/lib/utils";
 import { LeadQuickActions } from "./LeadQuickActions";
@@ -58,13 +59,15 @@ export function HotLeadRow({ lead, isLast }: HotLeadRowProps) {
                 an emoji, but no emoji vocabulary exists anywhere in the app and
                 its labels ("Mailers", "Internet Lead", "Walk-in") match none of
                 the 14 canonical sources. */}
-            <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0 bg-muted text-muted-foreground">
+            <Badge
+              size="sm"
+              className="shrink-0 bg-muted font-normal text-muted-foreground"
+            >
               {lead.leadSource || "No source"}
-            </span>
+            </Badge>
             {isHot && (
               <Star
-                size={10}
-                className="shrink-0 text-amber-500"
+                className="size-3 shrink-0 text-amber-500"
                 fill="currentColor"
               />
             )}
@@ -78,8 +81,8 @@ export function HotLeadRow({ lead, isLast }: HotLeadRowProps) {
           </p>
         </div>
 
-        <div className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0 mt-0.5">
-          <Clock size={9} />
+        <div className="mt-0.5 flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+          <Clock className="size-3" />
           {relativeTime(lead.lastActivityAt)}
         </div>
       </div>
