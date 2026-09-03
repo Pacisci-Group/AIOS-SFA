@@ -20,6 +20,7 @@ import type {
   ServiceTicketStatus,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { LEGACY_DEDUPE_INDEX_OPTIONS } from '../../common/schemas/tenant-record.schema';
 
 export type ServiceTicketDocument = HydratedDocument<ServiceTicket>;
 
@@ -162,7 +163,19 @@ export class RenewalStepEntry {
 
 export const RenewalStepSchema = SchemaFactory.createForClass(RenewalStepEntry);
 
-@Schema({ timestamps: true, collection: 'service_tickets' })
+/**
+ * The one service-ticket collection.
+ *
+ * `serviceTickets`, camel-cased like every other collection here. There used to
+ * be two: the SmartSuite migration wrote a thin import mirror to this name from
+ * `service-tickets/schemas/` while the CRM read a `service_tickets` collection
+ * through this schema, and because both classes were named `ServiceTicket`,
+ * `@nestjs/mongoose` would have silently handed whichever registered first to
+ * both had they ever shared a Nest context. The mirror is gone; the migration
+ * and the demo seed write this shape, and `consolidate-service-tickets.ts`
+ * folded the rows the old mirror had already imported into here.
+ */
+@Schema({ timestamps: true, collection: 'serviceTickets' })
 export class ServiceTicket {
   @Prop({ type: Types.ObjectId, ref: 'Agency', required: true, index: true })
   agencyId: Types.ObjectId;
@@ -298,12 +311,34 @@ export class ServiceTicket {
   @Prop({ type: RenewalStepSchema, default: null })
   renewal: RenewalStepEntry | null;
 
+  /**
+   * The SmartSuite record this ticket was imported from, or unset for a ticket
+   * opened in the app. The migration upserts on `{ agencyId, legacySmartSuiteId }`
+   * so a re-run heals an imported ticket in place rather than duplicating it;
+   * the demo seed uses the same key with a `demo:` prefix so it can purge its
+   * own rows. Same convention as every other imported collection
+   * (`TenantRecord.legacySmartSuiteId`), declared here because this schema
+   * carries ObjectId tenancy and does not extend `TenantRecord`.
+   */
   @Prop()
   legacySmartSuiteId?: string;
+
+  /**
+   * Flagged by the migration's test-record heuristic, like every other
+   * imported collection. Informational — no query filters on it.
+   */
+  @Prop({ default: false })
+  isTestRecord: boolean;
 }
 
 export const ServiceTicketSchema = SchemaFactory.createForClass(ServiceTicket);
 ServiceTicketSchema.index({ agencyId: 1, ticketNumber: 1 }, { unique: true });
+// The migration's idempotency key. Partial on `$type: 'string'` so the tickets
+// opened in the app, which carry no legacy id, do not collide on null.
+ServiceTicketSchema.index(
+  { agencyId: 1, legacySmartSuiteId: 1 },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+);
 ServiceTicketSchema.index({ agencyId: 1, branchId: 1, status: 1 });
 ServiceTicketSchema.index({ assignedUserId: 1, status: 1 });
 ServiceTicketSchema.index({ agencyId: 1, status: 1, resolvedAt: 1 });

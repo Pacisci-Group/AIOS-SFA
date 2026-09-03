@@ -1,0 +1,138 @@
+meta {
+  name: Get Household
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/households/{{householdId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the HouseholdView the page and the drawer both render", function () {
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("householdId"));
+    expect(body).to.have.property("name");
+    expect(body).to.have.property("status");
+    expect(body).to.have.property("primaryContactName");
+    expect(body).to.have.property("address");
+    expect(body).to.have.property("propertyAddress");
+    expect(body).to.have.property("mailingAddress");
+    expect(body).to.have.property("assignedCrmId");
+    expect(body.primaryEmails).to.be.an("array");
+    expect(body.primaryPhones).to.be.an("array");
+    expect(body.contacts).to.be.an("array");
+    expect(body.policies).to.be.an("array");
+  });
+
+  test("address is normalized, not the raw stored object", function () {
+    // The raw objects use three different key sets (`street` from lead intake,
+    // `line1` from the demo seed, `location_address` from the SmartSuite
+    // migration). `address` is the one shape every client reads.
+    const address = res.getBody().address;
+    if (address !== null) {
+      expect(address).to.have.all.keys("street", "city", "state", "zip");
+    }
+  });
+
+  test("address falls back to the mailing address", function () {
+    // Null only when street, city and zip are blank in *both* stored objects.
+    const body = res.getBody();
+    if (body.propertyAddress || body.mailingAddress) {
+      const stored = JSON.stringify(body.propertyAddress ?? body.mailingAddress);
+      const hasParts = /"(street|line1|location_address|city|location_city|zip|postalCode|location_zip)"\s*:\s*"[^"]+"/.test(stored);
+      if (hasParts) {
+        expect(body.address).to.not.equal(null);
+      }
+    }
+  });
+
+  test("at most one contact is the primary", function () {
+    const primaries = res.getBody().contacts.filter((c) => c.isPrimary);
+    expect(primaries.length).to.be.at.most(1);
+  });
+
+  test("the primary contact leads the roster", function () {
+    const contacts = res.getBody().contacts;
+    if (contacts.length && contacts.some((c) => c.isPrimary)) {
+      expect(contacts[0].isPrimary).to.equal(true);
+    }
+  });
+
+  test("primaryContactName is resolved whenever a primary contact exists", function () {
+    // The regression this endpoint was fixed for: the SmartSuite import writes
+    // no `primaryContactName`, so a migrated household answered null here and
+    // both the Household page and the ticket drawer rendered an em dash.
+    const body = res.getBody();
+    const primary = body.contacts.find((c) => c.isPrimary);
+    const named = primary && (primary.firstName || primary.lastName);
+    if (named) {
+      expect(body.primaryContactName).to.be.a("string");
+      expect(body.primaryContactName.trim()).to.not.equal("");
+    }
+  });
+}
+
+docs {
+  # GET /households/:id
+
+  The full household read-model — the 360° Household Details page
+  (`/clients/:id`) and the `HouseholdDrawer` opened from a service ticket both
+  render this one response.
+
+  - **Module:** `clients` **OR** `crm_service` (class-level OR-gate), so a CSR
+    can open the drawer without holding the Clients page permission.
+  - **Permission:** `clients:read` **or** `crm_service:read`.
+  - **Data scope:** `own` collapses to branch. A household outside the caller's
+    branch reads as **404**, never 403 — the same non-disclosure rule as leads.
+
+  ## Response — `HouseholdView`
+
+  | Field | Notes |
+  |---|---|
+  | `id`, `name`, `status`, `totalActivePolicies` | `status` is normalized on read as well as on import: 2,095 migrated households store the raw choice code `b5qvJ` (PAC-80) |
+  | `primaryContactName` | **Resolved**, see below |
+  | `address` | **Normalized** `{street, city, state, zip}`, or null |
+  | `propertyAddress`, `mailingAddress` | The raw stored objects. Prefer `address` |
+  | `primaryEmails`, `primaryPhones` | Household-level contact details, written by lead intake |
+  | `assignedCrmId` | The assigned CRM user, or null |
+  | `contacts` | `ContactSummary[]`, primary first then by `lastName` |
+  | `policies` | `PolicySummary[]`, active first then by `renewalDate` |
+
+  ## Why `primaryContactName` and `address` are resolved here
+
+  Both were previously left to the clients, and both rendered an em dash on the
+  Household page and the ticket drawer for the same records.
+
+  **The primary contact.** Three things claim to name it and none of them alone
+  does: `household.primaryContactId` (the authoritative ref — lead intake sets
+  it, the SmartSuite import does not), `contact.isPrimary` (copied from a
+  SmartSuite checkbox, so often unset, and set on *every* contact where legacy
+  intake wrote it), and the denormalized `household.primaryContactName` (written
+  by intake, never by the migration). `pickPrimaryContact` applies them in that
+  order; `contacts[].isPrimary` is then restated from the result, so **exactly
+  one** contact carries it and the roster leads with them.
+
+  **The address.** `propertyAddress` is an untyped object and three writers use
+  three key sets — `street` (lead intake), `line1` (demo seed),
+  `location_address` (SmartSuite migration). `resolveHouseholdAddress` coerces
+  them into one shape, property address first and mailing address as the
+  fallback, and returns null only when street, city and zip are all blank.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | Both `clients` and `crm_service` disabled, or neither read permission held |
+  | 404 | Unknown household, malformed id, or a household outside the caller's scope |
+}

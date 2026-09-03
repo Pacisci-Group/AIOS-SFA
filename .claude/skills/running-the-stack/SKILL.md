@@ -80,10 +80,18 @@ applies identically in both modes.
 >   RTP upload and the demo seed both populate a working `mailers` collection
 >   without it. Re-runnable: upserts on the control-number key, so a second run
 >   appends what is new and updates what changed.
+> - `api:migrate:tickets:dev` — **one-off**, only for a database migrated
+>   before September 2026 (a restored dump, dev, prod). Folds the old
+>   service-ticket mirror rows and the separate `service_tickets` collection
+>   into the one `serviceTickets` collection the CRM reads, then syncs its
+>   indexes. `--dry-run` reports without writing. Idempotent; no SmartSuite
+>   needed. A database seeded or migrated by current code never needs it.
 >
 > **Nothing needs running after the migration.** It writes its own cross-record
 > refs (`leadId` / `householdId` / `quoteRecapId`), its own match keys
 > (`policies.policyNumberKey`, `quoteRecaps.quoteDateYmd`) and reconciles
 > household `HH-…` numbering at the end of its household pass. The repair passes
 > that used to follow it were for databases migrated by older code and have been
-> removed — a run against real data found them doing nothing.
+> removed — a run against real data found them doing nothing. The ticket
+> consolidation above is the one current exception, and it has the same
+> lifecycle: delete it once no environment is old enough to need it.

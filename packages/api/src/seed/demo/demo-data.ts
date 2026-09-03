@@ -10,6 +10,11 @@
  */
 
 import {
+  SERVICE_TICKET_PRIORITIES,
+  type ServiceTicketCategory,
+  type ServiceTicketStatus,
+} from '@sfa/shared';
+import {
   CORE_AUDIT_TEMPLATES,
   type CoreAuditTemplateSpec,
 } from '../audit-templates.seed';
@@ -404,23 +409,30 @@ export type AuditTemplateSpec = CoreAuditTemplateSpec;
  */
 export const AUDIT_TEMPLATES: AuditTemplateSpec[] = CORE_AUDIT_TEMPLATES;
 
+/*
+ * Drawn from the live CRM vocabulary, not a local list: the ticket schema
+ * enum-enforces all three fields, so a seeded `Claim` or `Coverage Question`
+ * ticket would be rejected on the first edit a CSR made to it. `Onboarding`,
+ * `Quote` and the renewal categories stay out — each is a chain the seed's
+ * later stages open through the service, not a bare ticket.
+ */
 export const SERVICE_CATEGORIES = [
   'Billing',
   'Policy Change',
-  'Claim',
-  'Coverage Question',
-  'Cancellation',
+  'Claims Assist',
+  'Payment',
   'Endorsement',
-] as const;
+  'Other',
+] as const satisfies readonly ServiceTicketCategory[];
 
-export const SERVICE_PRIORITIES = ['Low', 'Medium', 'High', 'Urgent'] as const;
+export const SERVICE_PRIORITIES = SERVICE_TICKET_PRIORITIES;
 
 export const SERVICE_STATUSES = [
-  'Open',
-  'In Progress',
-  'Waiting on Client',
-  'Resolved',
-] as const;
+  'open',
+  'in_progress',
+  'waiting_on_client',
+  'resolved',
+] as const satisfies readonly ServiceTicketStatus[];
 
 /** Record-count knobs for the synthetic tenant. */
 export const DEMO_CONFIG = {

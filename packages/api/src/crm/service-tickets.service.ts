@@ -17,6 +17,7 @@ import {
   RENEWAL_STEP_LABELS,
   renewalTrackFor,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
+  SERVICE_TICKET_CATEGORY_PREFIX,
   SERVICE_TICKET_TERMINAL_STATUSES,
   ServiceTicketActivity,
   ServiceTicketAssignee,
@@ -78,11 +79,16 @@ import {
   type StepTiming,
 } from './onboarding/onboarding-scheduling';
 import {
+  daysUntil,
   formatTermKey,
   renewalAnchorDate,
   scheduleRenewalSteps,
   type PlannedRenewalStep,
 } from './renewal/renewal-scheduling';
+import {
+  compareRenewalDeskRows,
+  renewalPreviewCutoff,
+} from './renewal/renewal-desk';
 import {
   renewalStepStatus,
   serializeRenewalCycle,
@@ -1320,7 +1326,11 @@ export class ServiceTicketsService {
     category: string,
     attempt = 0,
   ): Promise<string> {
-    const prefix = CATEGORY_PREFIX[category] ?? 'TKT';
+    // Typed over the category union in `@sfa/shared`; the fallback only covers
+    // a stray string reaching here through `createTicketWithNumber`'s untyped doc.
+    const prefix =
+      (SERVICE_TICKET_CATEGORY_PREFIX as Record<string, string>)[category] ??
+      'TKT';
     const count = await this.ticketModel.countDocuments({
       agencyId: new Types.ObjectId(agencyId),
     });
@@ -2054,10 +2064,20 @@ export class ServiceTicketsService {
 
   /**
    * The Proactive Renewal Outreach desk: one row per cycle, showing the call
-   * that is actually on the CSR's plate.
+   * that is actually on the CSR's plate — plus the ones about to land on it.
    *
    * Runs the throttled scan first, which is what makes renewals appear without
-   * a cron. Scheduled calls stay out — a call that has not opened is not work.
+   * a cron.
+   *
+   * **Scheduled calls are previewed, not hidden.** Everywhere else a call that
+   * has not opened is not work and is filtered out (`scheduledStepMatches`
+   * keeps them out of the queue and the KPI strip). This desk is the exception,
+   * because it is the one surface whose job is the *next* fortnight rather than
+   * today: a T-45 call that first appears on the morning it opens cannot be
+   * planned around, which made a panel named "Proactive" reactive. Calls inside
+   * {@link RENEWAL_DESK_PREVIEW_DAYS} therefore come back carrying
+   * `daysUntilAvailable`, and stay non-actionable until they open —
+   * `completeRenewalStep` enforces that independently.
    */
   async renewalDesk(access: AccessContext): Promise<RenewalDeskRow[]> {
     await this.materializeRenewalCycles(access);
@@ -2066,6 +2086,7 @@ export class ServiceTicketsService {
       return [];
     }
     const now = new Date();
+    const previewUntil = renewalPreviewCutoff(now);
     const agencyId = new Types.ObjectId(access.agencyId);
     const cycles = await this.cycleModel
       .find({ agencyId, completedAt: null })
@@ -2084,18 +2105,32 @@ export class ServiceTicketsService {
         ...this.scopeFilter(access),
         'renewal.renewalCycleId': { $in: cycles.map((c) => c._id) },
         'renewal.completedAt': null,
-        'renewal.availableAt': { $ne: null, $lte: now },
+        // Open, or opening within the preview window.
+        'renewal.availableAt': { $ne: null, $lte: previewUntil },
       })
       .sort({ 'renewal.dueAt': 1 })
       .lean();
 
     const rows: RenewalDeskRow[] = [];
     for (const cycle of cycles) {
-      // The open call for this cycle, if any. A cycle whose only call is still
-      // scheduled has nothing to show yet.
-      const ticket = tickets.find(
+      const forCycle = tickets.filter(
         (t) => String(t.renewal?.renewalCycleId) === String(cycle._id),
       );
+      /*
+       * One row per cycle, and an open call always wins it.
+       *
+       * Both calls of an annual cycle can match at once — an annual review
+       * still open at T-50 alongside a renewal review opening at T-45. The
+       * work in hand is the open one; previewing the later call while the
+       * earlier is unfinished would bury it. Explicit rather than leaning on
+       * the `dueAt` sort to imply the same thing.
+       */
+      const ticket =
+        forCycle.find(
+          (t) =>
+            t.renewal?.availableAt &&
+            new Date(t.renewal.availableAt).getTime() <= now.getTime(),
+        ) ?? forCycle[0];
       if (!ticket?.renewal) continue;
 
       const step = serializeRenewalStep(ticket.renewal, definitions, now);
@@ -2115,6 +2150,12 @@ export class ServiceTicketsService {
         daysUntilRenewal: step.daysUntilRenewal,
         availableAt: step.availableAt,
         dueAt: step.dueAt,
+        // Null once the call is open. `availableAt` is never null here — the
+        // query matched on `$ne: null` — so the countdown is always real.
+        daysUntilAvailable:
+          step.isActionable || !step.availableAt
+            ? null
+            : daysUntil(new Date(step.availableAt), now),
         status: renewalStepStatus(ticket.renewal, now),
         isActionable: step.isActionable,
         isOverdue: step.isOverdue,
@@ -2123,12 +2164,7 @@ export class ServiceTicketsService {
       });
     }
 
-    // Most urgent first: overdue leads, then soonest renewal.
-    return rows.sort(
-      (a, b) =>
-        Number(b.isOverdue) - Number(a.isOverdue) ||
-        a.daysUntilRenewal - b.daysUntilRenewal,
-    );
+    return rows.sort(compareRenewalDeskRows);
   }
 }
 
@@ -2293,22 +2329,6 @@ function mergeCyclePolicy(
 
 /** Roles whose holders can be a ticket's Assigned Client Relation Manager. */
 const ASSIGNABLE_ROLE_SLUGS = ['csr', 'crm'];
-
-const CATEGORY_PREFIX: Record<string, string> = {
-  Onboarding: 'ONBD',
-  Endorsement: 'ENDR',
-  Billing: 'BILL',
-  'Claims Assist': 'CLAIM',
-  'Renewal Review': 'RENEW',
-  Other: 'TKT',
-  Quote: 'QTE',
-  'Policy Change': 'PCHG',
-  Payment: 'PAY',
-  'Company Transfer': 'XFER',
-  Save: 'SAVE',
-  Termination: 'TERM',
-  'Renewal Taken': 'RNWT',
-};
 
 function statusLabel(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1);

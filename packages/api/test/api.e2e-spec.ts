@@ -3104,7 +3104,7 @@ describe('SFA API (e2e)', () => {
 
       // Backdate the resolve past the window.
       const connection = app.get<Connection>(getConnectionToken());
-      await connection.collection('service_tickets').updateOne(
+      await connection.collection('serviceTickets').updateOne(
         { _id: new Types.ObjectId(ticketId) },
         {
           $set: {
@@ -3310,7 +3310,7 @@ describe('SFA API (e2e)', () => {
 
       const connection = app.get<Connection>(getConnectionToken());
       const count = await connection
-        .collection('service_tickets')
+        .collection('serviceTickets')
         .countDocuments({
           'onboarding.onboardingId': new Types.ObjectId(onboardingId),
           'onboarding.stepKey': 'checkin_3day',
@@ -3488,7 +3488,7 @@ describe('SFA API (e2e)', () => {
       const connection = app.get<Connection>(getConnectionToken());
 
       // Open the 3-day call by backdating it, then complete it.
-      await connection.collection('service_tickets').updateOne(
+      await connection.collection('serviceTickets').updateOne(
         { _id: new Types.ObjectId(threeDayTicketId) },
         {
           $set: {
@@ -3515,7 +3515,7 @@ describe('SFA API (e2e)', () => {
       expect((chain.body as OnboardingBody).isComplete).toBe(false);
 
       // Same for the 30-day call, which is 30 days out by design.
-      await connection.collection('service_tickets').updateOne(
+      await connection.collection('serviceTickets').updateOne(
         { _id: new Types.ObjectId(thirtyDay.ticketId!) },
         {
           $set: {
@@ -3562,7 +3562,7 @@ describe('SFA API (e2e)', () => {
         .expect(201);
 
       // Simulate the chain breaking between writes.
-      const removed = await connection.collection('service_tickets').deleteOne({
+      const removed = await connection.collection('serviceTickets').deleteOne({
         'onboarding.onboardingId': new Types.ObjectId(repairId),
         'onboarding.stepKey': 'checkin_3day',
       });

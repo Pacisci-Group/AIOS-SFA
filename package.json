@@ -17,6 +17,8 @@
     "api:migrate:dev": "npm run migrate:dev -w @sfa/api",
     "api:migrate:mailers": "npm run migrate:mailers -w @sfa/api",
     "api:migrate:mailers:dev": "npm run migrate:mailers:dev -w @sfa/api",
+    "api:migrate:tickets": "npm run migrate:tickets -w @sfa/api",
+    "api:migrate:tickets:dev": "npm run migrate:tickets:dev -w @sfa/api",
     "api:sync:roles": "npm run sync:roles -w @sfa/api",
     "api:sync:roles:dev": "npm run sync:roles:dev -w @sfa/api",
     "web:dev": "npm run dev -w @sfa/web",

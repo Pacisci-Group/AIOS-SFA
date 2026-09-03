@@ -12,10 +12,15 @@ import {
 } from './policy-status';
 import {
   LEGACY_TICKET_CATEGORY_CODE_ALIASES,
+  LEGACY_TICKET_PRIORITIES,
   LEGACY_TICKET_STATUSES,
   LEGACY_TICKET_STATUS_CODE_ALIASES,
+  LEGACY_TICKET_STATUS_SLUGS,
   normalizeLegacyTicketCategory,
   normalizeLegacyTicketStatus,
+  toServiceTicketCategory,
+  toServiceTicketPriority,
+  toServiceTicketStatus,
 } from './legacy-service-ticket';
 import {
   TIME_OFF_DECISION_CODE_ALIASES,
@@ -36,7 +41,11 @@ import {
   normalizeContactRole,
   normalizeHouseholdRole,
 } from './household-role';
-import { SERVICE_TICKET_CATEGORIES } from '../service/service-ticket';
+import {
+  SERVICE_TICKET_CATEGORIES,
+  SERVICE_TICKET_PRIORITIES,
+  SERVICE_TICKET_STATUSES,
+} from '../service/service-ticket';
 
 /**
  * The sweep every vocabulary gets: each catalogued code resolves into the
@@ -217,5 +226,61 @@ describe('contact roles', () => {
     expect(normalizeHouseholdRole('W7qil')).toBe('Spouse');
     expect(normalizeHouseholdRole('fZHxn')).toBe('Child');
     expect(normalizeHouseholdRole('5ddmB')).toBe('Driver');
+  });
+});
+
+describe('legacy ticket → CRM bridge', () => {
+  it('lands every legacy status label on a real CRM status slug', () => {
+    for (const label of LEGACY_TICKET_STATUSES) {
+      const slug = toServiceTicketStatus(label);
+      expect(SERVICE_TICKET_STATUSES as readonly string[]).toContain(slug);
+      expect(LEGACY_TICKET_STATUS_SLUGS[label]).toBe(slug);
+    }
+  });
+
+  it('bridges straight from a SmartSuite code, without a label in between', () => {
+    expect(toServiceTicketStatus('backlog')).toBe('open');
+    expect(toServiceTicketStatus('a2E7K')).toBe('waiting_on_carrier');
+    expect(toServiceTicketStatus('r1Glf')).toBe('closed');
+  });
+
+  it('is idempotent over a slug, so a consolidation re-run is a no-op', () => {
+    for (const slug of Object.values(LEGACY_TICKET_STATUS_SLUGS)) {
+      expect(toServiceTicketStatus(slug)).toBe(slug);
+    }
+  });
+
+  it('files a blank or unknown status as open', () => {
+    // Five of the 286 migrated tickets carried no status at all.
+    expect(toServiceTicketStatus('')).toBe('open');
+    expect(toServiceTicketStatus(null)).toBe('open');
+    expect(toServiceTicketStatus('Escalated')).toBe('open');
+  });
+
+  it('collapses four legacy priorities onto the CRM three', () => {
+    expect(toServiceTicketPriority('Low')).toBe('low');
+    expect(toServiceTicketPriority('medium')).toBe('medium');
+    expect(toServiceTicketPriority('High')).toBe('high');
+    expect(toServiceTicketPriority('Urgent')).toBe('high');
+    for (const label of LEGACY_TICKET_PRIORITIES) {
+      expect(SERVICE_TICKET_PRIORITIES as readonly string[]).toContain(
+        toServiceTicketPriority(label),
+      );
+    }
+  });
+
+  it('defaults priority to medium, the same default the CRM applies', () => {
+    expect(toServiceTicketPriority('')).toBe('medium');
+    expect(toServiceTicketPriority(undefined)).toBe('medium');
+    expect(toServiceTicketPriority('high')).toBe('high');
+  });
+
+  it('keeps every category, and files an unknown one under Other', () => {
+    for (const category of SERVICE_TICKET_CATEGORIES) {
+      expect(toServiceTicketCategory(category)).toBe(category);
+    }
+    expect(toServiceTicketCategory('4osEm')).toBe('Policy Change');
+    expect(toServiceTicketCategory('Coverage Question')).toBe('Other');
+    expect(toServiceTicketCategory('')).toBe('Other');
   });
 });

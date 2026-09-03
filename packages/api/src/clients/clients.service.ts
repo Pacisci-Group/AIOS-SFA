@@ -20,7 +20,9 @@ import {
   normalizePolicyType,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { resolveHouseholdAddress } from '../common/address/household-address';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
+import { pickPrimaryContact } from '../households/primary-contact';
 import {
   Household,
   HouseholdDocument,
@@ -291,8 +293,29 @@ export class ClientsService {
         .lean(),
     ]);
 
+    /*
+     * Resolved here rather than in each client. Both the Household page and the
+     * ticket drawer used to run `primaryContactName ?? contacts.find(isPrimary)`
+     * themselves and both rendered an em dash for the same records: the
+     * SmartSuite import writes no `primaryContactName`, and `contact.isPrimary`
+     * comes from a checkbox that is often unset. `primaryContactId` — which
+     * neither client could see — is the answer for the rest of them.
+     */
+    const summary = toHouseholdSummary(household);
+    const primary = pickPrimaryContact(contacts, household.primaryContactId);
+    const primaryId = primary ? String(primary._id) : null;
+
     return {
-      ...toHouseholdSummary(household),
+      ...summary,
+      primaryContactName: summary.primaryContactName ?? contactName(primary),
+      // Coerced once, on the way out: the three writers' key sets are an API
+      // concern, and every client that re-implemented the lookup table got at
+      // least one of them wrong. No lead in scope here, hence the leading null.
+      address: resolveHouseholdAddress(
+        null,
+        household.propertyAddress,
+        household.mailingAddress,
+      ),
       propertyAddress: household.propertyAddress ?? null,
       mailingAddress: household.mailingAddress ?? null,
       primaryEmails: household.primaryEmails ?? [],
@@ -300,7 +323,12 @@ export class ClientsService {
       assignedCrmId: household.assignedCrmId
         ? String(household.assignedCrmId)
         : null,
-      contacts: contacts.map(toContactSummary),
+      // Primary first, then the `isPrimary: -1, lastName: 1` order the query
+      // returned — the roster leads with the named insured, and `isPrimary` is
+      // restated from the resolution above so exactly one contact carries it.
+      contacts: orderPrimaryFirst(contacts, primaryId).map((contact) =>
+        toContactSummary(contact, String(contact._id) === primaryId),
+      ),
       policies: policies.map(toPolicySummary),
     };
   }
@@ -412,7 +440,10 @@ function toHouseholdSummary(
     // database; this is what keeps a code renderable in one migrated by older
     // code, and what stops `b5qvJ` reaching a badge if one ever reappears.
     status: normalizeHouseholdStatus(household.status) || null,
-    primaryContactName: household.primaryContactName ?? null,
+    // `|| null`, not `?? null`: a blank stored value has to fall through to the
+    // resolved contact in `getHousehold`, and `??` would hand back the empty
+    // string — which renders as nothing at all rather than as an em dash.
+    primaryContactName: household.primaryContactName?.trim() || null,
     totalActivePolicies: household.totalActivePolicies ?? 0,
   };
 }
@@ -433,7 +464,15 @@ function toPolicySummary(policy: Policy & { _id: unknown }): PolicySummary {
   };
 }
 
-function toContactSummary(contact: Contact & { _id: unknown }): ContactSummary {
+/**
+ * `isPrimary` is passed in wherever the household has been consulted, because
+ * the stored flag is only half the answer (see `pickPrimaryContact`). It
+ * defaults to the flag for the one caller with no household in hand.
+ */
+function toContactSummary(
+  contact: Contact & { _id: unknown },
+  isPrimary = contact.isPrimary ?? false,
+): ContactSummary {
   return {
     id: String(contact._id),
     firstName: contact.firstName ?? null,
@@ -441,9 +480,31 @@ function toContactSummary(contact: Contact & { _id: unknown }): ContactSummary {
     emails: contact.emails ?? [],
     phones: contact.phones ?? [],
     roleInHousehold: normalizeContactRole(contact.roleInHousehold) || null,
-    isPrimary: contact.isPrimary ?? false,
+    isPrimary,
     dateOfBirth: toIso(contact.dateOfBirth),
   };
+}
+
+/** `null` when there is no name to show, so the caller's `??` chain continues. */
+function contactName(
+  contact: (Contact & { _id: unknown }) | null,
+): string | null {
+  if (!contact) return null;
+  return (
+    [contact.firstName, contact.lastName]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(' ') || null
+  );
+}
+
+function orderPrimaryFirst<T extends { _id: unknown }>(
+  contacts: T[],
+  primaryId: string | null,
+): T[] {
+  if (!primaryId) return contacts;
+  const primary = contacts.filter((c) => String(c._id) === primaryId);
+  return [...primary, ...contacts.filter((c) => String(c._id) !== primaryId)];
 }
 
 function toIso(value: Date | undefined | null): string | null {

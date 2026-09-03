@@ -1,4 +1,8 @@
-import { formatHouseholdRef, parseHouseholdRef } from './record-reference';
+import {
+  formatHouseholdRef,
+  parseHouseholdRef,
+  parseLegacyTicketNumber,
+} from './record-reference';
 
 /**
  * The parser is the migration's only bridge between the legacy SmartSuite title
@@ -65,5 +69,36 @@ describe('household references', () => {
     it('rejects a number too large to survive the round trip', () => {
       expect(parseHouseholdRef(`HH-${'9'.repeat(20)}`)).toBeNull();
     });
+  });
+});
+
+describe('parseLegacyTicketNumber', () => {
+  it('reads the legacy SmartSuite title, dropping the hash and the padding', () => {
+    expect(parseLegacyTicketNumber('#SFAS-030')).toBe('SFAS-30');
+    expect(parseLegacyTicketNumber('#SFAS-002')).toBe('SFAS-2');
+    expect(parseLegacyTicketNumber('#SFAS-300')).toBe('SFAS-300');
+  });
+
+  it('accepts our own format and the unseparated middle ground, any case', () => {
+    expect(parseLegacyTicketNumber('SFAS-30')).toBe('SFAS-30');
+    expect(parseLegacyTicketNumber('sfas030')).toBe('SFAS-30');
+    expect(parseLegacyTicketNumber('  #Sfas-30  ')).toBe('SFAS-30');
+  });
+
+  it('keeps whatever prefix the title carried', () => {
+    expect(parseLegacyTicketNumber('#XYZ-12')).toBe('XYZ-12');
+  });
+
+  it('is idempotent over its own output', () => {
+    const once = parseLegacyTicketNumber('#SFAS-030');
+    expect(parseLegacyTicketNumber(once)).toBe(once);
+  });
+
+  it('returns null for anything that is not a ticket number', () => {
+    expect(parseLegacyTicketNumber(null)).toBeNull();
+    expect(parseLegacyTicketNumber('')).toBeNull();
+    expect(parseLegacyTicketNumber('Record 1')).toBeNull();
+    expect(parseLegacyTicketNumber('#SFAS-000')).toBeNull();
+    expect(parseLegacyTicketNumber('Nick Huddleston — Endorsement')).toBeNull();
   });
 });

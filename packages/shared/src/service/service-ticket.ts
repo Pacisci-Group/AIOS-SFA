@@ -125,6 +125,38 @@ export const SERVICE_TICKET_PRIORITIES = ['high', 'medium', 'low'] as const;
 export type ServiceTicketPriority = (typeof SERVICE_TICKET_PRIORITIES)[number];
 
 /**
+ * The prefix a ticket number carries per category — `ENDR-101`, `RENEW-280`.
+ *
+ * Shared rather than private to the API's allocator because the demo seed
+ * mints numbers too, and a seeded `Billing` ticket numbered `TKT-…` beside a
+ * live one numbered `BILL-…` would read as two different kinds of ticket.
+ * Typed over the full category union so adding a category without a prefix is
+ * a compile error, not a silent fall-through to `TKT`.
+ *
+ * Migrated SmartSuite tickets keep the number they already had (`SFAS-30`,
+ * from the legacy `#SFAS-030` title) and never use these — the agency reads
+ * those numbers off printed notes, and renumbering them would orphan the paper.
+ */
+export const SERVICE_TICKET_CATEGORY_PREFIX: Record<
+  ServiceTicketCategory,
+  string
+> = {
+  Onboarding: 'ONBD',
+  Endorsement: 'ENDR',
+  Billing: 'BILL',
+  'Claims Assist': 'CLAIM',
+  'Renewal Review': 'RENEW',
+  Other: 'TKT',
+  Quote: 'QTE',
+  'Policy Change': 'PCHG',
+  Payment: 'PAY',
+  'Company Transfer': 'XFER',
+  Save: 'SAVE',
+  Termination: 'TERM',
+  'Renewal Taken': 'RNWT',
+};
+
+/**
  * Categories from which a CSR can record a **policy transfer** — a client
  * moving package or tier without any new business being written.
  *

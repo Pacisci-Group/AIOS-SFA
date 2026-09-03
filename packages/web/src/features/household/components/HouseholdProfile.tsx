@@ -54,16 +54,6 @@ function toMembers(household: HouseholdView): Member[] {
   });
 }
 
-function addressLines(address: Record<string, unknown> | null) {
-  const get = (key: string) =>
-    typeof address?.[key] === "string" ? (address[key] as string) : "";
-  const line1 = get("line1");
-  const rest = [get("city"), get("state"), get("postalCode")]
-    .filter(Boolean)
-    .join(", ");
-  return { line1, rest };
-}
-
 /**
  * The green "live" treatment is only honest for a genuinely active record.
  *
@@ -141,13 +131,26 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
   const name = household.name ?? "Unnamed household";
   const status = normalizeHouseholdStatus(household.status) || "Unknown";
   const recordLabel = `HH-${household.id.slice(-6).toUpperCase()}`;
-  // Falling back to the primary contact is real data, not a placeholder.
-  const contactName =
-    household.primaryContactName ?? fullName(primaryContact) ?? "—";
+  /*
+   * `primaryContactName` and `contacts[].isPrimary` both arrive resolved from
+   * `GET /households/:id` (see `pickPrimaryContact`) — the stored name is blank
+   * on every migrated household, and the API is the only layer that can see the
+   * `primaryContactId` that names the contact instead.
+   */
+  const contactName = household.primaryContactName ?? "—";
   const phone = household.primaryPhones[0] ?? primaryContact?.phones[0] ?? null;
   const email = household.primaryEmails[0] ?? primaryContact?.emails[0] ?? null;
   const members = toMembers(household);
-  const address = addressLines(household.propertyAddress);
+  /*
+   * Already coerced server-side. This block used to read `line1`/`postalCode`
+   * off the raw `propertyAddress`, and `postalCode` is a key no writer produces
+   * while `line1` only matches the demo seed — so every migrated household
+   * showed two em dashes here.
+   */
+  const address = household.address;
+  const cityLine = address
+    ? [address.city, address.state, address.zip].filter(Boolean).join(", ")
+    : "";
 
   return (
     // Same as the portfolio column: a scrolling block rather than a flex
@@ -224,8 +227,8 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
           <div className="flex items-start gap-2.5 px-3 py-2 rounded-lg" style={{ background: "var(--muted)" }}>
             <MapPin size={14} style={{ color: "var(--muted-foreground)", marginTop: "2px" }} />
             <div>
-              <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>{address.line1 || "—"}</p>
-              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>{address.rest || "—"}</p>
+              <p className="text-xs font-medium" style={{ color: "var(--foreground)" }}>{address?.street || "—"}</p>
+              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>{cityLine || "—"}</p>
             </div>
           </div>
         </div>

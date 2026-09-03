@@ -331,6 +331,24 @@ added to `/opt/sfa/.env`: the deploy workflow rewrites that file in full on ever
 deploy, so anything put there is lost, and they are read-only source credentials
 the running API has no reason to hold.
 
+**An environment migrated before September 2026 needs one more step, once.**
+Earlier migrations wrote service tickets as a mirror of the SmartSuite table
+into a schema the CRM never read, while the app kept its own tickets in a
+separate `service_tickets` collection. One schema and one collection
+(`serviceTickets`) now; the data has to be folded in before the API on this
+code is useful — until then it sees none of the imported tickets and none of
+its own. Run it after the deploy and before anyone opens the CRM:
+
+```bash
+docker compose exec api npm run migrate:tickets -- --dry-run   # report only
+docker compose exec api npm run migrate:tickets
+```
+
+Idempotent (a re-run finds nothing to do), needs no SmartSuite credentials,
+and refuses to rebuild a unique index over conflicting data rather than
+dropping the old one first. A fresh environment brought up by the current
+migration never needs it. Delete the script once every environment has run it.
+
 > **The image must be newer than the webpack entry-list fix.** Every one-shot
 > script is a separate webpack entry (`packages/api/webpack.config.js`), and the
 > runner stage of the Dockerfile copies `dist` and never `src`. A script that is

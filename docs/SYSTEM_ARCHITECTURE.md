@@ -507,7 +507,7 @@ Agency Owners may pass `X-Branch-Id` header to filter UI to a specific branch wi
 | `quote_recaps` | Branch | agencyId, branchId, leadId, producerId, premium, quoteDate |
 | `deals` | Branch | agencyId, branchId, leadId, producerId, crmId, soldDate, auditStatus |
 | `policies` | Branch | agencyId, branchId, dealId, policyType, premium |
-| `service_tickets` | Branch | agencyId, branchId, householdId, assignedCrmId, status |
+| `serviceTickets` | Branch | agencyId, branchId, householdId, assignedCrmId, status |
 | `crm_rotations` | Branch | agencyId, branchId, crmUserId, order, active |
 | `producer_assignments` | Branch | agencyId, branchId, producerId, pointer, lastAssignedCrmId |
 | `migration_id_map` | System | entityType, legacySmartSuiteId, mongoId |

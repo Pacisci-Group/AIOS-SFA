@@ -19,6 +19,8 @@
     "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
     "migrate:mailers": "node dist/migration/mailers/import-bigquery-mailers.js",
     "migrate:mailers:dev": "ts-node -r tsconfig-paths/register src/migration/mailers/import-bigquery-mailers.ts",
+    "migrate:tickets": "node dist/migration/consolidate-service-tickets.js",
+    "migrate:tickets:dev": "ts-node -r tsconfig-paths/register src/migration/consolidate-service-tickets.ts",
     "sync:roles": "node dist/seed/sync-role-templates.js",
     "sync:roles:dev": "ts-node -r tsconfig-paths/register src/seed/sync-role-templates.ts",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",

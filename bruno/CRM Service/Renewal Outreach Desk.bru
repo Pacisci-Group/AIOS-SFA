@@ -1,0 +1,147 @@
+meta {
+  name: Renewal Outreach Desk
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/crm/service-tickets/renewals/desk
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns an array of desk rows", function () {
+    expect(res.getBody()).to.be.an("array");
+  });
+
+  test("every row carries the fields the desk renders", function () {
+    for (const row of res.getBody()) {
+      expect(row).to.have.property("cycleId");
+      expect(row).to.have.property("ticketId");
+      expect(row).to.have.property("stepKey");
+      expect(row).to.have.property("label");
+      expect(row).to.have.property("clientName");
+      expect(row).to.have.property("renewalDate");
+      expect(row).to.have.property("daysUntilRenewal");
+      expect(row).to.have.property("daysUntilAvailable");
+      expect(row).to.have.property("isActionable");
+      expect(row).to.have.property("isOverdue");
+      expect(row.policies).to.be.an("array");
+    }
+  });
+
+  test("daysUntilAvailable is null exactly when the call is actionable", function () {
+    // The one invariant the UI depends on: it gates the Start button on this
+    // rather than comparing `availableAt` to the browser clock.
+    for (const row of res.getBody()) {
+      expect(row.daysUntilAvailable === null).to.equal(row.isActionable);
+    }
+  });
+
+  test("previewed calls are within the preview window and not yet open", function () {
+    for (const row of res.getBody()) {
+      if (row.daysUntilAvailable === null) continue;
+      expect(row.daysUntilAvailable).to.be.at.most(14);
+      expect(row.isActionable).to.equal(false);
+      expect(row.isOverdue).to.equal(false);
+      expect(row.status).to.equal("waiting");
+    }
+  });
+
+  test("actionable rows sort ahead of previewed ones", function () {
+    const rows = res.getBody();
+    let seenScheduled = false;
+    for (const row of rows) {
+      if (row.daysUntilAvailable !== null) seenScheduled = true;
+      else expect(seenScheduled).to.equal(false);
+    }
+  });
+
+  test("one row per cycle", function () {
+    const ids = res.getBody().map((row) => row.cycleId);
+    expect(new Set(ids).size).to.equal(ids.length);
+  });
+}
+
+docs {
+  # GET /crm/service-tickets/renewals/desk
+
+  The **Proactive Renewal Outreach** desk on the Service Dashboard
+  (`/crm/service`): one row per open renewal cycle, flattened to the single call
+  that is on the CSR's plate — plus the calls about to land on it.
+
+  - **Module:** `crm_service`
+  - **Permission:** `crm_service:read`
+  - **Data scope:** applied as everywhere else. A cycle whose call is not
+    visible to the caller simply produces no row, so an `own`-scoped CSR sees
+    the calls assigned to them rather than the agency's whole book.
+
+  ## ⚠ This read has a side effect
+
+  Reading the desk runs the throttled renewal scan first
+  (`materializeRenewalCycles`), which is what creates cycles and their call
+  tickets. **There is no cron** — this request is what makes newly-due renewals
+  appear. A first call against a fresh database can therefore be slow and can
+  return rows that did not exist a moment earlier.
+
+  ## Params
+
+  None.
+
+  ## Response
+
+  `RenewalDeskRow[]` — see `@sfa/shared` `service/renewal.ts`. Sorted:
+  actionable calls first (overdue ahead of the rest, then soonest renewal),
+  then previewed calls by how soon they open.
+
+  Capped at the 100 soonest-renewing incomplete cycles.
+
+  ### Previewed calls (the `daysUntilAvailable` field)
+
+  Every other list in the CRM hides a call until its `availableAt`
+  (`scheduledStepMatches` keeps them out of the queue and the KPI strip) — a
+  call that has not opened is not work. **This desk is the deliberate
+  exception:** it is the one surface whose job is the coming fortnight, and a
+  T-45 call first appearing on the morning it opens cannot be planned around.
+
+  Calls opening within `RENEWAL_DESK_PREVIEW_DAYS` (**14**) are returned with:
+
+  | field | previewed call | call on the plate |
+  |---|---|---|
+  | `daysUntilAvailable` | whole days until it opens (`0` = today) | `null` |
+  | `isActionable` | `false` | `true` |
+  | `status` | `waiting` | `open` / `overdue` |
+
+  `daysUntilAvailable` is the flag to gate UI on — computed against the
+  **server clock** and shipped as a number, for the same reason `isActionable`
+  is. A browser that re-derived it from `availableAt` could offer a Start
+  button that `POST …/renewals/steps/:stepKey/complete` then rejects with a
+  400, since that endpoint independently refuses a step before its
+  `availableAt`.
+
+  An **open call always wins its cycle's row.** Both calls of an annual cycle
+  can be in range at once — an annual review still open at T-50 beside a
+  renewal review opening at T-45 — and previewing the later one while the
+  earlier is unfinished would bury real work.
+
+  ### What is deliberately absent
+
+  No premium-change field. `Policy.premium` is a single current number and the
+  system holds no premium history, so an increase cannot be computed; the desk
+  shows the renewal window and the call, nothing invented.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | `crm_service` disabled for the agency, or the caller lacks `crm_service:read` |
+}

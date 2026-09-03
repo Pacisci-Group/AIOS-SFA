@@ -210,3 +210,40 @@ places the ticket's literal spec was wrong, and the one known gap left open.
 ⚠ **Existing agencies need `npm run api:sync:roles`**: PAC-61 gave `mailers:read`
 to every role template, and editing a template does not touch already-seeded
 roles.
+
+### Service tickets — one schema, one collection (September 2026)
+
+There is now exactly one `ServiceTicket` schema
+(`packages/api/src/crm/schemas/service-ticket.schema.ts`) and one collection,
+`serviceTickets`. Until this, the SmartSuite migration wrote a thin mirror of
+the legacy table into `serviceTickets` through a *second* schema
+(`service-tickets/schemas/`, now deleted) while the CRM read `service_tickets`
+— so all 286 imported tickets were invisible in the app and the app's own
+tickets invisible to the import. Both classes were named `ServiceTicket`;
+`@nestjs/mongoose` resolves a duplicate model name first-registration-wins
+with no error, which only never bit because the migration and demo seed run
+as standalone contexts.
+
+- Migration and demo seed write the CRM shape through
+  `migration/helpers/legacy-ticket.ts` (`buildLegacyTicket`). SmartSuite
+  status/priority labels bridge to the CRM slugs in `@sfa/shared`
+  `domain/legacy-service-ticket.ts`; categories were already the same
+  vocabulary. Legacy numbers are kept: `#SFAS-030` → `SFAS-30`
+  (`parseLegacyTicketNumber`), never reallocated under the category prefixes.
+- The migration now also imports the ticket body (`notes`, then `Ticket Notes`)
+  as the opening timeline entry, `last_updated` as `lastActivityAt`, and
+  `Normalized Created By` as `createdByName`. None of the three were imported
+  before, which is why every migrated ticket would have opened blank.
+- ⚠ **Existing databases need `npm run migrate:tickets -w @sfa/api` once**
+  (`migrate:tickets:dev` locally; `--dry-run` first). It reshapes the mirror
+  rows in place, moves `service_tickets` over, drops it, and syncs indexes.
+  Run it before starting the API on this code — until then the CRM sees none
+  of the imported tickets (string tenancy keys) and none of its own. Same
+  one-off lifecycle as the deleted `fix-legacy-dedupe-indexes.ts`: delete the
+  script once every environment has run it.
+- Not yet exercised end-to-end: the rewritten `migrateServiceTickets` against
+  live SmartSuite (no credentials locally). Its mapper is unit-tested and the
+  consolidation ran the same builder over the 286 real rows.
+- `nextTicketNumber` is still `countDocuments() + 101`, so the first ticket
+  opened after consolidation numbers from 389, not 103. Harmless; a real
+  per-agency counter (like `householdRef`) is a separate change.

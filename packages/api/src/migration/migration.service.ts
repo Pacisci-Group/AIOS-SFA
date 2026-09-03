@@ -30,7 +30,7 @@ import { Activity } from '../activities/schemas/activity.schema';
 import { ProducerGoal } from '../producer-goals/schemas/producer-goal.schema';
 import { Contact } from '../contacts/schemas/contact.schema';
 import { Policy } from '../policies/schemas/policy.schema';
-import { ServiceTicket } from '../service-tickets/schemas/service-ticket.schema';
+import { ServiceTicket } from '../crm/schemas/service-ticket.schema';
 import { DealAudit } from '../deal-audits/schemas/deal-audit.schema';
 import { InterestedParty } from '../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../prior-insurance/schemas/prior-insurance.schema';
@@ -73,6 +73,7 @@ import {
   selectCode,
   toBool,
   toDate,
+  toRichText,
   toNumber,
   toPhoneArray,
   toStringArray,
@@ -89,8 +90,6 @@ import {
   normalizeContactRole,
   normalizeHouseholdStatus,
   normalizeLeadSource,
-  normalizeLegacyTicketCategory,
-  normalizeLegacyTicketStatus,
   normalizePolicyStatus,
   normalizePolicyType,
   normalizePriorPolicyCancellationStatus,
@@ -107,6 +106,7 @@ import {
   policyTypeLabels,
   resolvePremium,
 } from './helpers/derive';
+import { buildLegacyTicket } from './helpers/legacy-ticket';
 import { recentChicagoMonths } from '../performance/performance.range';
 import {
   CollectionStat,
@@ -2051,6 +2051,30 @@ export class MigrationService {
     );
     stat.fetched = records.length;
 
+    /*
+     * Written in the CRM's own shape (`crm/schemas/service-ticket.schema.ts`),
+     * not as a mirror of the SmartSuite table. The first import wrote a mirror
+     * to a schema nothing read, which left all 286 of the agency's tickets
+     * invisible to the app; `buildLegacyTicket` is what both this and the
+     * one-off consolidation of those rows now produce.
+     *
+     * The shape denormalizes the linked records' display fields, so households
+     * and policies are read once up front — two queries for the run instead of
+     * two per row.
+     */
+    const [householdDocs, policyDocs] = await Promise.all([
+      this.householdModel
+        .find({ agencyId: ctx.agencyId })
+        .select('name primaryContactName primaryPhones primaryEmails')
+        .lean(),
+      this.policyModel
+        .find({ agencyId: ctx.agencyId })
+        .select('policyNumber policyType')
+        .lean(),
+    ]);
+    const householdById = new Map(householdDocs.map((h) => [String(h._id), h]));
+    const policyById = new Map(policyDocs.map((p) => [String(p._id), p]));
+
     for (const rec of records) {
       const legacyId = rec.id as string;
       if (!legacyId) {
@@ -2068,47 +2092,70 @@ export class MigrationService {
         rec[SERVICE_TICKET_FIELDS.createdBy],
       );
       const clientName = toText(rec[SERVICE_TICKET_FIELDS.clientName]);
-      const test = isTestRecord(null, clientName, toText(rec.title));
+      const title = toText(rec[SERVICE_TICKET_FIELDS.title]);
+      const test = isTestRecord(null, clientName, title);
       if (test) stat.excludedTest++;
-      const firstCreatedAt = toDate(rec[SERVICE_TICKET_FIELDS.firstCreated]);
+
+      const policyId = this.ref(legacyPolicyId, policies);
+      const householdId = this.ref(legacyHouseholdId, households);
+      const createdBy = legacyCreatedById
+        ? producers.get(legacyCreatedById)
+        : undefined;
+
+      const fields = buildLegacyTicket(
+        {
+          title,
+          category: selectCode(rec[SERVICE_TICKET_FIELDS.category]),
+          status: selectCode(rec[SERVICE_TICKET_FIELDS.status]),
+          priority: selectCode(rec[SERVICE_TICKET_FIELDS.priority]),
+          clientName,
+          crmName: toText(rec[SERVICE_TICKET_FIELDS.crmName]),
+          createdByName: toText(rec[SERVICE_TICKET_FIELDS.createdByName]),
+          // The table has two notes fields. The richtext one is the body the
+          // CSRs type into; the plain "Ticket Notes" is the fallback.
+          notes:
+            toRichText(rec[SERVICE_TICKET_FIELDS.notes]) ??
+            toRichText(rec[SERVICE_TICKET_FIELDS.ticketNotes]),
+          createdDate:
+            toDate(rec[SERVICE_TICKET_FIELDS.createdDate]) ??
+            toDate(rec[SERVICE_TICKET_FIELDS.firstCreated]),
+          lastUpdated: toDate(rec[SERVICE_TICKET_FIELDS.lastUpdated]),
+          dateResolved: toDate(rec[SERVICE_TICKET_FIELDS.dateResolved]),
+          policyId,
+          householdId,
+          assignedUserId: this.userRef(legacyAssignedCrmId, producers),
+          createdByUserId: createdBy?.userId,
+          isTestRecord: test,
+        },
+        {
+          household: householdId
+            ? householdById.get(String(householdId))
+            : null,
+          policy: policyId ? policyById.get(String(policyId)) : null,
+          createdByDisplayName: createdBy?.name,
+        },
+      );
+      if (!fields) {
+        // Every row in the source book is titled `#SFAS-nnn`; one that is not
+        // has no number to keep, and the CRM requires one.
+        stat.skipped++;
+        this.recordError(
+          report,
+          `ServiceTicket ${legacyId}: title "${title ?? ''}" is not a ticket number`,
+        );
+        continue;
+      }
 
       await this.persist(
         this.serviceTicketModel,
         ctx,
         legacyId,
         {
-          title: toText(rec[SERVICE_TICKET_FIELDS.title]),
-          createdDate:
-            toDate(rec[SERVICE_TICKET_FIELDS.createdDate]) ?? firstCreatedAt,
-          category: normalizeLegacyTicketCategory(
-            selectCode(rec[SERVICE_TICKET_FIELDS.category]),
-          ),
-          priority: selectCode(rec[SERVICE_TICKET_FIELDS.priority]),
-          dueDate: toDate(rec[SERVICE_TICKET_FIELDS.dueDate]),
-          status: normalizeLegacyTicketStatus(
-            selectCode(rec[SERVICE_TICKET_FIELDS.status]),
-          ),
-          dateResolved: toDate(rec[SERVICE_TICKET_FIELDS.dateResolved]),
-          /*
-           * Unlike the deal-audit-item formula, this one is the right way round
-           * (`DATEDIFF(first_created, TODAY())`, example `"65"`), so the source
-           * value is trusted — but clamped, because a future `first_created`
-           * would still yield a negative, and "open for −3 days" is not a thing.
-           */
-          daysOpen:
-            Math.max(0, toNumber(rec[SERVICE_TICKET_FIELDS.daysOpen])) ||
-            daysSince(firstCreatedAt),
-          clientName,
-          crmName: toText(rec[SERVICE_TICKET_FIELDS.crmName]),
-          policyId: this.ref(legacyPolicyId, policies),
-          legacyPolicyId,
-          householdId: this.ref(legacyHouseholdId, households),
-          legacyHouseholdId,
-          assignedCrmId: this.userRef(legacyAssignedCrmId, producers),
-          legacyAssignedCrmId,
-          createdById: this.userRef(legacyCreatedById, producers),
-          legacyCreatedById,
-          isTestRecord: test,
+          // `persist` stamps the string tenancy the `TenantRecord` collections
+          // use; this schema stores ObjectIds, so both are overridden here.
+          agencyId: ctx.agencyObjectId,
+          branchId: ctx.branchObjectId,
+          ...fields,
         },
         stat,
         report,

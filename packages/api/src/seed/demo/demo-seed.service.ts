@@ -6,6 +6,7 @@ import {
   ALL_MODULE_KEYS,
   DEAL_AUDIT_REASON_CODES,
   DEFAULT_DEAL_AUDIT_STATUS,
+  SERVICE_TICKET_CATEGORY_PREFIX,
 } from '@sfa/shared';
 import type { DealAuditStatus } from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
@@ -31,7 +32,7 @@ import { AuditTemplate } from '../../audit-templates/schemas/audit-template.sche
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
-import { ServiceTicket } from '../../service-tickets/schemas/service-ticket.schema';
+import { ServiceTicket } from '../../crm/schemas/service-ticket.schema';
 import { ProducerAssignment } from '../../producer-assignments/schemas/producer-assignment.schema';
 import { CrmRotation } from '../../crm-rotations/schemas/crm-rotation.schema';
 import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request.schema';
@@ -169,6 +170,7 @@ interface DealRef {
 interface PolicyRef {
   id: Types.ObjectId;
   legacyId: string;
+  policyNumber: string;
   policyType: string;
   household: HouseholdRef;
   deal: DealRef;
@@ -968,6 +970,11 @@ export class DemoSeedService {
         expirationDate.setMonth(expirationDate.getMonth() + 6);
         const renewalDate = expirationDate;
         const legacyId = `demo:policy:${n}`;
+        // Digits only, because the carrier below is Allstate and PAC-56 #20
+        // now enforces that format. Demo data has to satisfy the rules the
+        // app enforces, or the first person to edit a seeded policy on the
+        // Sold card gets a 400 on data we shipped them.
+        const policyNumber = `9${String(200000 + n).padStart(8, '0')}`;
 
         const id = await this.upsert(
           this.policyModel,
@@ -976,11 +983,7 @@ export class DemoSeedService {
             agencyId: ctx.agencyId,
             branchId: deal.producer.branchId,
             legacySmartSuiteId: legacyId,
-            // Digits only, because the carrier below is Allstate and PAC-56 #20
-            // now enforces that format. Demo data has to satisfy the rules the
-            // app enforces, or the first person to edit a seeded policy on the
-            // Sold card gets a 400 on data we shipped them.
-            policyNumber: `9${String(200000 + n).padStart(8, '0')}`,
+            policyNumber,
             policyType,
             carrier: 'Allstate',
             active: true,
@@ -1001,6 +1004,7 @@ export class DemoSeedService {
         refs.push({
           id,
           legacyId,
+          policyNumber,
           policyType,
           household: deal.household,
           deal,
@@ -1399,36 +1403,58 @@ export class DemoSeedService {
         ? rng.pick(branchCrms.length ? branchCrms : crms)
         : undefined;
       const policy = policies.find((p) => p.household.legacyId === hh.legacyId);
+      const category = rng.pick(SERVICE_CATEGORIES);
       const status = rng.pick(SERVICE_STATUSES);
-      const createdDate = this.daysAgo(rng.int(0, 30));
-      const resolved = status === 'Resolved';
+      const openedAt = this.daysAgo(rng.int(0, 30));
+      const resolvedAt =
+        status === 'resolved' ? this.addDays(openedAt, rng.int(1, 8)) : null;
       const legacyId = `demo:ticket:${i}`;
 
+      // The live schema, field for field, so a seeded ticket is
+      // indistinguishable from one a CSR opened — same shape the migration
+      // now writes. Tenancy is ObjectId here, unlike the `TenantRecord`
+      // collections above.
       await this.upsert(
         this.serviceTicketModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
+        { agencyId: ctx.agencyObjectId, legacySmartSuiteId: legacyId },
         {
-          agencyId: ctx.agencyId,
-          branchId: hh.branchId,
+          agencyId: ctx.agencyObjectId,
+          branchId: new Types.ObjectId(hh.branchId),
           legacySmartSuiteId: legacyId,
-          title: `${hh.name} — ${rng.pick(SERVICE_CATEGORIES)}`,
-          createdDate,
-          category: rng.pick(SERVICE_CATEGORIES),
-          priority: rng.pick(SERVICE_PRIORITIES),
-          dueDate: this.addDays(createdDate, rng.int(2, 14)),
-          status,
-          dateResolved: resolved
-            ? this.addDays(createdDate, rng.int(1, 8))
-            : undefined,
-          daysOpen: daysSince(createdDate),
+          // Below the CRM's allocator, which numbers from the document count
+          // plus 101: these sixteen take 101–116, and the first ticket opened
+          // in the app lands on 117 rather than on one of them.
+          ticketNumber: `${SERVICE_TICKET_CATEGORY_PREFIX[category]}-${101 + i}`,
           clientName: `${hh.clientFirst} ${hh.clientLast}`,
-          crmName: crm?.fullName,
-          policyId: policy?.id,
-          legacyPolicyId: policy?.legacyId,
+          category,
+          status,
+          statusOverriddenAt: null,
+          priority: rng.pick(SERVICE_PRIORITIES),
+          assignedRep: crm?.fullName ?? '',
+          assignedUserId: crm?.userId ?? null,
+          createdByUserId: crm?.userId ?? null,
+          createdByName: crm?.fullName ?? '',
+          policyNumber: policy?.policyNumber ?? '',
+          policyType: policy?.policyType ?? '',
+          household: hh.name,
+          policyId: policy?.id ?? null,
           householdId: hh.id,
-          legacyHouseholdId: hh.legacyId,
-          assignedCrmId: crm?.userId,
-          createdById: crm?.userId,
+          leadId: null,
+          phone: '',
+          email: '',
+          openedAt,
+          lastActivityAt: resolvedAt ?? openedAt,
+          resolvedAt,
+          timeline: [
+            {
+              type: 'created',
+              ...(crm ? { author: crm.fullName } : {}),
+              content: `Ticket opened — ${category}.`,
+              at: openedAt,
+            },
+          ],
+          onboarding: null,
+          renewal: null,
           isTestRecord: false,
         },
       );

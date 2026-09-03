@@ -148,6 +148,20 @@ export const SERVICE_TICKET_FIELDS = {
   clientName: 'setuud00',
   crmName: 's43ee2ba8f',
   firstCreated: 'first_created',
+  /*
+   * The four below were not imported by the first migration, which wrote a
+   * thin mirror of the table. They are what turns a row into a ticket a CSR
+   * can act on: the body text becomes the opening timeline entry, the system
+   * `last_updated` becomes `lastActivityAt`, and `Normalized Created By` is the
+   * creator's name (`crmName` above is the *assigned* CRM, a different person
+   * on 2 of 286 rows).
+   */
+  lastUpdated: 'last_updated',
+  /** SmartDoc richtext — `{ data, html, preview }`; see `toRichText`. */
+  notes: 'notes',
+  /** "Ticket Notes", a plain multi-line string alongside the richtext one. */
+  ticketNotes: 'sed733068f',
+  createdByName: 's6e4995d56',
 } as const;
 
 export const DEAL_AUDIT_FIELDS = {
