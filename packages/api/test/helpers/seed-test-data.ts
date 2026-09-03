@@ -2,9 +2,11 @@ import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { Model } from 'mongoose';
-import { ALL_MODULE_KEYS, DataScope } from '@sfa/shared';
+import { ALL_MODULE_KEYS, DataScope, policyNumberKey } from '@sfa/shared';
 import { Branch } from '../../src/branches/schemas/branch.schema';
 import { Contact } from '../../src/contacts/schemas/contact.schema';
+import { SequenceService } from '../../src/common/mongo/sequence.service';
+import { reconcileHouseholdRefs } from '../../src/households/household-ref';
 import { Household } from '../../src/households/schemas/household.schema';
 import { RoleAssignmentsService } from '../../src/permissions/role-assignments.service';
 import { Permission } from '../../src/permissions/schemas/permission.schema';
@@ -242,6 +244,7 @@ export async function seedTestData(
   const household = await householdModel.create({
     ...tenant,
     legacySmartSuiteId: 'test:hh:main',
+    householdRef: 'HH-1',
     name: 'Test Household',
     status: 'Active',
     primaryContactName: 'Test Client',
@@ -266,6 +269,7 @@ export async function seedTestData(
     ...tenant,
     legacySmartSuiteId: 'test:pol:main',
     policyNumber: 'TEST-000-1',
+    policyNumberKey: policyNumberKey('TEST-000-1'),
     policyType: 'Auto',
     carrier: 'Test Carrier',
     active: true,
@@ -281,16 +285,39 @@ export async function seedTestData(
   const secondHousehold = await householdModel.create({
     ...tenant,
     legacySmartSuiteId: 'test:hh:second',
+    householdRef: 'HH-2',
     name: 'Second Test Household',
     status: 'Active',
     primaryContactName: 'Second Client',
     totalActivePolicies: 1,
   });
 
+  /*
+   * A member of the second household whose name appears nowhere on the
+   * household itself — not in `name`, not in `primaryContactName`.
+   *
+   * That is the whole point of them: a search that finds this household by
+   * "Vasquez" or by a date of birth can only have resolved it through the
+   * `contacts` collection, so the Clients list's cross-collection search has
+   * something it must reach that a household-only query cannot.
+   */
+  await contactModel.create({
+    ...tenant,
+    legacySmartSuiteId: 'test:ct:second-child',
+    firstName: 'Marguerite',
+    lastName: 'Vasquez',
+    // UTC midnight, exactly as `parseDateOfBirth` stores it.
+    dateOfBirth: new Date(Date.UTC(1985, 2, 12)),
+    roleInHousehold: 'Child',
+    isPrimary: false,
+    householdId: secondHousehold._id,
+  });
+
   const secondPolicy = await policyModel.create({
     ...tenant,
     legacySmartSuiteId: 'test:pol:second',
     policyNumber: 'TEST-000-2',
+    policyNumberKey: policyNumberKey('TEST-000-2'),
     policyType: 'Auto',
     carrier: 'Test Carrier',
     active: true,
@@ -329,6 +356,24 @@ export async function seedTestData(
     name: 'Other Agency Household',
     status: 'Active',
   });
+
+  /*
+   * Seed the agency's household counter from the references above.
+   *
+   * ⚠ Not optional. `allocateHouseholdRef` starts at 1, so lead intake would
+   * hand `HH-1` to its first new household while `Test Household` already holds
+   * it — and `{agencyId, householdRef}` is unique, so every subsequent
+   * `POST /leads` fails on the duplicate key, surfaced as a 409. This is the
+   * exact ordering hazard called out on `reconcileHouseholdRefs`; the migration
+   * and the demo seed both end their household pass the same way.
+   *
+   * It also numbers the other-branch household, which is created without one.
+   */
+  await reconcileHouseholdRefs(
+    householdModel,
+    app.get(SequenceService),
+    tenant.agencyId,
+  );
 
   // A populated second tenant, so the cross-agency user directory (PAC-70) has
   // something to find outside the main agency. Its user holds two roles on

@@ -115,6 +115,20 @@ export const CHANGE_PASSWORD_RATE_LIMIT = limitFromEnv(
 );
 
 /**
+ * `POST /bug-reports` — filing an in-app bug report, per minute.
+ *
+ * The only authenticated write in the API that requires **no permission at
+ * all**, so this limit is the whole abuse bound rather than a second line of
+ * defence. Ten a minute is far above anyone describing a real problem and far
+ * below anything that would fill the queue.
+ *
+ * The presign route gets six times this — five screenshots is five presigns,
+ * and someone who picks the wrong file and retries must not be locked out of
+ * submitting the report they have already typed.
+ */
+export const BUG_REPORT_RATE_LIMIT = limitFromEnv('BUG_REPORT_RATE_LIMIT', 10);
+
+/**
  * `POST /address/*` — authenticated address autocomplete (PAC-60).
  *
  * Generous, because unlike the intake limits this one guards a *billed* call

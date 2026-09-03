@@ -43,6 +43,16 @@ function createFeatureController(path: string, moduleKey: ModuleKey) {
  * `@Controller('contacts')` would register silently, first-wins — so the stub
  * had to go in the same commit, not later.
  */
+/**
+ * @deprecated Superseded by the real `HouseholdRecordsController` in
+ * `src/clients` (PAC-89), which serves the paginated Clients list on
+ * `GET /households`, and no longer registered.
+ *
+ * Two classes on `@Controller('households')` register silently, first-wins — so
+ * this had to be de-registered in the same commit that added the real handler,
+ * exactly as `ContactsController` did for PAC-38. Kept only for symmetry with
+ * the stubs below; import the real one, not this.
+ */
 export const HouseholdsController = createFeatureController(
   'households',
   ModuleKey.Clients,

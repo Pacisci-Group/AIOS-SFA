@@ -3,7 +3,6 @@ import {
   CommandCenterController,
   DashboardController,
   DealsController,
-  HouseholdsController,
   ManagementController,
   OnboardingsController,
   OwnerDashboardController,
@@ -17,7 +16,9 @@ import {
 // the real `PerformanceModule` (see src/performance) and `leaderboard` by the
 // real `LeaderboardModule` (see src/leaderboard), and `mailers` by the real
 // agency-facing `MailersController` in `MailersModule` (see src/mailers,
-// PAC-61), so their stub controllers are intentionally omitted here.
+// PAC-61), and `households` by the real `HouseholdRecordsController` in
+// `ClientsModule` (see src/clients, PAC-89), so their stub controllers are
+// intentionally omitted here.
 //
 // `files` is gone entirely: it was a `@Controller('files')` placeholder that
 // borrowed the `quote_recaps` module key for want of a better one. The real
@@ -25,7 +26,6 @@ import {
 // and leaving a second route on the same gate was only ever confusing.
 const controllers = [
   DashboardController,
-  HouseholdsController,
   DealsController,
   OnboardingsController,
   ManagementController,

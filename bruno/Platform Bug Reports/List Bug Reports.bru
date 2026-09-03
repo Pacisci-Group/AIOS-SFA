@@ -1,0 +1,114 @@
+meta {
+  name: List Bug Reports
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/platform/bug-reports?status=new,triaged,in_progress&limit=50
+  body: none
+  auth: bearer
+}
+
+params:query {
+  status: new,triaged,in_progress
+  limit: 50
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns rows, a filtered total and unfiltered status counts", function () {
+    const body = res.getBody();
+    expect(body.items).to.be.an("array");
+    expect(body.total).to.be.a("number");
+    expect(body.statusCounts).to.have.property("new");
+    expect(body.statusCounts).to.have.property("wont_fix");
+  });
+
+  test("includes the report filed in the Bug Reports folder", function () {
+    const ids = res.getBody().items.map((item) => item.id);
+    expect(ids).to.include(bru.getVar("bugReportId"));
+  });
+
+  test("rows carry a derived summary and no screenshot keys", function () {
+    const row = res.getBody().items.find(
+      (item) => item.id === bru.getVar("bugReportId"),
+    );
+    expect(row.summary).to.contain("leaderboard");
+    expect(row.screenshotCount).to.equal(1);
+    // The list is a list: no description, no context, no storage keys.
+    expect(row).to.not.have.property("description");
+    expect(row).to.not.have.property("screenshots");
+  });
+}
+
+docs {
+  # GET /platform/bug-reports — the Super Admin queue
+
+  Every report on the platform, across every tenant, newest first. Backs
+  `/admin/bugs`.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:bugs:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`) — cross-tenant by
+    design; `platform:bugs:read` is the boundary.
+
+  ## Query
+  | param    | type   | notes                                                        |
+  |----------|--------|--------------------------------------------------------------|
+  | status   | csv    | any of `new`,`triaged`,`in_progress`,`resolved`,`wont_fix`. Omit for all. |
+  | severity | enum   | `low` \| `normal` \| `high` \| `blocking`                     |
+  | agencyId | string | 24-hex                                                        |
+  | search   | string | matched against the description via a Mongo **text index**    |
+  | limit    | int    | 1–100, default 50                                             |
+  | skip     | int    | ≥ 0, default 0                                                |
+
+  `status` is comma-separated so the page's default view — "everything still
+  open" — is one request rather than three.
+
+  ## Why `statusCounts` ignores the filters
+
+  They drive the page's filter chips. A count that respected the status filter
+  would show `New (12)` only while New was already selected, and every other
+  chip at zero. `total` is the filtered count; `statusCounts` is the whole
+  collection.
+
+  ## Response `200`
+  ```json
+  {
+    "items": [{
+      "id": "68f3…c21",
+      "status": "new",
+      "severity": "high",
+      "summary": "The leaderboard still shows last month's numbers…",
+      "reporterName": "Casey Rivera",
+      "reporterEmail": "producer@demoagency.local",
+      "agencyId": "68a1…f09",
+      "agencyName": "Demo Agency",
+      "screenshotCount": 1,
+      "createdAt": "2026-09-01T14:22:07.113Z",
+      "updatedAt": "2026-09-01T14:22:07.113Z"
+    }],
+    "total": 1,
+    "statusCounts": { "new": 1, "triaged": 0, "in_progress": 0, "resolved": 0, "wont_fix": 0 }
+  }
+  ```
+
+  `summary` is the first line of the description, capped at 120 chars and
+  derived by `bugReportSummary` in `@sfa/shared` — there is no stored title,
+  because one more field to fill in while mid-bug is one more reason not to file.
+
+  `agencyName` is `null` for a report filed by a platform operator, who has no
+  agency; the page renders those as "Platform".
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — missing `platform:bugs:read` (e.g. any producer).
+}

@@ -1,0 +1,41 @@
+meta {
+  name: List Bug Reports (Producer Rejected)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/platform/bug-reports
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /platform/bug-reports — the producer must not read the queue
+
+  Sent with the **collection-level bearer** (`auth: inherit`), which is the
+  producer captured by `Auth/Login` — not `platformAccessToken`. That is the
+  whole point of the request.
+
+  This is the assertion that the feature's asymmetry holds. `POST /bug-reports`
+  deliberately requires **no permission**, so every producer can file a report;
+  reading them back is `platform:bugs:read`, which no agency role holds and
+  which `grantsAllEnabledModules` cannot expand into (it only expands
+  `{module}:read` / `{module}:write`). A producer reaching this endpoint would
+  see every other tenant's reports, including the screens and data they name.
+
+  `403`, not `404`: the route exists and the caller is authenticated: they simply
+  are not a platform operator. The non-disclosure rules that make an
+  out-of-scope *record* answer 404 (see `Leads/Get Lead (Foreign Lead)`) are
+  about hiding whether a specific record exists, which does not apply to a
+  collection endpoint.
+
+  ## Errors
+  - `403 Forbidden` — missing `platform:bugs:read`. Any agency role.
+}

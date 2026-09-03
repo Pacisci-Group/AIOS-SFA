@@ -12,6 +12,7 @@ import {
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
+import type { HouseholdListResponse } from '@sfa/shared';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
@@ -1771,10 +1772,364 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Clients list (PAC-89)', () => {
+    /*
+     * `GET /households` — the Clients list and its cross-record search.
+     *
+     * Unlike `GET /households/:id` above, the index is **`clients:read` only**.
+     * The controller's class-level OR-gate still applies, but the handler adds
+     * its own `@RequirePermissions(clients:read)` and metadata override is
+     * per-key, so the two compose rather than replace. A CSR reaching the
+     * record but not the list is the behaviour under test, not an accident.
+     */
+    const list = (token: string, query = '') =>
+      request(app.getHttpServer())
+        .get(`/api/v1/households${query}`)
+        .set(authHeader(token));
+
+    /** The 200 body, typed — the contract both packages compile against. */
+    const listBody = async (
+      token: string,
+      query = '',
+    ): Promise<HouseholdListResponse> => {
+      const res = await list(token, query).expect(200);
+      return res.body as HouseholdListResponse;
+    };
+
+    const idsIn = (body: HouseholdListResponse) =>
+      body.items.map((item) => item.id);
+
+    it('returns a paginated envelope of households in scope', async () => {
+      const body = await listBody(ownerToken);
+
+      expect(body).toMatchObject({ page: 1, pageSize: 50 });
+      expect(body.totalPages).toBeGreaterThanOrEqual(1);
+      const ids = idsIn(body);
+      expect(ids).toContain(seed.householdId);
+      expect(ids).toContain(seed.secondHouseholdId);
+    });
+
+    it('is no longer the {status:ready} stub', async () => {
+      const body = await listBody(ownerToken);
+      expect(body.status).toBeUndefined();
+      expect(body.items).toBeInstanceOf(Array);
+    });
+
+    it('serializes a row without leaking internals', async () => {
+      const body = await listBody(ownerToken, '?q=Test Household');
+      const row = body.items.find((item) => item.id === seed.householdId);
+      expect(row).toBeDefined();
+
+      expect(row).toMatchObject({
+        name: 'Test Household',
+        householdRef: 'HH-1',
+        status: 'Active',
+        primaryContactName: 'Test Client',
+        primaryEmail: 'client@test.local',
+        city: 'Austin',
+        state: 'TX',
+      });
+      // `city`/`state` above are coerced from `propertyAddress.line1` — one of
+      // the three key shapes the three writers use, which is why the API
+      // resolves it rather than each client re-implementing the lookup.
+      const raw = row as unknown as Record<string, unknown>;
+      for (const key of [
+        'agencyId',
+        'branchId',
+        'legacySmartSuiteId',
+        'legacyAssignedCrmId',
+        'isTestRecord',
+        'addressKey',
+      ]) {
+        expect(raw[key]).toBeUndefined();
+      }
+    });
+
+    describe('permissions', () => {
+      it('403s for a CSR — the OR gate covers :id, not the index', async () => {
+        await list(csrToken).expect(403);
+      });
+
+      it('200s for the agency owner', async () => {
+        await list(ownerToken).expect(200);
+      });
+
+      it('401s unauthenticated', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/households')
+          .expect(401);
+      });
+    });
+
+    describe('tenancy and scope', () => {
+      it("never returns another agency's households", async () => {
+        const body = await listBody(ownerToken, '?pageSize=100');
+        expect(idsIn(body)).not.toContain(seed.otherAgencyHouseholdId);
+      });
+
+      it('hides an out-of-branch household from a branch-scoped user', async () => {
+        // The owner is agency-scoped and DOES see it; that asymmetry is the
+        // point of the `own` -> branch collapse on client records.
+        const owner = await listBody(ownerToken, '?pageSize=100');
+        expect(idsIn(owner)).toContain(seed.otherBranchHouseholdId);
+      });
+    });
+
+    describe('omni search (q)', () => {
+      it('finds a household by its own name', async () => {
+        const body = await listBody(ownerToken, '?q=Second Test');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it('finds a household by its HH- reference', async () => {
+        const body = await listBody(ownerToken, '?q=HH-1');
+        expect(idsIn(body)).toEqual([seed.householdId]);
+      });
+
+      it('accepts the legacy #HH1 form of the same reference', async () => {
+        const body = await listBody(ownerToken, '?q=%23HH1');
+        expect(idsIn(body)).toEqual([seed.householdId]);
+      });
+
+      it("finds a household by a member's surname", async () => {
+        // "Vasquez" appears on no household — only on the contact — so this
+        // can only have resolved through the `contacts` collection.
+        const body = await listBody(ownerToken, '?q=Vasquez');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it('matches a member name case-insensitively (collation)', async () => {
+        // Without the collation repeated on the query this misses AND scans.
+        const body = await listBody(ownerToken, '?q=vASQUEZ');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it("finds a household by a member's date of birth", async () => {
+        const body = await listBody(ownerToken, '?q=1985-03-12');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it('accepts the MM/DD/YYYY form of the same date', async () => {
+        const body = await listBody(ownerToken, '?q=03%2F12%2F1985');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it('finds a household by one of its policy numbers', async () => {
+        const body = await listBody(ownerToken, '?q=TEST-000-1');
+        expect(idsIn(body)).toEqual([seed.householdId]);
+      });
+
+      it('normalizes separators away when matching a policy number', async () => {
+        // `TEST 0001` and `TEST-000-1` share one key: that is the whole reason
+        // `policyNumberKey` is stored rather than computed at query time.
+        const body = await listBody(ownerToken, '?q=test%200001');
+        expect(idsIn(body)).toEqual([seed.householdId]);
+      });
+
+      it('returns nothing for a term that matches nothing', async () => {
+        const body = await listBody(ownerToken, '?q=Nonexistent%20Zzz');
+        expect(body.items).toEqual([]);
+        expect(body.total).toBe(0);
+      });
+    });
+
+    describe('matchedOn', () => {
+      it('names the member that put a household in the results', async () => {
+        const body = await listBody(ownerToken, '?q=Vasquez');
+        expect(body.items[0].matchedOn).toEqual({
+          field: 'member',
+          value: 'Marguerite Vasquez',
+        });
+      });
+
+      it('names the policy that put a household in the results', async () => {
+        const body = await listBody(ownerToken, '?q=TEST-000-1');
+        expect(body.items[0].matchedOn).toEqual({
+          field: 'policy',
+          value: 'TEST-000-1',
+        });
+      });
+
+      it('carries the date of birth alongside the member who has it', async () => {
+        const body = await listBody(ownerToken, '?q=1985-03-12');
+        expect(body.items[0].matchedOn).toEqual({
+          field: 'dateOfBirth',
+          value: 'Marguerite Vasquez · 1985-03-12',
+        });
+      });
+
+      it('is null when the household matched on something the row shows', async () => {
+        // Its own name and its reference are both printed in the first column,
+        // so restating them would be noise.
+        const byName = await listBody(ownerToken, '?q=Test Household');
+        expect(byName.items[0].matchedOn).toBeNull();
+
+        const byRef = await listBody(ownerToken, '?q=HH-1');
+        expect(byRef.items[0].matchedOn).toBeNull();
+      });
+
+      it('is null on an unfiltered list', async () => {
+        const body = await listBody(ownerToken);
+        expect(body.items[0].matchedOn).toBeNull();
+      });
+    });
+
+    describe('explicit fields', () => {
+      it('finds a household by a member first name', async () => {
+        const body = await listBody(ownerToken, '?firstName=Marguerite');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it('finds a household by a member date of birth', async () => {
+        const body = await listBody(ownerToken, '?dateOfBirth=1985-03-12');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it('finds a household by its reference', async () => {
+        const body = await listBody(ownerToken, '?householdRef=HH-2');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it('finds a household by policy number', async () => {
+        const body = await listBody(ownerToken, '?policyNumber=TEST-000-2');
+        expect(idsIn(body)).toEqual([seed.secondHouseholdId]);
+      });
+
+      it('ANDs the fields together', async () => {
+        // Marguerite is in HH-2, so pairing her with HH-1 must find nothing —
+        // an OR here would wrongly return both.
+        const body = await listBody(
+          ownerToken,
+          '?firstName=Marguerite&householdRef=HH-1',
+        );
+        expect(body.items).toEqual([]);
+      });
+
+      it('narrows the omni box rather than widening it', async () => {
+        const body = await listBody(ownerToken, '?q=Vasquez&householdRef=HH-1');
+        expect(body.items).toEqual([]);
+      });
+
+      it('treats a blank field as no filter, not as "matches everything"', async () => {
+        // `?firstName=` is what a cleared input sends. Left as an empty string
+        // it reads as a filter every contact satisfies.
+        const blank = await listBody(ownerToken, '?firstName=');
+        const none = await listBody(ownerToken);
+        expect(blank.total).toBe(none.total);
+      });
+
+      it('returns an empty page for a reference that cannot be one', async () => {
+        // Never the unfiltered book: a search that silently widens is worse
+        // than one that finds nothing.
+        const body = await listBody(ownerToken, '?householdRef=not-a-ref');
+        expect(body.items).toEqual([]);
+        expect(body.total).toBe(0);
+      });
+    });
+
+    describe('status filter', () => {
+      it('matches the canonical label', async () => {
+        const body = await listBody(ownerToken, '?status=Active');
+        expect(idsIn(body)).toContain(seed.householdId);
+      });
+
+      it('rejects a label outside the vocabulary', async () => {
+        await list(ownerToken, '?status=Lapsed').expect(400);
+      });
+    });
+
+    describe('validation', () => {
+      it('400s on a malformed date of birth, never 500', async () => {
+        await list(ownerToken, '?dateOfBirth=03%2F12%2F1985').expect(400);
+        await list(ownerToken, '?dateOfBirth=yesterday').expect(400);
+      });
+
+      it('400s on an out-of-bounds pageSize', async () => {
+        await list(ownerToken, '?pageSize=500').expect(400);
+        await list(ownerToken, '?page=0').expect(400);
+      });
+
+      it('400s on an unknown sort', async () => {
+        await list(ownerToken, '?sort=premium').expect(400);
+      });
+
+      it('accepts every documented sort', async () => {
+        for (const sort of ['name', 'policies', 'updated']) {
+          await list(ownerToken, `?sort=${sort}`).expect(200);
+        }
+      });
+    });
+
+    describe('name sort puts nameless households last', () => {
+      /*
+       * MongoDB sorts missing values FIRST, so without the computed flag the
+       * default view opens on whatever the import left unnamed — blank rows at
+       * the top of the first screen, which reads as a broken page. The migrated
+       * book has a handful of these.
+       */
+      let namelessId: string;
+
+      beforeAll(async () => {
+        const households = app.get<Model<Household>>(
+          getModelToken(Household.name),
+        );
+        const created = await households.create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          legacySmartSuiteId: 'test:hh:nameless',
+          status: 'Active',
+          householdRef: 'HH-900',
+        });
+        namelessId = created._id.toString();
+      });
+
+      afterAll(async () => {
+        const households = app.get<Model<Household>>(
+          getModelToken(Household.name),
+        );
+        await households.deleteOne({ _id: new Types.ObjectId(namelessId) });
+      });
+
+      it('still returns it, but after every named household', async () => {
+        const body = await listBody(ownerToken, '?sort=name&pageSize=100');
+        const ids = idsIn(body);
+        expect(ids).toContain(namelessId);
+        expect(ids[ids.length - 1]).toBe(namelessId);
+        expect(ids[0]).not.toBe(namelessId);
+      });
+
+      it('serializes its name as null rather than inventing one', async () => {
+        const body = await listBody(ownerToken, '?sort=name&pageSize=100');
+        const row = body.items.find((item) => item.id === namelessId);
+        expect(row?.name).toBeNull();
+        expect(row?.householdRef).toBe('HH-900');
+      });
+    });
+
+    describe('pagination', () => {
+      it('bounds the page and reports the total honestly', async () => {
+        const body = await listBody(ownerToken, '?pageSize=1');
+        expect(body.items).toHaveLength(1);
+        expect(body.pageSize).toBe(1);
+        expect(body.totalPages).toBe(body.total);
+      });
+
+      it('does not repeat a row across pages', async () => {
+        const first = await listBody(ownerToken, '?pageSize=1&page=1');
+        const second = await listBody(ownerToken, '?pageSize=1&page=2');
+        expect(idsIn(first)[0]).not.toBe(idsIn(second)[0]);
+      });
+
+      it('returns an empty page past the end, not an error', async () => {
+        const body = await listBody(ownerToken, '?page=9999');
+        expect(body.items).toEqual([]);
+      });
+    });
+  });
+
   describe('Feature modules', () => {
     const featureRoutes = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
-      { path: 'households', module: ModuleKey.Clients },
       { path: 'deals', module: ModuleKey.Clients },
       // NOTE: `deal-audits` (DealAuditsModule / PAC-12/14), `leads`
       // (LeadsModule / PAC-36), `quote-recaps` (QuoteRecapsModule / PAC-39),
@@ -1787,7 +2142,11 @@ describe('SFA API (e2e)', () => {
       // `POST /quote-recaps/quote-document/presign`. `mailers` left this list
       // with PAC-61, which replaced its stub with the real agency-facing
       // controller — `GET /mailers/:controlNumber`, covered by
-      // `mailer-lookup.e2e-spec.ts`.
+      // `mailer-lookup.e2e-spec.ts`. `households` left with PAC-89, which
+      // replaced its stub with the real Clients list — `GET /households`,
+      // covered by its own describe block below. That also removed the bare
+      // `PATCH /households`, which only ever echoed `{status:'updated'}`; the
+      // real household write is `POST /households/:id/members`.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
       { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
@@ -2053,7 +2412,6 @@ describe('SFA API (e2e)', () => {
     // handler (PATCH) requires `{module}:write`.
     const mutatingFeatureRoutes = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
-      { path: 'households', module: ModuleKey.Clients },
       { path: 'deals', module: ModuleKey.Clients },
       // `deal-audits` write (resolve) is item-scoped, not a bare PATCH stub, and
       // `contacts` write is now id-scoped too (ContactsModule / PAC-38) — both
@@ -2064,7 +2422,10 @@ describe('SFA API (e2e)', () => {
       // modules now, with no mutating handler at all, so neither can appear in
       // this list. `crm/service-tickets` is a real module (CrmModule) with its
       // own describe block too. `mailers` left with PAC-61 — its write is
-      // `POST /mailers/log-lead`, probed on its own below.
+      // `POST /mailers/log-lead`, probed on its own below. `households` left
+      // with PAC-89: its stub is de-registered, so there is no bare
+      // `PATCH /households` to probe — the write is
+      // `POST /households/:id/members`, covered by the Client records block.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
       { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },

@@ -1,0 +1,54 @@
+meta {
+  name: Update Bug Report (Empty Body)
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/platform/bug-reports/{{bugReportId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH /platform/bug-reports/:id — the empty-body guard
+
+  A PATCH carrying neither `status` nor `internalNotes` is rejected rather than
+  answered with the unchanged record. Silently succeeding would turn a client
+  bug — a form that forgot to send its field — into a save button that appears
+  to work and changes nothing.
+
+  Enforced by a `.refine()` on the zod schema, so it is a `400` with a form-level
+  error rather than a field-level one:
+
+  ```json
+  {
+    "message": "Validation failed",
+    "errors": {
+      "formErrors": ["Provide a status or internal notes to update."],
+      "fieldErrors": {}
+    }
+  }
+  ```
+
+  Note the asymmetry with `internalNotes: ""`, which is **valid** and clears the
+  note. Omitting a field and sending it empty are deliberately different.
+}

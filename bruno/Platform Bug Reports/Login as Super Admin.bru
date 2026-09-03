@@ -1,0 +1,64 @@
+meta {
+  name: Login as Super Admin
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{adminEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Its own variable rather than overwriting `accessToken`, for the same reason
+  // `Platform Mailers` does it: a platform account holds `platform:*` and no
+  // module permissions at all, so it would 403 every producer-scoped folder.
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    bru.setVar("platformAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("holds the platform bug permissions", function () {
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("platform:bugs:read");
+    expect(perms).to.include("platform:bugs:write");
+  });
+}
+
+docs {
+  # POST /auth/login — sign in as the platform super admin
+
+  Duplicated from `Platform Mailers/Login as Super Admin` rather than shared,
+  so this folder is self-contained: the CLI walks folders alphabetically and
+  `Platform Bug Reports` sorts **before** `Platform Mailers`, so it cannot rely
+  on that one having run.
+
+  `PermissionsService.resolveForUser` short-circuits on `isPlatformAdmin` and
+  returns `ALL_PLATFORM_PERMISSIONS` verbatim — the role/grant/revoke and
+  enabled-module machinery is skipped. So adding `BugsRead`/`BugsWrite` to
+  `PlatformPermission` granted them to this account with **no seed or migration
+  step**, which is what the second test above pins.
+
+  - **Module:** none (`@Public()`)
+  - **Permission:** none
+
+  ## Errors
+  - `401 Unauthorized` — wrong credentials, or the core seed has not been run.
+}
