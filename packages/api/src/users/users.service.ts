@@ -35,6 +35,7 @@ import { TenantBrandingService } from '../tenant-branding/tenant-branding.servic
 import { MailService } from '../mail/mail.service';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
+import { Branch, BranchDocument } from '../branches/schemas/branch.schema';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import {
   AgencyRole,
@@ -78,6 +79,7 @@ export class UsersService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
+    @InjectModel(Branch.name) private branchModel: Model<BranchDocument>,
     private permissionsService: PermissionsService,
     private roleAssignments: RoleAssignmentsService,
     private ownerProtection: OwnerProtectionService,
@@ -172,6 +174,7 @@ export class UsersService {
    */
   async createPendingUser(input: InviteUserInput): Promise<UserDocument> {
     await this.validateRoles(input.agencyId, input.roleIds);
+    await this.validateBranch(input.agencyId, input.branchId);
 
     const email = input.email.toLowerCase();
     await this.assertEmailAvailable(email);
@@ -1019,6 +1022,30 @@ export class UsersService {
       throw new BadRequestException(
         'One or more roles are invalid for this agency',
       );
+    }
+  }
+
+  /**
+   * A branch, when one is given, must belong to the inviting agency.
+   *
+   * `InviteUserDto` only checks that `branchId` is *a* valid id, so without this
+   * a caller could place a new employee in another tenant's branch — the id is
+   * never re-derived from the session afterwards, and `BranchGuard` scopes reads
+   * by `user.branchId`, so the mistake would be a standing cross-tenant leak
+   * rather than a rejected request.
+   *
+   * `undefined` stays allowed: the invite form pre-selects the default branch,
+   * but the seed and the SmartSuite migration create users with no branch at all.
+   */
+  private async validateBranch(agencyId: string, branchId?: string) {
+    if (!branchId) return;
+
+    const exists = await this.branchModel.exists({
+      _id: new Types.ObjectId(branchId),
+      agencyId: new Types.ObjectId(agencyId),
+    });
+    if (!exists) {
+      throw new BadRequestException('Branch is invalid for this agency');
     }
   }
 

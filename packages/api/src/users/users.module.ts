@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
 import { MailModule } from '../mail/mail.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
@@ -36,6 +37,10 @@ import { UsersService } from './users.service';
       { name: User.name, schema: UserSchema },
       { name: AgencyRole.name, schema: AgencyRoleSchema },
       { name: Agency.name, schema: AgencySchema },
+      // Read by `inviteUser` to check the chosen branch belongs to the
+      // inviting agency. Schema only — one `exists` query is not worth
+      // importing `BranchesModule` and its controller for.
+      { name: Branch.name, schema: BranchSchema },
       { name: UserRole.name, schema: UserRoleSchema },
       // Read by `UserWorkReleaseService` when an employee is removed. Schemas
       // only — the CRM *services* are not imported, so removing a user does not

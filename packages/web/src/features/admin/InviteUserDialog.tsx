@@ -16,6 +16,7 @@ import {
 import { useAppForm } from "@/hooks/form";
 import { usePermissions } from "@/hooks/usePermissions";
 import { ApiError } from "@/lib/api-client";
+import { listBranches } from "@/lib/branches-api";
 import { listRoles } from "@/lib/roles-api";
 import { inviteUser } from "@/lib/users-api";
 import {
@@ -48,6 +49,18 @@ export function InviteUserDialog() {
     queryFn: listRoles,
     // Nothing to fetch until the owner opens the dialog.
     enabled: open && allowed,
+  });
+
+  // The branch picker is a *secondary* read: `POST /users/invite` does not
+  // require `agency:branches:read`, so a caller who can invite but cannot list
+  // branches must still get a working form — hence its own gate here rather
+  // than being folded into `allowed`, and `retry: false` so a 403 fails once
+  // instead of three times before the picker disappears.
+  const branchesQuery = useQuery({
+    queryKey: ["branches"],
+    queryFn: listBranches,
+    enabled: open && allowed && can("agency:branches:read"),
+    retry: false,
   });
 
   const mutation = useMutation({
@@ -94,6 +107,22 @@ export function InviteUserDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // Preselect the agency's default branch — most invitees belong to it, and an
+  // empty picker would quietly recreate the branchless users this replaced.
+  // Declared *after* the reset effect so the two fire in that order on a
+  // reopen where the branch list is already cached; guarded on the current
+  // value so a re-render can't overwrite a choice the owner has made.
+  const branches = branchesQuery.data;
+  useEffect(() => {
+    if (!open || !branches?.length) return;
+    if (form.state.values.branchId) return;
+    // The API sorts `isDefault` first, but the fallback is what keeps this
+    // honest for agencies predating the default-branch fix, which have none.
+    const preferred = branches.find((b) => b.isDefault) ?? branches[0];
+    form.setFieldValue("branchId", preferred._id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, branches]);
+
   if (!allowed) return null;
 
   // `triggerLabel` keeps the closed select to the role's name. The description
@@ -112,6 +141,12 @@ export function InviteUserDialog() {
     ) : (
       role.name
     ),
+  }));
+
+  const branchOptions = (branches ?? []).map((branch) => ({
+    value: branch._id,
+    label: branch.isDefault ? `${branch.name} (default)` : branch.name,
+    triggerLabel: branch.name,
   }));
 
   return (
@@ -198,6 +233,33 @@ export function InviteUserDialog() {
               <p className="text-sm text-destructive">
                 Could not load roles — {(rolesQuery.error as Error).message}
               </p>
+            )}
+
+            {/*
+              Rendered only once there is something to choose from. A failed or
+              forbidden `GET /branches` leaves no picker and no error copy — the
+              invite still works, it just creates a branchless user, and nothing
+              here is something the owner could act on.
+
+              In practice this branch is unreachable: `agency:users:write` is
+              owner-only and the owner template carries every agency permission.
+              It matters because there is still **no UI that changes a user's
+              branch after the invite**, so silently skipping the picker would
+              be a dead end rather than a delay.
+            */}
+            {branchOptions.length > 0 && (
+              <form.AppField name="branchId">
+                {(f) => (
+                  <f.SelectField
+                    label="Branch"
+                    options={branchOptions}
+                    placeholder="Select a branch"
+                    description="Where they work. Defaults to the agency's main branch."
+                    triggerClassName="w-full bg-card border-border"
+                    contentClassName="max-w-[var(--radix-select-trigger-width)]"
+                  />
+                )}
+              </form.AppField>
             )}
 
             <DialogFooter>

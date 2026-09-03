@@ -1,0 +1,68 @@
+meta {
+  name: List Branches (for the invite picker)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/branches
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+script:post-response {
+  // The default branch is what the invite dialog preselects, so that is what
+  // this chains into **Invite User**. Falling back to the first row keeps the
+  // run green against an agency created before default branches existed.
+  if (res.getStatus() === 200) {
+    const branches = res.getBody();
+    const preferred = branches.find((b) => b.isDefault) ?? branches[0];
+    if (preferred) {
+      bru.setVar("inviteBranchId", preferred._id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns at least one branch", function () {
+    expect(res.getBody().length).to.be.greaterThan(0);
+  });
+
+  test("the default branch sorts first", function () {
+    // The API sorts `isDefault: -1, name: 1`; the picker relies on that rather
+    // than re-sorting client-side.
+    const branches = res.getBody();
+    if (branches.some((b) => b.isDefault)) {
+      expect(branches[0].isDefault).to.equal(true);
+    }
+  });
+}
+
+docs {
+  # GET /branches — the invite form's branch picker
+
+  Not a new endpoint; listed here because it populates the **Branch** select on
+  the invite dialog at `/settings/users`, and because **Invite User** needs a
+  real branch id to send.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:branches:read`
+  (Agency Owner, Branch Manager). A producer or CSR gets `403`.
+
+  **Response `200`** — `Branch[]`: `_id`, `agencyId`, `name`, `slug`,
+  `isDefault`, optional `address`, `settings`. Sorted **default first, then by
+  name** — the picker preselects `isDefault` and does not re-sort.
+
+  > Note this permission is **not** required by `POST /users/invite`. A caller
+  > allowed to invite can still be refused this list, and the dialog handles
+  > that by dropping the picker and sending no `branchId`. Every role that can
+  > invite holds `agency:branches:read` today, which is just as well: there is
+  > no endpoint that changes a user's branch after the invite, so a branchless
+  > user stays branchless.
+}

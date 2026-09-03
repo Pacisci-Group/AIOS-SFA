@@ -968,6 +968,25 @@ describe('SFA API (e2e)', () => {
       const created = await userModel.findOne({ email }).lean();
       expect(created?.isActive).toBe(false);
       expect(created?.inviteToken).toBeTruthy();
+      // The dialog's branch picker sends this; it has to actually land on the
+      // row, since nothing re-derives it later.
+      expect(created?.branchId?.toString()).toBe(seed.branchId);
+    });
+
+    it('POST /users/invite — rejects a branch outside the agency', async () => {
+      // `InviteUserDto` only checks that `branchId` is a well-formed id, so
+      // without the service-side ownership check this would place a new
+      // employee in another tenant's branch — permanently, and silently.
+      const res = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({
+          email: freshEmail(),
+          roleIds: [seed.producerRoleId],
+          branchId: new Types.ObjectId().toString(),
+        })
+        .expect(400);
+      expect((res.body as { message: string }).message).toMatch(/branch/i);
     });
 
     it('POST /users/invite — forbidden for a CSR', async () => {
