@@ -75,3 +75,47 @@ export interface PolicyView extends PolicySummary {
   /** Null when the policy has no household, or it is out of the caller's scope. */
   household: HouseholdSummary | null;
 }
+
+/**
+ * Why a household appeared in a `GET /households` result.
+ *
+ * The Clients search spans three collections, so a row's own name frequently
+ * matches nothing the caller typed — searching a policy number returns the
+ * household that owns it, and searching a child's date of birth returns the
+ * household they belong to. Without this the result list reads as broken, so
+ * the row renders the record that actually matched.
+ *
+ * Only ever set for a match the row cannot already show: a member, their date
+ * of birth, or a policy. A household matched on its own name or reference
+ * leaves this `null`, because those are printed in the row's first column and
+ * restating them would be noise.
+ */
+export interface HouseholdMatch {
+  field: 'member' | 'dateOfBirth' | 'policy';
+  /** Already formatted for display, e.g. `Jane Doe` or `AS-1234567`. */
+  value: string;
+}
+
+/** One row of the Clients list, from `GET /households`. */
+export interface HouseholdListRow extends HouseholdSummary {
+  /** The `HH-2614` a producer reads aloud. Null until a backfill numbers it. */
+  householdRef: string | null;
+  primaryEmail: string | null;
+  primaryPhone: string | null;
+  /** From the household's property address, falling back to the mailing one. */
+  city: string | null;
+  state: string | null;
+  assignedCrmId: string | null;
+  /** ISO timestamp, or null. */
+  updatedAt: string | null;
+  matchedOn: HouseholdMatch | null;
+}
+
+/** Paginated envelope for `GET /households`, mirroring `LeadListResponse`. */
+export interface HouseholdListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: HouseholdListRow[];
+}

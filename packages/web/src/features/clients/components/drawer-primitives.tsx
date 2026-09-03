@@ -67,13 +67,39 @@ export function shortDate(iso: string | null | undefined) {
   });
 }
 
-/** Render a stored address object as a single line. */
+/**
+ * Render a stored address object as a single line.
+ *
+ * Each part accepts every key the three writers use, because
+ * `households.propertyAddress` is an untyped `Record<string, unknown>` and they
+ * never agreed on names — lead intake writes `street/city/state/zip`, the demo
+ * seed `line1/...`, and the SmartSuite migration `location_*`. The API's
+ * `normalizeStoredAddress` (`common/address/household-address.ts`) documents the
+ * same table and is the reason the Quote Recap form works; `GET /households/:id`
+ * is the one read path that returns the raw object instead, so the coercion has
+ * to happen here.
+ *
+ * `postalCode` was the original bug: it is not a key **any** writer produces, and
+ * `line1` only matches the demo seed — so a migrated household matched nothing at
+ * all and the drawer rendered a bare em-dash.
+ */
+const ADDRESS_KEYS = [
+  ['street', 'line1', 'location_address'],
+  ['city', 'location_city'],
+  ['state', 'location_state'],
+  ['zip', 'postalCode', 'location_zip'],
+];
+
 export function addressLine(
   address: Record<string, unknown> | null | undefined,
 ) {
   if (!address) return '—';
-  const parts = ['line1', 'city', 'state', 'postalCode']
-    .map((key) => address[key])
-    .filter((v): v is string => typeof v === 'string' && v.length > 0);
+  const parts = ADDRESS_KEYS.map((keys) => {
+    for (const key of keys) {
+      const value = address[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+  }).filter(Boolean);
   return parts.length ? parts.join(', ') : '—';
 }

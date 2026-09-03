@@ -1,0 +1,118 @@
+meta {
+  name: Get Bug Report
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/platform/bug-reports/{{bugReportId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the full description and the captured context", function () {
+    const body = res.getBody();
+    expect(body.description).to.contain("Motivation Hub");
+    expect(body.context.route).to.equal("/dashboard/producer");
+    expect(body.context.viewport.width).to.equal(1512);
+    expect(body.context.theme).to.equal("dark");
+  });
+
+  test("screenshots come back signed, with no storage key", function () {
+    const shot = res.getBody().screenshots[0];
+    expect(shot).to.have.property("id");
+    expect(shot).to.have.property("url");
+    expect(shot).to.not.have.property("key");
+    expect(res.getBody().screenshotUrlExpiresIn).to.be.a("number");
+  });
+
+  test("size is what storage reported, not what the client declared", function () {
+    // `Create Bug Report` declared 20480; the upload was a short text stand-in.
+    expect(res.getBody().screenshots[0].size).to.not.equal(20480);
+  });
+}
+
+docs {
+  # GET /platform/bug-reports/:id — one report in full
+
+  Everything the detail sheet renders: the description, the captured browser
+  context, the screenshots, and the triage state.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:bugs:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Screenshots are signed here, and expire
+
+  Each screenshot comes back with a short-lived **inline** presigned GET — so
+  the page renders it straight into an `<img>` and clicking opens it in the
+  browser's own viewer. The storage key never crosses the wire in either
+  direction; the client identifies a screenshot by its subdocument `id`.
+
+  `screenshotUrlExpiresIn` (300s by default, from
+  `STORAGE_DOWNLOAD_URL_TTL_SECONDS`) is echoed so the client can keep its cache
+  staleness under it — `BugReportDetailSheet` pins `staleTime` to 120s for
+  exactly this reason. A sheet reopened after the TTL re-signs rather than
+  rendering broken images.
+
+  `contentType` is overridden on the signed URL: an image stored as
+  `application/octet-stream` downloads instead of rendering, whatever the
+  disposition says.
+
+  ## The size assertion above
+
+  `size` is read from `HeadObject` at create time, not from the request body —
+  which is why it does not match the `20480` the presign and create bodies
+  declared. That is the whole point: a presigned PUT signs only the content
+  type, so a declared size is a claim about a file the API has never seen.
+
+  ## Response `200`
+  ```json
+  {
+    "id": "68f3…c21",
+    "status": "new",
+    "severity": "high",
+    "description": "The leaderboard still shows…",
+    "reporterName": "Casey Rivera",
+    "reporterEmail": "producer@demoagency.local",
+    "agencyId": "68a1…f09",
+    "agencyName": "Demo Agency",
+    "context": {
+      "url": "http://localhost:5173/dashboard/producer?range=month",
+      "route": "/dashboard/producer",
+      "userAgent": "Mozilla/5.0 …",
+      "viewport": { "width": 1512, "height": 916 },
+      "theme": "dark"
+    },
+    "screenshots": [{
+      "id": "68f3…c22",
+      "filename": "leaderboard-stale.png",
+      "contentType": "image/png",
+      "size": 33,
+      "url": "http://localhost:9000/sfa-uploads/…&response-content-disposition=inline…"
+    }],
+    "screenshotUrlExpiresIn": 300,
+    "screenshotCount": 1,
+    "internalNotes": null,
+    "statusUpdatedAt": null,
+    "statusUpdatedByName": null,
+    "createdAt": "2026-09-01T14:22:07.113Z",
+    "updatedAt": "2026-09-01T14:22:07.113Z"
+  }
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — missing `platform:bugs:read`.
+  - `404 Not Found` — no such report, **and** any malformed id: an invalid
+    ObjectId is a 404 rather than a 400, so probing tells an attacker nothing.
+}

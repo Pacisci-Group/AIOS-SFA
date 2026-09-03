@@ -170,9 +170,21 @@ export function PriorityTicketQueue({
                 style={{ backgroundColor: sla.color }}
               />
 
-              <div className="flex-1 px-4 py-3.5">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
+              {/*
+                `min-w-0` on all three of these, not just the innermost one.
+                A flex item's automatic minimum size is content-based unless its
+                `overflow` is non-visible, so any one of these left at the
+                default `min-width: auto` refuses to shrink and widens the whole
+                row past the card — which is what put the last-touch note (and
+                the "— 2h ago" after it) outside the clipped edge. The `truncate`
+                further down cannot ellipsise against a width that never got
+                constrained. `overflow-hidden` on the text column is the backstop:
+                the two unshrinkable header spans (policy number, badges) can no
+                longer spill either.
+              */}
+              <div className="min-w-0 flex-1 px-4 py-3.5">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 overflow-hidden">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xs text-muted-foreground font-mono">{ticket.policyNumber || ticket.id.slice(-6)}</span>
                       <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${sla.bg} ${sla.text}`}>
@@ -188,8 +200,8 @@ export function PriorityTicketQueue({
                       <span className="text-muted-foreground font-normal">{ticket.ticketType}</span>
                     </div>
                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Clock size={10} />
-                      <span className="truncate">{ticket.lastTouch}</span>
+                      <Clock size={10} className="flex-shrink-0" />
+                      <span className="min-w-0 truncate">{ticket.lastTouch}</span>
                       <span className="text-white/20 flex-shrink-0">—</span>
                       <span className="flex-shrink-0">{ticket.lastTouchTime}</span>
                     </div>

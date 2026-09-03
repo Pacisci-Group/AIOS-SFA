@@ -74,6 +74,15 @@ docs {
     preview → resend → revoke. Logs in as the **owner** first and uses that token
     explicitly, because the collection-level bearer is the producer, who holds
     none of the `agency:users:*` permissions these need.
+  - **Bug Reports** — the floating "Report a bug" widget: presign → PUT →
+    create, plus the two negative cases. The only authenticated write in the API
+    that requires **no permission at all**; see `Presign Screenshot`'s docs for
+    why, and `Platform Bug Reports/List Bug Reports (Producer Rejected)` for the
+    other half of that trade.
+  - **Platform Bug Reports** — the Super Admin queue that reads them
+    (`platform:bugs:read` / `:write`). Self-contained: it logs in as the super
+    admin itself, because it sorts **before** `Platform Mailers` and so cannot
+    rely on that folder's login.
 
   > `GET /auth/invite/:token` is an `auth/*` route but lives under **Users**, for
   > the same ordering reason as activity logging (below): in the **Auth** folder
@@ -97,6 +106,12 @@ docs {
   Running requests by hand, the natural order is `Auth › Login` → `Leads ›
   Create Lead` → `Create Lead (Replay)` → `Share Links › Create Share Link` →
   `Public Intake › *`.
+
+  **Bug Reports** and **Platform Bug Reports** lean on that same alphabetical
+  walk, twice over: `Bug Reports` sorts after `Auth` so it has an `accessToken`,
+  and `Platform Bug Reports` sorts after `Bug Reports` so `bugReportId` — set by
+  `Create Bug Report` with `bru.setVar` — is live by the time the queue reads it.
+  Neither folder can be renamed without checking that still holds.
 
   **Users** is self-contained and idempotent: it logs in, invites a
   freshly-generated address, and revokes it again, so it can be re-run

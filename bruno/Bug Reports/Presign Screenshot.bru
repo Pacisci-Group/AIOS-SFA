@@ -1,0 +1,110 @@
+meta {
+  name: Presign Screenshot
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/bug-reports/screenshots/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "leaderboard-stale.png",
+    "contentType": "image/png",
+    "size": 20480
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("bugScreenshotKey", res.getBody().key);
+    bru.setVar("bugScreenshotUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a presigned PUT URL and a server-minted key", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("key");
+    expect(body).to.have.property("uploadUrl");
+    expect(body).to.have.property("expiresIn");
+    expect(body.requiredHeaders["Content-Type"]).to.equal("image/png");
+  });
+
+  test("the key is namespaced to the caller, not just their agency", function () {
+    // `agencies/<agencyId>/bug-reports/<userId>/…` — the user segment is what
+    // stops one member of an agency attaching a colleague's upload.
+    expect(res.getBody().key).to.match(/^agencies\/[0-9a-f]{24}\/bug-reports\/[0-9a-f]{24}\//);
+  });
+}
+
+docs {
+  # POST /bug-reports/screenshots/presign — step 1 of 3
+
+  Issues a short-lived **presigned PUT URL** so the browser uploads a screenshot
+  straight to object storage. The bytes never pass through the API — there is no
+  multer and no `FileInterceptor` anywhere in this codebase, and none should be
+  added. Same chain as `Quote Recaps/Presign Quote Document` and
+  `Platform Mailers/Presign Import`.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** **none** — see below
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Why no permission at all
+
+  This is the only authenticated write in the API that declares none. The people
+  most likely to hit a bug are the ones whose page just 403'd, so gating the
+  reporter on a module permission would silence exactly them. `@SkipTenant()` /
+  `@SkipBranch()` are there so a **platform operator** — who has no agency and
+  would otherwise be rejected by `TenantGuard` with "Agency context required" —
+  can report a bug in the Super Admin panel.
+
+  Reading the queue is what is gated: `platform:bugs:read`, in
+  **Platform Bug Reports**.
+
+  The abuse bound is the rate limit instead — `BUG_REPORT_RATE_LIMIT × 6` per
+  minute on this route (six presigns per report, so a mis-picked file and a
+  retry never lock someone out of submitting).
+
+  ## Body
+  | field       | type   | rules                                          |
+  |-------------|--------|------------------------------------------------|
+  | filename    | string | 1–255 chars                                    |
+  | contentType | enum   | `image/png` \| `image/jpeg` \| `image/webp` \| `image/gif` |
+  | size        | int    | > 0, ≤ 10 MB                                   |
+
+  Narrower than the mailer CSV rule on purpose: every source of a screenshot (a
+  file picker, a drag, a clipboard paste) reports a real `image/*` type, so
+  widening it would only let non-images through.
+
+  ## Response `201`
+  ```json
+  {
+    "key": "agencies/<agencyId>/bug-reports/<userId>/2026/<uuid>-leaderboard-stale.png",
+    "uploadUrl": "http://localhost:9000/sfa-uploads/agencies/...",
+    "requiredHeaders": { "Content-Type": "image/png" },
+    "expiresIn": 300
+  }
+  ```
+
+  The key is **server-generated** and namespaced to the caller; `Create Bug
+  Report` re-checks that prefix, so a key belonging to someone else is rejected.
+
+  ## Errors
+  - `400 Bad Request` — bad content type, or over 10 MB.
+  - `401 Unauthorized` — missing/expired token.
+  - `429 Too Many Requests` — over the per-minute limit.
+  - `503 Service Unavailable` — object storage is not configured.
+}

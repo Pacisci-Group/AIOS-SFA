@@ -13,6 +13,11 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 |---|---|---|---|
 | Auth | Login | `POST /auth/login` | Public. Captures tokens into the env. |
 | Auth | Refresh Token | `POST /auth/refresh` | Public. Rotates the token pair. |
+| Bug Reports | Presign Screenshot | `POST /bug-reports/screenshots/presign` | Screenshot upload URL. **No permission** — any authenticated caller, including a platform operator with no agency. |
+| Bug Reports | Upload Screenshot | `PUT <uploadUrl>` | Raw PUT straight to storage. `auth: none` by design. |
+| Bug Reports | Create Bug Report | `POST /bug-reports` | File a report. **No permission.** Captures `bugReportId` for the platform folder. |
+| Bug Reports | Create Bug Report (Too Short) | `POST /bug-reports` | The 10-char description floor (400). |
+| Bug Reports | Create Bug Report (Foreign Screenshot Key) | `POST /bug-reports` | The key-ownership check: a key from another user's namespace must 400. |
 | Deal Audits | List Deal Audits | `GET /deal-audits` | **PAC-12** — Deals Pending Service Hand-off (read). `deal_audits:read`. |
 | Deal Audits | Presign Audit Attachment | `POST /deal-audits/:itemId/attachments/presign` | **PAC-14** — resolution document upload. `deal_audits:write`. |
 | Deal Audits | Resolve Deal Audit Item | `PATCH /deal-audits/:itemId/resolve` | **PAC-14** — resolve + optional note/document. `deal_audits:write`. |
@@ -53,6 +58,12 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Platform Agencies | Get / Accept Owner Invite (Public) | `GET /auth/invite/:token`, `POST /auth/accept-invite` | **PAC-69** — the owner's half: preview carries `firstName`/`lastName`/`agencySetupPending`, accept takes optional name corrections. `auth: none`. |
 | Platform Agencies | Get / Complete Agency Setup | `GET`/`POST /agency/setup…` | **PAC-69** — the owner's first-run wizard state. `agency:branding:read` / `:write`. `complete` is idempotent. |
 | Platform Agencies | Check Availability (After Onboarding) | `GET /platform/agencies/availability` | **PAC-69** — the same query, now answering "taken". Paired with the first so neither depends on which agencies happen to exist locally. |
+| Platform Bug Reports | Login as Super Admin | `POST /auth/login` | Its own copy — this folder sorts **before** `Platform Mailers`, so it cannot rely on that one's login. Pins that a new `PlatformPermission` member reaches the super admin with no seed step. |
+| Platform Bug Reports | List Bug Reports | `GET /platform/bug-reports` | The Super Admin queue, cross-tenant. `platform:bugs:read`. |
+| Platform Bug Reports | Get Bug Report | `GET /platform/bug-reports/:id` | One report + signed inline screenshot URLs. `platform:bugs:read`. |
+| Platform Bug Reports | Update Bug Report | `PATCH /platform/bug-reports/:id` | Status + internal notes. `platform:bugs:write`. |
+| Platform Bug Reports | Update Bug Report (Empty Body) | `PATCH /platform/bug-reports/:id` | A PATCH that changes nothing must 400, not silently succeed. |
+| Platform Bug Reports | List Bug Reports (Producer Rejected) | `GET /platform/bug-reports` | The boundary: anyone may **file**, only the platform may **read** (403). |
 | Platform Mailers | Login as Super Admin | `POST /auth/login` | **PAC-73** — the platform operator (`admin@sfa.local`). Captures `platformAccessToken` separately: a platform account holds no module permissions, so it would 403 every other folder. |
 | Platform Mailers | List Agencies | `GET /platform/agencies` | **PAC-73** — the Add Mailers agency picker. `platform:agencies:read`. Selects by slug, not `[0]` — the list has no guaranteed order. |
 | Platform Mailers | Presign Import | `POST /platform/mailers/imports/presign` | **PAC-73** — RTP upload URL. `platform:mailers:write`. |

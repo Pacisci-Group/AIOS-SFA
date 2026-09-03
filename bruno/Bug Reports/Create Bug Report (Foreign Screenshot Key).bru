@@ -1,0 +1,62 @@
+meta {
+  name: Create Bug Report (Foreign Screenshot Key)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/bug-reports
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "description": "Attempting to attach a screenshot from someone else's namespace.",
+    "screenshots": [
+      {
+        "key": "agencies/000000000000000000000000/bug-reports/000000000000000000000001/2026/forged-screenshot.png",
+        "filename": "forged-screenshot.png",
+        "contentType": "image/png",
+        "size": 1024
+      }
+    ]
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("rejects on the key, not on anything else in the body", function () {
+    expect(JSON.stringify(res.getBody())).to.contain("document key");
+  });
+}
+
+docs {
+  # POST /bug-reports — the screenshot-key ownership check
+
+  The security assertion for this feature. A client hands back whatever key the
+  presign gave it, so without a server-side check it could hand back **any** key
+  it knew of — including one belonging to another agency — and have that image
+  attached to its own report and rendered in the Super Admin queue.
+
+  `StorageService.assertKeyOwnership` is the inverse of `buildObjectKey`: the
+  key's leading segments are fixed (`agencies/<agencyId>/bug-reports/<userId>/`),
+  so a prefix test is exact. The `purpose` includes the **user id**, not just the
+  agency, which is what stops one member of an agency attaching a colleague's
+  upload — a weaker check than this one would still pass an intra-tenant forge.
+
+  Rejected before `HeadObject` is called, so a forged key reveals nothing about
+  whether that object exists.
+
+  ## Response `400`
+  ```json
+  { "statusCode": 400, "message": "Invalid document key." }
+  ```
+}

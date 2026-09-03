@@ -243,6 +243,15 @@ export function CreateTicketDialog({
 
   const [policyId, setPolicyId] = useState<string | null>(null);
   const [householdId, setHouseholdId] = useState<string | null>(null);
+  /**
+   * The household the selected policy belongs to, carried as a whole option.
+   *
+   * Selecting a policy fills the Household picker, but that picker renders only
+   * what the *household* search returned — and the user searching for a policy
+   * has typically never run one. Without the label the auto-filled household
+   * shows as the empty placeholder while still being submitted.
+   */
+  const [policyHousehold, setPolicyHousehold] = useState<Option | null>(null);
   const [category, setCategory] = useState<ServiceTicketCategory | "">("");
   const [assignedUserId, setAssignedUserId] = useState<string | null>(null);
   const [status, setStatus] = useState<ServiceTicketStatus>(DEFAULT_STATUS);
@@ -302,17 +311,26 @@ export function CreateTicketDialog({
   const householdOptions: Option[] = useMemo(
     () =>
       pinOption(
-        (householdsQuery.data ?? []).map((h) => ({
-          value: h.id,
-          label: h.name ?? h.primaryContactName ?? "Unnamed household",
-          hint: h.totalActivePolicies
-            ? `${h.totalActivePolicies} active`
-            : undefined,
-        })),
-        prefill?.householdId,
-        prefill?.householdLabel,
+        pinOption(
+          (householdsQuery.data ?? []).map((h) => ({
+            value: h.id,
+            label: h.name ?? h.primaryContactName ?? "Unnamed household",
+            hint: h.totalActivePolicies
+              ? `${h.totalActivePolicies} active`
+              : undefined,
+          })),
+          prefill?.householdId,
+          prefill?.householdLabel,
+        ),
+        policyHousehold?.value,
+        policyHousehold?.label,
       ),
-    [householdsQuery.data, prefill?.householdId, prefill?.householdLabel],
+    [
+      householdsQuery.data,
+      prefill?.householdId,
+      prefill?.householdLabel,
+      policyHousehold,
+    ],
   );
 
   // The CRM list is small, so it is fetched once and filtered in the browser.
@@ -335,6 +353,9 @@ export function CreateTicketDialog({
     if (!open) return;
     setHouseholdId(prefill?.householdId ?? null);
     setPolicyId(prefill?.policyId ?? null);
+    // The prefill carries its own household label; a pin left over from the
+    // previous ticket would name a client this one has nothing to do with.
+    setPolicyHousehold(null);
   }, [open, prefill?.householdId, prefill?.policyId]);
 
   // The CRM is seeded separately, and only once the assignee list can name it:
@@ -351,9 +372,39 @@ export function CreateTicketDialog({
     }
   }, [open, prefill?.assignedUserId, assigneesQuery.data]);
 
+  /**
+   * Selecting a policy also fills in the household that owns it.
+   *
+   * A ticket's policy and household are not independent choices — the policy
+   * belongs to exactly one client, so making the user find that client again in
+   * a second picker is busywork with a wrong answer available. It overwrites a
+   * household already chosen by hand: the policy's owner is the record of
+   * truth, and the alternative is submitting a ticket that links a policy to a
+   * household that does not own it.
+   *
+   * A policy with no household (the import left some unlinked) leaves the
+   * picker alone rather than clearing it.
+   */
+  const handlePolicyChange = (next: string | null) => {
+    setPolicyId(next);
+    if (!next) return;
+
+    const policy = (policiesQuery.data ?? []).find((p) => p.id === next);
+    if (!policy?.householdId || policy.householdId === householdId) return;
+
+    setPolicyHousehold({
+      value: policy.householdId,
+      label: policy.householdName ?? "Linked household",
+    });
+    // Deliberately not the picker's `onChange`: that clears the policy in
+    // restricted mode, which would undo the selection that got us here.
+    setHouseholdId(policy.householdId);
+  };
+
   const resetForm = () => {
     setPolicyId(null);
     setHouseholdId(null);
+    setPolicyHousehold(null);
     setCategory("");
     setAssignedUserId(null);
     setStatus(DEFAULT_STATUS);
@@ -425,14 +476,14 @@ export function CreateTicketDialog({
               id="ticket-policy"
               options={policyOptions}
               value={policyId}
-              onChange={setPolicyId}
+              onChange={handlePolicyChange}
               onSearch={setPolicyTerm}
               placeholder={
                 restrictPolicyToHousehold && !householdId
                   ? "Pick a household first…"
                   : "Search a policy…"
               }
-              searchPlaceholder="Policy number, type, or carrier"
+              searchPlaceholder="Policy number, type, carrier, or client"
               emptyLabel={
                 restrictPolicyToHousehold
                   ? "This household has no matching policies."

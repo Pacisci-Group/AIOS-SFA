@@ -37,7 +37,7 @@ import { Policy, PolicySchema } from '../../policies/schemas/policy.schema';
 import {
   ServiceTicket,
   ServiceTicketSchema,
-} from '../../service-tickets/schemas/service-ticket.schema';
+} from '../../crm/schemas/service-ticket.schema';
 import {
   DealAudit,
   DealAuditSchema,

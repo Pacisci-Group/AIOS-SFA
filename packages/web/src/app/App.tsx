@@ -12,6 +12,7 @@ import { SETTINGS_PERMISSIONS } from '@/features/settings/settings-sections';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
+import { ReportBugWidget } from '@/features/bug-report/ReportBugWidget';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -32,6 +33,9 @@ const TicketWorkspacePage = lazy(
 );
 const ArchivedTicketsPage = lazy(
   () => import('@/features/tickets/ArchivedTicketsPage'),
+);
+const HouseholdsListPage = lazy(
+  () => import('@/features/household/HouseholdsListPage'),
 );
 const HouseholdDetailsPage = lazy(
   () => import('@/features/household/HouseholdDetailsPage'),
@@ -81,6 +85,9 @@ const PlatformUsersPage = lazy(
 );
 const ImpersonateHandoffPage = lazy(
   () => import('@/pages/ImpersonateHandoffPage')
+);
+const BugReportsPage = lazy(
+  () => import('@/features/platform/BugReportsPage'),
 );
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
@@ -169,7 +176,7 @@ function RoleLanding() {
     return <Navigate to="/crm/service" replace />;
   }
   if (canRead(ModuleKey.Clients)) {
-    return <Navigate to="/clients/demo" replace />;
+    return <Navigate to="/clients" replace />;
   }
   if (canRead(ModuleKey.Leads)) {
     return <Navigate to="/leads" replace />;
@@ -337,6 +344,18 @@ export function App() {
                   <RequirePermission permission={`${ModuleKey.Clients}:read`} />
                 }
               >
+                {/* The Clients list (PAC-89). `clients:read` only — unlike
+                    `/clients/:id` below, which a CSR also reaches from a ticket.
+                    That split mirrors the API: the index requires
+                    `clients:read`, the record accepts either page permission. */}
+                <Route
+                  path="/clients"
+                  element={
+                    <LazyPage>
+                      <HouseholdsListPage />
+                    </LazyPage>
+                  }
+                />
                 <Route
                   path="/clients/demo"
                   element={
@@ -692,6 +711,28 @@ export function App() {
                     }
                   />
                 </Route>
+                {/* The queue gates on `:read`; the status/notes controls on it
+                    call a `:write` endpoint, so an operator holding only read
+                    can open the page and will be refused on save. Every
+                    platform admin holds both (`ALL_PLATFORM_PERMISSIONS`), so
+                    that split only matters if the permission is ever narrowed. */}
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={PlatformPermission.BugsRead}
+                      redirectTo="/admin"
+                    />
+                  }
+                >
+                  <Route
+                    path="/admin/bugs"
+                    element={
+                      <LazyPage>
+                        <BugReportsPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
               </Route>
             </Route>
 
@@ -771,6 +812,13 @@ export function App() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+
+          {/* Inside `BrowserRouter` but outside `Routes`: it renders on every
+              signed-in surface (tenant pages, the Super Admin panel, the dev
+              navigator) without any of them having to mount it, and it needs a
+              router context to record which page a report came from. It renders
+              nothing when signed out. */}
+          <ReportBugWidget />
           </BrowserRouter>
           {/* `sonner` was installed but never mounted, so `toast()` silently
               no-opped. Used by the share-link dialog's copy action. */}
