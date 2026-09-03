@@ -48,7 +48,15 @@ export default function ProfilePage() {
   const displayName = user.name?.trim() || user.email;
 
   return (
-    <SettingsPage title="My profile" caption="Your account" icon={UserRound}>
+    <SettingsPage
+      title="My profile"
+      caption="Your account"
+      icon={UserRound}
+      // Personal, not the workspace's: this page is reached from the sidebar's
+      // user chip, so its back arrow goes home rather than into Workspace
+      // Settings — which is where the shared shell now points by default.
+      backTo="/"
+    >
       <div className="space-y-6">
         <PhotoCard
           displayName={displayName}
@@ -158,7 +166,7 @@ function PhotoCard({
               disabled={busy}
               onClick={() => inputRef.current?.click()}
             >
-              <Upload size={14} />
+              <Upload className="size-4" />
               {avatarUrl ? 'Replace' : 'Upload'}
             </Button>
             {avatarUrl && (
@@ -169,7 +177,7 @@ function PhotoCard({
                 onClick={() => remove.mutate()}
                 className="text-muted-foreground hover:text-destructive"
               >
-                <Trash2 size={14} />
+                <Trash2 className="size-4" />
                 Remove
               </Button>
             )}

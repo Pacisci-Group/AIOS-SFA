@@ -170,11 +170,13 @@ export function SidebarBody({
   onNavigate,
 }: SidebarBodyProps) {
   const { user, logout } = useAuth();
-  const { canRead, can } = usePermissions();
+  const { canRead, can, canAny } = usePermissions();
   const navigate = useNavigate();
 
   const isVisible = (item: NavItem) => {
     if (item.permission) return can(item.permission);
+    // A hub entry is visible when *any* of the pages behind it is.
+    if (item.anyOf) return canAny(item.anyOf);
     if (item.module) return canRead(item.module);
     return true;
   };

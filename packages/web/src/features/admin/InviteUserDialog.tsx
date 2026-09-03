@@ -153,7 +153,7 @@ export function InviteUserDialog() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="brand" size="sm" className="gap-1.5">
-          <UserPlus size={14} />
+          <UserPlus className="size-4" />
           Invite user
         </Button>
       </DialogTrigger>
@@ -273,7 +273,7 @@ export function InviteUserDialog() {
               </Button>
               <Button type="submit" disabled={mutation.isPending}>
                 {mutation.isPending && (
-                  <Loader2 size={14} className="animate-spin" />
+                  <Loader2 className="size-4 animate-spin" />
                 )}
                 Send invite
               </Button>

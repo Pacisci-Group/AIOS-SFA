@@ -110,7 +110,7 @@ export default function RolePermissionsPage() {
 
   if (!rolesQuery.data?.length || !selectedRole) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-background text-slate-400 text-sm">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-background text-muted-foreground text-sm">
         <p>No roles found for this agency.</p>
         <Link to="/" className="text-primary">
           Back to navigator
@@ -149,7 +149,7 @@ export default function RolePermissionsPage() {
         onClick={() => setCreateOpen(true)}
         className="text-muted-foreground hover:text-foreground"
       >
-        <Plus size={16} />
+        <Plus className="size-4" />
       </Button>
 
       {/*
@@ -169,7 +169,7 @@ export default function RolePermissionsPage() {
               onClick={() => setConfirmDelete(true)}
               className="text-muted-foreground hover:text-destructive"
             >
-              <Trash2 size={16} />
+              <Trash2 className="size-4" />
             </Button>
           </span>
         </TooltipTrigger>

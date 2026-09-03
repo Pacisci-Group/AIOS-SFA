@@ -163,7 +163,7 @@ export function ImageSlot({
             disabled={busy}
             onClick={() => inputRef.current?.click()}
           >
-            <Upload size={14} />
+            <Upload className="size-4" />
             {hasImage ? 'Replace' : 'Upload'}
           </Button>
           {hasImage && (
@@ -174,7 +174,7 @@ export function ImageSlot({
               onClick={onRemove}
               className="text-muted-foreground hover:text-destructive"
             >
-              <Trash2 size={14} />
+              <Trash2 className="size-4" />
               Remove
             </Button>
           )}

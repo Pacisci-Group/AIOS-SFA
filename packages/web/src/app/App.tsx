@@ -8,6 +8,7 @@ import { UnknownHostPage } from '@/pages/UnknownHostPage';
 import { ThemeProvider } from '@/app/ThemeProvider';
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/layout/ProtectedRoute';
 import { RequirePermission } from '@/components/layout/RequirePermission';
+import { SETTINGS_PERMISSIONS } from '@/features/settings/settings-sections';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -85,6 +86,9 @@ const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
 const ProfilePage = lazy(() => import('@/features/settings/ProfilePage'));
+const WorkspaceSettingsPage = lazy(
+  () => import('@/features/settings/WorkspaceSettingsPage'),
+);
 const UserPermissionsPage = lazy(
   () => import('@/features/admin/UserPermissionsPage'),
 );
@@ -457,6 +461,29 @@ export function App() {
                   element={
                     <LazyPage>
                       <PolicyTransferPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/*
+                The workspace-settings hub — the single sidebar entry that
+                replaced the five-row Administration section.
+
+                `anyOf` over every section's read permission, not the owner
+                capability: the page is a list of separately-gated links, so
+                anyone who can reach one of them should be able to reach the
+                list. `SETTINGS_SECTIONS` is the one place that list lives, and
+                each section's own route keeps its own gate below.
+              */}
+              <Route
+                element={<RequirePermission anyOf={SETTINGS_PERMISSIONS} />}
+              >
+                <Route
+                  path="/settings"
+                  element={
+                    <LazyPage>
+                      <WorkspaceSettingsPage />
                     </LazyPage>
                   }
                 />
