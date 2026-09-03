@@ -23,6 +23,10 @@ agencyops/
 # Read-only reference to the sfaforms prototype (see .claude/rules/sfaforms-reference.md)
 /sfaforms
 sfaforms/
+# Read-only reference to ApexReports, Apex Agency's ops/reporting portal
+# (see .claude/rules/apex-mail-companion-reference.md)
+/apex-mail-companion
+apex-mail-companion/
 
 # Claude Code — personal, machine-local config (.claude/rules/ IS committed)
 .claude/settings.local.json

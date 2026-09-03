@@ -8,10 +8,13 @@ imported below. Path-scoped and always-on rules live in `.claude/rules/`.
 ## Claude Code specifics
 
 - **Rules** (`.claude/rules/`) are the modular instruction files for this repo:
-  - `legacy-sfa-reference.md` + `figma-mockups-reference.md` +
-    `sfaforms-reference.md` — always loaded; how to use the three read-only
-    symlinked reference checkouts (`./SFA`, `./agencyops_fe_mockups`,
-    `./sfaforms`).
+  - `legacy-sfa-reference.md` — always loaded; how to use the read-only
+    symlinked legacy app at `./SFA`.
+  - `figma-mockups-reference.md` (`packages/web/**`) +
+    `sfaforms-reference.md` (form-pipeline paths) +
+    `apex-mail-companion-reference.md` (mailer / performance / quote / sold paths) — **path-scoped**; how to
+    use the other three read-only symlinked reference checkouts
+    (`./agencyops_fe_mockups`, `./sfaforms`, `./apex-mail-companion`).
   - `api-bruno-docs.md` — **path-scoped**, loads only when touching
     `packages/api/src/**/*.controller.ts`, `packages/api/src/**/dto/*.ts`, or
     `packages/web/src/lib/*-api.ts`. Keep the Bruno collection in sync there.
