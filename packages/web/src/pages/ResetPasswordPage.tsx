@@ -88,14 +88,10 @@ export default function ResetPasswordPage() {
 
   if (status === 'expired') {
     return (
-      <AuthShell>
-        <h2 className="text-foreground font-semibold text-base">
-          This reset link has expired
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Reset links are only valid for a short time. Ask your agency owner to
-          send you a new one.
-        </p>
+      <AuthShell
+        title="This reset link has expired"
+        description="Reset links are only valid for a short time. Ask your agency owner to send you a new one."
+      >
         <Button asChild variant="outline" className="w-full">
           <Link to="/login">Back to sign in</Link>
         </Button>
@@ -105,14 +101,10 @@ export default function ResetPasswordPage() {
 
   if (status === 'invalid') {
     return (
-      <AuthShell>
-        <h2 className="text-foreground font-semibold text-base">
-          This reset link isn’t valid
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          It may already have been used, or the link may be incomplete. Ask your
-          agency owner to send you a new one.
-        </p>
+      <AuthShell
+        title="This reset link isn’t valid"
+        description="It may already have been used, or the link may be incomplete. Ask your agency owner to send you a new one."
+      >
         <Button asChild variant="outline" className="w-full">
           <Link to="/login">Back to sign in</Link>
         </Button>
@@ -123,25 +115,23 @@ export default function ResetPasswordPage() {
   const reset = resetQuery.data!;
 
   return (
-    <AuthShell>
-      <div className="space-y-1">
-        <h2 className="text-foreground font-semibold text-base">
-          Set a new password
-        </h2>
-        {/*
-          The address is text, not a field — the token already determines the
-          account. It is shown because this mail arrives unprompted at an
-          existing account, so whoever opened the link needs to see which one
-          they are about to change, especially on a shared machine.
-        */}
-        <p className="text-sm text-muted-foreground">
+    <AuthShell
+      title="Set a new password"
+      /*
+        The address is text, not a field — the token already determines the
+        account. It is shown because this mail arrives unprompted at an existing
+        account, so whoever opened the link needs to see which one they are
+        about to change, especially on a shared machine.
+      */
+      description={
+        <>
           An administrator at{' '}
           <span className="text-foreground">{reset.agencyName}</span> asked you
           to reset the password for{' '}
           <span className="text-foreground">{reset.email}</span>.
-        </p>
-      </div>
-
+        </>
+      }
+    >
       <SetPasswordForm
         email={reset.email}
         idPrefix="reset"

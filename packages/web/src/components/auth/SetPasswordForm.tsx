@@ -23,7 +23,7 @@ function Rule({ met, children }: { met: boolean; children: React.ReactNode }) {
         met ? 'text-success' : 'text-muted-foreground',
       )}
     >
-      {met ? <Check size={12} /> : <X size={12} />}
+      {met ? <Check className="size-3" /> : <X className="size-3" />}
       {children}
     </li>
   );
@@ -134,7 +134,6 @@ export function SetPasswordForm({
         <div className="space-y-1.5">
           <Label
             htmlFor={`${idPrefix}-current`}
-            className="text-xs text-muted-foreground"
           >
             Current password
           </Label>
@@ -153,7 +152,6 @@ export function SetPasswordForm({
       <div className="space-y-1.5">
         <Label
           htmlFor={`${idPrefix}-password`}
-          className="text-xs text-muted-foreground"
         >
           {requireCurrent ? 'New password' : 'Password'}
         </Label>
@@ -176,7 +174,7 @@ export function SetPasswordForm({
             aria-label={reveal ? 'Hide password' : 'Show password'}
             aria-pressed={reveal}
           >
-            {reveal ? <EyeOff size={14} /> : <Eye size={14} />}
+            {reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
           </Button>
         </div>
       </div>
@@ -184,7 +182,6 @@ export function SetPasswordForm({
       <div className="space-y-1.5">
         <Label
           htmlFor={`${idPrefix}-confirm`}
-          className="text-xs text-muted-foreground"
         >
           {requireCurrent ? 'Confirm new password' : 'Confirm password'}
         </Label>
@@ -214,7 +211,7 @@ export function SetPasswordForm({
       </Button>
 
       {footer && (
-        <p className="text-[10px] text-muted-foreground text-center pt-2">
+        <p className="pt-2 text-center text-xs text-muted-foreground">
           {footer}
         </p>
       )}

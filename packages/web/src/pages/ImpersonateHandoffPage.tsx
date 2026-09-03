@@ -84,11 +84,10 @@ export default function ImpersonateHandoffPage() {
 
   if (error) {
     return (
-      <AuthShell>
-        <h2 className="text-foreground font-semibold text-base">
-          Couldn’t start this session
-        </h2>
-        <p className="text-sm text-muted-foreground">{error}</p>
+      <AuthShell
+        title="Couldn’t start this session"
+        description={error}
+      >
         <p className="text-sm text-muted-foreground">
           Go back to the Super Admin panel and try again, or sign in normally.
         </p>
