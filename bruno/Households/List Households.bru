@@ -1,0 +1,163 @@
+meta {
+  name: List Households
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/households?page=1&pageSize=50
+  body: none
+  auth: inherit
+}
+
+params:query {
+  page: 1
+  pageSize: 50
+  ~q: rodriguez
+  ~firstName: Jane
+  ~lastName: Doe
+  ~dateOfBirth: 1985-03-12
+  ~householdRef: HH-2614
+  ~policyNumber: AS-1234567
+  ~status: Active
+  ~sort: name
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // Capture the first row's id for the other Households requests.
+  // Runtime-only var (never persisted to disk).
+  if (res.getStatus() === 200) {
+    const items = res.getBody().items;
+    if (items && items.length > 0) {
+      bru.setVar("householdId", items[0].id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("page");
+    expect(body).to.have.property("pageSize");
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body).to.have.property("items");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("rows expose only display fields (no internals leak)", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      const row = items[0];
+      expect(row).to.have.property("name");
+      expect(row).to.have.property("householdRef");
+      expect(row).to.have.property("status");
+      expect(row).to.have.property("totalActivePolicies");
+      expect(row).to.have.property("matchedOn");
+      expect(row).to.not.have.property("legacySmartSuiteId");
+      expect(row).to.not.have.property("legacyAssignedCrmId");
+      expect(row).to.not.have.property("isTestRecord");
+      expect(row).to.not.have.property("agencyId");
+      expect(row).to.not.have.property("branchId");
+      expect(row).to.not.have.property("addressKey");
+    }
+  });
+
+  test("an unfiltered list carries no match reason", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      expect(items[0].matchedOn).to.equal(null);
+    }
+  });
+}
+
+docs {
+  # GET /households
+
+  The **Clients list** (`/clients`) — every household in the caller's scope, and
+  the search that finds one from whichever identifier the caller is holding
+  (PAC-89). Replaced the `{ status: 'ready' }` feature stub.
+
+  - **Module:** `clients`
+  - **Permission:** `clients:read` — **narrower than the rest of this
+    controller.** `HouseholdRecordsController` carries a class-level OR-gate
+    accepting `clients:read` **or** `crm_service:read`, because a household also
+    renders inside a CRM ticket's drawer. This handler adds a handler-level
+    `@RequirePermissions(clients:read)`; metadata override is per-key, so the
+    two compose and the effective requirement is `clients:read`. A CSR holding
+    only `crm_service:read` gets **403** here while `GET /households/:id` stays
+    open to them.
+  - **Data scope:** `own` collapses to **branch** — client records are shared
+    and carry no per-user owner. Out-of-scope households are simply absent;
+    existence never leaks across tenants.
+
+  ## Query params
+  | Param | Default | Notes |
+  |---|---|---|
+  | `page` | 1 | 1-based |
+  | `pageSize` | 50 | max 100 |
+  | `q` | — | Omni search, max 120 chars. Shape-routed; **ORs** across every dimension |
+  | `firstName` | — | Contact first name, max 80 |
+  | `lastName` | — | Contact last name, max 80 |
+  | `dateOfBirth` | — | `YYYY-MM-DD`, contact DOB |
+  | `householdRef` | — | `HH-2614`, `#HH2614` or the bare number |
+  | `policyNumber` | — | Matched on the normalized key, so `AS 123-4567` finds `AS1234567` |
+  | `status` | — | `Active` / `Inactive`. Repeated or comma-separated; ORed |
+  | `sort` | `name` | `name` · `policies` · `updated` |
+
+  The five explicit fields **AND** together (and with `q`); `q` alone ORs. The
+  advanced panel is for a caller combining two identifiers; the omni box is for
+  the common case of holding exactly one.
+
+  ## How the search resolves
+  Households are the result set, but three of the five identifiers live on
+  **child** collections, so this runs in two phases rather than a `$lookup`:
+
+  1. `contacts` (name, DOB) and `policies` (number) are queried under the same
+     scope filter and resolved to household ids, each capped at 500 so one broad
+     term cannot build an unbounded `$in`.
+  2. Households are filtered by `$or` of `name`, `primaryContactName`,
+     `householdRef` and those ids.
+
+  `q` is routed by shape before it is used — `HH-\d+` to the reference, a parsed
+  date (`YYYY-MM-DD` or `MM/DD/YYYY`) to date of birth, a normalized key of at
+  least 4 alphanumerics to the policy number, and anything else to names.
+  Routing is additive: a term that could be two things is queried as both.
+
+  ## Response
+  `{ page, pageSize, total, totalPages, items: HouseholdListRow[] }` — the same
+  envelope as `GET /leads`.
+
+  Each row is a `HouseholdSummary` plus `householdRef`, `primaryEmail`,
+  `primaryPhone`, `city`, `state`, `assignedCrmId`, `updatedAt`, and:
+
+  - **`matchedOn`** — `{ field, value }` or `null`. Why the row is in the
+    results, set **only** for a reason the row cannot already show: `member`,
+    `dateOfBirth` or `policy`. A household matched on its own name or reference
+    leaves it null, because both are printed in the row's first column.
+    Searching a policy number otherwise returns households whose names match
+    nothing the caller typed, and the list reads as broken.
+
+  `city`/`state` come from `resolveHouseholdAddress`, which coerces the three
+  writers' differing key shapes (`street` / `line1` / `location_address`) into
+  one — never read `propertyAddress` raw.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | `dateOfBirth` not `YYYY-MM-DD`, `page`/`pageSize` out of bounds, `status` outside the vocabulary, unknown `sort` |
+  | 401 | Missing/expired bearer token |
+  | 403 | `clients` disabled for the agency, or the caller lacks `clients:read` (a CSR with only `crm_service:read` lands here) |
+
+  A `householdRef` or `policyNumber` that cannot be a reference or a key at all
+  returns an **empty page**, not the unfiltered book — a search that silently
+  widens is the failure this guards against.
+}

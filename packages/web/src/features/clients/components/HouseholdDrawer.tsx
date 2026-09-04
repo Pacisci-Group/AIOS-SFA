@@ -10,7 +10,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { getHousehold } from '@/lib/households-api';
+import { getHousehold, type ContactSummary } from '@/lib/households-api';
 import {
   addressLine,
   DrawerError,
@@ -20,6 +20,14 @@ import {
   money,
   shortDate,
 } from './drawer-primitives';
+
+/** `null` rather than "Unnamed" so the caller's `??` chain can keep falling through. */
+function fullName(contact: ContactSummary | undefined) {
+  if (!contact) return null;
+  return (
+    [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null
+  );
+}
 
 interface HouseholdDrawerProps {
   householdId: string | null;
@@ -47,13 +55,32 @@ export function HouseholdDrawer({
 
   const household = query.data;
 
+  /*
+   * The denormalized `primaryContactName` / `primaryEmails` / `primaryPhones`
+   * on the household are written by lead intake but **not** by the SmartSuite
+   * migration, so every migrated household leaves them empty and this drawer
+   * rendered "—" for a client whose details it had already fetched. The primary
+   * contact is right there in `contacts`; falling back to it is real data, not a
+   * placeholder. `HouseholdProfile` (the full page) has always done this — the
+   * drawer is what was inconsistent.
+   */
+  const primaryContact = household?.contacts.find((c) => c.isPrimary);
+  const contactName =
+    household?.primaryContactName ?? fullName(primaryContact) ?? '—';
+  const email =
+    household?.primaryEmails[0] ?? primaryContact?.emails[0] ?? '—';
+  const phone =
+    household?.primaryPhones[0] ?? primaryContact?.phones[0] ?? '—';
+  /* Mailing address as the last resort — the drawer already fetches it. */
+  const address = household?.propertyAddress ?? household?.mailingAddress;
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="sm:max-w-md overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{household?.name ?? 'Household'}</SheetTitle>
           <SheetDescription>
-            {household?.primaryContactName ?? 'Household details'}
+            {household ? contactName : 'Household details'}
           </SheetDescription>
         </SheetHeader>
 
@@ -65,22 +92,10 @@ export function HouseholdDrawer({
             <>
               <div>
                 <DrawerRow label="Status" value={household.status ?? '—'} />
-                <DrawerRow
-                  label="Primary contact"
-                  value={household.primaryContactName ?? '—'}
-                />
-                <DrawerRow
-                  label="Email"
-                  value={household.primaryEmails[0] ?? '—'}
-                />
-                <DrawerRow
-                  label="Phone"
-                  value={household.primaryPhones[0] ?? '—'}
-                />
-                <DrawerRow
-                  label="Address"
-                  value={addressLine(household.propertyAddress)}
-                />
+                <DrawerRow label="Primary contact" value={contactName} />
+                <DrawerRow label="Email" value={email} />
+                <DrawerRow label="Phone" value={phone} />
+                <DrawerRow label="Address" value={addressLine(address)} />
                 <DrawerRow
                   label="Active policies"
                   value={household.totalActivePolicies}

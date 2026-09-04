@@ -1,0 +1,89 @@
+meta {
+  name: Update Bug Report
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/platform/bug-reports/{{bugReportId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "status": "triaged",
+    "internalNotes": "Reproduced. The leaderboard query caches per month and the sold write does not invalidate it."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("applies both fields and stamps who moved it", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("triaged");
+    expect(body.internalNotes).to.contain("Reproduced");
+    expect(body.statusUpdatedAt).to.not.equal(null);
+    expect(body.statusUpdatedByName).to.not.equal(null);
+  });
+
+  test("returns the full detail, so the sheet needs no refetch", function () {
+    expect(res.getBody()).to.have.property("description");
+    expect(res.getBody()).to.have.property("context");
+  });
+}
+
+docs {
+  # PATCH /platform/bug-reports/:id — triage
+
+  Sets the status and/or the internal notes. Returns the **full detail**, the
+  same shape as `GET :id`, so the detail sheet updates from the response rather
+  than refetching.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:bugs:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ⚠ Note the split from the two reads above, which need only
+  `platform:bugs:read`. Every platform admin holds both
+  (`ALL_PLATFORM_PERMISSIONS`), so it only bites if the permission is ever
+  narrowed — but the page gates on `read` and this endpoint on `write`, so a
+  read-only holder would reach `/admin/bugs` and be refused on save.
+
+  ## Body
+  | field         | type   | notes                                              |
+  |---------------|--------|-----------------------------------------------------|
+  | status        | enum   | `new` \| `triaged` \| `in_progress` \| `resolved` \| `wont_fix` |
+  | internalNotes | string | ≤ 5,000 chars. **`""` clears the note**; omitting the field leaves it alone. |
+
+  Both optional, **at least one required** — a PATCH that says nothing is a
+  client bug, and returning the unchanged record would hide it.
+
+  ## Not a state machine
+
+  Any status is reachable from any other. A queue that argues with the person
+  working it gets worked around rather than used.
+
+  ## `statusUpdatedBy` / `statusUpdatedAt` move only on a real status change
+
+  Editing a note is not a triage decision. Stamping one would erase who last
+  moved the report and when — which is the only history this record keeps.
+  Re-sending the same status is also not a change and does not re-stamp.
+
+  ## Errors
+  - `400 Bad Request` — empty body, unknown status, notes over 5,000 chars.
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — missing `platform:bugs:write`.
+  - `404 Not Found` — no such report.
+}

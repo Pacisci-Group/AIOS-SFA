@@ -70,3 +70,14 @@ ContactSchema.index(
   { agencyId: 1, lastName: 1, firstName: 1 },
   { collation: { locale: 'en', strength: 2 } },
 );
+
+/**
+ * Date-of-birth search on the Clients page (PAC-89).
+ *
+ * DOB is the one identifier there with no fallback path: a caller who has a
+ * date of birth generally has it *because* the name was ambiguous or misspelt,
+ * so the query that serves them cannot be the one that scans the collection.
+ *
+ * No collation — this index is only ever used for a range on a `Date`.
+ */
+ContactSchema.index({ agencyId: 1, dateOfBirth: 1 });

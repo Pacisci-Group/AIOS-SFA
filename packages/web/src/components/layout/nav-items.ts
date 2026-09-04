@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Home,
   LayoutDashboard,
   SlidersHorizontal,
   Ticket,
@@ -96,15 +97,23 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Ticket,
         module: ModuleKey.CrmService,
       },
+      {
+        to: "/clients",
+        label: "Clients",
+        icon: Home,
+        module: ModuleKey.Clients,
+      },
       /*
-       * No "Ticket Workspace" or "Households" entry here.
+       * No "Ticket Workspace" entry here. The workspace is reached by opening a
+       * ticket from the Service Dashboard, so a second top-level entry to the
+       * same page only duplicated the queue.
        *
-       * The workspace is reached by opening a ticket from the Service
-       * Dashboard, so a second top-level entry to the same page only
-       * duplicated the queue. `/clients/demo` is still the unwired Household
-       * Details mockup and is deliberately kept out of the sidebar — it is
-       * reachable from the dev Screen Navigator at `/`. Add it back (gated on
-       * `ModuleKey.Clients`) once the real list view lands (PAC-57).
+       * Clients above is gated on `ModuleKey.Clients`, not `crm_service`, which
+       * is what keeps it hidden from a CSR — who holds `crm_service:*` and no
+       * `clients:read`. A CSR still reaches an individual household through the
+       * ticket's Household drawer; that path goes to `/clients/:id`, which
+       * accepts either permission. `GET /households` does not, so pointing the
+       * nav item at the list for them would only produce a 403.
        */
     ],
   },
