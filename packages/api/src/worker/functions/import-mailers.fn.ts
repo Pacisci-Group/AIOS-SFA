@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { parse } from 'csv-parse';
 import { Model } from 'mongoose';
+import { appointmentCodeKey, carrierSlug } from '@sfa/shared';
 import {
   INNGEST_CLIENT,
   type InngestClient,
@@ -34,6 +35,27 @@ import {
   Agency,
   type AgencyDocument,
 } from '../../platform/schemas/agency.schema';
+import {
+  Carrier,
+  CarrierDocument,
+} from '../../carriers/schemas/carrier.schema';
+
+/**
+ * The carrier an uploaded mailer file is assumed to come from (PAC-93).
+ *
+ * ⚠ **This is a real assumption, not a placeholder default.** The RTP file
+ * format is Allstate's — the 124/132-column Quote Burst contract, with
+ * `agents.allstate.com` in the agency block — so a file's `agencyid` column is
+ * an Allstate agency code and can only be compared against an Allstate
+ * appointment. A vendor file from another carrier will arrive in some other
+ * shape and needs its own column contract before it needs its own carrier
+ * resolution here.
+ *
+ * Named and exported so that day is one grep. PAC-71's routing lookup starts
+ * from this same constant; when a campaign carries its own carrier, this
+ * becomes that campaign's carrier and this constant becomes the fallback.
+ */
+export const MAILER_FILE_CARRIER = 'Allstate';
 
 /** What a run is doing. Selects the terminal status and whether it writes. */
 type ImportPhase = 'preview' | 'commit';
@@ -76,10 +98,13 @@ export class ImportMailersFn implements InngestFunctionProvider {
     private readonly mailerModel: Model<MailerDocument>,
     @InjectModel(MailerImportRun.name)
     private readonly runModel: Model<MailerImportRunDocument>,
-    // Schemas may cross the worker boundary; services may not. `Agency` is
-    // needed only to read the ticker/Allstate id for the cross-check.
+    // Schemas may cross the worker boundary; services may not. `Agency` and
+    // `Carrier` are needed only to resolve the agency's carrier appointment for
+    // the cross-check.
     @InjectModel(Agency.name)
     private readonly agencyModel: Model<AgencyDocument>,
+    @InjectModel(Carrier.name)
+    private readonly carrierModel: Model<CarrierDocument>,
   ) {}
 
   build() {
@@ -294,10 +319,15 @@ export class ImportMailersFn implements InngestFunctionProvider {
    * confirmation cannot be bypassed by a client that simply omits it — filing
    * one agency's prospects under another is the failure that matters here.
    *
-   * ⚠ Absence is **not** a mismatch. An agency with no `allstateAgencyId` on
-   * record, or a file with no `agencyid` column, means we have nothing to
-   * compare — and blocking every upload behind a confirmation nobody can act on
-   * would train operators to click through it, which is worse than not asking.
+   * The comparison is against the agency's **active appointment with the file's
+   * carrier** (PAC-93), not a single field: an agency may hold a code from
+   * several carriers, and a code only means anything inside its own.
+   *
+   * ⚠ Absence is **not** a mismatch, at four separate points: no `agencyid`
+   * column, no run, no such carrier in the catalog, or no active appointment
+   * with that carrier all mean we have nothing to compare. Blocking every
+   * upload behind a confirmation nobody can act on would train operators to
+   * click through it, which is worse than not asking.
    */
   private async detectMismatch(
     importRunId: string,
@@ -312,13 +342,36 @@ export class ImportMailersFn implements InngestFunctionProvider {
       .lean();
     if (!run) return false;
 
+    const carrier = await this.carrierModel
+      .findOne({ agencyId: null, slug: carrierSlug(MAILER_FILE_CARRIER) })
+      .select({ _id: 1 })
+      .lean();
+    if (!carrier) {
+      // The core seed has not run. That is a deployment problem, not a
+      // disagreement between the file and the agency, so it must not surface as
+      // a mismatch the operator is asked to confirm.
+      this.logger.warn(
+        `No global ${MAILER_FILE_CARRIER} carrier; skipping the agency cross-check.`,
+      );
+      return false;
+    }
+
     const agency = await this.agencyModel
       .findById(run.agencyId)
-      .select({ allstateAgencyId: 1 })
+      .select({ carrierAppointments: 1 })
       .lean();
-    if (!agency?.allstateAgencyId) return false;
 
-    return agency.allstateAgencyId.toUpperCase() !== fileAgencyId.toUpperCase();
+    // `.lean()` applies no schema defaults, so an agency created before PAC-93
+    // reads as `undefined` rather than `[]`.
+    const appointments = (agency?.carrierAppointments ?? []).filter(
+      (appointment) =>
+        appointment.active &&
+        appointment.carrierId?.toString() === carrier._id.toString(),
+    );
+    if (appointments.length === 0) return false;
+
+    const fileKey = appointmentCodeKey(fileAgencyId);
+    return !appointments.some((appointment) => appointment.codeKey === fileKey);
   }
 }
 

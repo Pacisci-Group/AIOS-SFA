@@ -18,6 +18,7 @@ import {
   MailerImportRunSchema,
 } from '../mailers/schemas/mailer-import-run.schema';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
+import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
 import { StorageModule } from '../storage/storage.module';
 
 /**
@@ -53,6 +54,9 @@ import { StorageModule } from '../storage/storage.module';
       { name: Mailer.name, schema: MailerSchema },
       { name: MailerImportRun.name, schema: MailerImportRunSchema },
       { name: Agency.name, schema: AgencySchema },
+      // Resolves the mailer file's carrier so the upload cross-check can compare
+      // the file's `agencyid` against the right appointment (PAC-93).
+      { name: Carrier.name, schema: CarrierSchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports
