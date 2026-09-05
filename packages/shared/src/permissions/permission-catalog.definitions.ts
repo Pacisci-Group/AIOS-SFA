@@ -128,6 +128,16 @@ const ADMIN_COPY: Record<string, { label: string; description: string }> = {
     label: 'View change history',
     description: 'See who changed a record and what they changed.',
   },
+  [AgencyPermission.CarrierAppointmentsRead]: {
+    label: 'View carrier appointments',
+    description:
+      'See which carriers have appointed the agency and the code each one issued.',
+  },
+  [AgencyPermission.CarrierAppointmentsWrite]: {
+    label: 'Manage carrier appointments',
+    description:
+      'Add and remove carrier appointments, set the primary one, and change their codes.',
+  },
 };
 
 function moduleDefinitions(): PermissionDefinition[] {
