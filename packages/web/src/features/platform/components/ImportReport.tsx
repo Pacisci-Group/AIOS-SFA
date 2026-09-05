@@ -149,8 +149,10 @@ export function ImportReport({
             <span>
               The file reports{" "}
               <strong>{detected?.agencyName ?? detected?.agencyId}</strong>, but
-              you selected <strong>{agencyName ?? "another agency"}</strong>.
-              Importing anyway files one agency's prospects under another.
+              that is not a code{" "}
+              <strong>{agencyName ?? "the selected agency"}</strong> is
+              appointed under. Importing anyway files one agency's prospects
+              under another.
             </span>
             <label className="flex items-center gap-2 text-sm">
               <Checkbox

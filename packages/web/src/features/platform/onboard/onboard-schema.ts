@@ -35,13 +35,27 @@ export const onboardFormSchema = z.object({
         "Lowercase letters, numbers and single hyphens — e.g. acme-insurance",
       ),
     /**
-     * Both mailer fields are optional, matching the API. An agency without them
-     * imports no mailers and warns on every RTP upload, which the step says —
-     * but an agency that will never run a mail campaign should not be blocked
-     * on inventing one.
+     * The mailer identity fields are optional, matching the API. An agency
+     * without them imports no mailers and warns on every RTP upload, which the
+     * step says — but an agency that will never run a mail campaign should not
+     * be blocked on inventing one.
      */
     ticker: z.string().trim().max(8, "Tickers are at most 8 characters"),
-    allstateAgencyId: z.string().trim().max(40),
+    /**
+     * Carrier appointments (PAC-93). A row may carry a carrier with **no code**
+     * — the operator often knows who appointed the agency but not the code — and
+     * `toOnboardInput` sends it as-is for the server to drop, so the owner can
+     * fill it in during their own setup. That is why there is no `min(1)` here.
+     */
+    carrierAppointments: z.array(
+      z.object({
+        carrierId: z.string().trim(),
+        carrierAgencyCode: z.string().trim().max(40),
+        isPrimary: z.boolean().optional(),
+        active: z.boolean().optional(),
+      }),
+    ),
+    npn: z.string().trim().max(20, "NPNs are at most 20 characters"),
   }),
   branch: z.object({
     name: z.string().trim().min(1, "Give the branch a name").max(80),
@@ -68,7 +82,15 @@ export const onboardFormSchema = z.object({
 export type OnboardFormValues = z.infer<typeof onboardFormSchema>;
 
 export const EMPTY_ONBOARD: OnboardFormValues = {
-  agency: { name: "", slug: "", ticker: "", allstateAgencyId: "" },
+  agency: {
+    name: "",
+    slug: "",
+    ticker: "",
+    // One blank row so the step opens with something to fill in rather than an
+    // empty state and a button.
+    carrierAppointments: [{ carrierId: "", carrierAgencyCode: "" }],
+    npn: "",
+  },
   branch: {
     name: DEFAULT_BRANCH_NAME,
     address: { street: "", city: "", state: "", zip: "" },
@@ -91,7 +113,22 @@ export function toOnboardInput(values: OnboardFormValues): OnboardAgencyInput {
       name: values.agency.name.trim(),
       slug: values.agency.slug.trim().toLowerCase(),
       ticker: trimmed(values.agency.ticker),
-      allstateAgencyId: trimmed(values.agency.allstateAgencyId),
+      /*
+       * Rows with no carrier are dropped here — an untouched blank row is not
+       * an appointment anyone meant to add. A row with a carrier and no *code*
+       * is sent through: the API drops it too, but sending it keeps one rule in
+       * one place rather than two clients each deciding what "incomplete"
+       * means.
+       */
+      carrierAppointments: values.agency.carrierAppointments
+        .filter((row) => row.carrierId.trim())
+        .map((row) => ({
+          carrierId: row.carrierId.trim(),
+          carrierAgencyCode: trimmed(row.carrierAgencyCode),
+          isPrimary: row.isPrimary,
+          active: row.active,
+        })),
+      npn: trimmed(values.agency.npn),
     },
     branch: {
       name: values.branch.name.trim(),

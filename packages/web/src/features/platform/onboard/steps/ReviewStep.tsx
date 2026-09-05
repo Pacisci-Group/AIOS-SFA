@@ -1,10 +1,13 @@
 import { useStore } from "@tanstack/react-form";
+import { useQuery } from "@tanstack/react-query";
+import type { CarrierOption } from "@sfa/shared";
 import { FormSection } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { withForm } from "@/hooks/form";
 import { MODULE_CATALOG } from "../module-catalog";
 import { EMPTY_ONBOARD } from "../onboard-schema";
+import { getPlatformCarriers, platformCarriersKey } from "@/lib/carriers-api";
 import { ONBOARD_STEPS, type OnboardStepId } from "../onboard-steps";
 
 /**
@@ -22,6 +25,13 @@ export const ReviewStep = withForm({
   props: { onEdit: (_index: number) => {} },
   render: function Render({ form, onEdit }) {
     const values = useStore(form.store, (s) => s.values);
+    // Cached by the Agency step's own query — the appointments are stored by
+    // carrier id, and this is the only place that turns them back into names.
+    const { data: carriers = [] } = useQuery({
+      queryKey: platformCarriersKey,
+      queryFn: getPlatformCarriers,
+      staleTime: Infinity,
+    });
     const address = values.branch.address;
     const addressLine = [
       address.street,
@@ -57,10 +67,14 @@ export const ReviewStep = withForm({
               muted={!values.agency.ticker}
             />
             <Row
-              label="Allstate agency ID"
-              value={values.agency.allstateAgencyId || "Not set"}
-              mono={!!values.agency.allstateAgencyId}
-              muted={!values.agency.allstateAgencyId}
+              label="NPN"
+              value={values.agency.npn || "Not set"}
+              mono={!!values.agency.npn}
+              muted={!values.agency.npn}
+            />
+            <AppointmentRows
+              appointments={values.agency.carrierAppointments}
+              carriers={carriers}
             />
           </dl>
         </FormSection>
@@ -144,5 +158,47 @@ function Row({
         {value}
       </dd>
     </div>
+  );
+}
+
+/**
+ * One row per appointment the operator entered.
+ *
+ * A row with a carrier and no code is shown as such rather than hidden: the
+ * operator chose that carrier, and "the owner will supply the code" is exactly
+ * what they should be confirming here.
+ */
+function AppointmentRows({
+  appointments,
+  carriers,
+}: {
+  appointments: { carrierId: string; carrierAgencyCode: string }[];
+  carriers: readonly CarrierOption[];
+}) {
+  const named = appointments.filter((row) => row.carrierId);
+  if (named.length === 0) {
+    return <Row label="Carrier appointments" value="None" muted />;
+  }
+
+  return (
+    <>
+      {named.map((row, index) => {
+        const carrier = carriers.find((option) => option.id === row.carrierId);
+        const code = row.carrierAgencyCode.trim();
+        return (
+          <Row
+            key={`${row.carrierId}-${index}`}
+            label={index === 0 ? "Carrier appointments" : ""}
+            value={
+              code
+                ? `${carrier?.name ?? "Carrier"} — ${code}`
+                : `${carrier?.name ?? "Carrier"} — code to be added by the owner`
+            }
+            mono={!!code}
+            muted={!code}
+          />
+        );
+      })}
+    </>
   );
 }

@@ -1,5 +1,7 @@
 import type {
   AgencyAvailabilityResponse,
+  CarrierAppointmentInput,
+  CarrierAppointmentView,
   ModuleKey,
   OnboardAgencyResponse,
 } from '@sfa/shared';
@@ -22,8 +24,15 @@ export interface PlatformAgency {
   status: string;
   /** Three-letter mailer ticker (`SFA`), when set. */
   ticker?: string;
-  /** Allstate agency id (`A0B9049`), cross-checked against uploads. */
-  allstateAgencyId?: string;
+  /**
+   * Which carriers appointed this agency, and under what code (PAC-93).
+   *
+   * ⚠ Optional because the list endpoint returns raw agency documents, and one
+   * created before this field has none — treat `undefined` as `[]`.
+   */
+  carrierAppointments?: CarrierAppointmentView[];
+  /** National Producer Number, when the agency supplied one. */
+  npn?: string;
 }
 
 /** Every agency on the platform. Backs the Add Mailers agency picker. */
@@ -47,6 +56,12 @@ export function checkAgencyAvailability(query: {
   slug?: string;
   email?: string;
   ticker?: string;
+  /**
+   * Send both or neither — a carrier agency code means nothing outside its
+   * carrier, and the API refuses half the pair (PAC-93).
+   */
+  carrierId?: string;
+  carrierAgencyCode?: string;
 }): Promise<AgencyAvailabilityResponse> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -63,7 +78,13 @@ export interface OnboardAgencyInput {
     name: string;
     slug: string;
     ticker?: string;
-    allstateAgencyId?: string;
+    /**
+     * The same row shape `PUT /agency/carrier-appointments` takes. A row whose
+     * code the operator left blank is sent as-is and stored as nothing — the
+     * owner supplies it later (PAC-93).
+     */
+    carrierAppointments: CarrierAppointmentInput[];
+    npn?: string;
   };
   branch: {
     name: string;

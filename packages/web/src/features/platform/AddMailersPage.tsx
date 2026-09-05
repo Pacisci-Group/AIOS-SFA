@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { FileDropzone } from "@/components/upload/FileDropzone";
-import { listAgencies } from "@/lib/platform-api";
+import { listAgencies, type PlatformAgency } from "@/lib/platform-api";
 import {
   ALLOWED_MAILER_EXTENSIONS,
   ALLOWED_MAILER_TYPES,
@@ -174,10 +174,10 @@ export default function AddMailersPage() {
                   ))}
                 </SelectContent>
               </Select>
-              {selectedAgency && !selectedAgency.allstateAgencyId && (
+              {selectedAgency && !hasActiveAppointment(selectedAgency) && (
                 <p className="text-xs text-muted-foreground">
-                  This agency has no Allstate agency id on record, so the file's
-                  own agency cannot be cross-checked.
+                  This agency has no active carrier appointment on record, so
+                  the file's own agency cannot be cross-checked.
                 </p>
               )}
             </div>
@@ -256,4 +256,19 @@ function useSettledToast(run: MailerImportRun | null): void {
       );
     }
   }, [run]);
+}
+
+/**
+ * Is there anything to cross-check this agency's uploads against? (PAC-93)
+ *
+ * The mismatch warning compares the file's `agencyid` against the agency's
+ * appointments, so an agency with none — or only deactivated ones — is the
+ * "nothing to compare" case the API also treats as no mismatch. Kept in step
+ * with `detectMismatch`, which is the authority.
+ *
+ * ⚠ `carrierAppointments` is optional on the wire: `GET /platform/agencies`
+ * returns raw documents, and one created before PAC-93 has no such field.
+ */
+function hasActiveAppointment(agency: PlatformAgency): boolean {
+  return (agency.carrierAppointments ?? []).some((row) => row.active);
 }
