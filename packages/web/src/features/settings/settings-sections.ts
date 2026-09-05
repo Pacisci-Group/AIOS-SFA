@@ -1,6 +1,7 @@
 import { AgencyPermission } from "@sfa/shared";
 import {
   AtSign,
+  BadgeCheck,
   Globe,
   KeyRound,
   Palette,
@@ -74,6 +75,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: "The address invites, resets and share links are sent from.",
     icon: AtSign,
     permission: AgencyPermission.EmailRead,
+  },
+  {
+    to: "/settings/carriers",
+    label: "Carrier Appointments",
+    description: "The agency code each carrier that appointed you issued.",
+    icon: BadgeCheck,
+    permission: AgencyPermission.CarrierAppointmentsRead,
   },
 ];
 

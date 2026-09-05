@@ -68,6 +68,9 @@ const DomainsPage = lazy(() => import('@/features/settings/DomainsPage'));
 const EmailSenderPage = lazy(
   () => import('@/features/settings/EmailSenderPage'),
 );
+const CarrierAppointmentsPage = lazy(
+  () => import('@/features/settings/CarrierAppointmentsPage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
@@ -588,6 +591,26 @@ export function App() {
                   element={
                     <LazyPage>
                       <EmailSenderPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/*
+                Carrier appointments (PAC-93). Gated on `:read` like every
+                section beside it; the page hides its write controls without
+                `agency:carrier_appointments:write`.
+              */}
+              <Route
+                element={
+                  <RequirePermission permission="agency:carrier_appointments:read" />
+                }
+              >
+                <Route
+                  path="/settings/carriers"
+                  element={
+                    <LazyPage>
+                      <CarrierAppointmentsPage />
                     </LazyPage>
                   }
                 />
