@@ -1,5 +1,5 @@
 import { Model, Types } from 'mongoose';
-import { ALL_MODULE_KEYS } from '@sfa/shared';
+import { ALL_MODULE_KEYS, appointmentCodeKey } from '@sfa/shared';
 
 import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
 import { Branch } from '../branches/schemas/branch.schema';
@@ -48,13 +48,13 @@ export interface ProvisionTenantOptions {
   branchSlug: string;
   branchName: string;
   /**
-   * Mailer identity (PAC-73). `ticker` is how the BigQuery backfill attributes
-   * a row to this tenant and `allstateAgencyId` is what an uploaded RTP file's
-   * `agencyid` column is checked against — so an agency provisioned without
-   * them imports no mailers and warns on every upload.
+   * Mailer identity. `ticker` (PAC-73) is how the BigQuery backfill attributes
+   * a row to this tenant; the carrier appointment (PAC-93) is what an uploaded
+   * RTP file's `agencyid` column is checked against — so an agency provisioned
+   * without them imports no mailers and warns on every upload.
    */
   ticker?: string;
-  allstateAgencyId?: string;
+  carrierAppointment?: { carrierId: Types.ObjectId; carrierAgencyCode: string };
 }
 
 export interface ProvisionedTenant {
@@ -84,14 +84,23 @@ export async function provisionTenant(
 
   /*
    * The mailer identity is reconciled on an existing agency rather than only
-   * set on create: agencies provisioned before PAC-73 predate both fields, and
+   * set on create: agencies provisioned before PAC-73 predate the ticker, and
    * would otherwise import nothing forever.
    */
   const mailerIdentity: Record<string, string> = {};
   if (options.ticker) mailerIdentity.ticker = options.ticker;
-  if (options.allstateAgencyId) {
-    mailerIdentity.allstateAgencyId = options.allstateAgencyId;
-  }
+
+  const appointment = options.carrierAppointment
+    ? {
+        carrierId: options.carrierAppointment.carrierId,
+        carrierAgencyCode: options.carrierAppointment.carrierAgencyCode.trim(),
+        codeKey: appointmentCodeKey(
+          options.carrierAppointment.carrierAgencyCode,
+        ),
+        isPrimary: true,
+        active: true,
+      }
+    : null;
 
   let agency = await agencyModel.findOne({ slug: options.slug });
   const agencyCreated = !agency;
@@ -102,9 +111,43 @@ export async function provisionTenant(
       status: 'active',
       modules,
       ...mailerIdentity,
+      carrierAppointments: appointment ? [appointment] : [],
     });
-  } else if (Object.keys(mailerIdentity).length) {
-    await agencyModel.updateOne({ _id: agency._id }, { $set: mailerIdentity });
+  } else {
+    if (Object.keys(mailerIdentity).length) {
+      await agencyModel.updateOne(
+        { _id: agency._id },
+        { $set: mailerIdentity },
+      );
+    }
+    /*
+     * ⚠ `$push` after an existence check, never `$set` of the whole array.
+     * This runs on re-migration against an agency whose owner may have added
+     * their other carriers' appointments through Workspace Settings, and a
+     * blind `$set` would delete them. `isPrimary` only when the list is empty,
+     * for the same reason — the agency may have chosen a different primary.
+     */
+    if (appointment) {
+      const existing = agency.carrierAppointments ?? [];
+      const alreadyThere = existing.some(
+        (row) =>
+          row.carrierId?.toString() === appointment.carrierId.toString() &&
+          row.codeKey === appointment.codeKey,
+      );
+      if (!alreadyThere) {
+        await agencyModel.updateOne(
+          { _id: agency._id },
+          {
+            $push: {
+              carrierAppointments: {
+                ...appointment,
+                isPrimary: existing.length === 0,
+              },
+            },
+          },
+        );
+      }
+    }
   }
 
   // Must follow the permission catalog from the core seed: `setRolePermissions`

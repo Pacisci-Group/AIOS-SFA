@@ -112,6 +112,13 @@ cover agency CRUD and module toggles — not tenant roles.
 
 Flags: `--dry-run` (provisions nothing), `--agency <slug>` (default
 `smith-family-agency`), `--branch <slug>` (default `main`), `--agency-name`,
-`--branch-name`, `--ticker` (default `SFA`) and `--allstate-id` (default
-`A0B9049`) for the mailer identity step 3 attributes rows by, `--owner-email`
-(default `davidhowad@allstate.com`), and `--page-size <n>` (default `500`).
+`--branch-name`, and for the mailer identity step 3 attributes rows by:
+`--ticker` (default `SFA`) plus the carrier appointment `--carrier-slug`
+(default `allstate`) and `--carrier-code` (default `A0B9049`). Also
+`--owner-email` (default `davidhowad@allstate.com`) and `--page-size <n>`
+(default `500`).
+
+⚠ `--carrier-slug` names a **global** carrier from the core seed's catalog, so
+the core seed has to have run first — the migration fails loudly rather than
+provisioning a tenant with no appointment, which would leave every mailer
+upload warning for no visible reason.
