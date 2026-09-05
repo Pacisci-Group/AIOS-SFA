@@ -124,8 +124,13 @@ export class AgencyCarrierAppointmentsService {
 
     const active = rows.filter((row) => row.active);
     const primary =
+      // The flagged row, when it can hold the flag…
       flagged.find((row) => row.active) ??
-      (flagged.length === 0 ? active[0] : undefined) ??
+      // …otherwise the first active one, whether the flag was misplaced onto an
+      // inactive row or never set at all…
+      active[0] ??
+      // …and if nothing is active there is no meaningful primary, so leave the
+      // flag where it was put rather than inventing a state.
       flagged[0] ??
       rows[0];
 

@@ -7,7 +7,7 @@ import {
   getModelToken,
 } from '@nestjs/mongoose';
 import { Test } from '@nestjs/testing';
-import { Connection, Model } from 'mongoose';
+import { Connection, Model, Types } from 'mongoose';
 import { ENV_FILE_PATH } from '../../src/config/env.config';
 import { InngestModule } from '../../src/inngest/inngest.module';
 import { StorageService } from '../../src/storage/storage.service';
@@ -16,6 +16,7 @@ import { ImportMailersFn } from '../../src/worker/functions/import-mailers.fn';
 import { Mailer } from '../../src/mailers/schemas/mailer.schema';
 import { MailerImportRun } from '../../src/mailers/schemas/mailer-import-run.schema';
 import { Agency } from '../../src/platform/schemas/agency.schema';
+import { Carrier } from '../../src/carriers/schemas/carrier.schema';
 import type { MailerImportRequestedData } from '../../src/inngest/events';
 
 const AGENCY_ID = '507f1f77bcf86cd799439012';
@@ -84,6 +85,7 @@ describe('ImportMailersFn (e2e)', () => {
   let mailers: Model<Mailer>;
   let runs: Model<MailerImportRun>;
   let agencies: Model<Agency>;
+  let carriers: Model<Carrier>;
 
   beforeAll(async () => {
     storage = new InMemoryStorage();
@@ -116,6 +118,7 @@ describe('ImportMailersFn (e2e)', () => {
     mailers = app.get<Model<Mailer>>(getModelToken(Mailer.name));
     runs = app.get<Model<MailerImportRun>>(getModelToken(MailerImportRun.name));
     agencies = app.get<Model<Agency>>(getModelToken(Agency.name));
+    carriers = app.get<Model<Carrier>>(getModelToken(Carrier.name));
 
     // The dedupe index is load-bearing for the re-run assertion below, and
     // `dropDatabase` in a sibling suite removes it.
@@ -135,6 +138,7 @@ describe('ImportMailersFn (e2e)', () => {
     await mailers.deleteMany({});
     await runs.deleteMany({});
     await agencies.deleteMany({ _id: AGENCY_ID });
+    await carriers.deleteMany({ slug: 'allstate' });
   });
 
   /** A run in the state the API leaves it in before dispatching the event. */
@@ -220,15 +224,35 @@ describe('ImportMailersFn (e2e)', () => {
     expect(storage.reads).toBe(2);
   });
 
+  /** The global Allstate row the cross-check resolves the file's carrier by. */
+  async function seedAllstate(): Promise<Types.ObjectId> {
+    const carrier = await carriers.create({
+      agencyId: null,
+      name: 'Allstate',
+      slug: 'allstate',
+      active: true,
+    });
+    return carrier._id;
+  }
+
   it('flags an agency mismatch during the preview', async () => {
-    // The file says A0B9049; this agency says something else. The flag is
-    // written here and read by the commit endpoint, so a client cannot bypass
-    // the confirmation by omitting it.
+    // The file says A0B9049; this agency's Allstate appointment says something
+    // else. The flag is written here and read by the commit endpoint, so a
+    // client cannot bypass the confirmation by omitting it.
+    const carrierId = await seedAllstate();
     await agencies.create({
       _id: AGENCY_ID,
       name: 'Northgate Insurance',
       slug: 'northgate-insurance',
-      allstateAgencyId: 'B1C2345',
+      carrierAppointments: [
+        {
+          carrierId,
+          carrierAgencyCode: 'B1C2345',
+          codeKey: 'B1C2345',
+          isPrimary: true,
+          active: true,
+        },
+      ],
     });
     const data = await seedRun('previewing');
 
@@ -238,9 +262,82 @@ describe('ImportMailersFn (e2e)', () => {
     expect(run?.agencyMismatch).toBe(true);
   });
 
-  it('does not call an absent Allstate id a mismatch', async () => {
+  it('matches an appointment whose code differs only in case', async () => {
+    // The stored key is normalized by `appointmentCodeKey`, and the file's
+    // value by the row mapper. Both sides going through the same helper is the
+    // whole reason it lives in `shared`.
+    const carrierId = await seedAllstate();
+    await agencies.create({
+      _id: AGENCY_ID,
+      name: 'Smith Family Agency',
+      slug: 'smith-family-agency',
+      carrierAppointments: [
+        {
+          carrierId,
+          carrierAgencyCode: 'a0b9049',
+          codeKey: 'A0B9049',
+          isPrimary: true,
+          active: true,
+        },
+      ],
+    });
+    const data = await seedRun('previewing');
+
+    await fn.handle(event(data), inlineStep().step, 'preview');
+
+    expect((await runs.findById(data.importRunId).lean())?.agencyMismatch).toBe(
+      false,
+    );
+  });
+
+  it('does not call an absent appointment a mismatch', async () => {
     // Nothing to compare is not a disagreement, and a confirmation nobody can
     // act on just trains operators to click through it.
+    await seedAllstate();
+    await agencies.create({
+      _id: AGENCY_ID,
+      name: 'Smith Family Agency',
+      slug: 'smith-family-agency',
+    });
+    const data = await seedRun('previewing');
+
+    await fn.handle(event(data), inlineStep().step, 'preview');
+
+    expect((await runs.findById(data.importRunId).lean())?.agencyMismatch).toBe(
+      false,
+    );
+  });
+
+  it('does not call a deactivated appointment a mismatch', async () => {
+    // An agency that has lapsed with Allstate has nothing to compare either —
+    // and an inactive appointment must not be read as a disagreeing one.
+    const carrierId = await seedAllstate();
+    await agencies.create({
+      _id: AGENCY_ID,
+      name: 'Lapsed Agency',
+      slug: 'lapsed-agency',
+      carrierAppointments: [
+        {
+          carrierId,
+          carrierAgencyCode: 'B1C2345',
+          codeKey: 'B1C2345',
+          isPrimary: true,
+          active: false,
+        },
+      ],
+    });
+    const data = await seedRun('previewing');
+
+    await fn.handle(event(data), inlineStep().step, 'preview');
+
+    expect((await runs.findById(data.importRunId).lean())?.agencyMismatch).toBe(
+      false,
+    );
+  });
+
+  it('does not warn when the carrier catalog has no Allstate row', async () => {
+    // The core seed has not run. That is a deployment problem, not a
+    // disagreement between the file and the agency.
     await agencies.create({
       _id: AGENCY_ID,
       name: 'Smith Family Agency',

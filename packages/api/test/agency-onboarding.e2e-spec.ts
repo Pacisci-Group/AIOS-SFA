@@ -13,6 +13,7 @@ import { RoleAssignmentsService } from '../src/permissions/role-assignments.serv
 import { RolePermission } from '../src/permissions/schemas/role-permission.schema';
 import { UserRole } from '../src/permissions/schemas/user-role.schema';
 import { Agency } from '../src/platform/schemas/agency.schema';
+import { Carrier } from '../src/carriers/schemas/carrier.schema';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
 import { User } from '../src/users/schemas/user.schema';
 import { dropTestDatabase, closeTestApp } from './helpers/test-app';
@@ -71,6 +72,9 @@ describe('Agency onboarding (e2e)', () => {
   let userRoles: Model<UserRole>;
   let auditTemplates: Model<AuditTemplate>;
   let users: Model<User>;
+  let carriers: Model<Carrier>;
+  let allstateId: Types.ObjectId;
+  let travelersId: Types.ObjectId;
 
   let seq = 0;
   const freshSlug = () => `onboard-${Date.now()}-${++seq}`;
@@ -134,6 +138,23 @@ describe('Agency onboarding (e2e)', () => {
       getModelToken(AuditTemplate.name),
     );
     users = app.get<Model<User>>(getModelToken(User.name));
+    carriers = app.get<Model<Carrier>>(getModelToken(Carrier.name));
+
+    /*
+     * ⚠ `dropTestDatabase` runs *after* `app.init()`, so `autoIndex` has
+     * already built the indexes and will not run again — the collection is left
+     * with none. The uniqueness assertions below depend on the carrier-
+     * appointment index existing, so rebuild it explicitly. Same reason
+     * `mailer-import.e2e-spec.ts` calls `syncIndexes`.
+     */
+    await agencies.syncIndexes();
+
+    const [allstate, travelers] = await carriers.create([
+      { agencyId: null, name: 'Allstate', slug: 'allstate', active: true },
+      { agencyId: null, name: 'Travelers', slug: 'travelers', active: true },
+    ]);
+    allstateId = allstate._id;
+    travelersId = travelers._id;
 
     const login = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
@@ -331,6 +352,244 @@ describe('Agency onboarding (e2e)', () => {
       };
       expect(setupBody.status).toBe('complete');
       expect(setupBody.brandingSkipped).toBe(true);
+    });
+  });
+
+  describe('carrier appointments (PAC-93)', () => {
+    it('stores an appointment with a derived code key', async () => {
+      const slug = freshSlug();
+      const response = await onboard(
+        body(slug, {
+          agency: {
+            name: `Agency ${slug}`,
+            slug,
+            // Lower case and padded on the way in: the stored code keeps what
+            // the operator typed, the key is what matching uses.
+            carrierAppointments: [
+              {
+                carrierId: travelersId.toString(),
+                carrierAgencyCode: ' 123456 ',
+              },
+            ],
+            npn: '8675309',
+          },
+        }),
+      ).expect(201);
+
+      const agencyId = (response.body as OnboardResponseBody).agency.id;
+      const agency = await agencies.findById(agencyId).lean();
+      expect(agency?.npn).toBe('8675309');
+      expect(agency?.carrierAppointments).toHaveLength(1);
+      expect(agency?.carrierAppointments[0]).toMatchObject({
+        carrierAgencyCode: '123456',
+        codeKey: '123456',
+        // The first appointment is the primary by construction.
+        isPrimary: true,
+        active: true,
+      });
+    });
+
+    it('refuses a second agency claiming the same carrier and code', async () => {
+      const first = freshSlug();
+      await onboard(
+        body(first, {
+          agency: {
+            name: `Agency ${first}`,
+            slug: first,
+            carrierAppointments: [
+              {
+                carrierId: travelersId.toString(),
+                carrierAgencyCode: '654321',
+              },
+            ],
+          },
+        }),
+      ).expect(201);
+
+      const second = freshSlug();
+      const response = await onboard(
+        body(second, {
+          agency: {
+            name: `Agency ${second}`,
+            slug: second,
+            // Case-insensitively the same code, which must not slip past.
+            carrierAppointments: [
+              {
+                carrierId: travelersId.toString(),
+                carrierAgencyCode: '654321',
+              },
+            ],
+          },
+        }),
+      ).expect(409);
+
+      // The message has to name the carrier and the code — an operator cannot
+      // act on "duplicate key on carrierAppointments.codeKey".
+      const message = (response.body as { message: string }).message;
+      expect(message).toContain('Travelers');
+      expect(message).toContain('654321');
+
+      // Nothing was written: the check runs before the first insert.
+      expect(await agencies.findOne({ slug: second }).lean()).toBeNull();
+    });
+
+    it('accepts the same code under a different carrier', async () => {
+      // A code is only meaningful inside its carrier — two carriers can issue
+      // the same string to different agencies, which is the whole reason the
+      // model is a list of pairs.
+      const shared = 'A0B9049';
+      const first = freshSlug();
+      await onboard(
+        body(first, {
+          agency: {
+            name: `Agency ${first}`,
+            slug: first,
+            carrierAppointments: [
+              { carrierId: allstateId.toString(), carrierAgencyCode: shared },
+            ],
+          },
+        }),
+      ).expect(201);
+
+      const second = freshSlug();
+      await onboard(
+        body(second, {
+          agency: {
+            name: `Agency ${second}`,
+            slug: second,
+            carrierAppointments: [
+              { carrierId: travelersId.toString(), carrierAgencyCode: shared },
+            ],
+          },
+        }),
+      ).expect(201);
+    });
+
+    it('onboards two agencies that have no appointments at all', async () => {
+      /*
+       * The regression test for the partial filter on the unique index. A
+       * multikey index over an empty array emits one entry keyed `undefined`,
+       * so under a bare `unique: true` the *second* agency here would die with
+       * E11000 — and onboarding would break for everyone who skipped the step.
+       */
+      const first = freshSlug();
+      await onboard(body(first)).expect(201);
+      const second = freshSlug();
+      await onboard(body(second)).expect(201);
+
+      expect(await agencies.countDocuments({ slug: first })).toBe(1);
+      expect(await agencies.countDocuments({ slug: second })).toBe(1);
+    });
+
+    it('stores nothing for a carrier picked without a code', async () => {
+      // The operator knows who appointed the agency but not the code. The row
+      // is accepted and dropped; the owner supplies the code in their own setup.
+      const slug = freshSlug();
+      const response = await onboard(
+        body(slug, {
+          agency: {
+            name: `Agency ${slug}`,
+            slug,
+            carrierAppointments: [{ carrierId: allstateId.toString() }],
+          },
+        }),
+      ).expect(201);
+
+      const agencyId = (response.body as OnboardResponseBody).agency.id;
+      expect(
+        (await agencies.findById(agencyId).lean())?.carrierAppointments,
+      ).toEqual([]);
+    });
+
+    it('refuses an agency-scoped carrier as an appointment target', async () => {
+      // Appointments are unique across tenants, so a carrier only one agency
+      // can see makes "the same carrier" undecidable.
+      const custom = await carriers.create({
+        agencyId: ctx.agencyId.toString(),
+        name: 'Backyard Mutual',
+        slug: 'backyard-mutual',
+        active: true,
+      });
+      const slug = freshSlug();
+      await onboard(
+        body(slug, {
+          agency: {
+            name: `Agency ${slug}`,
+            slug,
+            carrierAppointments: [
+              { carrierId: custom._id.toString(), carrierAgencyCode: 'X1' },
+            ],
+          },
+        }),
+      ).expect(400);
+    });
+
+    it('refuses two primaries', async () => {
+      const slug = freshSlug();
+      await onboard(
+        body(slug, {
+          agency: {
+            name: `Agency ${slug}`,
+            slug,
+            carrierAppointments: [
+              {
+                carrierId: allstateId.toString(),
+                carrierAgencyCode: 'P1',
+                isPrimary: true,
+              },
+              {
+                carrierId: travelersId.toString(),
+                carrierAgencyCode: 'P2',
+                isPrimary: true,
+              },
+            ],
+          },
+        }),
+      ).expect(400);
+    });
+
+    it('reports a taken pair through the availability check', async () => {
+      const slug = freshSlug();
+      await onboard(
+        body(slug, {
+          agency: {
+            name: `Agency ${slug}`,
+            slug,
+            carrierAppointments: [
+              { carrierId: allstateId.toString(), carrierAgencyCode: 'AV1234' },
+            ],
+          },
+        }),
+      ).expect(201);
+
+      const availability = (query: string) =>
+        request(app.getHttpServer())
+          .get(`/api/v1/platform/agencies/availability?${query}`)
+          .set('Authorization', `Bearer ${adminToken}`);
+
+      const taken = await availability(
+        `carrierId=${allstateId.toString()}&carrierAgencyCode=av1234`,
+      ).expect(200);
+      expect(
+        (taken.body as { carrierAppointmentAvailable: boolean })
+          .carrierAppointmentAvailable,
+      ).toBe(false);
+
+      const free = await availability(
+        `carrierId=${travelersId.toString()}&carrierAgencyCode=AV1234`,
+      ).expect(200);
+      expect(
+        (free.body as { carrierAppointmentAvailable: boolean })
+          .carrierAppointmentAvailable,
+      ).toBe(true);
+    });
+
+    it('refuses half of the availability pair', async () => {
+      // A code without its carrier is not a question that has an answer.
+      await request(app.getHttpServer())
+        .get('/api/v1/platform/agencies/availability?carrierAgencyCode=A0B9049')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(400);
     });
   });
 
