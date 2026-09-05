@@ -5,6 +5,7 @@ import {
   AuditTemplateSchema,
 } from '../audit-templates/schemas/audit-template.schema';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
+import { AgencyCarrierAppointmentsModule } from '../agency-carrier-appointments/agency-carrier-appointments.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import {
   UserRole,
@@ -40,6 +41,11 @@ import { PlatformUsersService } from './platform-users.service';
   imports: [
     PermissionsModule,
     UsersModule,
+    // Onboarding records the tenant's carrier appointments, and must do it
+    // under the same rules the agency's own settings page uses (PAC-93). The
+    // dependency is one-way: that module registers the `Agency` schema itself
+    // rather than importing this one back.
+    AgencyCarrierAppointmentsModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       // Read by the cross-agency user directory (PAC-70). Schemas only — the

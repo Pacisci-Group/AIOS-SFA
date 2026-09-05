@@ -66,6 +66,15 @@ export interface AgencyAvailabilityResponse {
    */
   emailAvailable: boolean | null;
   tickerAvailable: boolean | null;
+  /**
+   * Whether the `(carrierId, carrierAgencyCode)` pair is unclaimed (PAC-93).
+   *
+   * Worth answering at the field rather than at submit: a taken code is
+   * released only by *removing* the other agency's appointment, never by
+   * deactivating it, so discovering the clash five steps later is expensive to
+   * act on.
+   */
+  carrierAppointmentAvailable: boolean | null;
 }
 
 /**
