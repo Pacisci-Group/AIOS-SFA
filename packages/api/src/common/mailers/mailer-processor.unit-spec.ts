@@ -3,6 +3,7 @@ import { join } from 'path';
 import { parse } from 'csv-parse/sync';
 import {
   APPENDED_COLUMNS,
+  DEFAULT_MAILER_DISCOUNTS,
   campaignNumberForDate,
   discountPremium,
   homeAgeDiscount,
@@ -314,6 +315,57 @@ describe('discountPremium', () => {
     );
     expect(premium).toBeCloseTo(6030, 6);
     expect(floored).toBe(false);
+  });
+});
+
+describe('per-campaign discount rules', () => {
+  it('defaults to the table every run so far has used', () => {
+    expect(squareFootageDiscount(2500)).toBe(
+      squareFootageDiscount(2500, DEFAULT_MAILER_DISCOUNTS.squareFootage),
+    );
+    expect(homeAgeDiscount(2017, 2026)).toBe(
+      homeAgeDiscount(2017, 2026, DEFAULT_MAILER_DISCOUNTS.homeAge),
+    );
+  });
+
+  it("applies a campaign's own bands, whatever order they are given in", () => {
+    const bands = [
+      { minSquareFeet: 1000, rate: 0.1 },
+      { minSquareFeet: 3000, rate: 0.5 },
+    ];
+    expect(squareFootageDiscount(999, bands)).toBe(0);
+    expect(squareFootageDiscount(1000, bands)).toBe(0.1);
+    expect(squareFootageDiscount(2999, bands)).toBe(0.1);
+    expect(squareFootageDiscount(3000, bands)).toBe(0.5);
+  });
+
+  it("applies a campaign's own age rule", () => {
+    const rule = { maxNewYears: 20, newRate: 0.02, oldRate: 0.2 };
+    expect(homeAgeDiscount(2006, 2026, rule)).toBe(0.02);
+    expect(homeAgeDiscount(2005, 2026, rule)).toBe(0.2);
+  });
+
+  it("prices a file with the campaign's rules, not the defaults", () => {
+    const fx = loadFixture();
+    const input = reconstructInput(fx);
+    const settings = settingsFromFixture(fx);
+    const noDiscount = processMailerFile(input.headers, input.rows, {
+      ...settings,
+      premiumFloor: 0,
+      discounts: {
+        squareFootage: [],
+        homeAge: { maxNewYears: 0, newRate: 0, oldRate: 0 },
+      },
+    });
+    const out = (name: string) => noDiscount.headers.indexOf(name);
+    // With no discount and no floor the offer is the quote itself.
+    for (const row of noDiscount.rows) {
+      const quote = Number(
+        String(row[out('totalpremi')]).replace(/[^\d.]/g, ''),
+      );
+      expect(row[out('New Yearly Premium 2')] as number).toBeCloseTo(quote, 6);
+    }
+    expect(noDiscount.stats.floorRaised).toBe(0);
   });
 });
 

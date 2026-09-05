@@ -93,3 +93,48 @@ of rows with values like `SNNNN4`, and it sits among the `dpv_*` / `coa_*` /
 `ste_rtncd` address-standardisation columns. It stays in `source.raw` and must
 never be promoted into a campaign status — PAC-61 open item 3 is still open, and
 this column does not answer it.
+
+
+## The stage-2 vendor file (`SFA-QBP.xlsx`, 2026-09-04)
+
+David supplied the file the mail vendor returns **before** ApexReports' SFA
+Processor runs — the input PAC-71's "run a campaign" takes. Measured on the
+real week-36 file (8.8 MB, **20,024 rows, 124 columns**, one sheet, `.xlsx`):
+
+| | week 36 vendor file |
+|---|---|
+| columns | **124 = the 132 above minus the 8 the processor appends** (`FileName`, `zip1`, `zip2`, `New Yearly Premium 2`, `Zip Codes`, `Right_Name`, `New Control Number`, `Campaign Number`) — same names, same order, nothing extra |
+| `yearlyprem` / `totalpremi` | `"$2,260.53/year*"` / `"$2,260.53"` — **the same number on 20,024/20,024 rows**. The processor discounts `yearlyprem` and overwrites it; that is why the two disagree in the output |
+| `monthlypre` | vendor's own `"$188.00"`; equals `yearlyprem ÷ 12` on 79 rows only — overwritten |
+| `agencyphon` | one value, `918-417-7400`, on every row — overwritten with the market phone |
+| `cfield53` | `All Peril` on every row — the reason the processor blanks it |
+| `quotedate` | **two** values, `46268`/`46269` → 2026-09-03/04 (ISO week 36). Not single-valued as the week-29 output was |
+| `controlno` | `#`+UUID, unique, never empty; `New Control Number` absent (derived) |
+| `zip` | ZIP+4 on 100% of rows; `pst_seq` and `recordid` present (vendor order, not 1..N) |
+| `phone` / `emailaddre` / `birthdate` | 502 (2.5%) / 0 / 0 |
+| `donotmail` | present; `donotcall` `No` throughout |
+| columns empty on every row | 31 (Home file — an Auto file fills them) |
+| duplicate rows | 0 |
+
+**The `agency*` block comes from Allstate.** `agencyid` (`A0B9049`),
+`agencyname`, `agencyfirs`/`agencylast` (Brian Smith), `agencyemai`
+(`a0b9049@allstate.com`), `agencyweb` (his `agents.allstate.com` page) are the
+issuing agent's Allstate profile, present in the vendor file before ApexReports
+touches it and never written by Apex. It identifies whose account the quotes
+were issued under. PAC-71 makes it the **default assignment rule**: a row goes
+to the agency whose `Agency.allstateAgencyId` matches, unless David overrides
+by picking agencies explicitly or choosing all. Forty-one column names are
+truncated to exactly 10 characters (`agencyfirs`, `emailaddre`, `quotestatu`) —
+the DBF field-name limit, i.e. the mail vendor's presort software passed the
+file through.
+
+**It is XLSX, not CSV.** The importer is CSV-only today (`csv-parse`); PAC-71
+needs an XLSX reader on the parse path from day one.
+
+`zip-markets.csv` beside this file is the ZIP → market table the processor
+joins on, pulled 2026-09-04 from the Google Sheet ApexReports maintains
+(565 rows: Oklahoma City 295 · Tulsa 245 · 580 Group 24 · Unknown 1 — one of
+them a four-digit typo, `4031`, which the seed must reject or fix). No PII.
+PAC-71 seeds the per-agency table from it and retires the Sheet.
+
+The vendor file itself is **not** committed — real names and addresses.

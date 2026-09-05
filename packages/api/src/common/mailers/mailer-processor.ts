@@ -27,11 +27,17 @@
  * ## What the fixture taught us that the code did not say
  *
  * - The base premium Apex reads from `yearlyprem` is the vendor's `totalpremi`
- *   — the vendor writes the same quoted premium to both, and Apex overwrites
- *   `yearlyprem` with the offer. That is why the two never agree afterwards
- *   (handoff doc §3), and why the "which premium do producers quote" question
- *   has a real answer: `yearlyprem` is the mailed offer, `totalpremi` is the
- *   quote it was discounted from.
+ *   — the vendor writes the same quoted premium to both (`"$2,260.53/year*"`
+ *   and `"$2,260.53"`, confirmed on all 20,024 rows of the real week-36 vendor
+ *   file), and Apex overwrites `yearlyprem` with the offer. That is why the two
+ *   never agree afterwards (handoff doc §3), and why the "which premium do
+ *   producers quote" question has a real answer: `yearlyprem` is the mailed
+ *   offer, `totalpremi` is the quote it was discounted from.
+ * - The vendor file also explains three steps that look arbitrary in Apex:
+ *   `cfield53` is blanked because the vendor fills it with `All Peril` on every
+ *   row; `agencyphon` is overwritten because the vendor writes one number
+ *   (918-417-7400) everywhere; `monthlypre` is recomputed because the vendor's
+ *   is a rounded `"$188.00"` that does not equal the offer ÷ 12.
  * - The week-29 run used a floor of **$1,886.15** (Apex's form default today is
  *   $1,916.44), and **188 of 197** sampled rows landed on it. The "offer" is
  *   the floor for ~95% of prospects; the discount table only matters for large,
@@ -63,7 +69,45 @@ export interface MailerProcessorSettings {
    * a re-run of a past campaign must pass the original year.
    */
   runYear?: number;
+  /**
+   * The pricing rules. David sets these **per campaign**; the defaults are
+   * what Apex hard-codes and what every run seen so far used. A campaign must
+   * store the rules it ran with, or it cannot be reproduced.
+   */
+  discounts?: MailerDiscountRules;
 }
+
+/** One square-footage band: homes at or above `minSquareFeet` get `rate` off. */
+export interface SquareFootageBand {
+  minSquareFeet: number;
+  /** Fraction, e.g. `0.44`. */
+  rate: number;
+}
+
+export interface MailerDiscountRules {
+  /**
+   * Evaluated largest `minSquareFeet` first; the first band the home reaches
+   * wins. A home below every band gets no size discount.
+   */
+  squareFootage: SquareFootageBand[];
+  homeAge: {
+    /** A home this many years old or newer gets `newRate`; older gets `oldRate`. */
+    maxNewYears: number;
+    newRate: number;
+    oldRate: number;
+  };
+}
+
+/** Apex's table — see `Part2.tsx`. */
+export const DEFAULT_MAILER_DISCOUNTS: MailerDiscountRules = {
+  squareFootage: [
+    { minSquareFeet: 2500, rate: 0.44 },
+    { minSquareFeet: 2000, rate: 0.36 },
+    { minSquareFeet: 1500, rate: 0.32 },
+    { minSquareFeet: 1000, rate: 0.29 },
+  ],
+  homeAge: { maxNewYears: 9, newRate: 0.04, oldRate: 0.1 },
+};
 
 export interface MailerPremiumStats {
   min: number;
@@ -137,11 +181,14 @@ export const DEDUPE_COLUMNS = [
  * Boundaries are inclusive at the bottom of each band (`>=`), exactly as Apex
  * has them. Below 1,000 sq ft there is no size discount at all.
  */
-export function squareFootageDiscount(squareFeet: number): number {
-  if (squareFeet >= 2500) return 0.44;
-  if (squareFeet >= 2000) return 0.36;
-  if (squareFeet >= 1500) return 0.32;
-  if (squareFeet >= 1000) return 0.29;
+export function squareFootageDiscount(
+  squareFeet: number,
+  bands: SquareFootageBand[] = DEFAULT_MAILER_DISCOUNTS.squareFootage,
+): number {
+  const ordered = [...bands].sort((a, b) => b.minSquareFeet - a.minSquareFeet);
+  for (const band of ordered) {
+    if (squareFeet >= band.minSquareFeet) return band.rate;
+  }
   return 0;
 }
 
@@ -152,8 +199,12 @@ export function squareFootageDiscount(squareFeet: number): number {
  * the 10% band — Apex behaves the same way, and that is what the mailed
  * offers were built on, so it is preserved rather than "fixed".
  */
-export function homeAgeDiscount(yearBuilt: number, runYear: number): number {
-  return runYear - yearBuilt <= 9 ? 0.04 : 0.1;
+export function homeAgeDiscount(
+  yearBuilt: number,
+  runYear: number,
+  rule: MailerDiscountRules['homeAge'] = DEFAULT_MAILER_DISCOUNTS.homeAge,
+): number {
+  return runYear - yearBuilt <= rule.maxNewYears ? rule.newRate : rule.oldRate;
 }
 
 export interface DiscountedPremium {
@@ -176,9 +227,11 @@ export function discountPremium(
   yearBuilt: number,
   runYear: number,
   floor: number,
+  rules: MailerDiscountRules = DEFAULT_MAILER_DISCOUNTS,
 ): DiscountedPremium {
   const discount =
-    squareFootageDiscount(squareFeet) + homeAgeDiscount(yearBuilt, runYear);
+    squareFootageDiscount(squareFeet, rules.squareFootage) +
+    homeAgeDiscount(yearBuilt, runYear, rules.homeAge);
   const discounted = base - base * discount;
   const floored = discounted < floor;
   return { premium: floored ? floor : discounted, discount, floored };
@@ -265,6 +318,7 @@ export function processMailerFile(
   settings: MailerProcessorSettings,
 ): ProcessedMailerFile {
   const runYear = settings.runYear ?? new Date().getFullYear();
+  const discounts = settings.discounts ?? DEFAULT_MAILER_DISCOUNTS;
   const campaignNumber = normalizeCampaignNumber(settings.campaignNumber);
 
   const outHeaders = headers.map((h) => text(h).trim());
@@ -299,6 +353,7 @@ export function processMailerFile(
       apexNumber(source[at.yearbuilt]),
       runYear,
       settings.premiumFloor,
+      discounts,
     );
     if (floored) floorRaised += 1;
 
