@@ -1,0 +1,45 @@
+meta {
+  name: Login as Super Admin
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{adminEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Its own variable, never `accessToken`: a platform admin holds `platform:*`
+  // and no module permissions at all, so a platform token would fail every
+  // agency-scoped folder that runs after this one.
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    bru.setVar("platformAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+}
+
+docs {
+  # POST /auth/login — platform helper for this folder
+
+  Captures `platformAccessToken` for **List Platform Carriers**. Repeated here
+  rather than relied on from `Platform Agencies`, because the CLI walks folders
+  alphabetically and this one runs first.
+}

@@ -101,7 +101,7 @@ docs {
   | field | notes |
   |---|---|
   | `detected` | What the file says about itself, read off the first data row. Safe because `agencyid`, `agencyname`, `Campaign Number`, `FileName` and `quotedate` each hold exactly **one** distinct value across all 20,405 rows of a real file. The importer verifies that rather than assuming it. |
-  | `agencyMismatch` | The file's `agencyid` disagrees with the selected agency's `allstateAgencyId`. Absence of either is **not** a mismatch — there is nothing to compare, and a confirmation nobody can act on just trains people to click through it. |
+  | `agencyMismatch` | The file's `agencyid` matches no **active Allstate appointment** on the selected agency (PAC-93). Absence is **not** a mismatch — no `agencyid` column, no Allstate row in the carrier catalog, or no active appointment all mean there is nothing to compare, and a confirmation nobody can act on just trains people to click through it. |
   | `counts.skipped` | The authoritative total. |
   | `rejections` | A capped **sample** (50), not the full list. |
   | `rawFileUrl` | Short-lived presigned download, minted per read because presigned URLs expire — a report left open for ten minutes would hand out a dead link. |

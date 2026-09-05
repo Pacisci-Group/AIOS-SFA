@@ -30,16 +30,18 @@ tests {
     expect(res.getStatus()).to.equal(200);
   });
 
-  test("carries the mailer identity fields (PAC-73)", function () {
+  test("carries the mailer identity fields (PAC-73, PAC-93)", function () {
     const agency = res.getBody().find((a) => a.slug === "smith-family-agency");
     expect(agency, "migrated agency is present (run the SmartSuite migration)").to.exist;
     // Set by the SmartSuite migration, which provisions this tenant — NOT by
     // the core seed, which creates no agency. `ticker` resolves BigQuery rows
-    // to a tenant; `allstateAgencyId` is what an uploaded file's `agencyid` is
-    // checked against. Without them the backfill imports nothing and every
-    // upload warns.
+    // to a tenant; the Allstate carrier appointment is what an uploaded file's
+    // `agencyid` is checked against. Without them the backfill imports nothing
+    // and every upload warns.
     expect(agency.ticker).to.equal("SFA");
-    expect(agency.allstateAgencyId).to.equal("A0B9049");
+    const appointments = agency.carrierAppointments || [];
+    const allstate = appointments.find((a) => a.active && a.codeKey === "A0B9049");
+    expect(allstate, "an active Allstate appointment with code A0B9049").to.exist;
   });
 }
 
@@ -63,7 +65,10 @@ docs {
       "slug": "smith-family-agency",
       "status": "active",
       "ticker": "SFA",
-      "allstateAgencyId": "A0B9049",
+      "carrierAppointments": [
+        { "carrierId": "6a86…", "carrierAgencyCode": "A0B9049",
+          "codeKey": "A0B9049", "isPrimary": true, "active": true }
+      ],
       "modules": { "leads": { "enabled": true } }
     }
   ]
