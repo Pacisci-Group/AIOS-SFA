@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { ImportMailersFn } from './functions/import-mailers.fn';
 import { SendInviteEmailFn } from './functions/send-invite-email.fn';
 import { SendPasswordResetEmailFn } from './functions/send-password-reset-email.fn';
 import { SweepEventLogFn } from './functions/sweep-event-log.fn';
@@ -12,13 +11,6 @@ import {
   EmailMessageSchema,
 } from './email/schemas/email-message.schema';
 import { WorkerIndexesService } from './worker-indexes.service';
-import { Mailer, MailerSchema } from '../mailers/schemas/mailer.schema';
-import {
-  MailerImportRun,
-  MailerImportRunSchema,
-} from '../mailers/schemas/mailer-import-run.schema';
-import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
-import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
 import { StorageModule } from '../storage/storage.module';
 
 /**
@@ -48,21 +40,13 @@ import { StorageModule } from '../storage/storage.module';
   imports: [
     MongooseModule.forFeature([
       { name: EmailMessage.name, schema: EmailMessageSchema },
-      // Owned by the API; registered here so the mailer import can read and
-      // write them. Schemas are the one thing the worker boundary lets across
-      // (see `eslint.config.mjs`) — duplicating them would be strictly worse.
-      { name: Mailer.name, schema: MailerSchema },
-      { name: MailerImportRun.name, schema: MailerImportRunSchema },
-      { name: Agency.name, schema: AgencySchema },
-      // Resolves the mailer file's carrier so the upload cross-check can compare
-      // the file's `agencyid` against the right appointment (PAC-93).
-      { name: Carrier.name, schema: CarrierSchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports
     // it, and `WorkerRootModule` does not import `AppModule`. Without this the
     // standalone worker would boot fine and then fail to resolve
-    // `StorageService` the first time a file needed reading.
+    // `StorageService` the first time a file needed reading. The mailer campaign
+    // jobs (PAC-71) are the next thing that will need it.
     StorageModule,
   ],
   providers: [
@@ -78,7 +62,6 @@ import { StorageModule } from '../storage/storage.module';
     SendInviteEmailFn,
     SendPasswordResetEmailFn,
     SweepEventLogFn,
-    ImportMailersFn,
   ],
 })
 export class WorkerModule {}

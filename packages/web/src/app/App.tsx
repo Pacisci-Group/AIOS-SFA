@@ -74,9 +74,6 @@ const CarrierAppointmentsPage = lazy(
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
-const AddMailersPage = lazy(
-  () => import('@/features/platform/AddMailersPage'),
-);
 const OnboardAgencyPage = lazy(
   () => import('@/features/platform/onboard/OnboardAgencyPage'),
 );
@@ -676,23 +673,6 @@ export function App() {
                     </LazyPage>
                   }
                 />
-                <Route
-                  element={
-                    <RequirePermission
-                      permission={PlatformPermission.MailersWrite}
-                      redirectTo="/admin"
-                    />
-                  }
-                >
-                  <Route
-                    path="/admin/mailers/add"
-                    element={
-                      <LazyPage>
-                        <AddMailersPage />
-                      </LazyPage>
-                    }
-                  />
-                </Route>
                 {/* Onboarding writes a whole tenant, so it gates on the write
                     permission rather than the panel's read one, and falls back
                     to the panel rather than to `/` — which would bounce the

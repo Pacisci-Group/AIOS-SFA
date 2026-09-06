@@ -71,6 +71,10 @@ import {
   AuditTemplateSchema,
 } from '../../audit-templates/schemas/audit-template.schema';
 import { Mailer, MailerSchema } from '../../mailers/schemas/mailer.schema';
+import {
+  MailerCampaign,
+  MailerCampaignSchema,
+} from '../../mailers/schemas/mailer-campaign.schema';
 import { Carrier, CarrierSchema } from '../../carriers/schemas/carrier.schema';
 import { PermissionsModule } from '../../permissions/permissions.module';
 import { DemoSeedService } from './demo-seed.service';
@@ -125,6 +129,9 @@ import { DemoSeedService } from './demo-seed.service';
       { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
       { name: AuditTemplate.name, schema: AuditTemplateSchema },
       { name: Mailer.name, schema: MailerSchema },
+      // `Mailer.campaignId` is required (PAC-71), so the demo mailers need a
+      // campaign of their own — marked `source: 'demo'` and purged with them.
+      { name: MailerCampaign.name, schema: MailerCampaignSchema },
       { name: Carrier.name, schema: CarrierSchema },
     ]),
   ],

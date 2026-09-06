@@ -23,6 +23,10 @@ import {
   sessionOptions,
   StepDeps,
 } from './intake.types';
+import {
+  MailerLinkResolver,
+  type ResolvedMailerLink,
+} from './mailer-link.resolver';
 
 /** A new lead starts here — `LEAD_STATUSES[0]`. */
 const INITIAL_STATUS = LEAD_STATUSES[0];
@@ -127,6 +131,7 @@ interface LeadRefs {
 export class ResolveLeadStep {
   constructor(
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
+    private readonly mailerLinks: MailerLinkResolver,
   ) {}
 
   async run(
@@ -134,6 +139,11 @@ export class ResolveLeadStep {
     refs: LeadRefs,
     deps: StepDeps,
   ): Promise<ResolvedLead> {
+    // Resolve the mailer before deduping: signal 2 keys on it, and `create`
+    // stores it. The drawer supplies its own already-certain link; every other
+    // caller only has the printed string a submitter typed.
+    const link = await this.resolveMailerLink(input, deps);
+
     // --- Signal 1: submission token (strongest) ---------------------------
     // A hit returns immediately with NO update. A replay is a pure no-op: the
     // caller is re-sending a request we already fully processed, and merging
@@ -145,15 +155,31 @@ export class ResolveLeadStep {
       if (byToken) return { leadId: byToken._id, isNew: false };
     }
 
-    // --- Signal 2: quote control number -----------------------------------
-    const qcn = input.quoteControlNumber?.trim();
-    if (qcn) {
-      const byQcn = await this.leadModel
-        .findOne({ agencyId: deps.ctx.agencyId, quoteControlNumber: qcn })
+    // --- Signal 2: the mailer, or its control-number key -------------------
+    //
+    // Keyed on the resolved link rather than on the raw `quoteControlNumber`
+    // string it used to compare. Both printed forms of one control number are
+    // different strings, and a hand-typed one is stored unnormalized, so string
+    // equality missed the very cases this signal exists for. After the PAC-71
+    // backfill every lead carrying a control number also carries its key.
+    if (link) {
+      const byMailer = await this.leadModel
+        .findOne(
+          link.mailerId
+            ? { agencyId: deps.ctx.agencyId, 'mailer.mailerId': link.mailerId }
+            : {
+                agencyId: deps.ctx.agencyId,
+                'mailer.controlNumberKey': link.key,
+                // Only an *unlinked* lead: one already bound to a mailer was
+                // matched by the branch above, or belongs to a different mailer
+                // whose key merely normalizes the same way.
+                'mailer.mailerId': null,
+              },
+        )
         .session(deps.session);
-      if (byQcn) {
-        await this.mergeIntoExisting(byQcn, input, refs, deps);
-        return { leadId: byQcn._id, isNew: false };
+      if (byMailer) {
+        await this.mergeIntoExisting(byMailer, input, refs, deps, link);
+        return { leadId: byMailer._id, isNew: false };
       }
     }
 
@@ -184,12 +210,35 @@ export class ResolveLeadStep {
         .sort({ createdAt: -1 })
         .session(deps.session);
       if (byAddress) {
-        await this.mergeIntoExisting(byAddress, input, refs, deps);
+        await this.mergeIntoExisting(byAddress, input, refs, deps, link);
         return { leadId: byAddress._id, isNew: false };
       }
     }
 
-    return this.create(input, refs, addressKey, deps);
+    return this.create(input, refs, addressKey, deps, link);
+  }
+
+  /**
+   * The mailer this submission points at, if any.
+   *
+   * The drawer hands over a certain link; anything else gets one derived from
+   * the typed control number, which may resolve to a mailer, to a key alone, or
+   * to nothing at all. Never throws — see `MailerLinkResolver`.
+   */
+  private async resolveMailerLink(
+    input: IntakeInput,
+    deps: StepDeps,
+  ): Promise<ResolvedMailerLink | null> {
+    if (input.mailer) {
+      return {
+        mailerId: input.mailer.mailerId,
+        campaignId: input.mailer.campaignId,
+        key: input.mailer.controlNumberKey,
+      };
+    }
+    const qcn = input.quoteControlNumber?.trim();
+    if (!qcn) return null;
+    return this.mailerLinks.resolve(qcn, deps.ctx.agencyId);
   }
 
   private async create(
@@ -197,6 +246,7 @@ export class ResolveLeadStep {
     refs: LeadRefs,
     addressKey: string | null,
     deps: StepDeps,
+    link: ResolvedMailerLink | null,
   ): Promise<ResolvedLead> {
     const now = new Date();
     const email = normalizeEmail(input.primaryContact.email);
@@ -229,6 +279,7 @@ export class ResolveLeadStep {
           // dwelling belongs to the policy row, and the lead-level field exists
           // only for migrated SmartSuite records.
           quoteControlNumber: input.quoteControlNumber?.trim() || undefined,
+          mailer: buildMailerLink(input, link, deps),
           producerId: deps.ctx.producerId,
           householdId: refs.householdId,
           primaryContactId: refs.contactId,
@@ -267,6 +318,7 @@ export class ResolveLeadStep {
     input: IntakeInput,
     refs: LeadRefs,
     deps: StepDeps,
+    link: ResolvedMailerLink | null,
   ): Promise<void> {
     const email = normalizeEmail(input.primaryContact.email);
     const phone = normalizePhone(input.primaryContact.phone);
@@ -290,6 +342,16 @@ export class ResolveLeadStep {
     if (!lead.primaryContactId) set.primaryContactId = refs.contactId;
     if (!lead.quoteControlNumber && input.quoteControlNumber?.trim()) {
       set.quoteControlNumber = input.quoteControlNumber.trim();
+    }
+    // Fill-if-empty, the same rule as the control number above. ⚠ A lead already
+    // linked to a *different* mailer keeps that link and the new one goes
+    // unrecorded — the address dedupe can land a second mailer's submission on
+    // an existing lead, and silently repointing attribution would rewrite which
+    // campaign produced it. The caller still learns the lead already existed
+    // through `alreadyExisted`.
+    if (!lead.mailer?.mailerId && !lead.mailer?.controlNumberKey) {
+      const mailer = buildMailerLink(input, link, deps);
+      if (mailer) set.mailer = mailer;
     }
 
     // Additive, like the contact details above: someone re-enquiring about a
@@ -319,4 +381,34 @@ export class ResolveLeadStep {
       sessionOptions(deps.session),
     );
   }
+}
+
+/**
+ * The `Lead.mailer` sub-document to store, or `undefined` when there is nothing
+ * worth storing.
+ *
+ * `matchedBy` records **how the link was made**, never a flattering guess:
+ * `drawer` only when the caller resolved the mailer itself, `control_number`
+ * when we resolved a typed string to exactly one mailer. A key with no mailer
+ * gets no `matchedBy` at all — nothing has been matched yet, and the campaign
+ * commit's reconcile step is what fills it in.
+ */
+function buildMailerLink(
+  input: IntakeInput,
+  link: ResolvedMailerLink | null,
+  deps: StepDeps,
+): Record<string, unknown> | undefined {
+  if (!link) return undefined;
+  return {
+    mailerId: link.mailerId,
+    campaignId: link.campaignId,
+    controlNumberKey: link.key,
+    ...(link.mailerId
+      ? {
+          matchedBy: input.mailer ? input.mailer.matchedBy : 'control_number',
+          linkedAt: new Date(),
+        }
+      : {}),
+    linkedBy: deps.ctx.actorUserId,
+  };
 }

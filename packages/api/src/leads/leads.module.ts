@@ -25,7 +25,9 @@ import {
   QuoteRecapSchema,
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import { Mailer, MailerSchema } from '../mailers/schemas/mailer.schema';
 import { LeadIntakeService } from './intake/lead-intake.service';
+import { MailerLinkResolver } from './intake/mailer-link.resolver';
 import { LinkEntitiesStep } from './intake/link-entities.step';
 import { ResolveContactStep } from './intake/resolve-contact.step';
 import { ResolveHouseholdStep } from './intake/resolve-household.step';
@@ -54,6 +56,12 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
       { name: PriorInsurance.name, schema: PriorInsuranceSchema },
       { name: PriorPolicy.name, schema: PriorPolicySchema },
       { name: User.name, schema: UserSchema },
+      // Resolves a typed quote control number to its mailer at write time
+      // (PAC-71). A *schema* registration, not a module import: `MailersModule`
+      // already imports this one for `LeadIntakeService`, so importing it back
+      // would be a cycle needing `forwardRef`. Registering another module's
+      // schema is the house pattern — see the note in `crm.module.ts`.
+      { name: Mailer.name, schema: MailerSchema },
     ]),
     // `LeadTicketsService` — opens a lead's quote ticket from Start Quote, and
     // resolves it when the lead reaches a terminal status. The dependency runs
@@ -73,6 +81,7 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     ResolveHouseholdStep,
     ResolveLeadStep,
     LinkEntitiesStep,
+    MailerLinkResolver,
   ],
   // `LeadIntakeService` so the public share-link controller can run the same
   // pipeline; `LeadAccessService` so every lead-scoped write path (quote

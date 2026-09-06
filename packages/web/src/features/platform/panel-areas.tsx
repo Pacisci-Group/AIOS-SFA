@@ -1,7 +1,6 @@
 import {
   Bug,
   Building2,
-  Mail,
   Megaphone,
   Rocket,
   UserSearch,
@@ -65,12 +64,5 @@ export const PANEL_AREAS: PanelArea[] = [
     description: "Everything filed from the in-app Report a bug button.",
     to: "/admin/bugs",
     icon: Bug,
-  },
-  {
-    key: "add-mailers",
-    label: "Add Mailers",
-    description: "Upload an agency's RTP file and import the mailers.",
-    to: "/admin/mailers/add",
-    icon: Mail,
   },
 ];

@@ -1,10 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import type {
   IntakeChannel,
+  LeadMailerMatchedBy,
   LeadTemperature,
   NormalizedLeadSource,
 } from '@sfa/shared';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, IndexOptions, Types } from 'mongoose';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -76,6 +77,67 @@ export interface LeadIntakeSource {
 }
 
 /**
+ * The mailer this lead came from, and how we know (PAC-71).
+ *
+ * ## Why a real link and not just the printed string
+ *
+ * `quoteControlNumber` stays, but it is a **display and search string**, not a
+ * join key: a producer typing a control number into an intake form stores it
+ * unnormalized, so "which campaign produced this lead" was a string join that
+ * silently missed. This sub-document is the join, and `campaignId` is
+ * denormalized off the mailer at link time so a campaign's attributed-lead
+ * count is one indexed count rather than a two-hop lookup.
+ *
+ * ⚠ `campaignId` is stamped once and **never rewritten**. An append-mode commit
+ * moves a mailer to a newer campaign; the lead stays attributed to the campaign
+ * that actually produced it, which is the only reading of the number that means
+ * anything.
+ *
+ * ## Three fields, three states
+ *
+ * - `mailerId` set — a real link. `matchedBy` says how strong it is.
+ * - `mailerId` null with `controlNumberKey` set — the number is known but no
+ *   mailer matched it yet, either because the campaign has not been imported or
+ *   because another agency's lead already owns the mailer. The commit's
+ *   reconcile step walks exactly these.
+ * - the whole sub-document absent — no control number was ever supplied.
+ */
+@Schema({ _id: false })
+export class LeadMailerLink {
+  /**
+   * ⚠ Unique **platform-wide** (see the index below): one lead per mailer, and
+   * the first agency to log it owns it.
+   *
+   * Nullable rather than absent when unmatched, so the reconcile query can ask
+   * for "has a pending key and no mailer" in one indexed predicate.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'Mailer', default: null })
+  mailerId: Types.ObjectId | null;
+
+  /** Denormalized from `Mailer.campaignId`. Null while `mailerId` is null. */
+  @Prop({ type: String, default: null })
+  campaignId: string | null;
+
+  /** `mailerControlNumberKey(...)` — the normalized form every lookup keys on. */
+  @Prop({ trim: true })
+  controlNumberKey?: string;
+
+  /** ⚠ `type: String` — a union reflects as `Object` and throws at construction. */
+  @Prop({ type: String, enum: ['drawer', 'control_number', 'address'] })
+  matchedBy?: LeadMailerMatchedBy;
+
+  @Prop({ type: Date })
+  linkedAt?: Date;
+
+  /** Null when the link was made by a job rather than a person. */
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  linkedBy: Types.ObjectId | null;
+}
+
+export const LeadMailerLinkSchema =
+  SchemaFactory.createForClass(LeadMailerLink);
+
+/**
  * Migrated from SmartSuite "The Leads Table" (6941fdb1dc9a6d024fd8b505).
  * Backs the Hot Leads / Priority Contact List.
  */
@@ -140,8 +202,16 @@ export class Lead extends TenantRecord {
   @Prop({ type: Object })
   propertyAddress?: LeadAddress;
 
+  /**
+   * The control number as printed, for display and for the Leads-list
+   * contains-search. **Not the join key** — see {@link LeadMailerLink}.
+   */
   @Prop()
   quoteControlNumber?: string;
+
+  /** The mailer that produced this lead, if any. See {@link LeadMailerLink}. */
+  @Prop({ type: LeadMailerLinkSchema })
+  mailer?: LeadMailerLink;
 
   @Prop({ type: Types.ObjectId, ref: 'User', index: true })
   producerId?: Types.ObjectId;
@@ -256,3 +326,68 @@ LeadSchema.index({ agencyId: 1, householdId: 1 });
  */
 LeadSchema.index({ agencyId: 1, primaryContactId: 1 });
 LeadSchema.index({ agencyId: 1, memberContactIds: 1 });
+
+// ---------------------------------------------------------------------------
+// Mailer attribution (PAC-71). Exported because the backfill creates them
+// itself, before the schema's `autoIndex` gets the chance — a restated,
+// drifted spec there makes the next boot throw `IndexOptionsConflict`.
+// ---------------------------------------------------------------------------
+
+/**
+ * **One lead per mailer, platform-wide.** This index is what enforces it; the
+ * pre-checks in `logLead` and the intake pipeline only turn the violation into
+ * a readable 409 instead of an E11000.
+ *
+ * Not agency-prefixed, and that is the whole point: a campaign visible to
+ * several tenants must not produce one lead per tenant for the same prospect.
+ * The first agency to log it owns it, and everyone else's drawer shows the
+ * mailer as already logged with the action disabled.
+ */
+export const LEAD_MAILER_UNIQUE_INDEX_NAME = 'mailer.mailerId_1';
+export const LEAD_MAILER_UNIQUE_INDEX_KEY = { 'mailer.mailerId': 1 } as const;
+export const LEAD_MAILER_UNIQUE_INDEX_OPTIONS = {
+  unique: true,
+  // Partial, never sparse — and on `objectId` rather than "exists", because the
+  // unmatched state stores an explicit `null` that every such lead would
+  // otherwise collide on.
+  partialFilterExpression: { 'mailer.mailerId': { $type: 'objectId' } },
+} satisfies IndexOptions;
+
+LeadSchema.index(LEAD_MAILER_UNIQUE_INDEX_KEY, {
+  name: LEAD_MAILER_UNIQUE_INDEX_NAME,
+  ...LEAD_MAILER_UNIQUE_INDEX_OPTIONS,
+});
+
+/**
+ * Serves both readings of "leads from this campaign": the platform count on the
+ * campaigns list (leading field alone) and an agency-scoped list.
+ *
+ * The agency-prefixed `{ agencyId, 'mailer.mailerId' }` the ticket originally
+ * called for is redundant with the unique index above — that one already
+ * resolves a mailer to at most one lead, from which the agency is a FETCH away.
+ */
+export const LEAD_MAILER_CAMPAIGN_INDEX_KEY = {
+  'mailer.campaignId': 1,
+  agencyId: 1,
+} as const;
+export const LEAD_MAILER_CAMPAIGN_INDEX_OPTIONS = {
+  partialFilterExpression: { 'mailer.campaignId': { $type: 'string' } },
+} satisfies IndexOptions;
+
+LeadSchema.index(
+  LEAD_MAILER_CAMPAIGN_INDEX_KEY,
+  LEAD_MAILER_CAMPAIGN_INDEX_OPTIONS,
+);
+
+/**
+ * The commit's reconcile pass: leads carrying a control-number key that has not
+ * resolved to a mailer yet.
+ */
+export const LEAD_MAILER_KEY_INDEX_KEY = {
+  'mailer.controlNumberKey': 1,
+} as const;
+export const LEAD_MAILER_KEY_INDEX_OPTIONS = {
+  partialFilterExpression: { 'mailer.controlNumberKey': { $type: 'string' } },
+} satisfies IndexOptions;
+
+LeadSchema.index(LEAD_MAILER_KEY_INDEX_KEY, LEAD_MAILER_KEY_INDEX_OPTIONS);
