@@ -491,3 +491,63 @@ export const MAILER_CAMPAIGN_RECOMMENDED_COLUMNS = [
   'yearbuilt',
   'pstseq',
 ] as const;
+
+// ---------------------------------------------------------------------------
+// List responses
+// ---------------------------------------------------------------------------
+
+/**
+ * The page shape every platform list uses — `PlatformUserListResponse` is the
+ * precedent. Restated per resource rather than made generic because the item
+ * type is the interesting half and a `Page<T>` reads worse at every call site.
+ */
+export interface MailerCampaignListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: MailerCampaignListItem[];
+}
+
+export interface MailerCampaignRecordsResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: MailerCampaignRecord[];
+}
+
+export interface MailerZipMarketListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: MailerZipMarket[];
+}
+
+/**
+ * `GET /platform/mailer-campaigns/defaults` — what the Run a campaign form
+ * prefills with.
+ *
+ * The **last imported campaign's** settings, because "last used" is what
+ * ApexReports' presets amounted to and what an operator expects; falling back
+ * to Apex's own hard-coded values on a platform that has never run one. ⚠ These
+ * are defaults only — the campaign stores what actually ran, so editing a rule
+ * afterwards never changes what a completed run means.
+ */
+export interface MailerCampaignDefaults {
+  carrierId: string | null;
+  carrierName: string | null;
+  /** `Week_Number-NN` for today. */
+  campaignNumber: string;
+  settings: MailerCampaignSettings;
+  assignment: MailerCampaignAssignment;
+}
+
+/** `GET /platform/mailer-campaigns/:id/files/:kind/url`. */
+export interface MailerCampaignFileUrl {
+  url: string;
+  filename: string;
+  /** Seconds the link stays valid, echoed so a UI can say so. */
+  expiresIn: number;
+}

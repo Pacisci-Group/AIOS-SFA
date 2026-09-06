@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type { Readable } from 'stream';
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
@@ -466,6 +467,22 @@ export class StorageService implements OnModuleInit {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Remove an object (PAC-71).
+   *
+   * Used when a campaign is discarded before it ever imported: the record goes
+   * and its vendor file goes with it. Deliberately **not** offered for anything
+   * an imported record still points at — a stored file is the only way to
+   * re-import after a mapping bug, which is why uploads are retained rather
+   * than discarded once parsed.
+   */
+  async deleteObject(key: string): Promise<void> {
+    this.assertConfigured();
+    await this.client.send(
+      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
   }
 
   /** Whether an object exists (used to confirm an upload completed). */
