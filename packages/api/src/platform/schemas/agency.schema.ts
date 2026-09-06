@@ -1,6 +1,7 @@
 import type { AgencySetupStatus, ModuleEntitlements } from '@sfa/shared';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, IndexOptions, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type AgencyDocument = HydratedDocument<Agency>;
 
@@ -137,7 +138,7 @@ export class AgencySetup {
   completedAt: Date | null;
 
   /** Who finished it — the owner, not the operator who created the agency. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   completedByUserId: Types.ObjectId | null;
 
   /**
@@ -183,7 +184,11 @@ export class CarrierAppointment {
    * foreign key. Policies store the display *name* (see `carrier.ts`), and that
    * stays true — the two are answering different questions.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Carrier', required: true })
+  // ⚠ `ObjectIdType`, never `Types.ObjectId` — the latter compiles and silently
+  // produces a **Mixed** path, so a string id would store verbatim and this
+  // appointment would never match the `$elemMatch` that decides which tenant a
+  // mailer row belongs to. See `common/mongo/object-id.ts`.
+  @Prop({ type: ObjectIdType, ref: 'Carrier', required: true })
   carrierId: Types.ObjectId;
 
   /**

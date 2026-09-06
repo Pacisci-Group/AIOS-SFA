@@ -133,6 +133,22 @@ export type RenewalStepAnchor = (typeof RENEWAL_STEP_ANCHORS)[number];
 /** How long a renewal call stays on time once it opens. */
 export const DEFAULT_RENEWAL_SLA_HOURS = 48;
 
+/**
+ * How far ahead of its `availableAt` a scheduled call appears on the Proactive
+ * Renewal Outreach desk.
+ *
+ * The desk used to show only calls that had already opened, which made the
+ * outreach reactive in a panel named for the opposite: a T-45 call surfaced on
+ * the morning it was due to start, with no chance to slot it into a week. Two
+ * weeks of warning is enough to plan around and short enough that the desk
+ * still reads as this fortnight's work.
+ *
+ * A previewed call is **not** actionable — `RenewalStepRef.isActionable` stays
+ * false until `availableAt`, and `completeRenewalStep` refuses it — so this
+ * only widens what is *shown*, never what can be done.
+ */
+export const RENEWAL_DESK_PREVIEW_DAYS = 14;
+
 export interface RenewalStepDefinition {
   track: RenewalTrack;
   stepKey: RenewalStepKey;
@@ -375,6 +391,16 @@ export interface RenewalDeskRow {
   daysUntilRenewal: number;
   availableAt: string | null;
   dueAt: string | null;
+  /**
+   * Days until this call opens, or `null` once it has — the flag that separates
+   * a previewed row (see {@link RENEWAL_DESK_PREVIEW_DAYS}) from one on the
+   * plate today.
+   *
+   * Server-computed for the same reason `isActionable` is: the browser clock is
+   * not authoritative, and a row that looks startable but 400s on submit is the
+   * failure the whole serializer exists to avoid.
+   */
+  daysUntilAvailable: number | null;
   status: ServiceTicketStatus;
   isActionable: boolean;
   isOverdue: boolean;

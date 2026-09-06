@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -40,7 +41,7 @@ export class DealAuditItem extends TenantRecord {
   @Prop({ trim: true })
   title?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Deal', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Deal', index: true })
   dealId?: Types.ObjectId;
 
   @Prop({ index: true })
@@ -58,11 +59,11 @@ export class DealAuditItem extends TenantRecord {
    */
 
   /** The `auditTemplates` row this item was generated from. */
-  @Prop({ type: Types.ObjectId, ref: 'AuditTemplate' })
+  @Prop({ type: ObjectIdType, ref: 'AuditTemplate' })
   templateId?: Types.ObjectId;
 
   /** The parent roll-up audit record. */
-  @Prop({ type: Types.ObjectId, ref: 'DealAudit' })
+  @Prop({ type: ObjectIdType, ref: 'DealAudit' })
   dealAuditId?: Types.ObjectId;
 
   /**
@@ -70,7 +71,7 @@ export class DealAuditItem extends TenantRecord {
    * alone cannot say whether `Home Inspection` came from the home or the
    * landlord line.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Policy' })
+  @Prop({ type: ObjectIdType, ref: 'Policy' })
   policyId?: Types.ObjectId;
 
   /**
@@ -82,7 +83,7 @@ export class DealAuditItem extends TenantRecord {
   @Prop({ trim: true })
   subjectName?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Contact' })
+  @Prop({ type: ObjectIdType, ref: 'Contact' })
   subjectContactId?: Types.ObjectId;
 
   /** The generating deal's submission token; mirrors legacy's item field. */
@@ -136,7 +137,7 @@ export class DealAuditItem extends TenantRecord {
   @Prop({ trim: true })
   producerName?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
   @Prop({ default: 0 })
@@ -180,7 +181,7 @@ export class DealAuditItem extends TenantRecord {
   resolvedAt?: Date;
 
   /** The user (producer) who resolved the item. */
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: ObjectIdType, ref: 'User' })
   resolvedById?: Types.ObjectId;
 
   /** Supporting documents uploaded on resolution. */

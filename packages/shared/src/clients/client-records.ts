@@ -10,6 +10,8 @@
  *   distinguish `undefined` from `null`
  */
 
+import type { StructuredAddress } from '../domain/address';
+
 /** A household member, from the `contacts` collection. */
 export interface ContactSummary {
   id: string;
@@ -19,6 +21,12 @@ export interface ContactSummary {
   phones: string[];
   /** e.g. "Named Insured", "Spouse", "Driver", "Child". */
   roleInHousehold: string | null;
+  /**
+   * Inside a `HouseholdView` this is **resolved**, not the stored flag: the API
+   * consults `household.primaryContactId` first (see `pickPrimaryContact`), so
+   * at most one contact in the roster carries it and that contact leads the
+   * list. Elsewhere it is the contact's own stored flag.
+   */
   isPrimary: boolean;
   /** ISO date, or null when unknown. */
   dateOfBirth: string | null;
@@ -51,6 +59,22 @@ export interface HouseholdSummary {
 
 /** Full household read-model returned by `GET /households/:id`. */
 export interface HouseholdView extends HouseholdSummary {
+  /**
+   * The household's address, already coerced into one shape by the API's
+   * `resolveHouseholdAddress` — property address first, mailing address as the
+   * fallback.
+   *
+   * Read this, not the raw objects below. `propertyAddress` is a loose
+   * `Record<string, unknown>` whose keys differ per writer (`street` from lead
+   * intake, `line1` from the demo seed, `location_address` from the SmartSuite
+   * migration), and every client that re-implemented that lookup table got it
+   * wrong for at least one writer.
+   */
+  address: StructuredAddress | null;
+  /**
+   * The raw stored objects, kept for callers that need a key the normalized
+   * shape drops (`location_address2`). Prefer {@link HouseholdView.address}.
+   */
   propertyAddress: Record<string, unknown> | null;
   mailingAddress: Record<string, unknown> | null;
   primaryEmails: string[];

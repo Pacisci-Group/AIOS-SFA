@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -33,7 +34,7 @@ export class PriorInsurance extends TenantRecord {
    * ⚠ Verified against the caller's agency before it is written — see
    * `SoldDealsService.assertCancelledByOwned`. The id arrives from the client.
    */
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: ObjectIdType, ref: 'User' })
   cancellationHandledByUserId?: Types.ObjectId;
 
   /**
@@ -61,19 +62,19 @@ export class PriorInsurance extends TenantRecord {
   @Prop()
   previousAgentName?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Deal', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Deal', index: true })
   dealId?: Types.ObjectId;
 
   @Prop()
   legacyDealId?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
   householdId?: Types.ObjectId;
 
   @Prop()
   legacyHouseholdId?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: ObjectIdType, ref: 'User' })
   producerId?: Types.ObjectId;
 
   @Prop()

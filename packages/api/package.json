@@ -19,6 +19,8 @@
     "migrate:dev": "ts-node -r tsconfig-paths/register src/migration/migrate.ts",
     "migrate:mailers": "node dist/migration/mailers/import-bigquery-mailers.js",
     "migrate:mailers:dev": "ts-node -r tsconfig-paths/register src/migration/mailers/import-bigquery-mailers.ts",
+    "migrate:tickets": "node dist/migration/consolidate-service-tickets.js",
+    "migrate:tickets:dev": "ts-node -r tsconfig-paths/register src/migration/consolidate-service-tickets.ts",
     "backfill:appointments": "node dist/migration/backfill/allstate-id-to-carrier-appointment.js",
     "backfill:appointments:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/allstate-id-to-carrier-appointment.ts",
     "backfill:mailer-campaigns": "node dist/migration/backfill/mailer-campaigns.js",

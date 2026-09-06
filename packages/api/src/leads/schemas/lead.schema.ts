@@ -6,6 +6,7 @@ import type {
   NormalizedLeadSource,
 } from '@sfa/shared';
 import { HydratedDocument, IndexOptions, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -111,7 +112,7 @@ export class LeadMailerLink {
    * Nullable rather than absent when unmatched, so the reconcile query can ask
    * for "has a pending key and no mailer" in one indexed predicate.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Mailer', default: null })
+  @Prop({ type: ObjectIdType, ref: 'Mailer', default: null })
   mailerId: Types.ObjectId | null;
 
   /** Denormalized from `Mailer.campaignId`. Null while `mailerId` is null. */
@@ -130,7 +131,7 @@ export class LeadMailerLink {
   linkedAt?: Date;
 
   /** Null when the link was made by a job rather than a person. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   linkedBy: Types.ObjectId | null;
 }
 
@@ -213,7 +214,7 @@ export class Lead extends TenantRecord {
   @Prop({ type: LeadMailerLinkSchema })
   mailer?: LeadMailerLink;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
   @Prop({ index: true })
@@ -229,13 +230,13 @@ export class Lead extends TenantRecord {
    * The real Household link. Migrated leads carry only `legacyHouseholdId` (the
    * SmartSuite id); intake backfills this on first touch.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
   householdId?: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Contact', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Contact', index: true })
   primaryContactId?: Types.ObjectId;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'Contact' }], default: [] })
+  @Prop({ type: [{ type: ObjectIdType, ref: 'Contact' }], default: [] })
   memberContactIds: Types.ObjectId[];
 
   /**

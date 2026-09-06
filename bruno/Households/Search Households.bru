@@ -1,0 +1,87 @@
+meta {
+  name: Search Households
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/households/search?limit=5
+  body: none
+  auth: inherit
+}
+
+params:query {
+  limit: 5
+  ~q: cobb
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns HouseholdSummary rows", function () {
+    const body = res.getBody();
+    expect(body).to.be.an("array");
+    for (const household of body) {
+      expect(household).to.have.property("id");
+      expect(household).to.have.property("name");
+      expect(household).to.have.property("status");
+      expect(household).to.have.property("primaryContactName");
+      expect(household).to.have.property("totalActivePolicies");
+    }
+  });
+
+  test("primaryContactName is a name or null, never a blank string", function () {
+    // `toHouseholdSummary` collapses a blank stored value to null so the
+    // `?? fallback` chains downstream of it actually fire.
+    for (const household of res.getBody()) {
+      if (household.primaryContactName !== null) {
+        expect(household.primaryContactName.trim()).to.not.equal("");
+      }
+    }
+  });
+
+  test("captures a household id for the rest of the folder", function () {
+    const body = res.getBody();
+    if (body.length) {
+      bru.setVar("householdId", body[0].id);
+    }
+  });
+}
+
+docs {
+  # GET /households/search
+
+  Typeahead over households in the caller's scope — the household picker on the
+  New Ticket dialog and the Start Quote flow.
+
+  - **Module:** `clients` **OR** `crm_service` (class-level OR-gate).
+  - **Permission:** `clients:read` **or** `crm_service:read`. A CSR holding only
+    the service module can pick a household without the Clients page.
+  - **Data scope:** `own` collapses to branch — client records are shared across
+    a branch and carry no assigned user for `own` to key on.
+
+  ## Query
+  | Param | Required | Notes |
+  |---|---|---|
+  | `q` | no | Case-insensitive substring over `name` and `primaryContactName`. Escaped before it compiles as a regex. Blank returns the first page so the picker has something to show before the user types |
+  | `limit` | no | Default 20, clamped to 1–50 |
+
+  ## Response
+  An array of `HouseholdSummary`, sorted by `name`.
+
+  This request also captures `householdId` for **Get Household** and **Add
+  Household Member**, so the folder runs end to end against a freshly seeded
+  database with nothing set by hand.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | Both `clients` and `crm_service` disabled, or neither read permission held |
+}

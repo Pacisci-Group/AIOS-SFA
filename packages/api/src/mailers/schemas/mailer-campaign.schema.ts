@@ -11,6 +11,7 @@ import type {
   MailerImportRejection,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type MailerCampaignDocument = HydratedDocument<MailerCampaign>;
 
@@ -148,7 +149,7 @@ export class MailerCampaign {
    * anything inside its own carrier, PAC-93) and, later, per-carrier column
    * contracts.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Carrier', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Carrier', required: true, index: true })
   carrierId: Types.ObjectId;
 
   @Prop({ required: true, trim: true })
@@ -260,7 +261,7 @@ export class MailerCampaign {
   error: string | null;
 
   /** Null on an implicit campaign — nobody requested those. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   requestedBy: Types.ObjectId | null;
 
   /** Minimum `quotedate` across the file. */
