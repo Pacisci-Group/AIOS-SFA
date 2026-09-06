@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type UserPermissionDocument = HydratedDocument<UserPermission>;
 
@@ -22,13 +23,13 @@ export type PermissionEffect = 'grant' | 'revoke';
  */
 @Schema({ timestamps: true, collection: 'userPermissions' })
 export class UserPermission {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', required: true, index: true })
   agencyId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: ObjectIdType, ref: 'User', required: true })
   userId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Permission', required: true })
+  @Prop({ type: ObjectIdType, ref: 'Permission', required: true })
   permissionId: Types.ObjectId;
 
   /** Denormalized from `Permission.key`; see `RolePermission.permissionKey`. */
@@ -39,10 +40,10 @@ export class UserPermission {
   effect: PermissionEffect;
 
   /** Opts this schema into `authorshipPlugin`; see `TenantRecord`. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   createdBy: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   updatedBy: Types.ObjectId | null;
 }
 

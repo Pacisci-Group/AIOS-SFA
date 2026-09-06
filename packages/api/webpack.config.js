@@ -46,6 +46,12 @@ const path = require('path');
  *                                                  has to exist in the image.
  *
  * Occasional operations (not part of a bring-up):
+ *   dist/migration/consolidate-service-tickets.js  fold a database migrated
+ *                                                  before Sept 2026 into the
+ *                                                  one `serviceTickets`
+ *                                                  collection. Once per
+ *                                                  environment; delete when
+ *                                                  none needs it.
  *   dist/seed/sync-role-templates.js               push a role-template change
  *                                                  out to already-provisioned
  *                                                  tenants. A fresh database
@@ -64,6 +70,8 @@ const ONE_SHOT_ENTRIES = {
   'migration/migrate': 'src/migration/migrate.ts',
   'migration/mailers/import-bigquery-mailers':
     'src/migration/mailers/import-bigquery-mailers.ts',
+  'migration/consolidate-service-tickets':
+    'src/migration/consolidate-service-tickets.ts',
   'migration/backfill/mailer-campaigns':
     'src/migration/backfill/mailer-campaigns.ts',
 };

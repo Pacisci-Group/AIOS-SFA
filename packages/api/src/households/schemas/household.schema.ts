@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -51,7 +52,7 @@ export class Household extends TenantRecord {
   @Prop({ type: [String], default: [] })
   primaryPhones: string[];
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: ObjectIdType, ref: 'User' })
   assignedCrmId?: Types.ObjectId;
 
   @Prop()
@@ -67,13 +68,13 @@ export class Household extends TenantRecord {
    * Set on create, and on reuse only when currently unset — a second lead for an
    * existing household must not reassign whoever its primary already is.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Contact', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Contact', index: true })
   primaryContactId?: Types.ObjectId;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'Contact' }], default: [] })
+  @Prop({ type: [{ type: ObjectIdType, ref: 'Contact' }], default: [] })
   memberContactIds: Types.ObjectId[];
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'Lead' }], default: [] })
+  @Prop({ type: [{ type: ObjectIdType, ref: 'Lead' }], default: [] })
   leadIds: Types.ObjectId[];
 
   /**

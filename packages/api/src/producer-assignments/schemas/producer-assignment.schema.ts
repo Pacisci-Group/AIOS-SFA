@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -28,13 +29,13 @@ export class ProducerAssignment extends TenantRecord {
   @Prop({ default: false })
   lock: boolean;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
   @Prop()
   legacyProducerId?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: ObjectIdType, ref: 'User' })
   lastAssignedCrmId?: Types.ObjectId;
 
   @Prop()

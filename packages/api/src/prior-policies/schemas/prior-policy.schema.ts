@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -39,13 +40,13 @@ export class PriorPolicy extends TenantRecord {
   @Prop({ type: Date })
   completedDate?: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'Deal', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Deal', index: true })
   dealId?: Types.ObjectId;
 
   @Prop()
   legacyDealId?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
   householdId?: Types.ObjectId;
 
   @Prop()

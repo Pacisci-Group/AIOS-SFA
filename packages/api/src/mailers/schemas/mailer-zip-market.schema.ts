@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import type { MailerZipMarket as MailerZipMarketView } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type MailerZipMarketDocument = HydratedDocument<MailerZipMarket>;
 
@@ -63,7 +64,7 @@ export class MailerZipMarket {
   source: MailerZipMarketView['source'];
 
   /** Null for seeded rows — nobody typed those. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   updatedBy: Types.ObjectId | null;
 
   createdAt?: Date;

@@ -10,6 +10,7 @@ import {
 } from '@sfa/shared';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type BugReportDocument = HydratedDocument<BugReport>;
 
@@ -92,7 +93,7 @@ export const BugReportContextSchema = SchemaFactory.createForClass(
  */
 @Schema({ timestamps: true, collection: 'bugReports' })
 export class BugReport {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', required: true, index: true })
   reportedBy: Types.ObjectId;
 
   /**
@@ -114,10 +115,10 @@ export class BugReport {
   reporterName: string | null;
 
   /** Null for a platform operator, who has no agency of their own. */
-  @Prop({ type: Types.ObjectId, ref: 'Agency', default: null, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', default: null, index: true })
   agencyId: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'Branch', default: null })
+  @Prop({ type: ObjectIdType, ref: 'Branch', default: null })
   branchId: Types.ObjectId | null;
 
   @Prop({ required: true, trim: true })
@@ -150,7 +151,7 @@ export class BugReport {
   @Prop({ type: String, trim: true, default: null })
   internalNotes: string | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   statusUpdatedBy: Types.ObjectId | null;
 
   @Prop({ type: Date, default: null })
