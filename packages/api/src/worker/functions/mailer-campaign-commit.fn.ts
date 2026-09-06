@@ -64,6 +64,7 @@ import {
   chunk,
   failCampaign,
   loadZipMarkets,
+  plainSettings,
   readCampaignFile,
   summarizeCarrierCodes,
   type StepLike,
@@ -345,7 +346,7 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
     const campaign = await this.mustFind(campaignId);
     if (!campaign.vendorFile) throw new Error('This campaign has no file.');
 
-    const settings = campaign.settings;
+    const settings = plainSettings(campaign.settings);
     const isProcessed = campaign.source === 'processed' || !settings;
     const kind = detectVendorFileKind({
       filename: campaign.vendorFile.name,

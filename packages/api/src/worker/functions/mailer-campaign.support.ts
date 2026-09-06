@@ -10,7 +10,7 @@ import {
   buildZipMarketTable,
   type ZipMarketRow,
 } from '../../common/mailers/zip-markets';
-import { appointmentCodeKey } from '@sfa/shared';
+import { appointmentCodeKey, type MailerCampaignSettings } from '@sfa/shared';
 
 /**
  * Plumbing shared by the campaign preview and commit jobs (PAC-71).
@@ -39,6 +39,26 @@ export interface StepLike {
    * rows in one and Inngest memoizes all of them on every retry.
    */
   run<T>(id: string, fn: () => Promise<T> | T): Promise<unknown>;
+}
+
+/**
+ * A campaign's settings as a **plain object**.
+ *
+ * ⚠ Not decoration. `campaign.settings` is a Mongoose sub-document, and a
+ * sub-document keeps its values in `_doc` rather than as own enumerable
+ * properties — so `{...settings}` copies *nothing*, and the transform then
+ * reads `settings.marketPhones` as `undefined` and throws on the first row it
+ * prices. Invisible at the type level, because the sub-document class and the
+ * shared interface have the same shape.
+ */
+export function plainSettings(
+  settings: unknown,
+): MailerCampaignSettings | null {
+  if (!settings) return null;
+  const doc = settings as { toObject?: () => MailerCampaignSettings };
+  return typeof doc.toObject === 'function'
+    ? doc.toObject()
+    : (settings as MailerCampaignSettings);
 }
 
 /** What a campaign's stored file looks like to a worker job. */

@@ -50,6 +50,7 @@ import {
   columnIndex,
   failCampaign,
   loadZipMarkets,
+  plainSettings,
   readCampaignFile,
   rowsAsRecords,
   summarizeCarrierCodes,
@@ -230,7 +231,7 @@ export class MailerCampaignPreviewFn implements InngestFunctionProvider {
     );
 
     // --- Transform ---------------------------------------------------------
-    const settings = campaign.settings;
+    const settings = plainSettings(campaign.settings);
     const zipMarkets = await loadZipMarkets(
       this.zipModel,
       settings?.zipResolutions ?? {},
