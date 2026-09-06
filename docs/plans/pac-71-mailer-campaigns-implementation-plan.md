@@ -22,7 +22,7 @@ Design decisions this plan fixes (the ticket left them open):
 - **One lead per mailer, platform-wide**: unique partial index `{ 'mailer.mailerId': 1 }` on `leads`; `logLead` pre-checks and returns 409; E11000 on that index maps to 409.
 - **Add Mailers (server + page) is deleted in PR1**, not PR3, because `ImportMailersFn` cannot compile against the new engine signature without a throwaway campaign adapter. Between PR1 and PR3 the panel has no import UI on `dev`; the demo seed still creates mailers. Noted in the PR1 description.
 
-Reference material: `docs/mailers-handoff.md` (settled decisions), `api/test/fixtures/mailers/README.md` (vendor-file profile), `apex-mail-companion/src/components/mail/Part2.tsx` (the source flow; read-only), PAC-93 (carrier appointments, already on this branch).
+Reference material: `api/test/fixtures/mailers/README.md` (vendor-file profile), `apex-mail-companion/src/components/mail/Part2.tsx` (the source flow; read-only), PAC-93 (carrier appointments, already on this branch).
 
 ---
 
@@ -181,7 +181,7 @@ One function per endpoint in 2.4/2.5; query keys `["platform","campaigns",…]`,
 - `mailer-campaign-output-email.fn.ts`: `step.run('load')` (campaign, output key) → per recipient `step.run('send:<i>')` → `MailDeliveryService.send('mailerCampaignOutput', data, `mailer-campaign:${campaignId}:${attempt}:${recipient}`, null)` then `record`. `downloadUrl = createPresignedDownload(outputKey, {expiresIn: 7d, disposition:'attachment', filename})`; `detailUrl = `${tenantUrl.platformBaseUrl()}/admin/campaigns/${id}``. `DeliveryContext.agencyId` / `EmailMessage.agencyId` become nullable (platform mail) — check `email-message.schema.ts` indexes tolerate null.
 - Config: `MAILER_OUTPUT_LINK_TTL_SECONDS` (default 604800) in `config/env.config.ts` + `.env.example`.
 - Bruno `Email Output.bru`; e2e `worker/mailer-campaign-output-email` (renders link, idempotent resend, no agency on the record).
-- Docs: `docs/mailers-handoff.md` (campaign era, migration order, `mailerImportRuns` manual drop), `AGENTS.md` §2/§10 (Add Mailers gone; campaign key namespace), `packages/api/src/mailers/**` docblocks that still say "PAC-71 will…".
+- Docs: `AGENTS.md` §2/§10 (Add Mailers gone; campaign key namespace; the migration's stop-API-first order and the manual `db.mailerImportRuns.drop()` — both used to live in `docs/mailers-handoff.md`, which was deleted as stale), `packages/api/src/mailers/**` docblocks that still say "PAC-71 will…".
 
 ---
 

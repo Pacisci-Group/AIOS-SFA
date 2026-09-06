@@ -166,8 +166,11 @@ temperature/aging that aren't first-class in legacy payloads. See
   transaction/commission reports, quote-to-sold analytics, producer
   performance, and the quote/policy scrubbers. Behavioural source-of-truth for
   campaign features and for metrics it already defines — see
-  `.claude/rules/apex-mail-companion-reference.md`. Pair it with
-  `docs/mailers-handoff.md`, which records what our side already settled.
+  `.claude/rules/apex-mail-companion-reference.md`. What **our** side has
+  already settled lives in the Linear tickets (PAC-61 · PAC-73 · PAC-71) and in
+  the docblocks under `packages/api/src/mailers/**` and
+  `packages/api/src/common/mailers/**` — read those before re-deciding
+  something.
 - `docs/plans/pac-71-mailer-campaigns-implementation-plan.md` — the four-PR
   execution order for mailer campaigns (PAC-71). ⚠ **PR1 deleted the Add Mailers
   upload** (page, route, panel tile, endpoints and worker function): a mailer now
