@@ -1,0 +1,101 @@
+meta {
+  name: Campaign Defaults
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/defaults
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    bru.setVar("campaignCarrierId", res.getBody().carrierId);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("prefills the Allstate carrier and this week", function () {
+    const body = res.getBody();
+    expect(body.carrierName).to.equal("Allstate");
+    expect(body.campaignNumber).to.match(/^Week_Number-\d+$/);
+  });
+
+  test("prefills a real premium floor, never zero", function () {
+    // A floor of 0 is a run with no floor at all — and since ~95% of rows
+    // normally land on the floor, that is a whole mail drop priced wrong.
+    expect(res.getBody().settings.premiumFloor).to.be.above(0);
+  });
+
+  test("always prices against the current year", function () {
+    // The home-age discount reads `runYear`, so inheriting a stored snapshot's
+    // year would age every home without anyone choosing to.
+    expect(res.getBody().settings.runYear).to.equal(new Date().getFullYear());
+  });
+
+  test("offers a real assignment mode", function () {
+    // ⚠ Not asserted as `carrier_agency_id`. That is the answer on a platform
+    // that has never run a campaign; after one, the **last imported campaign's**
+    // assignment is what prefills — which is the behaviour, and which makes
+    // this collection re-runnable only if the assertion says so.
+    expect(["carrier_agency_id", "agencies", "all"]).to.include(
+      res.getBody().assignment.mode,
+    );
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/defaults — what the Run form prefills
+
+  The **last imported campaign's** settings, because "last used" is what
+  ApexReports' presets amounted to, falling back to Apex's own hard-coded values
+  on a platform that has never run one.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ⚠ Declared **above** `GET /:campaignId` in the controller. Nest matches in
+  declaration order and `:campaignId` matches anything, so a static route added
+  below it would silently become a campaign-id lookup.
+
+  ## Two things are deliberately *not* inherited
+  | field | why |
+  |---|---|
+  | `runYear` | Always the current year. It drives the home-age discount; a re-run of a past campaign has to pass the original year on purpose, never by accident. |
+  | `settings.zipResolutions` | Always `{}`. Last run's unmapped ZIPs were resolved for *that* file; carrying them forward would hide new ones in this preview. |
+
+  ## Response `200`
+  ```json
+  {
+    "carrierId": "6a86…",
+    "carrierName": "Allstate",
+    "campaignNumber": "Week_Number-36",
+    "settings": {
+      "premiumFloor": 1916.44,
+      "fileName": "SFA-QBP",
+      "defaultMarket": "Oklahoma City",
+      "marketPhones": { "Tulsa": "918-984-6163" },
+      "defaultPhone": "405-803-7590",
+      "runYear": 2026,
+      "discounts": { "squareFootage": [ … ], "homeAge": { … } },
+      "zipResolutions": {},
+      "outputRecipients": []
+    },
+    "assignment": { "mode": "carrier_agency_id", "agencyIds": [] }
+  }
+  ```
+
+  ## Errors
+  - `401` / `403` — missing token, or missing `platform:mailers:read`.
+}

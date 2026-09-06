@@ -1,0 +1,52 @@
+meta {
+  name: Delete Zip Market
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{baseUrl}}/platform/mailer-zip-markets/{{zipMarketId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("reports the deletion", function () {
+    expect(res.getBody().deleted).to.equal(true);
+  });
+}
+
+docs {
+  # DELETE /platform/mailer-zip-markets/:id — remove one mapping
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  Deletes the throwaway row `Upsert Zip Markets` created, which is what keeps
+  this folder re-runnable: the unique `(agencyId, zip5)` index means a leftover
+  row would make the next run's upsert an update rather than an insert, and the
+  folder would still pass — but it would have stopped testing the insert.
+
+  ⚠ It deliberately does **not** touch `99999`, the ZIP the campaign folder
+  resolves mid-run. That row is evidence the resolver flow persisted, and the
+  campaign folder's own assertion reads it.
+
+  ## Response `200`
+  ```json
+  { "deleted": true }
+  ```
+
+  ## Errors
+  - `401` / `403` — missing token, or missing `platform:mailers:write`.
+  - `404 Not Found` — no such row, or a malformed id. Deleting twice is a `404`,
+    not a silent success: a mapping that is already gone is worth saying so.
+}

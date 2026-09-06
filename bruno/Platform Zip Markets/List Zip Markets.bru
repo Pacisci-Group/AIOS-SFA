@@ -1,0 +1,100 @@
+meta {
+  name: List Zip Markets
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-zip-markets?q=9999&page=1&pageSize=25
+  body: none
+  auth: bearer
+}
+
+params:query {
+  q: 9999
+  page: 1
+  pageSize: 25
+  ~agencyId: 
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const row = res.getBody().items.find((r) => r.zip5 === "99998");
+    if (row) bru.setVar("zipMarketId", row.id);
+    // 99999 is what `Platform Mailer Campaigns/Patch Zip Resolutions` wrote
+    // back mid-run. Captured so the next request can remove it and leave the
+    // table as this run found it — see that request's docs.
+    const resolved = res.getBody().items.find((r) => r.zip5 === "99999");
+    bru.setVar("campaignZipMarketId", resolved ? resolved.id : "missing");
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("finds the row by ZIP prefix", function () {
+    const row = res.getBody().items.find((r) => r.zip5 === "99998");
+    expect(row, "the upserted row is listed").to.not.equal(undefined);
+    expect(row.market).to.equal("Bruno Test Market");
+    // `null` is a value here, not an absence — the platform-global scope.
+    expect(row.agencyId).to.equal(null);
+  });
+
+  test("carries the resolution the campaign preview wrote back", function () {
+    // `Platform Mailer Campaigns/Patch Zip Resolutions` resolves 99999 → Tulsa
+    // mid-run, and the answer is persisted here so the next campaign starts
+    // with it. That is the whole of ApexReports' resolver flow.
+    const row = res.getBody().items.find((r) => r.zip5 === "99999");
+    if (row) {
+      expect(row.market).to.equal("Tulsa");
+      expect(row.source).to.equal("preview");
+    }
+  });
+}
+
+docs {
+  # GET /platform/mailer-zip-markets — the ZIP → market table
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Query
+  | param | notes |
+  |---|---|
+  | q | A ZIP **prefix**, or a substring of the market name. The ZIP half is anchored so the `{agencyId, zip5}` index can serve it. |
+  | page / pageSize | 1-based; pageSize ≤ 200, default 50. Sorted by ZIP. |
+  | agencyId | Which scope to list. Absent = the platform-global table, which is the only one anything writes in this ticket. |
+
+  ## `agencyId: null` is a value, not an absence
+
+  The table is platform-global: a campaign can serve many agencies, so during a
+  preview no single agency owns the resolution. The column exists so per-agency
+  overrides are additive later with no migration — the `Carrier` pattern, where
+  `null` is stored explicitly so the query is unambiguous and the unique index
+  has a real key to work with.
+
+  ## Response `200`
+  ```json
+  {
+    "page": 1, "pageSize": 25, "total": 2, "totalPages": 1,
+    "items": [{
+      "id": "…", "agencyId": null, "zip5": "99998",
+      "market": "Bruno Test Market", "source": "manual",
+      "updatedAt": "2026-09-06T…"
+    }]
+  }
+  ```
+
+  `source` says who decided: `seed` (the committed 564-row export), `preview`
+  (an operator resolving an unmatched ZIP mid-campaign) or `manual` (this page).
+
+  ## Errors
+  - `401` / `403` — missing token, or missing `platform:mailers:read`.
+}

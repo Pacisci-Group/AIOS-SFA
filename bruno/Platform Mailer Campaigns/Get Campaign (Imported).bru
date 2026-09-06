@@ -1,0 +1,86 @@
+meta {
+  name: Get Campaign (Imported)
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:pre-request {
+  // The commit is a chain of queued steps — read, transform, store, import,
+  // reconcile — so it takes longer than a preview. Same reason for the wait as
+  // `Get Campaign (Previewed)`.
+  await new Promise((resolve) => setTimeout(resolve, 8000));
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the run finished", function () {
+    expect(res.getBody().status).to.equal("imported");
+    expect(res.getBody().finishedAt).to.be.a("string");
+  });
+
+  test("reports a truthful accepted/skipped breakdown", function () {
+    const counts = res.getBody().importCounts;
+    expect(counts.read).to.equal(3);
+    expect(counts.mapped).to.equal(2);
+    // The control-number-less row, rejected and counted rather than dropped.
+    expect(counts.skipped).to.equal(1);
+    expect(counts.created + counts.updated).to.equal(2);
+  });
+
+  test("stored the print file alongside the vendor one", function () {
+    const body = res.getBody();
+    expect(body.outputFile.name).to.equal("SFA-QBP.csv");
+    expect(body.outputFile.size).to.be.above(0);
+    // Still no storage keys on the wire.
+    expect(body.outputFile).to.not.have.property("storageKey");
+  });
+
+  test("kept the transform's own numbers", function () {
+    // Three, not two. The transform never rejects a row — it *prices* every
+    // one, including the control-number-less one, because the print file is
+    // what it produces. Rejection happens later, in the import, which is why
+    // `stats.outputRows` and `importCounts.mapped` legitimately differ.
+    expect(res.getBody().stats.inputRows).to.equal(3);
+    expect(res.getBody().stats.outputRows).to.equal(3);
+  });
+
+  test("names the rejected row", function () {
+    expect(res.getBody().rejections[0].reason).to.match(/control number/i);
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/:campaignId — the finished run
+
+  Same endpoint as `Get Campaign (Previewed)`; see that request's docs. This one
+  asserts the outcome half of the record.
+
+  ## What the commit added
+  | field | notes |
+  |---|---|
+  | `status` | `imported`. |
+  | `outputFile` | The 132-column print CSV, written to storage under a **deterministic** key (`…/<campaignId>/<attempt>/…`) so a retry overwrites its own partial write rather than littering storage. |
+  | `stats` | The transform's own numbers, stored verbatim rather than re-shaped — a second shape over the same numbers is how a stat on the detail page drifts from the one the run produced. |
+  | `importCounts` | `read`/`mapped`/`created`/`updated`/`skipped` from the shared import engine, plus `deleted`, `leadsLinked` and `leadsConflicted`, which only a campaign commit can report. |
+  | `rejections` | A capped sample; `importCounts.skipped` is the authoritative total. |
+
+  `leadsLinked` counts leads that carried a control number **before** this file
+  existed — the "prospect called before the operator imported it" case, and the
+  same pass that backfills leads which already carried a typed control number.
+  `leadsConflicted` counts the ones a rival lead had already claimed; the
+  platform-wide unique index on `mailer.mailerId` is what makes that a number
+  rather than a duplicate.
+}

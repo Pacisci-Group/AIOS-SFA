@@ -81,8 +81,18 @@ docs {
     other half of that trade.
   - **Platform Bug Reports** — the Super Admin queue that reads them
     (`platform:bugs:read` / `:write`). Self-contained: it logs in as the super
-    admin itself, because it sorts **before** `Platform Mailers` and so cannot
-    rely on that folder's login.
+    admin itself rather than relying on a folder that happens to sort earlier.
+  - **Platform Mailer Campaigns** — running a mail campaign from the vendor file
+    (PAC-71): presign → PUT → create → preview → resolve a ZIP inline →
+    commit → the finished report, plus the list, the records table, the output
+    download and the wrong-status refusal. ⚠ **Needs the Inngest dev server**:
+    the preview and the commit are queued jobs, and the `Get Campaign (…)`
+    requests wait for them rather than asserting vacuously against a campaign
+    that has not started.
+  - **Platform Zip Markets** — the ZIP → market table those campaigns resolve
+    against (PAC-71). Self-contained and idempotent: it upserts a throwaway ZIP
+    and deletes it again, and deliberately leaves the row the campaign folder's
+    inline resolver wrote.
 
   > `GET /auth/invite/:token` is an `auth/*` route but lives under **Users**, for
   > the same ordering reason as activity logging (below): in the **Auth** folder
@@ -112,6 +122,18 @@ docs {
   and `Platform Bug Reports` sorts after `Bug Reports` so `bugReportId` — set by
   `Create Bug Report` with `bru.setVar` — is live by the time the queue reads it.
   Neither folder can be renamed without checking that still holds.
+
+  **Platform Mailer Campaigns** and **Platform Zip Markets** lean on the same
+  walk, and the coupling is worth knowing about because it is a *feature* being
+  tested rather than an accident. The campaign folder resolves ZIP `99999`
+  mid-run, and the API **persists that answer** to the ZIP table so the next
+  campaign starts with it — which is exactly what the resolver flow is for, and
+  which means the campaign folder's "99999 is unmatched" assertion is only true
+  on a table that does not already hold it. `Platform Zip Markets` sorts after
+  `Platform Mailer Campaigns`, reads the row as proof the write-back happened,
+  and then deletes it, leaving the table as the run found it. Running the
+  campaign folder **twice on its own** therefore fails the second time; running
+  the collection, or the two folders in order, does not.
 
   **Users** is self-contained and idempotent: it logs in, invites a
   freshly-generated address, and revokes it again, so it can be re-run

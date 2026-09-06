@@ -1,0 +1,97 @@
+meta {
+  name: List Campaigns
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns?page=1&pageSize=10&status=imported
+  body: none
+  auth: bearer
+}
+
+params:query {
+  page: 1
+  pageSize: 10
+  status: imported
+  ~q: week 98
+  ~agencyId: 
+  ~carrierId: 
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("pages", function () {
+    const body = res.getBody();
+    expect(body.page).to.equal(1);
+    expect(body.pageSize).to.equal(10);
+    expect(body.items).to.be.an("array");
+  });
+
+  test("carries the live counts the list column shows", function () {
+    const row = res.getBody().items.find((c) => c.id === bru.getVar("campaignId"));
+    expect(row, "the committed campaign is in the list").to.not.equal(undefined);
+    expect(row.recordCount).to.equal(2);
+    expect(row.leadsAttributed).to.equal(0);
+    expect(row.premiumFloor).to.equal(1886.15);
+  });
+
+  test("null visible agencies means all, never none", function () {
+    const row = res.getBody().items.find((c) => c.id === bru.getVar("campaignId"));
+    // The same distinction `Mailer.visibleAgencyIds` carries.
+    expect(row.visibleAgencyNames).to.equal(null);
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns — the campaigns list
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Query
+  | param | notes |
+  |---|---|
+  | page / pageSize | 1-based; pageSize ≤ 100, default 25. |
+  | q | Free text over the name and the `Week_Number-NN` tag. |
+  | status | `uploaded` \| `previewed` \| `processing` \| `imported` \| `failed` \| `superseded`. |
+  | agencyId | Campaigns assigned to that agency — **plus every `all` campaign**, because an `all` campaign is visible to every agency and a list that omitted them would contradict the drawer. |
+  | carrierId | The campaign's carrier. |
+
+  ## Response `200`
+  ```json
+  {
+    "page": 1, "pageSize": 10, "total": 1, "totalPages": 1,
+    "items": [{
+      "id": "…", "name": "Bruno week 98",
+      "campaignNumber": "Week_Number-98", "weekNumber": 98, "year": 2026,
+      "status": "imported", "source": "vendor",
+      "assignment": { "mode": "all", "agencyIds": [] },
+      "visibleAgencyNames": null,
+      "premiumFloor": 1886.15, "quoteDate": "2026-07-13T00:00:00.000Z",
+      "requestedByName": "Platform Admin", "createdAt": "…",
+      "recordCount": 2, "leadsAttributed": 0
+    }]
+  }
+  ```
+
+  `recordCount` and `leadsAttributed` are each **one `$group`** over the whole
+  page rather than a count query per row: `mailers.campaignId` and
+  `leads.mailer.campaignId`, both indexed.
+
+  ⚠ `visibleAgencyNames: null` means **all agencies**, never "none". In
+  `carrier_agency_id` mode it is the set the preview resolved to, since only the
+  file knows.
+
+  ## Errors
+  - `400 Bad Request` — a malformed filter (e.g. a non-hex `agencyId`).
+  - `401` / `403` — missing token, or missing `platform:mailers:read`.
+}
