@@ -32,6 +32,10 @@ import { InterestedParty } from '../../interested-parties/schemas/interested-par
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
 import { ServiceTicket } from '../../crm/schemas/service-ticket.schema';
+import {
+  TICKET_NUMBER_BASE,
+  ticketNumberFor,
+} from '../../crm/service-tickets.service';
 import { ProducerAssignment } from '../../producer-assignments/schemas/producer-assignment.schema';
 import { CrmRotation } from '../../crm-rotations/schemas/crm-rotation.schema';
 import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request.schema';
@@ -137,6 +141,9 @@ interface HouseholdRef {
   clientLast: string;
   branchSlug: BranchSlug;
   branchId: string;
+  /** The primary contact's details, denormalized onto service tickets. */
+  primaryPhone: string;
+  primaryEmail: string;
   assignedCrm?: TeamMember;
   city: CitySpec;
   address: Record<string, unknown>;
@@ -186,6 +193,7 @@ interface DealRef {
 interface PolicyRef {
   id: Types.ObjectId;
   legacyId: string;
+  policyNumber: string;
   policyType: string;
   household: HouseholdRef;
   deal: DealRef;
@@ -506,6 +514,8 @@ export class DemoSeedService {
           ? rng.pick(crms)
           : undefined;
       const legacyId = `demo:hh:${i}`;
+      const primaryEmail = this.email(clientFirst, clientLast);
+      const primaryPhone = this.phone(rng);
 
       const id = await this.upsert(
         this.householdModel,
@@ -519,8 +529,8 @@ export class DemoSeedService {
           propertyAddress: address,
           mailingAddress: address,
           primaryContactName: `${clientFirst} ${clientLast}`,
-          primaryEmails: [this.email(clientFirst, clientLast)],
-          primaryPhones: [this.phone(rng)],
+          primaryEmails: [primaryEmail],
+          primaryPhones: [primaryPhone],
           assignedCrmId: assignedCrm?.userId,
           totalActivePolicies: rng.int(0, 4),
           isTestRecord: false,
@@ -535,6 +545,8 @@ export class DemoSeedService {
         clientLast,
         branchSlug,
         branchId: ctx.branchIdBySlug[branchSlug],
+        primaryPhone,
+        primaryEmail,
         assignedCrm,
         city,
         address,
@@ -1025,6 +1037,11 @@ export class DemoSeedService {
         expirationDate.setMonth(expirationDate.getMonth() + 6);
         const renewalDate = expirationDate;
         const legacyId = `demo:policy:${n}`;
+        // Digits only, because the carrier below is Allstate and PAC-56 #20
+        // now enforces that format. Demo data has to satisfy the rules the
+        // app enforces, or the first person to edit a seeded policy on the
+        // Sold card gets a 400 on data we shipped them.
+        const policyNumber = `9${String(200000 + n).padStart(8, '0')}`;
 
         const id = await this.upsert(
           this.policyModel,
@@ -1033,11 +1050,7 @@ export class DemoSeedService {
             agencyId: ctx.agencyId,
             branchId: deal.producer.branchId,
             legacySmartSuiteId: legacyId,
-            // Digits only, because the carrier below is Allstate and PAC-56 #20
-            // now enforces that format. Demo data has to satisfy the rules the
-            // app enforces, or the first person to edit a seeded policy on the
-            // Sold card gets a 400 on data we shipped them.
-            policyNumber: `9${String(200000 + n).padStart(8, '0')}`,
+            policyNumber,
             policyType,
             carrier: 'Allstate',
             active: true,
@@ -1058,6 +1071,7 @@ export class DemoSeedService {
         refs.push({
           id,
           legacyId,
+          policyNumber,
           policyType,
           household: deal.household,
           deal,
@@ -1442,6 +1456,26 @@ export class DemoSeedService {
   // Service tickets + ops (assignments, rotations, time off)
   // ---------------------------------------------------------------------------
 
+  /**
+   * Tickets for the live CRM `service_tickets` collection.
+   *
+   * ## These are written against `crm/schemas/service-ticket.schema.ts`
+   *
+   * There used to be a second `ServiceTicket` schema — the SmartSuite import's
+   * own, in the `serviceTickets` collection, `TenantRecord`-based, with free
+   * strings for status/category and no ticket number. PAC-89 deleted it as a
+   * duplicate and repointed this module at the live CRM copy, but the document
+   * built here was never translated. `findOneAndUpdate` runs no validators, so
+   * the mismatch was silent in every direction: strict mode dropped `title`,
+   * `daysOpen`, `crmName` and the `legacy*Id` fields, display-cased values went
+   * into enum-validated paths, and `ticketNumber` — required, and half of the
+   * unique `{ agencyId, ticketNumber }` key — was simply never set. The second
+   * ticket then collided with the first on `(agency, null)` and took the whole
+   * seed down with an E11000.
+   *
+   * The fields below are the live schema's, and the vocabularies come from the
+   * enums it validates against (see `SERVICE_CATEGORIES` in `demo-data.ts`).
+   */
   private async seedServiceTickets(
     ctx: Ctx,
     crms: TeamMember[],
@@ -1449,6 +1483,37 @@ export class DemoSeedService {
     policies: PolicyRef[],
     rng: Rng,
   ): Promise<void> {
+    /*
+     * Numbers are allocated here rather than by
+     * `ServiceTicketsService.createTicketWithNumber`, which creates
+     * unconditionally — every demo record is upserted on a stable
+     * `demo:ticket:<i>` key so a re-run updates the same rows instead of adding
+     * more. Only the *format* is shared, via `ticketNumberFor`, which is what
+     * keeps a seeded ticket indistinguishable from one the app opened.
+     *
+     * Allocation therefore has to dodge what the agency already holds: tickets
+     * opened through the UI, and this block's own numbers from a previous run.
+     * Re-using a demo ticket's existing number is what keeps the re-run
+     * idempotent — walking past every *other* taken number is what stops the
+     * seed failing on a demo tenant somebody has actually used.
+     */
+    const existing = await this.serviceTicketModel
+      .find({ agencyId: ctx.agencyObjectId })
+      .select('ticketNumber legacySmartSuiteId')
+      .lean<{ ticketNumber?: string; legacySmartSuiteId?: string }[]>();
+    const taken = new Set(
+      existing
+        .map((t) => t.ticketNumber)
+        .filter((n): n is string => typeof n === 'string'),
+    );
+    const numberByLegacyId = new Map(
+      existing.flatMap((t) =>
+        t.legacySmartSuiteId && t.ticketNumber
+          ? ([[t.legacySmartSuiteId, t.ticketNumber]] as [string, string][])
+          : [],
+      ),
+    );
+
     for (let i = 0; i < DEMO_CONFIG.serviceTickets; i++) {
       const hh = rng.pick(households);
       const branchCrms = crms.filter((c) => c.branchSlug === hh.branchSlug);
@@ -1456,37 +1521,67 @@ export class DemoSeedService {
         ? rng.pick(branchCrms.length ? branchCrms : crms)
         : undefined;
       const policy = policies.find((p) => p.household.legacyId === hh.legacyId);
+      const category = rng.pick(SERVICE_CATEGORIES);
       const status = rng.pick(SERVICE_STATUSES);
-      const createdDate = this.daysAgo(rng.int(0, 30));
-      const resolved = status === 'Resolved';
+      const openedAt = this.daysAgo(rng.int(0, 30));
+      const settled = status === 'resolved' || status === 'closed';
+      // Clamped to now: `openedAt` can be today, and a ticket resolved next
+      // week would sit in the resolution stats as a negative turnaround.
+      const resolvedAt = settled
+        ? new Date(
+            Math.min(
+              this.addDays(openedAt, rng.int(1, 8)).getTime(),
+              Date.now(),
+            ),
+          )
+        : null;
       const legacyId = `demo:ticket:${i}`;
+
+      let ticketNumber = numberByLegacyId.get(legacyId);
+      if (!ticketNumber) {
+        let sequence = TICKET_NUMBER_BASE + i + 1;
+        while (taken.has(ticketNumberFor(category, sequence))) sequence++;
+        ticketNumber = ticketNumberFor(category, sequence);
+      }
+      taken.add(ticketNumber);
 
       await this.upsert(
         this.serviceTicketModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
+        { agencyId: ctx.agencyObjectId, legacySmartSuiteId: legacyId },
         {
-          agencyId: ctx.agencyId,
-          branchId: hh.branchId,
+          // ObjectIds, not the `ctx.agencyId` string the `TenantRecord`
+          // collections take — this schema types both links as ObjectId, and a
+          // string stored here matches none of the API's scope queries, which
+          // is what kept the demo tenant's Service Dashboard empty.
+          agencyId: ctx.agencyObjectId,
+          branchId: ctx.branchObjectIdBySlug[hh.branchSlug],
           legacySmartSuiteId: legacyId,
-          title: `${hh.name} — ${rng.pick(SERVICE_CATEGORIES)}`,
-          createdDate,
-          category: rng.pick(SERVICE_CATEGORIES),
-          priority: rng.pick(SERVICE_PRIORITIES),
-          dueDate: this.addDays(createdDate, rng.int(2, 14)),
-          status,
-          dateResolved: resolved
-            ? this.addDays(createdDate, rng.int(1, 8))
-            : undefined,
-          daysOpen: daysSince(createdDate),
+          ticketNumber,
           clientName: `${hh.clientFirst} ${hh.clientLast}`,
-          crmName: crm?.fullName,
-          policyId: policy?.id,
-          legacyPolicyId: policy?.legacyId,
+          category,
+          status,
+          priority: rng.pick(SERVICE_PRIORITIES),
+          assignedRep: crm?.fullName ?? '',
+          assignedUserId: crm?.userId ?? null,
+          createdByUserId: crm?.userId ?? null,
+          createdByName: crm?.fullName ?? '',
+          policyNumber: policy?.policyNumber ?? '',
+          policyType: policy?.policyType ?? '',
+          household: hh.name,
+          policyId: policy?.id ?? null,
           householdId: hh.id,
-          legacyHouseholdId: hh.legacyId,
-          assignedCrmId: crm?.userId,
-          createdById: crm?.userId,
-          isTestRecord: false,
+          phone: hh.primaryPhone,
+          email: hh.primaryEmail,
+          openedAt,
+          lastActivityAt: resolvedAt ?? openedAt,
+          resolvedAt,
+          timeline: [
+            {
+              type: 'created',
+              content: `Ticket opened — ${category}.`,
+              at: openedAt,
+            },
+          ],
         },
       );
       this.inc('serviceTickets');
@@ -1887,7 +1982,6 @@ export class DemoSeedService {
       this.interestedPartyModel,
       this.priorInsuranceModel,
       this.priorPolicyModel,
-      this.serviceTicketModel,
       this.producerAssignmentModel,
       this.crmRotationModel,
       this.timeOffRequestModel,
@@ -1896,6 +1990,21 @@ export class DemoSeedService {
     for (const model of models) {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }
+    /*
+     * Service tickets are purged on their own because their `agencyId` can be
+     * either type. `seedServiceTickets` writes an ObjectId — the live CRM
+     * schema types the link that way — while rows from before it was corrected
+     * hold the `TenantRecord` string, and Mongoose casts neither: `@Prop({ type:
+     * Types.ObjectId })` under `SchemaFactory` produces a **Mixed** path, so the
+     * value goes to Mongo exactly as passed and a string filter matches only the
+     * string rows. Listing both is what makes `--fresh` actually fresh; the
+     * loop's string-only filter above would leave every current ticket standing.
+     */
+    await this.serviceTicketModel.collection.deleteMany({
+      agencyId: { $in: [agencyId, new Types.ObjectId(agencyId)] },
+      legacySmartSuiteId: { $regex: '^demo:' },
+    });
+
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
     // Same exception as producer goals: `Mailer` has no `legacySmartSuiteId`,
     // so it is keyed and purged on its provenance marker instead.

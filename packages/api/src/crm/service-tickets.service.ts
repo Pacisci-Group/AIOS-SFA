@@ -1320,7 +1320,6 @@ export class ServiceTicketsService {
     category: string,
     attempt = 0,
   ): Promise<string> {
-    const prefix = CATEGORY_PREFIX[category] ?? 'TKT';
     const count = await this.ticketModel.countDocuments({
       agencyId: new Types.ObjectId(agencyId),
     });
@@ -1329,7 +1328,7 @@ export class ServiceTicketsService {
     // number that is already taken — which happens once numbering has drifted
     // from the count, e.g. after deletions — would be retried identically
     // until the attempts ran out.
-    return `${prefix}-${100 + count + 1 + attempt}`;
+    return ticketNumberFor(category, TICKET_NUMBER_BASE + count + 1 + attempt);
   }
 
   /**
@@ -2293,6 +2292,25 @@ function mergeCyclePolicy(
 
 /** Roles whose holders can be a ticket's Assigned Client Relation Manager. */
 const ASSIGNABLE_ROLE_SLUGS = ['csr', 'crm'];
+
+/**
+ * Where an agency's ticket numbering starts, so the first ticket reads
+ * `BILL-101` rather than `BILL-1`.
+ */
+export const TICKET_NUMBER_BASE = 100;
+
+/**
+ * A ticket's human-facing reference, from its category and sequence number.
+ *
+ * Exported because the demo seed allocates its own numbers rather than going
+ * through `createTicketWithNumber` — that creates unconditionally, and the seed
+ * upserts so a re-run updates the same rows instead of adding more. Sharing the
+ * *format* is what keeps a seeded ticket indistinguishable from one the app
+ * wrote; a second copy of this template is how the two drift apart.
+ */
+export function ticketNumberFor(category: string, sequence: number): string {
+  return `${CATEGORY_PREFIX[category] ?? 'TKT'}-${sequence}`;
+}
 
 const CATEGORY_PREFIX: Record<string, string> = {
   Onboarding: 'ONBD',

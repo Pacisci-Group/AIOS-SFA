@@ -10,6 +10,11 @@
  */
 
 import {
+  SERVICE_TICKET_CATEGORIES,
+  SERVICE_TICKET_CREATE_STATUSES,
+  SERVICE_TICKET_PRIORITIES,
+} from '@sfa/shared';
+import {
   CORE_AUDIT_TEMPLATES,
   type CoreAuditTemplateSpec,
 } from '../audit-templates.seed';
@@ -420,23 +425,35 @@ export type AuditTemplateSpec = CoreAuditTemplateSpec;
  */
 export const AUDIT_TEMPLATES: AuditTemplateSpec[] = CORE_AUDIT_TEMPLATES;
 
-export const SERVICE_CATEGORIES = [
-  'Billing',
-  'Policy Change',
-  'Claim',
-  'Coverage Question',
-  'Cancellation',
-  'Endorsement',
-] as const;
+/**
+ * The service-ticket vocabularies, taken straight from the enums the live
+ * `service_tickets` schema validates against.
+ *
+ * Spelled as filters over the shared constants rather than as literal lists on
+ * purpose. These used to be display-cased lists of their own (`'Open'`,
+ * `'Coverage Question'`, …) written for the retired SmartSuite-import schema,
+ * and because `findOneAndUpdate` runs no validators the seed went on writing
+ * values no enum accepts long after the collection changed underneath it.
+ * Deriving them means a vocabulary change is a compile error here.
+ *
+ * `Onboarding` and `Quote` are excluded because neither is a standalone ticket:
+ * an onboarding ticket is one link of a chain and carries an `onboarding` step
+ * payload the queue derives its status from, and a `Quote` ticket belongs to a
+ * lead — `updateStatus` refuses to write a status on one, so a demo `Quote`
+ * ticket with no lead could never be resolved. Both are seeded properly by the
+ * dedicated fixtures (`post-sale-fixture.ts`, `onboarding-scenarios.ts`).
+ */
+export const SERVICE_CATEGORIES = SERVICE_TICKET_CATEGORIES.filter(
+  (category) => category !== 'Onboarding' && category !== 'Quote',
+);
 
-export const SERVICE_PRIORITIES = ['Low', 'Medium', 'High', 'Urgent'] as const;
+export const SERVICE_PRIORITIES = SERVICE_TICKET_PRIORITIES;
 
-export const SERVICE_STATUSES = [
-  'Open',
-  'In Progress',
-  'Waiting on Client',
-  'Resolved',
-] as const;
+/**
+ * The statuses a ticket can be *filed* under, which is what a seeded ticket is.
+ * `waiting` and `overdue` are derived states rather than something anyone sets.
+ */
+export const SERVICE_STATUSES = SERVICE_TICKET_CREATE_STATUSES;
 
 /** Record-count knobs for the synthetic tenant. */
 export const DEMO_CONFIG = {
