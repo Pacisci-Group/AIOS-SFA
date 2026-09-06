@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { MailerCampaignCommitFn } from './functions/mailer-campaign-commit.fn';
+import { MailerCampaignPreviewFn } from './functions/mailer-campaign-preview.fn';
 import { SendInviteEmailFn } from './functions/send-invite-email.fn';
 import { SendPasswordResetEmailFn } from './functions/send-password-reset-email.fn';
 import { SweepEventLogFn } from './functions/sweep-event-log.fn';
@@ -11,6 +13,17 @@ import {
   EmailMessageSchema,
 } from './email/schemas/email-message.schema';
 import { WorkerIndexesService } from './worker-indexes.service';
+import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
+import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
+import {
+  MailerCampaign,
+  MailerCampaignSchema,
+} from '../mailers/schemas/mailer-campaign.schema';
+import {
+  MailerZipMarket,
+  MailerZipMarketSchema,
+} from '../mailers/schemas/mailer-zip-market.schema';
+import { Mailer, MailerSchema } from '../mailers/schemas/mailer.schema';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { StorageModule } from '../storage/storage.module';
 
@@ -46,6 +59,15 @@ import { StorageModule } from '../storage/storage.module';
       // boundary lets across (see `eslint.config.mjs`); duplicating them would
       // be strictly worse.
       { name: Agency.name, schema: AgencySchema },
+      // Owned by the API, registered here for the mailer campaign jobs
+      // (PAC-71). Schemas are the one thing the worker boundary lets across;
+      // the transform, the import engine and the assignment resolver are all
+      // plain functions in `common/` for exactly that reason.
+      { name: MailerCampaign.name, schema: MailerCampaignSchema },
+      { name: MailerZipMarket.name, schema: MailerZipMarketSchema },
+      { name: Mailer.name, schema: MailerSchema },
+      { name: Carrier.name, schema: CarrierSchema },
+      { name: Lead.name, schema: LeadSchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports
@@ -68,6 +90,8 @@ import { StorageModule } from '../storage/storage.module';
     SendInviteEmailFn,
     SendPasswordResetEmailFn,
     SweepEventLogFn,
+    MailerCampaignPreviewFn,
+    MailerCampaignCommitFn,
   ],
 })
 export class WorkerModule {}
