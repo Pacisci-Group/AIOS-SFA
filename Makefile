@@ -6,7 +6,7 @@
 # Docker-side services split by compose profile (see docker-compose.yml): mongo,
 # minio and redis have no profile so they start in both modes; api and web sit
 # behind `--profile app`.
-.PHONY: help dev infra up start down stop build logs logs-infra restart ps seed seed-demo worker worker-logs
+.PHONY: help dev infra up start down stop build logs logs-infra restart ps seed seed-demo migrate migrate-status worker worker-logs
 
 COMPOSE := docker compose
 APP     := $(COMPOSE) --profile app
@@ -21,6 +21,10 @@ help:
 	@echo "    make dev        Start Mongo + MinIO + Redis only"
 	@echo "    make seed       Seed the core super admin + tenant scaffold"
 	@echo "    make seed-demo  Seed the full synthetic demo agency"
+	@echo ""
+	@echo "  Schema migrations (packages/api/migrations/ — applied on API startup):"
+	@echo "    make migrate         Apply pending migrations by hand"
+	@echo "    make migrate-status  Show applied vs pending"
 	@echo ""
 	@echo "  Everything in Docker:"
 	@echo "    make up         Build and start Mongo, MinIO, Redis, API and web"
@@ -68,6 +72,16 @@ seed:
 
 seed-demo:
 	npm run api:seed:demo:dev
+
+# Schema/data migrations, as opposed to the seeds above (which populate an empty
+# database). Rarely needed by hand: the API applies pending migrations at startup
+# in both run modes. These are here for inspecting state and for applying a
+# migration without restarting the API.
+migrate:
+	npm run db:migrate
+
+migrate-status:
+	npm run db:migrate:status
 
 up start: build
 	$(APP) up -d

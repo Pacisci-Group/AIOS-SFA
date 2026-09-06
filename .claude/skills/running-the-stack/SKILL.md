@@ -87,3 +87,22 @@ applies identically in both modes.
 > household `HH-…` numbering at the end of its household pass. The repair passes
 > that used to follow it were for databases migrated by older code and have been
 > removed — a run against real data found them doing nothing.
+
+> **Careful — "migration" means two different things in this repo.**
+> Everything above *populates an empty database*. **Schema migrations** are the
+> other kind: changes to data or indexes that already exist, one file per change
+> in `packages/api/migrations/`, applied once per database and recorded in
+> `migrations_changelog`.
+>
+> ```bash
+> npm run db:migrate:create -- add_archived_to_households   # scaffold one
+> npm run db:migrate:status                                 # applied vs pending
+> npm run db:migrate                                        # apply pending
+> npm run db:migrate:down                                   # revert the last one
+> ```
+>
+> You rarely need those by hand: **the API applies pending migrations at startup**,
+> before it binds a port, in both run modes. `DB_MIGRATE_ON_BOOT=false` skips it.
+> Read `packages/api/migrations/README.md` before writing one — applied
+> migrations are immutable, they use the raw `db` handle and never a Mongoose
+> model, and they must be idempotent.
