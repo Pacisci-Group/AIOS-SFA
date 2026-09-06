@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -22,13 +23,13 @@ export class CrmRotation extends TenantRecord {
   @Prop({ default: false })
   activeForProducer: boolean;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   crmId?: Types.ObjectId;
 
   @Prop()
   legacyCrmId?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
   @Prop()

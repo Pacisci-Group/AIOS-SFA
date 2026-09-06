@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import { TenantRecord } from '../../common/schemas/tenant-record.schema';
 
 export type ProducerGoalDocument = HydratedDocument<ProducerGoal>;
@@ -11,7 +12,7 @@ export type ProducerGoalDocument = HydratedDocument<ProducerGoal>;
  */
 @Schema({ timestamps: true, collection: 'producerGoals' })
 export class ProducerGoal extends TenantRecord {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', required: true, index: true })
   producerId: Types.ObjectId;
 
   @Prop({ index: true })

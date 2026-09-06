@@ -1,6 +1,7 @@
 import type { AgencySetupStatus, ModuleEntitlements } from '@sfa/shared';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type AgencyDocument = HydratedDocument<Agency>;
 
@@ -137,7 +138,7 @@ export class AgencySetup {
   completedAt: Date | null;
 
   /** Who finished it — the owner, not the operator who created the agency. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   completedByUserId: Types.ObjectId | null;
 
   /**

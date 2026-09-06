@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { ONBOARDING_STEP_KEYS } from '@sfa/shared';
 import type { OnboardingStepKey } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type OnboardingDocument = HydratedDocument<Onboarding>;
 
@@ -50,17 +51,17 @@ export const OnboardingEmailMilestonesSchema = SchemaFactory.createForClass(
  */
 @Schema({ timestamps: true, collection: 'onboardings' })
 export class Onboarding {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', required: true, index: true })
   agencyId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Branch', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Branch', index: true, default: null })
   branchId: Types.ObjectId | null;
 
   /**
    * The client. Required — an onboarding with no client cannot be tracked per
    * client, which is the whole point of this record.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Household', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', required: true, index: true })
   householdId: Types.ObjectId;
 
   /** Denormalized so the chain view needs no household read. */
@@ -73,7 +74,7 @@ export class Onboarding {
    * triggered the onboarding — the onboarding itself is per client, not per
    * policy, but the originating policy is useful context on the call.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Policy', default: null })
+  @Prop({ type: ObjectIdType, ref: 'Policy', default: null })
   policyId: Types.ObjectId | null;
 
   @Prop({ trim: true, default: '' })
@@ -96,21 +97,21 @@ export class Onboarding {
   salesProducerName: string;
 
   /** The originating deal. Null for a hand-started onboarding. */
-  @Prop({ type: Types.ObjectId, ref: 'Deal', default: null })
+  @Prop({ type: ObjectIdType, ref: 'Deal', default: null })
   dealId: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'DealAudit', default: null })
+  @Prop({ type: ObjectIdType, ref: 'DealAudit', default: null })
   dealAuditId: Types.ObjectId | null;
 
   /** The CSR the chain's tickets are assigned to. */
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true, default: null })
   assignedCsrId: Types.ObjectId | null;
 
   /**
    * Who started the onboarding. Stamped onto every ticket in the chain so the
    * provenance survives the calls that the system opens automatically.
    */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   createdByUserId: Types.ObjectId | null;
 
   @Prop({ trim: true, default: '' })

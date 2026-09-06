@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -42,7 +43,7 @@ export class ShareLink extends TenantRecord {
   token: string;
 
   /** Every lead submitted through this link is assigned to this user. */
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', required: true, index: true })
   producerId: Types.ObjectId;
 
   /**
@@ -81,13 +82,13 @@ export class ShareLink extends TenantRecord {
   @Prop({ type: Date })
   addressLookupWindowStart?: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: ObjectIdType, ref: 'User', required: true })
   createdById: Types.ObjectId;
 
   @Prop({ type: Date })
   revokedAt?: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: ObjectIdType, ref: 'User' })
   revokedById?: Types.ObjectId;
 }
 

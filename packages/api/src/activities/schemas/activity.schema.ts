@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -69,17 +70,17 @@ export class Activity extends TenantRecord {
   @Prop({ index: true })
   legacySubjectId?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Lead' })
+  @Prop({ type: ObjectIdType, ref: 'Lead' })
   leadId?: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Deal' })
+  @Prop({ type: ObjectIdType, ref: 'Deal' })
   dealId?: Types.ObjectId;
 
   /**
    * Set by `POST /quote-recaps` (PAC-39). Unset on migrated `quoted` rows,
    * which identify their subject through `legacySubjectId` instead.
    */
-  @Prop({ type: Types.ObjectId, ref: 'QuoteRecap' })
+  @Prop({ type: ObjectIdType, ref: 'QuoteRecap' })
   quoteRecapId?: Types.ObjectId;
 
   /**
@@ -90,7 +91,7 @@ export class Activity extends TenantRecord {
    * `audit_resolved` row still carries only `dealId`, because it is about one
    * checklist item rather than the audit as a whole.
    */
-  @Prop({ type: Types.ObjectId, ref: 'DealAudit' })
+  @Prop({ type: ObjectIdType, ref: 'DealAudit' })
   dealAuditId?: Types.ObjectId;
 
   /**
@@ -104,7 +105,7 @@ export class Activity extends TenantRecord {
    * Distinct from `Lead.producerId` / `Deal.producerId` / `QuoteRecap.producerId`,
    * which really are producer refs and drive `buildScopeFilter`'s `own` clamp.
    */
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   userId?: Types.ObjectId;
 
   /**
@@ -116,7 +117,7 @@ export class Activity extends TenantRecord {
    * index for a predicate nobody queries is pure cost. Add one when a query
    * needs it.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Policy' })
+  @Prop({ type: ObjectIdType, ref: 'Policy' })
   policyId?: Types.ObjectId;
 
   @Prop({ type: Date, index: true })

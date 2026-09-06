@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type AgencyDomainDocument = HydratedDocument<AgencyDomain>;
 
@@ -32,7 +33,7 @@ export type AgencyDomainStatus = 'pending' | 'active' | 'failed';
  */
 @Schema({ timestamps: true, collection: 'agencyDomains' })
 export class AgencyDomain {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', required: true, index: true })
   agencyId: Types.ObjectId;
 
   /**

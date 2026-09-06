@@ -5,6 +5,7 @@ import type {
   NormalizedLeadSource,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -143,7 +144,7 @@ export class Lead extends TenantRecord {
   @Prop()
   quoteControlNumber?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
   @Prop({ index: true })
@@ -159,13 +160,13 @@ export class Lead extends TenantRecord {
    * The real Household link. Migrated leads carry only `legacyHouseholdId` (the
    * SmartSuite id); intake backfills this on first touch.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
   householdId?: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Contact', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Contact', index: true })
   primaryContactId?: Types.ObjectId;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'Contact' }], default: [] })
+  @Prop({ type: [{ type: ObjectIdType, ref: 'Contact' }], default: [] })
   memberContactIds: Types.ObjectId[];
 
   /**

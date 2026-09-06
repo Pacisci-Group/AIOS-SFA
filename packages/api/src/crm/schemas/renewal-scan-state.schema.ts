@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type RenewalScanStateDocument = HydratedDocument<RenewalScanState>;
 
@@ -27,7 +28,7 @@ export type RenewalScanStateDocument = HydratedDocument<RenewalScanState>;
  */
 @Schema({ timestamps: true, collection: 'renewalScanState' })
 export class RenewalScanState {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', required: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', required: true })
   agencyId: Types.ObjectId;
 
   @Prop({ type: Date, required: true, default: () => new Date(0) })
