@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type UserRoleDocument = HydratedDocument<UserRole>;
 
@@ -17,20 +18,20 @@ export type UserRoleDocument = HydratedDocument<UserRole>;
  */
 @Schema({ timestamps: true, collection: 'userRoles' })
 export class UserRole {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', required: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', required: true })
   agencyId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: ObjectIdType, ref: 'User', required: true })
   userId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'AgencyRole', required: true })
+  @Prop({ type: ObjectIdType, ref: 'AgencyRole', required: true })
   roleId: Types.ObjectId;
 
   /** Opts this schema into `authorshipPlugin`; see `TenantRecord`. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   createdBy: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   updatedBy: Types.ObjectId | null;
 }
 

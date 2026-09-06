@@ -10,9 +10,9 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { getHousehold, type ContactSummary } from '@/lib/households-api';
+import { getHousehold } from '@/lib/households-api';
+import { formatAddress } from '@/lib/format-address';
 import {
-  addressLine,
   DrawerError,
   DrawerRow,
   DrawerSection,
@@ -20,14 +20,6 @@ import {
   money,
   shortDate,
 } from './drawer-primitives';
-
-/** `null` rather than "Unnamed" so the caller's `??` chain can keep falling through. */
-function fullName(contact: ContactSummary | undefined) {
-  if (!contact) return null;
-  return (
-    [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null
-  );
-}
 
 interface HouseholdDrawerProps {
   householdId: string | null;
@@ -56,23 +48,21 @@ export function HouseholdDrawer({
   const household = query.data;
 
   /*
-   * The denormalized `primaryContactName` / `primaryEmails` / `primaryPhones`
-   * on the household are written by lead intake but **not** by the SmartSuite
-   * migration, so every migrated household leaves them empty and this drawer
-   * rendered "—" for a client whose details it had already fetched. The primary
-   * contact is right there in `contacts`; falling back to it is real data, not a
-   * placeholder. `HouseholdProfile` (the full page) has always done this — the
-   * drawer is what was inconsistent.
+   * `primaryContactName` and `contacts[].isPrimary` are both resolved by
+   * `GET /households/:id` (see `pickPrimaryContact`), which is what makes them
+   * usable for a migrated household — the SmartSuite import writes neither
+   * `primaryContactName` nor a reliable `isPrimary`, so this drawer used to
+   * render "—" for a client whose details it had already fetched.
+   *
+   * The household-level email/phone still come first: intake writes them, and
+   * they are the household's own line rather than one member's.
    */
   const primaryContact = household?.contacts.find((c) => c.isPrimary);
-  const contactName =
-    household?.primaryContactName ?? fullName(primaryContact) ?? '—';
+  const contactName = household?.primaryContactName ?? '—';
   const email =
     household?.primaryEmails[0] ?? primaryContact?.emails[0] ?? '—';
   const phone =
     household?.primaryPhones[0] ?? primaryContact?.phones[0] ?? '—';
-  /* Mailing address as the last resort — the drawer already fetches it. */
-  const address = household?.propertyAddress ?? household?.mailingAddress;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -95,7 +85,10 @@ export function HouseholdDrawer({
                 <DrawerRow label="Primary contact" value={contactName} />
                 <DrawerRow label="Email" value={email} />
                 <DrawerRow label="Phone" value={phone} />
-                <DrawerRow label="Address" value={addressLine(address)} />
+                <DrawerRow
+                  label="Address"
+                  value={formatAddress(household.address) ?? '—'}
+                />
                 <DrawerRow
                   label="Active policies"
                   value={household.totalActivePolicies}

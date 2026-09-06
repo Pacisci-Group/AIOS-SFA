@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, IndexOptions, Types } from 'mongoose';
+import { ObjectIdType } from '../mongo/object-id';
 
 export type TenantDocument = HydratedDocument<TenantRecord>;
 
@@ -45,10 +46,10 @@ export class TenantRecord {
    * the query that needs it.
    */
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   createdBy?: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   updatedBy?: Types.ObjectId | null;
 }
 

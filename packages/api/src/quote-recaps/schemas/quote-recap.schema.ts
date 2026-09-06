@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import type { PolicyType } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -145,7 +146,7 @@ export class QuoteRecap extends TenantRecord {
   @Prop({ trim: true })
   insuranceRenewalMonth?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
   /**
@@ -153,11 +154,11 @@ export class QuoteRecap extends TenantRecord {
    * without one; migrated documents carry only `legacyLeadId`, so this is unset
    * on everything that predates PAC-39.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Lead', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Lead', index: true })
   leadId?: Types.ObjectId;
 
   /** Resolved from the lead server-side, never sent by the client. */
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
   householdId?: Types.ObjectId;
 
   @Prop({ type: [QuotedPolicySchema], default: [] })

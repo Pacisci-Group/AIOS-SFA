@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE } from '@sfa/shared';
 import type { BusinessType, NormalizedLeadSource } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -138,7 +139,7 @@ export class Deal extends TenantRecord {
    * reachable from the ticket it was booked on.
    */
   @Prop({
-    type: Types.ObjectId,
+    type: ObjectIdType,
     ref: 'ServiceTicket',
     index: true,
     default: null,
@@ -157,7 +158,7 @@ export class Deal extends TenantRecord {
   @Prop({ trim: true })
   clientName?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   producerId?: Types.ObjectId;
 
   @Prop({ index: true })
@@ -186,17 +187,17 @@ export class Deal extends TenantRecord {
    * in the create DTO, not the collection.
    */
 
-  @Prop({ type: Types.ObjectId, ref: 'Lead', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Lead', index: true })
   leadId?: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
   householdId?: Types.ObjectId;
 
   /** Optional by design — not every sale has a recorded quote. */
-  @Prop({ type: Types.ObjectId, ref: 'QuoteRecap' })
+  @Prop({ type: ObjectIdType, ref: 'QuoteRecap' })
   quoteRecapId?: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Contact' })
+  @Prop({ type: ObjectIdType, ref: 'Contact' })
   primaryContactId?: Types.ObjectId;
 
   /** Per-wizard-session idempotency key; see the partial unique index below. */
@@ -222,7 +223,7 @@ export class Deal extends TenantRecord {
 
   // --- CRM assignment (PAC-40), mirrored from the household ---
 
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true })
   assignedCrmId?: Types.ObjectId;
 
   @Prop({ type: Date })

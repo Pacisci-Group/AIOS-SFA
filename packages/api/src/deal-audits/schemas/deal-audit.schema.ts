@@ -6,6 +6,7 @@ import {
 } from '@sfa/shared';
 import type { AuditOwnerType, DealAuditStatus } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -34,7 +35,7 @@ export class AuditOwnerRef {
   @Prop({ type: String, enum: AUDIT_OWNER_TYPES, required: true })
   type: AuditOwnerType;
 
-  @Prop({ type: Types.ObjectId, required: true })
+  @Prop({ type: ObjectIdType, required: true })
   id: Types.ObjectId;
 }
 
@@ -119,13 +120,13 @@ export class DealAudit extends TenantRecord {
   @Prop({ type: Date })
   submittedAt?: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: ObjectIdType, ref: 'User' })
   submittedById?: Types.ObjectId;
 
   @Prop({ type: Date })
   reviewedAt?: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: ObjectIdType, ref: 'User' })
   reviewedById?: Types.ObjectId;
 
   /*
@@ -170,7 +171,7 @@ export class DealAudit extends TenantRecord {
   @Prop({ type: Date })
   dueAt?: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'Deal', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Deal', index: true })
   dealId?: Types.ObjectId;
 
   @Prop({ type: [String], default: [] })
