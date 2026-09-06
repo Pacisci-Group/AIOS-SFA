@@ -3,6 +3,7 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
+    "assets": ["seed/data/*.csv"],
     "deleteOutDir": true,
     "webpack": true,
     "webpackConfigPath": "webpack.config.js"

@@ -44,10 +44,7 @@
  *   expensive homes.
  */
 
-import type {
-  MailerDiscountRules,
-  SquareFootageBand,
-} from '@sfa/shared';
+import type { MailerDiscountRules, SquareFootageBand } from '@sfa/shared';
 
 export interface MailerProcessorSettings {
   /**

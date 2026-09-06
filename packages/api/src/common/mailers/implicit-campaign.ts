@@ -80,7 +80,10 @@ export function implicitCampaignDoc(
   return {
     carrierId: input.carrierId,
     name: `${label} — ${week}${year}${file}`,
-    campaignNumber: input.campaignNumber ?? undefined,
+    // `null`, not `undefined`: the raw driver serialises `undefined` to `null`
+    // anyway and the backfill writes through it, so being explicit keeps the
+    // Mongoose and driver paths producing the same document.
+    campaignNumber: input.campaignNumber ?? null,
     weekNumber: key.weekNumber,
     year: key.year,
     status: 'imported',

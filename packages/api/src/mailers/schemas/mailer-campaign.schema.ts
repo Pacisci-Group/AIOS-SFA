@@ -108,8 +108,9 @@ export class MailerCampaignFileDoc {
   @Prop({ trim: true })
   contentType?: string;
 }
-export const MailerCampaignFileDocSchema =
-  SchemaFactory.createForClass(MailerCampaignFileDoc);
+export const MailerCampaignFileDocSchema = SchemaFactory.createForClass(
+  MailerCampaignFileDoc,
+);
 
 /**
  * One run of a mail campaign (PAC-71).

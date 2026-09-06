@@ -7,7 +7,8 @@ import {
 } from './mailer-row.mapper';
 
 const CTX: MailerMapContext = {
-  agencyId: 'agency-1',
+  campaignId: 'campaign-1',
+  visibleAgencyIdsFor: () => ['agency-1'],
   system: 'spreadsheet',
   runId: 'run-1',
 };
@@ -257,10 +258,98 @@ describe('cross-source equivalence', () => {
   });
 });
 
+describe('mapMailerRow — campaign tenancy (PAC-71)', () => {
+  function map(
+    row: Record<string, unknown>,
+    ctx: Partial<MailerMapContext> = {},
+  ) {
+    return mapMailerRow(normalizeRow(row), { ...CTX, ...ctx });
+  }
+
+  it('stamps the campaign and never an agencyId', () => {
+    const result = map(CSV_ROW);
+    if (!result.ok) throw new Error('expected a mapped row');
+
+    expect(result.mapped.doc.campaignId).toBe('campaign-1');
+    // The field is gone from the schema; a stray write would land as an
+    // unindexed stowaway that reads like tenancy but enforces nothing.
+    expect(result.mapped.doc).not.toHaveProperty('agencyId');
+  });
+
+  it('uppercases the row carrier agency code onto its own field', () => {
+    const result = map({ ...CSV_ROW, agencyid: '  a0b9049  ' });
+    if (!result.ok) throw new Error('expected a mapped row');
+
+    // Must match `appointmentCodeKey` exactly — the two sides of the carrier
+    // appointment match derive their key independently, and a drift makes the
+    // routing miss silently.
+    expect(result.mapped.doc.carrierAgencyId).toBe('A0B9049');
+  });
+
+  it('passes the normalized code key, not the raw column, to the resolver', () => {
+    const seen: (string | null)[] = [];
+    map(
+      { ...CSV_ROW, agencyid: ' a0b9049 ' },
+      {
+        visibleAgencyIdsFor: (code) => {
+          seen.push(code);
+          return ['agency-1'];
+        },
+      },
+    );
+    expect(seen).toEqual(['A0B9049']);
+  });
+
+  it('passes null for a row carrying no code at all', () => {
+    const seen: (string | null)[] = [];
+    map(
+      { ...CSV_ROW, agencyid: '' },
+      {
+        visibleAgencyIdsFor: (code) => {
+          seen.push(code);
+          return null;
+        },
+      },
+    );
+    expect(seen).toEqual([null]);
+  });
+
+  it('keeps an explicit null visibility on the document', () => {
+    // `null` = every agency. It survives `compact`, which drops `undefined`
+    // only — reinstated after it precisely so a future widening of that helper
+    // cannot turn a platform-wide campaign into a hidden one.
+    const result = map(CSV_ROW, { visibleAgencyIdsFor: () => null });
+    if (!result.ok) throw new Error('expected a mapped row');
+
+    expect(result.mapped.doc.visibleAgencyIds).toBeNull();
+  });
+
+  it('rejects an unassignable row, naming the code', () => {
+    const result = map(CSV_ROW, { visibleAgencyIdsFor: () => undefined });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe(
+      'No agency is assigned for carrier agency code A0B9049.',
+    );
+    // The rejection carries a number a human can search the file for.
+    expect(result.controlNumber).toBe('9c41b2d70e58');
+  });
+
+  it('keeps agencyid recoverable in source.raw', () => {
+    // It is not a promoted column, so the backfill can still read it back off
+    // an already-imported row.
+    const result = map(CSV_ROW);
+    if (!result.ok) throw new Error('expected a mapped row');
+    const source = result.mapped.doc.source as { raw: Record<string, unknown> };
+    expect(source.raw.agencyid).toBe('A0B9049');
+  });
+});
+
 describe('detectFromRow', () => {
   it('reads what the file says about itself', () => {
     expect(detectFromRow(normalizeRow(CSV_ROW))).toEqual({
-      agencyId: 'A0B9049',
+      carrierAgencyId: 'A0B9049',
       agencyName: 'SMITH FAMILY AGENCY',
       campaignNumber: 'Week_Number-29',
       weekNumber: 29,

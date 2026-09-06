@@ -1629,7 +1629,11 @@ export class DemoSeedService {
     const sample: { long: string; short: string }[] = [];
     const quoteDate = this.daysAgo(21);
     const weekNumber = 29;
-    const campaignId = await this.seedMailerCampaign(ctx, weekNumber, quoteDate);
+    const campaignId = await this.seedMailerCampaign(
+      ctx,
+      weekNumber,
+      quoteDate,
+    );
 
     for (let i = 0; i < DEMO_CONFIG.mailers; i++) {
       // A stable, realistic-looking pair: a '#'-prefixed 32-hex "UUID" whose

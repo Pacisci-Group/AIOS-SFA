@@ -4,10 +4,12 @@ import { Model } from 'mongoose';
 import { getModelToken } from '@nestjs/mongoose';
 import { AppModule } from '../app.module';
 import { Carrier } from '../carriers/schemas/carrier.schema';
+import { MailerZipMarket } from '../mailers/schemas/mailer-zip-market.schema';
 import { Permission } from '../permissions/schemas/permission.schema';
 import { User } from '../users/schemas/user.schema';
 import { seedCarriers } from './carriers.seed';
 import { seedPermissions } from './permissions.seed';
+import { seedZipMarkets } from './zip-markets.seed';
 
 /**
  * Core seed — platform-required data only.
@@ -38,6 +40,9 @@ async function seed() {
   const carrierModel = app.get<Model<Carrier>>(getModelToken(Carrier.name));
   const permissionModel = app.get<Model<Permission>>(
     getModelToken(Permission.name),
+  );
+  const zipMarketModel = app.get<Model<MailerZipMarket>>(
+    getModelToken(MailerZipMarket.name),
   );
 
   // ---------------------------------------------------------------------------
@@ -92,6 +97,20 @@ async function seed() {
   const permissions = await seedPermissions(permissionModel);
   console.log(
     `Permissions seeded (${permissions.created} created, ${permissions.updated} updated, ${permissions.deprecated} deprecated)`,
+  );
+
+  // ZIP -> market (PAC-71). Platform-required, not demo data: an empty table
+  // silently mails every piece under the default market's phone number rather
+  // than failing, which is the worse of the two outcomes.
+  const zipMarkets = await seedZipMarkets(zipMarketModel);
+  console.log(
+    `Zip markets seeded (${zipMarkets.created} created, ${zipMarkets.existing} already present` +
+      (zipMarkets.rejected.length
+        ? `, ${zipMarkets.rejected.length} rejected: ${zipMarkets.rejected
+            .map((r) => `${r.zip || '(blank)'} — ${r.reason}`)
+            .join('; ')}`
+        : '') +
+      ')',
   );
 
   console.log('\nCore seed complete.');
