@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type ImpersonationEventDocument = HydratedDocument<ImpersonationEvent>;
 
@@ -26,15 +27,15 @@ export type ImpersonationEventDocument = HydratedDocument<ImpersonationEvent>;
 @Schema({ timestamps: true, collection: 'impersonationEvents' })
 export class ImpersonationEvent {
   /** The platform admin who took the session. */
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', required: true, index: true })
   actorUserId: Types.ObjectId;
 
   /** The user they became. */
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'User', required: true, index: true })
   targetUserId: Types.ObjectId;
 
   /** The tenant entered. Null only if the target somehow has no agency. */
-  @Prop({ type: Types.ObjectId, ref: 'Agency', default: null })
+  @Prop({ type: ObjectIdType, ref: 'Agency', default: null })
   agencyId: Types.ObjectId | null;
 
   /**

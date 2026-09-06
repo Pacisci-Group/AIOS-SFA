@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import type { SoldPolicyDiscounts } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -89,13 +90,13 @@ export class Policy extends TenantRecord {
   @Prop()
   notes?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
   householdId?: Types.ObjectId;
 
   @Prop({ index: true })
   legacyHouseholdId?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Deal', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Deal', index: true })
   dealId?: Types.ObjectId;
 
   @Prop()
@@ -112,10 +113,10 @@ export class Policy extends TenantRecord {
    * place — a transfer keeps both rows, because the client genuinely had two
    * policies over time and the old one's history has to survive.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Policy', index: true, default: null })
   transferredToPolicyId: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Policy', index: true, default: null })
   transferredFromPolicyId: Types.ObjectId | null;
 
   /**
