@@ -35,11 +35,15 @@ export interface ResolvedMailerLink {
  * ## What it deliberately does not do
  *
  * It never throws, and it never refuses to create a lead. A producer typing a
- * number that belongs to another agency's lead still gets their lead — they just
- * get it **without** the mailer link, carrying the key alone. The 409 in
+ * number that belongs to **another agency's** lead still gets their lead — they
+ * just get it without the mailer link, carrying the key alone. The 409 in
  * `MailersService.logLead` is for the drawer, where the producer explicitly
  * asked for *that mailer*; here the mailer is a detail on a lead that exists
  * regardless, and failing the whole intake over it would lose a real enquiry.
+ *
+ * A mailer **this** agency already links is a different case entirely: the full
+ * link comes back, so dedupe signal 2 resolves to the existing lead instead of
+ * creating a second one.
  */
 @Injectable()
 export class MailerLinkResolver {
@@ -75,12 +79,23 @@ export class MailerLinkResolver {
 
     if (!mailer) return { mailerId: null, campaignId: null, key };
 
-    // One lead per mailer, platform-wide. If someone already owns it, downgrade
-    // to key-only rather than producing a link the unique index would reject.
-    const owned = await this.leadModel
-      .exists({ 'mailer.mailerId': mailer._id })
-      .then(Boolean);
-    if (owned) return { mailerId: null, campaignId: null, key };
+    // One lead per mailer, platform-wide. ⚠ The agency check is load-bearing in
+    // *both* directions:
+    //
+    // - **Another agency owns it** → downgrade to key-only, rather than emitting
+    //   a link the unique index would reject and turn into a 409. A producer
+    //   typing a number still gets their lead.
+    // - **This agency owns it** → keep the full link, because that is exactly
+    //   what dedupe signal 2 matches on. Downgrading here would make a second
+    //   submission of the same control number create a *second* lead, which is
+    //   the duplicate the signal exists to prevent.
+    const owner = await this.leadModel
+      .findOne({ 'mailer.mailerId': mailer._id })
+      .select({ agencyId: 1 })
+      .lean();
+    if (owner && owner.agencyId !== agencyId) {
+      return { mailerId: null, campaignId: null, key };
+    }
 
     return {
       mailerId: mailer._id,

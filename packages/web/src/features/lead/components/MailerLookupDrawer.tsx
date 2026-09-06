@@ -109,9 +109,9 @@ export function MailerLookupDrawer({
       );
 
       if (result.alreadyExisted) {
-        // The existing lead may belong to another producer, in which case the
-        // API withholds its id. Refetch rather than guess, so the footer offers
-        // "View lead" only when the link would actually resolve.
+        // The existing lead may belong to someone this caller cannot see, in
+        // which case the API withholds its id. Refetch rather than guess, so the
+        // footer offers "View lead" only when the link would actually resolve.
         void queryClient.invalidateQueries({ queryKey: mailerLookupKey(key) });
       } else {
         // We created it, so it is ours and definitely reachable.
@@ -135,6 +135,12 @@ export function MailerLookupDrawer({
     },
     onError: (error: Error) => {
       toast.error(error.message || "Couldn't log this mailer as a lead.");
+      // Refetch regardless of the reason. The likeliest failure is a 409 —
+      // another agency logged this mailer on a shared campaign between the
+      // lookup and the click, and one mailer produces one lead platform-wide
+      // (PAC-71). Re-reading flips the footer to "Already logged." instead of
+      // leaving an enabled button that can only fail again.
+      void queryClient.invalidateQueries({ queryKey: mailerLookupKey(key) });
     },
   });
 
@@ -360,9 +366,14 @@ export function MailerLookupDrawer({
                     <Link to={`/leads/${mailer.linkedLeadId}`}>View lead</Link>
                   </Button>
                 ) : (
-                  // Someone else's lead. Saying so beats a link that would 404.
+                  // Someone else's lead — and deliberately no hint as to whose.
+                  // Since PAC-71 `alreadyLogged` is platform-wide: this may be a
+                  // colleague outside the caller's data scope, or another agency
+                  // entirely on a shared campaign. Naming a producer would be
+                  // wrong in the second case and naming the agency would leak
+                  // another tenant's data, so it says neither.
                   <p className="text-sm text-muted-foreground">
-                    Already logged by another producer.
+                    Already logged.
                   </p>
                 )}
               </>

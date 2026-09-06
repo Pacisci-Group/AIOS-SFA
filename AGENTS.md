@@ -168,6 +168,14 @@ temperature/aging that aren't first-class in legacy payloads. See
   campaign features and for metrics it already defines — see
   `.claude/rules/apex-mail-companion-reference.md`. Pair it with
   `docs/mailers-handoff.md`, which records what our side already settled.
+- `docs/plans/pac-71-mailer-campaigns-implementation-plan.md` — the four-PR
+  execution order for mailer campaigns (PAC-71). ⚠ **PR1 deleted the Add Mailers
+  upload** (page, route, panel tile, endpoints and worker function): a mailer now
+  belongs to a *campaign* rather than an agency, and the old importer could not
+  compile against that. Until PR3 lands the campaign UI, the **demo seed is the
+  only way to get mailers into a local database**. An existing database is moved
+  across by `npm run backfill:mailer-campaigns:dev -w @sfa/api`, which must run
+  with the API and worker stopped.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**

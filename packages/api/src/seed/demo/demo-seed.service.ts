@@ -1601,11 +1601,14 @@ export class DemoSeedService {
   // ---------------------------------------------------------------------------
 
   /**
-   * A handful of mailer prospects (PAC-73).
+   * A handful of mailer prospects (PAC-73), under one demo campaign (PAC-71).
    *
-   * Exists so the Mailers drawer and the Add Mailers report are testable with
-   * **neither** GCP credentials nor a real RTP file — both of which gate the
-   * two real importers, and neither of which a new contributor will have.
+   * Exists so the Mailers drawer is testable with **neither** GCP credentials
+   * nor a real vendor file — both of which gate the real importers, and neither
+   * of which a new contributor will have. Between PR1 and PR3 of PAC-71 this is
+   * the *only* way to get mailers into a local database through the app, because
+   * the Add Mailers upload was deleted with the tenancy refactor and the campaign
+   * UI has not landed yet.
    *
    * ## Deliberately not tied to demo households
    *

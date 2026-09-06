@@ -11,6 +11,7 @@ import {
   EmailMessageSchema,
 } from './email/schemas/email-message.schema';
 import { WorkerIndexesService } from './worker-indexes.service';
+import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { StorageModule } from '../storage/storage.module';
 
 /**
@@ -40,6 +41,11 @@ import { StorageModule } from '../storage/storage.module';
   imports: [
     MongooseModule.forFeature([
       { name: EmailMessage.name, schema: EmailMessageSchema },
+      // Owned by the API, registered here so `SenderIdentityService` can read
+      // the per-agency `From:`/`Reply-To`. Schemas are the one thing the worker
+      // boundary lets across (see `eslint.config.mjs`); duplicating them would
+      // be strictly worse.
+      { name: Agency.name, schema: AgencySchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports

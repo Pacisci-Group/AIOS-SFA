@@ -539,13 +539,22 @@ function freshness(doc: DuplicateCandidate): number {
 /**
  * Fill `Lead.mailer` from the control number leads already carry.
  *
- * Two passes, because "exactly one lead per mailer" is a property of the *set*
- * and cannot be decided one lead at a time. Pass 1 groups every lead by its
- * normalized key; pass 2 links only the keys that exactly one lead claims.
+ * Three passes, because "exactly one lead per mailer" is a property of the
+ * **set**, not of any single lead:
  *
- * A key claimed by several leads is reported as a **conflict** and every one of
- * them gets the key alone. Linking an arbitrary one would put a campaign's
- * attribution on a coin toss, and the unique index would reject the rest anyway.
+ * 1. Group every candidate lead by its normalized key.
+ * 2. Resolve each key to a mailer, and group the leads by *that*.
+ * 3. Link only the mailers exactly one lead claims.
+ *
+ * ⚠ Pass 2 is not redundant with pass 1, and skipping it is a real defect the
+ * e2e caught: the long and short printed forms normalize to **different keys**
+ * that resolve to the **same mailer** (the mailer holds both in
+ * `controlNumberKeys`). Grouping by key alone therefore let two leads through
+ * as "unique", and the unique index rejected the whole run with E11000.
+ *
+ * A mailer several leads claim is reported as a **conflict** and every one of
+ * them keeps the key alone. Linking whichever the cursor happened to yield first
+ * would put a campaign's attribution on a coin toss.
  *
  * `linkedBy` is null throughout: nobody made these links, a script did.
  */
@@ -557,7 +566,8 @@ async function backfillLeadLinks(
   const leads = db.collection('leads');
   const mailers = db.collection('mailers');
 
-  const byKey = new Map<string, { _id: Types.ObjectId; agencyId: string }[]>();
+  // --- Pass 1: group candidate leads by normalized key --------------------
+  const byKey = new Map<string, LeadCandidate[]>();
   const cursor = leads
     .find({
       quoteControlNumber: { $type: 'string' },
@@ -569,30 +579,36 @@ async function backfillLeadLinks(
     const key = mailerControlNumberKey(lead.quoteControlNumber);
     if (!key) continue;
     const bucket = byKey.get(key) ?? [];
-    bucket.push({ _id: lead._id, agencyId: lead.agencyId });
+    bucket.push(lead);
     byKey.set(key, bucket);
   }
 
   log(`\nLeads carrying a control number: ${byKey.size} distinct key(s)`);
 
+  /** Mailers a lead outside this pass already owns. They are not up for grabs. */
+  const alreadyOwned = new Set(
+    (
+      await leads
+        .find({ 'mailer.mailerId': { $type: 'objectId' } })
+        .project<{ mailer: { mailerId: Types.ObjectId } }>({
+          'mailer.mailerId': 1,
+        })
+        .toArray()
+    ).map((lead) => lead.mailer.mailerId.toString()),
+  );
+
+  const keyOnly: { lead: LeadCandidate; key: string }[] = [];
+  const byMailer = new Map<
+    string,
+    { campaignId: string; claims: { lead: LeadCandidate; key: string }[] }
+  >();
+
+  // --- Pass 2: resolve each key to a mailer, and regroup -------------------
   for (const [key, claimants] of byKey) {
     if (claimants.length > 1) {
-      result.leadsConflicted += claimants.length;
       log(`  conflict: ${key} claimed by ${claimants.length} leads — key only`);
-      await leads.updateMany(
-        { _id: { $in: claimants.map((c) => c._id) } },
-        {
-          $set: {
-            mailer: {
-              mailerId: null,
-              campaignId: null,
-              controlNumberKey: key,
-              linkedBy: null,
-            },
-          },
-        },
-      );
-      result.leadsKeyOnly += claimants.length;
+      for (const lead of claimants) keyOnly.push({ lead, key });
+      result.leadsConflicted += claimants.length;
       continue;
     }
 
@@ -610,31 +626,39 @@ async function backfillLeadLinks(
       { projection: { campaignId: 1 } },
     );
 
-    if (!mailer) {
-      await leads.updateOne(
-        { _id: lead._id },
-        {
-          $set: {
-            mailer: {
-              mailerId: null,
-              campaignId: null,
-              controlNumberKey: key,
-              linkedBy: null,
-            },
-          },
-        },
-      );
-      result.leadsKeyOnly += 1;
+    if (!mailer || alreadyOwned.has(mailer._id.toString())) {
+      keyOnly.push({ lead, key });
       continue;
     }
 
+    const id = mailer._id.toString();
+    const entry = byMailer.get(id) ?? {
+      campaignId: mailer.campaignId as string,
+      claims: [],
+    };
+    entry.claims.push({ lead, key });
+    byMailer.set(id, entry);
+  }
+
+  // --- Pass 3: link the uncontested, report the rest -----------------------
+  for (const [mailerId, entry] of byMailer) {
+    if (entry.claims.length > 1) {
+      log(
+        `  conflict: mailer ${mailerId} claimed by ${entry.claims.length} leads — key only`,
+      );
+      keyOnly.push(...entry.claims);
+      result.leadsConflicted += entry.claims.length;
+      continue;
+    }
+
+    const [{ lead, key }] = entry.claims;
     await leads.updateOne(
       { _id: lead._id },
       {
         $set: {
           mailer: {
-            mailerId: mailer._id,
-            campaignId: mailer.campaignId as string,
+            mailerId: new Types.ObjectId(mailerId),
+            campaignId: entry.campaignId,
             controlNumberKey: key,
             matchedBy: 'control_number',
             linkedAt: new Date(),
@@ -644,6 +668,23 @@ async function backfillLeadLinks(
       },
     );
     result.leadsLinked += 1;
+  }
+
+  for (const { lead, key } of keyOnly) {
+    await leads.updateOne(
+      { _id: lead._id },
+      {
+        $set: {
+          mailer: {
+            mailerId: null,
+            campaignId: null,
+            controlNumberKey: key,
+            linkedBy: null,
+          },
+        },
+      },
+    );
+    result.leadsKeyOnly += 1;
   }
 }
 

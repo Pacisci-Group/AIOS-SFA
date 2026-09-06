@@ -172,7 +172,7 @@ export class MailerSource {
 export const MailerSourceSchema = SchemaFactory.createForClass(MailerSource);
 
 /**
- * One direct-mail prospect record (PAC-73).
+ * One direct-mail prospect record (PAC-73, re-tenanted in PAC-71).
  *
  * ## Why this does not extend `TenantRecord`
  *

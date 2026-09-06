@@ -1,6 +1,6 @@
 /**
  * The SFA Processor — the transform that turns a mail vendor's presorted quote
- * file into the offer that gets printed and mailed (PAC-71 spike).
+ * file into the offer that gets printed and mailed (PAC-71).
  *
  * Ported step for step from ApexReports
  * (`./apex-mail-companion/src/components/mail/Part2.tsx`, `run()` +

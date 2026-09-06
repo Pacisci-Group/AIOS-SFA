@@ -61,10 +61,34 @@ prototype dashboard with hard-coded palette values and no light-theme support.
    BigQuery is a *transform* of the spreadsheet — Carl's pipeline adds and removes
    columns. The future super-admin upload receives the original sheet. BigQuery and the
    upload are both just importers into the collection.
-2. **A mailer belongs to one agency; `agencyId` is required.** Going forward the
-   uploader picks the agency in the super-admin UI. For the BigQuery backfill only,
-   agency is derived from the three-letter ticker prefixing `FileName` (`SFA`, `LFI`).
-   Unmapped tickers are skipped and reported, never guessed.
+2. ~~**A mailer belongs to one agency; `agencyId` is required.**~~
+   **Superseded by PAC-71 (2026-09-06): a mailer belongs to a *campaign*.**
+   A campaign is run once and can serve many agencies, so `Mailer.agencyId` is
+   replaced by `campaignId` plus `visibleAgencyIds` (`null` = every agency,
+   including ones onboarded later) plus `carrierAgencyId` (the row's own
+   `agencyid`, the carrier's code for the issuing agency). Rows are routed
+   **per row**, matching that code against the PAC-93 carrier appointments under
+   the campaign's carrier — so a file carrying two codes splits across two
+   tenants rather than being mis-filed under whichever the operator picked.
+
+   Consequences worth carrying forward:
+   - The dedupe index moved from `{agencyId, controlNumberKeys}` to
+     `{controlNumberKeys}`. A control number is a UUID; **one mailer exists once
+     on the platform.**
+   - Every lookup filters `{ $or: [{ visibleAgencyIds: { $type: 'null' } },
+     { visibleAgencyIds: <caller> }] }`. ⚠ `{ $type: 'null' }`, never a bare
+     `null` — that also matches a *missing* field, which would expose every
+     un-migrated row to every tenant.
+   - The three-letter `FileName` ticker is retired as an attribution key. It
+     survives only inside the BigQuery backfill, which is itself slated for
+     deletion at cutover.
+   - Existing databases are moved across by
+     `npm run backfill:mailer-campaigns:dev -w @sfa/api`, which mints one
+     **implicit campaign** per `(agency, week, year)`. ⚠ Run it with the API and
+     worker **stopped**, from the new build, before deploying — see the script's
+     docblock for why both halves of that ordering matter.
+   - After the deploy, drop the collection the retired Add Mailers flow left
+     behind: `db.mailerImportRuns.drop()`.
 3. **The import script is re-runnable** — appends new records and updates existing ones
    (upsert on the control-number key). Not a one-shot migration.
 4. **Do not extend `TenantRecord`.** Its `branchId` is `required: true`; mailers have no
@@ -180,11 +204,18 @@ and full of real prospects' names and addresses. The committed fixture is a
   it would 400 every real request. The service-layer `IntakePerson` already has all
   three optional — that is what makes this work. Give the endpoint its own
   `{ controlNumber }` DTO.
-- **`partialFilterExpression`, never `sparse`** on the compound unique index. A compound
-  sparse index only skips a document when *every* key is missing, so with `agencyId`
-  always present, control-number-less rows index as `(agencyId, null)` and the second
-  one dies on E11000. Written up on `LEGACY_DEDUPE_INDEX_OPTIONS`
+- **`partialFilterExpression`, never `sparse`** on a unique index. On a *compound*
+  index sparse only skips a document when every key is missing, so back when the
+  dedupe key was `{agencyId, controlNumberKeys}` a control-number-less row indexed
+  as `(agencyId, null)` and the second one died on E11000. The key is single-field
+  now (PAC-71), but the rule stands for every unique index in the codebase and is
+  written up on `LEGACY_DEDUPE_INDEX_OPTIONS`
   (`packages/api/src/common/schemas/tenant-record.schema.ts:34`).
+- **Mongoose defaults an array `@Prop` to `[]`, not `null`** — and on
+  `visibleAgencyIds` those mean opposite things (`[]` = nobody, `null` = everybody).
+  The importer writes through `bulkWrite`, which bypasses casting and stores the
+  literal `null`, so the schema must agree or the same field means different things
+  depending on who wrote it.
 - **Sub-documents must be `@Prop({ type: XSchema })`**, using the output of
   `SchemaFactory.createForClass`. Passing the bare class registers `Mixed` and silently
   drops typing and validation. Follow `NewBusinessApplication`

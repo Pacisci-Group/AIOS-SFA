@@ -65,6 +65,11 @@ tests {
     expect(body).to.not.have.property("source");
     expect(body).to.not.have.property("isTestRecord");
     expect(body).to.not.have.property("agencyPhone");
+    // Tenancy moved onto the campaign in PAC-71. Neither the campaign the
+    // mailer belongs to nor the agencies it is visible to is a producer's
+    // business — the second would name other tenants outright.
+    expect(body).to.not.have.property("campaignId");
+    expect(body).to.not.have.property("visibleAgencyIds");
   });
 }
 
@@ -81,6 +86,13 @@ docs {
   **Not data-scoped**, deliberately: a mailer has no producer, and the point is
   that any producer can pick up a mail piece and work it. The *lead* it may
   already have produced is scoped — see `linkedLeadId` below.
+
+  **Tenancy is per row, not per mailer collection (PAC-71).** A mailer belongs
+  to a *campaign*, and a campaign is run once and can serve many agencies — so
+  the lookup filters on `visibleAgencyIds`, which the import resolved for that
+  row from the campaign's assignment mode. A campaign assigned to *all* agencies
+  stores an explicit `null` there and is visible to every tenant, including ones
+  onboarded after the run.
 
   ## Either printed form resolves
 
@@ -163,13 +175,18 @@ docs {
   - **`doNotCall` / `doNotMail`** are suppression flags carried through from the
     source. Not cosmetic — a producer cold-calling a suppressed record is a
     compliance problem.
-  - **`alreadyLogged` vs `linkedLeadId`.** `alreadyLogged` is agency-wide:
-    whether *anyone* has logged this mailer, which is the collision the drawer
-    exists to prevent. `linkedLeadId` is returned **only when that lead is
-    inside the caller's data scope**, because `GET /leads/:id` 404s another
-    producer's lead under `own` scope and an unreachable id would render a
-    "View lead" button that goes nowhere. `alreadyLogged: true` with
-    `linkedLeadId: null` means "logged by someone else".
+  - **`alreadyLogged` vs `linkedLeadId`.** `alreadyLogged` is **platform-wide**
+    since PAC-71: whether *any* lead anywhere is linked to this mailer. One
+    mailer produces one lead across the whole platform — the first agency to log
+    it owns it — so a campaign visible to several tenants cannot produce one
+    lead per tenant for the same prospect. `linkedLeadId` is returned **only when
+    that lead is inside the caller's data scope**, because `GET /leads/:id` 404s
+    another producer's lead under `own` scope and an unreachable id would render
+    a "View lead" button that goes nowhere.
+
+    `alreadyLogged: true` with `linkedLeadId: null` therefore means "logged by
+    someone else" — a colleague out of scope, or another agency entirely, and
+    deliberately indistinguishable. Which agency holds it is their data.
 
   ### Deliberately withheld
 
@@ -184,9 +201,9 @@ docs {
   |---|---|
   | `401` | no/invalid token |
   | `403` | `mailers` module disabled for the agency, or missing `mailers:read` |
-  | `404` | no mailer with that number **in the caller's agency**, or the input normalized to nothing |
+  | `404` | no such number; the input normalized to nothing; the mailer's campaign is not visible to the caller's agency; or the row predates the PAC-71 migration and carries no visibility at all |
 
-  `404` is deliberately the same body for all three cases — which one it was is
+  `404` is deliberately the same body for all four cases — which one it was is
   not the caller's business.
 
   ## Why the environment variable is percent-encoded
