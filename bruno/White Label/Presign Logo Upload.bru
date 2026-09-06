@@ -1,0 +1,91 @@
+meta {
+  name: Presign Logo Upload
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/agency/branding/uploads
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "slot": "logo",
+    "filename": "texas-holdings-logo.png",
+    "contentType": "image/png"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("brandingLogoKey", res.getBody().key);
+    bru.setVar("brandingUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("namespaces the key to this agency", function () {
+    // `assertKeyOwnership` re-checks this prefix on commit — without it a client
+    // could hand back any key it knew of, including another agency's object.
+    expect(res.getBody().key).to.match(/^agencies\/[a-f0-9]{24}\/branding\//);
+  });
+
+  test("pins the content type the PUT must send", function () {
+    expect(res.getBody().requiredHeaders["Content-Type"]).to.equal("image/png");
+  });
+}
+
+docs {
+  # POST /agency/branding/uploads
+
+  Presign a direct-to-storage `PUT` for one branding image.
+
+  **Module** — none. **Permission** — `agency:branding:write`.
+
+  Same two-step shape as document uploads: the browser sends the bytes straight
+  to object storage, then calls `PATCH /agency/branding` with the returned
+  `key`. The API never handles the file.
+
+  **Body**
+  | field       | type | rules                                       |
+  |-------------|------|---------------------------------------------|
+  | slot        | enum | `logo` \| `logoDark` \| `favicon`           |
+  | filename    | string | 1–200 chars; sanitised into the key       |
+  | contentType | enum | `image/png` \| `image/jpeg` \| `image/webp` |
+
+  ## SVG is not accepted, and that is not an oversight
+  An SVG is executable markup — it can carry `<script>` — and these bytes are
+  served from **our own origin, under the agency's own hostname, on pages that
+  hold a session**. A tenant-supplied SVG would be a stored-XSS primitive
+  against that tenant's own users. Raster formats have no such capability.
+
+  **Response `201`**
+  ```json
+  {
+    "slot": "logo",
+    "key": "agencies/<agencyId>/branding/2026/<uuid>-logo.png",
+    "uploadUrl": "https://<storage>/...&X-Amz-Signature=...",
+    "requiredHeaders": { "Content-Type": "image/png" },
+    "expiresIn": 900
+  }
+  ```
+
+  **Errors**
+  - `400` — unsupported content type or a malformed slot.
+  - `403` — caller lacks `agency:branding:write`.
+  - `503` — object storage is not configured (`STORAGE_ENDPOINT` unset).
+}

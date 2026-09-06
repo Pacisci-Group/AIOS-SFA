@@ -6,6 +6,7 @@ import {
   ALL_MODULE_KEYS,
   DEAL_AUDIT_REASON_CODES,
   DEFAULT_DEAL_AUDIT_STATUS,
+  SERVICE_TICKET_CATEGORY_PREFIX,
 } from '@sfa/shared';
 import type { DealAuditStatus } from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
@@ -38,6 +39,10 @@ import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request
 import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema';
 import { Activity } from '../../activities/schemas/activity.schema';
 import { RoleAssignmentsService } from '../../permissions/role-assignments.service';
+import { Permission } from '../../permissions/schemas/permission.schema';
+import { Carrier } from '../../carriers/schemas/carrier.schema';
+import { seedPermissions } from '../permissions.seed';
+import { seedCarriers } from '../carriers.seed';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
 import {
   INSURANCE_MONTHS,
@@ -76,6 +81,17 @@ import { mailerControlNumberKeys } from '../../common/mailers/mailer-control-num
 export interface DemoSeedOptions {
   agencySlug: string;
   agencyName: string;
+  /**
+   * The domain of every team member's email, e.g. `demoagency.local`.
+   *
+   * `User.email` is globally unique and the roster is upserted by email, so
+   * two agencies seeded with the same domain would *move* one roster into the
+   * other tenant rather than add a second. Each agency gets its own domain
+   * (derived from the slug unless `--email-domain` says otherwise), which is
+   * what makes `--agency texas-holdings` add a second populated tenant for
+   * cross-agency features like the Super Admin user directory (PAC-70).
+   */
+  emailDomain: string;
   fresh: boolean;
   seed: number;
   password: string;
@@ -106,6 +122,8 @@ interface Ctx {
 
 interface TeamMember {
   spec: TeamMemberSpec;
+  /** `spec.email` re-domained for this agency — the address actually stored. */
+  email: string;
   userId: Types.ObjectId;
   branchSlug: BranchSlug;
   branchId: string;
@@ -169,6 +187,7 @@ interface DealRef {
 interface PolicyRef {
   id: Types.ObjectId;
   legacyId: string;
+  policyNumber: string;
   policyType: string;
   household: HouseholdRef;
   deal: DealRef;
@@ -227,6 +246,9 @@ export class DemoSeedService {
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     @InjectModel(Mailer.name) private readonly mailerModel: Model<Mailer>,
+    @InjectModel(Permission.name)
+    private readonly permissionModel: Model<Permission>,
+    @InjectModel(Carrier.name) private readonly carrierModel: Model<Carrier>,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
@@ -235,14 +257,25 @@ export class DemoSeedService {
     this.summary = {};
     const rng = createRng(options.seed);
 
+    // Platform-global catalogs, before any tenant data. The skill documents
+    // `seed:demo:dev` as the first command against an empty database, so the
+    // demo seed cannot assume the core seed ran: `seedDefaultRoles` resolves
+    // every permission key to a catalog `_id` and hard-fails on an empty
+    // `permissions` collection, and an empty carrier catalog forces every sold
+    // deal through the "Other" escape. Both seeds are idempotent upserts on
+    // tenant-agnostic rows, so re-running after the core seed is a no-op.
+    await this.seedPlatformCatalogs();
+
     const { ctx } = await this.seedTenancy(options);
     if (options.fresh) {
       await this.purge(ctx.agencyId);
     }
 
-    const team = await this.seedTeam(ctx, options.password);
+    const team = await this.seedTeam(ctx, options);
     const producers = team.filter((m) => m.spec.roleSlug === 'producer');
-    const crms = team.filter((m) => m.spec.roleSlug === 'crm');
+    const crms = team.filter(
+      (m) => m.spec.roleSlug === 'csr' || m.spec.roleSlug === 'crm',
+    );
 
     const households = await this.seedHouseholds(ctx, crms, rng);
     const contactsByHousehold = await this.seedContacts(ctx, households, rng);
@@ -297,7 +330,7 @@ export class DemoSeedService {
     const mailers = await this.seedMailers(ctx, rng);
 
     const logins = team.map((m) => ({
-      email: m.spec.email,
+      email: m.email,
       role: m.spec.roleSlug,
       password: options.password,
     }));
@@ -309,6 +342,18 @@ export class DemoSeedService {
       logins,
       sampleMailerControlNumbers: mailers.slice(0, 3),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Platform-global catalogs: permission vocabulary + carriers
+  // ---------------------------------------------------------------------------
+
+  private async seedPlatformCatalogs(): Promise<void> {
+    const permissions = await seedPermissions(this.permissionModel);
+    this.inc('permissions', permissions.created + permissions.updated);
+
+    const carriers = await seedCarriers(this.carrierModel);
+    this.inc('carriers', carriers.created);
   }
 
   // ---------------------------------------------------------------------------
@@ -360,8 +405,20 @@ export class DemoSeedService {
   // Users: platform super admin + full role roster
   // ---------------------------------------------------------------------------
 
-  private async seedTeam(ctx: Ctx, password: string): Promise<TeamMember[]> {
-    const passwordHash = await bcrypt.hash(password, 10);
+  private async seedTeam(
+    ctx: Ctx,
+    options: DemoSeedOptions,
+  ): Promise<TeamMember[]> {
+    const passwordHash = await bcrypt.hash(options.password, 10);
+    // The default tenant keeps its historical keys so an existing database
+    // reseeds in place; any other slug gets its own namespace, because
+    // `legacySmartSuiteId` is globally unique on `users` and a second agency
+    // must not steal the first one's rows.
+    const isDefaultTenant = options.agencySlug === 'demo-agency';
+    const userLegacyId = (key: string) =>
+      isDefaultTenant
+        ? `demo:user:${key}`
+        : `demo:${options.agencySlug}:user:${key}`;
 
     // Platform super admin (no agency) — reconciled, not counted as team.
     const superAdminEmail =
@@ -387,8 +444,9 @@ export class DemoSeedService {
     for (const spec of TEAM) {
       const roleId = roleIdBySlug.get(spec.roleSlug);
       const branchObjectId = ctx.branchObjectIdBySlug[spec.branch];
+      const email = spec.email.replace(/@.*$/, `@${options.emailDomain}`);
       const user = await this.userModel.findOneAndUpdate(
-        { email: spec.email },
+        { email },
         {
           $set: {
             agencyId: ctx.agencyObjectId,
@@ -397,7 +455,7 @@ export class DemoSeedService {
             lastName: spec.lastName,
             isActive: true,
             isPlatformAdmin: false,
-            legacySmartSuiteId: `demo:user:${spec.key}`,
+            legacySmartSuiteId: userLegacyId(spec.key),
           },
           $setOnInsert: { passwordHash },
         },
@@ -416,6 +474,7 @@ export class DemoSeedService {
       this.inc('users');
       team.push({
         spec,
+        email,
         userId: user._id,
         branchSlug: spec.branch,
         branchId: ctx.branchIdBySlug[spec.branch],
@@ -968,6 +1027,11 @@ export class DemoSeedService {
         expirationDate.setMonth(expirationDate.getMonth() + 6);
         const renewalDate = expirationDate;
         const legacyId = `demo:policy:${n}`;
+        // Digits only, because the carrier below is Allstate and PAC-56 #20
+        // now enforces that format. Demo data has to satisfy the rules the
+        // app enforces, or the first person to edit a seeded policy on the
+        // Sold card gets a 400 on data we shipped them.
+        const policyNumber = `9${String(200000 + n).padStart(8, '0')}`;
 
         const id = await this.upsert(
           this.policyModel,
@@ -976,11 +1040,7 @@ export class DemoSeedService {
             agencyId: ctx.agencyId,
             branchId: deal.producer.branchId,
             legacySmartSuiteId: legacyId,
-            // Digits only, because the carrier below is Allstate and PAC-56 #20
-            // now enforces that format. Demo data has to satisfy the rules the
-            // app enforces, or the first person to edit a seeded policy on the
-            // Sold card gets a 400 on data we shipped them.
-            policyNumber: `9${String(200000 + n).padStart(8, '0')}`,
+            policyNumber,
             policyType,
             carrier: 'Allstate',
             active: true,
@@ -1001,6 +1061,7 @@ export class DemoSeedService {
         refs.push({
           id,
           legacyId,
+          policyNumber,
           policyType,
           household: deal.household,
           deal,
@@ -1399,36 +1460,58 @@ export class DemoSeedService {
         ? rng.pick(branchCrms.length ? branchCrms : crms)
         : undefined;
       const policy = policies.find((p) => p.household.legacyId === hh.legacyId);
+      const category = rng.pick(SERVICE_CATEGORIES);
       const status = rng.pick(SERVICE_STATUSES);
-      const createdDate = this.daysAgo(rng.int(0, 30));
-      const resolved = status === 'Resolved';
+      const openedAt = this.daysAgo(rng.int(0, 30));
+      const resolvedAt =
+        status === 'resolved' ? this.addDays(openedAt, rng.int(1, 8)) : null;
       const legacyId = `demo:ticket:${i}`;
 
+      // The live schema, field for field, so a seeded ticket is
+      // indistinguishable from one a CSR opened — same shape the migration
+      // now writes. Tenancy is ObjectId here, unlike the `TenantRecord`
+      // collections above.
       await this.upsert(
         this.serviceTicketModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
+        { agencyId: ctx.agencyObjectId, legacySmartSuiteId: legacyId },
         {
-          agencyId: ctx.agencyId,
-          branchId: hh.branchId,
+          agencyId: ctx.agencyObjectId,
+          branchId: new Types.ObjectId(hh.branchId),
           legacySmartSuiteId: legacyId,
-          title: `${hh.name} — ${rng.pick(SERVICE_CATEGORIES)}`,
-          createdDate,
-          category: rng.pick(SERVICE_CATEGORIES),
-          priority: rng.pick(SERVICE_PRIORITIES),
-          dueDate: this.addDays(createdDate, rng.int(2, 14)),
-          status,
-          dateResolved: resolved
-            ? this.addDays(createdDate, rng.int(1, 8))
-            : undefined,
-          daysOpen: daysSince(createdDate),
+          // Below the CRM's allocator, which numbers from the document count
+          // plus 101: these sixteen take 101–116, and the first ticket opened
+          // in the app lands on 117 rather than on one of them.
+          ticketNumber: `${SERVICE_TICKET_CATEGORY_PREFIX[category]}-${101 + i}`,
           clientName: `${hh.clientFirst} ${hh.clientLast}`,
-          crmName: crm?.fullName,
-          policyId: policy?.id,
-          legacyPolicyId: policy?.legacyId,
+          category,
+          status,
+          statusOverriddenAt: null,
+          priority: rng.pick(SERVICE_PRIORITIES),
+          assignedRep: crm?.fullName ?? '',
+          assignedUserId: crm?.userId ?? null,
+          createdByUserId: crm?.userId ?? null,
+          createdByName: crm?.fullName ?? '',
+          policyNumber: policy?.policyNumber ?? '',
+          policyType: policy?.policyType ?? '',
+          household: hh.name,
+          policyId: policy?.id ?? null,
           householdId: hh.id,
-          legacyHouseholdId: hh.legacyId,
-          assignedCrmId: crm?.userId,
-          createdById: crm?.userId,
+          leadId: null,
+          phone: '',
+          email: '',
+          openedAt,
+          lastActivityAt: resolvedAt ?? openedAt,
+          resolvedAt,
+          timeline: [
+            {
+              type: 'created',
+              ...(crm ? { author: crm.fullName } : {}),
+              content: `Ticket opened — ${category}.`,
+              at: openedAt,
+            },
+          ],
+          onboarding: null,
+          renewal: null,
           isTestRecord: false,
         },
       );

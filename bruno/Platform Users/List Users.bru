@@ -1,0 +1,145 @@
+meta {
+  name: List Users
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/platform/users?page=1&pageSize=25
+  body: none
+  auth: bearer
+}
+
+params:query {
+  page: 1
+  pageSize: 25
+  ~q: producer
+  ~agencyIds: {{agencyId}}
+  ~roleSlugs: producer,csr
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:post-response {
+  // The impersonate requests need a *tenant* user to target. `Auth › Login`
+  // already captured the producer as `currentUserId`; this is a second source
+  // for a run that starts from this folder. Runtime-only var.
+  if (res.getStatus() === 200) {
+    const items = res.getBody().items;
+    const target = items.find(function (row) { return row.isActive; });
+    if (target) {
+      bru.setVar("platformTargetUserId", target.id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("page");
+    expect(body).to.have.property("pageSize");
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body.items).to.be.an("array");
+    expect(body.items.length).to.be.above(0);
+  });
+
+  test("rows name the agency and list every role", function () {
+    const row = res.getBody().items[0];
+    expect(row).to.have.property("id");
+    expect(row).to.have.property("email");
+    expect(row.agency).to.have.property("name");
+    expect(row.agency).to.have.property("slug");
+    expect(row.roles).to.be.an("array");
+    expect(row).to.have.property("isActive");
+  });
+
+  test("never lists a platform admin", function () {
+    const emails = res.getBody().items.map(function (row) { return row.email; });
+    expect(emails).to.not.include(bru.getEnvVar("adminEmail"));
+  });
+
+  test("rows expose only display fields (no internals leak)", function () {
+    const row = res.getBody().items[0];
+    expect(row).to.not.have.property("passwordHash");
+    expect(row).to.not.have.property("inviteToken");
+    expect(row).to.not.have.property("passwordResetToken");
+    expect(row).to.not.have.property("legacySmartSuiteId");
+    expect(row).to.not.have.property("agencyId");
+  });
+}
+
+docs {
+  # GET /platform/users — cross-agency user directory (PAC-70)
+
+  The read half of *Find / Impersonate User* in the Super Admin panel: every
+  tenant user on the platform, searchable and filterable, paginated. Pick a row,
+  then call `POST /auth/impersonate/:userId` with its `id`.
+
+  - **Module:** none (`@SkipTenant() @SkipBranch() @SkipModule()`)
+  - **Permission:** `platform:users:read` — distinct from
+    `platform:users:impersonate`, so "can find a person" and "can act as a
+    person" are independently grantable.
+  - Platform admins are never listed; they are not tenant users and cannot be
+    impersonated.
+  - Runs after **Platform Mailers**, which captures `platformAccessToken`.
+
+  ## Query params
+  | param     | type   | default | rules                                                        |
+  |-----------|--------|---------|--------------------------------------------------------------|
+  | page      | int    | 1       | min 1 (1-based)                                              |
+  | pageSize  | int    | 25      | min 1, max 100                                               |
+  | q         | string | —       | max 120; first name, last name, `first last`, email, **agency name**, **role name** — case-insensitive *contains* |
+  | agencyIds | multi  | —       | ObjectIds, ORed; max 50; a malformed id is `400`             |
+  | roleSlugs | multi  | —       | role **slugs** (`producer`, `csr`, …), ORed; max 20          |
+
+  Multi-value params accept the same three forms as `Leads › List Leads`
+  (repeated, comma-separated, single). An empty value is *no filter*.
+
+  ### Why role **slugs**, not ids
+  Roles are per agency: `producer` has a different `_id` in every tenant but
+  the same slug. A cross-agency filter must therefore group by slug. A user
+  holding **several** roles matches if *any* selected slug is among them, and
+  appears once. Options for the filter come from `GET /platform/users/roles`.
+
+  ### How `q` reaches agency and role names
+  `users` stores neither. Matching agencies and roles are resolved to ids
+  first, then ORed into the `users` query alongside the name/email branches.
+  The result is exact and entirely server-side; `total` is correct for every
+  filter combination.
+
+  ## Response `200`
+  ```json
+  {
+    "page": 1, "pageSize": 25, "total": 12, "totalPages": 1,
+    "items": [
+      {
+        "id": "665f…",
+        "name": "Alex Rivera",
+        "firstName": "Alex", "lastName": "Rivera",
+        "email": "alex.rivera@demoagency.local",
+        "agency": { "id": "664a…", "name": "Demo Agency", "slug": "demo-agency" },
+        "branch": { "id": "664b…", "name": "Main" },
+        "roles": [ { "slug": "producer", "name": "Producer" } ],
+        "isActive": true,
+        "deactivatedAt": null
+      }
+    ]
+  }
+  ```
+  Sorted by last name, first name, then email (case-insensitive), so pages are
+  stable. `branch` is `null` for an agency-wide user; `agency` is never `null`
+  for a listed row.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — caller lacks `platform:users:read` (every tenant user).
+  - `400 Bad Request` — `pageSize` > 100, a malformed `agencyIds` entry, more
+    than 50 agencies or 20 roles.
+}

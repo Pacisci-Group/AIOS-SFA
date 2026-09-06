@@ -38,6 +38,18 @@ export function setTokens(accessToken: string, refreshToken: string) {
 const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
 
 /**
+ * Key prefixes preserved alongside {@link PRESERVED_UI_PREFERENCE_KEYS}, for
+ * entries whose exact key is not known ahead of time.
+ *
+ * Today: the white-label branding cache, keyed `tenant:<host>`. It describes
+ * the **host**, not the person signed into it — it holds an agency's public
+ * name and logo URL, which is exactly what the next visitor to that address
+ * sees on the login page anyway. Wiping it on logout would make the very next
+ * paint flash "AgencyOps" at someone who has never seen that name.
+ */
+const PRESERVED_UI_PREFERENCE_PREFIXES = ['tenant:'] as const;
+
+/**
  * Wipe every trace of the session from the browser. Clears the whole
  * localStorage and sessionStorage rather than individual keys so no cached
  * data (tokens, user, branch selection, or anything added later) can leak
@@ -49,7 +61,10 @@ const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
  */
 export function clearTokens() {
   try {
-    const preserved = PRESERVED_UI_PREFERENCE_KEYS.map(
+    const prefixed = Object.keys(localStorage).filter((key) =>
+      PRESERVED_UI_PREFERENCE_PREFIXES.some((prefix) => key.startsWith(prefix)),
+    );
+    const preserved = [...PRESERVED_UI_PREFERENCE_KEYS, ...prefixed].map(
       (key) => [key, localStorage.getItem(key)] as const,
     );
 
@@ -69,6 +84,15 @@ export interface AuthUser {
   email: string;
   /** Full name from firstName/lastName, or null if not set. */
   name: string | null;
+  /** The raw name halves, for the profile form (PAC-81). */
+  firstName: string | null;
+  lastName: string | null;
+  /**
+   * Relative API path of the profile photo, or null when none is set (PAC-81).
+   * Stable (it carries a cache-buster, not a signature), but **authenticated**
+   * — fetch it with {@link apiFetchBlob}, never point an `<img src>` at it.
+   */
+  avatarUrl: string | null;
   /** Human-readable role names (e.g. ["Owner"]). For display only. */
   roles: string[];
   agencyId: string | null;
@@ -77,6 +101,21 @@ export interface AuthUser {
   scope: string;
   dataScope: string;
   isPlatformAdmin: boolean;
+  /**
+   * Whether this user still owes their agency its first-run setup (PAC-69).
+   *
+   * True only for the owner of an agency onboarded through the Super Admin
+   * panel, and only until they finish or skip it. Drives `RoleLanding`'s
+   * redirect to `/welcome/agency`.
+   */
+  agencySetupPending: boolean;
+  /**
+   * The operator's user id when this session was minted by impersonation
+   * (PAC-70), else `null`. Provenance only — the API never reads it back, and
+   * the UI shows no banner by product decision; it is here so the stored blob
+   * matches what `/auth/me` returns.
+   */
+  impersonatedBy?: string | null;
 }
 
 export function getStoredUser(): AuthUser | null {
@@ -166,6 +205,38 @@ export async function apiFetch<T>(
   }
 
   return res.json() as Promise<T>;
+}
+
+/**
+ * `apiFetch` for binary responses — same auth header and 401-refresh-retry,
+ * but resolves to a `Blob` instead of parsing JSON.
+ *
+ * Exists for the profile photo (PAC-81): `GET /me/avatar` is authenticated,
+ * and an `<img src>` cannot send an `Authorization` header — so the bytes are
+ * fetched here and rendered through an object URL instead.
+ */
+export async function apiFetchBlob(path: string): Promise<Blob> {
+  const headers = new Headers();
+  let token = getAccessToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  let res = await fetch(`${API_BASE}${path}`, { headers });
+
+  if (res.status === 401 && getRefreshToken()) {
+    token = await refreshAccessToken();
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+      res = await fetch(`${API_BASE}${path}`, { headers });
+    }
+  }
+
+  if (!res.ok) {
+    throw new ApiError(res.statusText, res.status);
+  }
+
+  return res.blob();
 }
 
 /**

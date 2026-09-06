@@ -1,0 +1,67 @@
+meta {
+  name: List Domains
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/agency/domains
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns an array", function () {
+    expect(res.getBody()).to.be.an("array");
+  });
+
+  test("at most one domain is primary", function () {
+    // Enforced by a partial unique index on `{ agencyId, isPrimary: true }`;
+    // asserted here because a second primary would silently change which host
+    // every invite and share link points at.
+    const primaries = res.getBody().filter((d) => d.isPrimary);
+    expect(primaries.length).to.be.at.most(1);
+  });
+}
+
+docs {
+  # GET /agency/domains
+
+  Every hostname this agency's app answers on.
+
+  **Module** — none (`@SkipModule`): a domain is not a product module that can
+  be switched off, it is how the agency reaches the product at all.
+  **Permission** — `agency:domains:read`. **Branch** — skipped; a domain belongs
+  to the agency, not one of its offices.
+
+  **Response `200`** — array, primary first then oldest:
+  ```json
+  [
+    {
+      "id": "...",
+      "hostname": "texasholdings.smithfamily.agency",
+      "kind": "subdomain",
+      "status": "active",
+      "isPrimary": true,
+      "verifiedAt": "2026-08-28T12:00:00.000Z",
+      "lastCheckedAt": null,
+      "lastError": null,
+      "dnsInstructions": null
+    }
+  ]
+  ```
+
+  `dnsInstructions` is populated only for a **custom** domain that is not yet
+  `active` — including a `failed` one, which is exactly when someone needs to
+  re-read what they were meant to publish.
+
+  **Errors**
+  - `403` — caller lacks `agency:domains:read`. A producer gets this.
+}

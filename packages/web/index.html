@@ -30,6 +30,34 @@
         el.style.colorScheme = t;
       })();
     </script>
+    <!--
+      Applies the tenant's name and favicon before first paint, from the cache
+      `lib/tenant-api.ts` writes. Same reasoning as the theme script above: the
+      branding fetch resolves after the first paint, so without this every
+      returning user watches their own agency's tab flash "AgencyOps" first.
+
+      Must stay in sync with `tenantCacheKey()` — same `tenant:<host>` key, and
+      the same shape (`name`, `faviconUrl`). A miss is harmless: the markup's
+      own title stands until the fetch lands.
+    -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('tenant:' + window.location.host);
+          if (!raw) return;
+          var t = JSON.parse(raw);
+          if (t && t.name) document.title = t.name;
+          if (t && t.faviconUrl) {
+            var link = document.createElement('link');
+            link.rel = 'icon';
+            link.href = t.faviconUrl;
+            document.head.appendChild(link);
+          }
+        } catch (e) {
+          /* Private mode throws on localStorage; a cold first paint is fine. */
+        }
+      })();
+    </script>
     <!-- Inter is self-hosted via `@fontsource-variable/inter`, imported at the
          top of `src/styles/index.css`. Do not re-add a Google Fonts link. -->
   </head>

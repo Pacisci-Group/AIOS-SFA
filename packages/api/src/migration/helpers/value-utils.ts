@@ -132,6 +132,35 @@ export function toText(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * SmartDoc richtext field (`{ data, html, preview }`) as plain text.
+ *
+ * `preview` is SmartSuite's own plain-text rendering and is preferred; when it
+ * is blank but `html` is not (a doc that is all formatting), the tags are
+ * stripped from `html` instead. A plain string passes through, so a caller can
+ * hand this either of a table's two notes fields without checking which kind
+ * it is. Whitespace is collapsed: the timeline renders one paragraph.
+ */
+export function toRichText(value: unknown): string | undefined {
+  if (typeof value === 'string') return toText(value);
+  if (!isDict(value)) return undefined;
+  const preview = toText(value.preview);
+  if (preview) return preview;
+  const html = asString(value.html);
+  if (!html) return undefined;
+  const stripped = html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return stripped || undefined;
+}
+
 /** Boolean field. */
 export function toBool(value: unknown): boolean {
   return value === true || value === 'true' || value === 1;

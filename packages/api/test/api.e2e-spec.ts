@@ -52,6 +52,8 @@ import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
 import { StorageService } from '../src/storage/storage.service';
 import { User } from '../src/users/schemas/user.schema';
+import { AgencyDomain } from '../src/platform/schemas/agency-domain.schema';
+import { HostTenantResolver } from '../src/common/tenancy/host-tenant.resolver';
 import { authHeader, login } from './helpers/auth.helper';
 import {
   seedTestData,
@@ -194,6 +196,7 @@ describe('SFA API (e2e)', () => {
   describe('Impersonation (PAC-70)', () => {
     type Session = {
       accessToken: string;
+      appBaseUrl: string;
       user: {
         id: string;
         dataScope: string;
@@ -253,6 +256,48 @@ describe('SFA API (e2e)', () => {
       expect(body.user.permissions).not.toContain('platform:users:impersonate');
       expect(body.user.permissions).not.toContain('platform:agencies:read');
       expect(body.user.impersonatedBy).toBe(superAdminUserId);
+      // The test agency has no domain, so the session is used on the platform
+      // host — `APP_BASE_URL` as pinned by `setup-env.ts`.
+      expect(body.appBaseUrl).toBe('http://localhost:5173');
+    });
+
+    it('points the client at the target agency’s own host', async () => {
+      // The whole reason `appBaseUrl` exists: once an agency has an active
+      // domain, its users are refused on the platform host, so the panel has
+      // to carry the session to that origin. Only the *other* agency gets a
+      // domain here — one on the main test agency would flip every fixture
+      // user's host binding and 401 the rest of the suite.
+      const domains = app.get<Model<AgencyDomain>>(
+        getModelToken(AgencyDomain.name),
+      );
+      const resolver = app.get(HostTenantResolver);
+      const domain = await domains.create({
+        agencyId: new Types.ObjectId(seed.otherAgencyId),
+        hostname: 'other-agency.sfa.local',
+        kind: 'subdomain',
+        status: 'active',
+        isPrimary: true,
+      });
+      resolver.invalidate();
+      try {
+        const res = await request(app.getHttpServer())
+          .post(`/api/v1/auth/impersonate/${seed.otherAgencyUserId}`)
+          .set(authHeader(superAdminToken))
+          .expect(201);
+        const body = res.body as Session;
+        // Scheme and port inherited from `APP_BASE_URL`, host from the domain.
+        expect(body.appBaseUrl).toBe('http://other-agency.sfa.local:5173');
+
+        // And the minted token really is unusable here: `HostTenantGuard`
+        // refuses a domain-bearing agency's user on the platform host.
+        await request(app.getHttpServer())
+          .get('/api/v1/auth/me')
+          .set(authHeader(body.accessToken))
+          .expect(403);
+      } finally {
+        await domains.deleteOne({ _id: domain._id });
+        resolver.invalidate();
+      }
     });
 
     it('the minted token works, and is confined to the target', async () => {
@@ -275,8 +320,62 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(token))
         .expect(403);
 
-      // `/me` reports the provenance, so a client can render a banner.
+      // `/me` reports the provenance, so a client can tell.
       expect((await me(token)).impersonatedBy).toBe(superAdminUserId);
+    });
+
+    it('can write as the target — impersonation is not read-only', async () => {
+      // Product decision (PAC-70): the operator gets everything the target
+      // can do, including writes, and the record is attributed to the target.
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/auth/impersonate/${producerUserId}`)
+        .set(authHeader(superAdminToken))
+        .expect(201);
+      const token = (res.body as Session).accessToken;
+
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/leads')
+        .set(authHeader(token))
+        .send({
+          primaryContact: {
+            firstName: 'Imper',
+            lastName: 'Sonated',
+            dateOfBirth: '1990-01-01',
+            phone: '(555) 777-8888',
+            email: 'imper.sonated@example.com',
+          },
+          address: {
+            street: '1 Handoff Way',
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74101',
+          },
+          members: [],
+          leadSourceCode: 'WCO7l',
+        })
+        .expect(201);
+
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const lead = await leadModel.findById(
+        (created.body as { id: string }).id,
+      );
+      expect(lead).not.toBeNull();
+      expect(lead!.producerId?.toString()).toBe(producerUserId);
+
+      // Leave nothing behind: the Leads list block later counts the
+      // producer's own leads exactly, and intake also created a household and
+      // contact for this one.
+      const householdId = (lead as { householdId?: Types.ObjectId })
+        .householdId;
+      await leadModel.deleteOne({ _id: lead!._id });
+      if (householdId) {
+        await app
+          .get<Model<Contact>>(getModelToken(Contact.name))
+          .deleteMany({ householdId: householdId.toString() });
+        await app
+          .get<Model<Household>>(getModelToken(Household.name))
+          .deleteOne({ _id: householdId });
+      }
     });
 
     it('an ordinary login carries no impersonation marker', async () => {
@@ -287,8 +386,7 @@ describe('SFA API (e2e)', () => {
 
     it('refuses to impersonate another platform admin', async () => {
       // Sideways into a peer's authority is the one direction this must never
-      // go — the audit row would name the wrong person for whatever followed.
-      // Downwards into a tenant is the only direction.
+      // go. Downwards into a tenant is the only direction.
       await request(app.getHttpServer())
         .post(`/api/v1/auth/impersonate/${secondAdminUserId}`)
         .set(authHeader(superAdminToken))
@@ -362,14 +460,98 @@ describe('SFA API (e2e)', () => {
       expect((res.body as { slug: string }).slug).toBe('test-agency');
     });
 
+    /**
+     * The onboarding body (PAC-69). The route used to take `{ name, slug }` and
+     * produce an agency nobody could log into; the full-tenant assertions live
+     * in `agency-onboarding.e2e-spec.ts`, and this covers the route's contract
+     * in the main suite.
+     */
+    const onboardBody = (slug: string) => ({
+      agency: { name: 'New Agency', slug },
+      branch: {
+        name: 'Main',
+        address: { street: '1 Main St', city: 'Austin' },
+      },
+      modules: [ModuleKey.Dashboard, ModuleKey.Leads],
+      owner: {
+        firstName: 'New',
+        lastName: 'Owner',
+        email: `owner-${slug}@example.com`,
+      },
+    });
+
     it('POST /api/v1/platform/agencies', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/platform/agencies')
         .set(authHeader(superAdminToken))
-        .send({ name: 'New Agency', slug: 'new-agency' })
+        .send(onboardBody('new-agency'))
         .expect(201);
 
-      expect((res.body as { slug: string }).slug).toBe('new-agency');
+      const body = res.body as {
+        agency: { slug: string };
+        branch: { name: string };
+        owner: { email: string; emailStatus: string; inviteToken?: string };
+      };
+      expect(body.agency.slug).toBe('new-agency');
+      expect(body.branch.name).toBe('Main');
+      expect(body.owner.email).toBe('owner-new-agency@example.com');
+      expect(body.owner.emailStatus).toBe('queued');
+      // Outside production the raw token comes back, so the flow is walkable.
+      expect(body.owner.inviteToken).toBeTruthy();
+    });
+
+    it('POST /api/v1/platform/agencies — rejects a malformed slug', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/platform/agencies')
+        .set(authHeader(superAdminToken))
+        .send({
+          ...onboardBody('not-a-slug'),
+          agency: { name: 'Bad Slug', slug: 'Not A Slug' },
+        })
+        .expect(400);
+    });
+
+    it('POST /api/v1/platform/agencies — rejects a duplicate slug', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/platform/agencies')
+        .set(authHeader(superAdminToken))
+        .send(onboardBody('test-agency'))
+        .expect(409);
+    });
+
+    it('POST /api/v1/platform/agencies — rejects a duplicate owner email', async () => {
+      const body = onboardBody('another-agency');
+      await request(app.getHttpServer())
+        .post('/api/v1/platform/agencies')
+        .set(authHeader(superAdminToken))
+        .send({ ...body, owner: { ...body.owner, email: seed.ownerEmail } })
+        .expect(409);
+    });
+
+    it('GET /api/v1/platform/agencies/availability', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/platform/agencies/availability')
+        .query({ slug: 'test-agency', email: 'nobody-at-all@example.com' })
+        .set(authHeader(superAdminToken))
+        .expect(200);
+
+      const body = res.body as {
+        slugAvailable: boolean | null;
+        emailAvailable: boolean | null;
+        tickerAvailable: boolean | null;
+      };
+      expect(body.slugAvailable).toBe(false);
+      expect(body.emailAvailable).toBe(true);
+      // Not asked about, so no opinion — rather than a default of "free".
+      expect(body.tickerAvailable).toBeNull();
+    });
+
+    it('POST /api/v1/platform/agencies — forbidden for agency owner', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/platform/agencies')
+        .set(authHeader(ownerToken))
+        .send(onboardBody('owner-cannot'))
+        .expect(403);
     });
 
     it('PATCH /api/v1/platform/agencies/:agencyId/modules', async () => {
@@ -787,6 +969,25 @@ describe('SFA API (e2e)', () => {
       const created = await userModel.findOne({ email }).lean();
       expect(created?.isActive).toBe(false);
       expect(created?.inviteToken).toBeTruthy();
+      // The dialog's branch picker sends this; it has to actually land on the
+      // row, since nothing re-derives it later.
+      expect(created?.branchId?.toString()).toBe(seed.branchId);
+    });
+
+    it('POST /users/invite — rejects a branch outside the agency', async () => {
+      // `InviteUserDto` only checks that `branchId` is a well-formed id, so
+      // without the service-side ownership check this would place a new
+      // employee in another tenant's branch — permanently, and silently.
+      const res = await server()
+        .post('/api/v1/users/invite')
+        .set(authHeader(ownerToken))
+        .send({
+          email: freshEmail(),
+          roleIds: [seed.producerRoleId],
+          branchId: new Types.ObjectId().toString(),
+        })
+        .expect(400);
+      expect((res.body as { message: string }).message).toMatch(/branch/i);
     });
 
     it('POST /users/invite — forbidden for a CSR', async () => {
@@ -838,17 +1039,34 @@ describe('SFA API (e2e)', () => {
         agencyName: string;
         roleNames: string[];
         expiresAt: string;
+        firstName: string | null;
+        lastName: string | null;
+        agencySetupPending: boolean;
       };
       expect(body.email).toBe(email);
       expect(body.agencyName).toBeTruthy();
       expect(body.roleNames.length).toBeGreaterThan(0);
+      // An ordinary employee invite: no agency setup waiting behind it.
+      expect(body.agencySetupPending).toBe(false);
 
-      // The non-disclosure contract: an unauthenticated caller holding a
-      // forwarded link learns nothing beyond what the email already told them.
+      /*
+       * The non-disclosure contract: an unauthenticated caller holding a
+       * forwarded link learns nothing beyond what the email already told them.
+       *
+       * The three fields PAC-69 added are held to the same rule. `firstName`
+       * and `lastName` are what the inviter typed and already appear in the
+       * greeting of the email the link came from; `agencySetupPending` is a
+       * fact about the *agency's* setup state, not about the person, and it is
+       * here so the wizard can size its step counter before a session exists.
+       * Anything added later has to survive the same question.
+       */
       expect(Object.keys(body).sort()).toEqual([
         'agencyName',
+        'agencySetupPending',
         'email',
         'expiresAt',
+        'firstName',
+        'lastName',
         'roleNames',
       ]);
     });
@@ -3465,7 +3683,7 @@ describe('SFA API (e2e)', () => {
 
       // Backdate the resolve past the window.
       const connection = app.get<Connection>(getConnectionToken());
-      await connection.collection('service_tickets').updateOne(
+      await connection.collection('serviceTickets').updateOne(
         { _id: new Types.ObjectId(ticketId) },
         {
           $set: {
@@ -3671,7 +3889,7 @@ describe('SFA API (e2e)', () => {
 
       const connection = app.get<Connection>(getConnectionToken());
       const count = await connection
-        .collection('service_tickets')
+        .collection('serviceTickets')
         .countDocuments({
           'onboarding.onboardingId': new Types.ObjectId(onboardingId),
           'onboarding.stepKey': 'checkin_3day',
@@ -3849,7 +4067,7 @@ describe('SFA API (e2e)', () => {
       const connection = app.get<Connection>(getConnectionToken());
 
       // Open the 3-day call by backdating it, then complete it.
-      await connection.collection('service_tickets').updateOne(
+      await connection.collection('serviceTickets').updateOne(
         { _id: new Types.ObjectId(threeDayTicketId) },
         {
           $set: {
@@ -3876,7 +4094,7 @@ describe('SFA API (e2e)', () => {
       expect((chain.body as OnboardingBody).isComplete).toBe(false);
 
       // Same for the 30-day call, which is 30 days out by design.
-      await connection.collection('service_tickets').updateOne(
+      await connection.collection('serviceTickets').updateOne(
         { _id: new Types.ObjectId(thirtyDay.ticketId!) },
         {
           $set: {
@@ -3923,7 +4141,7 @@ describe('SFA API (e2e)', () => {
         .expect(201);
 
       // Simulate the chain breaking between writes.
-      const removed = await connection.collection('service_tickets').deleteOne({
+      const removed = await connection.collection('serviceTickets').deleteOne({
         'onboarding.onboardingId': new Types.ObjectId(repairId),
         'onboarding.stepKey': 'checkin_3day',
       });

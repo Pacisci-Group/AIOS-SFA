@@ -1,7 +1,7 @@
 meta {
   name: Invite User
   type: http
-  seq: 3
+  seq: 4
 }
 
 post {
@@ -30,6 +30,7 @@ body:json {
   {
     "email": "{{inviteEmail}}",
     "roleIds": ["{{inviteRoleId}}"],
+    "branchId": "{{inviteBranchId}}",
     "firstName": "Pending",
     "lastName": "Invitee"
   }
@@ -76,7 +77,7 @@ docs {
   |-----------|----------|----------------------------------------------|
   | email     | string   | valid email; trimmed + lowercased server-side |
   | roleIds   | string[] | non-empty; each a valid id belonging to the agency |
-  | branchId  | string?  | valid id                                      |
+  | branchId  | string?  | a branch **of this agency**; omit to leave unplaced |
   | firstName | string?  | ≤ 100 chars                                   |
   | lastName  | string?  | ≤ 100 chars                                   |
 
@@ -101,15 +102,19 @@ docs {
   > lands.
 
   **Errors**
-  - `400` — no roles, a role outside the agency, or a malformed email/id.
+  - `400` — no roles, a role outside the agency, a branch outside the agency, or
+    a malformed email/id. The branch check matters: `branchId` is only shape-
+    validated by the DTO, so without it a new employee could be placed in
+    another tenant's branch and stay there.
   - `403` — caller lacks `agency:users:write`.
   - `409` — the address is taken. The message distinguishes **already a member**
     from **already has a pending invite**, because the owner's next action
     differs (nothing vs. resend).
 
   ## Chaining
-  `inviteRoleId` comes from **List Roles (for the invite picker)**, which runs
-  first. The email is generated per run in the pre-request script, and
+  `inviteRoleId` comes from **List Roles (for the invite picker)** and
+  `inviteBranchId` from **List Branches (for the invite picker)**, both of which
+  run first. The email is generated per run in the pre-request script, and
   **Revoke Invite** deletes the row at the end of the folder — so a repeated
   `bru run` neither collides on the unique `email` index nor accumulates
   half-invited users.

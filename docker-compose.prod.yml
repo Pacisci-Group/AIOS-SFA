@@ -28,6 +28,18 @@
 #                            disable uploads *silently* — the API still boots and
 #                            passes its health check.
 #   PUBLIC_FORM_BASE_URL  -> public site URL; share links are built from it
+#   PLATFORM_HOST         -> the ONE hostname the super-admin app answers on.
+#                            Access control, not cosmetics: agency users are
+#                            refused here and platform admins are refused on
+#                            agency hosts. A wrong value reads as "nobody can
+#                            log in".
+#   BASE_DOMAIN           -> parent zone for agency subdomains. Optional; unset
+#                            disables subdomain creation (custom domains still
+#                            work).
+#   PUBLIC_SERVER_IPS     -> comma-separated public IPs, so the settings page
+#                            can tell an owner what to put in an A record. Only
+#                            an apex domain needs one — RFC 1034 forbids a CNAME
+#                            there.
 #   API_INNGEST_BIND      -> "<droplet private IP>:4000". Inngest reaches the
 #                            serve handler here; the firewall admits only the
 #                            Inngest droplet.
@@ -69,7 +81,7 @@ services:
     # replaces the running droplet.
     #
     # ⚠ Never bind this to 0.0.0.0. /api/inngest is raw Express middleware that
-    # none of the seven global guards see; its only authentication is Inngest's
+    # none of the eight global guards see; its only authentication is Inngest's
     # request signature.
     ports:
       - "${API_INNGEST_BIND:-127.0.0.1:4000}:4000"

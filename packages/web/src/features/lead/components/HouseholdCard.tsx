@@ -3,7 +3,7 @@ import { Check, Copy, Users } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { DetailCard, SectionLabel } from "./DetailCard";
+import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { formatCurrency, formatDate, initials } from "./lead-display";
 import { PolicyRow } from "./PolicyRow";
 

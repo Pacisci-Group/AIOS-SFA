@@ -76,7 +76,11 @@ A permission-based insurance agency operations platform where:
 ### Out of scope (initial release)
 
 - Payment processing / billing between agencies and platform
-- White-label per-agency branding (can be added later)
+- ~~White-label per-agency branding~~ — **delivered.** Per-agency hostnames
+  (platform subdomain or custom domain), logo/name through the app and outbound
+  email, and per-agency email sender identity. The hostname is a security
+  boundary, not just branding: a session is bound to the host it was created on.
+  Still deferred within it: per-agency **colour** themes.
 - Mobile native apps (PWA remains supported)
 
 ---
@@ -507,7 +511,7 @@ Agency Owners may pass `X-Branch-Id` header to filter UI to a specific branch wi
 | `quote_recaps` | Branch | agencyId, branchId, leadId, producerId, premium, quoteDate |
 | `deals` | Branch | agencyId, branchId, leadId, producerId, crmId, soldDate, auditStatus |
 | `policies` | Branch | agencyId, branchId, dealId, policyType, premium |
-| `service_tickets` | Branch | agencyId, branchId, householdId, assignedCrmId, status |
+| `serviceTickets` | Branch | agencyId, branchId, householdId, assignedCrmId, status |
 | `crm_rotations` | Branch | agencyId, branchId, crmUserId, order, active |
 | `producer_assignments` | Branch | agencyId, branchId, producerId, pointer, lastAssignedCrmId |
 | `migration_id_map` | System | entityType, legacySmartSuiteId, mongoId |

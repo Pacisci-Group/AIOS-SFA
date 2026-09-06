@@ -1,0 +1,47 @@
+meta {
+  name: Set Primary Domain
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{baseUrl}}/agency/domains/{{customDomainId}}/primary
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("refuses a domain that is not verified", function () {
+    // The collection's fixture domain never verifies, so this is the expected
+    // path here. Making an unverified host primary would point every invite and
+    // share link at an address that serves nothing.
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH /agency/domains/:domainId/primary
+
+  Choose which hostname the agency's **outbound links** use — invite emails,
+  lead share links, and the logo URL inside emails (`TenantUrlService`).
+
+  **Module** — none. **Permission** — `agency:domains:write`.
+
+  **Response `200`** — the domain row, now `isPrimary: true`. Any previous
+  primary is cleared first, because a partial unique index on
+  `{ agencyId, isPrimary: true }` permits only one.
+
+  Not wrapped in a transaction, deliberately: the worst interleaving leaves the
+  agency with *no* primary for an instant, and `TenantUrlService` falls back to
+  any active domain, so links keep working. Doing it the other way round would
+  violate the index and leave the old primary in place — a click that appears to
+  do nothing.
+
+  **Errors**
+  - `400` — the domain is not `active`. Verify it first.
+  - `403` — caller lacks `agency:domains:write`.
+  - `404` — no such domain in this agency.
+}

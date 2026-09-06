@@ -1,0 +1,75 @@
+meta {
+  name: Update Branding
+  type: http
+  seq: 11
+}
+
+patch {
+  url: {{baseUrl}}/agency/branding
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "displayName": "Texas Holdings",
+    "tagline": "Agency Portal"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("stores the display name", function () {
+    expect(res.getBody().displayName).to.equal("Texas Holdings");
+  });
+}
+
+docs {
+  # PATCH /agency/branding
+
+  Apply text edits and commit uploaded image keys.
+
+  **Module** — none. **Permission** — `agency:branding:write`.
+
+  **Body** — every field optional, and every one `clearable`: an explicit `null`
+  (or an emptied string) **removes** the value, while omitting the key leaves it
+  alone. Without that distinction the only way to drop a logo would be to upload
+  another one.
+
+  | field       | type            | rules        |
+  |-------------|-----------------|--------------|
+  | displayName | string \| null  | ≤ 60 chars   |
+  | tagline     | string \| null  | ≤ 80 chars   |
+  | logoKey     | string \| null  | a key from **Presign Logo Upload** |
+  | logoDarkKey | string \| null  | ditto        |
+  | faviconKey  | string \| null  | ditto        |
+
+  ## A key is only stored after the object is inspected
+  Two checks, both server-side, because a presigned `PUT` signs **only** the
+  content type — there is no other enforcement point:
+  - `assertKeyOwnership` proves the key carries this agency's prefix.
+  - `HeadObject` proves something was actually uploaded, and reports its real
+    size and stored content type. The **stored** type is what is validated, not
+    the claimed one — that is what stops an SVG arriving through a PUT that was
+    presigned as a PNG.
+
+  Max 2 MB.
+
+  **Response `200`** — the same shape as **Get Branding**.
+
+  **Errors**
+  - `400` — a key from another agency; the upload never completed; over 2 MB;
+    or a stored content type outside PNG/JPEG/WebP.
+  - `403` — caller lacks `agency:branding:write`.
+}

@@ -10,12 +10,17 @@
  */
 
 import {
+  SERVICE_TICKET_PRIORITIES,
+  type ServiceTicketCategory,
+  type ServiceTicketStatus,
+} from '@sfa/shared';
+import {
   CORE_AUDIT_TEMPLATES,
   type CoreAuditTemplateSpec,
 } from '../audit-templates.seed';
 
 export type RoleSlug =
-  'agency_owner' | 'branch_manager' | 'producer' | 'crm' | 'data_team';
+  'agency_owner' | 'branch_manager' | 'producer' | 'csr' | 'crm' | 'data_team';
 
 export type BranchSlug = 'main' | 'north';
 
@@ -33,7 +38,7 @@ export interface TeamMemberSpec {
 
 /**
  * The demo agency's org chart: one owner, one branch manager, five producers
- * across two branches, two CRMs, and a data-team analyst. Every account uses the
+ * across two branches, two CSRs, two CRMs, and a data-team analyst. Every account uses the
  * shared demo password so you can log in as any role to exercise permission
  * gating and data scopes.
  *
@@ -115,7 +120,7 @@ export const TEAM: TeamMemberSpec[] = [
     email: 'casey.kim@demoagency.local',
     firstName: 'Casey',
     lastName: 'Kim',
-    roleSlug: 'crm',
+    roleSlug: 'csr',
     branch: 'main',
   },
   {
@@ -123,6 +128,22 @@ export const TEAM: TeamMemberSpec[] = [
     email: 'robin.diaz@demoagency.local',
     firstName: 'Robin',
     lastName: 'Diaz',
+    roleSlug: 'csr',
+    branch: 'north',
+  },
+  {
+    key: 'crm-priya',
+    email: 'priya.natarajan@demoagency.local',
+    firstName: 'Priya',
+    lastName: 'Natarajan',
+    roleSlug: 'crm',
+    branch: 'main',
+  },
+  {
+    key: 'crm-marcus',
+    email: 'marcus.bell@demoagency.local',
+    firstName: 'Marcus',
+    lastName: 'Bell',
     roleSlug: 'crm',
     branch: 'north',
   },
@@ -404,23 +425,30 @@ export type AuditTemplateSpec = CoreAuditTemplateSpec;
  */
 export const AUDIT_TEMPLATES: AuditTemplateSpec[] = CORE_AUDIT_TEMPLATES;
 
+/*
+ * Drawn from the live CRM vocabulary, not a local list: the ticket schema
+ * enum-enforces all three fields, so a seeded `Claim` or `Coverage Question`
+ * ticket would be rejected on the first edit a CSR made to it. `Onboarding`,
+ * `Quote` and the renewal categories stay out — each is a chain the seed's
+ * later stages open through the service, not a bare ticket.
+ */
 export const SERVICE_CATEGORIES = [
   'Billing',
   'Policy Change',
-  'Claim',
-  'Coverage Question',
-  'Cancellation',
+  'Claims Assist',
+  'Payment',
   'Endorsement',
-] as const;
+  'Other',
+] as const satisfies readonly ServiceTicketCategory[];
 
-export const SERVICE_PRIORITIES = ['Low', 'Medium', 'High', 'Urgent'] as const;
+export const SERVICE_PRIORITIES = SERVICE_TICKET_PRIORITIES;
 
 export const SERVICE_STATUSES = [
-  'Open',
-  'In Progress',
-  'Waiting on Client',
-  'Resolved',
-] as const;
+  'open',
+  'in_progress',
+  'waiting_on_client',
+  'resolved',
+] as const satisfies readonly ServiceTicketStatus[];
 
 /** Record-count knobs for the synthetic tenant. */
 export const DEMO_CONFIG = {

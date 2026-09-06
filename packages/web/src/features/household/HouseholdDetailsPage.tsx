@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, Loader2 } from "lucide-react";
+import { AppShell } from "@/components/layout/AppShell";
+import { MobileNav } from "@/components/layout/MobileNav";
+import { Button } from "@/components/ui/button";
 import { getHousehold } from "@/lib/households-api";
 import {
   CreateTicketDialog,
@@ -9,12 +13,13 @@ import {
 import { usePermissions } from "@/hooks/usePermissions";
 import { DEMO_HOUSEHOLD } from "./demo-household";
 import { AddMemberDialog } from "./components/AddMemberDialog";
-import { QuickActionBar } from "./components/QuickActionBar";
+import { HouseholdHeader } from "./components/HouseholdHeader";
 import { StartQuoteDialog } from "./components/StartQuoteDialog";
 import { HouseholdProfile } from "./components/HouseholdProfile";
 import { PolicyPortfolio } from "./components/PolicyPortfolio";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { HouseholdOnboarding } from "./components/HouseholdOnboarding";
+
 /**
  * Household detail. `/clients/:id` renders a live record; the legacy
  * `/clients/demo` route renders `DEMO_HOUSEHOLD` through the *same* components.
@@ -30,7 +35,17 @@ import { HouseholdOnboarding } from "./components/HouseholdOnboarding";
  * block to real data. The activity feed reads live tickets and takes `isDemo`
  * only because `/clients/demo` has no household id to query.
  *
- * The page renders inside the app shell, so it has no top nav of its own.
+ * ## Layout
+ *
+ * `AppShell` is rendered here, like every other page — this one used to omit it
+ * (its docblock claimed "the page renders inside the app shell", which was true
+ * of an older layout route that no longer exists), so the whole Household
+ * Details screen rendered with **no sidebar at all** and no way back into the
+ * app except the browser's back button.
+ *
+ * The three columns are the mockup's 25/50/25 above `xl`. Below that they stack
+ * into one scrolling column: at 1024px the profile rail was already down to its
+ * 260px minimum and the policy grid was rendering two cards in ~300px.
  */
 export default function HouseholdDetailsPage() {
   const { id } = useParams<{ id: string }>();
@@ -50,8 +65,8 @@ export default function HouseholdDetailsPage() {
   const canStartQuote = canRead("leads") && canWrite("quote_recaps");
 
   /**
-   * Why "+ Start Quote" is unavailable, when it is — the tooltip on the
-   * disabled button.
+   * Why "Start quote" is unavailable, when it is — the tooltip on the disabled
+   * button.
    *
    * Both cases were previously a live-looking button that silently did nothing,
    * with no console error to find because nothing had gone wrong. The demo one
@@ -105,97 +120,106 @@ export default function HouseholdDetailsPage() {
   }, [household, isDemo]);
 
   return (
-    <div
-      className="flex h-full min-h-0 flex-col overflow-hidden"
-      style={{
-        background: "var(--background)",
-        color: "var(--foreground)",
-      }}
-    >
+    <AppShell>
+      {!household && (
+        <header className="flex items-center gap-2 border-b border-border px-4 py-4 md:px-6">
+          <MobileNav className="-ml-1" />
+          <h1 className="text-lg font-semibold tracking-tight">Household</h1>
+        </header>
+      )}
+
       {!isDemo && query.isPending && (
-        <div className="px-6 py-4 text-sm" style={{ color: "var(--muted-foreground)" }}>
+        <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+          <Loader2 aria-hidden className="size-5 animate-spin" />
           Loading household…
         </div>
       )}
 
       {!isDemo && query.isError && (
-        <div className="px-6 py-4">
-          <p className="text-sm text-red-400">Household not found.</p>
-          <p className="text-xs mt-1" style={{ color: "var(--muted-foreground)" }}>
+        <div className="m-4 space-y-3 rounded-xl border border-border bg-card p-6 md:m-6">
+          <p className="flex items-center gap-2 text-sm text-destructive">
+            <AlertCircle aria-hidden className="size-5" />
+            Household not found.
+          </p>
+          <p className="text-sm text-muted-foreground">
             It may have been removed, or it is outside your branch.
           </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void query.refetch()}
+          >
+            Retry
+          </Button>
         </div>
       )}
 
       {household && (
-        <>
-          {/* Quick Action Bar */}
-          <div className="shrink-0">
-            <QuickActionBar
-              householdName={household.name ?? "Unnamed household"}
-              // The demo household is not a real record, so there is nothing to
-              // write against — both buttons stay inert there.
-              onNewTicket={
-                isDemo ? undefined : () => setCreateTicketOpen(true)
-              }
-              onAddMember={isDemo ? undefined : () => setAddMemberOpen(true)}
-              onStartQuote={
-                startQuoteDisabledReason
-                  ? undefined
-                  : () => setStartQuoteOpen(true)
-              }
-              disabledReasons={{
-                addMember: demoReason,
-                newTicket: demoReason,
-                startQuote: startQuoteDisabledReason,
-              }}
-            />
-          </div>
+        // `h-screen`, matching `TicketWorkspacePage`: `AppShell` is
+        // `min-h-screen`, so it grows with its content rather than pinning the
+        // viewport. The three columns scroll independently above `xl`, which
+        // needs a definite height to measure against — `h-full` would collapse
+        // to auto and every column would grow the page instead.
+        <div className="flex h-screen min-h-0 flex-1 flex-col overflow-hidden">
+          <HouseholdHeader
+            householdName={household.name ?? "Unnamed household"}
+            recordLabel={`HH-${household.id.slice(-6).toUpperCase()}`}
+            // The demo household is not a real record, so there is nothing to
+            // write against — both buttons stay inert there.
+            onNewTicket={isDemo ? undefined : () => setCreateTicketOpen(true)}
+            onAddMember={isDemo ? undefined : () => setAddMemberOpen(true)}
+            onStartQuote={
+              startQuoteDisabledReason ? undefined : () => setStartQuoteOpen(true)
+            }
+            disabledReasons={{
+              addMember: demoReason,
+              newTicket: demoReason,
+              startQuote: startQuoteDisabledReason,
+            }}
+          />
 
-          {/* 3-Column Layout.
+          {/* Three columns above `xl`, one scrolling column below it.
               Each column is its own scroll container: `min-h-0` on the row and
               on every column is what lets them scroll independently instead of
               growing the page — without it a flex child's min-height is its
-              content, so the tallest column silently sets the row's height. */}
-          <div className="flex flex-1 min-h-0 overflow-hidden">
-            {/* Left Column — Household Profile (25%) */}
-            <div
-              className="flex flex-col shrink-0 min-h-0 overflow-hidden border-r"
-              style={{
-                width: "25%",
-                minWidth: "260px",
-                maxWidth: "320px",
-                borderColor: "var(--border)",
-              }}
-            >
+              content, so the tallest column silently sets the row's height.
+
+              Every column is `shrink-0` below `xl`, where the row is the single
+              scroller: the row has a definite height there, so a column left
+              shrinkable would be squeezed by its siblings rather than pushed
+              below the fold — with `min-h-0` on it, all the way to zero. The
+              middle column only becomes the flexible one at `xl`, where the
+              columns are side by side and there is width to distribute. */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:flex-row xl:overflow-hidden">
+            {/* Left — Household profile (25%) */}
+            <div className="flex min-h-0 shrink-0 flex-col border-b border-border xl:w-1/4 xl:min-w-[260px] xl:max-w-[320px] xl:overflow-hidden xl:border-b-0 xl:border-r">
               <HouseholdProfile household={household} isDemo={isDemo} />
             </div>
 
-            {/* Middle Column — Policy Portfolio (50%) */}
-            <div
-              className="flex flex-1 flex-col min-h-0 overflow-hidden border-r"
-              style={{ borderColor: "var(--border)" }}
-            >
+            {/* Middle — Policy portfolio (50%) */}
+            <div className="flex min-h-0 shrink-0 flex-col border-b border-border xl:flex-1 xl:shrink xl:overflow-hidden xl:border-b-0 xl:border-r">
               <PolicyPortfolio policies={household.policies} isDemo={isDemo} />
             </div>
 
-            {/* Right Column — Onboarding + Activity Feed (25%) */}
-            <div
-              className="flex flex-col shrink-0 min-h-0 overflow-hidden"
-              style={{ width: "25%", minWidth: "260px", maxWidth: "340px" }}
-            >
+            {/* Right — Onboarding + activity feed (25%) */}
+            <div className="flex min-h-0 shrink-0 flex-col xl:w-1/4 xl:min-w-[260px] xl:max-w-[340px] xl:overflow-hidden">
               {/* Onboarding is tracked per client, so its progress belongs on
                   the client — and it is the only place a scheduled call is
                   visible before it opens in the ticket queue.
 
-                  Capped and scrollable in its own right: a client with several
-                  onboardings would otherwise push the ticket feed off the
-                  bottom. It renders nothing when there are none, and an empty
-                  box has no height, so no gap appears above the feed. */}
-              <div className="shrink-0 max-h-[40%] overflow-y-auto">
-                <HouseholdOnboarding householdId={isDemo ? undefined : household.id} />
+                  Capped and scrollable in its own right on the three-column
+                  layout: a client with several onboardings would otherwise push
+                  the ticket feed off the bottom. It renders nothing when there
+                  are none, and an empty box has no height, so no gap appears
+                  above the feed. */}
+              <div className="shrink-0 xl:max-h-[40%] xl:overflow-y-auto">
+                <HouseholdOnboarding
+                  householdId={isDemo ? undefined : household.id}
+                />
               </div>
-              <div className="flex-1 min-h-0">
+              {/* `min-h-[24rem]` on the stacked layout: the feed is the last
+                  thing on the page there and has no parent height to fill. */}
+              <div className="min-h-[24rem] flex-1 xl:min-h-0">
                 <ActivityFeed
                   householdId={isDemo ? undefined : household.id}
                   isDemo={isDemo}
@@ -244,8 +268,8 @@ export default function HouseholdDetailsPage() {
               });
             }}
           />
-        </>
+        </div>
       )}
-    </div>
+    </AppShell>
   );
 }

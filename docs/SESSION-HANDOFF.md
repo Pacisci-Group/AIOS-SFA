@@ -210,3 +210,83 @@ places the ticket's literal spec was wrong, and the one known gap left open.
 ⚠ **Existing agencies need `npm run api:sync:roles`**: PAC-61 gave `mailers:read`
 to every role template, and editing a template does not touch already-seeded
 roles.
+
+### Super Admin — user directory and impersonation (PAC-70)
+
+**Find / Impersonate User** is live in the Super Admin panel at `/admin/users`.
+Product decision (2026-09-02): impersonation is a plain support tool with **no
+strings attached** — full write access as the target, no audit trail, no
+notification, no banner, no "return to admin". The operator logs out when done.
+PR #44's `impersonationEvents` collection was removed; drop it by hand
+(`db.impersonationEvents.drop()`) wherever that PR was deployed.
+
+Endpoints, all under the platform guard stack:
+- `GET /platform/users` — cross-agency directory, `platform:users:read`.
+  `q` matches name, email, **agency name** and **role name**; `agencyIds[]` and
+  `roleSlugs[]` are multi-select and ORed. Roles filter by **slug**, not id,
+  because `producer` has a different id in every agency. Two-phase query
+  (resolve agency/role matches to ids, then one `users` find), no new indexes.
+- `GET /platform/users/roles` — one `{slug, name}` per distinct slug, for the
+  Role filter.
+- `POST /auth/impersonate/:userId` (`platform:users:impersonate`) now returns
+  the login envelope **plus `appBaseUrl`**.
+
+**The handoff is the non-obvious part.** `HostTenantGuard` refuses a
+domain-bearing agency's user on the platform host and a platform admin on any
+agency host, and `localStorage` is per origin — so the panel cannot keep the
+minted tokens where it is. It navigates the **same tab** to
+`<appBaseUrl>/auth/impersonate#accessToken=…&refreshToken=…`; that page (outside
+both route guards) stores the tokens in the target origin, calls `/auth/me`,
+scrubs the fragment with `replaceState`, and redirects to `/`. Fragment, not
+query string, so the tokens never reach any server or proxy log. Same tab, so a
+no-domain agency (whose handoff lands on the platform origin) replaces the
+operator's session explicitly rather than splitting it across tabs.
+`TenantUrlService.baseUrlFor` now inherits scheme and port from `APP_BASE_URL`
+so the handoff origin is reachable locally (`http://x.sfa.local:5173`, not a dead
+`https://`); production output is unchanged.
+
+Local testing of the cross-host case needs `PLATFORM_HOST`/`BASE_DOMAIN` in
+`.env`, `/etc/hosts` entries, and an active `agencyDomains` row. For a second
+populated tenant: `npm run api:seed:demo:dev -- --agency texas-holdings
+--agency-name "Texas Holdings"` (the roster gets its own email domain now, so it
+adds rather than moves users).
+
+### Agency onboarding from the Super Admin panel (PAC-69)
+
+An operator now stands up a whole tenant from `/admin/agencies/onboard`, and the
+agency's owner is walked through their own first-run setup. This is the third
+provisioning path (after the SmartSuite migration and the demo seed) and the
+**only one that creates a user**.
+
+`POST /platform/agencies` replaced its unvalidated `{name, slug}` body — which
+created an agency nobody could sign into and no record could be written to —
+with a zod DTO and `AgencyProvisioningService`: agency → default roles → first
+branch → audit templates → invited Agency Owner. Alongside it,
+`GET /platform/agencies/availability` (live slug/email/ticker checks) and
+`POST /platform/agencies/:agencyId/owner-invite/resend`.
+
+**Three decisions worth carrying forward:**
+
+1. **The invite email is dispatched outside the rollback and is never undone.**
+   `InngestService.send` records the event before handing it over and the sweep
+   replays a stranded row, so rolling the tenant back on a delivery failure
+   would mail a live link to a deleted account. A failed dispatch is reported as
+   `emailStatus: 'failed'` on a **201**, not an error.
+2. **`TransactionRunner` is deliberately not used** — on a replica set it takes
+   the transaction path, where its compensation registry is a no-op, and none of
+   the collaborators accept a session. It would have looked atomic while leaking
+   roles, templates and the user. An explicit undo stack instead.
+3. **A failed invite dispatch now clears `inviteLastSentAt`** (every invite path,
+   not just onboarding), so the person recovering from one is not told "an invite
+   was just sent to this address" when none was.
+
+`Agency.setup` tracks the owner's wizard and **defaults to `complete`**, so no
+migration was needed and no existing owner is pushed into it. ⚠ `.lean()` does
+not apply schema defaults, so a document predating the field reads back
+`undefined` — null-guard rather than trusting the default.
+
+**Still open:** there is no delete-agency endpoint, so every Bruno run of the
+`Platform Agencies` folder leaves one agency behind, and a mis-typed onboarding
+can only be undone in the database. The panel's Agencies directory (PAC-68) is
+still unbuilt, so an onboarded agency cannot be viewed or edited afterwards.
+

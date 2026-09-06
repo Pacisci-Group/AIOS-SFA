@@ -12,6 +12,7 @@ import {
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
+import { escapeRegex } from '../common/mongo/escape-regex';
 import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { LeadAccessService } from './lead-access.service';
@@ -37,11 +38,6 @@ type LeadLean = Pick<
   leadSource?: NormalizedLeadSource;
   lastActivityAt?: Date;
 };
-
-/** Escape a user-supplied string before embedding it in a `$regex`. */
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 @Injectable()
 export class LeadsService {

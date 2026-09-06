@@ -1,9 +1,11 @@
-import { LogOut, Shield } from "lucide-react";
+import { LogOut } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/auth-context";
+import { useTenant } from "@/contexts/tenant-context";
+import { BrandMark } from "@/components/common/BrandMark";
+import { UserAvatar } from "@/components/common/UserAvatar";
 import { usePermissions } from "@/hooks/usePermissions";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Tooltip,
   TooltipContent,
@@ -21,12 +23,6 @@ function nameFromEmail(email: string | undefined): string {
     .filter(Boolean)
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join(" ");
-}
-
-function initialsFromName(name: string): string {
-  const parts = name.split(/\s+/).filter(Boolean);
-  const letters = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "");
-  return (letters || name.slice(0, 2) || "U").toUpperCase();
 }
 
 /**
@@ -64,17 +60,29 @@ export function RailTooltip({
   );
 }
 
-/** The shield mark, and the wordmark when there is room for it. */
+/**
+ * The agency's mark, and its name when there is room for it.
+ *
+ * "Agency Portal" is kept as the caption rather than the tenant's own tagline:
+ * this is the app shell, and the caption's job here is to say *where you are*,
+ * not to repeat marketing copy the user already saw on the login page.
+ */
 export function SidebarBrand({ collapsed = false }: { collapsed?: boolean }) {
+  const { branding } = useTenant();
+
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary">
-        <Shield className="size-4 text-primary-foreground" />
-      </div>
+      {/* The collapsed rail is 56px wide, so the mark is pinned square there —
+          a wider cap would push it under the toggle. Expanded, `sm` already
+          keeps it near-square so the agency name beside it is not crowded. */}
+      <BrandMark
+        size="sm"
+        className={cn('rounded-md', collapsed && 'max-w-[32px]')}
+      />
       {!collapsed && (
         <div className="min-w-0">
-          <p className="text-sm leading-tight font-bold tracking-[0.01em] text-sidebar-accent-foreground">
-            AgencyOps
+          <p className="truncate text-sm leading-tight font-bold tracking-[0.01em] text-sidebar-accent-foreground">
+            {branding.name}
           </p>
           <p className="text-xs leading-tight tracking-wide text-muted-foreground uppercase">
             Agency Portal
@@ -162,11 +170,13 @@ export function SidebarBody({
   onNavigate,
 }: SidebarBodyProps) {
   const { user, logout } = useAuth();
-  const { canRead, can } = usePermissions();
+  const { canRead, can, canAny } = usePermissions();
   const navigate = useNavigate();
 
   const isVisible = (item: NavItem) => {
     if (item.permission) return can(item.permission);
+    // A hub entry is visible when *any* of the pages behind it is.
+    if (item.anyOf) return canAny(item.anyOf);
     if (item.module) return canRead(item.module);
     return true;
   };
@@ -229,22 +239,28 @@ export function SidebarBody({
           collapsed={collapsed}
           label={`${displayName} · ${roleLabel}`}
         >
-          <div
+          {/* A link since PAC-81: the chip is the way to your own profile,
+              matching the mockups' Settings entry in the sidebar footer. */}
+          <Link
+            to="/settings/profile"
+            onClick={onNavigate}
+            aria-label={`${displayName} — my profile`}
             className={cn(
-              "mb-1 flex items-center gap-2.5 py-1.5",
+              "mb-1 flex w-full items-center gap-2.5 rounded-md py-1.5 outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring",
               collapsed ? "justify-center px-0" : "px-2.5",
             )}
           >
-            <Avatar className="size-8">
-              {/* The whole chip needs a light variant, not just the text: on the
-                  light theme `text-foreground` is near-black, and blue-900 stays
-                  dark whatever the theme, so recolouring only the text just
-                  trades dark-on-dark for blue-on-blue. The `dark:` pair restores
-                  the original treatment exactly. */}
-              <AvatarFallback className="bg-sidebar-accent text-xs font-bold text-sidebar-accent-foreground dark:bg-blue-900 dark:text-foreground">
-                {initialsFromName(displayName)}
-              </AvatarFallback>
-            </Avatar>
+            {/* The whole fallback chip needs a light variant, not just the
+                text: on the light theme `text-foreground` is near-black, and
+                blue-900 stays dark whatever the theme, so recolouring only the
+                text just trades dark-on-dark for blue-on-blue. The `dark:`
+                pair restores the original treatment exactly. */}
+            <UserAvatar
+              name={displayName}
+              avatarUrl={user?.avatarUrl ?? null}
+              className="size-8"
+              fallbackClassName="bg-sidebar-accent text-xs font-bold text-sidebar-accent-foreground dark:bg-blue-900 dark:text-foreground"
+            />
             {!collapsed && (
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-sidebar-accent-foreground">
@@ -255,7 +271,7 @@ export function SidebarBody({
                 </p>
               </div>
             )}
-          </div>
+          </Link>
         </RailTooltip>
 
         <ThemeToggle collapsed={collapsed} />

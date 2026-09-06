@@ -2,7 +2,7 @@
 
 > Auto-loaded by coding agents opened at the `AIOS-SFA/` repo root (Claude Code
 > reads it via the `@AGENTS.md` import in `CLAUDE.md`). This is the
-> **new, greenfield replacement** for the legacy SFA app. Three read-only reference
+> **new, greenfield replacement** for the legacy SFA app. Four read-only reference
 > checkouts are symlinked in (gitignored, never committed here):
 > - `./SFA` → legacy Next.js app, **source-of-truth for behaviour** being ported —
 >   see `.claude/rules/legacy-sfa-reference.md`.
@@ -12,10 +12,15 @@
 > - `./sfaforms` → standalone Next.js prototype of the Lead→Quote→Sold→Audit
 >   intake forms (localStorage mock API), **behavioural reference for the native
 >   forms** replacing Fillout — see `.claude/rules/sfaforms-reference.md`.
+> - `./apex-mail-companion` → **ApexReports**, the live TanStack/Cloudflare
+>   operations & reporting portal for Apex Agency (mail campaigns, chargebacks,
+>   transaction/commission reports, producer analytics, data-quality scrubbers),
+>   **behavioural source-of-truth for mailer campaigns and for any metric it
+>   already computes** — see `.claude/rules/apex-mail-companion-reference.md`.
 >
-> **Never edit, create, or delete anything under `./SFA`, `./agencyops_fe_mockups`
-> or `./sfaforms`.** They are read-only reference checkouts; all work goes in
-> `packages/*`.
+> **Never edit, create, or delete anything under `./SFA`, `./agencyops_fe_mockups`,
+> `./sfaforms` or `./apex-mail-companion`.** They are read-only reference
+> checkouts; all work goes in `packages/*`.
 
 ---
 
@@ -76,6 +81,13 @@ each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 load-bearing and the permission *strings* are the contract for the guards and the
 whole web app — full detail in `packages/api/CLAUDE.md`, which loads whenever you
 work under `packages/api`.
+
+A tenant is created one of three ways: the **SmartSuite migration** (the real
+agency), the **demo seed** (a throwaway one), or the Super Admin panel's
+**Onboard Agency** wizard (PAC-69) at `/admin/agencies/onboard`, which is the
+only one that also creates a user — the agency's owner, invited by email. The
+owner then completes a two-phase onboarding: personal (name + password) and a
+skippable agency white-label phase, tracked by `Agency.setup`.
 
 ---
 
@@ -145,6 +157,17 @@ temperature/aging that aren't first-class in legacy payloads. See
 - `./agencyops_fe_mockups/` — **read-only symlink** to the Figma FE mockups repo
   (design screenshots, exported React components/CSS, per-dashboard `guidelines/`).
   UI design source-of-truth — see `.claude/rules/figma-mockups-reference.md`.
+- `./apex-mail-companion/` — **read-only symlink** to **ApexReports**, Apex
+  Agency's live operations & reporting portal (~24 tabs across Pipelines /
+  Reports / Tools / System). It runs the real mailer campaign pipeline
+  (Quote Burst · SFA Processor · Lead Update · Aggregated Reports ·
+  Search Mailer) and writes the `Mailer_Test_Alteryx*` BigQuery tables our
+  `mailers` collection came from — but also owns chargebacks, monthly
+  transaction/commission reports, quote-to-sold analytics, producer
+  performance, and the quote/policy scrubbers. Behavioural source-of-truth for
+  campaign features and for metrics it already defines — see
+  `.claude/rules/apex-mail-companion-reference.md`. Pair it with
+  `docs/mailers-handoff.md`, which records what our side already settled.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**
@@ -170,6 +193,7 @@ whenever you work under `packages/web`.
 
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
+- **Anything that builds a user-facing URL must go through `TenantUrlService.baseUrlFor(agencyId)`**, never `APP_BASE_URL` / `PUBLIC_FORM_BASE_URL` directly. A link on the wrong host is not merely off-brand — `HostTenantGuard` rejects the recipient there, so the link is broken. Same for the logo URL in an email, which must be absolute and unauthenticated.
 - **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.claude/rules/api-bruno-docs.md` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
 - Forms: prefer **TanStack Form** + `zod` (wired via Standard Schema — pass the

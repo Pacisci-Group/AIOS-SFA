@@ -99,7 +99,12 @@ export class SendInviteEmailFn implements InngestFunctionProvider {
     // ⚠ That is a constraint on what a step may return, not a quirk of this
     // one: put a `Date` in a step result and the next step receives a string.
     const sent = (await step.run('send', () =>
-      this.mail.send('invite', event.data, event.data.inviteUrl),
+      this.mail.send(
+        'invite',
+        event.data,
+        event.data.inviteUrl,
+        event.data.agencyId,
+      ),
     )) as SentEmail;
 
     await step.run('record', () => this.mail.record(context, sent));

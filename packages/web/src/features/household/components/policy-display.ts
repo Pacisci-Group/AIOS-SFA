@@ -28,36 +28,65 @@ export interface DisplayPolicy {
   effective: string;
   expiration: string;
   icon: LucideIcon;
-  iconColor: string;
-  iconBg: string;
+  /** Foreground class for {@link DisplayPolicy.icon}. */
+  iconTone: string;
+  /** Background class for the icon's tile. */
+  iconTint: string;
   carrier: string;
   deductible?: string;
 }
 
-export const statusColors: Record<
-  DisplayPolicy["status"],
-  { bg: string; text: string; border: string }
-> = {
-  Active: { bg: "#052e16", text: "#4ade80", border: "#166534" },
-  Pending: { bg: "#1c1002", text: "#fbbf24", border: "#78350f" },
-  Lapsed: { bg: "#2d0a0a", text: "#f87171", border: "#7f1d1d" },
+/**
+ * Status pill classes for a policy.
+ *
+ * These were raw hex triples (`#052e16` / `#4ade80` / `#166534`) picked against
+ * the navy theme — near-black tiles with mid-green text, invisible on the light
+ * theme's `#F8FAFC`. They follow the `lead-display.ts` rules now: a token where
+ * one carries the meaning, otherwise a `X-600 dark:X-400` pair over an alpha
+ * tint that reads on either surface.
+ */
+export const statusColors: Record<DisplayPolicy["status"], string> = {
+  Active: "bg-success/12 text-success",
+  Pending: "bg-amber-500/15 text-amber-700 dark:text-amber-500",
+  Lapsed: "bg-red-500/12 text-red-600 dark:text-red-400",
 };
 
+/** Icon and accent per line of business. */
 const LINE_STYLES: Record<
   string,
-  { icon: LucideIcon; iconColor: string; iconBg: string }
+  { icon: LucideIcon; iconTone: string; iconTint: string }
 > = {
-  auto: { icon: Car, iconColor: "#3b82f6", iconBg: "#1e3a5f" },
-  home: { icon: Home, iconColor: "#10b981", iconBg: "#052e16" },
-  umbrella: { icon: Umbrella, iconColor: "#8b5cf6", iconBg: "#1e1b4b" },
-  life: { icon: Heart, iconColor: "#ec4899", iconBg: "#3b0a2a" },
-  landlord: { icon: Building2, iconColor: "#f59e0b", iconBg: "#1c1002" },
+  auto: {
+    icon: Car,
+    iconTone: "text-sky-600 dark:text-sky-400",
+    iconTint: "bg-sky-400/12",
+  },
+  home: {
+    icon: Home,
+    iconTone: "text-success",
+    iconTint: "bg-success/12",
+  },
+  umbrella: {
+    icon: Umbrella,
+    iconTone: "text-violet-600 dark:text-violet-400",
+    iconTint: "bg-violet-400/12",
+  },
+  life: {
+    icon: Heart,
+    iconTone: "text-pink-600 dark:text-pink-400",
+    iconTint: "bg-pink-400/12",
+  },
+  landlord: {
+    icon: Building2,
+    iconTone: "text-amber-600 dark:text-amber-500",
+    iconTint: "bg-amber-500/15",
+  },
 };
 
 const DEFAULT_STYLE = {
   icon: Shield,
-  iconColor: "#94a3b8",
-  iconBg: "#1e293b",
+  iconTone: "text-slate-600 dark:text-slate-400",
+  iconTint: "bg-slate-400/12",
 };
 
 /**

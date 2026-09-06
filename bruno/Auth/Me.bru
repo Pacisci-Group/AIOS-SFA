@@ -27,6 +27,9 @@ tests {
       "id",
       "email",
       "name",
+      "firstName",
+      "lastName",
+      "avatarUrl",
       "roles",
       "agencyId",
       "branchId",
@@ -34,7 +37,17 @@ tests {
       "scope",
       "dataScope",
       "isPlatformAdmin",
+      // PAC-69. Recomputed on every `/auth/me` rather than cached with the
+      // permission set: it flips the moment an owner finishes their agency's
+      // first-run setup, and the client reads `me` far more often than a cache
+      // TTL would turn over.
+      "agencySetupPending",
+      // `null` on a real login; the operator's id on an impersonated session
+      // (PAC-70). Always present so the web's stored blob never keeps a stale
+      // value after switching back to an ordinary login.
+      "impersonatedBy",
     );
+    expect(res.getBody().impersonatedBy).to.equal(null);
   });
 }
 
@@ -70,15 +83,25 @@ docs {
     "id": "…",
     "email": "owner@demoagency.local",
     "name": "Agency Owner",
+    "firstName": "Agency",
+    "lastName": "Owner",
+    "avatarUrl": "/me/avatar?v=1a2b3c4d",
     "roles": ["Agency Owner"],
     "agencyId": "…",
     "branchId": null,
     "permissions": ["agency:roles:read", "leads:read", "…"],
     "scope": "agency",
     "dataScope": "agency",
-    "isPlatformAdmin": false
+    "isPlatformAdmin": false,
+    "impersonatedBy": null
   }
   ```
+
+  `firstName`/`lastName` are the raw halves behind `name` (PAC-81), for the
+  profile form. `avatarUrl` is null until a photo is committed; when set it is
+  a **relative, authenticated** path (`GET /me/avatar`) carrying a
+  key-derived cache-buster — fetch it with the bearer header, never from a
+  bare `<img src>`.
 
   `roles` are display names — never branch on them. `permissions` is the
   authority, and `dataScope` is the widest across the roles the user holds.

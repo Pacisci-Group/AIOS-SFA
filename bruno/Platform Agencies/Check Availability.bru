@@ -1,0 +1,82 @@
+meta {
+  name: Check Availability
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/platform/agencies/availability?slug={{onboardSlug}}&email={{onboardOwnerEmail}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  slug: {{onboardSlug}}
+  email: {{onboardOwnerEmail}}
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:pre-request {
+  // A fresh identity for this run. `Agency.slug` and `User.email` are both
+  // unique, and onboarding answers a repeat with 409 by design — a hard-coded
+  // pair would pass once and fail on every subsequent `bru run`.
+  const stamp = Date.now();
+  bru.setVar("onboardSlug", `pac69-${stamp}`);
+  bru.setVar("onboardOwnerEmail", `pac69-owner-${stamp}@sfa.local`);
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("reports the fresh identity as free", function () {
+    // Deliberately checked against the identity this run is about to create,
+    // not a known-existing slug: which agencies exist locally depends on whether
+    // the SmartSuite migration or only the demo seed has been run, and a test
+    // that assumes either fails on the other developer's machine.
+    expect(res.getBody().slugAvailable).to.equal(true);
+    expect(res.getBody().emailAvailable).to.equal(true);
+  });
+
+  test("has no opinion on a parameter that was not sent", function () {
+    // `null`, never a default of "free" — the wizard renders no hint for it.
+    expect(res.getBody().tickerAvailable).to.equal(null);
+  });
+}
+
+docs {
+  # GET /platform/agencies/availability — live field checks for the onboarding wizard
+
+  Backs the inline "is this taken?" hints on the Onboard Agency wizard (PAC-69),
+  so an operator finds out on the step that owns the field rather than after
+  pressing Create.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:agencies:read`
+  - **Data scope:** none — above the tenant boundary (`@SkipTenant()`,
+    `@SkipBranch()`).
+
+  ## Query parameters
+  All optional. An omitted one answers `null` rather than `true`.
+
+  | Param | Checks |
+  | -- | -- |
+  | `slug` | `agencies.slug` — unique |
+  | `email` | `users.email` — unique **platform-wide**, not per agency |
+  | `ticker` | `agencies.ticker` — unique where set |
+
+  ## Response `200`
+  ```json
+  { "slugAvailable": false, "emailAvailable": true, "tickerAvailable": null }
+  ```
+
+  Advisory only. `POST /platform/agencies` re-checks under the same rules and is
+  the authority; this exists to move the answer earlier, not to replace it.
+
+  ## Errors
+  - `403 Forbidden` — not a platform account.
+}

@@ -1,6 +1,6 @@
 import type { LeadDetailPriorInsurance } from "@sfa/shared";
 import { Badge } from "@/components/ui/badge";
-import { DetailCard, SectionLabel } from "./DetailCard";
+import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { formatDate } from "./lead-display";
 
 interface PriorInsuranceCardProps {

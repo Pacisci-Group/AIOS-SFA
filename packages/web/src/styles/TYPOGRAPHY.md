@@ -5,9 +5,15 @@ Lead Detail ended up with **three competing label tiers**, the same status pill
 at three sizes, and the same `Home` icon at 12px and 13px inside one card. Reach
 for a row in these tables rather than picking a number.
 
-Applied to: the app sidebar, `/leads`, `/leads/:id`, and the intake forms. The
-five prototype dashboards (management, management-alt, service, tickets,
-household) are excluded — they are slated for replacement.
+Applied to: the app sidebar, `/leads`, `/leads/:id`, the intake forms, and — as
+of the CRM design-language pass — `/crm/tickets`, `/crm/tickets/archived`,
+`/clients/:id` and `/policies/:id`.
+
+Still excluded: the **management, management-alt and service** prototype
+dashboards. Those three are slated for replacement and still carry the patterns
+this document exists to stop (`text-[10px]`, hand-rolled pills and buttons, raw
+hex, and the four undefined `--emerald` / `--red` / `--amber` / `--font-mono`
+variables that render as no colour at all). Don't copy from them.
 
 ## The root is 15px, not 16px
 

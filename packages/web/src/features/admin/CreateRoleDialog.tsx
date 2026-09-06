@@ -167,7 +167,7 @@ export function CreateRoleDialog({
             disabled={create.isPending || name.trim().length < 2}
           >
             {create.isPending ? (
-              <Loader2 size={14} className="mr-1 animate-spin" />
+              <Loader2 className="size-4 mr-1 animate-spin" />
             ) : null}
             Create role
           </Button>

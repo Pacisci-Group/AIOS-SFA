@@ -208,7 +208,7 @@ and full of real prospects' names and addresses. The committed fixture is a
 
 | # | Question | Owner | Blocks |
 |---|---|---|---|
-| 1 | Raw spreadsheet + transform logic (promised by email) | Carl | Final field naming only |
+| 1 | Raw spreadsheet + transform logic (promised by email) — **resolved 2026-09-04**: the vendor file arrived (`SFA-QBP.xlsx`, week 36) and the transform is ported and proven in `packages/api/src/common/mailers/mailer-processor.ts`; see `packages/api/test/fixtures/mailers/README.md` | Carl | — |
 | 2 | Which premium do producers quote — `totalpremi` or `yearlyprem`? | David | The drawer's premium label |
 | 3 | Do any of the 4 dropped columns belong on screen? (`personalli` is a clean 40% of Coverage A) | David | Drawer content |
 | 4 | Is the ticker always the `FileName` prefix? Validated or free text? Full list? | Carl | Correct agency attribution |
@@ -252,7 +252,8 @@ literally and present neither as "our quote".
   <https://docs.google.com/document/d/1OJsDM2wEq_JQ81YmLjPk59Hjj8LON9FTDPaZPs3WFHk/edit>
 - Unrelated but flagged in the same scrum: a role is named **CRM** and should be **CSR**.
   Abu Bakar is fixing dev data; `packages/shared/src/permissions/default-role-templates.ts`
-  still says `CRM`, so the code needs it too.
+  still says `CRM`, so the code needs it too. **Reversed 2026-09-02:** Asad
+  reinstated CRM as its own role next to CSR; both templates exist.
 
 ---
 

@@ -11,7 +11,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { formatPhone } from "@/lib/leads-api";
 import { cn } from "@/lib/utils";
-import { DetailCard, SectionLabel } from "./DetailCard";
+import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { EditContactDialog } from "./EditContactDialog";
 import { LeadSourceSelect } from "./lead-inline-selects";
 import { formatAddress, formatDate } from "./lead-display";

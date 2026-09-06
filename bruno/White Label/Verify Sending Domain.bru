@@ -1,0 +1,49 @@
+meta {
+  name: Verify Sending Domain
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/agency/email/sending-domain/verify
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("requires a sending domain first", function () {
+    // 400 with none configured; 200 or 503 once one is.
+    expect([200, 400, 503]).to.include(res.getStatus());
+  });
+}
+
+docs {
+  # POST /agency/email/sending-domain/verify
+
+  Ask the provider to re-check DNS, then store what it now reports.
+
+  **Module** — none. **Permission** — `agency:email:write`. Safe to call
+  repeatedly — an owner watching for propagation will.
+
+  ## Two provider calls, not one
+  **Resend's `domains.verify` is asynchronous and its response does not carry
+  the outcome.** Reporting its return value as the status would tell an owner
+  "still pending" forever, even once their DNS was correct. So this triggers the
+  check and then reads the domain back to observe the transition.
+
+  Provider statuses `not_started`/`pending` collapse to `pending`, and both
+  `failed`/`temporary_failure` to `failed` — the only decision anything makes is
+  "may we send from this?", and for everything but `verified` the answer is no.
+
+  **Response `200`** — the **Get Email Settings** shape. A `failed` verification
+  is data, not an HTTP error: `lastError` explains that DNS records can take up
+  to 72 hours to publish.
+
+  **Errors**
+  - `400` — no sending domain configured yet.
+  - `403` — caller lacks `agency:email:write`.
+  - `503` — provider unavailable or unconfigured.
+}

@@ -1,0 +1,45 @@
+meta {
+  name: Remove Avatar
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/me/avatar
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{profileAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "key": null
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the photo is gone from the blob", function () {
+    expect(res.getBody().avatarUrl).to.equal(null);
+  });
+}
+
+docs {
+  # PATCH /me/avatar — the `null` half of the contract
+
+  Same endpoint as `Commit Avatar`; `key: null` removes the photo (an absent
+  key would leave it untouched — the standard `clearable` PATCH semantics).
+  Also what keeps a collection run idempotent: the demo producer ends the run
+  without a photo, as seeded. The stored object itself is not deleted —
+  storage cleanup is a lifecycle concern, not a request concern.
+}

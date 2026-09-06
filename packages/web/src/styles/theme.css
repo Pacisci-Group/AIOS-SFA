@@ -132,16 +132,22 @@
   --sidebar-border: rgba(255, 255, 255, 0.06);
   --sidebar-ring: #38BDF8;
 
-  /* KPI / status accent tokens used by the CRM Service ticket workspace.
-     Tuned for the dark surface (`--card`): solid accent + translucent bg. */
-  --kpi-blue: #38BDF8;
-  --kpi-blue-bg: rgba(56, 189, 248, 0.14);
-  --kpi-purple: #A78BFA;
-  --kpi-purple-bg: rgba(167, 139, 250, 0.14);
-  --kpi-green: #34D399;
-  --kpi-green-bg: rgba(52, 211, 153, 0.14);
-  --kpi-amber: #FBBF24;
-  --kpi-amber-bg: rgba(251, 191, 36, 0.14);
+  /*
+   * The eight `--kpi-*` accent tokens that used to live here are gone.
+   *
+   * They were declared **only in this `.dark` block**, so on the light theme
+   * every `text-[var(--kpi-blue)]` / `bg-[var(--kpi-amber-bg)]` in the CRM
+   * Service screens resolved to nothing: status dots and pills rendered
+   * invisible, the selected ticket lost its highlight, and "Post Note" was
+   * white text on a transparent button.
+   *
+   * Their replacements are theme tokens (`--primary`, `--success`,
+   * `--destructive`) plus the `X-600 dark:X-400` pairs in
+   * `features/tickets/components/ticket-data.ts` and
+   * `features/household/components/policy-display.ts`. Do not reintroduce a
+   * single-theme colour variable here — anything added to `.dark` needs a
+   * `:root` counterpart above.
+   */
 }
 
 @theme inline {

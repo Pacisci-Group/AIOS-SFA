@@ -6,12 +6,12 @@ import {
   Building2,
   BarChart3,
   LogOut,
-  Shield,
   KeyRound,
   type LucideIcon,
 } from 'lucide-react';
 import { ModuleKey } from '@sfa/shared';
 import { useAuth } from '@/contexts/auth-context';
+import { BrandLockup } from '@/components/common/BrandMark';
 import { usePermissions } from '@/hooks/usePermissions';
 
 const navSections = [
@@ -111,17 +111,7 @@ export function DevNavPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-6">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <Shield size={16} className="text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-sm font-bold">AgencyOps</h1>
-            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Screen Navigator
-            </p>
-          </div>
-        </div>
+        <BrandLockup size="sm" tagline="Screen Navigator" />
         <div className="flex items-center gap-4">
           {user && (
             <span className="max-w-[45vw] truncate text-xs text-muted-foreground">

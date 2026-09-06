@@ -78,6 +78,53 @@ describe('page-level permission model', () => {
     );
   });
 
+  /**
+   * White-labelling. The failure these guard against is silent: a
+   * `branding:read` (no `agency:` prefix) type-checks, seeds fine, and is then
+   * dropped by `resolvePermissionSet`'s enabled-module filter — the settings
+   * page 403s for the owner and nothing anywhere says why.
+   */
+  describe('white-label permissions', () => {
+    const owner = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === 'agency_owner')!;
+    const whiteLabel = [
+      'agency:branding:read',
+      'agency:branding:write',
+      'agency:domains:read',
+      'agency:domains:write',
+      'agency:email:read',
+      'agency:email:write',
+    ];
+
+    it.each(whiteLabel)('%s reaches the Agency Owner', (permission) => {
+      // Through the `AgencyPermission` spread, not `grantsAllEnabledModules`,
+      // which only ever expands `{m}:read|write`.
+      expect(owner.permissions).toContain(permission);
+    });
+
+    it.each(whiteLabel)(
+      '%s survives the enabled-module filter',
+      (permission) => {
+        const resolved = resolvePermissionSet({
+          rolePermissions: [permission],
+          // A deliberately narrow module set: an `agency:`-namespaced string
+          // must pass regardless of which modules the agency has switched on.
+          enabledModules: [ModuleKey.Dashboard],
+        });
+        expect(resolved).toContain(permission);
+      },
+    );
+
+    it.each(['branch_manager', 'producer', 'csr', 'crm', 'data_team'])(
+      'is withheld in full from %s',
+      (slug) => {
+        const template = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === slug)!;
+        for (const permission of whiteLabel) {
+          expect(template.permissions).not.toContain(permission);
+        }
+      },
+    );
+  });
+
   it('grantsAllEnabledModules templates rely on modules, not extra strings', () => {
     // A template that auto-grants every enabled module must not also hardcode
     // page permission strings (those are derived from enabled modules instead).

@@ -22,6 +22,17 @@ import { seedAuditTemplates } from './audit-templates.seed';
  * here invents an account — the migration instead promotes one *migrated* user
  * to Agency Owner (`MigrationService.assignAgencyOwner`), which is what gives
  * the tenant an administrator without adding a person the legacy book never had.
+ *
+ * ## Not used by the Super Admin panel, on purpose (PAC-69)
+ * `AgencyProvisioningService` runs the same sequence for an operator onboarding
+ * a client agency, and deliberately does **not** call this function. The reason
+ * is the find-or-create above: it exists so the migration can be resumed with
+ * `--from 2`, but an operator who types a slug that already exists has made a
+ * mistake that must be reported as a `409` — silently adopting the existing
+ * tenant and attaching a brand-new owner account to it is the one outcome
+ * neither caller wants. The two share what matters (`seedDefaultRoles`,
+ * `seedAuditTemplates`) and differ on that single rule; keep them that way
+ * rather than adding a flag here.
  */
 
 export interface ProvisionTenantModels {
