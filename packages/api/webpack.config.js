@@ -49,6 +49,13 @@ const path = require('path');
  *                                                  dev/staging, but it writes ~500
  *                                                  fake CRM records — never run it
  *                                                  against production.
+ *
+ * NOT here, on purpose: `migrations/` and `migrate-mongo-config.js`. migrate-mongo
+ * `require`s each migration file individually at runtime, which a bundle cannot
+ * satisfy, so they stay plain CommonJS and the Dockerfile copies them verbatim.
+ * That also means the trap above cannot reach them — adding a migration needs no
+ * change to this file, and a migration can never be missing from an image because
+ * someone forgot an entry.
  */
 const ONE_SHOT_ENTRIES = {
   'seed/seed': 'src/seed/seed.ts',
