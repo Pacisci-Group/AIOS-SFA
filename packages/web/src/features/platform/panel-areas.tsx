@@ -20,16 +20,13 @@ export interface PanelArea {
  * The Super Admin panel's areas (PAC-73).
  *
  * **Onboard Agency** (PAC-69), **Find / Impersonate User** (PAC-70), **Bug
- * Reports** (PAC-82) and **Add Mailers** are live. The rest are shown disabled
- * with "Coming soon" so the shape of the product reads at a glance — hiding
- * them would hide the roadmap from the people the panel is for. Nothing
- * navigates anywhere it cannot go, and there are no fake screens behind any of
- * them.
+ * Reports** (PAC-82) and **Mailer Campaigns** (PAC-71) are live. The rest are
+ * shown disabled so the shape of the product reads at a glance — hiding them
+ * would hide the roadmap from the people the panel is for. Nothing navigates
+ * anywhere it cannot go, and there are no fake screens behind any of them.
  *
- * ⚠ **Add Mailers is last and is temporary.** PAC-71 folds it into Mailer
- * Campaigns and deletes it; when that lands, remove this entry and the route,
- * not just the link. Bug Reports sits immediately above it and is permanent —
- * keep the temporary entry at the bottom as new areas land.
+ * The temporary **Add Mailers** entry that used to sit at the bottom is gone:
+ * PAC-71 folded that flow into Mailer Campaigns as "Import a processed file".
  */
 export const PANEL_AREAS: PanelArea[] = [
   {
@@ -56,6 +53,7 @@ export const PANEL_AREAS: PanelArea[] = [
     key: "campaigns",
     label: "Mailer Campaigns",
     description: "Past campaigns, quote files, and running a new one.",
+    to: "/admin/campaigns",
     icon: Megaphone,
   },
   {
