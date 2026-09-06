@@ -36,3 +36,47 @@ export const ALLOWED_MAILER_CONTENT_TYPES = [
  * is 23 MB, and an Auto file with its 33 extra populated columns will be larger.
  */
 export const MAX_MAILER_FILE_BYTES = 100 * 1024 * 1024;
+
+/**
+ * The XLSX media type, spelled once.
+ *
+ * Long enough that a typo in a second copy would be invisible, and it is
+ * compared for equality in three places (the allow-list above, the presign's
+ * canonical type, and the `PutObject` the commit job writes with).
+ */
+export const XLSX_CONTENT_TYPE =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+/** What the print output is written as. */
+export const CSV_CONTENT_TYPE = 'text/csv';
+
+/**
+ * What the presigned PUT is actually signed with.
+ *
+ * ⚠ The signature covers `Content-Type`, so the value signed here, the value
+ * returned in `requiredHeaders` and the header the browser sends must be **byte
+ * identical** or storage rejects the upload with a 403 that says nothing useful.
+ * Deriving it from the **extension** rather than trusting `File.type` is what
+ * stops that being a per-browser bug — see the note on
+ * {@link ALLOWED_MAILER_CONTENT_TYPES}.
+ */
+export function canonicalMailerContentType(filename: string): string {
+  return /\.xlsx?$|\.xlsm$/i.test(filename.trim())
+    ? XLSX_CONTENT_TYPE
+    : CSV_CONTENT_TYPE;
+}
+
+/**
+ * Object-key namespace for everything a mailer campaign stores (PAC-71).
+ *
+ * A fixed segment, because `StorageService.assertPlatformKeyOwnership` treats
+ * the `platform/<purpose>/` prefix as a security property: a client hands back
+ * the key it was given, so without an exact prefix test it could hand back any
+ * key it knew of — including a tenant's document — and have the platform read
+ * it.
+ *
+ * Lives here rather than in the campaign service because the worker writes the
+ * output object under the same prefix, and the worker's import boundary admits
+ * `common/` but not a feature directory.
+ */
+export const MAILER_CAMPAIGN_PURPOSE = 'mailer-campaigns';
