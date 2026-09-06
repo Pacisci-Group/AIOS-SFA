@@ -72,16 +72,6 @@ function toMembers(household: HouseholdView): Member[] {
   });
 }
 
-function addressLines(address: Record<string, unknown> | null) {
-  const get = (key: string) =>
-    typeof address?.[key] === "string" ? (address[key] as string) : "";
-  const line1 = get("line1");
-  const rest = [get("city"), get("state"), get("postalCode")]
-    .filter(Boolean)
-    .join(", ");
-  return { line1, rest };
-}
-
 /**
  * The green "live" treatment is only honest for a genuinely active record.
  *
@@ -152,13 +142,31 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
   // rather than a word. The name and the `HH-…` record number are rendered by
   // the page header, so neither is recomputed here.
   const status = normalizeHouseholdStatus(household.status) || "Unknown";
-  // Falling back to the primary contact is real data, not a placeholder.
+  /*
+   * `primaryContactName` and `contacts[].isPrimary` both arrive resolved from
+   * `GET /households/:id` (see `pickPrimaryContact`) — the stored name is blank
+   * on every migrated household, and the API is the only layer that can see the
+   * `primaryContactId` that names the contact instead.
+   *
+   * The fall back to the primary contact is kept behind that: it is real data
+   * rather than a placeholder, and it still covers a household read through a
+   * path that has not resolved the name.
+   */
   const contactName =
     household.primaryContactName ?? fullName(primaryContact) ?? "—";
   const phone = household.primaryPhones[0] ?? primaryContact?.phones[0] ?? null;
   const email = household.primaryEmails[0] ?? primaryContact?.emails[0] ?? null;
   const members = toMembers(household);
-  const address = addressLines(household.propertyAddress);
+  /*
+   * Already coerced server-side. This block used to read `line1`/`postalCode`
+   * off the raw `propertyAddress`, and `postalCode` is a key no writer produces
+   * while `line1` only matches the demo seed — so every migrated household
+   * showed two em dashes here.
+   */
+  const address = household.address;
+  const cityLine = address
+    ? [address.city, address.state, address.zip].filter(Boolean).join(", ")
+    : "";
 
   return (
     // Same as the portfolio column: a scrolling block rather than a flex
@@ -241,10 +249,10 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
             />
             <span className="min-w-0">
               <span className="block text-sm font-medium text-foreground">
-                {address.line1 || "—"}
+                {address?.street || "—"}
               </span>
               <span className="block text-xs text-muted-foreground">
-                {address.rest || "—"}
+                {cityLine || "—"}
               </span>
             </span>
           </div>

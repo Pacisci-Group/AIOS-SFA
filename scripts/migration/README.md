@@ -7,7 +7,7 @@ The migration pipeline lives in the API package so it reuses the Mongoose schema
 - Runner/service: `packages/api/src/migration/migration.service.ts`
 - SmartSuite REST client + field/table ids: `packages/api/src/migration/smartsuite/`
 - Mapping/derivation helpers: `packages/api/src/migration/helpers/`
-- Collection schemas: `packages/api/src/{deals,quote-recaps,leads,households,contacts,policies,service-tickets,deal-audits,audit-records,audit-templates,interested-parties,prior-insurance,prior-policies,producer-assignments,crm-rotations,time-off-requests,activities,producer-goals}/schemas/`
+- Collection schemas: `packages/api/src/{deals,quote-recaps,leads,households,contacts,policies,crm,deal-audits,audit-records,audit-templates,interested-parties,prior-insurance,prior-policies,producer-assignments,crm-rotations,time-off-requests,activities,producer-goals}/schemas/`
 
 ## What it does (PAC-18)
 
@@ -80,6 +80,18 @@ refs (`leadId` / `householdId` / `quoteRecapId`), its own match keys
 (`policies.policyNumberKey`, `quoteRecaps.quoteDateYmd`) and reconciles household
 `HH-…` numbering at the end of its household pass. The repair passes that used to
 follow it existed for databases migrated by older code and have been removed.
+
+**One exception, for databases migrated before September 2026.** Those runs
+wrote service tickets as a mirror of the SmartSuite table, through a second
+`ServiceTicket` schema the CRM never read, while the app kept its own tickets
+in a separate `service_tickets` collection. There is one schema and one
+collection (`serviceTickets`) now; `npm run migrate:tickets` (`migrate:tickets:dev`
+locally, `--dry-run` to report only) folds an older database into it — reshapes
+the mirror rows in place, keeping `_id` and `legacySmartSuiteId`, moves the app's
+tickets over, drops `service_tickets`, and syncs the indexes. Idempotent. Run it
+once per environment **before** starting the API on this code, then delete the
+script once no environment needs it — the same lifecycle as the dedupe-index
+fix before it.
 
 The migration **provisions the tenant it imports into** — agency, branch,
 default roles, audit templates. The core seed creates no agency; it supplies the

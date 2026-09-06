@@ -117,6 +117,15 @@ export const DEMO_HOUSEHOLD: HouseholdView = {
   status: "Active",
   primaryContactName: "Jessica Cobb",
   totalActivePolicies: POLICIES.filter((p) => p.active).length,
+  // The normalized shape the API resolves for a live record; `propertyAddress`
+  // below keeps the demo seed's raw key set so the fixture still stands in for
+  // one of the three stored shapes.
+  address: {
+    street: "412 Magnolia Lane",
+    city: "Alpharetta",
+    state: "GA",
+    zip: "30022",
+  },
   propertyAddress: {
     line1: "412 Magnolia Lane",
     city: "Alpharetta",
