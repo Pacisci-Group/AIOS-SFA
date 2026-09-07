@@ -1,7 +1,7 @@
 # PAC-91 — Contacts / households: implementation plan
 
 Ticket: https://linear.app/paciscigroup/issue/PAC-91 (the ticket is authoritative; this plan is the execution order).
-Branch: `asad/pac-91-contacts-households-domain-model` (off `dev`). **The whole ticket ships as one PR**, built in four phases; each phase is left green on `build` / `lint` / e2e / Bruno before the next starts, so the branch is mergeable at every phase boundary if priorities change.
+Branch: `asad/pac-91-contacts-households-domain-model` (off `dev`). **The whole ticket ships as one PR**, built in five phases; each phase is left green on `build` / `lint` / e2e / Bruno before the next starts, so the branch is mergeable at every phase boundary if priorities change.
 Paths are relative to the repo root; `api/` = `packages/api/`, `web/` = `packages/web/`, `shared/` = `packages/shared/`.
 
 ## Context
@@ -96,11 +96,16 @@ Runtime: three collection scans and ~5k `updateOne`s; `bulkWrite` in batches of 
 - No API surface changes → no Bruno changes in this phase.
 - `docs/SESSION-HANDOFF.md`: one paragraph pointing at the backfill and the CSV location.
 
-### 1.8 Open with David before the production run (none block Phase 1)
-- The 4 double-primary contacts: #C01036 Adeyemi, #C01765 Bizzell, #C02116 Allen, #C02579 Miskowiak — which household is the real primacy? The script writes the first and reports; Phase 3's unique index needs an answer.
-- The 2 households with members but no primary (HH3149, HH0032).
-- HH0001–HH0017 (Jenks "Main St" addresses, no contacts) and the six Sample/Test contacts: confirm they are test rows so `isTestRecord` can be set for them in the same pass.
-- The 136 policies with no household and the duplicated policy number 856719796.
+### 1.8 Owner decisions (David, Slack, 2026-09-07) — applied by the backfill as a final `--apply-owner-decisions` step
+Kept in one committed file, `api/src/migration/backfill/pac-91-owner-decisions.json`, so the rehearsal and the production run apply exactly the same list and the report shows each item.
+
+- **Remove households `HH-4717`, `HH-4718`, `HH-4764`, `HH-4313`, `HH-0032`.** Resolves every double primary: Adeyemi keeps #HH3932, Bizzell #HH3458, Dewayne Allen #HH3690, Miskowiak #HH4314. Per household: (1) reference check — refuse and report if any `policies`, `deals`, `quoteRecaps`, `serviceTickets`, `priorInsurance`, `priorPolicies` or `interestedParties` row points at it (none do on the dump); (2) re-point `leads` with `householdId`/`legacyHouseholdId` on it to the contact's kept household (one lead on HH-4717 → HH-3932); (3) clear `contact.householdId`/`legacyHouseholdId` where it names the removed household and re-run the contact fill so it lands on the kept one; (4) delete the household document. `HH-0032` also gets its junk policy `00006` flagged `isTestRecord`.
+- **Flag test rows:** households `HH-0001`–`HH-0017` and contacts #C00001, #C00002, #C00003, #C00018, #C00019, #C00034 → `isTestRecord: true` (`scope-filter.ts` already hides them from every producer-facing read).
+- **Duplicate policy 856719796:** two distinct SmartSuite rows with identical values and no whitespace difference; delete the newer (`legacySmartSuiteId` `6968735d3852d860110a1024`), keep `696135463c06f3648be9cbeb`. Refuse if the newer one has gained a household, deal or ticket since.
+- **`HH-3149`:** Brianne Ray (only member, Named Insured) becomes primary — **assumed**, confirmation requested from David; the decisions file carries it as `pending` until he answers and the step skips pending items.
+- **Unlinked policies (136) and contacts (~304) stay unlinked.** David wants the team to work from a list in the app → Phase 5.
+
+Every action above is idempotent (a removed household is simply absent on re-run; a flag already set is a no-op) and counted in the report under `ownerDecisions`.
 
 ---
 
@@ -176,6 +181,17 @@ Owner rule (2026-09-07): a contact is unique on **date of birth + full name + ph
 - Forward-looking exclusions: `resolve-contact.step.ts` matching, successor pickers, quote prefill and outbound details skip `deceasedAt`-set contacts; historical records keep rendering the name.
 - UI: an action on the Household profile, and a "Mark deceased" on the contact card that opens the successor picker when needed.
 - Bruno for both endpoints; e2e for the exclusivity failure and the deceased-primary path.
+
+---
+
+## Phase 5 — "Unlinked records" work list for the team (ticket §10)
+
+David's answer to "what about the records the backfill cannot link": leave them, but give the team a list to work from. Deliberately the smallest thing that does that.
+
+- `GET /clients/unlinked?kind=policies|contacts|households` (`clients:read`, agency scope): policies without `householdId`, contacts without a household (Phase 3: without a membership), households without `primaryContactId`. Excludes `isTestRecord`. Paginated, sorted newest first, plus a `counts` endpoint (or the same route with `kind=summary`) for the three numbers.
+- Web: an **Unlinked** tab on the Clients page (`web/src/features/clients/`) with the three filters as chips showing their counts; each row opens the existing record page where the existing link/assign actions live. No new actions are built here — if assigning a policy to a household has no UI yet, that is its own ticket and this view just makes the gap visible.
+- Bruno: the new request(s) with docs; e2e: one case per kind plus the test-record exclusion.
+- Not here: the 244 name-only duplicate groups (need a merge tool — follow-up ticket).
 
 ---
 

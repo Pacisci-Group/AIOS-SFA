@@ -304,7 +304,7 @@ still unbuilt, so an onboarded agency cannot be viewed or edited afterwards.
 numbers). Plan: `docs/plans/pac-91-contact-household-links-implementation-plan.md`
 (execution order; the ticket stays authoritative). Branch:
 `asad/pac-91-contacts-households-domain-model`, cut from `dev`, pushed. **The
-whole ticket ships as one PR in four phases**; each phase is left green before
+whole ticket ships as one PR in five phases**; each phase is left green before
 the next starts. No product code has been written yet — the branch holds only
 the plan and this section.
 
@@ -357,11 +357,15 @@ for every change needing no external input, a `--dry-run` CLI script under
 - `agencyId` on every `TenantRecord` is a **string**; a query with an
   `ObjectId` silently matches nothing.
 
-**Open with David (none block Phase 1; needed before the production run and
-before Phase 3's unique index):** the 4 double-primary contacts; the 2
-households with members but no primary (HH3149, HH0032); whether HH0001–HH0017
-and the six Sample/Test contacts are test rows; the 136 policies with no
-household and duplicate policy number 856719796.
+**Owner decisions received (David, Slack, 2026-09-07) — see ticket §8 "Owner
+decisions" and plan §1.8:** remove households HH-4717 / HH-4718 / HH-4764 /
+HH-4313 / HH-0032 (resolves every double primary; HH-4717 has one lead to
+re-point to HH-3932; HH-0032 is a test row with junk policy 00006); flag
+HH-0001–HH-0017 and the six Sample/Test contacts as test records; delete the
+newer of the two identical 856719796 policy rows; unlinked policies and
+contacts stay unlinked but the team needs an in-app list → ticket §10 / plan
+Phase 5. **Still unanswered:** HH-3149 — assumed Brianne Ray becomes primary,
+confirmation requested; the decisions file carries it as `pending`.
 
 **How to begin Phase 1:** follow plan §1.1–§1.8 in order. Run every script
 through the workspace (`npm run <script> -w @sfa/api -- --flags`), never a root
