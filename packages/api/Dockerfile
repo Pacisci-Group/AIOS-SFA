@@ -29,5 +29,14 @@ COPY --from=deps /app ./
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/packages/api/dist ./packages/api/dist
 
+# Migrations ship as source, not as build output: migrate-mongo `require`s each
+# file individually at runtime, so they are plain CommonJS and deliberately not
+# webpack entries. Without these two lines the API boots, finds no config, and
+# refuses to start — which is the failure `src/database/migrations.config.ts`
+# names explicitly. Copied from `build` rather than the context so the files are
+# provably the ones the image was built from.
+COPY --from=build /app/packages/api/migrate-mongo-config.js ./packages/api/
+COPY --from=build /app/packages/api/migrations ./packages/api/migrations
+
 EXPOSE 4000
 CMD ["node", "packages/api/dist/main.js"]

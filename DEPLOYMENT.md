@@ -192,6 +192,48 @@ docker compose -f /opt/sfa/docker-compose.prod.yml logs api | grep -i transactio
 # not:  "MongoDB is NOT a replica set — ..."
 ```
 
+## Schema migrations
+
+Changes to data or indexes that already exist live in `packages/api/migrations/`
+(migrate-mongo). **They apply themselves on deploy**: the API runs every pending
+migration at startup, before `NestFactory.create()` and before it binds a port.
+So the normal path is "merge, deploy, done" — no SSH step, unlike the data
+bring-up below.
+
+Three consequences worth knowing before your first migration lands here:
+
+- **A failed migration stops the container**, on purpose. `main.ts` does not
+  catch, so the process exits non-zero and Docker restarts it — which retries the
+  migration, since a failure is never recorded in the changelog. It will keep
+  failing until you fix it or roll back. That is the intended behaviour: the
+  alternative is serving traffic against a half-migrated database.
+- **Concurrent replicas are safe.** They race for a document in
+  `migrations_lock`; one applies, the rest wait for it and re-check before
+  serving. A process killed mid-migration leaves a lock behind, which the next
+  boot reaps after 15 minutes with a `WARN` — if you see that, verify the
+  database is in the state you expect before trusting the run that follows.
+- **Rolling back to an image older than a migration does not undo it.** Deploying
+  the old SHA leaves the schema change in place; the old code simply runs against
+  a newer database. If it cannot, roll the data back explicitly first (from a
+  checkout that still has the file: `npm run db:migrate:down`, which reverts one
+  migration), or set `DB_MIGRATE_ON_BOOT=false` in `/opt/sfa/.env` to bring the
+  old image up without re-applying anything. That edit lasts until the next
+  deploy rewrites the file — which is usually what you want.
+
+To inspect or drive migrations by hand on the droplet, the CLI is in the image.
+`migrationsDir` inside the config is absolute, so only the config path matters:
+
+```bash
+cd /opt/sfa
+docker compose -f docker-compose.prod.yml run --rm api \
+  npx migrate-mongo status -f packages/api/migrate-mongo-config.js
+```
+
+Swap `status` for `up` or `down` to apply or revert one. Unlike the bring-up
+scripts below, migrations are **not** webpack entries — they ship as plain `.js`
+copied by the Dockerfile — so the "must be an entry or it is MODULE_NOT_FOUND"
+trap does not apply to them, and adding one never touches `webpack.config.js`.
+
 ## First deploy checklist
 
 1. Export both credentials, then provision dev infra — see
@@ -437,6 +479,10 @@ docker compose -f docker-compose.prod.yml up -d
 
 Note this edit only survives until the next deploy — the workflow rewrites
 `/opt/sfa/.env` in full every run.
+
+Rolling the image back does **not** roll back any schema migration it applied;
+see "Schema migrations" above for what to do when the old code cannot run against
+the newer database.
 
 ## Local development
 
