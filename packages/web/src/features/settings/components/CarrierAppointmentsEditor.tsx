@@ -1,9 +1,12 @@
-import { useEffect, useMemo } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useStore } from "@tanstack/react-form";
 import { toast } from "sonner";
 import { z } from "zod";
-import type { CarrierAppointmentsResponse } from "@sfa/shared";
+import type {
+  CarrierAppointmentsResponse,
+  CarrierAppointmentView,
+  CarrierOption,
+} from "@sfa/shared";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAppForm } from "@/hooks/form";
@@ -51,7 +54,18 @@ const appointmentsFormSchema = z.object({
 
 type AppointmentsFormValues = z.infer<typeof appointmentsFormSchema>;
 
-const EMPTY: AppointmentsFormValues = { appointments: [] };
+function toFormValues(
+  appointments: readonly CarrierAppointmentView[],
+): AppointmentsFormValues {
+  return {
+    appointments: appointments.map((row) => ({
+      carrierId: row.carrierId,
+      carrierAgencyCode: row.carrierAgencyCode,
+      isPrimary: row.isPrimary,
+      active: row.active,
+    })),
+  };
+}
 
 interface CarrierAppointmentsEditorProps {
   /** Gates the write controls. The API is the enforcement; this is the UI. */
@@ -76,10 +90,13 @@ export function CarrierAppointmentsEditor({
     queryFn: getCarrierAppointments,
   });
 
-  const carriers = useMemo(
-    () => query.data?.carrierOptions ?? [],
-    [query.data],
-  );
+  /*
+   * Bumped to re-seed the form from the server, by remounting it. Only a save
+   * does that — a background refetch must never rewrite rows under someone
+   * mid-edit, and with the form mounted from its own values there is no reset
+   * to guard against one.
+   */
+  const [seed, setSeed] = useState(0);
 
   const save = useMutation({
     mutationFn: (values: AppointmentsFormValues) =>
@@ -99,50 +116,84 @@ export function CarrierAppointmentsEditor({
         agencyCarrierAppointmentsKey,
         (previous) => ({
           appointments,
-          carrierOptions: previous?.carrierOptions ?? carriers,
+          carrierOptions: previous?.carrierOptions ?? [],
         }),
       );
+      // Re-seed from what was actually stored: code-less rows are dropped
+      // server-side and the primary flag can move, so the form would otherwise
+      // keep showing rows that no longer exist.
+      setSeed((previous) => previous + 1);
       toast.success("Carrier appointments saved.");
       onSaved?.();
     },
     onError: (error) => toast.error(errorMessage(error)),
   });
 
-  const form = useAppForm({
-    defaultValues: EMPTY,
-    validators: { onBlur: appointmentsFormSchema },
-    onSubmit: ({ value }) => save.mutate(value),
-  });
-
-  /*
-   * Seed from the server once it answers. `reset` rather than per-field writes
-   * so the array length matches, and guarded on `isDirty` so a refetch cannot
-   * discard an edit in progress — the dirty-guard idiom `BugReportDetailSheet`
-   * documents.
-   */
-  const isDirty = useStore(form.store, (s) => s.isDirty);
-  useEffect(() => {
-    if (!query.data || isDirty) return;
-    form.reset({
-      appointments: query.data.appointments.map((row) => ({
-        carrierId: row.carrierId,
-        carrierAgencyCode: row.carrierAgencyCode,
-        isPrimary: row.isPrimary,
-        active: row.active,
-      })),
-    });
-    // `form` and `isDirty` are deliberately out of the dependency list: this
-    // must run when the *server data* changes, and including either re-seeds on
-    // every keystroke.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.data]);
-
-  if (query.isLoading) return <Skeleton className="h-48 w-full rounded-xl" />;
+  if (query.isPending) return <Skeleton className="h-48 w-full rounded-xl" />;
   if (query.isError) {
     return (
       <p className="text-sm text-destructive">{errorMessage(query.error)}</p>
     );
   }
+
+  return (
+    <AppointmentsForm
+      key={seed}
+      initial={toFormValues(query.data.appointments)}
+      carriers={query.data.carrierOptions}
+      canWrite={canWrite}
+      emptyMessage={emptyMessage}
+      saveLabel={saveLabel}
+      saving={save.isPending}
+      onSubmit={(values) => save.mutate(values)}
+    />
+  );
+}
+
+interface AppointmentsFormProps {
+  initial: AppointmentsFormValues;
+  carriers: readonly CarrierOption[];
+  canWrite: boolean;
+  emptyMessage?: React.ReactNode;
+  saveLabel: string;
+  saving: boolean;
+  onSubmit: (values: AppointmentsFormValues) => void;
+}
+
+/**
+ * Load the appointments, *then* build the form from them.
+ *
+ * ⚠ Two components rather than one, and the split is load-bearing — the same
+ * one `RunCampaignPage`'s `SetupStep` makes, for the same reason. Seeding a
+ * mounted form with `form.reset(...)` does reach the form's state, but a
+ * `mode="array"` field subscribes to nothing except its own array version, and
+ * `reset` zeroes that version instead of bumping it. The rows land in state and
+ * are never drawn: the page reads "No carrier appointments yet" over an agency
+ * that has one, and the next "Add appointment" reveals the hidden row beside
+ * the new one. Mounting the form only once its real values exist makes the
+ * ordering impossible to get wrong.
+ *
+ * `defaultValues` is therefore frozen at mount rather than tracked: it is the
+ * changing identity of that object, on a form nobody has touched yet, that
+ * makes `FormApi.update` rewrite values behind the same blind array field.
+ * Re-seeding is a remount (`key`), never a new prop.
+ */
+function AppointmentsForm({
+  initial,
+  carriers,
+  canWrite,
+  emptyMessage,
+  saveLabel,
+  saving,
+  onSubmit,
+}: AppointmentsFormProps) {
+  const [defaultValues] = useState(initial);
+
+  const form = useAppForm({
+    defaultValues,
+    validators: { onBlur: appointmentsFormSchema },
+    onSubmit: ({ value }) => onSubmit(value),
+  });
 
   return (
     <form.AppForm>
@@ -210,8 +261,8 @@ export function CarrierAppointmentsEditor({
         </p>
 
         {canWrite && (
-          <Button type="submit" variant="outline" size="sm" disabled={save.isPending}>
-            {save.isPending ? "Saving…" : saveLabel}
+          <Button type="submit" variant="outline" size="sm" disabled={saving}>
+            {saving ? "Saving…" : saveLabel}
           </Button>
         )}
       </form>
