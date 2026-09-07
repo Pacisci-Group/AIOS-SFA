@@ -364,8 +364,8 @@ re-point to HH-3932; HH-0032 is a test row with junk policy 00006); flag
 HH-0001–HH-0017 and the six Sample/Test contacts as test records; delete the
 newer of the two identical 856719796 policy rows; unlinked policies and
 contacts stay unlinked but the team needs an in-app list → ticket §10 / plan
-Phase 5. **Still unanswered:** HH-3149 — assumed Brianne Ray becomes primary,
-confirmation requested; the decisions file carries it as `pending`.
+Phase 5; HH-3149 — Brianne Ray becomes primary. **Nothing is outstanding with
+David for Phase 1.**
 
 **How to begin Phase 1:** follow plan §1.1–§1.8 in order. Run every script
 through the workspace (`npm run <script> -w @sfa/api -- --flags`), never a root
