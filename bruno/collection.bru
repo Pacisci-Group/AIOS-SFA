@@ -85,10 +85,12 @@ docs {
   - **Platform Mailer Campaigns** — running a mail campaign from the vendor file
     (PAC-71): presign → PUT → create → preview → resolve a ZIP inline →
     commit → the finished report, plus the list, the records table, the output
-    download and the wrong-status refusal. ⚠ **Needs the Inngest dev server**:
-    the preview and the commit are queued jobs, and the `Get Campaign (…)`
-    requests wait for them rather than asserting vacuously against a campaign
-    that has not started.
+    download, the completion email and the wrong-status refusal. It then borrows
+    two *tenant* tokens to prove the cross-agency rules the campaign creates —
+    see the run-order note below. ⚠ **Needs the Inngest dev server**: the
+    preview, the commit and the completion email are queued jobs, and the
+    `Get Campaign (…)` requests wait for them rather than asserting vacuously
+    against a campaign that has not started.
   - **Platform Zip Markets** — the ZIP → market table those campaigns resolve
     against (PAC-71). Self-contained and idempotent: it upserts a throwaway ZIP
     and deletes it again, and deliberately leaves the row the campaign folder's
@@ -135,7 +137,19 @@ docs {
   campaign folder **twice on its own** therefore fails the second time; running
   the collection, or the two folders in order, does not.
 
-  **Users** is self-contained and idempotent: it logs in, invites a
+  **Platform Mailer Campaigns' last three requests are tenant requests**, and
+  they are there rather than in **Mailers** for an ordering reason. Proving
+  PAC-71's "one lead per mailer, platform-wide" needs two agencies that can both
+  see one mailer: the demo producer (`accessToken`, from **Auth › Login**) and
+  the owner of the agency **Platform Agencies › Onboard Agency** creates
+  (`onboardOwnerAccessToken`). `Mailers` sorts before `Platform Agencies`, so
+  that second token does not exist yet when it runs — and the demo seed's own
+  mailer is visible to one agency by construction, so it could not show this
+  even with a token. The campaign folder has both, plus a mailer committed with
+  `assignment.mode: "all"`. That is also why **Onboard Agency** enables the
+  `mailers` module.
+
+    **Users** is self-contained and idempotent: it logs in, invites a
   freshly-generated address, and revokes it again, so it can be re-run
   indefinitely without colliding on the unique `email` index. One request there
   accepts two statuses by design — `Resend Invite` returns `409` inside the

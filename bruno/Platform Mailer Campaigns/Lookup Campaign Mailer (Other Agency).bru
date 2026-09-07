@@ -1,0 +1,82 @@
+meta {
+  name: Lookup Campaign Mailer (Other Agency)
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{baseUrl}}/mailers/9c41b2d7ee01
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{onboardOwnerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    // The campaign was committed with `assignment.mode: "all"`, which stores an
+    // explicit `visibleAgencyIds: null` — every agency, including this one,
+    // onboarded *after* the run.
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("says the mailer is taken, and nothing else", function () {
+    const body = res.getBody();
+    expect(body.alreadyLogged).to.equal(true);
+    // The load-bearing half. The lead belongs to another tenant, so its id is
+    // withheld — the drawer renders "Already logged." with the action disabled
+    // and names neither the agency nor the producer.
+    expect(body.linkedLeadId).to.equal(null);
+  });
+
+  test("names no other tenant", function () {
+    const serialized = JSON.stringify(res.getBody());
+    expect(serialized).to.not.contain("demo-agency");
+    expect(res.getBody()).to.not.have.property("visibleAgencyIds");
+    expect(res.getBody()).to.not.have.property("campaignId");
+  });
+}
+
+docs {
+  # GET /mailers/:controlNumber — the same mailer, seen by a second agency
+
+  Half of PAC-71's cross-agency contract, and the half that is about
+  *non-disclosure* rather than refusal.
+
+  - **Module:** `mailers`
+  - **Permission:** `mailers:read`
+  - **Data scope:** none — visibility is decided by the mailer's campaign.
+
+  Sent as the owner of the agency **Platform Agencies › Onboard Agency** created
+  minutes earlier in this run, which is why that request enables the `mailers`
+  module: an agency that cannot reach the module would 403 here and prove
+  nothing about visibility.
+
+  ## Why this agency can see it at all
+
+  `Commit Campaign (Append)` ran with `assignment.mode: "all"`, and the import
+  stores that as an explicit `visibleAgencyIds: null`. The lookup then matches
+  on `{ $or: [{ visibleAgencyIds: { $type: 'null' } }, { visibleAgencyIds:
+  <caller> }] }` — `$type: 'null'`, never a bare `null`, which would also match a
+  *missing* field and make every un-migrated mailer visible to every tenant.
+
+  This is also the "including agencies onboarded later" case from the ticket,
+  literally: the agency did not exist when the campaign was designed and does
+  not appear in any stored list.
+
+  ## Response `200`
+
+  The full mailer view, with `alreadyLogged: true` and `linkedLeadId: null`.
+  Those two fields answer different questions on purpose: `alreadyLogged` is
+  **platform-wide**, because one lead per mailer is a platform rule;
+  `linkedLeadId` is clamped to the caller's own scope, because a lead id from
+  another tenant is that tenant's data. Together they say "taken, and not by
+  you" without saying by whom.
+
+  ## Errors
+  - `403` — the caller's agency has the `mailers` module disabled.
+  - `404` — the mailer exists but the caller's agency is not in
+    `visibleAgencyIds`. Indistinguishable from "no such mailer", deliberately.
+}
