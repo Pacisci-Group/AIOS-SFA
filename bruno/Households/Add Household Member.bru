@@ -23,6 +23,15 @@ body:json {
   }
 }
 
+script:post-response {
+  // Hand the new member to `End Household Membership`, which removes them
+  // again — so a re-run of the collection does not grow the household by one
+  // Dana Tyson every time. Runtime-only var (never persisted to disk).
+  if (res.getStatus() === 201) {
+    bru.setVar("householdMemberContactId", res.getBody().id);
+  }
+}
+
 tests {
   test("returns 201 Created", function () {
     expect(res.getStatus()).to.equal(201);
@@ -72,18 +81,21 @@ docs {
   | `dateOfBirth` | no | `YYYY-MM-DD`. Members often have none on file |
   | `role` | yes | One of `HOUSEHOLD_MEMBER_ROLES`: `Spouse`, `Child`, `Driver`, `Additional Named Insured` |
 
-  `Named Insured` is **rejected**. It is the primary contact's role, implied by
-  `contacts.isPrimary` and stamped by lead intake; accepting it here would give
-  a household two primaries.
+  `Named Insured` is **rejected**. It is the primary contact's role, named by
+  `Household.primaryContactId` and stamped by lead intake; accepting it here
+  would give a household two primaries.
 
   ## What it writes
-  Two documents, both required — the contact's `householdId` is what the
-  household page reads, while `memberContactIds` is what the lead-intake
-  pipeline and the migration maintain:
+  Two documents (PAC-91 §5) — the person, and their membership of *this*
+  household:
 
-  1. A `Contact` with `isPrimary: false`, `roleInHousehold: <role>`, and the
-     household's own `agencyId` / `branchId` (never the caller's).
-  2. `$addToSet` of the new contact id onto the household's `memberContactIds`.
+  1. A `Contact` with the household's own `agencyId` / `branchId` (never the
+     caller's). It carries no household link, no role and no primacy: all three
+     were facts about a membership, and a contact can belong to several
+     households.
+  2. A `householdMembers` row `{ householdId, contactId, role, addedAt }`,
+     upserted — so re-adding somebody who left revives their row rather than
+     creating a second one.
 
   Deliberately **not** put through the public intake pipeline's fuzzy matcher:
   this is a human on the household's own page who can already see its members
@@ -107,5 +119,5 @@ docs {
   | 401 | Missing/expired bearer token |
   | 403 | `clients` disabled for the agency, or the caller lacks `clients:write` |
   | 404 | Unknown household, malformed id, or a household outside the caller's scope |
-  | 409 | This person already exists in the agency (PAC-91 §9). The body carries `contactId` and `householdId` so the UI can offer the existing contact instead |
+  | 409 | This person already exists in the agency (PAC-91 §9). The body carries `contactId` and `householdIds` (a **list** since PAC-91 §5 — a contact can belong to several households) so the UI can offer the existing contact instead |
 }

@@ -23,6 +23,10 @@ import {
   QuoteRecapDocument,
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { StorageService } from '../storage/storage.service';
+import {
+  HouseholdMembersService,
+  rolesByContact,
+} from '../households/household-members.service';
 import type { HouseholdDocument } from '../households/schemas/household.schema';
 import type { LeadDocument } from '../leads/schemas/lead.schema';
 import type {
@@ -56,6 +60,7 @@ export class SoldDealsService {
     private readonly auditGeneration: AuditGenerationService,
     private readonly crmAssignment: CrmAssignmentService,
     private readonly leadTickets: LeadTicketsService,
+    private readonly memberships: HouseholdMembersService,
   ) {}
 
   /**
@@ -399,26 +404,35 @@ export class SoldDealsService {
     );
   }
 
-  /** Household members the producer can name as defensive drivers. */
+  /**
+   * Household members the producer can name as defensive drivers.
+   *
+   * The roster comes from `householdMembers` (PAC-91 §5), which is also where
+   * the role comes from — a person who is a Named Insured at home may be listed
+   * here only as a Driver, and that is exactly the distinction this picker
+   * exists to show.
+   */
   private async householdContacts(
     household: HouseholdDocument,
   ): Promise<SoldHouseholdContact[]> {
-    const ids = [
-      household.primaryContactId,
-      ...(household.memberContactIds ?? []),
-    ].filter((id): id is Types.ObjectId => Boolean(id));
+    const memberships = await this.memberships.listByHousehold(
+      household.agencyId,
+      household._id,
+    );
+    if (!memberships.length) return [];
 
-    if (!ids.length) return [];
-
+    const roles = rolesByContact(memberships);
     const contacts = await this.contactModel
-      .find({ _id: { $in: ids }, agencyId: household.agencyId })
-      .select('firstName lastName roleInHousehold')
+      .find({
+        _id: { $in: memberships.map((membership) => membership.contactId) },
+        agencyId: household.agencyId,
+      })
+      .select('firstName lastName')
       .lean<
         Array<{
           _id: Types.ObjectId;
           firstName?: string;
           lastName?: string;
-          roleInHousehold?: string;
         }>
       >();
 
@@ -426,7 +440,7 @@ export class SoldDealsService {
       id: contact._id.toString(),
       firstName: contact.firstName ?? '',
       lastName: contact.lastName ?? '',
-      roleInHousehold: contact.roleInHousehold,
+      roleInHousehold: roles.get(contact._id.toString()) ?? undefined,
     }));
   }
 

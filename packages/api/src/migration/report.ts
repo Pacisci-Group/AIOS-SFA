@@ -96,6 +96,12 @@ export interface CollectionStat {
     multiPrimary: number;
     /** Link ids naming a record the run did not import. Counted, not fatal. */
     unresolved: number;
+    /**
+     * `householdMembers` rows written — the §6 reconciliation proper: how many
+     * memberships came across, against the three link sources above. Household
+     * links pass only.
+     */
+    memberships?: number;
   };
 }
 
@@ -256,6 +262,11 @@ export function printReport(report: MigrationReport): void {
           `${String(h.multiMembership).padStart(6)} in >1 household  ` +
           `${String(h.multiPrimary).padStart(6)} primary of >1 household`,
       );
+      if (h.memberships !== undefined) {
+        console.log(
+          `  ${name.padEnd(16)} ${String(h.memberships).padStart(6)} memberships written`,
+        );
+      }
     }
     console.log(line);
   }

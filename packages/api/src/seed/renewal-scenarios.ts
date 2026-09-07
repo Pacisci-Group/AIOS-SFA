@@ -10,6 +10,7 @@ import { RenewalScanState } from '../crm/schemas/renewal-scan-state.schema';
 import { ServiceTicket } from '../crm/schemas/service-ticket.schema';
 import { ServiceTicketsService } from '../crm/service-tickets.service';
 import { Contact } from '../contacts/schemas/contact.schema';
+import { HouseholdMember } from '../households/schemas/household-member.schema';
 import { Household } from '../households/schemas/household.schema';
 import { Agency } from '../platform/schemas/agency.schema';
 import { Policy } from '../policies/schemas/policy.schema';
@@ -191,6 +192,9 @@ async function run() {
     getModelToken(Household.name),
   );
   const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+  const memberModel = app.get<Model<HouseholdMember>>(
+    getModelToken(HouseholdMember.name),
+  );
   const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
   const ticketModel = app.get<Model<ServiceTicket>>(
     getModelToken(ServiceTicket.name),
@@ -277,6 +281,7 @@ async function run() {
     // The client's name, email and phone live on the contact now (PAC-91 §4).
     household.primaryContactId = await seedPrimaryContact(
       contactModel,
+      memberModel,
       household,
       key,
       {

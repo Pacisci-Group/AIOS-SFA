@@ -86,9 +86,28 @@ const SINGLE_REFS = [
 ] as const;
 
 const ARRAY_REFS = [
+  // Gone after PAC-91 §5's `drop-contact-household-fields` migration; harmless
+  // to keep listed, because the audit and the repoint both match on the field
+  // existing and simply find nothing once it does not.
   { collection: 'households', field: 'memberContactIds' },
   { collection: 'leads', field: 'memberContactIds' },
 ] as const;
+
+/**
+ * The membership join collection (PAC-91 §5) — a contact reference, but not one
+ * the generic repoint above can handle.
+ *
+ * `{agencyId, householdId, contactId}` is **unique**, so blindly `$set`-ting a
+ * loser's membership to the survivor fails with E11000 whenever both were
+ * members of the same household — which, for two rows that the identity rule
+ * says are one person, is the common case rather than the exotic one. It is
+ * repointed by {@link planMembershipRepoints}, which moves what it can and
+ * deletes the duplicate rest, and audited here like every other reference.
+ */
+const MEMBERSHIP_REF = {
+  collection: 'householdMembers',
+  field: 'contactId',
+} as const;
 
 interface Options {
   agencySlug: string;
@@ -128,6 +147,20 @@ interface ContactDoc {
   roleInHousehold?: string;
   isPrimary?: boolean;
   createdAt?: Date;
+  /**
+   * Households this contact belongs to, from `householdMembers` (PAC-91 §5).
+   *
+   * Loaded alongside the contact rather than derived from `householdId`,
+   * because that field is removed by the same release: before it is,
+   * both answer the survivor tiebreak and agree; afterwards this is the only
+   * one left. Empty when the join collection does not exist yet.
+   */
+  householdIds?: Types.ObjectId[];
+}
+
+/** Whether the row has a household at all, from whichever side still holds it. */
+function hasHousehold(contact: ContactDoc): boolean {
+  return Boolean(contact.householdId) || Boolean(contact.householdIds?.length);
 }
 
 /** One resolved merge: a survivor and the rows folded into it. */
@@ -211,8 +244,7 @@ function groupByIdentity(contacts: ContactDoc[]): MergeGroup[] {
  * re-run has to reach the same answer or the "idempotent" claim is empty.
  */
 function compareSurvivor(a: ContactDoc, b: ContactDoc): number {
-  const linked =
-    Number(Boolean(b.householdId)) - Number(Boolean(a.householdId));
+  const linked = Number(hasHousehold(b)) - Number(hasHousehold(a));
   if (linked !== 0) return linked;
 
   const age =
@@ -309,6 +341,34 @@ async function merge(db: Db, options: Options): Promise<MergeReport> {
     )
     .toArray()) as unknown as ContactDoc[];
 
+  /*
+   * Attach each contact's memberships (PAC-91 §5). One query for the whole
+   * agency rather than one per contact — the collection has roughly one row per
+   * contact, so this is the same order of data the contacts query already
+   * pulled. Absent on a database that predates the join collection, which is
+   * the state this script normally runs in.
+   */
+  const membershipsByContact = new Map<string, Types.ObjectId[]>();
+  const membershipRows = (await db
+    .collection(MEMBERSHIP_REF.collection)
+    .find(
+      { agencyId, endedAt: null },
+      { projection: { contactId: 1, householdId: 1 } },
+    )
+    .toArray()) as unknown as Array<{
+    contactId: Types.ObjectId;
+    householdId: Types.ObjectId;
+  }>;
+  for (const row of membershipRows) {
+    const key = row.contactId.toString();
+    const bucket = membershipsByContact.get(key);
+    if (bucket) bucket.push(row.householdId);
+    else membershipsByContact.set(key, [row.householdId]);
+  }
+  for (const contact of contacts) {
+    contact.householdIds = membershipsByContact.get(contact._id.toString());
+  }
+
   const withKeys = contacts.filter((c) => c.nameKey && c.dobKey).length;
   console.log(
     `Contacts: ${contacts.length} in scope, ${withKeys} with a full name+DOB key.`,
@@ -390,6 +450,8 @@ async function merge(db: Db, options: Options): Promise<MergeReport> {
       });
     }
 
+    ops.push(...planMembershipRepoints(agencyId, group));
+
     /*
      * Fill the survivor from the losers where it is blank — a household link,
      * a role, an email or phone the other row carried. Never overwrite: the
@@ -435,7 +497,7 @@ async function merge(db: Db, options: Options): Promise<MergeReport> {
         '',
       keep: describe(group.keep),
       losers: group.losers.map(describe),
-      reason: group.keep.householdId
+      reason: hasHousehold(group.keep)
         ? 'kept the row with a household link'
         : 'no row had a household link — kept the oldest',
     });
@@ -463,6 +525,61 @@ async function merge(db: Db, options: Options): Promise<MergeReport> {
   }
 
   return report;
+}
+
+/**
+ * Repoint a group's memberships onto the survivor, without tripping the unique
+ * `{agencyId, householdId, contactId}` index (PAC-91 §5).
+ *
+ * Two rows the identity rule calls one person are very often members of the
+ * same household — that is how they came to be filed twice. Moving both onto
+ * the survivor would then be two rows for one membership, which the index
+ * refuses, so:
+ *
+ * - a loser's membership of a household the survivor is **not** in is moved
+ *   (the person keeps the household);
+ * - a loser's membership of a household the survivor **is** in is deleted
+ *   (the survivor's own row already says it, and it is the one the agency has
+ *   been working with).
+ *
+ * The survivor's set is tracked as it grows, so two losers who are both in the
+ * same new household do not collide with each other either.
+ */
+function planMembershipRepoints(
+  agencyId: string,
+  group: MergeGroup,
+): Array<{ collection: string; op: AnyBulkWriteOperation }> {
+  const ops: Array<{ collection: string; op: AnyBulkWriteOperation }> = [];
+  const kept = new Set((group.keep.householdIds ?? []).map(String));
+
+  for (const loser of group.losers) {
+    for (const householdId of loser.householdIds ?? []) {
+      const filter = {
+        agencyId,
+        householdId,
+        contactId: loser._id,
+      };
+      if (kept.has(String(householdId))) {
+        ops.push({
+          collection: MEMBERSHIP_REF.collection,
+          op: { deleteOne: { filter } },
+        });
+        continue;
+      }
+      kept.add(String(householdId));
+      ops.push({
+        collection: MEMBERSHIP_REF.collection,
+        op: {
+          updateOne: {
+            filter,
+            update: { $set: { contactId: group.keep._id } },
+          },
+        },
+      });
+    }
+  }
+
+  return ops;
 }
 
 async function applyOps(
@@ -514,7 +631,7 @@ async function auditDanglingRefs(
 
   const out: Record<string, number> = {};
 
-  for (const ref of SINGLE_REFS) {
+  for (const ref of [...SINGLE_REFS, MEMBERSHIP_REF]) {
     const rows = await db
       .collection(ref.collection)
       .find(

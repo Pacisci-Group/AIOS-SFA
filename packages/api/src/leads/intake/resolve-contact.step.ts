@@ -1,13 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { PRIMARY_HOUSEHOLD_ROLE } from '@sfa/shared';
-import type { HouseholdMemberRole } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { ContactIdentityService } from '../../contacts/contact-identity.service';
 import {
   Contact,
   ContactDocument,
 } from '../../contacts/schemas/contact.schema';
+import { HouseholdMembersService } from '../../households/household-members.service';
 import { pickBestContact } from './contact-match';
 import {
   normalizeEmail,
@@ -46,16 +45,24 @@ export class ResolveContactStep {
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
     private readonly identity: ContactIdentityService,
+    private readonly memberships: HouseholdMembersService,
   ) {}
 
   /**
    * @param householdId When the intake is pinned to a household, the *fuzzy*
-   *   matching below is confined to **that household's** contacts. The
-   *   household is a fact here, not something to infer, so an agency-wide name
-   *   hit is the wrong answer twice over: `LinkEntitiesStep` would move a
-   *   stranger's contact into this household, and the household they came from
-   *   would silently lose them. Confining it can only produce a duplicate
-   *   contact — recoverable, and the trade this file makes everywhere else.
+   *   matching below is confined to the contacts **who are members of it**
+   *   (PAC-91 §5). The household is a fact here, not something to infer, so an
+   *   agency-wide name hit is a weaker signal than a name hit inside the
+   *   household the caller is looking at.
+   *
+   *   The filter used to be `{ householdId }` on the contact — one link per
+   *   person — which missed any member whose stored household happened to be a
+   *   *different* one of theirs, and so created a duplicate of somebody already
+   *   in the room. Reading the membership is the same intent without that hole,
+   *   and it is no longer a workaround for the "linking moves the contact" bug
+   *   that made confinement necessary: linking adds a membership now, so an
+   *   agency-wide hit could no longer drag a stranger out of their household
+   *   even if it were allowed.
    *
    *   The full-key identity check that runs *first* is deliberately **not**
    *   confined: under the owner's rule (PAC-91 §9) a name + DOB + phone-or-email
@@ -65,7 +72,6 @@ export class ResolveContactStep {
    */
   async run(
     person: IntakePerson,
-    role: 'primary' | HouseholdMemberRole,
     deps: StepDeps,
     householdId?: Types.ObjectId,
   ): Promise<ResolvedContact> {
@@ -96,6 +102,11 @@ export class ResolveContactStep {
       );
     }
 
+    const memberIds = householdId
+      ? await this.memberContactIds(householdId, deps)
+      : null;
+    // An empty roster confines the search to nothing, which is correct: a
+    // household with no members has nobody for this person to already be.
     // `.collation(...)` MUST match the index declared on ContactSchema — drop it
     // and the match silently becomes case-sensitive AND scans the collection.
     const candidates = await this.contactModel
@@ -104,7 +115,7 @@ export class ResolveContactStep {
         firstName,
         lastName,
         isTestRecord: { $ne: true },
-        ...(householdId ? { householdId } : {}),
+        ...(memberIds ? { _id: { $in: memberIds } } : {}),
       })
       .collation(NAME_COLLATION)
       .limit(CANDIDATE_LIMIT)
@@ -131,11 +142,14 @@ export class ResolveContactStep {
           email: email ?? undefined,
           phone: phone ?? undefined,
           dateOfBirth: dateOfBirth ?? undefined,
-          // Legacy stamped `isPrimary: true` on EVERY contact it created,
-          // including household members, because members were routed through the
-          // same function with no role parameter.
-          isPrimary: role === 'primary',
-          roleInHousehold: role === 'primary' ? PRIMARY_HOUSEHOLD_ROLE : role,
+          /*
+           * No `isPrimary` / `roleInHousehold` (PAC-91 §5). Both were facts
+           * about a *membership*, not about the person: legacy stamped
+           * `isPrimary: true` on every contact it created, including household
+           * members, because members went through the same function with no
+           * role parameter. `LinkEntitiesStep` writes the role onto the
+           * membership, and primacy stays `Household.primaryContactId`.
+           */
           isTestRecord: false,
         },
       ],
@@ -146,12 +160,22 @@ export class ResolveContactStep {
     return { contactId: created._id, isNew: true };
   }
 
+  /** The contact ids of a household's current members. */
+  private async memberContactIds(
+    householdId: Types.ObjectId,
+    deps: StepDeps,
+  ): Promise<Types.ObjectId[]> {
+    const memberships = await this.memberships.listByHousehold(
+      deps.ctx.agencyId,
+      householdId,
+      { session: deps.session },
+    );
+    return memberships.map((membership) => membership.contactId);
+  }
+
   /** Shared tail for both ways of landing on an existing contact. */
   private async resolveExisting(
-    matched: MatchedContact & {
-      householdId?: Types.ObjectId;
-      legacyHouseholdId?: string;
-    },
+    matched: MatchedContact,
     values: {
       email: string | null;
       phone: string | null;
@@ -163,8 +187,6 @@ export class ResolveContactStep {
     return {
       contactId: matched._id,
       isNew: false,
-      householdId: matched.householdId,
-      legacyHouseholdId: matched.legacyHouseholdId,
       ...(conflicts.length ? { conflicts } : {}),
     };
   }
@@ -180,8 +202,8 @@ export class ResolveContactStep {
    * this ticket removes — and left two emails with nothing saying which was
    * current.
    *
-   * `roleInHousehold` is still never touched: a form must not demote a Named
-   * Insured to "Child".
+   * The membership's `role` is still never touched either: a form must not
+   * demote a Named Insured to "Child" (see `HouseholdMembersService.add`).
    *
    * @returns the disagreements, for the caller to put on the lead's timeline.
    */

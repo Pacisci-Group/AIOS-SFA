@@ -1,5 +1,7 @@
+import { PRIMARY_HOUSEHOLD_ROLE } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import type { Contact } from '../contacts/schemas/contact.schema';
+import type { HouseholdMember } from '../households/schemas/household-member.schema';
 import {
   normalizeEmail,
   normalizeName,
@@ -24,9 +26,15 @@ import {
  * (`ContactIdentityService`) for the same reason they are excluded from intake
  * matching: several fixtures deliberately share a name, and one must never
  * block another.
+ *
+ * Also writes the `householdMembers` row (PAC-91 §5). Both are needed: the
+ * household's `primaryContactId` says *who* leads it, the membership says they
+ * belong to it, and a fixture with only the first renders an empty roster on
+ * the very page it exists to exercise.
  */
 export async function seedPrimaryContact(
   contactModel: Model<Contact>,
+  memberModel: Model<HouseholdMember>,
   household: {
     _id: Types.ObjectId;
     agencyId: string;
@@ -50,13 +58,28 @@ export async function seedPrimaryContact(
         // indexes and contact matching both compare normalised values.
         email: normalizeEmail(person.email) ?? undefined,
         phone: normalizePhone(person.phone) ?? undefined,
-        roleInHousehold: 'Named Insured',
-        isPrimary: true,
-        householdId: household._id,
         isTestRecord: true,
       },
     },
     { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+
+  await memberModel.updateOne(
+    {
+      agencyId: household.agencyId,
+      householdId: household._id,
+      contactId: contact._id,
+    },
+    {
+      $set: { endedAt: null },
+      $setOnInsert: {
+        branchId: household.branchId ?? null,
+        addedAt: new Date(),
+        role: PRIMARY_HOUSEHOLD_ROLE,
+        source: 'seed',
+      },
+    },
+    { upsert: true },
   );
 
   return contact._id;

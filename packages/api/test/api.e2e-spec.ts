@@ -5,6 +5,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import {
   AgencyPermission,
+  AMBIGUOUS_HOUSEHOLD_CODE,
   DataScope,
   DEFAULT_ROLE_TEMPLATES,
   ModuleKey,
@@ -38,6 +39,7 @@ import { ServiceTicketsService } from '../src/crm/service-tickets.service';
 import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
 import { DealAuditItem } from '../src/deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
+import { HouseholdMember } from '../src/households/schemas/household-member.schema';
 import { Household } from '../src/households/schemas/household.schema';
 import { InterestedParty } from '../src/interested-parties/schemas/interested-party.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
@@ -1769,6 +1771,148 @@ describe('SFA API (e2e)', () => {
         .get(`/api/v1/households/${seed.otherBranchHouseholdId}`)
         .set(authHeader(ownerToken))
         .expect(200);
+    });
+  });
+
+  /**
+   * Membership is a join collection (PAC-91 §5).
+   *
+   * The three things that were impossible before it, pinned here so a later
+   * change cannot quietly take them away again: a contact belongs to **several**
+   * households, the role is per household, and leaving one is an operation of
+   * its own rather than a `$pull` that erases the fact.
+   */
+  describe('Household membership (PAC-91 §5)', () => {
+    interface MemberBody {
+      id: string;
+      roleInHousehold: string | null;
+      isPrimary: boolean;
+    }
+    interface HouseholdBody {
+      contacts: MemberBody[];
+    }
+
+    const roster = async (householdId: string) => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/households/${householdId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      return (res.body as HouseholdBody).contacts;
+    };
+
+    const addMember = async (
+      householdId: string,
+      body: Record<string, unknown>,
+      expected = 201,
+    ) => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/households/${householdId}/members`)
+        .set(authHeader(ownerToken))
+        .send(body)
+        .expect(expected);
+      return res.body as MemberBody;
+    };
+
+    it('adds a member with the role on the membership, and lists them', async () => {
+      const member = await addMember(seed.householdId, {
+        firstName: 'Rowan',
+        lastName: 'Membership',
+        role: 'Driver',
+      });
+      expect(member.roleInHousehold).toBe('Driver');
+      // Never primary: that is the household's Named Insured, and this dialog
+      // does not offer it.
+      expect(member.isPrimary).toBe(false);
+
+      const listed = await roster(seed.householdId);
+      const row = listed.find((c) => c.id === member.id);
+      expect(row?.roleInHousehold).toBe('Driver');
+      expect(row?.isPrimary).toBe(false);
+      // Exactly one contact in the roster is the primary, resolved against the
+      // household's own `primaryContactId` rather than a flag on the person.
+      expect(listed.filter((c) => c.isPrimary)).toHaveLength(1);
+    });
+
+    it('the same person can be a member of a second household, with a different role', async () => {
+      const householdMemberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
+      const first = await addMember(seed.householdId, {
+        firstName: 'Wren',
+        lastName: 'Twohomes',
+        role: 'Child',
+      });
+
+      // The second membership is written directly: the "+ Member" dialog always
+      // creates a new contact, and the point here is the *model*, not the
+      // dialog — a merge or a future "add existing contact" flow produces this.
+      await householdMemberModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: new Types.ObjectId(seed.secondHouseholdId),
+        contactId: new Types.ObjectId(first.id),
+        role: 'Driver',
+        addedAt: new Date(),
+        source: 'manual',
+      });
+
+      expect(
+        (await roster(seed.householdId)).find((c) => c.id === first.id)
+          ?.roleInHousehold,
+      ).toBe('Child');
+      expect(
+        (await roster(seed.secondHouseholdId)).find((c) => c.id === first.id)
+          ?.roleInHousehold,
+      ).toBe('Driver');
+    });
+
+    it('DELETE ends the membership without deleting the contact, and is 404 the second time', async () => {
+      const member = await addMember(seed.householdId, {
+        firstName: 'Pax',
+        lastName: 'Leaving',
+        role: 'Driver',
+      });
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/households/${seed.householdId}/members/${member.id}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(
+        (await roster(seed.householdId)).some((c) => c.id === member.id),
+      ).toBe(false);
+
+      // The person is still there — leaving a household is not ceasing to exist.
+      const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      expect(await contactModel.findById(member.id)).not.toBeNull();
+
+      // Soft-ended, so the row survives and a second call has nothing current
+      // left to end.
+      await request(app.getHttpServer())
+        .delete(`/api/v1/households/${seed.householdId}/members/${member.id}`)
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    it('refuses to end the primary contact’s membership (409)', async () => {
+      const listed = await roster(seed.householdId);
+      const primary = listed.find((c) => c.isPrimary);
+      expect(primary).toBeDefined();
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/households/${seed.householdId}/members/${primary!.id}`)
+        .set(authHeader(ownerToken))
+        .expect(409);
+    });
+
+    it('DELETE needs clients:write — a CSR with only crm_service:read is 403', async () => {
+      const listed = await roster(seed.householdId);
+      await request(app.getHttpServer())
+        .delete(
+          `/api/v1/households/${seed.householdId}/members/${listed[0].id}`,
+        )
+        .set(authHeader(csrToken))
+        .expect(403);
     });
   });
 
@@ -4584,6 +4728,7 @@ describe('SFA API (e2e)', () => {
 
     let contactModel: Model<Contact>;
     let householdModel: Model<Household>;
+    let householdMemberModel: Model<HouseholdMember>;
     let leadModel: Model<Lead>;
     let userModel: Model<User>;
 
@@ -4630,6 +4775,9 @@ describe('SFA API (e2e)', () => {
     beforeAll(() => {
       contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
       householdModel = app.get<Model<Household>>(getModelToken(Household.name));
+      householdMemberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
       leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
       userModel = app.get<Model<User>>(getModelToken(User.name));
     });
@@ -4910,6 +5058,67 @@ describe('SFA API (e2e)', () => {
     });
 
     /*
+     * PAC-91 §5 — membership is many-to-many, so "the contact's household" is
+     * no longer a lookup. The single `Contact.householdId` this replaces
+     * answered it with whichever household was linked *last*: an arbitrary
+     * choice, made silently, on the record that decides which policies and
+     * which producer a new inquiry lands against.
+     */
+    it('refuses to guess when the submitter belongs to two households (409)', async () => {
+      const second = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Second Ambrose Household',
+      });
+
+      // First submission: no membership yet, so a household is created.
+      await createAs(producerToken, payload('Ambrose'));
+      const contact = await contactModel.findOne({ lastName: 'Ambrose' });
+
+      // A second membership, as a merge or an "add existing contact" flow
+      // would produce.
+      await householdMemberModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: second._id,
+        contactId: contact!._id,
+        role: 'Driver',
+        addedAt: new Date(),
+        source: 'manual',
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/leads')
+        .set(authHeader(producerToken))
+        .send(payload('Ambrose', { submissionToken: 'ambrose-ambiguous' }))
+        .expect(409);
+
+      const body = res.body as {
+        code: string;
+        contactId: string;
+        households: Array<{ id: string; name: string | null }>;
+      };
+      expect(body.code).toBe(AMBIGUOUS_HOUSEHOLD_CODE);
+      expect(body.contactId).toBe(contact!._id.toString());
+      // Both candidates, so the form can offer a chooser rather than a dead end.
+      expect(body.households).toHaveLength(2);
+      expect(body.households.map((h) => h.id)).toContain(second._id.toString());
+
+      // Pinning one of them resolves it — choosing explicitly is the whole
+      // point, and it must not create a third household.
+      const before = await householdModel.countDocuments({
+        agencyId: seed.agencyId,
+      });
+      await createAs(
+        producerToken,
+        payload('Ambrose', { householdId: second._id.toString() }),
+      );
+      expect(
+        await householdModel.countDocuments({ agencyId: seed.agencyId }),
+      ).toBe(before);
+    });
+
+    /*
      * PAC-91 §1 — a contact holds ONE phone. Intake used to `$addToSet` the
      * submitted value as a second array element, which is how those arrays grew
      * in the first place; the stored value now wins and the disagreement is
@@ -4955,7 +5164,12 @@ describe('SFA API (e2e)', () => {
       });
     });
 
-    it('creates member contacts with the right role and isPrimary=false', async () => {
+    /*
+     * PAC-91 §5 — role and primacy are properties of the *membership*, not of
+     * the person. The contact carries neither any more; a `householdMembers`
+     * row carries the role, and `Household.primaryContactId` names the primary.
+     */
+    it('writes a membership per contact, with the role, and names the primary', async () => {
       const created = await createAs(
         producerToken,
         payload('Harlow', {
@@ -4976,22 +5190,35 @@ describe('SFA API (e2e)', () => {
         .sort({ firstName: 1 });
       expect(contacts).toHaveLength(3);
 
-      const primary = contacts.find((c) => c.firstName === 'Dana');
-      expect(primary!.isPrimary).toBe(true);
-      expect(primary!.roleInHousehold).toBe('Named Insured');
-
-      const child = contacts.find((c) => c.firstName === 'Kit');
-      expect(child!.isPrimary).toBe(false);
-      expect(child!.roleInHousehold).toBe('Child');
-
       const lead = await leadModel.findById(created.id);
       expect(lead!.memberContactIds).toHaveLength(2);
 
       const household = await householdModel.findById(lead!.householdId);
-      expect(household!.memberContactIds).toHaveLength(2);
       expect(household!.leadIds.map((id) => id.toString())).toContain(
         created.id,
       );
+
+      const memberships = await householdMemberModel.find({
+        householdId: household!._id,
+      });
+      // The primary is a member too — they belong to the household they head.
+      expect(memberships).toHaveLength(3);
+      const roleOf = (firstName: string) => {
+        const contact = contacts.find((c) => c.firstName === firstName);
+        return memberships.find(
+          (m) => m.contactId.toString() === contact!._id.toString(),
+        )!.role;
+      };
+      expect(roleOf('Dana')).toBe('Named Insured');
+      expect(roleOf('Sam')).toBe('Spouse');
+      expect(roleOf('Kit')).toBe('Child');
+
+      const primary = contacts.find((c) => c.firstName === 'Dana');
+      expect(household!.primaryContactId!.toString()).toBe(
+        primary!._id.toString(),
+      );
+      // Every membership is current — nothing here ends one.
+      expect(memberships.every((m) => !m.endedAt)).toBe(true);
     });
     it('stores the policies of interest with their item counts (PAC-56 #2)', async () => {
       const created = await createAs(
@@ -5334,6 +5561,9 @@ describe('SFA API (e2e)', () => {
         getModelToken(Household.name),
       );
       const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      const householdMemberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
       const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
       const recapModel = app.get<Model<QuoteRecap>>(
         getModelToken(QuoteRecap.name),
@@ -5372,17 +5602,12 @@ describe('SFA API (e2e)', () => {
           ...base,
           firstName: 'Dana',
           lastName: 'Detail',
-          roleInHousehold: 'Spouse',
-          householdId: household._id,
           dateOfBirth: new Date('1981-09-02T00:00:00.000Z'),
         },
         {
           ...base,
           firstName: 'Devon',
           lastName: 'Detail',
-          roleInHousehold: 'Primary',
-          isPrimary: true,
-          householdId: household._id,
           email: 'devon.detail@example.com',
           phone: '5551110000',
           dateOfBirth: new Date('1978-04-12T00:00:00.000Z'),
@@ -5390,14 +5615,31 @@ describe('SFA API (e2e)', () => {
       ]);
       primaryContactId = primary._id.toString();
 
+      // Membership carries the role, `primaryContactId` names the primary
+      // (PAC-91 §5). Both are needed: the roster is read from the memberships,
+      // and "primary first" is resolved against the household's own ref.
+      await householdMemberModel.create([
+        {
+          ...base,
+          householdId: household._id,
+          contactId: spouse._id,
+          role: 'Spouse',
+          addedAt: new Date(),
+          source: 'seed',
+        },
+        {
+          ...base,
+          householdId: household._id,
+          contactId: primary._id,
+          role: 'Named Insured',
+          addedAt: new Date(),
+          source: 'seed',
+        },
+      ]);
+
       await householdModel.updateOne(
         { _id: household._id },
-        {
-          $set: {
-            primaryContactId: primary._id,
-            memberContactIds: [spouse._id],
-          },
-        },
+        { $set: { primaryContactId: primary._id } },
       );
 
       const lead = await leadModel.create({
@@ -11177,12 +11419,21 @@ describe('SFA API (e2e)', () => {
           branchId: seed.branchId,
           firstName: 'Dana',
           lastName: 'Driver',
-          roleInHousehold: 'Driver',
         });
-      await soldHouseholdModel.updateOne(
-        { _id: household._id },
-        { $set: { memberContactIds: [contact._id] } },
-      );
+      // The picker reads the roster from `householdMembers`, and the role from
+      // the membership — a Named Insured at home can be a Driver here
+      // (PAC-91 §5).
+      await app
+        .get<Model<HouseholdMember>>(getModelToken(HouseholdMember.name))
+        .create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          householdId: household._id,
+          contactId: contact._id,
+          role: 'Driver',
+          addedAt: new Date(),
+          source: 'seed',
+        });
 
       const res = await request(app.getHttpServer())
         .get(`${SOLD}/context`)

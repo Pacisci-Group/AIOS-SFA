@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { AccessContext, ContactDetail } from '@sfa/shared';
-import { normalizeContactRole } from '@sfa/shared';
 import { Model } from 'mongoose';
 import {
   normalizeEmail,
@@ -148,8 +147,19 @@ export class ContactsService {
         : null,
       email: contact.email ?? null,
       phone: contact.phone ?? null,
-      role: normalizeContactRole(contact.roleInHousehold) || null,
-      isPrimary: contact.isPrimary ?? false,
+      /*
+       * Both null/false here, and that is the honest answer (PAC-91 §5).
+       *
+       * Role and primacy are facts about a *membership*, and this endpoint has
+       * no household in hand: it edits the person, from the Lead Detail page's
+       * "Edit Primary Contact" modal. The page already knows both — it renders
+       * them from `GET /leads/:id`, which resolves them against the lead's
+       * household — so nothing on screen depends on this response carrying
+       * them. Reading the stored `roleInHousehold` / `isPrimary` was what made
+       * a Driver in one household render as a Named Insured in another.
+       */
+      role: null,
+      isPrimary: false,
     };
   }
 }

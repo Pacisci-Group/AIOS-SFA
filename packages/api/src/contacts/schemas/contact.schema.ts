@@ -1,6 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
-import { ObjectIdType } from '../../common/mongo/object-id';
+import { HydratedDocument } from 'mongoose';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -50,19 +49,31 @@ export class Contact extends TenantRecord {
   dateOfBirth?: Date;
 
   @Prop()
-  roleInHousehold?: string;
-
-  @Prop({ default: false })
-  isPrimary: boolean;
-
-  @Prop()
   notes?: string;
 
-  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
-  householdId?: Types.ObjectId;
-
-  @Prop({ index: true })
-  legacyHouseholdId?: string;
+  /*
+   * ⚠ No `householdId`, `legacyHouseholdId`, `isPrimary` or `roleInHousehold`,
+   * deliberately (PAC-91 §5, §6).
+   *
+   * All four were SmartSuite's shape rather than the domain's — its `Household`
+   * field on a contact is a single link — and the owner's ground truth
+   * (2026-09-04) is that a contact can belong to **several** households while
+   * being the primary of at most one:
+   *
+   * - `householdId` / `legacyHouseholdId` held one membership. Linking a
+   *   contact to a second household `$set` over the first, so the contact lost
+   *   it while the old household went on listing them.
+   * - `isPrimary` could not answer "primary *of what?*", already duplicated
+   *   `Household.primaryContactId`, and legacy stamped it `true` on every
+   *   contact it created.
+   * - `roleInHousehold` is a property of the *pair*: "Named Insured" at home,
+   *   "Driver" on a parent's policy.
+   *
+   * Membership, role and end-date live in the `householdMembers` collection
+   * (`households/household-member.schema.ts`); primacy stays the single
+   * `Household.primaryContactId`. A household-scoped response derives
+   * `isPrimary` by comparing ids — there is no contact-global flag to read.
+   */
 
   @Prop({ default: false, index: true })
   isTestRecord: boolean;
@@ -96,8 +107,6 @@ ContactSchema.index(
   { agencyId: 1, legacySmartSuiteId: 1 },
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
-ContactSchema.index({ agencyId: 1, householdId: 1 });
-
 /**
  * Person-first contact matching (PAC-37): the first+last name candidate query.
  *

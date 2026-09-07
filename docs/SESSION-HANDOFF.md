@@ -451,3 +451,91 @@ values — leaving `(918) 808-2556` raw would make 3,000 migrated contacts
 invisible to all three. `formatPhone` on the web side renders them.
 
 **Production has not been run for Phase 2 either.** Local rehearsal only.
+
+**Phase 3 is done (2026-09-07) and rehearsed on the local dump.** Membership is
+a join collection: **`householdMembers`** (`households/schemas/household-member.schema.ts`),
+one row per `(household, contact)` with the **role** and an **`endedAt`** on the
+row, because both are facts about the *pair* — the same person is a Named
+Insured at home and a Driver on a parent's policy, and leaving a household is
+not ceasing to exist. `HouseholdMembersService` is the only reader/writer;
+"current" means `endedAt: null`, which in Mongo also matches an absent field.
+
+**Five fields are gone**: `Contact.householdId` / `.legacyHouseholdId` /
+`.isPrimary` / `.roleInHousehold` and **`Household.memberContactIds`**. The last
+one goes beyond the plan's letter and is a Phase 3 decision: leaving it would
+keep two sources of membership truth with nothing reconciling them, and an array
+has nowhere to put a role or an end date — `$pull` *is* the loss §5 describes.
+Primacy stays the single `Household.primaryContactId`.
+
+Three migrations, in this order, and the order is load-bearing:
+
+1. `20260907172117-seed-household-members.js` — seeds from the **union of three**
+   sources (`primaryContactId` ∪ `memberContactIds` ∪ `Contact.householdId`),
+   not the two the plan named: the contact side alone holds **19** memberships
+   the household side never lists back, and dropping them is the §6 defect.
+2. `20260907172118-drop-contact-household-fields.js` — `$unset`s the five, and
+   drops the three now-orphaned contact indexes. Refuses to run if
+   `householdMembers` is empty while households exist. `down` throws.
+3. `20260907172120-household-primary-contact-index.js` — the partial unique
+   index on `{agencyId, primaryContactId}`, **and the wall**: it throws naming
+   the offending contacts. Last on purpose, so a database with double primaries
+   still gets its memberships and its cleanup; only the enforcement waits.
+
+**⚠ Blocked on the local dump, by design.** Phase 2's merge left three contacts
+primary of two households — susan dudley (HH-4790/HH-4792), Justin Rivera
+(HH-4774/HH-4775), Cristal Lubbers (HH-4527/HH-4540) — so migration 3 refuses.
+That is an **open owner decision** (ticket comment 2026-09-07): merge each pair,
+or keep both and name which household the person is primary of.
+
+Behaviour changes worth knowing:
+
+- **Intake adds a membership, never moves the contact.** `LinkEntitiesStep` no
+  longer `$set`s a household onto the contact, and it only sets a household's
+  `primaryContactId` when the contact is not already primary elsewhere —
+  otherwise the new index would fail the whole submission on an E11000.
+- **`ResolveHouseholdStep` refuses to guess.** No membership → create; exactly
+  one → that one; several → **409 `ambiguous_household`** carrying the
+  candidates so the form can ask. The public share-link path cannot pin a
+  household, so a public submission from a multi-household contact (14 of 3,082
+  contacts) needs the office to log it.
+- **`PATCH /contacts/:id` returns `role: null, isPrimary: false`** — always. Both
+  are per-membership and that endpoint has no household in hand; the Lead Detail
+  page reads them from `GET /leads/:id`.
+- **New endpoint** `DELETE /households/:id/members/:contactId` (`clients:write`)
+  soft-ends a membership; 409 on the primary contact, 404 when there is nothing
+  current to end.
+- The duplicate 409 now carries **`householdIds`** (a list), not `householdId`.
+
+**Rehearsal (from `pac91-before-phase2`, replaying the full production
+sequence).** Phase 2 migration 1 → the wall fired at 24 duplicate groups → merge
+dry-run reviewed (24 groups, all phone-leg, 5 both-linked) → live merge →
+snapshot `pac91-before-phase3` → the rest. **2,814 memberships** written
+(2,465 primaries + 330 member-list + **19** contact-side), 3,082 contacts and
+2,542 households cleaned, 0 dangling refs, 0 duplicate pairs, 0 primaries that
+are not members, **16 contacts in more than one household**. Re-running the seed
+is `0 inserted, 2,465 already present`; the merge re-run finds 0 groups (its
+tiebreak now reads memberships, since `householdId` is gone); the Phase 1
+backfill now **refuses** to run once memberships exist.
+
+Two defects the rehearsal itself caught, both fixed: the drop migration left
+`legacyHouseholdId_1` behind (that index comes from `index: true` on the
+`@Prop`, so grepping the schema for `schema.index(` misses it), and the seed
+copied `roleInHousehold: ''` onto 286 memberships as an empty string instead of
+leaving the field absent.
+
+Verified: `build -w @sfa/api` + `tsc -p packages/api`, 850 unit, 819 e2e in 26
+suites, Bruno **201/201 requests, 583/583 tests**, run twice against one
+database. `lint -w @sfa/api` is on its pre-existing baseline (same 7 files).
+
+⚠ **Two environment traps this phase hit.** A running `npm run api:dev` applied
+the Phase 3 migrations to the local dump *while they were still empty
+scaffolds*, recording them as applied so the real ones could never run — stop
+the watch server before touching migrations. And Bruno's
+`Platform Mailer Campaigns` folder needs the API on **port 4000** (the Inngest
+container's `-u` target) plus a running worker; on any other port those 12
+requests fail for want of a queue, not a defect.
+
+**Production has not been run for Phase 3 either.** Local rehearsal only. Next:
+Phase 4 (`Contact.deceasedAt`, `POST /households/:id/primary-contact`), which is
+also what resolves a household left without a primary.
+

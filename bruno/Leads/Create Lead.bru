@@ -238,4 +238,15 @@ docs {
   - `403 Forbidden` — `leads` module disabled, missing `leads:write`, a
     platform-admin caller with no agency, or an agency with no default branch.
   - `404 Not Found` — `householdId` names no household in the caller's agency.
+  - `409 Conflict` — the submitter belongs to **more than one household** and
+    none was pinned (PAC-91 §5). Membership is many-to-many, so "the contact's
+    household" is not a lookup, and picking one silently is how an inquiry lands
+    against the wrong household's policies and producer. The body is
+    `{ code: "ambiguous_household", contactId, households: [{ id, reference,
+    name, address }] }` — resubmit with `householdId` set to the one the user
+    chose. The **public** share-link path cannot pin a household, so a public
+    submission from a multi-household contact needs the office to log it; that
+    is 14 of 3,082 contacts on the production data.
+  - `409 Conflict` — a mailer already logged as a lead by another agency
+    (PAC-71).
 }

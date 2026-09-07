@@ -1,6 +1,7 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { HouseholdMembersService } from '../households/household-members.service';
 import {
   contactIdentity,
   hasCompleteIdentity,
@@ -17,8 +18,6 @@ export interface DuplicateContact {
   email?: string;
   phone?: string;
   dateOfBirth?: Date;
-  householdId?: Types.ObjectId;
-  legacyHouseholdId?: string;
 }
 
 /**
@@ -45,6 +44,7 @@ export class ContactIdentityService {
   constructor(
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
+    private readonly memberships: HouseholdMembersService,
   ) {}
 
   /**
@@ -68,9 +68,7 @@ export class ContactIdentityService {
 
     const query = this.contactModel
       .findOne(buildIdentityFilter(agencyId, identity, options.excludeId))
-      .select(
-        'firstName lastName email phone dateOfBirth householdId legacyHouseholdId',
-      );
+      .select('firstName lastName email phone dateOfBirth');
     if (options.session) query.session(options.session as never);
 
     return query.lean<DuplicateContact | null>();
@@ -81,7 +79,14 @@ export class ContactIdentityService {
    *
    * The response carries the existing `contactId` so the UI can offer "use the
    * existing contact" rather than only refusing — a refusal with no id leaves
-   * the user unable to do the right thing.
+   * the user unable to do the right thing. It also names the households that
+   * contact belongs to, so the message can be specific about *which* Sam
+   * Rivera. That is a list since PAC-91 §5 — membership is many-to-many, and
+   * the single `householdId` this replaces could only ever name one of them.
+   *
+   * Resolved here rather than in {@link findDuplicate}: intake's happy path
+   * calls that on every submission and has no use for the households, so the
+   * extra query belongs on the rejection.
    */
   async assertNoDuplicate(
     agencyId: string,
@@ -89,7 +94,16 @@ export class ContactIdentityService {
     options: { excludeId?: Types.ObjectId; session?: unknown } = {},
   ): Promise<void> {
     const existing = await this.findDuplicate(agencyId, person, options);
-    if (existing) throw toConflict(existing);
+    if (!existing) return;
+
+    const memberships = await this.memberships.listByContact(
+      agencyId,
+      existing._id,
+    );
+    throw toConflict(
+      existing,
+      memberships.map((membership) => String(membership.householdId)),
+    );
   }
 }
 
@@ -122,7 +136,10 @@ export function buildIdentityFilter(
 }
 
 /** The 409 every path returns for the same person twice. */
-export function toConflict(existing: DuplicateContact): ConflictException {
+export function toConflict(
+  existing: DuplicateContact,
+  householdIds: string[] = [],
+): ConflictException {
   const name =
     [existing.firstName, existing.lastName].filter(Boolean).join(' ').trim() ||
     'this contact';
@@ -133,6 +150,9 @@ export function toConflict(existing: DuplicateContact): ConflictException {
     // The whole point of the 409: the client can offer "use the existing
     // contact" instead of leaving the user with a dead end.
     contactId: existing._id.toString(),
-    householdId: existing.householdId?.toString() ?? null,
+    // A list, not a field: a contact can belong to several households
+    // (PAC-91 §5). Empty when they belong to none — 322 contacts on the
+    // production data are in that state.
+    householdIds,
   });
 }

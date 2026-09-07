@@ -53,7 +53,12 @@ tests {
     const body = res.getBody();
     expect(body.id).to.equal(bru.getVar("primaryContactId"));
     expect(body.name).to.equal("Anurodh " + bru.getVar("editedContactSurname"));
-    expect(body.isPrimary).to.equal(true);
+    // `role` and `isPrimary` are always null/false here since PAC-91 §5: both
+    // are facts about a *membership*, and this endpoint edits the person with
+    // no household in hand. The Lead Detail page reads them from
+    // `GET /leads/:id`, which resolves them against the lead's household.
+    expect(body.role).to.equal(null);
+    expect(body.isPrimary).to.equal(false);
   });
 
   test("date of birth is a calendar date, not a timestamp", function () {
@@ -170,10 +175,17 @@ docs {
     "dateOfBirth": "1978-04-12",
     "email": "anurodh.vaidya@example.com",
     "phone": "5128843920",
-    "role": "Primary",
-    "isPrimary": true
+    "role": null,
+    "isPrimary": false
   }
   ```
+
+  `role` and `isPrimary` are **always** `null` / `false` on this response
+  (PAC-91 §5). Both belong to a *membership* — the same person is a Named
+  Insured at home and a Driver on a parent's policy — and this endpoint edits
+  the person, with no household in hand. `GET /leads/:id` resolves both against
+  the lead's household, which is where the page reads them from; nothing on
+  screen depends on them here.
 
   ## Errors
   - `400 Bad Request` — empty body, a malformed `dateOfBirth`, an invalid email.
@@ -183,7 +195,8 @@ docs {
     cannot reach from one of their own leads.
   - `409 Conflict` — the edit would make this contact a duplicate of another
     under the identity rule (PAC-91 §9). The body carries `contactId` and
-    `householdId` so the UI can offer the existing contact instead.
+    `householdIds` (a list since PAC-91 §5) so the UI can offer the existing
+    contact instead.
 
   > **Tip:** run **Get Lead** first — it captures `primaryContactId` into a
   > runtime var that this request consumes.

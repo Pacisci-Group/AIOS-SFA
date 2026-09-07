@@ -1,12 +1,13 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ALL_MODULE_KEYS, DataScope, policyNumberKey } from '@sfa/shared';
 import { Branch } from '../../src/branches/schemas/branch.schema';
 import { Contact } from '../../src/contacts/schemas/contact.schema';
 import { SequenceService } from '../../src/common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../../src/households/household-ref';
+import { HouseholdMember } from '../../src/households/schemas/household-member.schema';
 import { Household } from '../../src/households/schemas/household.schema';
 import { RoleAssignmentsService } from '../../src/permissions/role-assignments.service';
 import { Permission } from '../../src/permissions/schemas/permission.schema';
@@ -231,11 +232,29 @@ export async function seedTestData(
   );
   const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
   const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+  const householdMemberModel = app.get<Model<HouseholdMember>>(
+    getModelToken(HouseholdMember.name),
+  );
 
   const tenant = {
     agencyId: agency._id.toString(),
     branchId: branch._id.toString(),
   };
+
+  /** A `householdMembers` row — membership, and the role in *this* household. */
+  const addMember = async (
+    householdId: Types.ObjectId,
+    contactId: Types.ObjectId,
+    role: string,
+  ) =>
+    householdMemberModel.create({
+      ...tenant,
+      householdId,
+      contactId,
+      role,
+      addedAt: new Date(),
+      source: 'seed',
+    });
 
   // Every record needs a distinct `legacySmartSuiteId`: the schema's
   // {agencyId, legacySmartSuiteId} index is unique+sparse, but a COMPOUND
@@ -268,13 +287,12 @@ export async function seedTestData(
     email: 'client@test.local',
     // Stored normalised, like every writer since PAC-91 §1.
     phone: '5550100100',
-    roleInHousehold: 'Named Insured',
-    isPrimary: true,
-    householdId: household._id,
   });
   household.primaryContactId = primaryContact._id;
-  household.memberContactIds = [primaryContact._id];
   await household.save();
+  // Membership is its own row since PAC-91 §5, and carries the role. The
+  // primary is a member too — they belong to the household they head.
+  await addMember(household._id, primaryContact._id, 'Named Insured');
 
   const policy = await policyModel.create({
     ...tenant,
@@ -311,17 +329,15 @@ export async function seedTestData(
    * `contacts` collection, so the Clients list's cross-collection search has
    * something it must reach that a household-only query cannot.
    */
-  await contactModel.create({
+  const secondHouseholdChild = await contactModel.create({
     ...tenant,
     legacySmartSuiteId: 'test:ct:second-child',
     firstName: 'Marguerite',
     lastName: 'Vasquez',
     // UTC midnight, exactly as `parseDateOfBirth` stores it.
     dateOfBirth: new Date(Date.UTC(1985, 2, 12)),
-    roleInHousehold: 'Child',
-    isPrimary: false,
-    householdId: secondHousehold._id,
   });
+  await addMember(secondHousehold._id, secondHouseholdChild._id, 'Child');
 
   const secondPolicy = await policyModel.create({
     ...tenant,

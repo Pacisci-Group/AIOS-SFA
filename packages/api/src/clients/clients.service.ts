@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -35,6 +36,10 @@ import {
 } from '../contacts/contact-details';
 import { ContactIdentityService } from '../contacts/contact-identity.service';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
+import {
+  HouseholdMembersService,
+  rolesByContact,
+} from '../households/household-members.service';
 import { pickPrimaryContact } from '../households/primary-contact';
 import {
   Household,
@@ -122,6 +127,7 @@ export class ClientsService {
     @InjectModel(Policy.name) private policyModel: Model<PolicyDocument>,
     @InjectModel(Contact.name) private contactModel: Model<ContactDocument>,
     private readonly identity: ContactIdentityService,
+    private readonly memberships: HouseholdMembersService,
   ) {}
 
   /**
@@ -129,6 +135,20 @@ export class ClientsService {
    * plain strings on these collections (unlike `ServiceTicket`, where they are
    * ObjectIds) — do not cast them.
    */
+  /**
+   * The caller's tenant, as the plain string these collections store.
+   *
+   * Separate from {@link scopeFilter} because a `FilterQuery` value is not a
+   * `string` to TypeScript, and the membership queries need one. Both throw on
+   * the same condition, which the guards already prevent.
+   */
+  private agencyIdOf(access: AccessContext): string {
+    if (!access.agencyId) {
+      throw new ForbiddenException('Agency context required');
+    }
+    return access.agencyId;
+  }
+
   private scopeFilter(access: AccessContext): FilterQuery<{
     agencyId: string;
     branchId: string;
@@ -250,11 +270,15 @@ export class ClientsService {
       if (query.dateOfBirth && !dob) {
         and.push(MATCHES_NOTHING);
       } else {
-        const byContact = await this.matchByContact(scope, {
-          firstName: query.firstName,
-          lastName: query.lastName,
-          dateOfBirth: dob,
-        });
+        const byContact = await this.matchByContact(
+          this.agencyIdOf(access),
+          scope,
+          {
+            firstName: query.firstName,
+            lastName: query.lastName,
+            dateOfBirth: dob,
+          },
+        );
         mergeMatches(matches, byContact);
         and.push(householdIdClause(byContact));
       }
@@ -284,9 +308,13 @@ export class ClientsService {
         // the primary included, and returns a `matchedOn` label the stored copy
         // never could.
         or.push({ name: rx });
-        const byName = await this.matchByContact(scope, {
-          anyName: routes.name,
-        });
+        const byName = await this.matchByContact(
+          this.agencyIdOf(access),
+          scope,
+          {
+            anyName: routes.name,
+          },
+        );
         mergeMatches(matches, byName);
         if (byName.size) or.push(householdIdClause(byName));
       }
@@ -297,9 +325,13 @@ export class ClientsService {
       }
 
       if (routes.dateOfBirth) {
-        const byDob = await this.matchByContact(scope, {
-          dateOfBirth: routes.dateOfBirth,
-        });
+        const byDob = await this.matchByContact(
+          this.agencyIdOf(access),
+          scope,
+          {
+            dateOfBirth: routes.dateOfBirth,
+          },
+        );
         mergeMatches(matches, byDob);
         if (byDob.size) or.push(householdIdClause(byDob));
       }
@@ -364,8 +396,15 @@ export class ClientsService {
    * Returns the matching contact rather than a bare `distinct('householdId')`
    * so the list can say *why* a household is in the results — a household found
    * by a child's date of birth otherwise looks like a stray row.
+   *
+   * Goes contact → membership → household since PAC-91 §5. The contact no
+   * longer carries a household of its own, and a matching contact can now put
+   * **several** households in the results: an adult child on their parents'
+   * policy and on their own is a hit for both, which is the honest answer and
+   * was unreachable while one link per person was all there was.
    */
   private async matchByContact(
+    agencyId: string,
     scope: FilterQuery<{ agencyId: string; branchId: string }>,
     criteria: {
       firstName?: string;
@@ -374,10 +413,7 @@ export class ClientsService {
       dateOfBirth?: Date | null;
     },
   ): Promise<Map<string, HouseholdMatch>> {
-    const filter: FilterQuery<ContactDocument> = {
-      ...scope,
-      householdId: { $ne: null },
-    };
+    const filter: FilterQuery<ContactDocument> = { ...scope };
     let byName = false;
 
     if (criteria.firstName) {
@@ -405,7 +441,7 @@ export class ClientsService {
 
     const cursor = this.contactModel
       .find(filter)
-      .select('firstName lastName dateOfBirth householdId')
+      .select('firstName lastName dateOfBirth')
       .limit(CHILD_MATCH_CAP);
 
     // ⚠ The `{agencyId, lastName, firstName}` index carries this collation, and
@@ -415,23 +451,29 @@ export class ClientsService {
     if (byName) cursor.collation(CONTACT_NAME_COLLATION);
 
     const contacts = await cursor.lean();
+    if (!contacts.length) return new Map();
+
+    const byContact = await this.memberships.mapByContacts(
+      agencyId,
+      contacts.map((contact) => contact._id),
+    );
 
     const found = new Map<string, HouseholdMatch>();
     for (const contact of contacts) {
-      if (!contact.householdId) continue;
-      const key = String(contact.householdId);
-      // First contact wins: one label per household, and the query is already
-      // ordered by whatever the index handed back.
-      if (found.has(key)) continue;
-
       const name = contactDisplayName(contact) ?? 'Unnamed member';
       const dob = toDateKey(contact.dateOfBirth);
-      found.set(
-        key,
+      const match: HouseholdMatch =
         criteria.dateOfBirth && !byName
           ? { field: 'dateOfBirth', value: dob ? `${name} · ${dob}` : name }
-          : { field: 'member', value: name },
-      );
+          : { field: 'member', value: name };
+
+      for (const membership of byContact.get(String(contact._id)) ?? []) {
+        const key = String(membership.householdId);
+        // First contact wins: one label per household, and the query is already
+        // ordered by whatever the index handed back.
+        if (found.has(key)) continue;
+        found.set(key, match);
+      }
     }
     return found;
   }
@@ -747,16 +789,34 @@ export class ClientsService {
     }
 
     const householdId = new Types.ObjectId(id);
-    const [contacts, policies] = await Promise.all([
-      this.contactModel
-        .find({ ...scope, householdId })
-        .sort({ isPrimary: -1, lastName: 1 })
-        .lean(),
+    const [memberships, policies] = await Promise.all([
+      this.memberships.listByHousehold(this.agencyIdOf(access), householdId),
       this.policyModel
         .find({ ...scope, householdId })
         .sort({ active: -1, renewalDate: 1 })
         .lean(),
     ]);
+
+    /*
+     * The roster comes from `householdMembers` (PAC-91 §5) — the contact no
+     * longer carries a household, and could only ever have carried one. The
+     * `.sort({ isPrimary: -1, … })` this replaces sorted on a flag that meant
+     * "primary of *some* household", so a driver who heads their own household
+     * led the roster of one they merely belong to.
+     *
+     * Re-filtered by `scope`, so a member outside the caller's branch reads as
+     * absent rather than leaking across it.
+     */
+    const contacts = memberships.length
+      ? await this.contactModel
+          .find({
+            ...scope,
+            _id: { $in: memberships.map((member) => member.contactId) },
+          })
+          .sort({ lastName: 1 })
+          .lean()
+      : [];
+    const roles = rolesByContact(memberships);
 
     /*
      * Resolved here rather than in each client. Both the Household page and the
@@ -790,11 +850,15 @@ export class ClientsService {
       assignedCrmId: household.assignedCrmId
         ? String(household.assignedCrmId)
         : null,
-      // Primary first, then the `isPrimary: -1, lastName: 1` order the query
-      // returned — the roster leads with the named insured, and `isPrimary` is
-      // restated from the resolution above so exactly one contact carries it.
+      // Primary first, then the `lastName: 1` order the query returned — the
+      // roster leads with the named insured, and `isPrimary` is derived per
+      // household so exactly one contact in this response carries it.
       contacts: orderPrimaryFirst(contacts, primaryId).map((contact) =>
-        toContactSummary(contact, String(contact._id) === primaryId),
+        toContactSummary(
+          contact,
+          String(contact._id) === primaryId,
+          roles.get(String(contact._id)),
+        ),
       ),
       policies: policies.map(toPolicySummary),
     };
@@ -803,12 +867,12 @@ export class ClientsService {
   /**
    * Add a member to a household — the "+ Member" dialog on the Household page.
    *
-   * A member **is** a `Contact`; there is no separate member record. The write
-   * is therefore two documents: the contact, and the household's
-   * `memberContactIds`. Both are needed — the contact's `householdId` is what
-   * the household page reads, while `memberContactIds` is what the lead-intake
-   * pipeline and the migration maintain, and letting them disagree is how a
-   * member becomes visible on one screen and not another.
+   * The write is two documents: the `Contact` — the person — and a row in
+   * `householdMembers` — their membership of *this* household, carrying the
+   * role (PAC-91 §5). It used to be the contact plus two half-links that
+   * nothing reconciled (`contact.householdId` and
+   * `household.memberContactIds`), which is how a member could be visible on
+   * one screen and not another.
    *
    * Tenancy comes from the household, never from the caller: a producer whose
    * branch differs from the household's would otherwise stamp a contact into a
@@ -863,20 +927,71 @@ export class ClientsService {
       agencyId: household.agencyId,
       branchId: household.branchId,
       ...person,
-      roleInHousehold: dto.role,
-      // Never primary: that role belongs to the household's Named Insured, and
-      // the dialog does not offer it (see `add-household-member.dto.ts`).
-      isPrimary: false,
-      householdId: household._id,
       isTestRecord: false,
     });
 
-    await this.householdModel.updateOne(
-      { _id: household._id },
-      { $addToSet: { memberContactIds: contact._id } },
-    );
+    await this.memberships.add({
+      agencyId: household.agencyId,
+      branchId: household.branchId,
+      householdId: household._id,
+      contactId: contact._id,
+      role: dto.role,
+      source: 'manual',
+    });
 
-    return toContactSummary(contact.toObject());
+    // Never primary: that role belongs to the household's Named Insured, and
+    // the dialog does not offer it (see `add-household-member.dto.ts`).
+    return toContactSummary(contact.toObject(), false, dto.role);
+  }
+
+  /**
+   * End a membership — "remove from household", without deleting the person.
+   *
+   * Soft (`endedAt`), because the two are different facts: somebody moving out
+   * does not un-drive the car they were listed on, and the household's history
+   * has to keep rendering them. The contact itself is untouched and keeps every
+   * other household they belong to.
+   *
+   * Refuses to end the **primary contact's** membership: a household whose
+   * primary is not a member of it is a state no reader can render sensibly, and
+   * the fix is to name a different primary first — a deliberate operation of
+   * its own (PAC-91 §7). 409 rather than 400, because the request is
+   * well-formed and the obstacle is the record's state.
+   */
+  async endHouseholdMembership(
+    access: AccessContext,
+    householdId: string,
+    contactId: string,
+  ): Promise<{ ended: true }> {
+    const scope = this.scopeFilter(access);
+    if (
+      !Types.ObjectId.isValid(householdId) ||
+      !Types.ObjectId.isValid(contactId)
+    ) {
+      throw new NotFoundException('Household member not found');
+    }
+
+    const household = await this.householdModel
+      .findOne({ ...scope, _id: new Types.ObjectId(householdId) })
+      .select('primaryContactId')
+      .lean();
+    if (!household) throw new NotFoundException('Household not found');
+
+    const contact = new Types.ObjectId(contactId);
+    if (String(household.primaryContactId) === String(contact)) {
+      throw new ConflictException(
+        'This contact is the household\u2019s primary contact. Assign a ' +
+          'different primary contact before removing them.',
+      );
+    }
+
+    const ended = await this.memberships.end(
+      this.agencyIdOf(access),
+      new Types.ObjectId(householdId),
+      contact,
+    );
+    if (!ended) throw new NotFoundException('Household member not found');
+    return { ended: true };
   }
 
   async getPolicy(access: AccessContext, id: string): Promise<PolicyView> {
@@ -951,13 +1066,16 @@ function toPolicySummary(policy: Policy & { _id: unknown }): PolicySummary {
 }
 
 /**
- * `isPrimary` is passed in wherever the household has been consulted, because
- * the stored flag is only half the answer (see `pickPrimaryContact`). It
- * defaults to the flag for the one caller with no household in hand.
+ * Both `isPrimary` and `roleInHousehold` are passed in, because since PAC-91 §5
+ * neither is a fact about the person: primacy is `household.primaryContactId`
+ * and the role belongs to the membership. A caller with no household in hand
+ * has neither to give, and `false` / `null` is the honest answer there rather
+ * than a stored flag that meant "primary of *something*".
  */
 function toContactSummary(
   contact: Contact & { _id: unknown },
-  isPrimary = contact.isPrimary ?? false,
+  isPrimary = false,
+  role?: string | null,
 ): ContactSummary {
   return {
     id: String(contact._id),
@@ -965,7 +1083,7 @@ function toContactSummary(
     lastName: contact.lastName ?? null,
     email: contact.email ?? null,
     phone: contact.phone ?? null,
-    roleInHousehold: normalizeContactRole(contact.roleInHousehold) || null,
+    roleInHousehold: normalizeContactRole(role) || null,
     isPrimary,
     dateOfBirth: toIso(contact.dateOfBirth),
   };

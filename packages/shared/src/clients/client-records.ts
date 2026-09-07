@@ -24,13 +24,19 @@ export interface ContactSummary {
    */
   email: string | null;
   phone: string | null;
-  /** e.g. "Named Insured", "Spouse", "Driver", "Child". */
+  /**
+   * e.g. "Named Insured", "Spouse", "Driver", "Child" — the role in **this**
+   * household, read from the membership (PAC-91 §5). The contact carries no
+   * role of its own: the same person can be a Named Insured at home and a
+   * Driver on a parent's policy.
+   */
   roleInHousehold: string | null;
   /**
-   * Inside a `HouseholdView` this is **resolved**, not the stored flag: the API
-   * consults `household.primaryContactId` first (see `pickPrimaryContact`), so
-   * at most one contact in the roster carries it and that contact leads the
-   * list. Elsewhere it is the contact's own stored flag.
+   * Resolved per household, never a stored flag: the API compares the contact
+   * against `household.primaryContactId`, so at most one contact in a roster
+   * carries it and that contact leads the list. `false` in a response with no
+   * household in hand — `Contact.isPrimary` is gone, because it could not say
+   * primary *of what* (PAC-91 §5).
    */
   isPrimary: boolean;
   /** ISO date, or null when unknown. */

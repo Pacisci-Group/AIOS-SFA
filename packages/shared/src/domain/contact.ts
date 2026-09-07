@@ -29,7 +29,15 @@ export interface ContactDetail {
   email: string | null;
   /** First phone on file, unformatted — the client formats for display. */
   phone: string | null;
-  /** Canonical `HOUSEHOLD_MEMBER_ROLES` value, or the stored free text. */
+  /**
+   * Canonical `HOUSEHOLD_MEMBER_ROLES` value, or the stored free text — and
+   * **only meaningful in a household-scoped response** (PAC-91 §5). Role and
+   * primacy belong to a membership, not to the person: the same contact is a
+   * Named Insured at home and a Driver on a parent's policy. `GET /leads/:id`
+   * resolves both against the lead's household; `PATCH /contacts/:id`, which
+   * has no household in hand, returns `null` / `false` rather than a stored
+   * flag that meant "primary of *something*".
+   */
   role: string | null;
   isPrimary: boolean;
 }

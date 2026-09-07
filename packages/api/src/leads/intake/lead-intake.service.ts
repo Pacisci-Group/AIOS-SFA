@@ -13,6 +13,7 @@ import {
   IntakeContext,
   IntakeInput,
   ContactFieldConflict,
+  IntakeMemberContact,
   IntakeOutcome,
   ResolvedContact,
   StepDeps,
@@ -111,7 +112,6 @@ export class LeadIntakeService {
 
         const contact = await this.contacts.run(
           input.primaryContact,
-          'primary',
           deps,
           pinned?.householdId,
         );
@@ -140,7 +140,7 @@ export class LeadIntakeService {
             householdIsNew: household.isNew,
             leadId: lead.leadId,
             leadIsNew: lead.isNew,
-            memberContactIds: members.contactIds,
+            members: members.contacts,
           },
           deps,
         );
@@ -206,22 +206,24 @@ export class LeadIntakeService {
     deps: StepDeps,
     householdId?: Types.ObjectId,
   ): Promise<{
-    contactIds: Types.ObjectId[];
+    contacts: IntakeMemberContact[];
     conflicts: ContactFieldConflict[];
   }> {
-    const contactIds: Types.ObjectId[] = [];
+    const contacts: IntakeMemberContact[] = [];
     const conflicts: ContactFieldConflict[] = [];
     for (const member of input.members) {
       const contact: ResolvedContact = await this.contacts.run(
         member,
-        member.role,
         deps,
         householdId,
       );
-      contactIds.push(contact.contactId);
+      // The role travels with the resolved contact rather than onto it: it is
+      // a property of this membership, and the same person may be a Driver
+      // here and a Named Insured at home (PAC-91 §5).
+      contacts.push({ contactId: contact.contactId, role: member.role });
       conflicts.push(...(contact.conflicts ?? []));
     }
-    return { contactIds, conflicts };
+    return { contacts, conflicts };
   }
 
   /**

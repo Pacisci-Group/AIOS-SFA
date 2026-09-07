@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { DataScope } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { HouseholdMembersService } from '../households/household-members.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { Contact, ContactDocument } from './schemas/contact.schema';
 
@@ -32,6 +33,7 @@ export class ContactAccessService {
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
+    private readonly memberships: HouseholdMembersService,
   ) {}
 
   async loadOwnedContact(
@@ -70,6 +72,15 @@ export class ContactAccessService {
    *
    * Served by the `{agencyId, primaryContactId}`, `{agencyId, memberContactIds}`
    * and `{agencyId, householdId}` indexes on `leads`.
+   *
+   * The household leg reads the contact's memberships (PAC-91 §5) instead of
+   * the single `Contact.householdId` / `legacyHouseholdId` pair that used to be
+   * here. That is strictly wider in the right direction: a producer who owns a
+   * lead on *any* household this person belongs to reaches them, where before
+   * only whichever household happened to be stored last counted. The
+   * `legacyHouseholdId` leg is gone with the field — the PAC-91 §8 backfill
+   * resolved those strings into real refs and the seed migration turned every
+   * one into a membership, so there is nothing left for it to catch.
    */
   private async assertReachableFromOwnedLead(
     contact: ContactDocument,
@@ -80,15 +91,19 @@ export class ContactAccessService {
       { memberContactIds: contact._id },
     ];
 
-    if (contact.householdId) {
-      reaches.push({ householdId: contact.householdId });
-    }
-    // Migrated leads carry only `legacyHouseholdId` until `findHousehold`
-    // self-heals them, so the household leg has to consider both forms — else a
-    // producer would be locked out of their own migrated client until they
-    // happened to open the lead detail page first.
-    if (contact.legacyHouseholdId) {
-      reaches.push({ legacyHouseholdId: contact.legacyHouseholdId });
+    // The contact's own `agencyId` — the plain string this collection stores —
+    // rather than the nullable one on `AccessContext`. `loadOwnedContact`
+    // already matched the two, so they are the same tenant.
+    const memberships = await this.memberships.listByContact(
+      contact.agencyId,
+      contact._id,
+    );
+    if (memberships.length) {
+      reaches.push({
+        householdId: {
+          $in: memberships.map((membership) => membership.householdId),
+        },
+      });
     }
 
     const owned = await this.leadModel.exists({

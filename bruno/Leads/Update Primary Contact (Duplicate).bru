@@ -78,11 +78,14 @@ docs {
     "error": "Conflict",
     "message": "Anurodh Vaidya already exists in this agency",
     "contactId": "665f...b02",
-    "householdId": "665f...c33"
+    "householdIds": ["665f...c33"]
   }
   ```
 
-  `householdId` is null when the existing contact has no household.
+  `householdIds` is a **list** (PAC-91 §5): membership is many-to-many, so the
+  single `householdId` this replaces could only ever name one of the households
+  the existing contact belongs to. Empty when they belong to none — 322 contacts
+  on the production data are in that state.
 
   ## Why the rule is two indexes, not one
 

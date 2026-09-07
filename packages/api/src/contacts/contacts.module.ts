@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { HouseholdMembersModule } from '../households/household-members.module';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { ContactAccessService } from './contact-access.service';
 import { ContactIdentityService } from './contact-identity.service';
@@ -27,6 +28,9 @@ import { Contact, ContactSchema } from './schemas/contact.schema';
       { name: Contact.name, schema: ContactSchema },
       { name: Lead.name, schema: LeadSchema },
     ]),
+    // `ContactAccessService` derives ownership through the contact's
+    // households, and the duplicate 409 names them (PAC-91 §5).
+    HouseholdMembersModule,
   ],
   controllers: [ContactsController],
   providers: [ContactsService, ContactAccessService, ContactIdentityService],

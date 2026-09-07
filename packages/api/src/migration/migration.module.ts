@@ -8,6 +8,10 @@ import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import {
+  HouseholdMember,
+  HouseholdMemberSchema,
+} from '../households/schemas/household-member.schema';
+import {
   Household,
   HouseholdSchema,
 } from '../households/schemas/household.schema';
@@ -105,6 +109,8 @@ import { MigrationService } from './migration.service';
       { name: Branch.name, schema: BranchSchema },
       { name: User.name, schema: UserSchema },
       { name: Household.name, schema: HouseholdSchema },
+      // The `Household links` pass writes memberships directly (PAC-91 §5).
+      { name: HouseholdMember.name, schema: HouseholdMemberSchema },
       { name: Lead.name, schema: LeadSchema },
       { name: QuoteRecap.name, schema: QuoteRecapSchema },
       { name: Deal.name, schema: DealSchema },

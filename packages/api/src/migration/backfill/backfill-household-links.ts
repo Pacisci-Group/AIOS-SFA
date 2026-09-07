@@ -378,6 +378,28 @@ async function backfill(db: Db, options: Options): Promise<BackfillReport> {
   const agencyId = agency._id.toString();
   console.log(`Agency: ${options.agencySlug} (${agencyId})\n`);
 
+  /*
+   * Refuse to run once membership has moved to `householdMembers` (PAC-91 §5).
+   *
+   * This script writes `Contact.householdId` and `Household.memberContactIds`,
+   * which the Phase 3 migrations remove — so on a migrated database it would
+   * resurrect two dead fields that nothing reads and that would then disagree
+   * with the join collection. Its place in the production sequence is *before*
+   * the deploy (link repair → duplicate merge → deploy → migrations), and this
+   * is what makes running it out of order an error rather than a quiet mess.
+   */
+  const memberships = await db
+    .collection('householdMembers')
+    .countDocuments({ agencyId }, { limit: 1 });
+  if (memberships > 0) {
+    throw new Error(
+      'This agency already has `householdMembers` rows, so the PAC-91 §5 ' +
+        'membership migration has run. This backfill writes the pre-membership ' +
+        'link fields and must not run after it — it belongs before the deploy. ' +
+        'Nothing was written.',
+    );
+  }
+
   const csvContacts = parseContactsCsv(
     readFileSync(options.contactsCsv, 'utf8'),
   );

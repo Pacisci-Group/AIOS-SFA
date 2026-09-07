@@ -108,7 +108,7 @@ docs {
   | `propertyAddress`, `mailingAddress` | The raw stored objects. Prefer `address` |
   | `primaryEmail`, `primaryPhone` | The primary contact's, **resolved** from `primaryContactId` — scalars, and no longer stored on the household (PAC-91 §1, §4) |
   | `assignedCrmId` | The assigned CRM user, or null |
-  | `contacts` | `ContactSummary[]`, primary first then by `lastName` |
+  | `contacts` | `ContactSummary[]`, primary first then by `lastName`. The roster comes from `householdMembers` (PAC-91 §5); each row's `roleInHousehold` is the role on **that** membership and `isPrimary` is resolved against the household's own `primaryContactId` |
   | `policies` | `PolicySummary[]`, active first then by `renewalDate` |
 
   ## Why the primary contact's details and `address` are resolved here
@@ -120,11 +120,18 @@ docs {
   its primary's name, email or phone — those three fields are gone from the
   schema. Only intake ever wrote them, so every migrated household had all three
   empty, and nothing kept them in step with the contact afterwards. The API
-  resolves them from `household.primaryContactId` (the authoritative ref) via
-  `pickPrimaryContact`, which falls back to `contact.isPrimary` — a SmartSuite
-  checkbox, so often unset, and set on *every* contact where legacy intake wrote
-  it. `contacts[].isPrimary` is then restated from the result, so **exactly
-  one** contact carries it and the roster leads with them.
+  resolves them from `household.primaryContactId`, which is now the *only*
+  answer: `contact.isPrimary` — a SmartSuite checkbox, often unset and set on
+  *every* contact where legacy intake wrote it — is gone with PAC-91 §5,
+  because it could not say primary **of what** once a contact could belong to
+  several households. `contacts[].isPrimary` is derived per household, so
+  **exactly one** contact carries it and the roster leads with them.
+
+  **The roster.** It comes from the `householdMembers` join collection, not from
+  a `Contact.householdId` (one link per person, so a second household
+  overwrote the first) or a `Household.memberContactIds` array (nowhere to put
+  the role or the end date). `roleInHousehold` is read from the membership: the
+  same person is a Named Insured at home and a Driver on a parent's policy.
 
   **The address.** `propertyAddress` is an untyped object and three writers use
   three key sets — `street` (lead intake), `line1` (demo seed),

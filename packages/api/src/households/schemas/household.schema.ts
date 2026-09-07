@@ -73,14 +73,32 @@ export class Household extends TenantRecord {
   isTestRecord: boolean;
 
   /**
-   * Set on create, and on reuse only when currently unset — a second lead for an
+   * The household's primary contact — the whole of the fact, and the only
+   * place it lives (PAC-91 §5).
+   *
+   * Set on create, and on reuse only when currently unset: a second lead for an
    * existing household must not reassign whoever its primary already is.
+   * Reassignment is a deliberate operation of its own (PAC-91 §7).
+   *
+   * A contact is the primary of **at most one** household (David, 2026-09-04),
+   * enforced by the partial unique index below rather than only by application
+   * code. `Contact.isPrimary` used to say the same thing from the other end and
+   * could not answer "primary *of what?*" once membership went many-to-many;
+   * it is gone.
    */
   @Prop({ type: ObjectIdType, ref: 'Contact', index: true })
   primaryContactId?: Types.ObjectId;
 
-  @Prop({ type: [{ type: ObjectIdType, ref: 'Contact' }], default: [] })
-  memberContactIds: Types.ObjectId[];
+  /*
+   * ⚠ No `memberContactIds`, deliberately (PAC-91 §5).
+   *
+   * Membership is many-to-many and carries two facts that belong to the *pair*
+   * — the contact's role in this household, and when they left — neither of
+   * which an array of ids can hold. Ending a membership by `$pull` would also
+   * leave no record that the person was ever here, which is the loss §5
+   * describes from the other side. It lives in the `householdMembers`
+   * collection now; read it through `HouseholdMembersService`.
+   */
 
   @Prop({ type: [{ type: ObjectIdType, ref: 'Lead' }], default: [] })
   leadIds: Types.ObjectId[];
@@ -121,4 +139,27 @@ HouseholdSchema.index(
 HouseholdSchema.index(
   { agencyId: 1, addressKey: 1 },
   { partialFilterExpression: { addressKey: { $type: 'string' } } },
+);
+
+/**
+ * "Primary of at most one household" as an index (PAC-91 §5).
+ *
+ * Partial, not sparse, for the reason spelled out on `householdRef` above: a
+ * compound sparse index still indexes every document that has `agencyId`, so
+ * the 77 households with no primary contact would all collide on
+ * `(agencyId, null)`.
+ *
+ * ⚠ Declared here **and** built by
+ * `migrations/…-household-primary-contact-index.js`, deliberately — the same
+ * arrangement as the contact identity indexes and for the same reason.
+ * `autoIndex` creates a missing index silently and a unique build over
+ * conflicting data simply fails, leaving no uniqueness and nothing naming the
+ * rows responsible. The migration checks first and throws, naming them.
+ */
+HouseholdSchema.index(
+  { agencyId: 1, primaryContactId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { primaryContactId: { $type: 'objectId' } },
+  },
 );

@@ -142,11 +142,21 @@ export interface ContactFieldConflict {
 export interface ResolvedContact {
   contactId: Types.ObjectId;
   isNew: boolean;
-  /** Present when the matched contact already belonged to a household. */
-  householdId?: Types.ObjectId;
-  legacyHouseholdId?: string;
-  /** Empty unless the submission disagreed with the stored contact. */
+  /**
+   * Empty unless the submission disagreed with the stored contact.
+   *
+   * ⚠ No `householdId` / `legacyHouseholdId` any more (PAC-91 §5). A contact
+   * can belong to several households, so "the contact's household" is not a
+   * field to carry — `ResolveHouseholdStep` reads the memberships and says what
+   * it does when there is more than one.
+   */
   conflicts?: ContactFieldConflict[];
+}
+
+/** A resolved additional member, with the role *this household* knows them by. */
+export interface IntakeMemberContact {
+  contactId: Types.ObjectId;
+  role: HouseholdMemberRole;
 }
 
 export interface ResolvedHousehold {

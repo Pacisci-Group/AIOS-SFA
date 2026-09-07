@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ContactsModule } from '../contacts/contacts.module';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { HouseholdMembersModule } from '../households/household-members.module';
 import {
   Household,
   HouseholdSchema,
@@ -26,6 +27,8 @@ import { PolicyRecordsController } from './policy-records.controller';
     // The Household form creates contacts too, and must refuse the same
     // duplicates lead intake refuses (PAC-91 §9).
     ContactsModule,
+    // The roster, its roles, and adding/ending a membership (PAC-91 §5).
+    HouseholdMembersModule,
   ],
   controllers: [HouseholdRecordsController, PolicyRecordsController],
   providers: [ClientsService],

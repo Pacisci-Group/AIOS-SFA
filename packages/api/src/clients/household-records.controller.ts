@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
@@ -96,5 +104,27 @@ export class HouseholdRecordsController {
     body: AddHouseholdMemberDto,
   ) {
     return this.clientsService.addHouseholdMember(access, id, body);
+  }
+
+  /**
+   * End a membership — "remove from household" (PAC-91 §5).
+   *
+   * `DELETE` on the membership, not on the contact: the person keeps existing,
+   * keeps every other household they belong to, and keeps appearing on this
+   * household's history. The row is soft-ended (`endedAt`) rather than removed,
+   * which is the whole reason membership stopped being an array — a `$pull`
+   * left nothing behind.
+   *
+   * 409 when the contact is the household's primary: assign a different primary
+   * first.
+   */
+  @Delete(':id/members/:contactId')
+  @RequireWrite(ModuleKey.Clients)
+  endMembership(
+    @Access() access: AccessContext,
+    @Param('id') id: string,
+    @Param('contactId') contactId: string,
+  ) {
+    return this.clientsService.endHouseholdMembership(access, id, contactId);
   }
 }

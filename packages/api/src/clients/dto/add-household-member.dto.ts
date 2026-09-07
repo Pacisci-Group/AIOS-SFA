@@ -9,10 +9,12 @@ const name = z.string().trim().min(1).max(60);
  * Deliberately the **same four fields** the New Lead form's member rows collect
  * (`HouseholdMembersField`), and the same vocabulary: `HOUSEHOLD_MEMBER_ROLES`
  * is shared precisely so the two entry points cannot drift into writing
- * different `roleInHousehold` strings for the same relationship.
+ * different role strings for the same relationship. The role is written to the
+ * `householdMembers` row, not to the contact (PAC-91 §5) — the same person can
+ * be a Named Insured at home and a Driver here.
  *
- * `Named Insured` is not offered. It is the *primary* contact's role, implied
- * by `contacts.isPrimary` and stamped by intake — a household has one, and
+ * `Named Insured` is not offered. It is the *primary* contact's role, named by
+ * `Household.primaryContactId` and stamped by intake — a household has one, and
  * adding a second through this dialog would produce two primaries.
  *
  * Date of birth is optional here, as it is on the intake form: a producer

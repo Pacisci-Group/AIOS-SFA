@@ -19,6 +19,7 @@ import { AgencyRole } from '../roles/schemas/agency-role.schema';
 import { provisionTenant } from '../seed/provision-tenant';
 import { SequenceService } from '../common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../households/household-ref';
+import { HouseholdMember } from '../households/schemas/household-member.schema';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { auditItemDueAt } from '../audit-generation/audit-due';
@@ -191,6 +192,23 @@ interface HouseholdEntry {
   legacyMemberIds: string[];
 }
 
+/**
+ * What the contact pass hands the `Household links` pass (PAC-91 §5, §8).
+ *
+ * The role travels here rather than onto the contact document, because it is a
+ * property of the *membership*: SmartSuite's single `Role in Household` is the
+ * role in whichever household its single `Household` link named, and a contact
+ * back-linked from two households has one role per household as far as the
+ * domain is concerned.
+ */
+interface ContactEntry {
+  id: Types.ObjectId;
+  /** SmartSuite `Role in Household` (`se79ae4f7f`), normalised to a label. */
+  role?: string;
+  /** The household resolved in legacy's fallback order, if any. */
+  legacyHouseholdId?: string;
+}
+
 interface LeadRef {
   id: Types.ObjectId;
   legacyId: string;
@@ -286,6 +304,8 @@ export class MigrationService {
     @InjectModel(User.name) private readonly userModel: Model<User>,
     @InjectModel(Household.name)
     private readonly householdModel: Model<Household>,
+    @InjectModel(HouseholdMember.name)
+    private readonly householdMemberModel: Model<HouseholdMember>,
     @InjectModel(Lead.name) private readonly leadModel: Model<Lead>,
     @InjectModel(QuoteRecap.name)
     private readonly quoteRecapModel: Model<QuoteRecap>,
@@ -1108,8 +1128,9 @@ export class MigrationService {
    * Contacts, with their household link resolved in legacy's own fallback order
    * (PAC-91 §8) rather than from the writable `Household` field alone.
    *
-   * Returns `legacyId -> _id` so the `Household links` pass can resolve the
-   * household side, which it could not do while this returned `void`.
+   * Returns `legacyId -> `{@link ContactEntry}` so the `Household links` pass
+   * can resolve the household side, which it could not do while this returned
+   * `void`, and can write the membership with the role this row carried.
    */
   private async migrateContacts(
     ss: SmartSuiteClient,
@@ -1117,10 +1138,10 @@ export class MigrationService {
     households: Map<string, HouseholdEntry>,
     options: MigrationOptions,
     report: MigrationReport,
-  ): Promise<Map<string, Types.ObjectId>> {
+  ): Promise<Map<string, ContactEntry>> {
     const stat = emptyStat();
     report.collections.contacts = stat;
-    const map = new Map<string, Types.ObjectId>();
+    const map = new Map<string, ContactEntry>();
     const links = {
       viaHouseholdField: 0,
       viaBacklink: 0,
@@ -1168,6 +1189,10 @@ export class MigrationService {
         stat,
       );
 
+      const role = normalizeContactRole(
+        selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
+      );
+
       const id = await this.persist(
         this.contactModel,
         ctx,
@@ -1177,19 +1202,30 @@ export class MigrationService {
           lastName,
           ...contactDetails,
           dateOfBirth: toDate(rec[CONTACT_FIELDS.dateOfBirth]),
-          roleInHousehold: normalizeContactRole(
-            selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
-          ),
-          isPrimary: toBool(rec[CONTACT_FIELDS.isPrimary]),
           notes: toText(rec[CONTACT_FIELDS.notes]),
-          householdId: this.householdRef(legacyHouseholdId, households),
-          legacyHouseholdId,
           isTestRecord: test,
+          /*
+           * No `householdId` / `legacyHouseholdId` / `isPrimary` /
+           * `roleInHousehold` (PAC-91 §5). All four were the SmartSuite shape
+           * — one household per contact, a checkbox for primacy, one role —
+           * and the domain is many-to-many. The `Household links` pass turns
+           * the resolved links into `householdMembers` rows carrying `role`,
+           * and primacy stays `Household.primaryContactId`. `isPrimary`
+           * (`s413f031d4`) is not read at all any more: the household side
+           * names its own primary, which is the same fact from the end that
+           * owns it.
+           */
         },
         stat,
         report,
       );
-      if (id) map.set(legacyId, id);
+      if (id) {
+        map.set(legacyId, {
+          id,
+          ...(role ? { role } : {}),
+          ...(legacyHouseholdId ? { legacyHouseholdId } : {}),
+        });
+      }
     }
     this.logger.log(
       `Contacts: fetched ${stat.fetched} — ${links.viaHouseholdField} linked via ` +
@@ -1326,8 +1362,18 @@ export class MigrationService {
    * --------------------------
    * On a first import the migration *is* the source of truth, and on a re-run
    * the value it writes is the same legacy fact, so `$set` is idempotent rather
-   * than destructive. Membership is `$addToSet` because a household can also
-   * gain members through intake, which SmartSuite never knew about.
+   * than destructive. Membership is an **upsert into `householdMembers`**
+   * (PAC-91 §5) rather than an array push, because a household can also gain
+   * members through intake — which SmartSuite never knew about — and because
+   * the role and the end date belong to the membership, not to either end.
+   *
+   * MEMBERSHIP SOURCES
+   * ------------------
+   * The union of three, and the report counts each (the §6 reconciliation):
+   * the household's `Primary Contact`, its `Household Members`, and the
+   * contact's own resolved household. All three are needed for the same reason
+   * §8 already found on the first two — 266 primaries are absent from their own
+   * member list — each side only ever *misses* links, none of them invents one.
    *
    * ⚠ This is **not** the mechanism that repairs an existing production
    * database. `persist` `$set`s every mapped field on every migrated row, so
@@ -1338,7 +1384,7 @@ export class MigrationService {
   private async migrateHouseholdLinks(
     ctx: TenantCtx,
     households: Map<string, HouseholdEntry>,
-    contacts: Map<string, Types.ObjectId>,
+    contacts: Map<string, ContactEntry>,
     leads: LeadRef[],
     report: MigrationReport,
   ): Promise<void> {
@@ -1349,6 +1395,7 @@ export class MigrationService {
       multiMembership: 0,
       multiPrimary: 0,
       unresolved: 0,
+      memberships: 0,
     };
     stat.householdLinks = links;
     stat.source = households.size + leads.length;
@@ -1362,9 +1409,48 @@ export class MigrationService {
 
     /** Resolve a legacy contact id, counting the ones the run never imported. */
     const contactRef = (legacyId: string): Types.ObjectId | undefined => {
-      const id = contacts.get(legacyId);
-      if (!id) links.unresolved++;
-      return id;
+      const entry = contacts.get(legacyId);
+      if (!entry) links.unresolved++;
+      return entry?.id;
+    };
+
+    /** `<householdId>|<contactId>` already written this run. */
+    const written = new Set<string>();
+
+    /**
+     * Upsert one membership. Keyed on `(agencyId, householdId, contactId)`, so
+     * a re-import revives rather than duplicates, and a member added through
+     * intake since go-live is left exactly as they are.
+     */
+    const addMembership = async (
+      household: HouseholdEntry,
+      legacyContactId: string,
+      contactId: Types.ObjectId,
+    ): Promise<void> => {
+      const key = `${household.id.toString()}|${contactId.toString()}`;
+      if (written.has(key)) return;
+      written.add(key);
+      links.memberships++;
+      if (ctx.dryRun) return;
+
+      const role = contacts.get(legacyContactId)?.role;
+      await this.householdMemberModel.updateOne(
+        {
+          agencyId: ctx.agencyId,
+          householdId: household.id,
+          contactId,
+        },
+        {
+          $set: { endedAt: null },
+          $setOnInsert: {
+            branchId: ctx.branchId,
+            addedAt: new Date(),
+            ...(role ? { role } : {}),
+            source: 'smartsuite',
+          },
+        },
+        { upsert: true },
+      );
     };
 
     let householdsUpdated = 0;
@@ -1391,36 +1477,60 @@ export class MigrationService {
       const primaryContactId = legacyPrimary
         ? contactRef(legacyPrimary)
         : undefined;
-      const memberContactIds = legacyMembers
-        .map((id) => (id === legacyPrimary ? primaryContactId : contactRef(id)))
-        .filter((id): id is Types.ObjectId => !!id);
+      const resolvedMembers = legacyMembers
+        .map((legacyContactId) => ({
+          legacyContactId,
+          contactId:
+            legacyContactId === legacyPrimary
+              ? primaryContactId
+              : contactRef(legacyContactId),
+        }))
+        .filter(
+          (
+            member,
+          ): member is { legacyContactId: string; contactId: Types.ObjectId } =>
+            !!member.contactId,
+        );
 
-      if (!primaryContactId && !memberContactIds.length) {
+      if (!primaryContactId && !resolvedMembers.length) {
         // Every id on this household names a contact we did not import.
         stat.skipped++;
         continue;
       }
 
-      const update: Record<string, unknown> = {};
-      if (primaryContactId) update.$set = { primaryContactId };
-      if (memberContactIds.length) {
-        update.$addToSet = { memberContactIds: { $each: memberContactIds } };
-      }
-
-      if (!ctx.dryRun) {
-        try {
-          await this.householdModel.updateOne({ _id: entry.id }, update);
-        } catch (err) {
-          stat.skipped++;
-          this.recordError(
-            report,
-            `Household links ${entry.id.toString()}: ${(err as Error).message}`,
-          );
-          continue;
+      try {
+        for (const member of resolvedMembers) {
+          await addMembership(entry, member.legacyContactId, member.contactId);
         }
+        if (primaryContactId && !ctx.dryRun) {
+          await this.householdModel.updateOne(
+            { _id: entry.id },
+            { $set: { primaryContactId } },
+          );
+        }
+      } catch (err) {
+        stat.skipped++;
+        this.recordError(
+          report,
+          `Household links ${entry.id.toString()}: ${(err as Error).message}`,
+        );
+        continue;
       }
       householdsUpdated++;
       stat.migrated += ctx.dryRun ? 0 : 1;
+    }
+
+    /*
+     * The third source: a contact whose own `Household` link (or back-link)
+     * resolved to a household that does not list them back. 19 such rows on the
+     * 2026-09-04 production data — dropping them is the §6 defect this pass
+     * exists to close.
+     */
+    for (const [legacyContactId, contact] of contacts) {
+      if (!contact.legacyHouseholdId) continue;
+      const household = households.get(contact.legacyHouseholdId);
+      if (!household) continue;
+      await addMembership(household, legacyContactId, contact.id);
     }
 
     links.multiMembership = [...membershipCount.values()].filter(
@@ -1438,7 +1548,7 @@ export class MigrationService {
       const primaryContactId = lead.legacyPrimaryInsuredId
         ? contactRef(lead.legacyPrimaryInsuredId)
         : household?.legacyPrimaryContactId
-          ? contacts.get(household.legacyPrimaryContactId)
+          ? contacts.get(household.legacyPrimaryContactId)?.id
           : undefined;
       const memberContactIds = lead.legacyMemberIds
         .map((id) => contactRef(id))
@@ -1474,10 +1584,10 @@ export class MigrationService {
 
     this.logger.log(
       `Household links: ${householdsUpdated} households and ${leadsUpdated} leads ` +
-        `linked${ctx.dryRun ? ' (dry run)' : ''} — ${links.unlinked} households ` +
-        `unlinked at source, ${links.unresolved} link ids named a contact this ` +
-        `run did not import, ${links.multiPrimary} contacts are primary of more ` +
-        `than one household`,
+        `linked${ctx.dryRun ? ' (dry run)' : ''}, ${links.memberships} memberships ` +
+        `— ${links.unlinked} households unlinked at source, ${links.unresolved} ` +
+        `link ids named a contact this run did not import, ${links.multiPrimary} ` +
+        `contacts are primary of more than one household`,
     );
   }
 
