@@ -15,7 +15,11 @@ import { SenderIdentityService } from './sender-identity.service';
 export interface DeliveryContext {
   eventId: string;
   eventType: string;
-  agencyId: string;
+  /**
+   * `null` for platform mail — the mailer campaign completion notice (PAC-71)
+   * belongs to no tenant. See `EmailMessage.agencyId`.
+   */
+  agencyId: string | null;
   branchId: string | null;
 }
 

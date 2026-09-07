@@ -1,5 +1,9 @@
 import { EMAIL_TEMPLATES, type TemplateKey } from './registry';
 import { inviteTemplate } from './invite.template';
+import {
+  mailerCampaignOutputTemplate,
+  type MailerCampaignOutputData,
+} from './mailer-campaign-output.template';
 import { passwordResetTemplate } from './password-reset.template';
 import type {
   InviteRequestedData,
@@ -50,6 +54,26 @@ function passwordResetData(
   };
 }
 
+/** A committed campaign, as the completion notice sees it. */
+function mailerCampaignOutputData(
+  overrides: Partial<MailerCampaignOutputData> = {},
+): MailerCampaignOutputData {
+  return {
+    to: 'print@vendor.example',
+    campaignName: 'Week 36',
+    campaignNumber: 'Week_Number-36',
+    year: 2026,
+    fileName: 'SFA-QBP.csv',
+    outputRows: 20024,
+    recordCount: 20024,
+    downloadUrl: 'https://storage.example/platform/mailer-campaigns/x?sig=abc',
+    downloadExpiresAt: '2026-09-14T09:00:00.000Z',
+    detailUrl:
+      'https://app.example.com/admin/campaigns/64b7f1d2e4b0a1c2d3e4f5a6',
+    ...overrides,
+  };
+}
+
 const ALL_KEYS = Object.keys(EMAIL_TEMPLATES) as TemplateKey[];
 
 /**
@@ -65,6 +89,7 @@ describe('email template registry', () => {
   const FIXTURES: Record<TemplateKey, unknown> = {
     invite: inviteData(),
     passwordReset: passwordResetData(),
+    mailerCampaignOutput: mailerCampaignOutputData(),
   };
 
   it('has a fixture for every registered template', () => {
@@ -301,5 +326,87 @@ describe('password reset template', () => {
 
     expect(text).not.toContain('null');
     expect(text).toContain('Hi there,');
+  });
+});
+
+describe('mailer campaign output template', () => {
+  it('carries the download link in both parts', () => {
+    // The button is stripped or unclickable in some clients, and this link is
+    // the only copy of the file the recipient has.
+    const data = mailerCampaignOutputData();
+    const { html, text } = mailerCampaignOutputTemplate.render(data);
+
+    expect(html).toContain(data.downloadUrl);
+    expect(text).toContain(data.downloadUrl);
+  });
+
+  it('points at the campaign page as the durable path', () => {
+    // The whole reason it is a link rather than an attachment: the presigned
+    // URL dies after a week, and the recipient needs somewhere to go after it.
+    const data = mailerCampaignOutputData();
+    const { html, text } = mailerCampaignOutputTemplate.render(data);
+
+    expect(html).toContain(data.detailUrl);
+    expect(text).toContain(data.detailUrl);
+  });
+
+  it('says when the link expires, to the hour and in a named zone', () => {
+    const { text } = mailerCampaignOutputTemplate.render(
+      mailerCampaignOutputData({
+        downloadExpiresAt: '2026-09-14T21:30:00.000Z',
+      }),
+    );
+
+    expect(text).toContain('September 14, 2026');
+    expect(text).toContain('9:30');
+    expect(text).toContain('UTC');
+  });
+
+  it('names the file and formats the counts for a human', () => {
+    const { text } = mailerCampaignOutputTemplate.render(
+      mailerCampaignOutputData(),
+    );
+
+    expect(text).toContain('SFA-QBP.csv');
+    // 20024 in an operations email is a number nobody reads correctly.
+    expect(text).toContain('20,024');
+  });
+
+  it('identifies the campaign in the subject', () => {
+    const subject = mailerCampaignOutputTemplate.subject(
+      mailerCampaignOutputData(),
+    );
+    expect(subject).toBe('Mail file ready: Week 36 (Week_Number-36, 2026)');
+  });
+
+  it('still names the campaign with no week tag or year', () => {
+    // An "unknown" implicit campaign carries neither. The parenthetical has to
+    // disappear rather than render as "(, )".
+    const subject = mailerCampaignOutputTemplate.subject(
+      mailerCampaignOutputData({ campaignNumber: null, year: null }),
+    );
+    expect(subject).toBe('Mail file ready: Week 36');
+  });
+
+  it('escapes markup in a campaign name', () => {
+    // The name is typed by an operator and reaches us straight from the
+    // database, exactly like an agency name.
+    const { html } = mailerCampaignOutputTemplate.render(
+      mailerCampaignOutputData({ campaignName: '<script>alert(1)</script>' }),
+    );
+
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('renders under the platform identity, never an agency brand', () => {
+    // A campaign belongs to no tenant — it is run once and can serve many
+    // agencies — so there is no agency whose brand this could honestly carry.
+    const { html, text } = mailerCampaignOutputTemplate.render(
+      mailerCampaignOutputData(),
+    );
+
+    expect(html).toContain('<title>AgencyOps</title>');
+    expect(text).toContain('automated message from AgencyOps');
   });
 });
