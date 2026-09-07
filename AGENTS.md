@@ -172,13 +172,18 @@ temperature/aging that aren't first-class in legacy payloads. See
   `packages/api/src/common/mailers/**` — read those before re-deciding
   something.
 - `docs/plans/pac-71-mailer-campaigns-implementation-plan.md` — the four-PR
-  execution order for mailer campaigns (PAC-71). ⚠ **PR1 deleted the Add Mailers
-  upload** (page, route, panel tile, endpoints and worker function): a mailer now
-  belongs to a *campaign* rather than an agency, and the old importer could not
-  compile against that. Until PR3 lands the campaign UI, the **demo seed is the
-  only way to get mailers into a local database**. An existing database is moved
-  across by `npm run backfill:mailer-campaigns:dev -w @sfa/api`, which must run
-  with the API and worker stopped.
+  execution order for mailer campaigns (PAC-71). ⚠ **Add Mailers is gone** (page,
+  route, panel tile, endpoints and worker function): a mailer now belongs to a
+  *campaign* rather than an agency. Its flow lives on as **Import a processed
+  file** at `/admin/campaigns/new?source=processed`; mailers otherwise arrive
+  from a campaign run or the demo seed. Moving an existing database across:
+  **stop the API and the worker**, run
+  `npm run backfill:mailer-campaigns:dev -w @sfa/api` (`--dry-run` first) from
+  the new build, *then* deploy — old code would insert un-stamped rows while it
+  runs, and new code's `autoIndex` would try to build the platform-wide unique
+  index before duplicates have been verified. Afterwards, drop the orphaned
+  `mailerImportRuns` collection by hand (`db.mailerImportRuns.drop()`): no code
+  references it any more, so nothing will.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**
@@ -205,6 +210,16 @@ whenever you work under `packages/web`.
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
 - **Anything that builds a user-facing URL must go through `TenantUrlService.baseUrlFor(agencyId)`**, never `APP_BASE_URL` / `PUBLIC_FORM_BASE_URL` directly. A link on the wrong host is not merely off-brand — `HostTenantGuard` rejects the recipient there, so the link is broken. Same for the logo URL in an email, which must be absolute and unauthenticated.
+- **Object keys carry their own ownership check.** A client hands back the key
+  it was given, so every key lives under a prefix the server can test:
+  `agencies/<agencyId>/<purpose>/…` for tenant files (`assertKeyOwnership`) and
+  `platform/<purpose>/<year>/…` for files belonging to no tenant
+  (`assertPlatformKeyOwnership` — mailer campaigns are the first, PAC-71). Build
+  them with `StorageService.buildObjectKey` / `buildPlatformObjectKey`, never by
+  hand: the sanitizer is what makes `..` unrepresentable and the prefix
+  unforgeable. A **presigned URL is a bearer capability** — never store one on a
+  record, mint it per read; the one link that travels (the campaign completion
+  email's 7-day download) is a deliberate exception with its own TTL setting.
 - **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.claude/rules/api-bruno-docs.md` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
 - Forms: prefer **TanStack Form** + `zod` (wired via Standard Schema — pass the
