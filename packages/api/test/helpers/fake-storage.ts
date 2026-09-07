@@ -24,6 +24,14 @@ export class FakeStorage {
   >();
   /** Keys handed out by `createPresignedUpload`, for assertions. */
   readonly presigned: string[] = [];
+  /** Every presigned GET this fake has minted, in order. */
+  readonly downloads: Array<{
+    key: string;
+    disposition?: 'inline' | 'attachment';
+    filename?: string;
+    contentType?: string;
+    expiresIn: number;
+  }> = [];
 
   buildObjectKey({
     agencyId,
@@ -82,8 +90,30 @@ export class FakeStorage {
     });
   }
 
-  createPresignedDownload(key: string): Promise<string> {
-    return Promise.resolve(`https://storage.test/${key}?signed=1`);
+  /**
+   * The signing options are **recorded, not ignored**.
+   *
+   * The campaign completion email (PAC-71) signs its link for seven days rather
+   * than the five-minute default, and that TTL is the whole difference between
+   * a link that still works when the printer opens the mail tomorrow and one
+   * that does not. A fake that dropped the options would let that regress
+   * silently, so they are kept for assertions and the expiry is echoed into the
+   * URL.
+   */
+  createPresignedDownload(
+    key: string,
+    options: {
+      disposition?: 'inline' | 'attachment';
+      filename?: string;
+      contentType?: string;
+      expiresIn?: number;
+    } = {},
+  ): Promise<string> {
+    const expiresIn = options.expiresIn ?? this.downloadUrlTtlSeconds;
+    this.downloads.push({ key, ...options, expiresIn });
+    return Promise.resolve(
+      `https://storage.test/${key}?signed=1&expires=${expiresIn}`,
+    );
   }
 
   get downloadUrlTtlSeconds(): number {
