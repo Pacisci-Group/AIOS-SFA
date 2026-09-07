@@ -12,6 +12,7 @@ import {
   unmatchedCodeMessage,
   visibleAgencyIdsFor,
 } from '../../common/mailers/campaign-assignment';
+import { plainSettings } from '../../common/mailers/campaign-settings';
 import { DEFAULT_MAILER_CARRIER } from '../../common/mailers/mailer-carrier';
 import {
   CSV_CONTENT_TYPE,
@@ -64,7 +65,6 @@ import {
   chunk,
   failCampaign,
   loadZipMarkets,
-  plainSettings,
   readCampaignFile,
   summarizeCarrierCodes,
   type StepLike,

@@ -28,6 +28,7 @@ import {
   resolveAssignment,
   unmatchedCodeMessage,
 } from '../common/mailers/campaign-assignment';
+import { plainSettings } from '../common/mailers/campaign-settings';
 import { DEFAULT_MAILER_CARRIER } from '../common/mailers/mailer-carrier';
 import {
   MAILER_CAMPAIGN_PURPOSE,
@@ -150,7 +151,11 @@ export class MailerCampaignsService {
       .select({ settings: 1, assignment: 1 })
       .lean();
 
-    const settings = last?.settings ?? APEX_DEFAULT_SETTINGS;
+    // Through `plainSettings` for the same reason `get` is: `last` came back
+    // from a `.lean()` read here, but a previous run that stored no market
+    // phones would still prefill the wizard with an `undefined` where the
+    // interface declares a record.
+    const settings = plainSettings(last?.settings) ?? APEX_DEFAULT_SETTINGS;
 
     return {
       carrierId: carrier ? carrier._id.toString() : null,
@@ -899,7 +904,7 @@ export class MailerCampaignsService {
       },
       carrierAgencyIds: campaign.carrierAgencyIds,
       carrierAgencyNames: campaign.carrierAgencyNames,
-      settings: campaign.settings ? campaign.settings : null,
+      settings: plainSettings(campaign.settings),
       vendorFile: campaign.vendorFile
         ? {
             name: campaign.vendorFile.name,

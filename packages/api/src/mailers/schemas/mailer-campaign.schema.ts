@@ -47,8 +47,15 @@ export const MailerCampaignAssignmentDocSchema = SchemaFactory.createForClass(
  * only *prefill* the next one; a rule edited afterwards must not retroactively
  * change what a completed run means. There is deliberately no settings
  * collection to fall back to.
+ *
+ * ⚠ `minimize: false` is load-bearing. Mongoose's default **strips empty
+ * objects on save**, so a run with no ZIP fixes stored `settings` with no
+ * `zipResolutions` key at all — and `MailerCampaignSettings` declares it
+ * required, so every reader that trusted the type got `undefined` where it
+ * expected `{}`. That is a crash on the campaign detail page rather than a
+ * missing row, because the failure is a broken contract and not absent data.
  */
-@Schema({ _id: false })
+@Schema({ _id: false, minimize: false })
 export class MailerCampaignSettingsDoc {
   @Prop({ required: true, min: 0 })
   premiumFloor: number;

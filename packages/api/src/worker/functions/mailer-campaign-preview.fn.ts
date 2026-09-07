@@ -9,6 +9,7 @@ import {
 } from '@sfa/shared';
 import { Model } from 'mongoose';
 import { resolveAssignment } from '../../common/mailers/campaign-assignment';
+import { plainSettings } from '../../common/mailers/campaign-settings';
 import { importMailerRows } from '../../common/mailers/mailer-import';
 import {
   parseSourceDate,
@@ -50,7 +51,6 @@ import {
   columnIndex,
   failCampaign,
   loadZipMarkets,
-  plainSettings,
   readCampaignFile,
   rowsAsRecords,
   summarizeCarrierCodes,
