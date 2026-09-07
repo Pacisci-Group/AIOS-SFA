@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   MailerAssignmentMode,
+  MailerCampaign,
   MailerCampaignDefaults,
   MailerCampaignSettings,
   MailerDiscountRules,
@@ -326,5 +327,31 @@ export function fromDefaults(
       agencyIds: defaults.assignment.agencyIds,
     },
     settings: toFormSettings(defaults.settings),
+  };
+}
+
+/**
+ * Prefill the wizard from a campaign that already exists.
+ *
+ * The counterpart to {@link fromDefaults}, for editing a run rather than
+ * starting one: an operator re-opening a previewed campaign must see what it is
+ * actually about to run with, not the platform defaults it was seeded from
+ * three edits ago.
+ *
+ * `settings` is present on anything the API will accept a `PATCH` for — the
+ * create endpoint requires a complete snapshot — so the fallback only keeps the
+ * type total; it is not a state the wizard reaches.
+ */
+export function fromCampaign(campaign: MailerCampaign): CampaignFormValues {
+  return {
+    name: campaign.name,
+    campaignNumber: campaign.campaignNumber ?? "",
+    assignment: {
+      mode: campaign.assignment.mode,
+      agencyIds: campaign.assignment.agencyIds,
+    },
+    settings: campaign.settings
+      ? toFormSettings(campaign.settings)
+      : EMPTY_CAMPAIGN_FORM.settings,
   };
 }

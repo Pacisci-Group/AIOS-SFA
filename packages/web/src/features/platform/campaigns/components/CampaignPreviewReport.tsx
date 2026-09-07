@@ -246,10 +246,10 @@ export function CampaignPreviewReport({
                   : "Some carrier agency codes match no agency"}
               </AlertTitle>
               <AlertDescription>
-                {unmatchedCodes.join(", ")}. Add the appointment on the agency,
-                or switch assignment to "Specific agencies". Filing one agency's
-                prospects under another, or dropping them silently, are both
-                worse than refusing.
+                {unmatchedCodes.join(", ")}. Add the appointment on the agency
+                and then "Re-check", or use "Edit settings" to assign this run to
+                specific agencies. Filing one agency's prospects under another,
+                or dropping them silently, are both worse than refusing.
               </AlertDescription>
             </Alert>
           )}

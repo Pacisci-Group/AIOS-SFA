@@ -81,6 +81,18 @@ export function isCampaignWorking(status: MailerCampaignStatus): boolean {
   return status === 'uploaded' || status === 'processing';
 }
 
+/**
+ * Where a `PATCH` or a re-preview is still allowed — the mirror of the API's
+ * `EDITABLE_STATUSES`.
+ *
+ * Nothing has been written yet in any of these, which is the whole rule: once a
+ * commit has run, the settings that produced the mailers are the record of how
+ * they were priced and must not move under them.
+ */
+export function isCampaignEditable(status: MailerCampaignStatus): boolean {
+  return status === 'uploaded' || status === 'previewed' || status === 'failed';
+}
+
 // ---------------------------------------------------------------------------
 // Query keys
 // ---------------------------------------------------------------------------

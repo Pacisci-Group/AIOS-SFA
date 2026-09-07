@@ -8,6 +8,8 @@ import {
   Download,
   Loader2,
   Mail,
+  RefreshCw,
+  SlidersHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -39,12 +41,15 @@ import {
   getCampaign,
   getCampaignDefaults,
   getCampaignFileUrl,
+  isCampaignEditable,
   isCampaignSettled,
+  previewCampaign,
   updateCampaign,
 } from "@/lib/platform-campaigns-api";
 import { SuperAdminLayout } from "../SuperAdminLayout";
 import { CampaignPreviewReport } from "./components/CampaignPreviewReport";
 import { CampaignSettingsForm } from "./components/CampaignSettingsForm";
+import { EditCampaignSettings } from "./components/EditCampaignSettings";
 import { RejectionsTable } from "./components/RejectionsTable";
 import { StatTile } from "./components/StatTile";
 import {
@@ -95,6 +100,7 @@ export default function RunCampaignPage() {
   const [file, setFile] = useState<File | null>(null);
   const [campaignId, setCampaignId] = useState<string | null>(resumeId);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
 
   const agenciesQuery = useQuery({
     queryKey: ["platform", "agencies"],
@@ -171,6 +177,56 @@ export default function RunCampaignPage() {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  /**
+   * Change what step 1 collected, on a run that has already been previewed.
+   *
+   * The whole settings snapshot goes back, because that is what `PATCH` takes
+   * and what the run has to be reproducible from — with one carry-over: the
+   * form has never held `zipResolutions` (they are answered in the preview), so
+   * sending what {@link toCampaignSettings} produces would silently discard
+   * every ZIP the operator has already mapped on this campaign.
+   */
+  const saveSettings = useMutation({
+    mutationFn: (values: CampaignFormValues) => {
+      if (!campaign) throw new Error("There is no campaign to update.");
+      return updateCampaign(campaign.id, {
+        // Blank means "keep the generated one" server-side, not "erase it".
+        name: values.name.trim() || undefined,
+        campaignNumber: values.campaignNumber.trim(),
+        assignment: values.assignment,
+        settings: {
+          ...toCampaignSettings(values),
+          zipResolutions: campaign.settings?.zipResolutions ?? {},
+        },
+      });
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(campaignKey(updated.id), updated);
+      void queryClient.invalidateQueries({ queryKey: campaignsKey });
+      setEditing(false);
+      toast.success("Saved. Reading the file again with the new settings…");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  /**
+   * Re-run the preview with nothing changed.
+   *
+   * The preview's verdict is a snapshot, and the commit gate refuses on the
+   * *stored* one — so fixing what it complained about somewhere else in the
+   * product (a carrier appointment on the agency, a ZIP in the platform table)
+   * leaves the campaign blocked by a finding that is no longer true. This is how
+   * that gets re-asked.
+   */
+  const recheck = useMutation({
+    mutationFn: () => previewCampaign(campaign?.id as string),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(campaignKey(updated.id), updated);
+      toast.success("Reading the file again…");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const commit = useMutation({
     mutationFn: (request: MailerCommitRequest) =>
       commitCampaign(campaign?.id as string, request),
@@ -236,11 +292,22 @@ export default function RunCampaignPage() {
             onEmail={() => sendEmail.mutate()}
             onDone={() => navigate(`/admin/campaigns/${campaign.id}`)}
           />
+        ) : editing && isCampaignEditable(campaign.status) ? (
+          <EditCampaignSettings
+            campaign={campaign}
+            agencies={agenciesQuery.data ?? []}
+            saving={saveSettings.isPending}
+            onCancel={() => setEditing(false)}
+            onSubmit={(values) => saveSettings.mutate(values)}
+          />
         ) : (
           <WorkingOrPreview
             campaign={campaign}
             savingZips={resolveZips.isPending}
             committing={commit.isPending}
+            rechecking={recheck.isPending}
+            onEdit={() => setEditing(true)}
+            onRecheck={() => recheck.mutate()}
             onResolveZips={(values) => resolveZips.mutate(values)}
             onCommit={(request) => commit.mutate(request)}
           />
@@ -399,12 +466,18 @@ function WorkingOrPreview({
   campaign,
   savingZips,
   committing,
+  rechecking,
+  onEdit,
+  onRecheck,
   onResolveZips,
   onCommit,
 }: {
   campaign: MailerCampaign;
   savingZips: boolean;
   committing: boolean;
+  rechecking: boolean;
+  onEdit: () => void;
+  onRecheck: () => void;
   onResolveZips: (resolutions: Record<string, string>) => void;
   onCommit: (request: MailerCommitRequest) => void;
 }) {
@@ -418,10 +491,14 @@ function WorkingOrPreview({
             {campaign.error ?? "No further detail was recorded."}
           </AlertDescription>
         </Alert>
-        <Button asChild variant="outline">
-          <Link to={`/admin/campaigns/${campaign.id}`}>
-            Open the campaign to retry
-          </Link>
+        <RunActions
+          rechecking={rechecking}
+          onEdit={onEdit}
+          onRecheck={onRecheck}
+          hint="Nothing was written. Fix what it names and read the file again."
+        />
+        <Button asChild variant="ghost" size="sm">
+          <Link to={`/admin/campaigns/${campaign.id}`}>Open the campaign</Link>
         </Button>
       </div>
     );
@@ -446,13 +523,65 @@ function WorkingOrPreview({
   }
 
   return (
-    <CampaignPreviewReport
-      campaign={campaign}
-      savingZips={savingZips}
-      committing={committing}
-      onResolveZips={onResolveZips}
-      onCommit={onCommit}
-    />
+    <div className="space-y-4">
+      <RunActions
+        rechecking={rechecking}
+        onEdit={onEdit}
+        onRecheck={onRecheck}
+        hint="Nothing here is written yet. Both re-read the file and rebuild the report below."
+      />
+      <CampaignPreviewReport
+        campaign={campaign}
+        savingZips={savingZips}
+        committing={committing}
+        onResolveZips={onResolveZips}
+        onCommit={onCommit}
+      />
+    </div>
+  );
+}
+
+/**
+ * The two ways out of a preview that says no.
+ *
+ * **Re-check** is for a finding fixed *elsewhere* — a carrier appointment added
+ * on the agency, a ZIP mapped in the platform table — where this campaign's own
+ * settings were right all along and only the stored verdict is stale.
+ * **Edit settings** is for a finding fixed *here*. Neither is reachable from the
+ * error text alone, which is why the alerts name them.
+ */
+function RunActions({
+  rechecking,
+  onEdit,
+  onRecheck,
+  hint,
+}: {
+  rechecking: boolean;
+  onEdit: () => void;
+  onRecheck: () => void;
+  hint: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button variant="outline" size="sm" onClick={onEdit} disabled={rechecking}>
+        <SlidersHorizontal className="size-4" />
+        Edit settings
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onRecheck}
+        disabled={rechecking}
+      >
+        {rechecking ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <RefreshCw className="size-4" />
+        )}
+        {rechecking ? "Re-checking…" : "Re-check"}
+      </Button>
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
   );
 }
 
