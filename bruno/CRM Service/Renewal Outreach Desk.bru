@@ -1,13 +1,17 @@
 meta {
   name: Renewal Outreach Desk
   type: http
-  seq: 4
+  seq: 9
 }
 
 get {
   url: {{baseUrl}}/crm/service-tickets/renewals/desk
   body: none
-  auth: inherit
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{crmAccessToken}}
 }
 
 headers {

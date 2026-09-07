@@ -18,6 +18,15 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Bug Reports | Create Bug Report | `POST /bug-reports` | File a report. **No permission.** Captures `bugReportId` for the platform folder. |
 | Bug Reports | Create Bug Report (Too Short) | `POST /bug-reports` | The 10-char description floor (400). |
 | Bug Reports | Create Bug Report (Foreign Screenshot Key) | `POST /bug-reports` | The key-ownership check: a key from another user's namespace must 400. |
+| CRM Service | Login as CRM Manager | `POST /auth/login` | The one folder the producer bearer cannot run: a producer holds **no** `crm_service` permission. Captures `crmAccessToken` under its own name. |
+| CRM Service | Find Transfer Client | `GET /crm/service-tickets` | The desk queue. Picks a household for the transfer chain, sorted by id so every run picks the same one. `crm_service:read`. |
+| CRM Service | Get Transfer Policy | `GET /households/:id` | The **active** policy to transfer, re-read every run — a transfer retires the old policy and writes its replacement, so the line-up rotates. `clients:read`. |
+| CRM Service | Open Transfer Ticket | `POST /crm/service-tickets` | A disposable `Policy Change` ticket. One transfer per ticket is index-enforced, so a seeded ticket would work once and 409 forever after. `crm_service:write`. |
+| CRM Service | List Household Tickets | `GET /crm/service-tickets/household/:id` | The household 360 feed. Asserts the status lock is Quote-only and that `leadStatus` is null on lists. |
+| CRM Service | Presign Transfer Document | `POST /crm/service-tickets/:id/policy-transfer/presign` | New Business Application upload URL, keyed under the household rather than a lead. `crm_service:write`. |
+| CRM Service | Upload Transfer Document | `PUT <uploadUrl>` | Raw PUT straight to storage. `auth: none` by design — and not optional: the transfer `statObject`s the key before booking. |
+| CRM Service | Record Policy Transfer | `POST /crm/service-tickets/:id/policy-transfer` | Books the transfer through the **sold-deal pipeline**, so it returns a `dealId` and a `dealAuditId`. `crm_service:write`. |
+| CRM Service | Renewal Outreach Desk | `GET /crm/service-tickets/renewals/desk` | Proactive renewal calls, with `daysUntilAvailable` null exactly when the call is actionable. `crm_service:read`. |
 | Deal Audits | List Deal Audits | `GET /deal-audits` | **PAC-12** — Deals Pending Service Hand-off (read). `deal_audits:read`. |
 | Deal Audits | Presign Audit Attachment | `POST /deal-audits/:itemId/attachments/presign` | **PAC-14** — resolution document upload. `deal_audits:write`. |
 | Deal Audits | Resolve Deal Audit Item | `PATCH /deal-audits/:itemId/resolve` | **PAC-14** — resolve + optional note/document. `deal_audits:write`. |
@@ -108,9 +117,9 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Sold Deals | Create Sold Deal (Foreign Lead) | `POST /sold-deals` | **PAC-40** — asserts an out-of-scope lead 404s. |
 | Sold Deals | Check Policy Number (Match) | `GET /policies/check` | **PAC-40** — the duplicate-found branch. |
 
-> ⚠ **This table is not exhaustive.** `CRM Service`, `Carriers`, `Households`
-> and `Users` are in the collection but were never added here; every request
-> still carries its own `docs` block, which is the actual source of truth.
+> ⚠ **This table is not exhaustive.** `Carriers`, `Households` and `Users` are
+> in the collection but were never added here; every request still carries its
+> own `docs` block, which is the actual source of truth.
 >
 > **`Platform Mailer Campaigns` pauses on purpose.** Two of its requests sleep
 > in a pre-request script, because the preview and the commit are queued Inngest

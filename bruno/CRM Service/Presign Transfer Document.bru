@@ -1,13 +1,17 @@
 meta {
   name: Presign Transfer Document
   type: http
-  seq: 3
+  seq: 6
 }
 
 post {
-  url: {{baseUrl}}/crm/service-tickets/{{ticketId}}/policy-transfer/presign
+  url: {{baseUrl}}/crm/service-tickets/{{crmTicketId}}/policy-transfer/presign
   body: json
-  auth: inherit
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{crmAccessToken}}
 }
 
 headers {
@@ -27,6 +31,10 @@ body:json {
 script:post-response {
   if (res.getStatus() === 201) {
     bru.setVar("transferDocumentKey", res.getBody().key);
+    // The bytes have to actually land: `verifyAttachments` calls `statObject`
+    // on the key before booking the transfer, so a declared-but-never-uploaded
+    // document is a 404, not a silently missing file.
+    bru.setVar("transferDocumentUploadUrl", res.getBody().uploadUrl);
   }
 }
 

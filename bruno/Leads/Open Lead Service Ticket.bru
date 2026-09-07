@@ -1,11 +1,11 @@
 meta {
   name: Open Lead Service Ticket
   type: http
-  seq: 15
+  seq: 17
 }
 
 post {
-  url: {{baseUrl}}/leads/{{leadId}}/service-ticket
+  url: {{baseUrl}}/leads/{{quoteTicketLeadId}}/service-ticket
   body: none
   auth: inherit
 }
@@ -28,7 +28,7 @@ tests {
   test("opens a Quote ticket linked to the lead", function () {
     const body = res.getBody();
     expect(body.category).to.equal("Quote");
-    expect(body.leadId).to.equal(bru.getEnvVar("leadId") || bru.getVar("leadId"));
+    expect(body.leadId).to.equal(bru.getVar("quoteTicketLeadId"));
     expect(body.ticketNumber).to.match(/^QTE-\d+$/);
   });
 

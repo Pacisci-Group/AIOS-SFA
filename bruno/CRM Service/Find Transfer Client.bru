@@ -1,0 +1,76 @@
+meta {
+  name: Find Transfer Client
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/crm/service-tickets
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{crmAccessToken}}
+}
+
+script:post-response {
+  // Pick a household the desk already works, rather than hard-coding a seeded
+  // id: the collection has to run against any populated tenant. Sorted by id so
+  // every run picks the same one, which is what keeps the chain below
+  // deterministic.
+  if (res.getStatus() === 200) {
+    const candidates = res
+      .getBody()
+      .filter((t) => t.allowsPolicyTransfer && t.householdId)
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    if (candidates.length) {
+      bru.setVar("crmHouseholdId", candidates[0].householdId);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the desk queue as an array", function () {
+    expect(res.getBody()).to.be.an("array");
+  });
+
+  test("found a household a transfer can be recorded against", function () {
+    // Not merely "the list is non-empty": the three requests after this one
+    // need a household, and a failure here says which prerequisite is missing
+    // rather than surfacing as a 404 further down.
+    expect(bru.getVar("crmHouseholdId")).to.be.a("string");
+  });
+
+  test("only transfer-eligible categories advertise the action", function () {
+    const eligible = ["Renewal Review", "Policy Change", "Payment", "Company Transfer"];
+    for (const ticket of res.getBody()) {
+      expect(ticket.allowsPolicyTransfer).to.equal(
+        eligible.includes(ticket.category),
+      );
+    }
+  });
+}
+
+docs {
+  # GET /crm/service-tickets — the service desk queue
+
+  - **Module:** `crm_service`
+  - **Permission:** `crm_service:read`
+  - **Data scope:** applied — a CSR on `own` scope sees their own assignments,
+    the owner used here sees the agency.
+
+  Its job in this folder is to find a **household** for the policy-transfer
+  chain, which is why it sorts and captures rather than just asserting.
+
+  `allowsPolicyTransfer` is **category-driven**, not state-driven, so the button
+  appears on a fresh ticket before any transfer exists; `policyTransfer` being
+  non-null is what then replaces it with the read-only summary. The eligible
+  categories are `POLICY_TRANSFER_CATEGORIES` in `@sfa/shared` — a Claims Assist
+  or Onboarding ticket either has nothing to do with the policy line-up or owns
+  its own workflow.
+}

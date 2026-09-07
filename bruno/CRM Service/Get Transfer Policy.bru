@@ -1,0 +1,72 @@
+meta {
+  name: Get Transfer Policy
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/households/{{crmHouseholdId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{crmAccessToken}}
+}
+
+script:post-response {
+  // The **active** policy, read fresh every run. A transfer retires the policy
+  // it replaces (`active: false`, `policyStatus: 'Cancelled'`) and creates its
+  // replacement in the same household, so the household always has exactly one
+  // active policy to transfer next time. Re-using a captured id instead would
+  // transfer an already-cancelled policy on the second run.
+  if (res.getStatus() === 200) {
+    const active = (res.getBody().policies || []).find((p) => p.active);
+    if (active) bru.setVar("crmFromPolicyId", active.id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the household carries a policy line-up", function () {
+    expect(res.getBody().policies).to.be.an("array");
+  });
+
+  test("found an active policy to transfer", function () {
+    expect(bru.getVar("crmFromPolicyId")).to.be.a("string");
+  });
+
+  test("every policy says whether it is still in force", function () {
+    // `active` is what the transfer picks on, and what the household's premium
+    // total and active-policy count are kept honest by.
+    for (const policy of res.getBody().policies) {
+      expect(policy.active).to.be.a("boolean");
+      expect(policy.policyStatus).to.be.a("string");
+    }
+  });
+}
+
+docs {
+  # GET /households/:id — the client record behind the ticket
+
+  A **Clients** endpoint, borrowed here rather than duplicated in the Households
+  folder, because the policy transfer needs the id of a policy that is still in
+  force and that folder sorts *after* this one.
+
+  - **Module:** `clients`
+  - **Permission:** `clients:read`
+  - **Data scope:** applied.
+
+  ## Why the active policy is re-read every run
+
+  `UpsertPoliciesStep.retireTransferred` sets `active: false` and
+  `policyStatus: 'Cancelled'` on the policy a transfer replaces, and writes the
+  replacement into the same household. So the line-up rotates: run 1 transfers
+  policy A and creates B, run 2 transfers B and creates C. Capturing the id once
+  and re-using it would quietly transfer a cancelled policy — which the API
+  permits, since the household check is the real gate, and which would make this
+  folder pass while testing something nobody would ever do.
+}

@@ -79,6 +79,11 @@ docs {
     that requires **no permission at all**; see `Presign Screenshot`'s docs for
     why, and `Platform Bug Reports/List Bug Reports (Producer Rejected)` for the
     other half of that trade.
+  - **CRM Service** — the service desk: the household ticket feed, the renewal
+    outreach desk, and the full company-transfer chain (find a client → its
+    active policy → open a ticket → presign → upload → book the transfer). The
+    only folder that logs in as somebody other than the producer, because a
+    producer holds **no** `crm_service` permission at all.
   - **Platform Bug Reports** — the Super Admin queue that reads them
     (`platform:bugs:read` / `:write`). Self-contained: it logs in as the super
     admin itself rather than relying on a folder that happens to sort earlier.
@@ -106,8 +111,9 @@ docs {
   > **before `Auth`** and run with no `accessToken`.
 
   ## Run order
-  A full `npx @usebruno/cli run --env Local` passes as-is — the collection is
-  order-independent. Worth knowing why, since it is not obvious:
+  A full `npx @usebruno/cli run --env Local` passes as-is, and passes again
+  immediately afterwards — the collection is order-independent and re-runnable.
+  Worth knowing why, since it is not obvious:
 
   The CLI walks folders alphabetically, so `Leads › Share Links › Revoke Share
   Link` always runs *before* `Public Intake`. If Revoke destroyed the shared
@@ -148,6 +154,26 @@ docs {
   even with a token. The campaign folder has both, plus a mailer committed with
   `assignment.mode: "all"`. That is also why **Onboard Agency** enables the
   `mailers` module.
+
+    **CRM Service builds its own fixtures every run**, and has to. Three of the
+  endpoints it covers are one-shot by design: **one transfer per ticket**
+  (unique index on `{agencyId, ticketId}` over `deals`, `409` in front of it),
+  policy numbers are unique per agency and digits-only for Allstate, and a
+  transfer **retires** the policy it replaces. So the folder finds a client,
+  reads that client's currently *active* policy, opens a disposable
+  `Policy Change` ticket, and books the transfer with a timestamped policy
+  number. The line-up rotates rather than being consumed — run 1 transfers
+  policy A and creates B, run 2 transfers B — which is what makes the folder
+  re-runnable instead of green exactly once.
+
+  **The two password-reset paths deliberately use different accounts.** The
+  cooldown is per user, `Auth › Forgot Password (Public)` runs within seconds of
+  the start, and `Users › Send Password Reset` runs about forty seconds later.
+  Pointed at the same person, the second is a correct `409` that takes
+  `Get Password Reset (Public)` and `Reset Password (Public)` down with it for
+  want of a token. The public probe therefore uses `resetProbeEmail`; the
+  admin-triggered one keeps the producer, whose stamp `Deactivate User` clears
+  earlier in that same folder — which is also what keeps back-to-back runs green.
 
     **Users** is self-contained and idempotent: it logs in, invites a
   freshly-generated address, and revokes it again, so it can be re-run

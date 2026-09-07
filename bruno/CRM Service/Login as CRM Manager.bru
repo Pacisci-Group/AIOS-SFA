@@ -1,0 +1,65 @@
+meta {
+  name: Login as CRM Manager
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("crmAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the caller actually holds crm_service", function () {
+    // The point of this request. Without it the whole folder 403s on the
+    // permission guard and every assertion below fails for a reason that has
+    // nothing to do with what it is testing.
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("crm_service:read");
+    expect(perms).to.include("crm_service:write");
+  });
+}
+
+docs {
+  # POST /auth/login — a caller who can work the service desk
+
+  Captured as `crmAccessToken`, under its **own** name: overwriting the
+  collection-level `accessToken` would silently re-run every later folder as
+  this user and invalidate the `own`-scope assertions in Leads, Performance and
+  Leaderboard.
+
+  ## Why the owner rather than the producer
+
+  The collection's default bearer is the **producer**, and a producer holds no
+  `crm_service` permission at all — deliberately. `DEFAULT_ROLE_TEMPLATES` gives
+  `crm_service:read`/`:write` to **CSR**, **CRM** and **Agency Owner** only, and
+  the demo seed's owner is the one account with a password this collection
+  knows. That is also the reason `POST /leads/:id/service-ticket` exists as its
+  own endpoint under `/leads`: the producer who presses Start Quote could not
+  call the CRM controller at all.
+
+  The owner's `agency` data scope is wider than a CSR's, which does not weaken
+  anything here — nothing in this folder asserts a scope clamp.
+}
