@@ -247,23 +247,34 @@ export async function seedTestData(
     householdRef: 'HH-1',
     name: 'Test Household',
     status: 'Active',
-    primaryContactName: 'Test Client',
-    primaryEmails: ['client@test.local'],
-    primaryPhones: ['(555) 010-0100'],
     propertyAddress: { line1: '1 Test St', city: 'Austin', state: 'TX' },
     totalActivePolicies: 1,
   });
 
-  await contactModel.create({
+  /*
+   * The primary contact, linked with `primaryContactId` (PAC-91 §4).
+   *
+   * The household used to carry `primaryContactName` / `primaryEmails` /
+   * `primaryPhones` as well, and the fixture set both — which meant the reads
+   * were exercised against the copy and the link went untested. The copy is
+   * gone; the link is the only thing every household response now resolves
+   * from, so a fixture without it renders exactly the em dashes production did.
+   */
+  const primaryContact = await contactModel.create({
     ...tenant,
     legacySmartSuiteId: 'test:ct:main',
     firstName: 'Test',
     lastName: 'Client',
-    emails: ['client@test.local'],
+    email: 'client@test.local',
+    // Stored normalised, like every writer since PAC-91 §1.
+    phone: '5550100100',
     roleInHousehold: 'Named Insured',
     isPrimary: true,
     householdId: household._id,
   });
+  household.primaryContactId = primaryContact._id;
+  household.memberContactIds = [primaryContact._id];
+  await household.save();
 
   const policy = await policyModel.create({
     ...tenant,
@@ -288,13 +299,12 @@ export async function seedTestData(
     householdRef: 'HH-2',
     name: 'Second Test Household',
     status: 'Active',
-    primaryContactName: 'Second Client',
     totalActivePolicies: 1,
   });
 
   /*
    * A member of the second household whose name appears nowhere on the
-   * household itself — not in `name`, not in `primaryContactName`.
+   * household itself, and who is **not** its primary contact.
    *
    * That is the whole point of them: a search that finds this household by
    * "Vasquez" or by a date of birth can only have resolved it through the

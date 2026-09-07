@@ -29,8 +29,10 @@ tests {
     expect(body).to.have.property("propertyAddress");
     expect(body).to.have.property("mailingAddress");
     expect(body).to.have.property("assignedCrmId");
-    expect(body.primaryEmails).to.be.an("array");
-    expect(body.primaryPhones).to.be.an("array");
+    // Scalars since PAC-91 §1 — a contact is one person with one email and
+    // one phone; these were `primaryEmails` / `primaryPhones` arrays.
+    expect(body).to.have.property("primaryEmail");
+    expect(body).to.have.property("primaryPhone");
     expect(body.contacts).to.be.an("array");
     expect(body.policies).to.be.an("array");
   });
@@ -101,26 +103,27 @@ docs {
   | Field | Notes |
   |---|---|
   | `id`, `name`, `status`, `totalActivePolicies` | `status` is normalized on read as well as on import: 2,095 migrated households store the raw choice code `b5qvJ` (PAC-80) |
-  | `primaryContactName` | **Resolved**, see below |
+  | `primaryContactName` | **Resolved** from `primaryContactId`, see below |
   | `address` | **Normalized** `{street, city, state, zip}`, or null |
   | `propertyAddress`, `mailingAddress` | The raw stored objects. Prefer `address` |
-  | `primaryEmails`, `primaryPhones` | Household-level contact details, written by lead intake |
+  | `primaryEmail`, `primaryPhone` | The primary contact's, **resolved** from `primaryContactId` — scalars, and no longer stored on the household (PAC-91 §1, §4) |
   | `assignedCrmId` | The assigned CRM user, or null |
   | `contacts` | `ContactSummary[]`, primary first then by `lastName` |
   | `policies` | `PolicySummary[]`, active first then by `renewalDate` |
 
-  ## Why `primaryContactName` and `address` are resolved here
+  ## Why the primary contact's details and `address` are resolved here
 
   Both were previously left to the clients, and both rendered an em dash on the
   Household page and the ticket drawer for the same records.
 
-  **The primary contact.** Three things claim to name it and none of them alone
-  does: `household.primaryContactId` (the authoritative ref — lead intake sets
-  it, the SmartSuite import does not), `contact.isPrimary` (copied from a
-  SmartSuite checkbox, so often unset, and set on *every* contact where legacy
-  intake wrote it), and the denormalized `household.primaryContactName` (written
-  by intake, never by the migration). `pickPrimaryContact` applies them in that
-  order; `contacts[].isPrimary` is then restated from the result, so **exactly
+  **The primary contact.** Since PAC-91 §4 the household stores **no copy** of
+  its primary's name, email or phone — those three fields are gone from the
+  schema. Only intake ever wrote them, so every migrated household had all three
+  empty, and nothing kept them in step with the contact afterwards. The API
+  resolves them from `household.primaryContactId` (the authoritative ref) via
+  `pickPrimaryContact`, which falls back to `contact.isPrimary` — a SmartSuite
+  checkbox, so often unset, and set on *every* contact where legacy intake wrote
+  it. `contacts[].isPrimary` is then restated from the result, so **exactly
   one** contact carries it and the roster leads with them.
 
   **The address.** `propertyAddress` is an untyped object and three writers use

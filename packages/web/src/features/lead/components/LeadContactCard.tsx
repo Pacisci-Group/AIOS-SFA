@@ -89,12 +89,12 @@ export function LeadContactCard({
         <Field
           icon={Mail}
           label="Email"
-          value={contact?.email ?? lead.emails[0] ?? "—"}
+          value={contact?.email ?? "—"}
         />
         <Field
           icon={Phone}
           label="Phone"
-          value={formatPhone(contact?.phone ?? lead.phones[0] ?? null)}
+          value={formatPhone(contact?.phone ?? null)}
         />
         {lead.quoteControlNumber && (
           <Field

@@ -81,11 +81,6 @@ function dateOnly(value?: Date | null): string | null {
 }
 
 /** First non-empty entry of a stored array field, or `null`. */
-function first(values?: string[]): string | null {
-  const found = values?.find((value) => Boolean(value?.trim()));
-  return found ?? null;
-}
-
 function fullName(firstName?: string, lastName?: string): string {
   return [firstName, lastName]
     .filter((part) => Boolean(part?.trim()))
@@ -182,8 +177,6 @@ export class LeadDetailService {
       status: normalizeLeadStatus(lead.status),
       temperature: lead.temperature ?? 'Unknown',
       leadSource: this.toLeadSource(lead),
-      emails: lead.emails ?? [],
-      phones: lead.phones ?? [],
       address: resolveHouseholdAddress(
         lead.address,
         household?.propertyAddress,
@@ -631,8 +624,8 @@ export class LeadDetailService {
       lastName: contact.lastName ?? '',
       name: fullName(contact.firstName, contact.lastName) || 'Unnamed contact',
       dateOfBirth: dateOnly(contact.dateOfBirth),
-      email: first(contact.emails),
-      phone: first(contact.phones),
+      email: contact.email ?? null,
+      phone: contact.phone ?? null,
       role: normalizeContactRole(contact.roleInHousehold) || null,
       isPrimary,
     };

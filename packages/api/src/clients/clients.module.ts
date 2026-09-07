@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ContactsModule } from '../contacts/contacts.module';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import {
   Household,
@@ -22,6 +23,9 @@ import { PolicyRecordsController } from './policy-records.controller';
       { name: Policy.name, schema: PolicySchema },
       { name: Contact.name, schema: ContactSchema },
     ]),
+    // The Household form creates contacts too, and must refuse the same
+    // duplicates lead intake refuses (PAC-91 §9).
+    ContactsModule,
   ],
   controllers: [HouseholdRecordsController, PolicyRecordsController],
   providers: [ClientsService],

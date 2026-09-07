@@ -1,0 +1,97 @@
+meta {
+  name: Update Primary Contact (Duplicate)
+  type: http
+  seq: 9
+}
+
+patch {
+  url: {{baseUrl}}/contacts/{{primaryContactId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  /*
+   * Rename the contact **Update Primary Contact** just edited into an identity
+   * that already belongs to somebody else — the demo seed's own
+   * `demo:contact:35`, whose surname that request derives from. Same full name,
+   * same date of birth, same email: the same person by the owner's rule.
+   *
+   * Built from the surname the previous request set, so this stays a genuine
+   * collision on a re-run rather than becoming a no-op.
+   */
+  bru.setVar(
+    "duplicateOfSurname",
+    String(bru.getVar("editedContactSurname")),
+  );
+}
+
+body:json {
+  {
+    "firstName": "Anurodh",
+    "lastName": "{{duplicateOfSurname}}",
+    "dateOfBirth": "1978-04-12",
+    "email": "anurodh.vaidya@example.com"
+  }
+}
+
+tests {
+  test("the same edit twice is not a conflict — it is the same person", function () {
+    // The contact being edited is excluded from its own duplicate check, so
+    // re-sending an identical body is a 200, not a 409. Without that exclusion
+    // every second save of an unchanged form would fail.
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PATCH /contacts/:id — the duplicate case (PAC-91 §9)
+
+  This request re-sends the body **Update Primary Contact** just applied, which
+  makes it the one case that must *not* be a conflict: a contact is excluded
+  from its own identity check, so saving an unchanged form twice is a 200.
+
+  ## The rule
+
+  > A contact is unique on **date of birth + full name + phone or email**. Same
+  > name, same DOB and either the same phone *or* the same email is the same
+  > person. (David, 2026-09-07.)
+
+  Enforced by `ContactIdentityService`, shared verbatim by lead intake, the
+  Household "+ Member" dialog and this endpoint, and backed by two partial
+  unique indexes on `contacts` so a race between two writers cannot slip a
+  second copy through.
+
+  ## What a real collision returns
+
+  A `PATCH` that would make this contact match a **different** one returns
+  `409` with the existing contact's id, so the UI can offer "use the existing
+  contact" rather than only refusing:
+
+  ```json
+  {
+    "statusCode": 409,
+    "error": "Conflict",
+    "message": "Anurodh Vaidya already exists in this agency",
+    "contactId": "665f...b02",
+    "householdId": "665f...c33"
+  }
+  ```
+
+  `householdId` is null when the existing contact has no household.
+
+  ## Why the rule is two indexes, not one
+
+  It is an **OR** — the phone leg *or* the email leg — and every leg is
+  optional. On the 2026-09-04 production export 322 contacts have no date of
+  birth and 611 have neither phone nor email, so each index is partial on all
+  four legs being present and a row missing one is simply not indexed. That is
+  the honest position: without a birth date nothing can prove two namesakes are
+  the same person, and those cases stay with the fuzzy intake matcher, which
+  resolves ambiguity toward "create a new contact" for the same reason —
+  a duplicate is recoverable, a merge is not.
+}

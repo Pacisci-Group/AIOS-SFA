@@ -81,6 +81,7 @@ import { MailerCampaign } from '../../mailers/schemas/mailer-campaign.schema';
 import { implicitCampaignDoc } from '../../common/mailers/implicit-campaign';
 import { DEFAULT_MAILER_CARRIER } from '../../common/mailers/mailer-carrier';
 import { mailerControlNumberKeys } from '../../common/mailers/mailer-control-number';
+import { normalizePhone } from '../../leads/intake/intake.normalize';
 
 export interface DemoSeedOptions {
   agencySlug: string;
@@ -526,9 +527,8 @@ export class DemoSeedService {
           status: rng.pick(['Active', 'Prospect', 'Active', 'Active']),
           propertyAddress: address,
           mailingAddress: address,
-          primaryContactName: `${clientFirst} ${clientLast}`,
-          primaryEmails: [this.email(clientFirst, clientLast)],
-          primaryPhones: [this.phone(rng)],
+          // No name/email/phone copy (PAC-91 §4) — `seedContacts` below fills
+          // `primaryContactId`, and every reader follows it.
           assignedCrmId: assignedCrm?.userId,
           totalActivePolicies: rng.int(0, 4),
           isTestRecord: false,
@@ -662,8 +662,18 @@ export class DemoSeedService {
         legacySmartSuiteId: legacyId,
         firstName: base.firstName,
         lastName: base.lastName,
-        emails: [this.email(base.firstName, base.lastName)],
-        phones: [this.phone(rng)],
+        /*
+         * One each, normalised, and unique by construction (PAC-91 §1, §9).
+         *
+         * The index is in the address on purpose: the demo book draws names
+         * from a small pool, so two contacts sharing a first *and* last name is
+         * routine — and with a name-derived address they would then differ only
+         * by a randomly-generated birthday. That is a collision on the identity
+         * indexes waiting to happen on somebody's machine, which is not a thing
+         * a seed should leave to chance.
+         */
+        email: this.email(base.firstName, base.lastName, index),
+        phone: normalizePhone(this.phone(rng)) ?? undefined,
         dateOfBirth: this.birthDate(rng, base.roleInHousehold === 'Child'),
         roleInHousehold: base.roleInHousehold,
         isPrimary: base.isPrimary,
@@ -749,8 +759,8 @@ export class DemoSeedService {
           legacySmartSuiteId: legacyId,
           firstName: first,
           lastName: last,
-          emails: [this.email(first, last)],
-          phones: [this.phone(rng)],
+          // No email/phone copy (PAC-91 §2) — the list reads them off
+          // `primaryContactId`, which is set below.
           status,
           temperature,
           leadSource: { code: source.code, label: source.label },
@@ -2114,8 +2124,10 @@ export class DemoSeedService {
     };
   }
 
-  private email(first: string, last: string): string {
-    return `${first}.${last}@example.com`.toLowerCase();
+  private email(first: string, last: string, index?: number): string {
+    const local =
+      index === undefined ? `${first}.${last}` : `${first}.${last}.${index}`;
+    return `${local}@example.com`.toLowerCase();
   }
 
   private phone(rng: Rng): string {

@@ -3010,10 +3010,21 @@ describe('SFA API (e2e)', () => {
       const activityModel = app.get<Model<Activity>>(
         getModelToken(Activity.name),
       );
+      const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
 
       const producer = await userModel.findOne({ email: seed.producerEmail });
       const base = { agencyId: seed.agencyId, branchId: seed.branchId };
       const own = { ...base, producerId: producer!._id };
+
+      // The panel's phone and email come from the lead's primary contact since
+      // PAC-91 §2 — the lead carries no copy — so this fixture links one.
+      const staleContact = await contactModel.create({
+        ...base,
+        firstName: 'Stale',
+        lastName: 'Hotlead',
+        phone: '5550001111',
+        email: 'stale@example.test',
+      });
 
       const [stale, recent, warm, lost, foreign] = await leadModel.create([
         {
@@ -3023,8 +3034,7 @@ describe('SFA API (e2e)', () => {
           status: 'Contacted',
           temperature: 'Hot',
           lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
-          phones: ['5550001111'],
-          emails: ['stale@example.test'],
+          primaryContactId: staleContact._id,
         },
         {
           ...own,
@@ -3106,6 +3116,30 @@ describe('SFA API (e2e)', () => {
       expect(Array.isArray(body.items)).toBe(true);
       // A detail response would have `id`/`contact` at the top level instead.
       expect(body).not.toHaveProperty('id');
+    });
+
+    /*
+     * The bug PAC-91 §2 fixes, as a regression guard: the panel tells the
+     * producer who to call, and it rendered no phone number for most migrated
+     * leads because it read the lead's own copy — which the importer filled
+     * from the SmartSuite *Leads* table, empty on rows whose details live on
+     * the linked contact.
+     */
+    it('reads phone and email from the primary contact, not the lead', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const items = (res.body as HotLeadListResponse).items;
+      const row = items.find((i) => i.name === 'Stale Hotlead');
+      expect(row?.phone).toBe('5550001111');
+      expect(row?.email).toBe('stale@example.test');
+
+      // A lead with no primary contact shows blanks rather than inventing them.
+      const unlinked = items.find((i) => i.name === 'Recent Hotlead');
+      expect(unlinked?.phone).toBeNull();
+      expect(unlinked?.email).toBeNull();
     });
 
     it('orders stalest first — the inverse of the Leads list', async () => {
@@ -4325,11 +4359,35 @@ describe('SFA API (e2e)', () => {
     beforeAll(async () => {
       const userModel = app.get<Model<User>>(getModelToken(User.name));
       const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
 
       const producer = await userModel.findOne({ email: seed.producerEmail });
       const owner = await userModel.findOne({ email: seed.ownerEmail });
 
       const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      /*
+       * The list's phone and email come from the lead's **primary contact**
+       * since PAC-91 §2 — the lead carries no copy — so the fixture has to
+       * create the contact and link it. Stored in the raw formats a migrated
+       * row holds, which is what the digit-tolerant search must still match.
+       */
+      const [maria, john] = await contactModel.create([
+        {
+          ...base,
+          firstName: 'Maria',
+          lastName: 'Rodriguez',
+          phone: '(555) 123-4567',
+          email: 'maria.rodriguez@example.com',
+        },
+        {
+          ...base,
+          firstName: 'John',
+          lastName: 'Smith',
+          phone: '555-987-6543',
+          email: 'john.smith@example.com',
+        },
+      ]);
 
       await leadModel.create([
         {
@@ -4341,8 +4399,7 @@ describe('SFA API (e2e)', () => {
           status: 'arW7O',
           temperature: 'Hot',
           leadSource: { code: 'WCO7l', label: 'Mailer' },
-          phones: ['(555) 123-4567'],
-          emails: ['maria.rodriguez@example.com'],
+          primaryContactId: maria._id,
           quoteControlNumber: 'QCN-100001',
           producerId: producer!._id,
           lastActivityAt: new Date(),
@@ -4355,8 +4412,7 @@ describe('SFA API (e2e)', () => {
           status: 'New',
           temperature: 'Cold',
           leadSource: { code: 'X2Wrh', label: 'Facebook' },
-          phones: ['555-987-6543'],
-          emails: ['john.smith@example.com'],
+          primaryContactId: john._id,
           producerId: producer!._id,
           lastActivityAt: new Date(Date.now() - 86_400_000),
           isTestRecord: false,
@@ -4591,9 +4647,14 @@ describe('SFA API (e2e)', () => {
       expect(lead!.primaryContactId).toBeTruthy();
       expect(lead!.intakeSource?.channel).toBe('internal');
       expect(lead!.addressKey).toBe('77 alderton lane|74101');
-      // Normalised on the way in.
-      expect(lead!.emails).toEqual(['dana.alderton@example.com']);
-      expect(lead!.phones).toEqual(['5552223333']);
+      /*
+       * The lead carries no email or phone of its own (PAC-91 §2) — they are
+       * read through `primaryContactId`, which is asserted above. Normalised on
+       * the way in, on the contact.
+       */
+      const primary = await contactModel.findById(lead!.primaryContactId);
+      expect(primary!.email).toBe('dana.alderton@example.com');
+      expect(primary!.phone).toBe('5552223333');
     });
 
     /**
@@ -4814,6 +4875,84 @@ describe('SFA API (e2e)', () => {
       expect(await contactModel.countDocuments({ lastName: 'Grieves' })).toBe(
         2,
       );
+    });
+
+    /*
+     * PAC-91 §9 — the owner's identity rule, which runs *ahead* of the fuzzy
+     * scorer. It is deliberately agency-wide: the pinned-household filter the
+     * scorer uses is precisely what created a second copy of a member who
+     * already existed under another household.
+     */
+    it('reuses the existing person when name + DOB + email match, even pinned elsewhere', async () => {
+      const other = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Somewhere Else Household',
+      });
+
+      await createAs(producerToken, payload('Ikeda'));
+      const before = await contactModel.findOne({ lastName: 'Ikeda' });
+      expect(before).not.toBeNull();
+
+      await createAs(
+        producerToken,
+        payload(
+          'Ikeda',
+          { householdId: other._id.toString() },
+          // Same person by the rule: same full name, same DOB, same email.
+          // Only the phone differs, which is not enough to make them someone
+          // else — and is reported rather than stored (below).
+          { phone: '(555) 000-1212' },
+        ),
+      );
+
+      expect(await contactModel.countDocuments({ lastName: 'Ikeda' })).toBe(1);
+    });
+
+    /*
+     * PAC-91 §1 — a contact holds ONE phone. Intake used to `$addToSet` the
+     * submitted value as a second array element, which is how those arrays grew
+     * in the first place; the stored value now wins and the disagreement is
+     * recorded for a human instead.
+     */
+    it('records a conflicting submitted phone instead of storing a second one', async () => {
+      await createAs(producerToken, payload('Jorgensen'));
+      const stored = await contactModel.findOne({ lastName: 'Jorgensen' });
+      expect(stored!.phone).toBe('5552223333');
+
+      const second = await createAs(
+        producerToken,
+        payload(
+          'Jorgensen',
+          {
+            address: {
+              street: '12 Conflict Row',
+              city: 'Tulsa',
+              state: 'OK',
+              zip: '74107',
+            },
+          },
+          { phone: '(555) 777-8888' },
+        ),
+      );
+
+      // Not overwritten, and not joined by a second value.
+      const after = await contactModel.findById(stored!._id);
+      expect(after!.phone).toBe('5552223333');
+
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      const conflict = await activityModel.findOne({
+        leadId: new Types.ObjectId(second.id),
+        type: 'contact_conflict',
+      });
+      expect(conflict).not.toBeNull();
+      expect(conflict!.changes?.[0]).toMatchObject({
+        field: 'phone',
+        from: '5552223333',
+        to: '5557778888',
+      });
     });
 
     it('creates member contacts with the right role and isPrimary=false', async () => {
@@ -5244,8 +5383,8 @@ describe('SFA API (e2e)', () => {
           roleInHousehold: 'Primary',
           isPrimary: true,
           householdId: household._id,
-          emails: ['devon.detail@example.com'],
-          phones: ['5551110000'],
+          email: 'devon.detail@example.com',
+          phone: '5551110000',
           dateOfBirth: new Date('1978-04-12T00:00:00.000Z'),
         },
       ]);
@@ -5269,8 +5408,6 @@ describe('SFA API (e2e)', () => {
         status: 'arW7O',
         temperature: 'Hot',
         leadSource: { code: 'WCO7l', label: 'Mailer' },
-        emails: ['devon.detail@example.com'],
-        phones: ['5551110000'],
         quoteControlNumber: 'QCN-380001',
         // `PYgez` is stored as the raw Quote Recaps choice code, to prove the
         // read path normalizes this field like every other policy type here.
@@ -6250,8 +6387,8 @@ describe('SFA API (e2e)', () => {
         lastName: 'Contact',
         isPrimary: true,
         householdId: ownHousehold._id,
-        emails: ['corin.contact@example.com', 'corin.alt@example.com'],
-        phones: ['5554440000', '5554441111'],
+        email: 'corin.contact@example.com',
+        phone: '5554440000',
       });
       ownContactId = ownContact._id.toString();
 
@@ -6261,7 +6398,7 @@ describe('SFA API (e2e)', () => {
         lastName: 'Foreign',
         isPrimary: true,
         householdId: foreignHousehold._id,
-        emails: ['fenna.foreign@example.com'],
+        email: 'fenna.foreign@example.com',
       });
       foreignContactId = foreignContact._id.toString();
 
@@ -6281,8 +6418,6 @@ describe('SFA API (e2e)', () => {
         producerId: producer!._id,
         householdId: ownHousehold._id,
         primaryContactId: ownContact._id,
-        emails: ['corin.contact@example.com'],
-        phones: ['5554440000'],
         isTestRecord: false,
       });
       ownLeadId = ownLead._id.toString();
@@ -6315,13 +6450,48 @@ describe('SFA API (e2e)', () => {
       expect(body.phone).toBe('5559998888');
     });
 
-    it('preserves the additional emails and phones the form does not show', async () => {
+    /*
+     * PAC-91 §1 replaced the array with a scalar, so there is no longer a
+     * "second number the form does not show" to preserve — the edit simply
+     * replaces the one value. What has to hold instead is that the identity
+     * keys are re-stamped, or the corrected contact silently drops out of the
+     * §9 unique indexes.
+     */
+    it('re-stamps the identity keys when the name or DOB changes', async () => {
       const stored = await contactModel.findById(ownContactId);
-      // Only element 0 is replaced — a second number nobody asked to remove
-      // must not silently disappear.
-      expect(stored?.phones).toEqual(['5559998888', '5554441111']);
-      expect(stored?.emails).toHaveLength(2);
-      expect(stored?.emails[1]).toBe('corin.alt@example.com');
+      expect(stored?.phone).toBe('5559998888');
+      expect(stored?.email).toBe('corin.contact@example.com');
+      expect(stored?.nameKey).toBe('corin corrected');
+      expect(stored?.dobKey).toBe('1985-06-30');
+    });
+
+    it('refuses an edit that would duplicate another contact (PAC-91 §9)', async () => {
+      // Same name + DOB + email as the corrected contact above: the same
+      // person by the owner's rule, so the edit that would create the second
+      // copy is refused with the id of the first.
+      const twin = await contactModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Corin',
+        lastName: 'Twin',
+        dateOfBirth: new Date('1985-06-30T00:00:00.000Z'),
+        email: 'corin.contact@example.com',
+      });
+
+      const res = await patchAs(producerToken, ownContactId, {
+        firstName: 'Corin',
+        lastName: 'Twin',
+      }).expect(409);
+
+      expect((res.body as { contactId: string }).contactId).toBe(
+        twin._id.toString(),
+      );
+
+      // Refused, not partially applied.
+      const stored = await contactModel.findById(ownContactId);
+      expect(stored?.lastName).toBe('Corrected');
+
+      await contactModel.deleteOne({ _id: twin._id });
     });
 
     it('mirrors the correction onto leads this contact is primary for', async () => {
@@ -6329,7 +6499,9 @@ describe('SFA API (e2e)', () => {
       // and the producer would conclude the edit failed.
       const lead = await leadModel.findById(ownLeadId);
       expect(lead?.lastName).toBe('Corrected');
-      expect(lead?.phones?.[0]).toBe('5559998888');
+      // Only the name is mirrored: the lead has no phone of its own to update
+      // any more, which is the point of dropping the copy (PAC-91 §2).
+      expect(lead).not.toHaveProperty('phones');
     });
 
     it("another producer's contact is a 404 AND is not modified", async () => {
@@ -8904,11 +9076,31 @@ describe('SFA API (e2e)', () => {
      */
     const seedLead = async () => {
       const who = `Handoff ${(genCounter += 1).toString().padStart(3, '0')}`;
+      /*
+       * The board's `client` column comes from `Deal.clientName`, which
+       * `SoldDealsService` resolves through the household's **primary contact**
+       * — the household stores no `primaryContactName` since PAC-91 §4. Without
+       * the contact the card would fall through to the household's own name and
+       * this block's "my row" filter would match nothing.
+       */
+      // Split so the contact's *display* name is exactly `who` — that string is
+      // what every assertion in this block filters the board by.
+      const [contactFirst, contactLast] = who.split(' ');
+      const primaryContact = await app
+        .get<Model<Contact>>(getModelToken(Contact.name))
+        .create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: contactFirst,
+          lastName: contactLast,
+          roleInHousehold: 'Named Insured',
+          isPrimary: true,
+        });
       const household = await genHouseholdModel.create({
         agencyId: seed.agencyId,
         branchId: seed.branchId,
         name: `${who} Household`,
-        primaryContactName: who,
+        primaryContactId: primaryContact._id,
       });
       const lead = await genLeadModel.create({
         agencyId: seed.agencyId,
@@ -10434,11 +10626,27 @@ describe('SFA API (e2e)', () => {
       overrides: Record<string, unknown> = {},
       householdOverrides: Record<string, unknown> = {},
     ) => {
+      /*
+       * A real primary **contact**, linked by `primaryContactId`: the household
+       * stores no `primaryContactName` since PAC-91 §4, so the deal's
+       * `clientName` — which the hand-off board renders directly — is resolved
+       * through the ref or not at all.
+       */
+      const primaryContact = await app
+        .get<Model<Contact>>(getModelToken(Contact.name))
+        .create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Sam',
+          lastName: 'Sold',
+          roleInHousehold: 'Named Insured',
+          isPrimary: true,
+        });
       const household = await soldHouseholdModel.create({
         agencyId: seed.agencyId,
         branchId: seed.branchId,
         name: 'Sellable Household',
-        primaryContactName: 'Sam Sold',
+        primaryContactId: primaryContact._id,
         ...householdOverrides,
       });
       const lead = await soldLeadModel.create({

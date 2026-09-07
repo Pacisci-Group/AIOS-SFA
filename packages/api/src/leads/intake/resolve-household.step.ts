@@ -11,12 +11,7 @@ import {
   Household,
   HouseholdDocument,
 } from '../../households/schemas/household.schema';
-import {
-  buildAddressKey,
-  normalizeEmail,
-  normalizeName,
-  normalizePhone,
-} from './intake.normalize';
+import { buildAddressKey, normalizeName } from './intake.normalize';
 import {
   IntakeInput,
   ResolvedContact,
@@ -142,9 +137,6 @@ export class ResolveHouseholdStep {
     deps: StepDeps,
   ): Promise<ResolvedHousehold> {
     const lastName = normalizeName(input.primaryContact.lastName);
-    const firstName = normalizeName(input.primaryContact.firstName);
-    const email = normalizeEmail(input.primaryContact.email);
-    const phone = normalizePhone(input.primaryContact.phone);
     const addressKey = buildAddressKey(
       input.address?.street,
       input.address?.zip,
@@ -169,9 +161,14 @@ export class ResolveHouseholdStep {
           // different thing entirely and is captured later, on the quote.
           propertyAddress: this.toAddressObject(input),
           addressKey: addressKey ?? undefined,
-          primaryContactName: `${firstName} ${lastName}`.trim(),
-          primaryEmails: email ? [email] : [],
-          primaryPhones: phone ? [phone] : [],
+          /*
+           * No `primaryContactName` / `primaryEmails` / `primaryPhones`
+           * (PAC-91 §4). Intake was the only writer of those three, which is
+           * why every household it did *not* create rendered an em dash for
+           * them, and nothing kept them in step with the contact afterwards.
+           * `primaryContactId` is the whole of the fact now, and every reader
+           * follows it.
+           */
           primaryContactId: contact.contactId,
           totalActivePolicies: 0,
           isTestRecord: false,

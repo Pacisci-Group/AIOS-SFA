@@ -5,9 +5,11 @@ import { Model, Types } from 'mongoose';
 import { AppModule } from '../app.module';
 import { Branch } from '../branches/schemas/branch.schema';
 import { ServiceTicket } from '../crm/schemas/service-ticket.schema';
+import { Contact } from '../contacts/schemas/contact.schema';
 import { Household } from '../households/schemas/household.schema';
 import { Agency } from '../platform/schemas/agency.schema';
 import { User } from '../users/schemas/user.schema';
+import { seedPrimaryContact } from './seed-primary-contact';
 
 /**
  * Throwaway bulk tickets, purely so the CRM Service dashboard has enough rows
@@ -334,6 +336,7 @@ async function run() {
   const agencyModel = app.get<Model<Agency>>(getModelToken(Agency.name));
   const branchModel = app.get<Model<Branch>>(getModelToken(Branch.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
+  const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
   const householdModel = app.get<Model<Household>>(
     getModelToken(Household.name),
   );
@@ -399,15 +402,25 @@ async function run() {
           legacySmartSuiteId: key,
           name: fixture.household,
           status: 'Active',
-          primaryContactName: fixture.clientName,
-          primaryEmails: [`${firstName}@example.com`],
-          primaryPhones: ['(512) 555-0142'],
           assignedCrmId: csr?._id ?? null,
           isTestRecord: true,
         },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
+
+    // The client's name, email and phone live on the contact now (PAC-91 §4).
+    household.primaryContactId = await seedPrimaryContact(
+      contactModel,
+      household,
+      key,
+      {
+        name: fixture.clientName,
+        email: `${firstName}@example.com`,
+        phone: '(512) 555-0142',
+      },
+    );
+    await household.save();
 
     const openedAt = new Date(now - fixture.openedDaysAgo * DAY);
     // Spread last activity between "just now" and the open date so the feed's

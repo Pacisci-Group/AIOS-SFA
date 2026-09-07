@@ -47,6 +47,17 @@ export const HOUSEHOLD_FIELDS = {
    */
   primaryContact: 'sdb36b3217',
   householdMembers: 'suxra4lb',
+  /**
+   * SmartSuite's lookup of the primary contact's email and phone.
+   *
+   * ⚠ Deliberately **not imported** (PAC-91 §4). They are a lookup on the
+   * SmartSuite side and were a denormalised copy on ours, which nothing kept in
+   * step: every reader that consulted the copy first rendered an em dash for
+   * migrated households, and a promotion after a death would have left a dead
+   * person's phone number on the record. The ids stay documented here so the
+   * next person to open the Households table knows they were considered and
+   * why the answer was no.
+   */
   primaryEmail: 'se05e29831',
   primaryPhone: 'sugaqz8o',
   assignedCrm: 'se5d1492f3',
@@ -61,6 +72,14 @@ export const LEAD_FIELDS = {
   status: 'status',
   firstName: 'first_name',
   lastName: 'last_name',
+  /**
+   * The Leads table's own email and phone columns.
+   *
+   * ⚠ Deliberately **not imported** (PAC-91 §2). They are empty on most legacy
+   * rows — the real values live on the linked contact — and importing them into
+   * a copy on the lead is exactly why most migrated leads showed a blank Phone
+   * and Email column on the Leads list. Read the primary contact instead.
+   */
   email: 'email',
   phone: 'phone',
   quoteControlNumber: 's120960602',

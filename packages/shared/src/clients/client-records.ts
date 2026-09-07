@@ -17,8 +17,13 @@ export interface ContactSummary {
   id: string;
   firstName: string | null;
   lastName: string | null;
-  emails: string[];
-  phones: string[];
+  /**
+   * One email, one phone — a contact is one person (PAC-91 §1). These were
+   * `emails: string[]` / `phones: string[]`, mirroring SmartSuite's field type
+   * rather than the domain, and every consumer read `[0]`.
+   */
+  email: string | null;
+  phone: string | null;
   /** e.g. "Named Insured", "Spouse", "Driver", "Child". */
   roleInHousehold: string | null;
   /**
@@ -53,6 +58,11 @@ export interface HouseholdSummary {
   id: string;
   name: string | null;
   status: string | null;
+  /**
+   * Resolved from the household's primary contact, not stored on the household
+   * (PAC-91 §4 — the stored copy was written only by intake, so every migrated
+   * household rendered an em dash). Null when there is no primary contact.
+   */
   primaryContactName: string | null;
   totalActivePolicies: number;
 }
@@ -77,8 +87,13 @@ export interface HouseholdView extends HouseholdSummary {
    */
   propertyAddress: Record<string, unknown> | null;
   mailingAddress: Record<string, unknown> | null;
-  primaryEmails: string[];
-  primaryPhones: string[];
+  /**
+   * The primary contact's email and phone, **resolved from that contact** —
+   * the household no longer stores a copy of either (PAC-91 §1/§4). Null when
+   * the household has no primary contact, or the primary has no such value.
+   */
+  primaryEmail: string | null;
+  primaryPhone: string | null;
   assignedCrmId: string | null;
   contacts: ContactSummary[];
   policies: PolicySummary[];

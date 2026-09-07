@@ -20,6 +20,7 @@ import {
   money,
   shortDate,
 } from './drawer-primitives';
+import { formatPhone } from '@/lib/leads-api';
 
 interface HouseholdDrawerProps {
   householdId: string | null;
@@ -48,21 +49,20 @@ export function HouseholdDrawer({
   const household = query.data;
 
   /*
-   * `primaryContactName` and `contacts[].isPrimary` are both resolved by
-   * `GET /households/:id` (see `pickPrimaryContact`), which is what makes them
-   * usable for a migrated household — the SmartSuite import writes neither
-   * `primaryContactName` nor a reliable `isPrimary`, so this drawer used to
-   * render "—" for a client whose details it had already fetched.
+   * All three are resolved by `GET /households/:id` from the household's
+   * `primaryContactId` (see `pickPrimaryContact`), which is what makes them
+   * usable for a migrated household — this drawer used to render "—" for a
+   * client whose details it had already fetched.
    *
-   * The household-level email/phone still come first: intake writes them, and
-   * they are the household's own line rather than one member's.
+   * The PAC-86 fallback to `contacts.find(isPrimary)` is gone with PAC-91 §4:
+   * the household stores no copy of these to be stale, so the resolved values
+   * *are* the primary contact's, and a second lookup here could only disagree
+   * with the API about who the primary is.
    */
-  const primaryContact = household?.contacts.find((c) => c.isPrimary);
   const contactName = household?.primaryContactName ?? '—';
-  const email =
-    household?.primaryEmails[0] ?? primaryContact?.emails[0] ?? '—';
-  const phone =
-    household?.primaryPhones[0] ?? primaryContact?.phones[0] ?? '—';
+  const email = household?.primaryEmail ?? '—';
+  // Formatted on read: phones are stored normalised to digits (PAC-91 §1).
+  const phone = formatPhone(household?.primaryPhone ?? null);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

@@ -398,9 +398,56 @@ given a primary); the decision rules themselves are pure functions in
 quirk lives in `backfill/smartsuite-csv.ts` with another. **Production has not
 been touched yet** — the local rehearsal is the only run so far.
 
-**How to begin Phase 1:** follow plan §1.1–§1.8 in order. Run every script
-through the workspace (`npm run <script> -w @sfa/api -- --flags`), never a root
-alias (they swallow flags). `npm run build -w @sfa/api` catches type errors
-(`lint` does not); `npm run build -w @sfa/shared` before e2e/Bruno. The Phase 1
-rehearsal is `--dry-run` → real → re-run (zero fills), then the before/after
-report goes on the ticket as a comment.
+**How to begin a phase:** follow the plan's numbered steps in order. Run every
+script through the workspace (`npm run <script> -w @sfa/api -- --flags`), never a
+root alias (they swallow flags). `npm run build -w @sfa/api` catches type errors
+(`lint` does not, and `tsc -p packages/api/tsconfig.json` catches more still —
+webpack only checks what is reachable from `main.ts`, so an object literal passed
+to `persist(…: Record<string, unknown>)` type-checks against nothing);
+`npm run build -w @sfa/shared` before e2e/Bruno. Each phase's rehearsal is
+`--dry-run` → review → real → re-run, and its before/after report goes on the
+ticket as a comment.
+
+**Phase 2 is done (2026-09-07) and rehearsed on the local dump.** `Contact.email`
+/ `.phone` are scalars; `Lead.emails`/`.phones` and
+`Household.primaryContactName`/`.primaryEmails`/`.primaryPhones` are **deleted**,
+and every reader resolves the primary contact through `primaryContactId`
+(`contacts/contact-details.ts` `loadContactDetails` is the shared batched
+lookup; `households/primary-contact.ts` re-keys it by household). Intake stopped
+`$addToSet`-ing a conflicting submission — it fills a blank and records the
+disagreement as a new `contact_conflict` activity instead. §9 identity landed
+too: `Contact.nameKey`/`.dobKey` stamped by schema hooks
+(`contacts/contact-identity.ts`), one `ContactIdentityService.findDuplicate`
+shared by intake, the Household form and `PATCH /contacts/:id` (409 carrying the
+existing `contactId`), and two partial unique indexes.
+
+Two migrate-mongo migrations, in this order, and the order is load-bearing:
+
+1. `20260907105040-contact-scalars-and-identity-keys.js` — arrays → scalars
+   (normalised), keys stamped, the five denormalised fields `$unset`.
+2. `20260907110122-contact-identity-indexes.js` — builds the two partial unique
+   indexes, and **throws, naming the offending rows, if duplicates remain**.
+   That is deliberately a wall: the API applies pending migrations before it
+   binds a port, so a deploy that skipped the merge below stops here rather than
+   shipping a rule nothing enforces.
+
+Between them runs the reviewed merge script:
+
+```
+npm run merge:duplicate-contacts:dev -w @sfa/api -- \
+  --agency smith-family-agency --dry-run --report ./pac-91-merge.json
+```
+
+It groups by the **full** key only (never a partial one — the 244 name-only
+groups are for the agency to judge by hand, follow-up ticket), keeps the row with
+a household link (else the oldest), repoints `households`/`leads`
+`primaryContactId`+`memberContactIds`, `deals.primaryContactId` and
+`dealAuditItems.subjectContactId`, and audits for dangling refs on every run.
+
+⚠ **Phones are now stored normalised to digits.** Every writer already did that
+for app-created rows; migration 1 does it for migrated ones, because contact
+matching, the identity indexes and the merge script all compare normalised
+values — leaving `(918) 808-2556` raw would make 3,000 migrated contacts
+invisible to all three. `formatPhone` on the web side renders them.
+
+**Production has not been run for Phase 2 either.** Local rehearsal only.

@@ -233,6 +233,16 @@ export const activityDisplay: Record<
     tone: "text-violet-600 dark:text-violet-400",
     tint: "bg-violet-400/12",
   },
+  /*
+   * An intake submission disagreed with a stored contact detail and was NOT
+   * applied (PAC-91 §1). Amber rather than red: nothing is broken and nothing
+   * was lost — someone has to decide which of the two values is current.
+   */
+  contact_conflict: {
+    icon: AlertTriangle,
+    tone: "text-amber-600 dark:text-amber-400",
+    tint: "bg-amber-400/12",
+  },
 };
 
 /** Human label for an activity type, used when a row carries no `summary`. */
@@ -256,6 +266,9 @@ export const activityLabel: Record<ActivityType, string> = {
   // A fallback only: `LeadAssignmentService` always writes a summary naming
   // both producers, and the timeline prefers that over this label.
   lead_reassigned: "Lead reassigned",
+  // Also a fallback: the row's summary names which detail disagreed, and its
+  // `changes` carry both values.
+  contact_conflict: "Submitted contact detail differs",
 };
 
 /** Up to two initials for an avatar; `?` when there is no name to work with. */

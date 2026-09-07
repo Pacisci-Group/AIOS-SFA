@@ -261,10 +261,13 @@ describe('buildLegacyTicket', () => {
     const fields = buildLegacyTicket(
       source(),
       {
-        household: {
-          name: 'Watson Household',
-          primaryPhones: ['918 808 2556'],
-          primaryEmails: ['cw@example.com'],
+        household: { name: 'Watson Household' },
+        // Resolved by the caller from `Household.primaryContactId` — the
+        // household stores no copy of these (PAC-91 §4).
+        primaryContact: {
+          name: 'Christopher Watson',
+          phone: '9188082556',
+          email: 'cw@example.com',
         },
         policy: { policyNumber: '845776459', policyType: 'Auto' },
       },
@@ -287,7 +290,7 @@ describe('buildLegacyTicket', () => {
       policyId: policy,
       householdId: household,
       leadId: null,
-      phone: '918 808 2556',
+      phone: '9188082556',
       email: 'cw@example.com',
       openedAt: opened,
       lastActivityAt: opened,

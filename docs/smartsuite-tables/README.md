@@ -6,6 +6,23 @@ Each table doc lists every field with its **Field Id** (the API/slug key used in
 
 > **Migration notes:** `Field Id` is the stable key (field names can be renamed). Fields marked `(system)` are computed/read-only and cannot be set via API. Select values must be stored/normalized by their `value` code, not the label. Linked-record fields hold arrays of linked record ids.
 
+### Model the domain, not the SmartSuite field type
+
+SmartSuite's *types* are not the business facts. Three fields were mirrored
+straight out of these docs and each cost a ticket to undo:
+
+| SmartSuite type | What was stored | What is actually true |
+|---|---|---|
+| Email `string[]`, Phone `phone[]` | `Contact.emails` / `.phones` arrays | **One** email and **one** phone — a contact is one person. Every consumer read `[0]`, and the 2026-09-04 export has zero rows with a second value (PAC-91 §1) |
+| Single-select `{value, label}` | the raw `value` code | The label. 2,095 households store `b5qvJ` where "Active" belongs (PAC-80 §6) |
+| Linked record (single) | one `Contact.householdId` | A contact belongs to **several** households (PAC-91 §5) |
+
+The test: if you cannot say what the array's *second* element would mean, it is
+not an array. And a **denormalised copy** is the same mistake in another shape —
+importing SmartSuite's household-side lookup of the primary contact's email into
+`Household.primaryEmails` recreated a value that nothing kept in step and that
+read as empty on every migrated record. Import the *link*; resolve through it.
+
 ### Household links: read side vs write side
 
 A link between a contact and a household exists in **three** places in

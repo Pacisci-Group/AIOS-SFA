@@ -34,8 +34,9 @@ tests {
     expect(body.firstName).to.equal("Dana");
     expect(body.lastName).to.equal("Tyson");
     expect(body.roleInHousehold).to.equal("Spouse");
-    expect(body.emails).to.be.an("array");
-    expect(body.phones).to.be.an("array");
+    // Scalars since PAC-91 §1, and null here: the dialog collects neither.
+    expect(body).to.have.property("email");
+    expect(body).to.have.property("phone");
   });
 
   test("a member is never the primary contact", function () {
@@ -84,10 +85,17 @@ docs {
      household's own `agencyId` / `branchId` (never the caller's).
   2. `$addToSet` of the new contact id onto the household's `memberContactIds`.
 
-  Deliberately **not** deduplicated against existing contacts, unlike the public
-  intake pipeline: this is a human on the household's own page who can already
-  see its members listed, so silently merging into a same-named contact would be
-  the surprising outcome.
+  Deliberately **not** put through the public intake pipeline's fuzzy matcher:
+  this is a human on the household's own page who can already see its members
+  listed, so silently merging into a same-named contact would be the surprising
+  outcome.
+
+  It **is** checked against the owner's identity rule (PAC-91 §9) — same full
+  name, same date of birth, and the same phone *or* email is the same person —
+  which returns **409** carrying the existing `contactId` so the UI can offer
+  "use the existing contact". In practice this dialog collects no email or
+  phone, so the rule is usually incomplete and the check does nothing; it is
+  wired now so that stops being true the moment the dialog grows those fields.
 
   ## Response
   `ContactSummary` — the same shape `GET /households/:id` lists members in.
@@ -99,4 +107,5 @@ docs {
   | 401 | Missing/expired bearer token |
   | 403 | `clients` disabled for the agency, or the caller lacks `clients:write` |
   | 404 | Unknown household, malformed id, or a household outside the caller's scope |
+  | 409 | This person already exists in the agency (PAC-91 §9). The body carries `contactId` and `householdId` so the UI can offer the existing contact instead |
 }

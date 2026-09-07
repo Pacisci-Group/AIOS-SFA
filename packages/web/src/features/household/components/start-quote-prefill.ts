@@ -69,11 +69,13 @@ export function leadIntakeFromHousehold(
       firstName: primary?.firstName ?? fallbackFirst,
       lastName: primary?.lastName ?? fallbackRest.join(" "),
       dateOfBirth: toDateInput(primary?.dateOfBirth ?? null),
-      // The contact's own details first, falling back to the household-level
-      // ones the migration wrote — a migrated household often carries the phone
-      // and email while its contact rows do not.
-      phone: primary?.phones[0] ?? household.primaryPhones[0] ?? "",
-      email: primary?.emails[0] ?? household.primaryEmails[0] ?? "",
+      // One source since PAC-91 §4: `primaryPhone` / `primaryEmail` on the
+      // household view *are* the primary contact's, resolved server-side from
+      // `primaryContactId`. The old chain read the roster first and the
+      // household copy second, which could disagree about who the primary was;
+      // this cannot.
+      phone: primary?.phone ?? household.primaryPhone ?? "",
+      email: primary?.email ?? household.primaryEmail ?? "",
     },
     // `household.address`, not the raw `propertyAddress`: the raw object's keys
     // differ per writer, and reading `street` off it prefilled a blank street

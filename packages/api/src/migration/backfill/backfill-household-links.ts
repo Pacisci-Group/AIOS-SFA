@@ -1030,11 +1030,9 @@ async function applyOwnerDecisions(args: {
       const count = await db.collection(name).countDocuments(filter);
       if (!count) continue;
       if (!dryRun) {
-        await db
-          .collection(name)
-          .updateMany(filter, {
-            $unset: { householdId: '', legacyHouseholdId: '' },
-          });
+        await db.collection(name).updateMany(filter, {
+          $unset: { householdId: '', legacyHouseholdId: '' },
+        });
       }
       out.testReferencesUnlinked += count;
     }

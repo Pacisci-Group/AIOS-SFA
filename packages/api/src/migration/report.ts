@@ -57,6 +57,17 @@ export interface CollectionStat {
    */
   producerLinks?: { linked: number; unresolved: number; absent: number };
   /**
+   * SmartSuite rows carrying more than one email or phone — the footprint of
+   * the array-vs-scalar quirk PAC-91 §1 removes.
+   *
+   * Absent when nothing on the collection had a second value, which is the
+   * expected reading: the 2026-09-04 production export has **zero** such rows
+   * on 3,064 contacts, which is what made the scalar change safe. It is
+   * reported rather than assumed so that a different agency's data says so
+   * out loud instead of losing the extra values silently.
+   */
+  multiValued?: { emails: number; phones: number };
+  /**
    * How this collection's contact↔household links resolved — the §6
    * reconciliation count PAC-91 asks for. Filled by two passes that see the
    * link from opposite sides, so the two `via*` counters are contact-side only
@@ -244,6 +255,22 @@ export function printReport(report: MigrationReport): void {
           `${String(h.unresolved).padStart(6)} unresolved  ` +
           `${String(h.multiMembership).padStart(6)} in >1 household  ` +
           `${String(h.multiPrimary).padStart(6)} primary of >1 household`,
+      );
+    }
+    console.log(line);
+  }
+
+  const multiValued = Object.entries(report.collections).filter(
+    ([, s]) => s.multiValued,
+  );
+  if (multiValued.length) {
+    console.log('More than one email / phone at source (PAC-91 §1):');
+    for (const [name, s] of multiValued) {
+      const m = s.multiValued!;
+      console.log(
+        `  ${name.padEnd(16)} ${String(m.emails).padStart(6)} rows with >1 email  ` +
+          `${String(m.phones).padStart(6)} with >1 phone  ` +
+          '(first kept, the rest dropped)',
       );
     }
     console.log(line);

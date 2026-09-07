@@ -5,6 +5,7 @@ import {
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { ContactsModule } from '../contacts/contacts.module';
 import { CrmModule } from '../crm/crm.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 import {
@@ -68,6 +69,11 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     // one way only: `CrmModule` registers the `Lead` *schema* rather than
     // importing this module back.
     CrmModule,
+    // `ContactIdentityService` — the one full-key duplicate check (PAC-91 §9),
+    // run by `ResolveContactStep` ahead of the fuzzy scorer. Shared rather than
+    // reimplemented: intake and the Household form must agree on what "the same
+    // person" means, or one of them creates the duplicate the other refuses.
+    ContactsModule,
   ],
   controllers: [LeadsController],
   providers: [

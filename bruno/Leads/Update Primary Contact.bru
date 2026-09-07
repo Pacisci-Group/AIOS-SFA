@@ -15,10 +15,29 @@ headers {
   ~X-Branch-Id: {{branchId}}
 }
 
+script:pre-request {
+  /*
+   * The surname is derived from the contact being edited, so this request is
+   * re-runnable against a database it has already been run against.
+   *
+   * Since PAC-91 §9 a contact is unique on name + DOB + phone-or-email, so a
+   * *fixed* name here made the request self-colliding: the first run renamed
+   * whichever contact `Get Lead` had captured, and the next run — which
+   * captures a different one, because the Create Lead requests above have since
+   * added leads — asked the API to create a second person with that identity
+   * and correctly got a 409. Deriving it means two contacts never collide, and
+   * re-editing the same contact is excluded from its own check.
+   */
+  bru.setVar(
+    "editedContactSurname",
+    "Vaidya-" + String(bru.getVar("primaryContactId")).slice(-6),
+  );
+}
+
 body:json {
   {
     "firstName": "Anurodh",
-    "lastName": "Vaidya",
+    "lastName": "{{editedContactSurname}}",
     "dateOfBirth": "1978-04-12",
     "email": "anurodh.vaidya@example.com",
     "phone": "(512) 884-3920"
@@ -33,7 +52,7 @@ tests {
   test("returns the updated contact", function () {
     const body = res.getBody();
     expect(body.id).to.equal(bru.getVar("primaryContactId"));
-    expect(body.name).to.equal("Anurodh Vaidya");
+    expect(body.name).to.equal("Anurodh " + bru.getVar("editedContactSurname"));
     expect(body.isPrimary).to.equal(true);
   });
 
@@ -118,23 +137,36 @@ docs {
   stored values against those exact shapes, so a divergent rule here would
   silently break dedupe on the next lead for the same person.
 
-  **Only the first email/phone is replaced.** Both are arrays and a contact may
-  hold several; the form shows one. A second number nobody asked to remove is
-  preserved.
+  **One email and one phone.** A contact is one person (PAC-91 §1); these were
+  `string[]` mirroring SmartSuite's field type, and the edit replaced only
+  element 0. The edit now simply sets the value.
 
-  **The change is mirrored onto the lead.** `Lead` duplicates `firstName`,
-  `lastName`, `emails` and `phones`, and the Leads list, its search and the
-  detail header all read the *lead's* copy — so without the mirror a corrected
-  surname would still show the old value on `/leads` forever. Scoped to leads
-  this contact is **primary** for: editing a spouse or child touches no lead.
+  **The identity keys are re-stamped.** `nameKey` / `dobKey` are derived by a
+  schema hook on save, so changing the name or date of birth moves the contact
+  in the §9 unique indexes rather than leaving it there under its old identity.
+
+  **An edit that would create a duplicate is refused.** Same full name, same
+  date of birth, and the same phone *or* email as another contact in the agency
+  is the same person by the owner's rule, so the request returns **409** with
+  that contact's `contactId` rather than storing a second copy of them.
+
+  **The name is mirrored onto the lead.** `Lead` still duplicates `firstName` /
+  `lastName` — a lead can exist before anyone has decided which contact it
+  belongs to — and the Leads list, its search and the detail header read the
+  *lead's* copy, so without the mirror a corrected surname would still show the
+  old value on `/leads` forever. Scoped to leads this contact is **primary**
+  for: editing a spouse or child touches no lead. Email and phone are **not**
+  mirrored, because the lead no longer has anywhere to put them — every reader
+  follows `primaryContactId` to this contact, so the edit is visible everywhere
+  the moment it is saved.
 
   ## Response `200`
   ```json
   {
     "id": "665f...b02",
     "firstName": "Anurodh",
-    "lastName": "Vaidya",
-    "name": "Anurodh Vaidya",
+    "lastName": "Vaidya-501caeb",
+    "name": "Anurodh Vaidya-501caeb",
     "dateOfBirth": "1978-04-12",
     "email": "anurodh.vaidya@example.com",
     "phone": "5128843920",
@@ -149,6 +181,9 @@ docs {
   - `403 Forbidden` — `clients` module disabled, or missing `clients:write`.
   - `404 Not Found` — no such contact, a malformed id, or a contact the caller
     cannot reach from one of their own leads.
+  - `409 Conflict` — the edit would make this contact a duplicate of another
+    under the identity rule (PAC-91 §9). The body carries `contactId` and
+    `householdId` so the UI can offer the existing contact instead.
 
   > **Tip:** run **Get Lead** first — it captures `primaryContactId` into a
   > runtime var that this request consumes.

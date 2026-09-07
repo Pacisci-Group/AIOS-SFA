@@ -43,14 +43,22 @@ export class Household extends TenantRecord {
   @Prop({ type: Object })
   mailingAddress?: Record<string, unknown>;
 
-  @Prop({ trim: true })
-  primaryContactName?: string;
-
-  @Prop({ type: [String], default: [] })
-  primaryEmails: string[];
-
-  @Prop({ type: [String], default: [] })
-  primaryPhones: string[];
+  /*
+   * ⚠ No `primaryContactName` / `primaryEmails` / `primaryPhones`, deliberately
+   * (PAC-91 §1, §4).
+   *
+   * The household used to carry a denormalised copy of its primary contact's
+   * name, email and phone. Only lead intake ever wrote it, so every migrated
+   * household had all three empty and every reader that consulted them first
+   * rendered an em dash — the gap PAC-86 patched in one drawer and left
+   * everywhere else. Nothing kept the copy in step either, which §7 makes
+   * decisive: promoting a new primary after a death would otherwise leave a
+   * dead person's phone number on the record indefinitely.
+   *
+   * Resolve the primary contact through `primaryContactId` below instead —
+   * `loadPrimaryContacts` in `households/primary-contact.ts` does it in one
+   * batched query, and `ClientsService` resolves it in the list aggregation.
+   */
 
   @Prop({ type: ObjectIdType, ref: 'User' })
   assignedCrmId?: Types.ObjectId;

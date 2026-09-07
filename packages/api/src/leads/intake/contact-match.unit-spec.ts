@@ -14,7 +14,13 @@ const idB = new Types.ObjectId('000000000000000000000002');
 function candidate(
   overrides: Partial<ContactCandidate> = {},
 ): ContactCandidate {
-  return { _id: idA, emails: [], phones: [], dateOfBirth: null, ...overrides };
+  return {
+    _id: idA,
+    email: null,
+    phone: null,
+    dateOfBirth: null,
+    ...overrides,
+  };
 }
 
 function signals(overrides: Partial<MatchSignals> = {}): MatchSignals {
@@ -47,7 +53,7 @@ describe('contact matching', () => {
       const score = scoreCandidate(
         candidate({
           dateOfBirth: new Date('1975-01-01T00:00:00.000Z'),
-          emails: ['same@example.com'],
+          email: 'same@example.com',
         }),
         signals({
           dateOfBirth: parseDateOfBirth('1990-02-05'),
@@ -60,7 +66,7 @@ describe('contact matching', () => {
     it('falls through to email when DOB is absent on either side', () => {
       expect(
         scoreCandidate(
-          candidate({ emails: ['pat@example.com'] }),
+          candidate({ email: 'pat@example.com' }),
           signals({
             dateOfBirth: parseDateOfBirth('1990-02-05'),
             email: 'pat@example.com',
@@ -72,20 +78,24 @@ describe('contact matching', () => {
         scoreCandidate(
           candidate({
             dateOfBirth: new Date('1990-02-05T00:00:00.000Z'),
-            emails: ['pat@example.com'],
+            email: 'pat@example.com',
           }),
           signals({ email: 'pat@example.com' }),
         ),
       ).toBe(2);
     });
 
-    // Legacy required `typeof stored === 'string'` while the store held arrays,
-    // so this branch was dead code and never matched anything in production.
-    it('compares against ARRAY-valued stored emails and phones', () => {
+    /*
+     * Normalisation on the *stored* side, which is the half legacy got wrong:
+     * it compared a normalised submission against the raw stored value, so this
+     * branch never once fired in production. Contacts written before PAC-91
+     * normalised every writer still hold values in this shape.
+     */
+    it('normalises the stored email and phone before comparing', () => {
       const score = scoreCandidate(
         candidate({
-          emails: ['old@example.com', 'PAT@Example.com'],
-          phones: ['(555) 123-4567', '5559999999'],
+          email: 'PAT@Example.com',
+          phone: '(555) 123-4567',
         }),
         signals({ email: 'pat@example.com', phone: '5551234567' }),
       );
@@ -94,7 +104,7 @@ describe('contact matching', () => {
 
     it('matches a phone across a country-code difference', () => {
       const score = scoreCandidate(
-        candidate({ phones: ['+1 (555) 123-4567'] }),
+        candidate({ phone: '+1 (555) 123-4567' }),
         signals({ phone: '5551234567' }),
       );
       expect(score).toBe(2);
@@ -104,7 +114,7 @@ describe('contact matching', () => {
       expect(scoreCandidate(candidate(), signals())).toBe(0);
       expect(
         scoreCandidate(
-          candidate({ emails: ['someone@example.com'] }),
+          candidate({ email: 'someone@example.com' }),
           signals({ email: 'different@example.com' }),
         ),
       ).toBe(0);
@@ -124,11 +134,11 @@ describe('contact matching', () => {
 
     it('prefers the highest-scoring candidate', () => {
       const dob = new Date('1990-02-05T00:00:00.000Z');
-      const emailOnly = candidate({ _id: idA, emails: ['pat@example.com'] });
+      const emailOnly = candidate({ _id: idA, email: 'pat@example.com' });
       const dobAndEmail = candidate({
         _id: idB,
         dateOfBirth: dob,
-        emails: ['pat@example.com'],
+        email: 'pat@example.com',
       });
 
       const best = pickBestContact([emailOnly, dobAndEmail], {
@@ -140,7 +150,7 @@ describe('contact matching', () => {
     });
 
     it('breaks ties on the lowest id so repeat submissions converge', () => {
-      const shared = { emails: ['pat@example.com'] };
+      const shared = { email: 'pat@example.com' };
       const first = candidate({ _id: idA, ...shared });
       const second = candidate({ _id: idB, ...shared });
       const sig = signals({ email: 'pat@example.com' });
@@ -154,8 +164,8 @@ describe('contact matching', () => {
       const conflicting = candidate({
         _id: idA,
         dateOfBirth: new Date('1975-01-01T00:00:00.000Z'),
-        emails: ['pat@example.com'],
-        phones: ['5551234567'],
+        email: 'pat@example.com',
+        phone: '5551234567',
       });
 
       expect(

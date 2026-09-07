@@ -13,6 +13,8 @@ import { DealAuditItem } from '../deal-audit-items/schemas/deal-audit-item.schem
 import { DealAudit } from '../deal-audits/schemas/deal-audit.schema';
 import { DealAuditsService } from '../deal-audits/deal-audits.service';
 import { Deal } from '../deals/schemas/deal.schema';
+import { Contact } from '../contacts/schemas/contact.schema';
+import { loadContactDetails } from '../contacts/contact-details';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { Policy } from '../policies/schemas/policy.schema';
@@ -66,6 +68,7 @@ async function run() {
   const householdModel = app.get<Model<Household>>(
     getModelToken(Household.name),
   );
+  const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
   const templateModel = app.get<Model<AuditTemplate>>(
     getModelToken(AuditTemplate.name),
@@ -259,11 +262,18 @@ async function run() {
     (await userModel.findOne({ email: 'csr@smithfamily.local' })) ?? null;
   const primaryPolicy = policies[0];
 
+  // The household stores no copy of its primary contact's details (PAC-91 §4).
+  const primary = household?.primaryContactId
+    ? (
+        await loadContactDetails(contactModel, [household.primaryContactId])
+      ).get(String(household.primaryContactId))
+    : undefined;
+
   const onboarding = await serviceTickets.startOnboarding({
     agencyId,
     branchId,
     householdId,
-    clientName: deal.clientName ?? household?.primaryContactName ?? '',
+    clientName: deal.clientName ?? primary?.name ?? '',
     salesProducerName: producerName,
     dealId: String(deal._id),
     dealAuditId: audit ? String(audit._id) : null,
@@ -273,8 +283,8 @@ async function run() {
     policyNumber: primaryPolicy?.policyNumber ?? '',
     policyType: primaryPolicy?.policyType ?? '',
     householdName: household?.name ?? '',
-    phone: household?.primaryPhones?.[0] ?? '',
-    email: household?.primaryEmails?.[0] ?? '',
+    phone: primary?.phone ?? '',
+    email: primary?.email ?? '',
     createdByUserId: csr ? String(csr._id) : null,
     createdByName: displayName(csr),
     openingNote: `Deal audit passed ${passedAt.toDateString()} — handed off from ${producerName}.`,

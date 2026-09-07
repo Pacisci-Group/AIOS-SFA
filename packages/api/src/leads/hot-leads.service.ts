@@ -19,6 +19,11 @@ import {
   ActivityDocument,
 } from '../activities/schemas/activity.schema';
 import { buildScopeFilter } from '../common/access/scope-filter';
+import {
+  loadContactDetails,
+  type ContactDetails,
+} from '../contacts/contact-details';
+import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { initialsFrom } from '../common/domain/initials';
 import { ListHotLeadsDto } from './dto/list-hot-leads.dto';
 import { Lead, LeadDocument } from './schemas/lead.schema';
@@ -26,11 +31,12 @@ import { Lead, LeadDocument } from './schemas/lead.schema';
 /** Lean projection of the fields the panel renders. */
 type HotLeadLean = Pick<
   Lead,
-  'firstName' | 'lastName' | 'emails' | 'phones' | 'status' | 'temperature'
+  'firstName' | 'lastName' | 'status' | 'temperature'
 > & {
   _id: Types.ObjectId;
   leadSource?: NormalizedLeadSource;
   lastActivityAt?: Date;
+  primaryContactId?: Types.ObjectId;
 };
 
 /** Latest activity per lead, from the `$group … $first` rollup. */
@@ -68,6 +74,8 @@ export class HotLeadsService {
     @InjectModel(Lead.name) private leadModel: Model<LeadDocument>,
     @InjectModel(Activity.name)
     private activityModel: Model<ActivityDocument>,
+    @InjectModel(Contact.name)
+    private contactModel: Model<ContactDocument>,
   ) {}
 
   async list(
@@ -142,13 +150,21 @@ export class HotLeadsService {
       }
     }
 
-    const summaries = await this.latestActivityByLead(
-      access.agencyId,
-      records.map((record) => record._id),
-    );
+    const [summaries, contacts] = await Promise.all([
+      this.latestActivityByLead(
+        access.agencyId,
+        records.map((record) => record._id),
+      ),
+      // One batched lookup for the whole card — the lead no longer carries the
+      // primary contact's phone and email (PAC-91 §2).
+      loadContactDetails(
+        this.contactModel,
+        records.map((record) => record.primaryContactId),
+      ),
+    ]);
 
     return {
-      items: records.map((record) => this.toRow(record, summaries)),
+      items: records.map((record) => this.toRow(record, summaries, contacts)),
     };
   }
 
@@ -203,6 +219,7 @@ export class HotLeadsService {
   private toRow(
     record: HotLeadLean,
     summaries: Map<string, LatestActivity>,
+    contacts: Map<string, ContactDetails>,
   ): HotLeadRow {
     const id = record._id.toString();
     const name =
@@ -216,6 +233,9 @@ export class HotLeadsService {
       record.leadSource?.label,
     );
     const latest = summaries.get(id);
+    const contact = record.primaryContactId
+      ? contacts.get(record.primaryContactId.toString())
+      : undefined;
 
     return {
       id,
@@ -224,8 +244,14 @@ export class HotLeadsService {
       temperature: record.temperature ?? 'Unknown',
       leadSource: source.label,
       status: normalizeLeadStatus(record.status),
-      phone: record.phones?.[0] ?? null,
-      email: record.emails?.[0] ?? null,
+      /*
+       * From the primary contact, not the lead: the lead carries no copy any
+       * more (PAC-91 §2), and the copy this used to read was empty on most
+       * migrated leads — which is precisely why the panel showed no phone
+       * number for the people it was telling the producer to call.
+       */
+      phone: contact?.phone ?? null,
+      email: contact?.email ?? null,
       // Null rather than invented copy — the UI falls back to the status.
       lastActivitySummary: latest?.summary ?? null,
       lastActivityType: latest?.type ?? null,

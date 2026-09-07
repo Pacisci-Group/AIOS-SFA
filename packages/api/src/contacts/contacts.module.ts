@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { ContactAccessService } from './contact-access.service';
+import { ContactIdentityService } from './contact-identity.service';
 import { ContactsController } from './contacts.controller';
 import { ContactsService } from './contacts.service';
 import { Contact, ContactSchema } from './schemas/contact.schema';
@@ -14,6 +15,11 @@ import { Contact, ContactSchema } from './schemas/contact.schema';
  * `Lead` is registered here because authorization depends on it:
  * {@link ContactAccessService} derives a producer's right to edit a contact from
  * the leads that reach it.
+ *
+ * {@link ContactIdentityService} is exported rather than duplicated: the
+ * owner's "one person, one contact" rule (PAC-91 §9) has to read the same way
+ * for lead intake, the Household form and the contact endpoints, and three
+ * copies of a uniqueness check is three chances for one of them to drift.
  */
 @Module({
   imports: [
@@ -23,7 +29,7 @@ import { Contact, ContactSchema } from './schemas/contact.schema';
     ]),
   ],
   controllers: [ContactsController],
-  providers: [ContactsService, ContactAccessService],
-  exports: [ContactAccessService],
+  providers: [ContactsService, ContactAccessService, ContactIdentityService],
+  exports: [ContactAccessService, ContactIdentityService],
 })
 export class ContactsModule {}

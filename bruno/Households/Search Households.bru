@@ -37,8 +37,8 @@ tests {
   });
 
   test("primaryContactName is a name or null, never a blank string", function () {
-    // `toHouseholdSummary` collapses a blank stored value to null so the
-    // `?? fallback` chains downstream of it actually fire.
+    // Resolved from the primary contact (PAC-91 §4) and collapsed to null when
+    // there is no name to show, so the `?? fallback` chains downstream fire.
     for (const household of res.getBody()) {
       if (household.primaryContactName !== null) {
         expect(household.primaryContactName.trim()).to.not.equal("");
@@ -69,7 +69,7 @@ docs {
   ## Query
   | Param | Required | Notes |
   |---|---|---|
-  | `q` | no | Case-insensitive substring over `name` and `primaryContactName`. Escaped before it compiles as a regex. Blank returns the first page so the picker has something to show before the user types |
+  | `q` | no | Case-insensitive substring over the household's own `name` **and its primary contact's name**. The latter is resolved contact-first (PAC-91 §4 removed the stored `primaryContactName`), so it uses the contact name index and its collation. Escaped before it compiles as a regex. Blank returns the first page so the picker has something to show before the user types |
   | `limit` | no | Default 20, clamped to 1–50 |
 
   ## Response

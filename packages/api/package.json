@@ -25,6 +25,8 @@
     "backfill:appointments:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/allstate-id-to-carrier-appointment.ts",
     "backfill:household-links": "node dist/migration/backfill/backfill-household-links.js",
     "backfill:household-links:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/backfill-household-links.ts",
+    "merge:duplicate-contacts": "node dist/migration/backfill/merge-duplicate-contacts.js",
+    "merge:duplicate-contacts:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/merge-duplicate-contacts.ts",
     "backfill:mailer-campaigns": "node dist/migration/backfill/mailer-campaigns.js",
     "backfill:mailer-campaigns:dev": "ts-node -r tsconfig-paths/register src/migration/backfill/mailer-campaigns.ts",
     "db:migrate": "migrate-mongo up",

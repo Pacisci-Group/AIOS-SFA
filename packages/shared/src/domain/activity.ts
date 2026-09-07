@@ -76,6 +76,18 @@ export const ACTIVITY_TYPES = [
    * row would hide it from the producer it affects most.
    */
   'lead_reassigned',
+  /**
+   * An intake submission supplied an email or phone that disagrees with the one
+   * already stored on the matched contact (PAC-91 §1). System-emitted by
+   * `ResolveContactStep`, so absent from `LOGGABLE_ACTIVITY_TYPES`.
+   *
+   * A contact holds **one** email and **one** phone. Intake used to `$addToSet`
+   * the submitted value as a second array element, which is how the arrays this
+   * ticket removes came to grow in the first place. The stored value now wins
+   * and the disagreement is recorded here instead — visible on the timeline for
+   * a human to reconcile, rather than silently stored as a second identity.
+   */
+  'contact_conflict',
 ] as const;
 
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];

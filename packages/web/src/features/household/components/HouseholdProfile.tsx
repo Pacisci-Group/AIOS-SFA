@@ -8,6 +8,7 @@ import { SectionLabel } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
+import { formatPhone } from "@/lib/leads-api";
 
 interface Member {
   name: string;
@@ -143,19 +144,15 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
   // the page header, so neither is recomputed here.
   const status = normalizeHouseholdStatus(household.status) || "Unknown";
   /*
-   * `primaryContactName` and `contacts[].isPrimary` both arrive resolved from
-   * `GET /households/:id` (see `pickPrimaryContact`) — the stored name is blank
-   * on every migrated household, and the API is the only layer that can see the
-   * `primaryContactId` that names the contact instead.
-   *
-   * The fall back to the primary contact is kept behind that: it is real data
-   * rather than a placeholder, and it still covers a household read through a
-   * path that has not resolved the name.
+   * All three arrive resolved from `GET /households/:id`, which follows the
+   * household's `primaryContactId` (see `pickPrimaryContact`). The API is the
+   * only layer that can see that ref, and since PAC-91 §4 it is the only source
+   * of these values — the household stores no copy of them, so there is no
+   * stale name left to fall back past.
    */
-  const contactName =
-    household.primaryContactName ?? fullName(primaryContact) ?? "—";
-  const phone = household.primaryPhones[0] ?? primaryContact?.phones[0] ?? null;
-  const email = household.primaryEmails[0] ?? primaryContact?.emails[0] ?? null;
+  const contactName = household.primaryContactName ?? "—";
+  const phone = household.primaryPhone;
+  const email = household.primaryEmail;
   const members = toMembers(household);
   /*
    * Already coerced server-side. This block used to read `line1`/`postalCode`
@@ -231,7 +228,10 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
           <ContactRow
             icon={Phone}
             iconTone="text-primary"
-            value={phone ?? "—"}
+            // Formatted on read: a migrated contact's phone is stored as digits
+            // (PAC-91 §1 normalises every writer), so the raw value would show
+            // as `9188082556`.
+            value={formatPhone(phone)}
             caption={phone ? "Mobile · Click to call" : "No phone on file"}
             href={phone ? `tel:${phone.replace(/[^\d+]/g, "")}` : undefined}
           />

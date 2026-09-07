@@ -11,6 +11,7 @@ import type {
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { AuditGenerationService } from '../audit-generation/audit-generation.service';
+import { contactDisplayName } from '../contacts/contact-details';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CrmAssignmentService } from '../crm-rotations/crm-assignment.service';
@@ -272,7 +273,7 @@ export class SoldDealsService {
         ? new Types.ObjectId(dto.quoteRecapId)
         : undefined,
       primaryContactId: household.primaryContactId,
-      clientName: this.clientName(lead, household),
+      clientName: await this.clientName(lead, household),
       submissionToken: token,
     };
 
@@ -439,13 +440,29 @@ export class SoldDealsService {
   /**
    * The deal's client name, which the hand-off board renders directly — a deal
    * without one shows every generated audit item as "Unknown Client".
+   *
+   * Async since PAC-91 §4: the household no longer stores `primaryContactName`,
+   * so the primary contact is read through `primaryContactId`. One query, on a
+   * write path that already runs several — and the name is now right for a
+   * migrated household, where the stored copy was always empty and the deal
+   * therefore fell through to the household's own name.
    */
-  private clientName(
+  private async clientName(
     lead: LeadDocument,
     household: HouseholdDocument,
-  ): string | undefined {
+  ): Promise<string | undefined> {
+    const primary = household.primaryContactId
+      ? await this.contactModel
+          .findOne({
+            _id: household.primaryContactId,
+            agencyId: household.agencyId,
+          })
+          .select('firstName lastName')
+          .lean<{ firstName?: string; lastName?: string } | null>()
+      : null;
+
     return (
-      household.primaryContactName?.trim() ||
+      contactDisplayName(primary)?.trim() ||
       household.name?.trim() ||
       this.leadName(lead)
     );

@@ -109,6 +109,11 @@ import {
   resolvePremium,
 } from './helpers/derive';
 import { buildLegacyTicket } from './helpers/legacy-ticket';
+import { loadPrimaryContacts } from '../households/primary-contact';
+import {
+  normalizeEmail,
+  normalizePhone,
+} from '../leads/intake/intake.normalize';
 import { recentChicagoMonths } from '../performance/performance.range';
 import {
   CollectionStat,
@@ -1028,8 +1033,14 @@ export class MigrationService {
           ),
           propertyAddress: this.asObject(rec[HOUSEHOLD_FIELDS.propertyAddress]),
           mailingAddress: this.asObject(rec[HOUSEHOLD_FIELDS.mailingAddress]),
-          primaryEmails: this.deepEmails(rec[HOUSEHOLD_FIELDS.primaryEmail]),
-          primaryPhones: this.deepPhones(rec[HOUSEHOLD_FIELDS.primaryPhone]),
+          /*
+           * No `primaryContactName` / `primaryEmails` / `primaryPhones`
+           * (PAC-91 §4). SmartSuite's household row does carry a lookup of its
+           * primary's email and phone, but importing it would recreate exactly
+           * the copy this ticket deletes — and one that goes stale the moment
+           * the contact is edited. The `Household links` pass writes
+           * `primaryContactId`, and every reader follows it.
+           */
           assignedCrmId: crm?.userId,
           legacyAssignedCrmId: legacyCrmId,
           totalActivePolicies: toNumber(
@@ -1151,6 +1162,12 @@ export class MigrationService {
         links.unresolved++;
       }
 
+      const contactDetails = this.singleContactDetails(
+        rec[CONTACT_FIELDS.email],
+        rec[CONTACT_FIELDS.phone],
+        stat,
+      );
+
       const id = await this.persist(
         this.contactModel,
         ctx,
@@ -1158,8 +1175,7 @@ export class MigrationService {
         {
           firstName,
           lastName,
-          emails: toStringArray(rec[CONTACT_FIELDS.email]),
-          phones: toPhoneArray(rec[CONTACT_FIELDS.phone]),
+          ...contactDetails,
           dateOfBirth: toDate(rec[CONTACT_FIELDS.dateOfBirth]),
           roleInHousehold: normalizeContactRole(
             selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
@@ -1240,8 +1256,15 @@ export class MigrationService {
         {
           firstName,
           lastName,
-          emails: toStringArray(rec[LEAD_FIELDS.email]),
-          phones: toPhoneArray(rec[LEAD_FIELDS.phone]),
+          /*
+           * No `emails` / `phones` (PAC-91 §2). This used to import the
+           * SmartSuite *Leads* table's own email and phone columns, which are
+           * empty on most legacy rows because the real values live on the
+           * linked contact — which is why most migrated leads rendered a blank
+           * Phone and Email on the Leads list. The lead carries no copy now;
+           * the `Household links` pass fills `primaryContactId` and every
+           * reader follows it.
+           */
           status: selectCode(rec[LEAD_FIELDS.status]),
           temperature: normalizeTemperature(rec[LEAD_FIELDS.temperature]),
           leadSource: { code: leadSource.code, label: leadSource.label },
@@ -2385,7 +2408,7 @@ export class MigrationService {
     const [householdDocs, policyDocs] = await Promise.all([
       this.householdModel
         .find({ agencyId: ctx.agencyId })
-        .select('name primaryContactName primaryPhones primaryEmails')
+        .select('name primaryContactId')
         .lean(),
       this.policyModel
         .find({ agencyId: ctx.agencyId })
@@ -2394,6 +2417,15 @@ export class MigrationService {
     ]);
     const householdById = new Map(householdDocs.map((h) => [String(h._id), h]));
     const policyById = new Map(policyDocs.map((p) => [String(p._id), p]));
+    // The ticket's `clientName`, `phone` and `email` come from the household's
+    // primary contact, which the household no longer stores a copy of
+    // (PAC-91 §4). One batched query for the whole pass — the same "two queries
+    // for the run, not two per row" rule the block above is written to.
+    const primaryByHousehold = await loadPrimaryContacts(
+      this.contactModel,
+      householdDocs,
+      { agencyId: ctx.agencyId },
+    );
 
     for (const rec of records) {
       const legacyId = rec.id as string;
@@ -2450,6 +2482,9 @@ export class MigrationService {
         {
           household: householdId
             ? householdById.get(String(householdId))
+            : null,
+          primaryContact: householdId
+            ? (primaryByHousehold.get(String(householdId)) ?? null)
             : null,
           policy: policyId ? policyById.get(String(policyId)) : null,
           createdByDisplayName: createdBy?.name,
@@ -2963,29 +2998,41 @@ export class MigrationService {
     return code ? [code] : [];
   }
 
-  private deepFlatten(value: unknown): unknown[] {
-    const out: unknown[] = [];
-    const walk = (v: unknown): void => {
-      if (Array.isArray(v)) v.forEach(walk);
-      else if (v !== null && v !== undefined) out.push(v);
+  /**
+   * A contact's **one** email and **one** phone (PAC-91 §1).
+   *
+   * SmartSuite types these as `string[]` and `phone[]`, which is what the old
+   * schema copied. The domain has one of each, legacy always read and wrote one
+   * of each, and the 2026-09-04 export has zero rows with a second value — so
+   * this takes the first and **counts** anything beyond it into the report,
+   * which is the footprint number the ticket asks for. A count rather than a
+   * silent drop: if the assumption is ever wrong on some other agency's data,
+   * the report says so instead of the values vanishing.
+   *
+   * Normalised on the way in, through the intake normalisers rather than a
+   * local re-implementation. This is the point at which a migrated contact
+   * becomes comparable to an app-created one: contact matching, the identity
+   * indexes and `merge-duplicate-contacts.ts` all compare normalised values, so
+   * importing `(918) 808-2556` raw would leave every migrated row invisible to
+   * all three.
+   */
+  private singleContactDetails(
+    emailValue: unknown,
+    phoneValue: unknown,
+    stat: CollectionStat,
+  ): { email?: string; phone?: string } {
+    const emails = toStringArray(emailValue);
+    const phones = toPhoneArray(phoneValue);
+
+    if (emails.length > 1 || phones.length > 1) {
+      const multi = (stat.multiValued ??= { emails: 0, phones: 0 });
+      if (emails.length > 1) multi.emails++;
+      if (phones.length > 1) multi.phones++;
+    }
+
+    return {
+      email: normalizeEmail(emails[0]) ?? undefined,
+      phone: normalizePhone(phones[0]) ?? undefined,
     };
-    walk(value);
-    return out;
-  }
-
-  private deepEmails(value: unknown): string[] {
-    return this.deepFlatten(value)
-      .filter((v): v is string => typeof v === 'string' && v.includes('@'))
-      .map((v) => v.toLowerCase());
-  }
-
-  private deepPhones(value: unknown): string[] {
-    return this.deepFlatten(value)
-      .map((v): string => {
-        if (typeof v === 'string') return v;
-        const o = this.asObject(v);
-        return o && typeof o.phone_number === 'string' ? o.phone_number : '';
-      })
-      .filter((v) => v.length > 0);
   }
 }
