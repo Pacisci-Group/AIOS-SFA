@@ -1,4 +1,5 @@
 import { inviteTemplate } from './invite.template';
+import { mailerCampaignOutputTemplate } from './mailer-campaign-output.template';
 import { passwordResetTemplate } from './password-reset.template';
 import type { Template } from './template.types';
 
@@ -16,6 +17,7 @@ import type { Template } from './template.types';
 export const EMAIL_TEMPLATES = {
   invite: inviteTemplate,
   passwordReset: passwordResetTemplate,
+  mailerCampaignOutput: mailerCampaignOutputTemplate,
 } satisfies Record<string, Template<never>>;
 
 export type TemplateKey = keyof typeof EMAIL_TEMPLATES;

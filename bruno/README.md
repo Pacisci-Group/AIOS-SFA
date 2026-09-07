@@ -18,6 +18,15 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Bug Reports | Create Bug Report | `POST /bug-reports` | File a report. **No permission.** Captures `bugReportId` for the platform folder. |
 | Bug Reports | Create Bug Report (Too Short) | `POST /bug-reports` | The 10-char description floor (400). |
 | Bug Reports | Create Bug Report (Foreign Screenshot Key) | `POST /bug-reports` | The key-ownership check: a key from another user's namespace must 400. |
+| CRM Service | Login as CRM Manager | `POST /auth/login` | The one folder the producer bearer cannot run: a producer holds **no** `crm_service` permission. Captures `crmAccessToken` under its own name. |
+| CRM Service | Find Transfer Client | `GET /crm/service-tickets` | The desk queue. Picks a household for the transfer chain, sorted by id so every run picks the same one. `crm_service:read`. |
+| CRM Service | Get Transfer Policy | `GET /households/:id` | The **active** policy to transfer, re-read every run — a transfer retires the old policy and writes its replacement, so the line-up rotates. `clients:read`. |
+| CRM Service | Open Transfer Ticket | `POST /crm/service-tickets` | A disposable `Policy Change` ticket. One transfer per ticket is index-enforced, so a seeded ticket would work once and 409 forever after. `crm_service:write`. |
+| CRM Service | List Household Tickets | `GET /crm/service-tickets/household/:id` | The household 360 feed. Asserts the status lock is Quote-only and that `leadStatus` is null on lists. |
+| CRM Service | Presign Transfer Document | `POST /crm/service-tickets/:id/policy-transfer/presign` | New Business Application upload URL, keyed under the household rather than a lead. `crm_service:write`. |
+| CRM Service | Upload Transfer Document | `PUT <uploadUrl>` | Raw PUT straight to storage. `auth: none` by design — and not optional: the transfer `statObject`s the key before booking. |
+| CRM Service | Record Policy Transfer | `POST /crm/service-tickets/:id/policy-transfer` | Books the transfer through the **sold-deal pipeline**, so it returns a `dealId` and a `dealAuditId`. `crm_service:write`. |
+| CRM Service | Renewal Outreach Desk | `GET /crm/service-tickets/renewals/desk` | Proactive renewal calls, with `daysUntilAvailable` null exactly when the call is actionable. `crm_service:read`. |
 | Deal Audits | List Deal Audits | `GET /deal-audits` | **PAC-12** — Deals Pending Service Hand-off (read). `deal_audits:read`. |
 | Deal Audits | Presign Audit Attachment | `POST /deal-audits/:itemId/attachments/presign` | **PAC-14** — resolution document upload. `deal_audits:write`. |
 | Deal Audits | Resolve Deal Audit Item | `PATCH /deal-audits/:itemId/resolve` | **PAC-14** — resolve + optional note/document. `deal_audits:write`. |
@@ -64,21 +73,35 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Platform Bug Reports | Update Bug Report | `PATCH /platform/bug-reports/:id` | Status + internal notes. `platform:bugs:write`. |
 | Platform Bug Reports | Update Bug Report (Empty Body) | `PATCH /platform/bug-reports/:id` | A PATCH that changes nothing must 400, not silently succeed. |
 | Platform Bug Reports | List Bug Reports (Producer Rejected) | `GET /platform/bug-reports` | The boundary: anyone may **file**, only the platform may **read** (403). |
-| Platform Mailers | Login as Super Admin | `POST /auth/login` | **PAC-73** — the platform operator (`admin@sfa.local`). Captures `platformAccessToken` separately: a platform account holds no module permissions, so it would 403 every other folder. |
-| Platform Mailers | List Agencies | `GET /platform/agencies` | **PAC-73** — the Add Mailers agency picker. `platform:agencies:read`. Selects by slug, not `[0]` — the list has no guaranteed order. |
-| Platform Mailers | Presign Import | `POST /platform/mailers/imports/presign` | **PAC-73** — RTP upload URL. `platform:mailers:write`. |
-| Platform Mailers | Upload Import File | `PUT <uploadUrl>` | **PAC-73** — raw PUT straight to storage. `auth: none` by design. |
-| Platform Mailers | Create Import | `POST /platform/mailers/imports` | **PAC-73** — queues the preview parse. Writes no mailers. |
-| Platform Mailers | Get Import Run | `GET /platform/mailers/imports/:runId` | **PAC-73** — the poll target. `platform:mailers:read`. Waits for the queued preview before asserting. |
-| Platform Mailers | Commit Import | `POST /platform/mailers/imports/:runId/commit` | **PAC-73** — the only call that writes. 409s unless the run is `previewed` and any agency mismatch was confirmed. |
-| Platform Mailers | List Imports | `GET /platform/mailers/imports` | **PAC-73** — an agency's recent runs. `platform:mailers:read`. |
-| Platform Mailers | Get Import Run (After Commit) | `GET /platform/mailers/imports/:runId` | **PAC-73** — proves the write happened: `created + updated === 1` on every run, because the upsert dedupes. |
+| Platform Mailer Campaigns | Login as Super Admin | `POST /auth/login` | **PAC-71** — the platform operator (`admin@sfa.local`). Captures `platformAccessToken` separately: a platform account holds no module permissions, so it would 403 every other folder. |
+| Platform Mailer Campaigns | Campaign Defaults | `GET /platform/mailer-campaigns/defaults` | **PAC-71** — what the run wizard prefills with: Allstate, this week's number, and the last imported campaign's settings. `platform:mailers:read`. |
+| Platform Mailer Campaigns | Presign Campaign File | `POST /platform/mailer-campaigns/presign` | **PAC-71** — vendor-file upload URL. `platform:mailers:write`. |
+| Platform Mailer Campaigns | Upload Campaign File | `PUT <uploadUrl>` | **PAC-71** — raw PUT straight to storage. `auth: none` by design. |
+| Platform Mailer Campaigns | Create Campaign | `POST /platform/mailer-campaigns` | **PAC-71** — records the run and queues the preview. Writes no mailers. Captures `campaignId`. |
+| Platform Mailer Campaigns | Get Campaign (Previewed) | `GET /platform/mailer-campaigns/:id` | **PAC-71** — the poll target. `platform:mailers:read`. Waits for the queued preview before asserting counts, assignment and unmatched ZIPs. |
+| Platform Mailer Campaigns | Patch Zip Resolutions | `PATCH /platform/mailer-campaigns/:id` | **PAC-71** — resolve an unmatched ZIP inline; also upserts it into the global table and re-previews. |
+| Platform Mailer Campaigns | Get Campaign (Re-previewed) | `GET /platform/mailer-campaigns/:id` | **PAC-71** — the resolved ZIP is gone from `unmatchedZips` on the second pass. |
+| Platform Mailer Campaigns | Commit Campaign (Append) | `POST /platform/mailer-campaigns/:id/commit` | **PAC-71** — the only call that writes mailers. `platform:mailers:write`. 202; the gate re-checks assignment and overlap counts. |
+| Platform Mailer Campaigns | Get Campaign (Imported) | `GET /platform/mailer-campaigns/:id` | **PAC-71** — proves the write happened, and that the rejected row is *counted* rather than dropped. |
+| Platform Mailer Campaigns | List Campaigns | `GET /platform/mailer-campaigns` | **PAC-71** — the campaigns list, with record and attributed-lead counts. `platform:mailers:read`. |
+| Platform Mailer Campaigns | List Campaign Records | `GET /platform/mailer-campaigns/:id/records` | **PAC-71** — the campaign's mailers, searchable by either control-number form or by name. |
+| Platform Mailer Campaigns | Get Output File URL | `GET /platform/mailer-campaigns/:id/files/:kind/url` | **PAC-71** — a presigned download minted per click, never stored. |
+| Platform Mailer Campaigns | Commit Campaign (Wrong Status, 409) | `POST /platform/mailer-campaigns/:id/commit` | **PAC-71** — the gate's first check: only a `previewed` campaign may commit. |
+| Platform Mailer Campaigns | Email Output | `POST /platform/mailer-campaigns/:id/email` | **PAC-71** — re-send the completion notice with a 7-day download link. `platform:mailers:write`. 202. |
+| Platform Mailer Campaigns | Log Campaign Mailer Lead | `POST /mailers/log-lead` | **PAC-71** — the demo agency claims a mailer from the `all`-mode campaign, so the two requests after it have an owner to collide with. Sent as the producer, not the platform operator. |
+| Platform Mailer Campaigns | Lookup Campaign Mailer (Other Agency) | `GET /mailers/:controlNumber` | **PAC-71** — the agency onboarded earlier in this run sees the same mailer (`visibleAgencyIds: null` = all, including agencies onboarded later) as `alreadyLogged: true` with `linkedLeadId: null`, naming no other tenant. |
+| Platform Mailer Campaigns | Log Campaign Mailer Lead (Other Agency, 409) | `POST /mailers/log-lead` | **PAC-71** — one lead per mailer, platform-wide: a forced second log from another agency is refused, without naming who owns it. |
 | Platform Users | List Users | `GET /platform/users` | **PAC-70** — the cross-agency user directory. `platform:users:read`. Paginated; `q` reaches agency and role *names*, not just the user's own fields. |
 | Platform Users | List Users (Filtered) | `GET /platform/users` | **PAC-70** — `roleSlugs=producer,csr` is ORed (slugs, not ids — a role's id differs per agency); `q=demo` hits the agency name. |
 | Platform Users | List Roles | `GET /platform/users/roles` | **PAC-70** — one `{slug, name}` per distinct slug across the platform; the Role filter's options. |
 | Platform Users | List Users (Forbidden) | `GET /platform/users` | **PAC-70** — a tenant user (the inherited producer token) gets 403. |
 | Platform Users | Impersonate User | `POST /auth/impersonate/:userId` | **PAC-70** — a session *as* the target, resolved from the store. `platform:users:impersonate`. Returns the login envelope plus `appBaseUrl`, the origin the session must be used on. Deliberately not audited. |
 | Platform Users | Impersonate Unknown User | `POST /auth/impersonate/:userId` | **PAC-70** — unknown and inactive targets are the same 404, so the endpoint is not a cross-tenant enumeration oracle. |
+| Platform Zip Markets | Login as Super Admin | `POST /auth/login` | **PAC-71** — its own copy; each folder is self-contained. |
+| Platform Zip Markets | Upsert Zip Markets | `PUT /platform/mailer-zip-markets` | **PAC-71** — the ZIP → market table the transform reads. `platform:mailers:write`. Platform-wide (`agencyId: null`). |
+| Platform Zip Markets | List Zip Markets | `GET /platform/mailer-zip-markets` | **PAC-71** — paginated, searchable by ZIP or market. `platform:mailers:read`. |
+| Platform Zip Markets | Delete Zip Market | `DELETE /platform/mailer-zip-markets/:id` | **PAC-71** — remove one row. `platform:mailers:write`. |
+| Platform Zip Markets | Delete Campaign Zip Resolution | `DELETE /platform/mailer-zip-markets/:id` | **PAC-71** — removes the row **Patch Zip Resolutions** created, so the chain is re-runnable. |
 | Public Intake | Get Form / Submit | `/public/lead-form/:token`, `/public/leads/:token` | **PAC-37** — unauthenticated share-link intake. |
 | Quote Recaps | Get Lead Context | `GET /quote-recaps/context` | **PAC-39** — lead + household header for the form. `quote_recaps:read`. |
 | Quote Recaps | Presign Quote Document | `POST /quote-recaps/quote-document/presign` | **PAC-39** — carrier-quote upload URL. `quote_recaps:write`. |
@@ -94,22 +117,25 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Sold Deals | Create Sold Deal (Foreign Lead) | `POST /sold-deals` | **PAC-40** — asserts an out-of-scope lead 404s. |
 | Sold Deals | Check Policy Number (Match) | `GET /policies/check` | **PAC-40** — the duplicate-found branch. |
 
-> ⚠ **This table is not exhaustive.** `CRM Service`, `Carriers`, `Households`
-> and `Users` are in the collection but were never added here; every request
-> still carries its own `docs` block, which is the actual source of truth.
+> ⚠ **This table is not exhaustive.** `Carriers`, `Households` and `Users` are
+> in the collection but were never added here; every request still carries its
+> own `docs` block, which is the actual source of truth.
 >
-> **`Platform Mailers` pauses on purpose.** Two of its requests sleep 5s in a
-> pre-request script, because the preview and the commit are queued Inngest
+> **`Platform Mailer Campaigns` pauses on purpose.** Two of its requests sleep
+> in a pre-request script, because the preview and the commit are queued Inngest
 > jobs rather than synchronous work. Without the pause the folder goes green
-> while proving nothing: the assertions read a run still in `previewing`, and
+> while proving nothing: the assertions read a campaign still `uploaded`, and
 > the commit gets a correct-but-useless 409. It also needs the Inngest dev
 > server (`npx inngest-cli@latest dev -u http://localhost:4000/api/inngest`) —
-> without it `Create Import` 500s.
+> without it `Create Campaign` 500s. **`Platform Mailers` (the PAC-73 Add
+> Mailers upload) is gone**: PAC-71 replaced it, and a mailer now belongs to a
+> campaign rather than an agency.
 >
 > **Folder order matters when running the whole collection.** The CLI walks
 > folders alphabetically (`Auth` → `Deal Audits` → `Leads` → `Mailers` →
-> `Performance` → `Platform Mailers` → `Platform Users` → `Policies` →
-> `Public Intake` → `Quote Recaps` → `Sold Deals`), and the downstream chains
+> `Performance` → `Platform Mailer Campaigns` → `Platform Users` →
+> `Platform Zip Markets` → `Policies` → `Public Intake` → `Quote Recaps` →
+> `Sold Deals`), and the downstream chains
 > reuse ids captured earlier: Quote Recaps and Sold Deals both need
 > `createdLeadId` from **Leads › Create Lead**, and the PAC-38 contact requests
 > need `primaryContactId` from **Leads › Get Lead** (which in turn needs

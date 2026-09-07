@@ -7,6 +7,7 @@ import {
   DEAL_AUDIT_REASON_CODES,
   DEFAULT_DEAL_AUDIT_STATUS,
   SERVICE_TICKET_CATEGORY_PREFIX,
+  carrierSlug,
 } from '@sfa/shared';
 import type { DealAuditStatus } from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
@@ -76,6 +77,9 @@ import {
 } from './demo-data';
 import { createRng, Rng } from './rng';
 import { Mailer } from '../../mailers/schemas/mailer.schema';
+import { MailerCampaign } from '../../mailers/schemas/mailer-campaign.schema';
+import { implicitCampaignDoc } from '../../common/mailers/implicit-campaign';
+import { DEFAULT_MAILER_CARRIER } from '../../common/mailers/mailer-carrier';
 import { mailerControlNumberKeys } from '../../common/mailers/mailer-control-number';
 
 export interface DemoSeedOptions {
@@ -246,6 +250,8 @@ export class DemoSeedService {
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     @InjectModel(Mailer.name) private readonly mailerModel: Model<Mailer>,
+    @InjectModel(MailerCampaign.name)
+    private readonly mailerCampaignModel: Model<MailerCampaign>,
     @InjectModel(Permission.name)
     private readonly permissionModel: Model<Permission>,
     @InjectModel(Carrier.name) private readonly carrierModel: Model<Carrier>,
@@ -1621,11 +1627,14 @@ export class DemoSeedService {
   // ---------------------------------------------------------------------------
 
   /**
-   * A handful of mailer prospects (PAC-73).
+   * A handful of mailer prospects (PAC-73), under one demo campaign (PAC-71).
    *
-   * Exists so the Mailers drawer and the Add Mailers report are testable with
-   * **neither** GCP credentials nor a real RTP file — both of which gate the
-   * two real importers, and neither of which a new contributor will have.
+   * Exists so the Mailers drawer is testable with **neither** GCP credentials
+   * nor a real vendor file — both of which gate the real importers, and neither
+   * of which a new contributor will have. Between PR1 and PR3 of PAC-71 this is
+   * the *only* way to get mailers into a local database through the app, because
+   * the Add Mailers upload was deleted with the tenancy refactor and the campaign
+   * UI has not landed yet.
    *
    * ## Deliberately not tied to demo households
    *
@@ -1649,6 +1658,11 @@ export class DemoSeedService {
     const sample: { long: string; short: string }[] = [];
     const quoteDate = this.daysAgo(21);
     const weekNumber = 29;
+    const campaignId = await this.seedMailerCampaign(
+      ctx,
+      weekNumber,
+      quoteDate,
+    );
 
     for (let i = 0; i < DEMO_CONFIG.mailers; i++) {
       // A stable, realistic-looking pair: a '#'-prefixed 32-hex "UUID" whose
@@ -1666,15 +1680,22 @@ export class DemoSeedService {
 
       await this.mailerModel.updateOne(
         {
-          agencyId: ctx.agencyId,
           // `$in` over both forms, matching the unique index's domain — see
           // the note on the same filter in `common/mailers/mailer-import.ts`.
+          // Platform-wide, with no agency clause: the dedupe key is the mailer's
+          // whole identity since PAC-71.
           controlNumberKeys: {
             $in: mailerControlNumberKeys(controlNumber, newControlNumber),
           },
         },
         {
           $set: {
+            campaignId,
+            visibleAgencyIds: [ctx.agencyId],
+            // The code the real Smith Family Agency file carries, so a demo
+            // database exercises the same carrier-appointment routing shape
+            // production does.
+            carrierAgencyId: 'A0B9049',
             controlNumber,
             newControlNumber,
             firstName: first,
@@ -1743,7 +1764,6 @@ export class DemoSeedService {
             },
           },
           $setOnInsert: {
-            agencyId: ctx.agencyId,
             controlNumberKeys: mailerControlNumberKeys(
               controlNumber,
               newControlNumber,
@@ -1757,6 +1777,57 @@ export class DemoSeedService {
     }
 
     return sample;
+  }
+
+  /**
+   * The campaign the demo mailers belong to.
+   *
+   * `Mailer.campaignId` is required (PAC-71), so the seed mints one implicit
+   * campaign per agency through the **shared** `implicitCampaignDoc` helper —
+   * the same one the migration uses, so a demo database and a migrated one have
+   * campaigns of the same shape rather than two dialects.
+   */
+  private async seedMailerCampaign(
+    ctx: Ctx,
+    weekNumber: number,
+    quoteDate: Date,
+  ): Promise<string> {
+    const carrier = await this.carrierModel
+      .findOne({ agencyId: null, slug: carrierSlug(DEFAULT_MAILER_CARRIER) })
+      .select({ _id: 1 })
+      .lean();
+    if (!carrier) {
+      // `seedPlatformCatalogs` runs first, so this cannot happen — but a
+      // required `carrierId` silently written as `undefined` would fail on save
+      // with a message about the wrong field.
+      throw new Error(
+        `Demo seed: no global ${DEFAULT_MAILER_CARRIER} carrier to attach the mailer campaign to.`,
+      );
+    }
+
+    const key = {
+      agencyId: ctx.agencyId,
+      weekNumber,
+      year: quoteDate.getUTCFullYear(),
+    };
+    const { migrationKey, ...rest } = implicitCampaignDoc(key, {
+      carrierId: carrier._id,
+      agencyName: 'Demo Agency',
+      campaignNumber: `Week_Number-${weekNumber}`,
+      fileName: 'SFA-20P',
+      source: 'demo',
+    });
+
+    const campaign = await this.mailerCampaignModel.findOneAndUpdate(
+      { migrationKey },
+      {
+        $set: { quoteDate, recordSource: 'demo:seed' },
+        $setOnInsert: { ...rest, migrationKey },
+      },
+      { upsert: true, new: true, projection: { _id: 1 } },
+    );
+    this.inc('mailerCampaigns');
+    return campaign._id.toString();
   }
 
   /** 32 stable hex characters for demo mailer `i`. Not cryptographic. */
@@ -1924,11 +1995,23 @@ export class DemoSeedService {
     }
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
     // Same exception as producer goals: `Mailer` has no `legacySmartSuiteId`,
-    // so it is keyed and purged on its provenance marker instead.
-    await this.mailerModel.deleteMany({
-      agencyId,
-      'source.recordSource': 'demo:seed',
-    });
+    // so it is keyed and purged on its provenance marker instead. It also has no
+    // `agencyId` any more (PAC-71), so the campaign is what scopes the purge to
+    // this tenant — delete the mailers first, or their campaign is gone and they
+    // are unreachable.
+    const demoCampaigns = await this.mailerCampaignModel
+      .find({ recordSource: 'demo:seed', 'assignment.agencyIds': agencyId })
+      .select({ _id: 1 })
+      .lean();
+    if (demoCampaigns.length > 0) {
+      await this.mailerModel.deleteMany({
+        campaignId: { $in: demoCampaigns.map((c) => c._id.toString()) },
+        'source.recordSource': 'demo:seed',
+      });
+      await this.mailerCampaignModel.deleteMany({
+        _id: { $in: demoCampaigns.map((c) => c._id) },
+      });
+    }
 
     // Reset the household counter too, so a `--fresh` seed is actually
     // reproducible rather than climbing `HH-44`, `HH-68`, … on every run.

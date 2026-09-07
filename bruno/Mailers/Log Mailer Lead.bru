@@ -76,12 +76,15 @@ docs {
     Clerk lookup with an email fallback and a self-healing `PATCH`, all of which
     existed because it had no first-class user identity.
   - **`quoteControlNumber` gets the LONG form**, taken from the mailer document
-    rather than from what was typed. Two reasons: the Leads list searches that
-    field with a contains-regex and the short form is the last 12 characters
-    *inside* the long one, so storing the long form is findable by either — and
-    the dedupe on that field is an exact-equality **merge**, where a collision
-    on 48 bits of truncated UUID would quietly join two different prospects'
-    leads.
+    rather than from what was typed, because the Leads list searches that field
+    with a contains-regex and the short form is the last 12 characters *inside*
+    the long one — so storing the long form is findable by either.
+  - **`Lead.mailer` gets the real link** (PAC-71): `mailerId`, the denormalized
+    `campaignId`, the normalized `controlNumberKey`, and
+    `matchedBy: "drawer"` — the strongest of the three values, because the
+    caller resolved the mailer itself rather than the server inferring one from
+    a typed string. `quoteControlNumber` stays as the display and search string
+    and is no longer the join key.
   - **The address stores the 5-digit zip**, not the ZIP+4. Address dedupe keys
     on `street|zip`, so a `74133-5807` would stop this lead ever matching one a
     producer typed by hand at the same house.
@@ -109,6 +112,27 @@ docs {
   and one mailer would become two leads — see **Log Mailer Lead (Replay, Other
   Form)**.
 
+  ## One lead per mailer, platform-wide (PAC-71)
+
+  A campaign can be visible to several agencies, and a mailer may be logged
+  **exactly once across all of them**. The first agency to log it owns it; a
+  second agency's call is a `409` rather than a second lead for the same
+  prospect. The rule is enforced by a unique partial index on
+  `leads.mailer.mailerId`, not by the pre-check alone — an E11000 raised on that
+  index anywhere in the intake pipeline maps to the same `409`.
+
+  The message names neither the agency that holds the lead nor the lead itself;
+  that is another tenant's data. The drawer surfaces the same fact as
+  `alreadyLogged: true` with `linkedLeadId: null` and disables the action.
+
+  A **same-agency** replay is not a conflict: it flows on and resolves to the
+  existing lead through the submission token, returning `alreadyExisted: true`.
+
+  > There is no Bruno request for the cross-agency `409`, because setting the
+  > state up needs a campaign visible to two agencies and the campaign API lands
+  > in PR2. It is covered by `test/mailer-lookup.e2e-spec.ts`, which asserts both
+  > the status and that the body names neither tenant.
+
   ## Response `200`
 
   ```json
@@ -132,6 +156,7 @@ docs {
   |---|---|
   | `400` | missing or malformed `controlNumber` |
   | `403` | `mailers` or `leads` module disabled, or missing `mailers:read` / `leads:write` |
-  | `404` | no mailer with that number in the caller's agency |
+  | `404` | no mailer with that number whose campaign is visible to the caller's agency |
+  | `409` | another agency has already logged this mailer — see above |
   | `422` | the mailer carries no usable recipient name, so no lead can be created — not `400` (the body was fine) and not `404` (the mailer exists) |
 }

@@ -13,24 +13,25 @@ import {
 } from './mailer-row.mapper';
 
 /**
- * The import engine shared by the RTP upload and the BigQuery backfill (PAC-73).
+ * The import engine, shared by every writer of `mailers` (PAC-73, PAC-71).
  *
  * ## Why this is a plain function and not an `@Injectable`
  *
- * The upload path runs inside `src/worker/`, which the eslint boundary in
+ * The commit path runs inside `src/worker/`, which the eslint boundary in
  * `packages/api/eslint.config.mjs` forbids from importing a feature service —
  * that would drag a whole module graph across a boundary the worker exists to
  * keep clean. A dependency-free function taking its collaborators as arguments
- * is importable from the worker, from an offline CLI, and from PAC-71's
- * campaign flow when it arrives, with no module wiring at any of them.
+ * is importable from the worker, from an offline CLI and from the demo seed,
+ * with no module wiring at any of them.
  *
- * ## One normalizer, two sources
+ * ## One normalizer, every source
  *
- * The two callers differ **only** in how rows are read: a CSV stream from
- * object storage, or a BigQuery query stream. Everything past that — header
- * normalization, coercion, the dedupe key, the upsert — is this file. Two
- * independently written mappers over near-identical data is how the sources
- * drift into producing different documents for the same mailer.
+ * The callers differ **only** in how rows are read: a CSV stream from object
+ * storage, a BigQuery query stream, an in-memory array. Everything past that —
+ * header normalization, coercion, the dedupe key, the audience resolution, the
+ * upsert — is this file. Two independently written mappers over near-identical
+ * data is how the sources drift into producing different documents for the same
+ * mailer.
  */
 
 /**
@@ -41,8 +42,8 @@ import {
  * of 4,708 inserts and 16,268 updates.
  *
  * ⚠ The figures this block used to carry (≈100 rows/s first import, ≈46 rows/s
- * re-import, 671k ≈ 2h) were measured while the upsert filter could not use
- * `agencyId_1_controlNumberKeys_1` — see the `$type` note on the filter below.
+ * re-import, 671k ≈ 2h) were measured while the upsert filter could not use the
+ * dedupe index — see the `$type` note on the filter below.
  * They described a full collection scan per row, so they were quadratic in
  * collection size rather than a property of this batch size, and the 671k
  * extrapolation was wrong by orders of magnitude. Do not restore them.
@@ -103,19 +104,24 @@ export interface MailerImportResult {
   /** What the file said about itself, from the first data row. */
   detected: MailerImportDetected | null;
   /**
-   * Columns that were supposed to be single-valued across the file but were
-   * not.
+   * Columns that held more than one value across the file.
    *
-   * "One file = one campaign, one agency, one product" is an observation about
-   * real files, not a guarantee the format makes. If it stops holding, the
-   * per-upload agency choice silently mis-files whichever rows disagree — so it
-   * is verified rather than assumed, and reported rather than enforced (a
-   * second value is a reason to look at the file, not to refuse it).
+   * Purely informational — see {@link SINGLE_VALUED_COLUMNS}. Rows are routed
+   * individually, so a second `agencyid` is a fact about the file, not a fault
+   * in it.
    */
   inconsistentColumns: string[];
 }
 
-/** Columns asserted to be constant across a file. See `inconsistentColumns`. */
+/**
+ * Columns a file was expected to hold one value of. See `inconsistentColumns`.
+ *
+ * ⚠ **Informational since PAC-71, not an assertion.** Several `agencyid` values
+ * is the normal multi-agency case — the campaign routes per row — and the real
+ * week-36 vendor file carries two `quotedate` values. What used to be evidence
+ * for "one file = one agency" is now just a note on the preview; nothing may
+ * render it as an error.
+ */
 const SINGLE_VALUED_COLUMNS = [
   'agencyid',
   'agencyname',
@@ -131,6 +137,11 @@ const SINGLE_VALUED_COLUMNS = [
  * source updates in place and creates nothing new. That property is what makes
  * a retried worker job safe, and what lets the backfill be re-runnable rather
  * than one-shot.
+ *
+ * A row whose carrier agency code the campaign's assignment cannot resolve is
+ * **rejected and counted** — see `MailerMapContext.visibleAgencyIdsFor`. The
+ * campaign API refuses to commit while any such code exists, so in practice
+ * these surface at preview.
  */
 export async function importMailerRows(
   // Accepts a plain `Iterable` as well: the upload path hands over a CSV parse
@@ -201,20 +212,23 @@ export async function importMailerRows(
         // moving together, and easy to mistake for corrupt source data.
         //
         // ⚠ `$type: 'string'` is **load-bearing, not decorative** — do not
-        // "simplify" it away. It restates the dedupe index's
+        // "simplify" it away. It restates `controlNumberKeys_1`'s
         // `partialFilterExpression` verbatim, and MongoDB will only use a
         // partial index when the query provably implies that expression.
         // `$in: [<strings>]` does *not* imply `$type: 'string'` on its own, so
-        // without this clause the planner silently discards
-        // `agencyId_1_controlNumberKeys_1` and falls back to `agencyId_1` —
-        // which, in a single-agency collection, FETCHes **every mailer in the
-        // agency for every row of the file**. That is O(n²) in the collection
-        // size: it hides on the first import into an empty collection and then
-        // degrades until a single batch outlives the object-storage read
-        // timeout, which is how a 20k-row import went from 3 minutes to a
-        // 5-hour hang.
+        // without this clause the planner silently discards the index and falls
+        // back to a collection scan — FETCHing **every mailer for every row of
+        // the file**. That is O(n²) in the collection size: it hides on the
+        // first import into an empty collection and then degrades until a
+        // single batch outlives the object-storage read timeout, which is how a
+        // 20k-row import went from 3 minutes to a 5-hour hang.
+        //
+        // The filter carries no campaign clause, and must not. The key is
+        // platform-wide (PAC-71): a row already held by an earlier campaign is
+        // *this same mailer*, and the `$set` moves it to the newer campaign.
+        // Scoping the filter by campaign would insert a second copy and die on
+        // the unique index.
         filter: {
-          agencyId: ctx.agencyId,
           controlNumberKeys: { $in: keys, $type: 'string' },
         },
         update: {

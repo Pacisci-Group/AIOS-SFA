@@ -37,6 +37,13 @@ const path = require('path');
  *   dist/migration/mailers/import-bigquery-mailers.js
  *                                                  BigQuery mailer backfill.
  *                                                  Needs BQ_* + GCP creds.
+ *   dist/migration/backfill/mailer-campaigns.js    PAC-71: moves `mailers` from
+ *                                                  agency tenancy to campaign
+ *                                                  tenancy and rebuilds the
+ *                                                  dedupe index. A REQUIRED
+ *                                                  deploy step, run with the API
+ *                                                  and worker stopped — so it
+ *                                                  has to exist in the image.
  *
  * Occasional operations (not part of a bring-up):
  *   dist/migration/consolidate-service-tickets.js  fold a database migrated
@@ -65,6 +72,8 @@ const ONE_SHOT_ENTRIES = {
     'src/migration/mailers/import-bigquery-mailers.ts',
   'migration/consolidate-service-tickets':
     'src/migration/consolidate-service-tickets.ts',
+  'migration/backfill/mailer-campaigns':
+    'src/migration/backfill/mailer-campaigns.ts',
 };
 
 module.exports = (options) => ({

@@ -1,0 +1,51 @@
+meta {
+  name: Upload Transfer Document
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{transferDocumentUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/pdf
+}
+
+body:text {
+  %PDF-1.4
+  1 0 obj<</Type/Catalog>>endobj
+  trailer<</Root 1 0 R>>
+  %%EOF
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw New Business Application upload
+
+  Not an API endpoint: this goes **straight to object storage** using the URL
+  from `Presign Transfer Document`, so the file bytes never pass through the
+  API.
+
+  - **Auth:** `none` — deliberately. The collection-level bearer would be sent
+    on this request and **break the S3 signature**; a presigned URL carries its
+    own credentials.
+
+  ## Why the collection cannot skip this step
+
+  `Record Policy Transfer` runs the sold-deal intake pipeline, and
+  `SoldSubmissionValidator.verifyAttachments` does two independent checks on
+  every declared attachment: `assertKeyOwnership` (a key from another agency or
+  another purpose prefix is refused before storage is touched at all) and then
+  `statObject`. A key that was presigned but never written is a
+  `404 An uploaded document was not found in storage.` — so a fixture that
+  presigned and moved on would fail the transfer for a reason that looks
+  nothing like the cause.
+}

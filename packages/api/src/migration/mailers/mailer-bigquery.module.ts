@@ -2,7 +2,12 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ENV_FILE_PATH } from '../../config/env.config';
+import { Carrier, CarrierSchema } from '../../carriers/schemas/carrier.schema';
 import { Mailer, MailerSchema } from '../../mailers/schemas/mailer.schema';
+import {
+  MailerCampaign,
+  MailerCampaignSchema,
+} from '../../mailers/schemas/mailer-campaign.schema';
 import { Agency, AgencySchema } from '../../platform/schemas/agency.schema';
 
 /**
@@ -13,10 +18,11 @@ import { Agency, AgencySchema } from '../../platform/schemas/agency.schema';
  * never boots the HTTP guards, the throttler, the Inngest client or a single
  * controller — none of which an offline import has any use for.
  *
- * Registers only the two models it touches. `MailerImportRun` is deliberately
- * absent: run records describe an **operator's upload** through the panel, and
- * inventing one for a deploy-time script would put a row in the panel's history
- * that nobody uploaded.
+ * Registers only the models it touches. `MailerCampaign` is among them because
+ * `Mailer.campaignId` is required (PAC-71): rows are bucketed into **implicit**
+ * campaigns keyed `(agency, week, year)`, marked `source: 'migration'` so they
+ * are distinguishable from a run an operator actually performed. `Carrier` is
+ * read-only here — the campaign needs one and this script never creates it.
  */
 @Module({
   imports: [
@@ -30,7 +36,9 @@ import { Agency, AgencySchema } from '../../platform/schemas/agency.schema';
     }),
     MongooseModule.forFeature([
       { name: Mailer.name, schema: MailerSchema },
+      { name: MailerCampaign.name, schema: MailerCampaignSchema },
       { name: Agency.name, schema: AgencySchema },
+      { name: Carrier.name, schema: CarrierSchema },
     ]),
   ],
 })

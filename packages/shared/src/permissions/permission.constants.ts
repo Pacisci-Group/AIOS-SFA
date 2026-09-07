@@ -112,6 +112,24 @@ export const AgencyPermission = {
   DomainsWrite: 'agency:domains:write',
   EmailRead: 'agency:email:read',
   EmailWrite: 'agency:email:write',
+  /**
+   * Carrier appointments — the agency code each carrier issued this agency
+   * (PAC-93). A fourth pair for the same reason the three above are three: its
+   * blast radius is its own. A wrong code files this agency's mailer prospects
+   * under another tenant, or under none — the appointment is what PAC-71 routes
+   * a vendor file's `agencyid` column by.
+   *
+   * ⚠ **Not `agency:carriers:*`.** `carrier.schema.ts` already reserves that
+   * for agency-owner CRUD over the carrier *catalog*, which is a different
+   * thing: the catalog says which insurers exist, an appointment says which of
+   * them appointed you and under what code. Two capabilities must not share a
+   * string.
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, for
+   * the same three reasons written up there.
+   */
+  CarrierAppointmentsRead: 'agency:carrier_appointments:read',
+  CarrierAppointmentsWrite: 'agency:carrier_appointments:write',
 } as const;
 
 export type ModuleAction = 'read' | 'write';

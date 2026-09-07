@@ -14,7 +14,6 @@ paths:
   - "packages/web/src/features/platform/AddMailersPage.tsx"
   - "packages/web/src/features/lead/components/MailerLookupDrawer.tsx"
   - "packages/web/src/components/leads/MailersButton.tsx"
-  - "docs/mailers-handoff.md"
 ---
 
 # `apex-mail-companion` (ApexReports) — read-only reference
@@ -63,8 +62,9 @@ rebuilt, and as an upstream data producer during the transition**.
 - **Its BigQuery tables are upstream of ours.** Project `allstate123`, dataset
   `smartsuite_data`. `Mailer_Test_Alteryx` / `Mailer_Test_Alteryx_Current` are
   what ApexReports writes and what our `mailers` collection was imported from
-  (PAC-73). Do not add request-time BigQuery reads to AIOS-SFA — see
-  `docs/mailers-handoff.md`.
+  (PAC-73). **Do not add request-time BigQuery reads to AIOS-SFA.** BigQuery is
+  retired once the mailer backfill has run (PAC-71 scope item 5), so a read path
+  added now is one that has to be taken out again.
 
 ## App shape
 
@@ -194,13 +194,22 @@ cron-secret-gated public hook (`api/public/hooks/scheduled-sfa`).
 
 ## Our side of the boundary
 
-AIOS-SFA already owns the **read** side of mailers (PAC-73 + PAC-61):
+AIOS-SFA owns both sides of mailers now. The **read** path (PAC-73 + PAC-61) is
 `packages/api/src/mailers/`, `packages/shared/src/domain/mailer.ts` +
-`mailer-control-number.ts`, and the Leads-page lookup drawer.
-`docs/mailers-handoff.md` records what was settled — canonical control number
-(long form), premium presentation, the campaign line, Oklahoma-only county
-resolution, and the `mailers:read` / `leads:write` split. **Read that before
-designing campaign features** so a new one doesn't re-litigate a decision or
+`mailer-control-number.ts`, and the Leads-page lookup drawer. The **run** itself
+is ours since PAC-71: `common/mailers/mailer-processor.ts` is the SFA Processor
+ported step for step, campaigns live in `mailers/mailer-campaigns.service.ts`,
+and the preview/commit jobs in `worker/functions/mailer-campaign-*.fn.ts`.
+
+The decisions behind those are recorded **in the code and in the tickets**,
+never in a separate handoff document — one goes stale the moment the code moves,
+which is why the old `docs/mailers-handoff.md` was deleted. Canonical control
+number (long form): `shared/src/domain/mailer-control-number.ts`. Premium
+presentation and the campaign line: the sub-schemas on `Mailer`. Oklahoma-only
+county resolution: `common/mailers/county-names.ts`. Tenancy — a mailer belongs
+to a campaign, not an agency: `MailerCampaign`'s class note. The
+`mailers:read` / `leads:write` split: `MailersController`. **Read those before
+designing a campaign feature**, so a new one doesn't re-litigate a decision or
 contradict the control-number contract.
 
 Beyond mailers, ApexReports overlaps our roadmap in several places — producer

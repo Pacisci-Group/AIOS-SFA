@@ -1,0 +1,60 @@
+meta {
+  name: Commit Campaign (Wrong Status, 409)
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/commit
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "mode": "append"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("names the status it refused on", function () {
+    // Not a generic "cannot commit": the operator needs to know whether to
+    // wait, re-preview, or look at a run that already finished.
+    expect(res.getBody().message).to.contain("imported");
+  });
+}
+
+docs {
+  # POST /platform/mailer-campaigns/:campaignId/commit — the wrong-status refusal
+
+  The same endpoint as `Commit Campaign (Append)`, sent against the campaign
+  that request already imported. See there for the full contract.
+
+  This is the first of the commit gate's checks and the one a client is most
+  likely to hit by accident — a stale page, a double-submitted button, a browser
+  back. **Only a `previewed` campaign may commit**: committing something still
+  parsing would write from a file nobody has seen the shape of, and committing
+  something already imported would be a silent double-import (harmless, since
+  every write is an upsert, but it would report nonsense).
+
+  The same `409` also covers losing the compare-and-set — two operators looking
+  at the same previewed page cannot both start the run — so the message names
+  the status rather than describing a single cause.
+
+  ## Response `409`
+  ```json
+  { "statusCode": 409, "message": "This campaign cannot be committed while it is \"imported\"." }
+  ```
+}

@@ -1,0 +1,108 @@
+meta {
+  name: Presign Campaign File
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/platform/mailer-campaigns/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "SFA-QBP-week-98.csv",
+    "contentType": "text/csv",
+    "size": 4096
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("campaignFileKey", res.getBody().key);
+    bru.setVar("campaignUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns a presigned PUT URL and a server-minted key", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("key");
+    expect(body).to.have.property("uploadUrl");
+    expect(body).to.have.property("expiresIn");
+    // Signed from the *extension*, not from whatever the browser reported.
+    expect(body.requiredHeaders["Content-Type"]).to.equal("text/csv");
+  });
+
+  test("the key sits in the platform namespace, not a tenant's", function () {
+    // A campaign belongs to no agency — it is run once and can serve many.
+    expect(res.getBody().key).to.match(/^platform\/mailer-campaigns\//);
+  });
+}
+
+docs {
+  # POST /platform/mailer-campaigns/presign — step 1 of 3 (PAC-71)
+
+  A short-lived **presigned PUT URL** so the browser uploads the vendor file
+  straight to object storage. The bytes never pass through the API — there is no
+  multer and no `FileInterceptor` anywhere in this codebase, and none should be
+  added.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ⚠ `platform:mailers:write` is **not** the agency-facing `mailers:read` module
+  permission the Mailers drawer uses. Neither implies the other.
+
+  ## Body
+  | field | type | rules |
+  |---|---|---|
+  | filename | string | 1–255 chars. **Decides the parse path**: `.xlsx` is read as a workbook, anything else as CSV. |
+  | contentType | enum | Optional and advisory — see below. |
+  | size | int | > 0, ≤ 100 MB. |
+
+  ## Why `contentType` is accepted but not used to sign
+
+  `File.type` for a spreadsheet is variously `application/vnd.openxmlformats-…`,
+  `application/zip`, `application/octet-stream` or the **empty string**,
+  depending on browser, OS and whether the file came from a cloud drive. The URL
+  is therefore signed with a type derived from the *extension*
+  (`canonicalMailerContentType`) and echoed back in `requiredHeaders`; the `PUT`
+  must send exactly that value or the S3 signature fails with an opaque 403.
+
+  100 MB rather than the 10 MB used for PDFs elsewhere: the real vendor file is
+  ~23 MB and an Auto file, with its 33 extra populated columns, is larger.
+
+  ## Response `201`
+  ```json
+  {
+    "key": "platform/mailer-campaigns/2026/vendor/<uuid>-sfa-qbp-week-98.csv",
+    "uploadUrl": "http://localhost:9000/sfa-uploads/platform/...",
+    "requiredHeaders": { "Content-Type": "text/csv" },
+    "expiresIn": 300
+  }
+  ```
+
+  The key is **server-generated**, and `Create Campaign` re-checks its
+  `platform/mailer-campaigns/` prefix — so a caller cannot hand back a key
+  belonging to a tenant's document and have the platform read it.
+
+  ## Errors
+  - `400 Bad Request` — bad content type, or a size over 100 MB.
+  - `401` / `403` — missing token, or missing `platform:mailers:write`.
+  - `503 Service Unavailable` — object storage is not configured.
+}

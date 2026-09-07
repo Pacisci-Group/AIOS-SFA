@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { carrierSlug } from '@sfa/shared';
 import type { CarrierListResponse, CarrierOption } from '@sfa/shared';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Carrier, CarrierDocument } from './schemas/carrier.schema';
 
 @Injectable()
@@ -60,6 +60,33 @@ export class CarriersService {
     carriers.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 
     return { carriers };
+  }
+
+  /**
+   * Global carrier names by id, for validating an appointment's target (PAC-93).
+   *
+   * ⚠ Not {@link list}, and not because of the shape. `list` filters
+   * `active: true`, which is the right answer to "what should the picker
+   * offer" and the wrong one to "is this a valid appointment target": an agency
+   * legitimately holds an appointment with a carrier we later deactivate in the
+   * catalog, and re-saving that agency must not fail. Globals only — an
+   * agency-scoped custom carrier is not something a carrier can appoint anyone
+   * under.
+   *
+   * Ids that are not global rows are simply absent from the map; the caller
+   * decides whether that is an error, and gets to name it.
+   */
+  async globalNamesByIds(ids: string[]): Promise<Map<string, string>> {
+    const unique = [...new Set(ids)].filter((id) => Types.ObjectId.isValid(id));
+    if (unique.length === 0) return new Map();
+
+    const rows = await this.carrierModel
+      .find({ _id: { $in: unique }, agencyId: null })
+      .select({ name: 1 })
+      .lean()
+      .exec();
+
+    return new Map(rows.map((row) => [row._id.toString(), row.name]));
   }
 
   /**

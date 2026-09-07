@@ -1,6 +1,6 @@
 /**
  * The SFA Processor — the transform that turns a mail vendor's presorted quote
- * file into the offer that gets printed and mailed (PAC-71 spike).
+ * file into the offer that gets printed and mailed (PAC-71).
  *
  * Ported step for step from ApexReports
  * (`./apex-mail-companion/src/components/mail/Part2.tsx`, `run()` +
@@ -44,6 +44,8 @@
  *   expensive homes.
  */
 
+import type { MailerDiscountRules, SquareFootageBand } from '@sfa/shared';
+
 export interface MailerProcessorSettings {
   /**
    * Written to every row's `Campaign Number`. Passed through
@@ -77,26 +79,17 @@ export interface MailerProcessorSettings {
   discounts?: MailerDiscountRules;
 }
 
-/** One square-footage band: homes at or above `minSquareFeet` get `rate` off. */
-export interface SquareFootageBand {
-  minSquareFeet: number;
-  /** Fraction, e.g. `0.44`. */
-  rate: number;
-}
-
-export interface MailerDiscountRules {
-  /**
-   * Evaluated largest `minSquareFeet` first; the first band the home reaches
-   * wins. A home below every band gets no size discount.
-   */
-  squareFootage: SquareFootageBand[];
-  homeAge: {
-    /** A home this many years old or newer gets `newRate`; older gets `oldRate`. */
-    maxNewYears: number;
-    newRate: number;
-    oldRate: number;
-  };
-}
+/**
+ * ⚠ `SquareFootageBand` and `MailerDiscountRules` moved to `@sfa/shared`
+ * (`domain/mailer-campaign.ts`) in PAC-71, and are re-exported here so this
+ * module stays the single import for everything transform-shaped.
+ *
+ * They moved because a campaign **stores** the rules it ran with and the web
+ * wizard **edits** them, so all three layers need the type. The default values
+ * did not move — {@link DEFAULT_MAILER_DISCOUNTS} below is still the only place
+ * the numbers are written down.
+ */
+export type { MailerDiscountRules, SquareFootageBand };
 
 /** Apex's table — see `Part2.tsx`. */
 export const DEFAULT_MAILER_DISCOUNTS: MailerDiscountRules = {

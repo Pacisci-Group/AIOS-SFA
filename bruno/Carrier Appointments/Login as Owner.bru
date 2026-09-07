@@ -1,0 +1,56 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("appointmentsOwnerToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the owner holds the carrier-appointment permissions", function () {
+    // They reach the Agency Owner through the `AgencyPermission` spread in
+    // `default-role-templates.ts`, not through `grantsAllEnabledModules`, which
+    // only expands `{module}:read|write`.
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("agency:carrier_appointments:read");
+    expect(perms).to.include("agency:carrier_appointments:write");
+  });
+}
+
+docs {
+  # POST /auth/login — carrier-appointments folder helper
+
+  Captures `appointmentsOwnerToken`, and doubles as the regression guard that
+  the new permission pair actually reaches the Agency Owner.
+
+  ⚠ **A seeded agency needs `npm run api:sync:roles:dev` after deploying
+  PAC-93.** The pair is added to the role *template*; an already-seeded agency
+  carries a stored copy of its roles and does not pick it up otherwise. If the
+  permission assertions here fail against an existing database, that is the
+  missing step, not a code bug.
+}

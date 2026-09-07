@@ -1,0 +1,101 @@
+meta {
+  name: Patch Zip Resolutions
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "settings": {
+      "premiumFloor": 1886.15,
+      "fileName": "SFA-QBP",
+      "defaultMarket": "Oklahoma City",
+      "marketPhones": { "Tulsa": "918-984-6163" },
+      "defaultPhone": "405-803-7590",
+      "runYear": 2026,
+      "discounts": {
+        "squareFootage": [
+          { "minSquareFeet": 2500, "rate": 0.44 },
+          { "minSquareFeet": 2000, "rate": 0.36 },
+          { "minSquareFeet": 1500, "rate": 0.32 },
+          { "minSquareFeet": 1000, "rate": 0.29 }
+        ],
+        "homeAge": { "maxNewYears": 9, "newRate": 0.04, "oldRate": 0.1 }
+      },
+      "zipResolutions": { "99999": "Tulsa" },
+      "outputRecipients": []
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("drops the stale preview and re-runs it", function () {
+    // The stored preview described the *old* settings. Leaving it in place
+    // would let a commit gate itself against numbers that no longer describe
+    // what would run.
+    const body = res.getBody();
+    expect(body.status).to.equal("uploaded");
+    expect(body.preview).to.equal(null);
+  });
+
+  test("keeps the resolution on the campaign, so the run is reproducible", function () {
+    expect(res.getBody().settings.zipResolutions["99999"]).to.equal("Tulsa");
+  });
+}
+
+docs {
+  # PATCH /platform/mailer-campaigns/:campaignId — change settings and re-preview
+
+  The inline ZIP resolver, and any other change to the run before it commits.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  Legal only in `uploaded`, `previewed` or `failed` — a `409` otherwise.
+
+  ## What a PATCH does beyond storing the change
+
+  1. **Writes `zipResolutions` into the platform ZIP → market table** with
+     `source: 'preview'`. That is the whole of ApexReports' resolver flow: the
+     answer the operator gives once is reused by every campaign after this one.
+     Confirm it with `Platform Zip Markets/List Zip Markets`.
+  2. **Clears the preview and re-dispatches it**, bumping `previewAttempt`. The
+     old preview described the old settings, so it cannot be allowed to gate a
+     commit.
+
+  ## What cannot be changed
+
+  `source` and the uploaded file. Both describe the object in storage, and
+  changing either would leave the campaign describing a file it no longer points
+  at — a different file is a different campaign.
+
+  ## Body
+  A partial pick of `{name, carrierId, campaignNumber, assignment, settings}`.
+  At least one field is required. `settings` is all-or-nothing: it is a
+  **snapshot**, so a partial one would leave a run half-described.
+
+  ## Errors
+  - `400 Bad Request` — an empty body, an unknown carrier or agency, or a ZIP
+    key that is not exactly five digits.
+  - `401` / `403` — missing token, or missing `platform:mailers:write`.
+  - `409 Conflict` — the campaign is `processing`, `imported` or `superseded`.
+}

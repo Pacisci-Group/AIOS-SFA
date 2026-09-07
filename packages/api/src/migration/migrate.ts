@@ -21,11 +21,14 @@ function parseOptions(argv: string[]): MigrationOptions {
     branchSlug: value('--branch', 'main'),
     agencyName: value('--agency-name', 'Smith Family Agency'),
     branchName: value('--branch-name', 'Main'),
-    // Mailer identity (PAC-73). Defaults are Smith Family Agency's, since this
-    // migration exists to import their book; a different tenant must pass both
-    // or step 3 (BigQuery -> mailers) attributes nothing to it.
+    // Mailer identity (PAC-73, PAC-93). Defaults are Smith Family Agency's,
+    // since this migration exists to import their book; a different tenant must
+    // pass all three or step 3 (BigQuery -> mailers) attributes nothing to it.
+    // The carrier is a *global* catalog slug — the appointment is with a real
+    // insurer, so the core seed must have run first.
     ticker: value('--ticker', 'SFA'),
-    allstateAgencyId: value('--allstate-id', 'A0B9049'),
+    carrierSlug: value('--carrier-slug', 'allstate'),
+    carrierAgencyCode: value('--carrier-code', 'A0B9049'),
     /*
      * The migrated user promoted to Agency Owner. A real person from the legacy
      * book, not a synthetic account — and the only way anyone gets into the

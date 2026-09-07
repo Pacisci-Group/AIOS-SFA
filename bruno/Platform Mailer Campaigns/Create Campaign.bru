@@ -1,0 +1,139 @@
+meta {
+  name: Create Campaign
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/platform/mailer-campaigns
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "Bruno week 98",
+    "source": "vendor",
+    "storageKey": "{{campaignFileKey}}",
+    "uploadedFilename": "SFA-QBP-week-98.csv",
+    "size": {{campaignFileSize}},
+    "campaignNumber": "98",
+    "assignment": { "mode": "all" },
+    "settings": {
+      "premiumFloor": 1886.15,
+      "fileName": "SFA-QBP",
+      "defaultMarket": "Oklahoma City",
+      "marketPhones": { "Tulsa": "918-984-6163" },
+      "defaultPhone": "405-803-7590",
+      "runYear": 2026,
+      "discounts": {
+        "squareFootage": [
+          { "minSquareFeet": 2500, "rate": 0.44 },
+          { "minSquareFeet": 2000, "rate": 0.36 },
+          { "minSquareFeet": 1500, "rate": 0.32 },
+          { "minSquareFeet": 1000, "rate": 0.29 }
+        ],
+        "homeAge": { "maxNewYears": 9, "newRate": 0.04, "oldRate": 0.1 }
+      },
+      "zipResolutions": {},
+      "outputRecipients": []
+    }
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("campaignId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("normalizes the week tag and derives the week number", function () {
+    // `98`, `week 98` and `Week_Number-98` all land the same way — the print
+    // file and the legacy joins key on that exact string.
+    expect(res.getBody().campaignNumber).to.equal("Week_Number-98");
+    expect(res.getBody().weekNumber).to.equal(98);
+  });
+
+  test("starts as uploaded, with nothing written yet", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("uploaded");
+    expect(body.importCounts).to.equal(null);
+    expect(body.outputFile).to.equal(null);
+  });
+
+  test("never exposes a storage key", function () {
+    // A key is a capability, not an identifier: the download endpoint mints a
+    // short-lived presigned URL on click instead.
+    expect(res.getBody().vendorFile).to.not.have.property("storageKey");
+    expect(res.getBody().vendorFile.name).to.equal("SFA-QBP-week-98.csv");
+  });
+}
+
+docs {
+  # POST /platform/mailer-campaigns — step 3 of 3: record it and preview (PAC-71)
+
+  Records the upload and queues the **preview** job. Nothing is written to
+  `mailers` here or by the job this starts — the operator sees what the file
+  contains before deciding.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Body
+  | field | type | rules |
+  |---|---|---|
+  | name | string | Optional; derived from the file name and week if omitted. |
+  | carrierId | string | Optional 24-hex. Defaults to the global Allstate carrier. |
+  | source | enum | `vendor` runs the transform; `processed` imports as-is (the old Add Mailers flow, kept as the recovery path). |
+  | storageKey | string | From `presign`. Its `platform/mailer-campaigns/` prefix is re-checked here. |
+  | uploadedFilename | string | 1–255 chars. |
+  | size | int | Must equal what `HeadObject` reports, or `400`. |
+  | campaignNumber | string | Optional; normalized to `Week_Number-NN`, defaults to the current ISO week. |
+  | assignment | object | `{mode: 'carrier_agency_id'}` \| `{mode: 'agencies', agencyIds: [...]}` \| `{mode: 'all'}`. |
+  | settings | object | Every transform field **required**, no defaults — see below. |
+
+  ## Why `settings` has no defaults
+
+  A defaulted `premiumFloor` of 0 is a run with no floor at all, priced from the
+  discount table alone — and since ~95% of rows normally land on the floor, that
+  is 20,000 mail pieces carrying the wrong offer, with nothing in the request to
+  say so. `GET …/defaults` exists precisely so the client always has real values
+  to send.
+
+  On a `processed` campaign the transform fields are inert and stored anyway;
+  `stats: null` on the result is what says the transform did not run.
+
+  ## Assignment
+
+  `carrier_agency_id` is the default and reads the file's own `agencyid` column,
+  matching it against carrier appointments (PAC-93). `all` means *every agency,
+  including ones onboarded later*, so the **mode** is stored rather than an
+  expanded list — which is why this request uses it: the collection must not
+  depend on which appointments the demo seed happens to have created.
+
+  ## Response `201`
+  The campaign, `status: "uploaded"`, with the preview job queued. Poll
+  `GET /platform/mailer-campaigns/:id` until it reaches `previewed`.
+
+  ## Errors
+  - `400 Bad Request` — key outside the platform namespace, object missing or
+    empty, size mismatch, unknown agency in an `agencies` assignment, or an
+    invalid settings block.
+  - `401` / `403` — missing token, or missing `platform:mailers:write`.
+  - `500` — the preview could not be queued. The campaign is marked `failed`
+    rather than left spinning; re-dispatch with `POST …/:id/preview`.
+}

@@ -240,6 +240,12 @@ function stepForError(message: string): number | null {
   const lower = message.toLowerCase();
   if (lower.includes("slug")) return indexOfStep("agency");
   if (lower.includes("ticker")) return indexOfStep("agency");
+  // Every appointment conflict names the code (PAC-93) — "Allstate code
+  // A0B9049 already belongs to …", "…is listed twice for the same carrier",
+  // "Only one carrier appointment can be the primary one".
+  if (lower.includes("code") || lower.includes("appointment")) {
+    return indexOfStep("agency");
+  }
   if (lower.includes("email")) return indexOfStep("owner");
   return null;
 }

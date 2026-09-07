@@ -40,6 +40,40 @@ describe('onboardAgencySchema', () => {
     expect(result.success).toBe(false);
   });
 
+  /**
+   * PAC-93. The operator may know which carrier appointed the agency without
+   * knowing the code yet, so the pair must survive validation half-filled and
+   * be dropped by the service — not rejected at the edge.
+   */
+  it('accepts a carrier appointment with no code yet', () => {
+    const result = onboardAgencySchema.safeParse({
+      ...valid,
+      agency: {
+        ...valid.agency,
+        carrierAppointments: [{ carrierId: 'a'.repeat(24) }],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a carrierId that is not an ObjectId', () => {
+    // Caught here so it is a 400 naming the field rather than a 500 out of a
+    // Mongoose cast.
+    const result = onboardAgencySchema.safeParse({
+      ...valid,
+      agency: {
+        ...valid.agency,
+        carrierAppointments: [{ carrierId: 'Allstate' }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('defaults the appointments to an empty list', () => {
+    const result = onboardAgencySchema.parse(valid);
+    expect(result.agency.carrierAppointments).toEqual([]);
+  });
+
   it('rejects an unknown module key', () => {
     const result = onboardAgencySchema.safeParse({
       ...valid,
@@ -109,5 +143,32 @@ describe('toBranchSlug', () => {
 
   it('produces hyphens, not the underscores role slugs use', () => {
     expect(toBranchSlug('Branch Manager Office')).not.toContain('_');
+  });
+});
+
+describe('agencyAvailabilitySchema — carrier appointment (PAC-93)', () => {
+  const carrierId = 'a'.repeat(24);
+
+  it('accepts a carrier and code together', () => {
+    const result = agencyAvailabilitySchema.safeParse({
+      carrierId,
+      carrierAgencyCode: 'A0B9049',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts neither', () => {
+    expect(agencyAvailabilitySchema.safeParse({ slug: 'acme' }).success).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ['a code with no carrier', { carrierAgencyCode: 'A0B9049' }],
+    ['a carrier with no code', { carrierId }],
+  ])('rejects %s', (_label, query) => {
+    // A code means nothing outside its carrier, so half the pair is not a
+    // question that has an answer.
+    expect(agencyAvailabilitySchema.safeParse(query).success).toBe(false);
   });
 });

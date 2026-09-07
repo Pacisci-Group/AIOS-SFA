@@ -1,0 +1,85 @@
+meta {
+  name: Create Quote Ticket Lead
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/leads
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:pre-request {
+  // A fresh identity every run. The intake pipeline dedupes on the contact and
+  // the address, so a fixed one would resolve to the *same* lead on the second
+  // run — and that lead already carries the quote ticket the next request is
+  // supposed to open.
+  bru.setVar("quoteTicketStamp", String(Date.now()));
+}
+
+body:json {
+  {
+    "primaryContact": {
+      "firstName": "Quinn",
+      "lastName": "Ticket{{quoteTicketStamp}}",
+      "dateOfBirth": "1986-02-14",
+      "phone": "(555) 707-3131",
+      "email": "quinn.ticket{{quoteTicketStamp}}@example.com"
+    },
+    "address": {
+      "street": "{{quoteTicketStamp}} Quote Ticket Way",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74104"
+    },
+    "members": [],
+    "policiesOfInterest": [{ "policyType": "Auto", "itemCount": 1 }],
+    "leadSourceCode": "WCO7l",
+    "submissionToken": "{{$guid}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("quoteTicketLeadId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("is a genuinely new lead, not a dedupe match", function () {
+    // If this ever came back `alreadyExisted`, the next request would be
+    // asserting against a ticket some earlier run opened.
+    expect(res.getBody().alreadyExisted).to.not.equal(true);
+  });
+}
+
+docs {
+  # Create Quote Ticket Lead — a lead with no quote ticket yet
+
+  Not an endpoint of its own; a fixture, and the same precedent as **Create
+  Disposable Lead** and **Share Links › Create Disposable Share Link**.
+
+  **Open Lead Service Ticket** asserts that the ticket it gets back is `open`,
+  unresolved, and assigned to the caller. All three are only true for a lead
+  whose ticket is being created *now*, and the endpoint is deliberately
+  idempotent — one quote ticket per lead, ever, so a second call returns the
+  existing one whatever state it has reached.
+
+  Pointing it at `{{leadId}}` (the newest lead in the list) was what made it
+  fail: on any re-run that is a lead an earlier run had already carried through
+  **Sold Deals**, whose sale resolved the quote ticket. The request then read
+  back `status: "resolved"` and correctly failed its own assertion.
+
+  The timestamp in the contact and the street is load-bearing: `LeadIntakeService`
+  dedupes on the primary contact and the address, so a fixed identity would
+  resolve to the same lead every run and reintroduce exactly the same problem.
+}

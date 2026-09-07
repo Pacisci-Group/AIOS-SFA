@@ -56,7 +56,40 @@ const personName = (label: string) =>
  * should not be blocked on inventing one.
  */
 const ticker = z.string().trim().min(1).max(8).optional();
-const allstateAgencyId = z.string().trim().min(1).max(40).optional();
+
+/**
+ * The carriers appointing this agency, and the code each issued (PAC-93).
+ *
+ * **The same row shape `PUT /agency/carrier-appointments` takes**, code
+ * optional, so the wizard, the owner's setup step and the settings page all
+ * send one thing and `AgencyCarrierAppointmentsService` does the deciding. An
+ * operator who knows the agency is an Allstate agent but not its code picks the
+ * carrier and moves on; the owner supplies the code during their own setup.
+ *
+ * A row with no code stores nothing — see the service. That keeps
+ * `carrierAgencyCode` required *inside* the stored appointment, which is what
+ * makes the unique index safe.
+ */
+const carrierAppointments = z
+  .array(
+    z.object({
+      carrierId: z
+        .string()
+        .trim()
+        .regex(/^[a-f0-9]{24}$/i, 'Choose a carrier from the list.'),
+      carrierAgencyCode: z.string().trim().max(40).optional(),
+      isPrimary: z.boolean().optional(),
+      active: z.boolean().optional(),
+    }),
+  )
+  .max(20)
+  .default([]);
+
+/**
+ * National Producer Number. Optional, carrier-independent, and nothing reads it
+ * yet — onboarding is simply the only place anyone will type it.
+ */
+const npn = z.string().trim().min(1).max(20).optional();
 
 /**
  * The address line is not required.
@@ -78,7 +111,8 @@ export const onboardAgencySchema = z.object({
     name: z.string().trim().min(2, 'An agency name is required.').max(120),
     slug: agencySlug,
     ticker,
-    allstateAgencyId,
+    carrierAppointments,
+    npn,
   }),
   branch: z.object({
     name: z
@@ -109,11 +143,30 @@ export type OnboardAgencyDto = z.infer<typeof onboardAgencySchema>;
  * `GET /platform/agencies/availability` — every field optional, because the
  * wizard checks each one as it is left rather than all three at once.
  */
-export const agencyAvailabilitySchema = z.object({
-  slug: z.string().trim().max(AGENCY_SLUG_MAX_LENGTH).optional(),
-  email: z.string().trim().max(160).optional(),
-  ticker: z.string().trim().max(8).optional(),
-});
+export const agencyAvailabilitySchema = z
+  .object({
+    slug: z.string().trim().max(AGENCY_SLUG_MAX_LENGTH).optional(),
+    email: z.string().trim().max(160).optional(),
+    ticker: z.string().trim().max(8).optional(),
+    /**
+     * A carrier agency code is only meaningful inside its carrier, so the pair
+     * is checked together or not at all (PAC-93).
+     */
+    carrierId: z
+      .string()
+      .trim()
+      .regex(/^[a-f0-9]{24}$/i)
+      .optional(),
+    carrierAgencyCode: z.string().trim().max(40).optional(),
+  })
+  .refine(
+    (query) => Boolean(query.carrierId) === Boolean(query.carrierAgencyCode),
+    {
+      message:
+        'Send a carrier and a code together, or neither — a code alone means nothing.',
+      path: ['carrierAgencyCode'],
+    },
+  );
 
 export type AgencyAvailabilityQueryDto = z.infer<
   typeof agencyAvailabilitySchema

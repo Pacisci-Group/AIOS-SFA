@@ -1,6 +1,7 @@
 import type {
   HouseholdMemberRole,
   IntakeChannel,
+  LeadMailerMatchedBy,
   LeadPolicyOfInterestInput,
   NormalizedLeadSource,
 } from '@sfa/shared';
@@ -60,6 +61,15 @@ export interface IntakeMember extends IntakePerson {
   role: HouseholdMemberRole;
 }
 
+/** A mailer the caller has already resolved. See `IntakeInput.mailer`. */
+export interface IntakeMailerLink {
+  mailerId: Types.ObjectId;
+  campaignId: string;
+  /** The mailer's own normalized key, never what the submitter typed. */
+  controlNumberKey: string;
+  matchedBy: LeadMailerMatchedBy;
+}
+
 export interface IntakeInput {
   primaryContact: IntakePerson;
   address?: IntakeAddress;
@@ -74,6 +84,16 @@ export interface IntakeInput {
    */
   policiesOfInterest?: LeadPolicyOfInterestInput[];
   quoteControlNumber?: string;
+  /**
+   * An **already-resolved** mailer link (PAC-71).
+   *
+   * Set only by the drawer's log-lead, which knows for certain which mailer the
+   * producer is looking at. Every other caller passes {@link quoteControlNumber}
+   * and lets `ResolveLeadStep` resolve it — passing a link here that the caller
+   * merely guessed at would write `matchedBy: 'drawer'` onto a match nobody
+   * made.
+   */
+  mailer?: IntakeMailerLink;
   /** Raw client token; the orchestrator namespaces it before use. */
   submissionToken?: string;
   /**

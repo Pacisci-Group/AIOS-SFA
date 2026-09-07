@@ -68,11 +68,11 @@ const DomainsPage = lazy(() => import('@/features/settings/DomainsPage'));
 const EmailSenderPage = lazy(
   () => import('@/features/settings/EmailSenderPage'),
 );
+const CarrierAppointmentsPage = lazy(
+  () => import('@/features/settings/CarrierAppointmentsPage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
-);
-const AddMailersPage = lazy(
-  () => import('@/features/platform/AddMailersPage'),
 );
 const OnboardAgencyPage = lazy(
   () => import('@/features/platform/onboard/OnboardAgencyPage'),
@@ -88,6 +88,18 @@ const ImpersonateHandoffPage = lazy(
 );
 const BugReportsPage = lazy(
   () => import('@/features/platform/BugReportsPage'),
+);
+const MailerCampaignsPage = lazy(
+  () => import('@/features/platform/campaigns/MailerCampaignsPage'),
+);
+const RunCampaignPage = lazy(
+  () => import('@/features/platform/campaigns/RunCampaignPage'),
+);
+const ZipMarketsPage = lazy(
+  () => import('@/features/platform/campaigns/ZipMarketsPage'),
+);
+const MailerCampaignDetailPage = lazy(
+  () => import('@/features/platform/campaigns/MailerCampaignDetailPage'),
 );
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
@@ -593,6 +605,26 @@ export function App() {
                 />
               </Route>
 
+              {/*
+                Carrier appointments (PAC-93). Gated on `:read` like every
+                section beside it; the page hides its write controls without
+                `agency:carrier_appointments:write`.
+              */}
+              <Route
+                element={
+                  <RequirePermission permission="agency:carrier_appointments:read" />
+                }
+              >
+                <Route
+                  path="/settings/carriers"
+                  element={
+                    <LazyPage>
+                      <CarrierAppointmentsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               {/* Owner-only user directory */}
               <Route
                 element={<RequirePermission permission="agency:users:read" />}
@@ -653,23 +685,6 @@ export function App() {
                     </LazyPage>
                   }
                 />
-                <Route
-                  element={
-                    <RequirePermission
-                      permission={PlatformPermission.MailersWrite}
-                      redirectTo="/admin"
-                    />
-                  }
-                >
-                  <Route
-                    path="/admin/mailers/add"
-                    element={
-                      <LazyPage>
-                        <AddMailersPage />
-                      </LazyPage>
-                    }
-                  />
-                </Route>
                 {/* Onboarding writes a whole tenant, so it gates on the write
                     permission rather than the panel's read one, and falls back
                     to the panel rather than to `/` — which would bounce the
@@ -729,6 +744,68 @@ export function App() {
                     element={
                       <LazyPage>
                         <BugReportsPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+                {/* Mailer Campaigns (PAC-71). The list and the detail gate on
+                    `:read`; running one, editing the ZIP table and committing
+                    all write, so those gate on `:write` and an operator holding
+                    only read never reaches a wizard whose every action would
+                    403.
+
+                    ⚠ Static paths are declared **above** `:campaignId`. React
+                    Router ranks static segments over dynamic ones, so this
+                    ordering is belt-and-braces rather than load-bearing — but
+                    it matches the API's own route order, where Nest matches in
+                    declaration order and `new` would otherwise be read as a
+                    campaign id. */}
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={PlatformPermission.MailersRead}
+                      redirectTo="/admin"
+                    />
+                  }
+                >
+                  <Route
+                    path="/admin/campaigns"
+                    element={
+                      <LazyPage>
+                        <MailerCampaignsPage />
+                      </LazyPage>
+                    }
+                  />
+                  <Route
+                    element={
+                      <RequirePermission
+                        permission={PlatformPermission.MailersWrite}
+                        redirectTo="/admin/campaigns"
+                      />
+                    }
+                  >
+                    <Route
+                      path="/admin/campaigns/new"
+                      element={
+                        <LazyPage>
+                          <RunCampaignPage />
+                        </LazyPage>
+                      }
+                    />
+                    <Route
+                      path="/admin/campaigns/zip-markets"
+                      element={
+                        <LazyPage>
+                          <ZipMarketsPage />
+                        </LazyPage>
+                      }
+                    />
+                  </Route>
+                  <Route
+                    path="/admin/campaigns/:campaignId"
+                    element={
+                      <LazyPage>
+                        <MailerCampaignDetailPage />
                       </LazyPage>
                     }
                   />

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { IntakeChannel } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
@@ -38,6 +38,21 @@ function isDuplicateKeyError(error: unknown): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === DUPLICATE_KEY
   );
+}
+
+/**
+ * Which index a duplicate-key error came from.
+ *
+ * The two unique indexes intake can hit mean completely different things — a
+ * replayed submission (recoverable: re-read and return the winner) versus a
+ * mailer another agency already logged (not recoverable: nothing here may
+ * create a second lead for it). Reading `keyPattern` is how they are told apart;
+ * matching on the message text would break the first time Mongo reworded it.
+ */
+function isMailerLinkConflict(error: unknown): boolean {
+  const keyPattern = (error as { keyPattern?: Record<string, unknown> })
+    ?.keyPattern;
+  return Boolean(keyPattern && 'mailer.mailerId' in keyPattern);
 }
 
 /**
@@ -154,9 +169,20 @@ export class LeadIntakeService {
       // is already aborted by the time we see it. Re-reading here is what makes
       // "a double-submit creates one lead" true under real concurrency rather
       // than only for a sequential retry.
-      if (isDuplicateKeyError(error) && token) {
-        const winner = await this.findByToken(ctx.agencyId, token);
-        if (winner) return winner;
+      if (isDuplicateKeyError(error)) {
+        // One lead per mailer, platform-wide (PAC-71). Another agency won the
+        // race, and there is no lead of ours to return — the token re-read below
+        // would find nothing and the caller would get a raw E11000. 409 with a
+        // message that reveals nothing about who holds it.
+        if (isMailerLinkConflict(error)) {
+          throw new ConflictException(
+            'This mailer has already been logged as a lead.',
+          );
+        }
+        if (token) {
+          const winner = await this.findByToken(ctx.agencyId, token);
+          if (winner) return winner;
+        }
       }
       throw error;
     }

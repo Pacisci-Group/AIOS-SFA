@@ -122,8 +122,10 @@ real week-36 file (8.8 MB, **20,024 rows, 124 columns**, one sheet, `.xlsx`):
 issuing agent's Allstate profile, present in the vendor file before ApexReports
 touches it and never written by Apex. It identifies whose account the quotes
 were issued under. PAC-71 makes it the **default assignment rule**: a row goes
-to the agency whose `Agency.allstateAgencyId` matches, unless David overrides
-by picking agencies explicitly or choosing all. Forty-one column names are
+to the agency holding an active **Allstate carrier appointment** whose code
+matches (PAC-93 — an agency has one code per carrier, and a code means nothing
+outside its own), unless David overrides by picking agencies explicitly or
+choosing all. Forty-one column names are
 truncated to exactly 10 characters (`agencyfirs`, `emailaddre`, `quotestatu`) —
 the DBF field-name limit, i.e. the mail vendor's presort software passed the
 file through.

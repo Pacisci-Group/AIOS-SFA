@@ -1,0 +1,80 @@
+meta {
+  name: Log Campaign Mailer Lead
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/mailers/log-lead
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "controlNumber": "9c41b2d7ee01"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    bru.setVar("campaignMailerLeadId", res.getBody().leadId);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    // 200, not 201: resolve-or-create. On a re-run of the collection the lead
+    // from the previous run is still linked to this mailer, and that is the
+    // correct answer rather than a second lead.
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("one agency now owns this mailer", function () {
+    const body = res.getBody();
+    expect(body.leadId).to.be.a("string");
+    expect(body.alreadyExisted).to.be.a("boolean");
+  });
+}
+
+docs {
+  # POST /mailers/log-lead — the campaign's own mailer, from the demo agency
+
+  The same endpoint the **Mailers** folder covers, aimed at a mailer this
+  folder's campaign just imported rather than at the demo seed's. It exists to
+  set up the two requests after it: **one lead per mailer is platform-wide**
+  (PAC-71 open item 7), so proving that needs a mailer *two* agencies can see,
+  and only a campaign committed with `assignment.mode: "all"` produces one.
+
+  - **Module:** `mailers` **and** `leads`
+  - **Permission:** `mailers:read` + `leads:write`
+  - **Data scope:** the lead is created in the **caller's** agency — the mailer
+    is shared, the lead never is.
+
+  Sent as the demo producer (`{{accessToken}}`, from **Auth › Login**), because
+  the platform operator this folder otherwise uses holds no module permissions
+  at all and would 403 here.
+
+  `9c41b2d7ee01` is the short printed form of
+  `#7c1e4a90-1111-4b8a-9f10-9c41b2d7ee01`, the fixture row **List Campaign
+  Records** searches for. Either form normalizes to the same
+  `controlNumberKeys` entry, so which one is sent is a display detail.
+
+  ## Response `200`
+  ```json
+  { "leadId": "…", "alreadyExisted": false }
+  ```
+
+  `alreadyExisted` is deliberately not asserted to a fixed value: it is `false`
+  on a database seeded fresh and `true` on every re-run, and both are correct.
+  What matters for the next two requests is only that *some* lead in the demo
+  agency now owns this mailer.
+}

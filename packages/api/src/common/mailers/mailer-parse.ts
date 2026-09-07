@@ -126,6 +126,25 @@ export function excelSerialToDate(serial: number): Date | undefined {
   return new Date(Math.round((serial - EXCEL_EPOCH_OFFSET_DAYS) * MS_PER_DAY));
 }
 
+/**
+ * The exact inverse of {@link excelSerialToDate} (PAC-71).
+ *
+ * ⚠ **This exists so the XLSX and CSV paths agree, not as a convenience.**
+ * ExcelJS hands back a date-formatted cell as a JavaScript `Date`, while the
+ * same file exported to CSV carries the raw serial (`"46216"`). Downstream,
+ * `processMailerFile` writes `quotedate` through untouched and the print file
+ * is compared byte for byte against Alteryx output — so a `Date` reaching it
+ * would render as `Wed Jul 13 2026 …` in the column the vendor expects a serial
+ * in. Normalizing to the serial at the reader is what keeps one parse path
+ * downstream of two file formats.
+ *
+ * Whole days only: `Math.round` matches `excelSerialToDate`'s own rounding, so a
+ * value that made the round trip comes back identical.
+ */
+export function dateToExcelSerial(date: Date): number {
+  return Math.round(date.getTime() / MS_PER_DAY) + EXCEL_EPOCH_OFFSET_DAYS;
+}
+
 /** Trimmed non-empty string, or `undefined`. Keeps empty columns off the doc. */
 export function parseText(raw: unknown): string | undefined {
   if (raw === null || raw === undefined) return undefined;

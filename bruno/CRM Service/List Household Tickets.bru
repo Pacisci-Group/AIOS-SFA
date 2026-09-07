@@ -1,13 +1,17 @@
 meta {
   name: List Household Tickets
   type: http
-  seq: 1
+  seq: 5
 }
 
 get {
-  url: {{baseUrl}}/crm/service-tickets/household/{{householdId}}
+  url: {{baseUrl}}/crm/service-tickets/household/{{crmHouseholdId}}
   body: none
-  auth: inherit
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{crmAccessToken}}
 }
 
 headers {
@@ -27,7 +31,7 @@ tests {
     // Tolerant of an empty result: a household with no tickets is a valid
     // steady state, and an unknown or malformed id returns [] rather than 404.
     for (const ticket of res.getBody()) {
-      expect(ticket.householdId).to.equal(bru.getVar("householdId"));
+      expect(ticket.householdId).to.equal(bru.getVar("crmHouseholdId"));
     }
   });
 

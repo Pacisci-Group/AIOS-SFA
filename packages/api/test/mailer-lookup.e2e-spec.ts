@@ -32,6 +32,13 @@ const SHORT = '9c41b2d70e58';
 /** A second mailer, for the tests that need one with nothing on it. */
 const NAMELESS_LONG = '#11112222-3333-4444-5555-666677778888';
 
+/**
+ * A campaign id. Mailers belong to campaigns, not agencies (PAC-71), and these
+ * tests never need a campaign *document* — only the id the mailer carries and
+ * the audience the import resolved for it.
+ */
+const CAMPAIGN_ID = '6a86ef5140258c85a093cc4e';
+
 interface MailerSeed {
   controlNumber?: string;
   newControlNumber?: string;
@@ -41,6 +48,9 @@ interface MailerSeed {
   county?: string;
   state?: string;
   street?: string;
+  campaignId?: string;
+  /** `null` = visible to every agency. Omitted means "the agency passed in". */
+  visibleAgencyIds?: string[] | null;
 }
 
 /**
@@ -69,7 +79,12 @@ describe('Mailer lookup + log lead (e2e)', () => {
       'newControlNumber' in overrides ? overrides.newControlNumber : SHORT;
 
     await mailerModel.create({
-      agencyId,
+      campaignId: overrides.campaignId ?? CAMPAIGN_ID,
+      visibleAgencyIds:
+        'visibleAgencyIds' in overrides
+          ? overrides.visibleAgencyIds
+          : [agencyId],
+      carrierAgencyId: 'A0B9049',
       controlNumber,
       newControlNumber,
       controlNumberKeys: mailerControlNumberKeys(
@@ -137,9 +152,19 @@ describe('Mailer lookup + log lead (e2e)', () => {
 
   beforeAll(async () => {
     app = await createTestApp();
+    // ⚠ Drop BEFORE seeding, not only after. Suites share one database and jest
+    // orders them by previous run time, so "the suite before me cleaned up" is
+    // an assumption that breaks the moment a new suite is added — which is
+    // exactly how this one started failing on `slug_1` for `test-agency`. Same
+    // pattern as `carrier-appointments.e2e-spec.ts`.
+    await dropTestDatabase(app);
     seed = await seedTestData(app);
     mailerModel = app.get<Model<Mailer>>(getModelToken(Mailer.name));
     leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+    // `dropTestDatabase` runs after `app.init()`, so `autoIndex` has already
+    // been and gone. The unique `mailer.mailerId` index is what enforces one
+    // lead per mailer platform-wide, and this suite asserts it.
+    await leadModel.syncIndexes();
     householdModel = app.get<Model<Household>>(getModelToken(Household.name));
     contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
 
@@ -191,16 +216,51 @@ describe('Mailer lookup + log lead (e2e)', () => {
       await lookup('---').expect(404);
     });
 
-    it('404s a mailer belonging to another agency', async () => {
-      // Tenant isolation is the assertion; a mailer is agency-scoped with no
-      // branch dimension, so this is the only boundary it has.
+    it('404s a mailer whose campaign this agency cannot see', async () => {
+      // Tenant isolation is the assertion. Visibility is per row and resolved by
+      // the campaign's assignment, so this is the only boundary a mailer has.
       const foreign = '#99998888-7777-6666-5555-444433332222';
-      await insertMailer('6a86ef5140258c85a093cc4e', {
+      await insertMailer('6a86ef5140258c85a093cc99', {
         controlNumber: foreign,
         newControlNumber: '444433332222',
       });
 
       await lookup(foreign).expect(404);
+    });
+
+    it('resolves a mailer whose campaign is visible to every agency', async () => {
+      // ⚠ `visibleAgencyIds: null` means "all", and the lookup tests it with
+      // `{ $type: 'null' }`. A bare `null` in that query would ALSO match a
+      // missing field — which is what the next test guards.
+      const global = '#aaaa1111-2222-3333-4444-555566667777';
+      await insertMailer(seed.agencyId, {
+        controlNumber: global,
+        newControlNumber: '555566667777',
+        visibleAgencyIds: null,
+      });
+
+      const res = await lookup(global).expect(200);
+      expect((res.body as MailerLookupView).controlNumber).toBe(global);
+    });
+
+    it('does NOT resolve a mailer the migration has not stamped', async () => {
+      // The whole reason the visibility filter is `{ $type: 'null' }` rather
+      // than `null`. A row with no `visibleAgencyIds` field at all — an
+      // un-migrated legacy mailer — must be invisible, not visible to everyone.
+      await mailerModel.collection.insertOne({
+        campaignId: CAMPAIGN_ID,
+        controlNumber: '#bbbb1111-2222-3333-4444-888899990000',
+        newControlNumber: '888899990000',
+        controlNumberKeys: mailerControlNumberKeys(
+          '#bbbb1111-2222-3333-4444-888899990000',
+          '888899990000',
+        ),
+        firstName: 'Un',
+        lastName: 'Migrated',
+        source: { system: 'spreadsheet' },
+      });
+
+      await lookup('888899990000').expect(404);
     });
 
     it('renders county as a name, never the raw FIPS code', async () => {
@@ -301,6 +361,19 @@ describe('Mailer lookup + log lead (e2e)', () => {
       // 48 bits of a truncated UUID.
       expect(lead!.quoteControlNumber).toBe(LONG);
       expect(lead!.intakeSource?.channel).toBe('mailer');
+
+      // The real link (PAC-71), not just the printed string. `drawer` because
+      // the caller resolved the mailer itself — nothing was inferred.
+      const mailer = await mailerModel
+        .findOne({ controlNumberKeys: SHORT.toUpperCase() })
+        .lean();
+      expect(lead!.mailer?.mailerId?.toString()).toBe(mailer!._id.toString());
+      expect(lead!.mailer?.campaignId).toBe(CAMPAIGN_ID);
+      expect(lead!.mailer?.matchedBy).toBe('drawer');
+      expect(lead!.mailer?.controlNumberKey).toBe(
+        mailerControlNumberKeys(LONG, SHORT)[0],
+      );
+      expect(lead!.mailer?.linkedBy).toBeTruthy();
       expect(lead!.submissionToken).toBe(
         `MAIL|${mailerControlNumberKeys(LONG, SHORT)[0]}`,
       );
@@ -382,6 +455,58 @@ describe('Mailer lookup + log lead (e2e)', () => {
       });
 
       await logLead(NAMELESS_LONG).expect(422);
+    });
+
+    it('409s a second agency, and reveals nothing about the first', async () => {
+      // One lead per mailer, platform-wide. The first agency to log it owns it;
+      // every other agency is refused rather than creating a second lead for the
+      // same prospect. The message names neither the agency nor the lead — that
+      // is another tenant's data.
+      const shared = '#5555aaaa-6666-bbbb-7777-cccc8888dddd';
+      await insertMailer(seed.agencyId, {
+        controlNumber: shared,
+        newControlNumber: 'cccc8888dddd',
+        // Visible to both tenants, which is the case that makes the rule matter.
+        visibleAgencyIds: null,
+        street: '404 Contested Way',
+      });
+      await logLead(shared).expect(200);
+
+      const otherToken = (
+        await login(app, seed.otherAgencyUserEmail, TEST_PASSWORD)
+      ).accessToken;
+
+      const res = await logLead(shared, otherToken).expect(409);
+      const body = res.body as { message: string };
+      expect(body.message).toBe(
+        'This mailer has already been logged as a lead.',
+      );
+      expect(JSON.stringify(body)).not.toContain(seed.agencyId);
+
+      // And exactly one lead exists for it, in the agency that won.
+      const mailer = await mailerModel
+        .findOne({ controlNumberKeys: 'CCCC8888DDDD' })
+        .lean();
+      const linked = await leadModel
+        .find({ 'mailer.mailerId': mailer!._id })
+        .lean();
+      expect(linked).toHaveLength(1);
+      expect(linked[0].agencyId).toBe(seed.agencyId);
+    });
+
+    it('tells the second agency it is already logged, with no link', async () => {
+      // `alreadyLogged` is platform-wide; `linkedLeadId` is scope-clamped to the
+      // caller. A colleague out of scope and another tenant are deliberately
+      // indistinguishable from outside.
+      const otherToken = (
+        await login(app, seed.otherAgencyUserEmail, TEST_PASSWORD)
+      ).accessToken;
+
+      const res = await lookup('cccc8888dddd', otherToken).expect(200);
+      const body = res.body as MailerLookupView;
+
+      expect(body.alreadyLogged).toBe(true);
+      expect(body.linkedLeadId).toBeNull();
     });
 
     it('creates a lead from a single-token name', async () => {

@@ -2,10 +2,19 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { getModelToken } from '@nestjs/mongoose';
 import type { MailerImportRejection } from '@sfa/shared';
-import { Model } from 'mongoose';
+import { carrierSlug } from '@sfa/shared';
+import { Model, Types } from 'mongoose';
 import { importMailerRows } from '../../common/mailers/mailer-import';
+import {
+  implicitCampaignDoc,
+  implicitCampaignKey,
+} from '../../common/mailers/implicit-campaign';
+import { DEFAULT_MAILER_CARRIER } from '../../common/mailers/mailer-carrier';
+import { parseWeekNumber } from '../../common/mailers/mailer-parse';
 import { normalizeRow } from '../../common/mailers/mailer-row.mapper';
+import { Carrier } from '../../carriers/schemas/carrier.schema';
 import { Mailer } from '../../mailers/schemas/mailer.schema';
+import { MailerCampaign } from '../../mailers/schemas/mailer-campaign.schema';
 import { Agency } from '../../platform/schemas/agency.schema';
 import { MailerBigQueryModule } from './mailer-bigquery.module';
 import {
@@ -26,10 +35,20 @@ import {
  *
  * ## One normalizer, two sources
  *
- * Everything past "read a row" is `importMailerRows`, the same function the
- * upload path runs. This file is only the reader and the agency resolution. Two
- * independently written mappers over near-identical data is how the sources
+ * Everything past "read a row" is `importMailerRows`, the same function a
+ * campaign commit runs. This file is only the reader and the agency resolution.
+ * Two independently written mappers over near-identical data is how the sources
  * drift into producing different documents for the same mailer.
+ *
+ * ## Campaigns (PAC-71)
+ *
+ * `Mailer.campaignId` is required, so rows are bucketed into **implicit
+ * campaigns** keyed `(agency, week, year)` — see `implicit-campaign.ts`, which
+ * the `mailer-campaigns` backfill shares so a mailer imported here and one
+ * stamped there land in the same campaign rather than two.
+ *
+ * ⚠ **Slated for deletion.** BigQuery is retired once this has run at cutover
+ * (PAC-71 scope item 5); this file is kept compiling, not extended.
  *
  * ## Re-runnable, not one-shot
  *
@@ -87,6 +106,32 @@ async function loadTickerMap(
   );
 }
 
+/** Agency id -> display name, for the implicit campaigns' names. */
+async function loadAgencyNames(
+  agencyModel: Model<Agency>,
+): Promise<Map<string, string>> {
+  const agencies = await agencyModel.find({}).select({ name: 1 }).lean();
+  return new Map(agencies.map((a) => [a._id.toString(), a.name]));
+}
+
+/**
+ * Calendar year of a `quotedate`, which BigQuery ships as an Excel serial or a
+ * date string. Null when it carries neither — the implicit campaign then falls
+ * into its agency's "unknown" bucket rather than inventing a year.
+ */
+function yearOf(raw: unknown): number | null {
+  if (raw instanceof Date) return raw.getUTCFullYear();
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    // The 1899-12-30 epoch every mailer date uses.
+    return new Date(Date.UTC(1899, 11, 30) + raw * 86_400_000).getUTCFullYear();
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) return parsed.getUTCFullYear();
+  }
+  return null;
+}
+
 async function main(): Promise<void> {
   const logger = new Logger('MailerBackfill');
   const options = parseOptions(process.argv.slice(2));
@@ -106,6 +151,79 @@ async function main(): Promise<void> {
   try {
     const mailerModel = app.get<Model<Mailer>>(getModelToken(Mailer.name));
     const agencyModel = app.get<Model<Agency>>(getModelToken(Agency.name));
+    const campaignModel = app.get<Model<MailerCampaign>>(
+      getModelToken(MailerCampaign.name),
+    );
+    const carrierModel = app.get<Model<Carrier>>(getModelToken(Carrier.name));
+
+    // Every implicit campaign needs a carrier, and this script never creates
+    // one — `seedCarriers` owns that catalog and a second writer would fork it.
+    const carrier = await carrierModel
+      .findOne({ agencyId: null, slug: carrierSlug(DEFAULT_MAILER_CARRIER) })
+      .select({ _id: 1, name: 1 })
+      .lean();
+    if (!carrier) {
+      throw new Error(
+        `No global ${DEFAULT_MAILER_CARRIER} carrier. ` +
+          'Run the core seed first (npm run api:seed:dev).',
+      );
+    }
+
+    const agencyNames = await loadAgencyNames(agencyModel);
+    const campaignIds = new Map<string, string>();
+
+    /**
+     * The implicit campaign one batch of rows belongs to, upserted on first use.
+     *
+     * Keyed off the **first** row of the bucket: rows arrive grouped by agency
+     * and a BigQuery batch spans one file, so week and year are constant within
+     * it. A bucket that did span two weeks would put the later rows in the
+     * earlier week's campaign — acceptable for data that is being retired, and
+     * the `mailer-campaigns` backfill regroups properly from the stored
+     * documents.
+     */
+    const resolveCampaignId = async (
+      agencyId: string,
+      rows: Record<string, unknown>[],
+    ): Promise<string> => {
+      const first = rows[0] ?? {};
+      const weekNumber =
+        parseWeekNumber(first.weeknumber) ??
+        parseWeekNumber(first.campaignnumber) ??
+        null;
+      const year = yearOf(first.quotedate);
+      const key = implicitCampaignKey({ agencyId, weekNumber, year });
+
+      const cached = campaignIds.get(key);
+      if (cached) return cached;
+
+      if (options.dryRun) {
+        // Nothing is written, so a stable placeholder is enough for the mapper.
+        campaignIds.set(key, new Types.ObjectId().toString());
+        return campaignIds.get(key)!;
+      }
+
+      const doc = implicitCampaignDoc(
+        { agencyId, weekNumber, year },
+        {
+          carrierId: carrier._id,
+          agencyName: agencyNames.get(agencyId),
+          campaignNumber:
+            typeof first.campaignnumber === 'string'
+              ? first.campaignnumber
+              : null,
+          source: 'migration',
+        },
+      );
+      const { migrationKey, ...rest } = doc;
+      const campaign = await campaignModel.findOneAndUpdate(
+        { migrationKey },
+        { $setOnInsert: { ...rest, migrationKey } },
+        { upsert: true, new: true, projection: { _id: 1 } },
+      );
+      campaignIds.set(key, campaign._id.toString());
+      return campaign._id.toString();
+    };
 
     const tickers = await loadTickerMap(agencyModel);
     if (tickers.size === 0) {
@@ -137,10 +255,15 @@ async function main(): Promise<void> {
     const rejections: MailerImportRejection[] = [];
 
     const flush = async (agencyId: string, rows: Record<string, unknown>[]) => {
+      const campaignId = await resolveCampaignId(agencyId, rows);
       const result = await importMailerRows(
         rows,
         {
-          agencyId,
+          campaignId,
+          // Every row in this bucket belongs to one agency — that *was* its
+          // whole tenancy — so the audience is that agency regardless of what
+          // the row's `agencyid` column says.
+          visibleAgencyIdsFor: () => [agencyId],
           system: 'bigquery',
           runId: `bigquery:${config.tableId}`,
         },

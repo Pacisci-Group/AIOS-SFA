@@ -1,22 +1,29 @@
 /**
- * Mailer prospect records and the import runs that create them (PAC-73).
+ * Mailer prospect records (PAC-73), and what the drawer shows for one (PAC-61).
  *
  * A **mailer** is one row of a direct-mail campaign file: a household that was
  * mailed a pre-filled insurance quote, keyed by the Quote Control Number
  * printed on the mail piece. A producer looks one up by that number and logs it
- * as a lead (PAC-61).
+ * as a lead.
  *
  * ## Two sources, one shape
  *
- * Mailers reach Mongo two ways — an operator uploading an agency's RTP final
- * file through the Super Admin panel, and a one-off BigQuery backfill of the
- * legacy history. Both funnel through the same mapper and the same upsert, and
- * the field set below is a **superset**: BigQuery carries campaign columns the
- * RTP file does not (`week_number`, `mail_drop_date`, `start_mon`/`end_sun`,
- * `campaign_status`), so those are optional and simply absent on an uploaded
- * mailer. Never make one source's extra field required — two independently
- * written mappers over near-identical data is how the sources drift into
- * producing different documents for the same mailer.
+ * Mailers reach Mongo two ways — a campaign run (PAC-71), and a one-off
+ * BigQuery backfill of the legacy history. Both funnel through the same mapper
+ * and the same upsert, and the field set below is a **superset**: BigQuery
+ * carries campaign columns a vendor file does not (`week_number`,
+ * `mail_drop_date`, `start_mon`/`end_sun`, `campaign_status`), so those are
+ * optional and simply absent on an uploaded mailer. Never make one source's
+ * extra field required — two independently written mappers over near-identical
+ * data is how the sources drift into producing different documents for the same
+ * mailer.
+ *
+ * ## Tenancy lives on the campaign
+ *
+ * A mailer has no `agencyId`. It carries `campaignId` and the
+ * `visibleAgencyIds` its campaign's assignment resolved for that row — see
+ * `mailer-campaign.ts`. The import-run types that used to live here went with
+ * the Add Mailers flow they described.
  */
 
 /**
@@ -29,20 +36,6 @@
 export type MailerSourceSystem = 'bigquery' | 'spreadsheet';
 
 /**
- * Lifecycle of one import run.
- *
- * `previewing` → `previewed` → `importing` → `completed`, with `failed`
- * reachable from either working state. The operator sees the parse result at
- * `previewed` and nothing has been written yet; `commit` is what moves it on.
- */
-export type MailerImportRunStatus =
-  | 'previewing'
-  | 'previewed'
-  | 'importing'
-  | 'completed'
-  | 'failed';
-
-/**
  * What the file says about itself, read during the preview parse.
  *
  * Every one of these columns holds exactly one distinct value across all 20,405
@@ -51,8 +44,17 @@ export type MailerImportRunStatus =
  * choice rather than a per-row attribution.
  */
 export interface MailerImportDetected {
-  /** The file's `agencyid` column, e.g. `A0B9049`. Cross-checked, never trusted. */
-  agencyId: string | null;
+  /**
+   * The file's `agencyid` column, e.g. `A0B9049` — the **carrier's** code for
+   * the issuing agency, not one of our agency ids.
+   *
+   * Renamed from `agencyId` in PAC-71 because it stopped being a cross-check
+   * and became the routing key: it is matched against the carrier appointments
+   * (PAC-93) to decide which tenants a row is visible to. A field named
+   * `agencyId` sitting next to our own agency ids is exactly the confusion that
+   * files one agency's prospects under another.
+   */
+  carrierAgencyId: string | null;
   /** The file's `agencyname` column, e.g. `SMITH FAMILY AGENCY`. */
   agencyName: string | null;
   /** `Campaign Number`, always of the form `Week_Number-29`. */
@@ -90,37 +92,6 @@ export interface MailerImportRejection {
   /** Whichever control-number form was present, for a human to search on. */
   controlNumber: string | null;
   reason: string;
-}
-
-/** The report a run produces, and the poll target while it is producing it. */
-export interface MailerImportRun {
-  id: string;
-  agencyId: string;
-  status: MailerImportRunStatus;
-  /** The name the operator's browser sent. */
-  uploadedFilename: string;
-  sizeBytes: number;
-  detected: MailerImportDetected | null;
-  /**
-   * The file's own agency does not match the agency the operator chose.
-   *
-   * Set during the preview parse. Committing anyway requires an explicit
-   * confirmation on the request — filing one agency's prospects under another
-   * is the failure that matters here.
-   */
-  agencyMismatch: boolean;
-  counts: MailerImportCounts | null;
-  /**
-   * A capped sample, not the full list. 20,405 rejections would not fit in a
-   * response; `counts.skipped` is the authoritative total.
-   */
-  rejections: MailerImportRejection[];
-  /** Present only when `status` is `failed`. */
-  error: string | null;
-  startedAt: string;
-  finishedAt: string | null;
-  /** Short-lived presigned URL for the raw uploaded file. */
-  rawFileUrl?: string;
 }
 
 /** How many rejections a run stores and returns. */
@@ -246,12 +217,17 @@ export interface MailerLookupView {
   doNotCall: boolean;
   doNotMail: boolean;
   /**
-   * Whether **any** lead in the agency already carries this control number.
+   * Whether **any** lead on the platform is already linked to this mailer.
    *
-   * Agency-wide on purpose, and separate from {@link linkedLeadId}: the point
-   * of showing it is to stop a producer logging a mailer a colleague already
-   * worked. `POST /mailers/log-lead` would reveal the same fact through
-   * `alreadyExisted`, so this discloses nothing new.
+   * ⚠ Platform-wide since PAC-71, not agency-wide. One campaign can be visible
+   * to several tenants and a mailer may be logged exactly once across all of
+   * them — the first agency to log it owns it. Every other agency's drawer sees
+   * `true` here with {@link linkedLeadId} `null` and the action disabled, and
+   * learns nothing about which agency or which lead: that is another tenant's
+   * data. `POST /mailers/log-lead` from such an agency is a 409.
+   *
+   * Within the caller's own agency this discloses nothing new — `log-lead`
+   * would reveal the same fact through `alreadyExisted`.
    */
   alreadyLogged: boolean;
   /**
@@ -260,7 +236,8 @@ export interface MailerLookupView {
    * `GET /leads/:id` 404s another producer's lead under `own` scope, so handing
    * back an unreachable id would render a "View lead" button that goes to a
    * not-found page. `null` with `alreadyLogged: true` means "logged by someone
-   * else"; the drawer says so instead of offering the link.
+   * else" — a colleague out of scope, or another agency entirely, deliberately
+   * indistinguishable. The drawer says "Already logged." and offers no link.
    */
   linkedLeadId: string | null;
 }

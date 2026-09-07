@@ -1,0 +1,100 @@
+meta {
+  name: Replace Carrier Appointments
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}/agency/carrier-appointments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{appointmentsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  // A fresh code every run. `(carrierId, codeKey)` is unique platform-wide and
+  // a repeat is answered with 409 by design, so a hard-coded value would pass
+  // once and then fail on every subsequent `bru run` against the same database.
+  bru.setVar("appointmentCode", `BRU${Date.now().toString().slice(-6)}`);
+}
+
+body:json {
+  {
+    "appointments": [
+      {
+        "carrierId": "{{appointmentCarrierId}}",
+        "carrierAgencyCode": "{{appointmentCode}}",
+        "isPrimary": true,
+        "active": true
+      }
+    ]
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("stores the code as issued and makes it primary", function () {
+    const appointment = res.getBody().appointments[0];
+    expect(appointment.carrierAgencyCode).to.equal(bru.getVar("appointmentCode"));
+    expect(appointment.carrierName).to.equal("Allstate");
+    expect(appointment.isPrimary).to.equal(true);
+  });
+}
+
+docs {
+  # PUT /agency/carrier-appointments — replace the whole list
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `agency:carrier_appointments:write`
+  - **Data scope:** none (`@SkipBranch()`)
+
+  ## Why `PUT` and why the whole list
+
+  The semantics genuinely are replacement — `PATCH /platform/agencies/:id/modules`
+  merges, this does not. And the list is the unit because two of its rules are
+  properties of the *list*: exactly one primary, and no duplicate
+  `(carrier, code)` pairs. Three granular endpoints would mean three copies of
+  each. An appointment also has no id — the sub-document is `_id: false` — so
+  there is nothing to address a granular route at.
+
+  ⚠ Two people editing at once will clobber each other. Accepted, not
+  overlooked: there is no `If-Match` convention anywhere in this API, and
+  inventing one here would make this the only endpoint with one.
+
+  ## Body
+  ```json
+  { "appointments": [
+      { "carrierId": "6a86…", "carrierAgencyCode": "A0B9049",
+        "isPrimary": true, "active": true } ] }
+  ```
+
+  - `carrierAgencyCode` is **optional**. A row without one is dropped, not
+    stored — that is how the owner leaves a carrier for later, and it is what
+    keeps the code required on a stored appointment (a code-less element would
+    index as `(carrier, null)` and collide with every other such agency).
+  - `carrierId` must be a **global** carrier. An agency-scoped one is a `400`.
+  - `isPrimary` and `active` both default sensibly: the first row becomes
+    primary, and a primary flagged onto an inactive row moves to the first
+    active one.
+  - The code is stored **as issued**; matching uses a trimmed, upper-cased key
+    derived by `appointmentCodeKey`, which the mailer pipeline also calls on a
+    file's `agencyid`.
+
+  ## Errors
+  - `400` — a carrier that is not global; a `carrierId` that is not an
+    ObjectId; more than one primary; the same pair listed twice.
+  - `403 Forbidden` — missing `agency:carrier_appointments:write`.
+  - `409 Conflict` — another agency already holds that `(carrier, code)`. The
+    message names the holder. ⚠ Deactivating an appointment does **not** free
+    its code; only removing it does.
+}

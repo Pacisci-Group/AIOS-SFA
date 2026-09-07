@@ -203,9 +203,13 @@ Two endpoints: `GET /mailers/:controlNumber` (`mailers:read`) and
 form of the control number resolves, and logging is idempotent per mailer across
 both forms.
 
-**`docs/mailers-handoff.md` §7 is the record** of what PAC-61 settled — the
-premium presentation, the campaign line, the Oklahoma-only county table, the two
-places the ticket's literal spec was wrong, and the one known gap left open.
+**What PAC-61 settled is recorded on the types it settled**, not in a separate
+document: premium presentation and the campaign line on `Mailer`'s sub-schemas,
+the Oklahoma-only county table in `common/mailers/county-names.ts`, and the
+idempotency key on `buildSubmissionToken`'s `mailer` branch — the ticket's
+literal spec was wrong there, and the docblock says why. The hand-typed
+control-number gap it left open is **closed**: PAC-71 stores a normalized
+`Lead.mailer.controlNumberKey` and resolves it at write time.
 
 ⚠ **Existing agencies need `npm run api:sync:roles`**: PAC-61 gave `mailers:read`
 to every role template, and editing a template does not touch already-seeded

@@ -43,8 +43,21 @@ export type EmailMessageDocument = HydratedDocument<EmailMessage>;
  */
 @Schema({ timestamps: true, collection: 'emailMessages' })
 export class EmailMessage {
-  @Prop({ required: true, index: true })
-  agencyId: string;
+  /**
+   * Whose tenant this was sent on behalf of, or `null` for **platform** mail.
+   *
+   * Nullable since PAC-71: a mailer campaign belongs to no agency — it is run
+   * once and can serve many, or all of them — so its completion notice has no
+   * tenant to be filed under. Writing a sentinel agency id to keep the field
+   * required would put platform mail into some agency's support view, which is
+   * strictly worse than a null that reads as "the platform sent this".
+   *
+   * The per-agency reads all filter on a real id, so a null row simply does not
+   * appear in them. `{ agencyId: 1, createdAt: -1 }` indexes nulls like any
+   * other value, so the platform's own rows stay queryable too.
+   */
+  @Prop({ type: String, default: null, index: true })
+  agencyId: string | null;
 
   /** Null for agency-scoped mail with no branch context. */
   @Prop({ type: String, default: null })

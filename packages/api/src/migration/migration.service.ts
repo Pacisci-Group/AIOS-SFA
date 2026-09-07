@@ -11,6 +11,7 @@ import {
 } from '@sfa/shared';
 import { reconcileDealAudits } from '../deal-audits/audit-reconcile';
 import { Agency } from '../platform/schemas/agency.schema';
+import { Carrier } from '../carriers/schemas/carrier.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
@@ -143,7 +144,10 @@ export interface MigrationOptions {
   branchName: string;
   /** Mailer identity stamped on the agency — see `provisionTenant`. */
   ticker?: string;
-  allstateAgencyId?: string;
+  /** Slug of the *global* carrier appointing this agency, e.g. `allstate`. */
+  carrierSlug?: string;
+  /** The code that carrier issued the agency, e.g. `A0B9049`. */
+  carrierAgencyCode?: string;
   /**
    * The migrated user to promote to Agency Owner, by email. Empty string
    * disables the step and leaves the agency with no administrator.
@@ -248,6 +252,7 @@ export class MigrationService {
 
   constructor(
     @InjectModel(Agency.name) private readonly agencyModel: Model<Agency>,
+    @InjectModel(Carrier.name) private readonly carrierModel: Model<Carrier>,
     @InjectModel(Branch.name) private readonly branchModel: Model<Branch>,
     @InjectModel(User.name) private readonly userModel: Model<User>,
     @InjectModel(Household.name)
@@ -585,6 +590,39 @@ export class MigrationService {
    * is one, and otherwise a throwaway context is returned so the fetch-and-count
    * pass can still report on every table.
    */
+  /**
+   * The tenant's carrier appointment, resolved against the **global** carrier
+   * catalog (PAC-93).
+   *
+   * Hard-fails rather than skipping when the carrier is missing: the core seed
+   * owns that catalog, and silently provisioning a tenant with no appointment
+   * would leave every mailer upload warning and — once PAC-71 lands — every
+   * mailer row unroutable, with nothing in the log saying why. Running the core
+   * seed first is the fix, and the message says so.
+   */
+  private async resolveCarrierAppointment(
+    options: MigrationOptions,
+  ): Promise<
+    { carrierId: Types.ObjectId; carrierAgencyCode: string } | undefined
+  > {
+    const slug = options.carrierSlug?.trim();
+    const carrierAgencyCode = options.carrierAgencyCode?.trim();
+    if (!slug || !carrierAgencyCode) return undefined;
+
+    const carrier = await this.carrierModel
+      .findOne({ agencyId: null, slug })
+      .select({ _id: 1 })
+      .lean();
+    if (!carrier) {
+      throw new Error(
+        `No global carrier with slug "${slug}". Run the core seed first ` +
+          '(npm run api:seed:dev), or pass --carrier-slug for one that exists.',
+      );
+    }
+
+    return { carrierId: carrier._id, carrierAgencyCode };
+  }
+
   private async resolveTenant(
     options: MigrationOptions,
     report: MigrationReport,
@@ -604,7 +642,7 @@ export class MigrationService {
         branchSlug: options.branchSlug,
         branchName: options.branchName,
         ticker: options.ticker,
-        allstateAgencyId: options.allstateAgencyId,
+        carrierAppointment: await this.resolveCarrierAppointment(options),
       },
     );
 

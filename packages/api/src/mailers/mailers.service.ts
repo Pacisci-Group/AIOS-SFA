@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -12,7 +13,7 @@ import {
   mailerControlNumberKey,
   normalizeLeadSource,
 } from '@sfa/shared';
-import { FilterQuery, Model, Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
 import { resolveCountyName } from '../common/mailers/county-names';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
@@ -65,11 +66,11 @@ export function deriveMailerName(mailer: {
 }
 
 /**
- * The Mailers drawer's read + log-lead path (PAC-61).
+ * The Mailers drawer's read + log-lead path (PAC-61, PAC-71).
  *
- * PAC-73 owns everything on the way in — the collection, the importers, the
- * normalization. Nothing here writes a mailer; it reads one and hands it to the
- * lead-intake pipeline.
+ * The campaign flow owns everything on the way in — the collection, the import
+ * engine, the normalization. Nothing here writes a mailer; it reads one and
+ * hands it to the lead-intake pipeline.
  */
 @Injectable()
 export class MailersService {
@@ -84,10 +85,10 @@ export class MailersService {
   /**
    * `GET /mailers/:controlNumber` — the drawer's debounced lookup.
    *
-   * Agency-wide with no data-scope clamp on the mailer itself: a mailer has no
-   * producer, and the whole point is that any producer can pick up a mail piece
-   * and work it. The lead it may already have produced *is* scope-clamped — see
-   * {@link resolveExistingLead}.
+   * Clamped to campaigns the caller's agency can see, but with no *data-scope*
+   * clamp on the mailer itself: a mailer has no producer, and the whole point is
+   * that any producer can pick up a mail piece and work it. The lead it may
+   * already have produced *is* scope-clamped — see {@link resolveExistingLead}.
    */
   async lookup(
     access: AccessContext,
@@ -124,6 +125,25 @@ export class MailersService {
     if (!name) {
       throw new UnprocessableEntityException(
         'This mailer has no recipient name and cannot be logged as a lead.',
+      );
+    }
+
+    // One lead per mailer, platform-wide (PAC-71). The unique index on
+    // `mailer.mailerId` is what actually enforces it; this pre-check exists to
+    // turn the violation into a message an operator can act on rather than an
+    // E11000. It says nothing about which agency holds the lead — that is
+    // another tenant's data.
+    //
+    // A same-agency replay is NOT rejected here: it flows on and resolves to the
+    // existing lead through the submission token, returning
+    // `alreadyExisted: true`. Only a *different* agency is a conflict.
+    const owner = await this.leadModel
+      .findOne({ 'mailer.mailerId': mailer._id })
+      .select({ agencyId: 1 })
+      .lean();
+    if (owner && owner.agencyId !== tenant.agencyId) {
+      throw new ConflictException(
+        'This mailer has already been logged as a lead.',
       );
     }
 
@@ -180,6 +200,15 @@ export class MailersService {
       // printed forms are different strings, so keying on the input would let
       // one mailer be logged twice, once per form.
       submissionToken: mailer.controlNumberKeys[0],
+      // The link, resolved. The drawer is the one path that knows *for certain*
+      // which mailer this is, so it hands the pipeline the answer rather than
+      // making it re-derive one from the printed string.
+      mailer: {
+        mailerId: mailer._id,
+        campaignId: mailer.campaignId,
+        controlNumberKey: mailer.controlNumberKeys[0],
+        matchedBy: 'drawer',
+      },
     });
 
     return {
@@ -189,12 +218,20 @@ export class MailersService {
   }
 
   /**
-   * One indexed equality against the multikey `{agencyId, controlNumberKeys}`
-   * index, whichever form the producer typed.
+   * One indexed equality against `controlNumberKeys_1`, whichever form the
+   * producer typed, clamped to campaigns visible to their agency.
    *
-   * 404 covers all three misses with the same body — no such number, a number
-   * that normalizes to nothing, and a mailer belonging to another agency. Which
-   * one it was is not the caller's business.
+   * ⚠ `{ $type: 'null' }`, **never** `visibleAgencyIds: null`. A bare `null`
+   * also matches a *missing* field, which would make every mailer a migration
+   * has not yet stamped visible to every tenant on the platform — a silent
+   * cross-agency data leak with no error anywhere.
+   *
+   * The `$or` is a residual filter, not an index need: the unique key resolves
+   * to at most one document, so the visibility test runs over a single FETCH.
+   *
+   * 404 covers all four misses with the same body — no such number, a number
+   * that normalizes to nothing, a mailer whose campaign this agency cannot see,
+   * and an un-stamped legacy row. Which one it was is not the caller's business.
    */
   private async findByControlNumber(
     agencyId: string,
@@ -202,7 +239,13 @@ export class MailersService {
   ): Promise<MailerDocument> {
     const key = mailerControlNumberKey(rawControlNumber);
     const mailer = key
-      ? await this.mailerModel.findOne({ agencyId, controlNumberKeys: key })
+      ? await this.mailerModel.findOne({
+          controlNumberKeys: key,
+          $or: [
+            { visibleAgencyIds: { $type: 'null' } },
+            { visibleAgencyIds: agencyId },
+          ],
+        })
       : null;
 
     if (!mailer) {
@@ -227,56 +270,62 @@ export class MailersService {
   }
 
   /**
-   * Whether this mailer has already been logged, and by whom.
+   * Whether this mailer has already been logged, and whether the caller may see
+   * the lead.
    *
    * Two questions, deliberately answered separately:
    *
-   * - `alreadyLogged` is **agency-wide**. Stopping a producer from working a
-   *   mailer a colleague already took is the entire reason the drawer says
-   *   anything about it, and `POST /log-lead` reveals the same fact through
-   *   `alreadyExisted` anyway.
-   * - `linkedLeadId` is **scope-clamped**. `GET /leads/:id` 404s another
-   *   producer's lead under `own` scope, so returning an unreachable id would
-   *   render a "View lead" button that lands on a not-found page.
+   * - `alreadyLogged` is **platform-wide** (PAC-71). One lead per mailer across
+   *   the platform is the rule, enforced by a unique index — so a campaign
+   *   visible to several tenants cannot produce one lead per tenant for the same
+   *   prospect. The first agency to log it owns it.
+   * - `linkedLeadId` is **scope-clamped to the caller**. `GET /leads/:id` 404s
+   *   another producer's lead under `own` scope, so returning an unreachable id
+   *   would render a "View lead" button that lands on a not-found page. It is
+   *   also what keeps another tenant's lead id from ever crossing the boundary.
    *
-   * The scoped query runs first because on the happy path — the caller's own
-   * lead — it is the only one that runs.
+   * ⚠ The three outcomes are deliberately only two from outside: a colleague out
+   * of scope and another agency entirely both produce
+   * `{ alreadyLogged: true, linkedLeadId: null }`. The drawer says "Already
+   * logged." and nothing more — which agency holds it is their data, not ours to
+   * disclose.
    *
-   * ⚠ Matching is on the raw stored string, so a lead whose control number a
-   * producer typed by hand into the New Lead form (stored trimmed but not
-   * normalized) will not be found here. Fixing that needs a stored
-   * `Lead.quoteControlNumberKey` plus an index and a backfill; it is out of
-   * scope for PAC-61 and is a known gap, not an oversight.
+   * One query, on `mailer.mailerId`. It replaces the old `$in` over both printed
+   * control-number forms, which matched on the raw stored string and therefore
+   * missed any lead whose number a producer had typed by hand — the known gap
+   * PAC-61 recorded.
    */
   private async resolveExistingLead(
     access: AccessContext,
     branchId: string | null,
     mailer: MailerDocument,
   ): Promise<{ alreadyLogged: boolean; linkedLeadId: string | null }> {
-    const forms = [mailer.controlNumber, mailer.newControlNumber].filter(
-      (form): form is string => typeof form === 'string' && form.length > 0,
-    );
-    if (!forms.length) return { alreadyLogged: false, linkedLeadId: null };
+    const owner = await this.leadModel
+      .findOne({ 'mailer.mailerId': mailer._id })
+      .select({ agencyId: 1, producerId: 1, branchId: 1 })
+      .lean();
+    if (!owner) return { alreadyLogged: false, linkedLeadId: null };
 
-    const byControlNumber: FilterQuery<LeadDocument> = {
-      quoteControlNumber: { $in: forms },
-    };
+    if (owner.agencyId !== access.agencyId) {
+      return { alreadyLogged: true, linkedLeadId: null };
+    }
 
+    // Re-ask for the same document through the scope clamp rather than
+    // re-implementing the clamp against the projection above — `buildScopeFilter`
+    // is the one definition of what this caller may see, and a second copy of it
+    // here is how the two drift.
     const mine = await this.leadModel
       .findOne({
+        _id: owner._id,
         ...buildScopeFilter<LeadDocument>(access, branchId),
-        ...byControlNumber,
       })
       .select('_id')
       .lean();
-    if (mine) {
-      return { alreadyLogged: true, linkedLeadId: mine._id.toString() };
-    }
 
-    const anyone = await this.leadModel
-      .exists({ agencyId: access.agencyId, ...byControlNumber })
-      .then(Boolean);
-    return { alreadyLogged: anyone, linkedLeadId: null };
+    return {
+      alreadyLogged: true,
+      linkedLeadId: mine ? mine._id.toString() : null,
+    };
   }
 
   /**

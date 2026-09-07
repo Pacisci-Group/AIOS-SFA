@@ -33,7 +33,7 @@ body:json {
         "zip": "73102"
       }
     },
-    "modules": ["dashboard", "leads", "clients", "performance"],
+    "modules": ["dashboard", "leads", "clients", "performance", "mailers"],
     "owner": {
       "firstName": "Pac",
       "lastName": "Owner",
@@ -111,7 +111,11 @@ docs {
   ```json
   {
     "agency": { "name": "Acme Insurance", "slug": "acme-insurance",
-                "ticker": "ACM", "allstateAgencyId": "A0B9049" },
+                "ticker": "ACM", "npn": "8675309",
+                "carrierAppointments": [
+                  { "carrierId": "<global carrier _id>",
+                    "carrierAgencyCode": "A0B9049" }
+                ] },
     "branch": { "name": "Main", "address": { "street": "…", "city": "…",
                 "state": "…", "zip": "…" } },
     "modules": ["dashboard", "leads"],
@@ -119,11 +123,36 @@ docs {
   }
   ```
 
-  `agency.ticker` and `agency.allstateAgencyId` are optional but consequential
-  (PAC-73): without them the agency imports no mailers and warns on every RTP
-  upload. `branch.name` defaults to `Main` and its address is optional.
+  `agency.ticker` and `agency.carrierAppointments` are optional but
+  consequential (PAC-73, PAC-93): without the ticker the agency imports no
+  mailers, and without an appointment every RTP upload warns because there is
+  nothing to cross-check the file's `agencyid` against.
+
+  **`carrierAgencyCode` is optional inside a row.** An operator who knows which
+  carrier appointed the agency but not the code picks the carrier and moves on;
+  a row with no code stores nothing, and the owner supplies it during their own
+  setup or later under Workspace Settings. `carrierId` must be a **global**
+  carrier — `GET /platform/carriers`, or `carriers` with `agencyId: null`. An
+  agency-scoped custom carrier is a `400`.
+
+  A `(carrierId, code)` pair belongs to one agency platform-wide; a second
+  claim is a `409` naming the holder. Check one ahead of time with **Check
+  Availability**. ⚠ Deactivating an appointment does *not* release its code —
+  only removing it does.
+
+  `branch.name` defaults to `Main` and its address is optional.
   `modules` is the enabled set — anything omitted is created disabled, not
-  absent.
+  absent. `crm_service` is left out on purpose: **Accept Owner Invite** asserts
+  that its permissions are filtered out of the owner's effective set, which is
+  what proves entitlement gating actually reaches the resolver.
+
+  ⚠ `mailers` is in the list for a **downstream** reason, not for this request.
+  `Platform Mailer Campaigns` needs a *second* agency to prove PAC-71's
+  one-lead-per-mailer rule — an agency that can see a shared campaign's mailer
+  and is still refused when it tries to log a second lead from it. This is the
+  only agency in the collection created after the demo tenant, and an agency
+  with the module disabled would 403 there and prove nothing. Removing `mailers`
+  here breaks those two requests, not this one.
 
   The slug must match `^[a-z0-9]+(?:-[a-z0-9]+)*$`: it becomes the agency's
   subdomain the moment they add one.

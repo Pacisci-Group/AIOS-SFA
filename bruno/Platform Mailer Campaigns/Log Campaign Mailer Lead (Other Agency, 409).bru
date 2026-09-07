@@ -1,0 +1,74 @@
+meta {
+  name: Log Campaign Mailer Lead (Other Agency, 409)
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{baseUrl}}/mailers/log-lead
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{onboardOwnerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "controlNumber": "9c41b2d7ee01"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    // The drawer disables the button, but a client that ignores `alreadyLogged`
+    // — a replayed request, a stale page, curl — must not get a second lead.
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("refuses without naming the agency that owns it", function () {
+    const message = JSON.stringify(res.getBody());
+    expect(message).to.not.contain("demo");
+    expect(message).to.not.contain("{{campaignMailerLeadId}}");
+  });
+}
+
+docs {
+  # POST /mailers/log-lead — a second agency is refused (PAC-71)
+
+  The other half of the cross-agency contract. **Log Campaign Mailer Lead** gave
+  the demo agency this mailer; this is another tenant trying to take it.
+
+  - **Module:** `mailers` + `leads`
+  - **Permission:** `mailers:read` + `leads:write`
+
+  ## Why 409 and not a silent second lead
+
+  PAC-71 open item 7, resolved with David: **one lead per mailer, platform-wide.**
+  The first agency to log it owns it. Two agencies each holding "their own" lead
+  for one mailed household would double-count the campaign in every report built
+  on `Lead.mailer.campaignId`, and the two producers would call the same person.
+
+  The refusal is enforced in two places, not one: `logLead` pre-checks and
+  returns this 409, and a **unique partial index** `{ 'mailer.mailerId': 1 }`
+  catches the race the pre-check cannot — an E11000 on it is mapped to the same
+  409. A check alone would be a time-of-check/time-of-use bug under two
+  concurrent drawers.
+
+  ⚠ The message deliberately does not name the owning agency, the producer or
+  the lead. A tenant learning *who else* is working a household from an error
+  body would be a cross-tenant leak through the one path that is supposed to be
+  a refusal.
+
+  ## Errors
+  - `409 Conflict` — this mailer already produced a lead, in some agency.
+  - `404 Not Found` — the mailer is not visible to the caller's agency at all
+    (an `agencies`-mode campaign that did not include them). Note the asymmetry:
+    invisible is a 404, visible-but-taken is a 409, and only the second tells
+    the caller the mailer exists — which they could already see from the lookup.
+}

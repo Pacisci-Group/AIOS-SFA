@@ -1,0 +1,82 @@
+meta {
+  name: Get Carrier Appointments
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/agency/carrier-appointments
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{appointmentsOwnerToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const allstate = res.getBody().carrierOptions.find((c) => c.name === "Allstate");
+    if (allstate) bru.setVar("appointmentCarrierId", allstate.id);
+    const other = res.getBody().carrierOptions.find((c) => c.name !== "Allstate");
+    if (other) bru.setVar("appointmentOtherCarrierId", other.id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the pickable carriers alongside the appointments", function () {
+    // The options ride along so the settings page never has to call the
+    // module-gated `GET /carriers` — see the docs block.
+    expect(res.getBody().appointments).to.be.an("array");
+    expect(res.getBody().carrierOptions.length).to.be.greaterThan(0);
+  });
+}
+
+docs {
+  # GET /agency/carrier-appointments — this agency's carrier codes
+
+  Which carriers appointed this agency, and under what code (PAC-93). Backs
+  Workspace Settings → Carrier Appointments and the owner's first-run setup
+  step.
+
+  - **Module:** none (`@SkipModule()`) — an appointment is agency identity, not
+    a product module that can be switched off.
+  - **Permission:** `agency:carrier_appointments:read`
+  - **Data scope:** none — an appointment belongs to the agency, not to one of
+    its branches, so `@SkipBranch()` is set.
+
+  ## Why `carrierOptions` is in the response
+
+  The obvious alternative — have the page call `GET /carriers` — breaks for an
+  agency with neither `deal_audits` nor `crm_service` enabled, because that
+  route is module-gated: their settings page would render a picker that 403s.
+  Returning the options here also guarantees the picker offers exactly the set
+  the `PUT` validates against (globals only).
+
+  ## Response `200`
+  ```json
+  {
+    "appointments": [
+      { "carrierId": "6a86…", "carrierName": "Allstate",
+        "carrierAgencyCode": "A0B9049", "isPrimary": true,
+        "active": true, "appointedAt": null }
+    ],
+    "carrierOptions": [ { "id": "6a86…", "name": "Allstate",
+                          "policyNumberPattern": "\\d+",
+                          "policyNumberHint": null } ]
+  }
+  ```
+
+  `carrierName` is resolved server-side, so no client has to join — and a
+  carrier since deactivated in the catalog still renders.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — the caller lacks `agency:carrier_appointments:read`. A
+    producer gets this; so does a platform operator, who has no agency of their
+    own.
+}

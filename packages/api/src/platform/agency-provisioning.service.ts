@@ -8,6 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   ALL_MODULE_KEYS,
   ModuleKey,
+  appointmentCodeKey,
   type AgencyAvailabilityResponse,
   type OnboardAgencyResponse,
   type OwnerInviteEmailStatus,
@@ -29,6 +30,7 @@ import {
   type AgencyAvailabilityQueryDto,
   type OnboardAgencyDto,
 } from './dto/onboard-agency.dto';
+import { AgencyCarrierAppointmentsService } from '../agency-carrier-appointments/agency-carrier-appointments.service';
 import { Agency, AgencyDocument } from './schemas/agency.schema';
 
 /** One reversible step of the provisioning sequence. */
@@ -84,6 +86,7 @@ export class AgencyProvisioningService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private roleAssignments: RoleAssignmentsService,
     private usersService: UsersService,
+    private appointments: AgencyCarrierAppointmentsService,
   ) {}
 
   /**
@@ -99,18 +102,37 @@ export class AgencyProvisioningService {
     const slug = query.slug?.trim().toLowerCase();
     const email = query.email?.trim().toLowerCase();
     const ticker = query.ticker?.trim().toUpperCase();
+    // The schema refines these two to arrive together or not at all — a code
+    // without its carrier is not a question that has an answer.
+    const appointment =
+      query.carrierId && query.carrierAgencyCode
+        ? {
+            carrierId: new Types.ObjectId(query.carrierId),
+            codeKey: appointmentCodeKey(query.carrierAgencyCode),
+          }
+        : null;
 
-    const [slugTaken, emailTaken, tickerTaken] = await Promise.all([
-      slug ? this.agencyModel.exists({ slug }) : null,
-      // Platform-wide, not per agency: `User.email` is globally unique.
-      email ? this.userModel.exists({ email }) : null,
-      ticker ? this.agencyModel.exists({ ticker }) : null,
-    ]);
+    const [slugTaken, emailTaken, tickerTaken, appointmentTaken] =
+      await Promise.all([
+        slug ? this.agencyModel.exists({ slug }) : null,
+        // Platform-wide, not per agency: `User.email` is globally unique.
+        email ? this.userModel.exists({ email }) : null,
+        ticker ? this.agencyModel.exists({ ticker }) : null,
+        // Not filtered on `active`: a deactivated appointment still holds its
+        // pair, so reporting the code as free would be a lie the submit then
+        // contradicts.
+        appointment
+          ? this.agencyModel.exists({
+              carrierAppointments: { $elemMatch: appointment },
+            })
+          : null,
+      ]);
 
     return {
       slugAvailable: slug ? !slugTaken : null,
       emailAvailable: email ? !emailTaken : null,
       tickerAvailable: ticker ? !tickerTaken : null,
+      carrierAppointmentAvailable: appointment ? !appointmentTaken : null,
     };
   }
 
@@ -146,6 +168,21 @@ export class AgencyProvisioningService {
     if (ticker) await this.assertTickerAvailable(ticker);
     await this.usersService.assertEmailAvailable(email);
 
+    // Carrier appointments belong in the pre-flight for the reason the block
+    // exists at all: a code collision found *after* the agency, roles, branch,
+    // audit templates and owner were written would unwind every one of them
+    // over a typo. Rows without a code drop out here and store nothing.
+    const carrierAppointments = this.appointments.normalize(
+      input.agency.carrierAppointments,
+    );
+    const carrierNames =
+      await this.appointments.assertCarriersAreGlobal(carrierAppointments);
+    await this.appointments.assertCodesFree(
+      carrierAppointments,
+      null,
+      carrierNames,
+    );
+
     const undo: Undo[] = [];
 
     try {
@@ -155,13 +192,8 @@ export class AgencyProvisioningService {
         status: 'active',
         modules: this.entitlements(input.modules, operator.userId),
         ...(ticker ? { ticker } : {}),
-        ...(input.agency.allstateAgencyId
-          ? {
-              allstateAgencyId: input.agency.allstateAgencyId
-                .trim()
-                .toUpperCase(),
-            }
-          : {}),
+        carrierAppointments,
+        ...(input.agency.npn ? { npn: input.agency.npn.trim() } : {}),
         // The one place `pending` is ever written — see `AgencySetup`.
         setup: { status: 'pending' },
       });

@@ -2,7 +2,8 @@ import { importMailerRows, type MailerUpsertTarget } from './mailer-import';
 import type { MailerMapContext } from './mailer-row.mapper';
 
 const ctx: MailerMapContext = {
-  agencyId: 'agency-1',
+  campaignId: 'campaign-1',
+  visibleAgencyIdsFor: () => ['agency-1'],
   system: 'spreadsheet',
   runId: 'run-1',
   uploadedAt: new Date('2026-08-25T00:00:00Z'),
@@ -24,34 +25,43 @@ const rows = [
 
 /** The filter shape this file asserts on. */
 interface RecordedFilter {
-  agencyId: string;
+  agencyId?: string;
   controlNumberKeys: { $in: string[]; $type: string };
+}
+
+/** The `$set` half, for the visibility assertions. */
+interface RecordedDoc {
+  campaignId?: string;
+  visibleAgencyIds?: string[] | null;
+  carrierAgencyId?: string;
 }
 
 function recordingModel() {
   const filters: RecordedFilter[] = [];
+  const docs: RecordedDoc[] = [];
   const model: MailerUpsertTarget = {
     bulkWrite: (batch) => {
       for (const write of batch) {
         filters.push(write.updateOne.filter as unknown as RecordedFilter);
+        docs.push((write.updateOne.update as { $set: RecordedDoc }).$set);
       }
       return Promise.resolve({ upsertedCount: batch.length, modifiedCount: 0 });
     },
   };
-  return { model, filters };
+  return { model, filters, docs };
 }
 
 describe('importMailerRows upsert filter', () => {
   /**
    * The regression this file exists for.
    *
-   * `$type: 'string'` restates the dedupe index's `partialFilterExpression`,
-   * and MongoDB only uses a partial index when the query provably implies that
-   * expression. Without the clause the planner discards
-   * `agencyId_1_controlNumberKeys_1`, falls back to `agencyId_1` and FETCHes
-   * every mailer in the agency for every row of the file — O(n²) in the
-   * collection size. It is invisible on an import into an empty collection and
-   * then degrades until a batch outlives the object-storage read timeout.
+   * `$type: 'string'` restates `controlNumberKeys_1`'s
+   * `partialFilterExpression`, and MongoDB only uses a partial index when the
+   * query provably implies that expression. Without the clause the planner
+   * discards the index and FETCHes every mailer for every row of the file —
+   * O(n²) in the collection size. It is invisible on an import into an empty
+   * collection and then degrades until a batch outlives the object-storage read
+   * timeout.
    *
    * Asserted on the emitted operation rather than through a live MongoDB
    * because the failure is a *planner* decision: the query returns identical
@@ -64,8 +74,12 @@ describe('importMailerRows upsert filter', () => {
 
     expect(filters).toHaveLength(2);
     for (const filter of filters) {
-      expect(filter.agencyId).toBe('agency-1');
       expect(filter.controlNumberKeys.$type).toBe('string');
+      // ⚠ No campaign or agency clause, and that is load-bearing (PAC-71). The
+      // key is platform-wide: a row an earlier campaign already holds is *this
+      // same mailer*, and the `$set` moves it. Scoping the filter would insert a
+      // second copy and die on the unique index.
+      expect(Object.keys(filter)).toEqual(['controlNumberKeys']);
     }
   });
 
@@ -102,5 +116,67 @@ describe('importMailerRows upsert filter', () => {
 
     expect(filters).toHaveLength(0);
     expect(result.counts).toMatchObject({ read: 2, mapped: 2, created: 0 });
+  });
+
+  it('stamps the campaign and the row-level visibility', async () => {
+    const { model, docs } = recordingModel();
+
+    await importMailerRows([{ ...rows[0], agencyid: ' a0b9049 ' }], ctx, {
+      model,
+    });
+
+    expect(docs[0].campaignId).toBe('campaign-1');
+    expect(docs[0].visibleAgencyIds).toEqual(['agency-1']);
+    // Uppercased, matching `appointmentCodeKey` — the two sides of the carrier
+    // match must normalize identically or the routing silently misses.
+    expect(docs[0].carrierAgencyId).toBe('A0B9049');
+  });
+
+  it('stores an explicit null for a campaign visible to every agency', async () => {
+    // ⚠ `null` is a *value* here, not an absence, and `bulkWrite` bypasses
+    // Mongoose casting — so this is the only place the literal reaching Mongo
+    // can be asserted. An array default of `[]` would mean "visible to nobody".
+    const { model, docs } = recordingModel();
+
+    await importMailerRows(
+      rows,
+      { ...ctx, visibleAgencyIdsFor: () => null },
+      { model },
+    );
+
+    expect(docs[0].visibleAgencyIds).toBeNull();
+  });
+
+  it('rejects a row whose carrier agency code no agency holds', async () => {
+    // Never guessed at, never silently dropped: filing one agency's prospects
+    // under another is worse than refusing the row.
+    const { model, filters } = recordingModel();
+
+    const result = await importMailerRows(
+      [{ ...rows[0], agencyid: 'A0B9049' }, rows[1]],
+      { ...ctx, visibleAgencyIdsFor: (code) => (code ? undefined : ['a']) },
+      { model },
+    );
+
+    expect(result.counts).toMatchObject({ read: 2, mapped: 1, skipped: 1 });
+    expect(result.rejections[0].reason).toBe(
+      'No agency is assigned for carrier agency code A0B9049.',
+    );
+    // The rejected row never reaches Mongo.
+    expect(filters).toHaveLength(1);
+  });
+
+  it('names a blank carrier agency code in the rejection', async () => {
+    const { model } = recordingModel();
+
+    const result = await importMailerRows(
+      rows,
+      { ...ctx, visibleAgencyIdsFor: () => undefined },
+      { model },
+    );
+
+    expect(result.rejections[0].reason).toBe(
+      'No agency is assigned for carrier agency code (blank).',
+    );
   });
 });

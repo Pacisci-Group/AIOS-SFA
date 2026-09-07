@@ -5,7 +5,10 @@ import { getModelToken } from '@nestjs/mongoose';
 import { parse } from 'csv-parse';
 import { Model } from 'mongoose';
 import { importMailerRows } from '../src/common/mailers/mailer-import';
-import { normalizeHeader } from '../src/common/mailers/mailer-row.mapper';
+import {
+  normalizeHeader,
+  type MailerMapContext,
+} from '../src/common/mailers/mailer-row.mapper';
 import { Mailer } from '../src/mailers/schemas/mailer.schema';
 import {
   closeTestApp,
@@ -14,7 +17,8 @@ import {
 } from './helpers/test-app';
 
 const FIXTURE = join(__dirname, 'fixtures/mailers/rtp-sample.csv');
-const AGENCY_ID = '6a86ef5140258c85a093cc4e';
+const CAMPAIGN_ID = '6a86ef5140258c85a093cc4e';
+const AGENCY_ID = '6a86ef5140258c85a093cc4f';
 
 /**
  * The fixture's own rows, read as plain records.
@@ -56,15 +60,21 @@ function fixtureRows() {
   );
 }
 
-function runImport(model: Model<Mailer>, options: { dryRun?: boolean } = {}) {
+function runImport(
+  model: Model<Mailer>,
+  options: { dryRun?: boolean } = {},
+  ctx: Partial<MailerMapContext> = {},
+) {
   return importMailerRows(
     fixtureRows(),
     {
-      agencyId: AGENCY_ID,
+      campaignId: CAMPAIGN_ID,
+      visibleAgencyIdsFor: () => [AGENCY_ID],
       system: 'spreadsheet',
       runId: 'run-under-test',
       uploadedFilename: 'rtp-sample.csv',
-      storageKey: `agencies/${AGENCY_ID}/mailer-imports/2026/abc-rtp-sample.csv`,
+      storageKey: `platform/mailer-campaigns/2026/${CAMPAIGN_ID}/1/rtp-sample.csv`,
+      ...ctx,
     },
     { model },
     // Small batches on purpose: 197 rows over a batch of 25 forces several
@@ -151,11 +161,11 @@ describe('Mailer import (e2e)', () => {
     // characters of the long one's UUID, which holds on 20,405/20,405 rows of
     // the real file. Legacy needed substring matching for exactly this.
     const byLong = await model.findOne({
-      agencyId: AGENCY_ID,
+      campaignId: CAMPAIGN_ID,
       controlNumberKeys: key(sample.controlno),
     });
     const byShort = await model.findOne({
-      agencyId: AGENCY_ID,
+      campaignId: CAMPAIGN_ID,
       controlNumberKeys: key(sample['New Control Number']),
     });
 
@@ -170,7 +180,7 @@ describe('Mailer import (e2e)', () => {
     await runImport(model);
     const mailer = await model
       .findOne({
-        agencyId: AGENCY_ID,
+        campaignId: CAMPAIGN_ID,
         controlNumberKeys: key(sample['New Control Number']),
       })
       .lean();
@@ -190,7 +200,7 @@ describe('Mailer import (e2e)', () => {
   it('keeps county a zero-padded string across every row', async () => {
     await runImport(model);
     const counties = await model.distinct('address.county', {
-      agencyId: AGENCY_ID,
+      campaignId: CAMPAIGN_ID,
     });
 
     // `Number('017')` is 17, and legacy showed producers "County: 083". Every
@@ -216,7 +226,7 @@ describe('Mailer import (e2e)', () => {
     )!;
     const suppressed = await model
       .findOne({
-        agencyId: AGENCY_ID,
+        campaignId: CAMPAIGN_ID,
         controlNumberKeys: key(source['New Control Number']),
       })
       .lean();
@@ -224,7 +234,7 @@ describe('Mailer import (e2e)', () => {
     expect(suppressed?.doNotMail).toBe(true);
     expect(suppressed?.phone).toBe(source.phone);
     expect(
-      await model.countDocuments({ agencyId: AGENCY_ID, doNotMail: true }),
+      await model.countDocuments({ campaignId: CAMPAIGN_ID, doNotMail: true }),
     ).toBe(fixture.filter((r) => r.donotmail === 'Yes').length);
   });
 
@@ -232,7 +242,7 @@ describe('Mailer import (e2e)', () => {
     const result = await runImport(model, { dryRun: true });
 
     expect(result.detected).toMatchObject({
-      agencyId: 'A0B9049',
+      carrierAgencyId: 'A0B9049',
       agencyName: 'SMITH FAMILY AGENCY',
       campaignNumber: 'Week_Number-29',
       weekNumber: 29,
@@ -255,11 +265,82 @@ describe('Mailer import (e2e)', () => {
     expect(await model.countDocuments({})).toBe(0);
   });
 
+  it('stamps the campaign and the row-level audience on every document', async () => {
+    await runImport(model);
+    const mailer = await model
+      .findOne({
+        campaignId: CAMPAIGN_ID,
+        controlNumberKeys: key(sample['New Control Number']),
+      })
+      .lean();
+
+    expect(mailer?.campaignId).toBe(CAMPAIGN_ID);
+    expect(mailer?.visibleAgencyIds).toEqual([AGENCY_ID]);
+    // Every row of this fixture carries the same code; the point is that it
+    // reaches its own field, uppercased, rather than only `source.raw`.
+    expect(mailer?.carrierAgencyId).toBe('A0B9049');
+    expect(mailer).not.toHaveProperty('agencyId');
+  });
+
+  it('stores a literal null for a campaign visible to every agency', async () => {
+    // ⚠ The trap this pins: Mongoose defaults an array prop to `[]`, and `[]`
+    // means "visible to nobody". `bulkWrite` bypasses casting, so this asserts
+    // what actually reaches Mongo — and that the `$type: 'null'` visibility
+    // query the drawer runs will match it.
+    await runImport(model, {}, { visibleAgencyIdsFor: () => null });
+
+    const global = await model.countDocuments({
+      visibleAgencyIds: { $type: 'null' },
+    });
+    expect(global).toBe(197);
+    expect(await model.countDocuments({ visibleAgencyIds: [] })).toBe(0);
+  });
+
+  it('rejects every row when no agency holds the file carrier agency code', async () => {
+    // Blocking is the point: filing one agency's prospects under another, or
+    // dropping them silently, are both worse than refusing the file.
+    const result = await runImport(
+      model,
+      {},
+      { visibleAgencyIdsFor: () => undefined },
+    );
+
+    expect(result.counts.mapped).toBe(0);
+    // 197 unassignable rows plus the one with no control number.
+    expect(result.counts.skipped).toBe(198);
+    expect(result.rejections[0].reason).toBe(
+      'No agency is assigned for carrier agency code A0B9049.',
+    );
+    expect(await model.countDocuments({})).toBe(0);
+  });
+
+  it('moves a mailer to the newest campaign that imports it', async () => {
+    // Append semantics, and the reason the upsert filter carries no campaign
+    // clause: the row already exists, so it is updated in place and re-pointed.
+    // A campaign-scoped filter would insert a second copy and die on E11000.
+    await runImport(model);
+    const second = await runImport(
+      model,
+      {},
+      {
+        campaignId: '6a86ef5140258c85a093cc50',
+        visibleAgencyIdsFor: () => ['6a86ef5140258c85a093cc51'],
+      },
+    );
+
+    expect(second.counts.created).toBe(0);
+    expect(second.counts.updated).toBe(197);
+    expect(await model.countDocuments({ campaignId: CAMPAIGN_ID })).toBe(0);
+    expect(
+      await model.countDocuments({ campaignId: '6a86ef5140258c85a093cc50' }),
+    ).toBe(197);
+  });
+
   it('keeps unmodelled columns recoverable in source.raw', async () => {
     await runImport(model);
     const mailer = await model
       .findOne({
-        agencyId: AGENCY_ID,
+        campaignId: CAMPAIGN_ID,
         controlNumberKeys: key(sample['New Control Number']),
       })
       .lean();

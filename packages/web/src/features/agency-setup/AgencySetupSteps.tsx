@@ -1,5 +1,6 @@
 import { CheckCircle2 } from "lucide-react";
 import { BrandStep } from "./BrandStep";
+import { CarrierAppointmentsStep } from "./CarrierAppointmentsStep";
 import { EmailIdentityStep } from "./EmailIdentityStep";
 
 /**
@@ -16,7 +17,7 @@ import { EmailIdentityStep } from "./EmailIdentityStep";
  * indefinitely.
  */
 
-export type AgencySetupStepId = "brand" | "email" | "finish";
+export type AgencySetupStepId = "brand" | "email" | "carriers" | "finish";
 
 export interface AgencySetupStep {
   id: AgencySetupStepId;
@@ -41,6 +42,13 @@ export const AGENCY_SETUP_STEPS: readonly AgencySetupStep[] = [
     skippable: true,
   },
   {
+    id: "carriers",
+    title: "Your carriers",
+    description:
+      "The agency code each carrier that appointed you issued — how we match mailer files to you.",
+    skippable: true,
+  },
+  {
     id: "finish",
     title: "All set",
     description: "That is everything we need.",
@@ -57,6 +65,8 @@ export function AgencySetupStepContent({
 }) {
   if (id === "brand") return <BrandStep />;
   if (id === "email") return <EmailIdentityStep />;
+  if (id === "carriers") return <CarrierAppointmentsStep />;
+  // ⚠ `finish` must stay last: both wizards branch on it to call `complete`.
   return <FinishStep agencyName={agencyName} />;
 }
 

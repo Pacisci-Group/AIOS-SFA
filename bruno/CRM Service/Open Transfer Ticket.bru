@@ -1,0 +1,82 @@
+meta {
+  name: Open Transfer Ticket
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/crm/service-tickets
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{crmAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "category": "Policy Change",
+    "householdId": "{{crmHouseholdId}}",
+    "priority": "medium",
+    "openingNote": "Bruno: company transfer walkthrough."
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("crmTicketId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("opens against the client, not a free-text name", function () {
+    const body = res.getBody();
+    expect(body.householdId).to.equal(bru.getVar("crmHouseholdId"));
+    // Taken from the household record rather than typed in.
+    expect(body.clientName).to.be.a("string").and.not.equal("");
+  });
+
+  test("a Policy Change ticket offers the transfer action", function () {
+    expect(res.getBody().allowsPolicyTransfer).to.equal(true);
+    expect(res.getBody().policyTransfer).to.equal(null);
+  });
+
+  test("records the opening note as the first timeline entry", function () {
+    const timeline = res.getBody().timeline;
+    expect(timeline).to.have.length.of.at.least(1);
+    expect(timeline[0].type).to.equal("created");
+  });
+}
+
+docs {
+  # POST /crm/service-tickets — open a ticket to record the transfer on
+
+  - **Module:** `crm_service`
+  - **Permission:** `crm_service:write`
+
+  ## Why this folder opens its own ticket
+
+  **One transfer per ticket**, enforced by a unique index on
+  `{agencyId, ticketId}` over `deals` with a `409` in front of it. Recording a
+  transfer against a seeded ticket would therefore work exactly once and `409`
+  on every re-run — so the folder mints a disposable ticket instead, the same
+  precedent as **Leads › Create Disposable Lead** and **Leads › Share Links ›
+  Create Disposable Share Link**.
+
+  `category` is `Policy Change` because `allowsPolicyTransfer` is category-
+  driven; a Claims Assist ticket would be refused by
+  `PolicyTransfersService.record` with a `400` naming the category.
+
+  `clientName` is deliberately omitted: when a household is linked, the name
+  comes off that record, which is what keeps the queue row and the client page
+  from disagreeing.
+}
