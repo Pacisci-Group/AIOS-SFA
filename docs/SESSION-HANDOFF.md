@@ -294,3 +294,78 @@ not apply schema defaults, so a document predating the field reads back
 can only be undone in the database. The panel's Agencies directory (PAC-68) is
 still unbuilt, so an onboarded agency cannot be viewed or edited afterwards.
 
+
+---
+
+## 13. PAC-91 — contacts / households domain fix (handoff, 2026-09-07)
+
+**Start here for PAC-91.** Ticket: https://linear.app/paciscigroup/issue/PAC-91
+(read §8 and §9 first — they were added 2026-09-07 and carry the measured
+numbers). Plan: `docs/plans/pac-91-contact-household-links-implementation-plan.md`
+(execution order; the ticket stays authoritative). Branch:
+`asad/pac-91-contacts-households-domain-model`, cut from `dev`, pushed. **The
+whole ticket ships as one PR in four phases**; each phase is left green before
+the next starts. No product code has been written yet — the branch holds only
+the plan and this section.
+
+**What was established (analysis session, 2026-09-06/07):**
+
+- Root cause of "contacts not linked / households have no primary" is two
+  stacked importer defects: `migrateHouseholds` never reads SmartSuite's
+  `Primary Contact` (`sdb36b3217`) / `Household Members` (`suxra4lb`), and
+  `migrateContacts` reads only the contact's single `Household` link
+  (`s66cf9402f`), which legacy wrote solely from the intake form. Legacy's own
+  `SFA/lib/intake/resolveHousehold.ts` falls back to the back-links `sljrnhhg`
+  / `su8pm1bp` — that fallback order is what the importer must mirror.
+- Measured on the production dump: 1,060 / 3,064 migrated contacts have a
+  `legacyHouseholdId` (35%); 1,700 are fillable from the export, 2 disagree
+  (#C00023, #C02694), 304 have no link either side; 2 migrated households have
+  a primary (both set by intake to app-created contacts); policies need nothing
+  (4,192 agree, 0 differ); 42 contacts / 28 households / 25 policies were
+  created in the app since go-live and carry no legacy id.
+- Owner rules: a contact can belong to several households but is primary of at
+  most one; a contact can die; **a contact is unique on DOB + full name + phone
+  or email** (§9). The export has 47 full-key duplicate groups (48 contacts)
+  and 4 contacts that are primary of two households (#C01036, #C01765,
+  #C02116, #C02579) — the latter contradicts the rule and will block the §5
+  unique index until David decides.
+- No contact in the export has more than one email or phone → the §1 scalar
+  change is safe on real data.
+
+**Decisions taken (each confined to one phase, see the plan's "Decisions"):**
+repair production with a CSV-driven backfill, never a migration re-run
+(`persist` `$set`s every field over employee edits); link semantics are
+fill-if-empty with conflicts reported, never written; Phase 1 writes to today's
+schema; denormalised phone/email copies on `Lead` and `Household` are deleted
+and read through `primaryContactId`; membership becomes a `householdMembers`
+join collection; a deceased primary requires a named successor, falling back to
+a data-quality flag; migrate-mongo (`packages/api/migrations/`, runs at boot)
+for every change needing no external input, a `--dry-run` CLI script under
+`src/migration/backfill/` for anything needing a file or a human review.
+
+**Environment state left behind (main checkout, `/Users/asad/MyData/dev/pacisci-group/AIOS-SFA`):**
+
+- Local `sfa` database = **restored production dump** (agency
+  `smith-family-agency`, id `6a95edcfb1c4e8eb86f954b9`) with `migrate:tickets`
+  (286 reshaped, 60 moved, `service_tickets` dropped) and
+  `backfill:appointments` (A0B9049 → Allstate) already applied. `db:migrate:status`
+  shows nothing pending. **Do not run the SmartSuite migration against it** —
+  it would overwrite the app-created edits the backfill exists to protect.
+- David's exports: `temp/Contacts 9_4_2026.csv`, `temp/Households 9_4_2026.csv`,
+  `temp/Policies 9_4_2026.csv` (gitignored, main checkout only). Multi-valued
+  *rec-id* columns are ` | `-separated; *title* columns are `, `-separated.
+- `agencyId` on every `TenantRecord` is a **string**; a query with an
+  `ObjectId` silently matches nothing.
+
+**Open with David (none block Phase 1; needed before the production run and
+before Phase 3's unique index):** the 4 double-primary contacts; the 2
+households with members but no primary (HH3149, HH0032); whether HH0001–HH0017
+and the six Sample/Test contacts are test rows; the 136 policies with no
+household and duplicate policy number 856719796.
+
+**How to begin Phase 1:** follow plan §1.1–§1.8 in order. Run every script
+through the workspace (`npm run <script> -w @sfa/api -- --flags`), never a root
+alias (they swallow flags). `npm run build -w @sfa/api` catches type errors
+(`lint` does not); `npm run build -w @sfa/shared` before e2e/Bruno. The Phase 1
+rehearsal is `--dry-run` → real → re-run (zero fills), then the before/after
+report goes on the ticket as a comment.
