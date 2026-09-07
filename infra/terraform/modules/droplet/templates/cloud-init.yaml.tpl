@@ -41,10 +41,15 @@ write_files:
           # connection. It talks to the API directly on loopback rather than
           # through this same proxy, so a certificate problem cannot make the
           # gate itself unreachable and wedge every new domain.
+          #
+          # `ask` is the only option here on purpose. Caddy 2.10 removed the
+          # `interval`/`burst` issuance throttle, and a Caddyfile still carrying
+          # them does not parse - the service exits before reading a single
+          # site block. Nothing is lost: the throttle was a second line of
+          # defence behind `ask`, and `ask` is the one that decides which names
+          # we will serve at all.
           on_demand_tls {
               ask http://127.0.0.1:4000/api/v1/public/domains/allow
-              interval 2m
-              burst 5
           }
       }
 
@@ -120,7 +125,18 @@ runcmd:
   - chmod a+r /etc/apt/keyrings/docker.asc
   - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
   - apt-get update
-  - apt-get install -y caddy docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  # DEBIAN_FRONTEND and --force-confold together, because `write_files` has
+  # already put /etc/caddy/Caddyfile on disk and dpkg finds a conffile it did
+  # not install. Left to prompt about it, the caddy package's post-install step
+  # does not finish - which is how a droplet ends up with /usr/bin/caddy present
+  # but no `caddy` system user, and a service that exits 217/USER before it ever
+  # reads the config.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold caddy docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  # Belt and braces: create the account ourselves if the package still did not.
+  # Idempotent, and the alternative is a droplet that boots with no edge at all.
+  - ["bash", "-c", "id caddy >/dev/null 2>&1 || adduser --system --group --home /var/lib/caddy --shell /usr/sbin/nologin caddy"]
+  - mkdir -p /var/lib/caddy
+  - chown -R caddy:caddy /var/lib/caddy
   - usermod -aG docker deploy
   - mkdir -p /opt/sfa
   - chown -R deploy:deploy /opt/sfa
@@ -134,9 +150,17 @@ runcmd:
   # (`dev.example.com`), not the parent zone - setting it from that would put a
   # plausible-looking wrong value in the environment for whoever uncomments it.
   # Add it explicitly, alongside the DNS plugin token, at that point.
-  - ["bash", "-c", "mkdir -p /etc/systemd/system/caddy.service.d && printf '[Service]\\nEnvironment=DROPLET_IP=%s\\n' \"$(curl -s --max-time 5 http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address || echo 0.0.0.0)\" > /etc/systemd/system/caddy.service.d/override.conf"]
+  # The empty-string case is the one that matters: `||` fires only when curl
+  # *fails*, and metadata answering 200 with an empty body during early boot is
+  # not a failure. An empty DROPLET_IP makes `http://{$DROPLET_IP}` collapse onto
+  # the bare `http://` block below it, and Caddy refuses to start on a duplicate
+  # site address.
+  - ["bash", "-c", "IP=$(curl -s --max-time 5 http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address); [ -n \"$IP\" ] || IP=0.0.0.0; mkdir -p /etc/systemd/system/caddy.service.d && printf '[Service]\\nEnvironment=DROPLET_IP=%s\\n' \"$IP\" > /etc/systemd/system/caddy.service.d/override.conf"]
   - systemctl daemon-reload
-  - caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  # Validate with the same DROPLET_IP the unit will see. Run bare, the
+  # placeholder expands to nothing and validation fails on a duplicate site
+  # address even when the config is perfectly good.
+  - ["bash", "-c", "IP=$(curl -s --max-time 5 http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address); [ -n \"$IP\" ] || IP=0.0.0.0; DROPLET_IP=$IP caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile"]
   - ufw default deny incoming
   - ufw default allow outgoing
   - ufw allow OpenSSH
@@ -146,5 +170,10 @@ runcmd:
   - systemctl enable docker caddy
   - systemctl start docker
   - systemctl restart caddy
+  # Say so in /var/log/cloud-init-output.log if the edge is not up. Without this
+  # the droplet finishes provisioning, reports success, answers SSH, and serves
+  # nothing on 80 or 443 - with the reason only in a journal nobody thought to
+  # read.
+  - ["bash", "-c", "systemctl is-active --quiet caddy || { echo 'FATAL: caddy did not start - the droplet has no edge'; systemctl status caddy --no-pager -l; journalctl -u caddy -n 40 --no-pager; exit 1; }"]
 
 final_message: "SFA droplet bootstrap complete for ${domain}"
