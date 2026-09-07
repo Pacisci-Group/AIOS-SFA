@@ -6,6 +6,31 @@ Each table doc lists every field with its **Field Id** (the API/slug key used in
 
 > **Migration notes:** `Field Id` is the stable key (field names can be renamed). Fields marked `(system)` are computed/read-only and cannot be set via API. Select values must be stored/normalized by their `value` code, not the label. Linked-record fields hold arrays of linked record ids.
 
+### Household links: read side vs write side
+
+A link between a contact and a household exists in **three** places in
+SmartSuite, and only one of them is the side the app wrote:
+
+| Field | Table | Id | Who fills it |
+|---|---|---|---|
+| `Household` | Contacts | `s66cf9402f` | **Only** the legacy intake form (`SFA/lib/intake/linkEntities.ts`) |
+| `Primary Contact` | Households | `sdb36b3217` | The SmartSuite UI and bulk imports — i.e. nearly everything |
+| `Household Members` | Households | `suxra4lb` | Same |
+| `Household Primary Contact` | Contacts | `sljrnhhg` | SmartSuite, server-side back-link of `sdb36b3217` |
+| `Household Member` | Contacts | `su8pm1bp` | SmartSuite, server-side back-link of `suxra4lb` |
+
+Reading only the contact's own `Household` field finds ~35% of the real links
+(PAC-91 §8) — the importer must fall back to the two back-links, in the same
+order legacy's own `resolveHousehold.ts` does, and must read the household-side
+fields to populate `primaryContactId` / `memberContactIds`. A contact's
+membership is the **union** of all three, not the first one that answers: 266
+contacts in the 2026-09-04 export are a household's primary without appearing in
+its member list.
+
+The same shape recurs on the Leads table (`Primary Insured` `s8754c9e3b`,
+`Household Members` `sa3501b7c2`). Before adding a link to a new importer, check
+which side of it the legacy app actually wrote.
+
 ## Tables
 
 | Table | Table ID | Fields | Doc |

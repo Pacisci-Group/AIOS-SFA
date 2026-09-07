@@ -367,6 +367,37 @@ contacts stay unlinked but the team needs an in-app list → ticket §10 / plan
 Phase 5; HH-3149 — Brianne Ray becomes primary. **Nothing is outstanding with
 David for Phase 1.**
 
+**Phase 1 is done (2026-09-07) and rehearsed on the local dump.** The importer
+now reads the household side (`HOUSEHOLD_FIELDS.primaryContact` /
+`.householdMembers`, `CONTACT_FIELDS.householdPrimaryBacklink` /
+`.householdMemberBacklink`, `LEAD_FIELDS.primaryInsured` /
+`.householdMembers`), resolves a contact's household through
+`resolveContactHousehold` in legacy's own fallback order, and runs a new
+**`Household links`** pass after contacts and leads (`migrateHouseholdLinks`,
+stage 6 of 23) that writes `Household.primaryContactId` / `memberContactIds` and
+a lead's `householdId` / `primaryContactId` / `memberContactIds`. Existing
+databases are repaired instead by
+`packages/api/src/migration/backfill/backfill-household-links.ts`:
+
+```
+npm run backfill:household-links:dev -w @sfa/api -- \
+  --agency smith-family-agency \
+  --contacts "<abs>/temp/Contacts 9_4_2026.csv" \
+  --households "<abs>/temp/Households 9_4_2026.csv" \
+  --policies "<abs>/temp/Policies 9_4_2026.csv" \
+  --apply-owner-decisions --dry-run --report ./pac-91-backfill.json
+```
+
+Give the CSVs as **absolute** paths — `-w @sfa/api` runs the script with
+`packages/api` as its working directory. The exports live in the gitignored
+`temp/` of the main checkout only. `--apply-owner-decisions` replays the
+committed list in `backfill/pac-91-owner-decisions.json` (five households
+removed, test rows flagged, the duplicate 856719796 policy deleted, #HH3149
+given a primary); the decision rules themselves are pure functions in
+`backfill/household-link-decisions.ts` with a unit spec, and the CSV separator
+quirk lives in `backfill/smartsuite-csv.ts` with another. **Production has not
+been touched yet** — the local rehearsal is the only run so far.
+
 **How to begin Phase 1:** follow plan §1.1–§1.8 in order. Run every script
 through the workspace (`npm run <script> -w @sfa/api -- --flags`), never a root
 alias (they swallow flags). `npm run build -w @sfa/api` catches type errors

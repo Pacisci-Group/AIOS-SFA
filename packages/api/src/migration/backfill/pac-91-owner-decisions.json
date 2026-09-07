@@ -1,0 +1,160 @@
+{
+  "_source": "David (owner), Slack, 2026-09-07 — PAC-91 §8 'Owner decisions'. Applied by backfill-household-links.ts under --apply-owner-decisions, so the rehearsal and the production run apply exactly the same list.",
+  "_keys": "Records are named by their SmartSuite title (#HH…/#C…/policy number) so the list stays reviewable by the owner. `recordId` is the SmartSuite record id the script actually joins on (Mongo `legacySmartSuiteId`); the script asserts the two still agree in the export before writing anything.",
+  "removeHouseholds": [
+    {
+      "householdRef": "#HH4717",
+      "recordId": "69f52e015ddb25371e85269a",
+      "reason": "Double primary with #HH3932 (Oladipupo Adeyemi); Adeyemi keeps #HH3932.",
+      "repointLeadsTo": "#HH3932",
+      "repointLeadsToRecordId": "6965c42798f8cd8ca7442b4c"
+    },
+    {
+      "householdRef": "#HH4718",
+      "recordId": "69f52fb2cd619eb478128c6a",
+      "reason": "Double primary with #HH3458 (Jedidiah Bizzell); Bizzell keeps #HH3458.",
+      "repointLeadsTo": "#HH3458",
+      "repointLeadsToRecordId": "6965c41898f8cd8ca7442588"
+    },
+    {
+      "householdRef": "#HH4764",
+      "recordId": "6a1a4d637ee91ad66879ad27",
+      "reason": "Double primary with #HH3690 (Dewayne Allen); Allen keeps #HH3690. Also lists Rebecca Alarid and Peter Alavanja as members — they keep their other households.",
+      "repointLeadsTo": "#HH3690",
+      "repointLeadsToRecordId": "6965c42698f8cd8ca7442a5a"
+    },
+    {
+      "householdRef": "#HH4313",
+      "recordId": "69729fd1e28964ddf3369834",
+      "reason": "Double primary with #HH4314 (Gary Miskowiak); Miskowiak keeps #HH4314.",
+      "repointLeadsTo": "#HH4314",
+      "repointLeadsToRecordId": "69729fe4c6393713d5fe566b"
+    },
+    {
+      "householdRef": "#HH0032",
+      "recordId": "695d1f1746b13f75746d424f",
+      "reason": "Test row (\"Outon\" / \"Live Free\") whose only policy, 00006, is junk. Its one lead has nowhere real to go, so it is unlinked rather than re-pointed.",
+      "unlinkLeads": true
+    }
+  ],
+  "flagTestHouseholds": [
+    {
+      "householdRef": "#HH0001",
+      "recordId": "6949917405c3d58fb026862f"
+    },
+    {
+      "householdRef": "#HH0002",
+      "recordId": "69499465531b566a72977518"
+    },
+    {
+      "householdRef": "#HH0003",
+      "recordId": "6949c1441944dea84727da33"
+    },
+    {
+      "householdRef": "#HH0004",
+      "recordId": "6949c14758b2dfee574b014d"
+    },
+    {
+      "householdRef": "#HH0005",
+      "recordId": "6949c26520db985378d5fe47"
+    },
+    {
+      "householdRef": "#HH0006",
+      "recordId": "6949c267b11bf833563d6fb9"
+    },
+    {
+      "householdRef": "#HH0007",
+      "recordId": "6949d6b44a9132807180e46e"
+    },
+    {
+      "householdRef": "#HH0008",
+      "recordId": "6949d6b80f490d792b12c78e"
+    },
+    {
+      "householdRef": "#HH0009",
+      "recordId": "6949d9716ba615fa80ce0f79"
+    },
+    {
+      "householdRef": "#HH0010",
+      "recordId": "6949dcdb18618d3e3c2021bc"
+    },
+    {
+      "householdRef": "#HH0011",
+      "recordId": "6949e64c3adf4ad20f4e4037"
+    },
+    {
+      "householdRef": "#HH0012",
+      "recordId": "6949e93cdbbd487b0f7a850f"
+    },
+    {
+      "householdRef": "#HH0013",
+      "recordId": "6956e6041b4d4e7c3b09931f"
+    },
+    {
+      "householdRef": "#HH0014",
+      "recordId": "6956e88e3629f759689d8bf3"
+    },
+    {
+      "householdRef": "#HH0015",
+      "recordId": "6956ead1d90780671ce6d464"
+    },
+    {
+      "householdRef": "#HH0016",
+      "recordId": "6956eb7c6e59219eba537ed9"
+    },
+    {
+      "householdRef": "#HH0017",
+      "recordId": "6956fa51c7f95eec52a45c91"
+    }
+  ],
+  "flagTestContacts": [
+    {
+      "contactRef": "#C00001",
+      "recordId": "694990ed71cb010f29409397"
+    },
+    {
+      "contactRef": "#C00002",
+      "recordId": "6949913bafe80e86631c0a2e"
+    },
+    {
+      "contactRef": "#C00003",
+      "recordId": "6949c0f9527d8f4733026877"
+    },
+    {
+      "contactRef": "#C00018",
+      "recordId": "6956e865c28db65b8209937c"
+    },
+    {
+      "contactRef": "#C00019",
+      "recordId": "6956eaa77a5f45f9b09d8bf1"
+    },
+    {
+      "contactRef": "#C00034",
+      "recordId": "695f1f2108dead4f4daa56e6"
+    }
+  ],
+  "flagTestPolicies": [
+    {
+      "policyNumber": "00006",
+      "recordId": "69710259ebd9a3542a92a312",
+      "reason": "Junk policy on the #HH0032 test household."
+    }
+  ],
+  "deletePolicies": [
+    {
+      "policyNumber": "856719796",
+      "recordId": "6968735d3852d860110a1024",
+      "keepRecordId": "696135463c06f3648be9cbeb",
+      "reason": "Two distinct SmartSuite rows with identical values and no whitespace difference (Allstate Auto, $774.09, 3 items, no household). The newer one is deleted. Refused if it has since gained a household, deal or ticket."
+    }
+  ],
+  "setPrimaryContacts": [
+    {
+      "householdRef": "#HH3149",
+      "recordId": "6965c41798f8cd8ca7442453",
+      "contactRef": "#C00733",
+      "contactRecordId": "6965c6c07d8840991b728cc4",
+      "reason": "Brianne Ray is the household's only member, Named Insured, with one active policy. #HH3149 has members but no primary in the export."
+    }
+  ]
+}

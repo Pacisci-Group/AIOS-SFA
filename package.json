@@ -21,6 +21,8 @@
     "api:migrate:tickets:dev": "npm run migrate:tickets:dev -w @sfa/api",
     "api:backfill:appointments": "npm run backfill:appointments -w @sfa/api",
     "api:backfill:appointments:dev": "npm run backfill:appointments:dev -w @sfa/api",
+    "api:backfill:household-links": "npm run backfill:household-links -w @sfa/api",
+    "api:backfill:household-links:dev": "npm run backfill:household-links:dev -w @sfa/api",
     "api:backfill:mailer-campaigns": "npm run backfill:mailer-campaigns -w @sfa/api",
     "api:backfill:mailer-campaigns:dev": "npm run backfill:mailer-campaigns:dev -w @sfa/api",
     "db:migrate": "npm run db:migrate -w @sfa/api",
