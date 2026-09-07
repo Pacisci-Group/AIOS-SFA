@@ -101,16 +101,6 @@ export default function RunCampaignPage() {
     queryFn: listAgencies,
   });
 
-  const defaultsQuery = useQuery({
-    queryKey: campaignDefaultsKey,
-    queryFn: getCampaignDefaults,
-    // The values only move when a campaign imports, and the wizard reads them
-    // once on mount — refetching mid-run would rewrite the form under the
-    // operator.
-    staleTime: Infinity,
-    enabled: campaignId === null,
-  });
-
   const campaignQuery = useQuery({
     queryKey: campaignKey(campaignId ?? ""),
     queryFn: () => getCampaign(campaignId as string),
@@ -132,25 +122,6 @@ export default function RunCampaignPage() {
 
   const campaign = campaignQuery.data ?? null;
   useSettledToast(campaign);
-
-  const form = useAppForm({
-    defaultValues: EMPTY_CAMPAIGN_FORM,
-    validators: { onBlur: campaignFormSchema },
-    onSubmit: ({ value }) => {
-      setSubmitError(null);
-      create.mutate(value);
-    },
-  });
-
-  // Prefill once, when the defaults land. Guarded on there being no campaign
-  // yet so a resumed run never has its stored settings overwritten by the
-  // platform defaults.
-  const prefilled = useRef(false);
-  useEffect(() => {
-    if (prefilled.current || !defaultsQuery.data || campaignId !== null) return;
-    prefilled.current = true;
-    form.reset(fromDefaults(defaultsQuery.data));
-  }, [defaultsQuery.data, campaignId, form]);
 
   const create = useMutation({
     mutationFn: (values: CampaignFormValues) =>
@@ -246,15 +217,17 @@ export default function RunCampaignPage() {
 
       <div className="mt-4">
         {campaign === null ? (
-          <SettingsStep
-            form={form}
+          <SetupStep
             agencies={agenciesQuery.data ?? []}
             source={source}
             file={file}
             onSelectFile={setFile}
-            loading={defaultsQuery.isPending}
-            error={defaultsQuery.isError ? "Couldn't load the defaults." : submitError}
+            error={submitError}
             submitting={create.isPending}
+            onSubmit={(values) => {
+              setSubmitError(null);
+              create.mutate(values);
+            }}
           />
         ) : campaign.status === "imported" ? (
           <OutcomeStep
@@ -281,6 +254,70 @@ export default function RunCampaignPage() {
 // Step 1
 // ---------------------------------------------------------------------------
 
+interface SetupStepProps {
+  agencies: readonly PlatformAgency[];
+  source: "vendor" | "processed";
+  file: File | null;
+  onSelectFile: (file: File | null) => void;
+  error: string | null;
+  submitting: boolean;
+  onSubmit: (values: CampaignFormValues) => void;
+}
+
+/**
+ * Load the defaults, *then* build the form from them.
+ *
+ * ⚠ Two components rather than one, and the split is load-bearing. Seeding a
+ * mounted form with `form.reset(...)` propagates to scalar fields but leaves an
+ * array field — the discount bands and the market phones — rendering the zero
+ * rows it mounted with, so the run would go out with no square-footage table at
+ * all. Mounting the form only once its real values exist makes the ordering
+ * impossible to get wrong instead of relying on a reset landing.
+ *
+ * The skeleton is the same guarantee in the other direction: an empty
+ * `premiumFloor` is a run priced from the discount table alone, on ~20,000 mail
+ * pieces, so there is never a moment where a blank one is on screen.
+ */
+function SetupStep(props: SetupStepProps) {
+  const { data, isPending, isError } = useQuery({
+    queryKey: campaignDefaultsKey,
+    queryFn: getCampaignDefaults,
+    // The values only move when a campaign imports, and the wizard reads them
+    // once — a refetch mid-run must not rewrite the form under the operator.
+    staleTime: Infinity,
+  });
+
+  if (isPending) {
+    return (
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <Skeleton key={index} className="h-40 w-full rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return <FormError>Couldn't load the campaign defaults. Reload to retry.</FormError>;
+  }
+
+  return <SetupForm initial={fromDefaults(data)} {...props} />;
+}
+
+function SetupForm({
+  initial,
+  onSubmit,
+  ...rest
+}: SetupStepProps & { initial: CampaignFormValues }) {
+  const form = useAppForm({
+    defaultValues: initial,
+    validators: { onBlur: campaignFormSchema },
+    onSubmit: ({ value }) => onSubmit(value),
+  });
+
+  return <SettingsStep form={form} {...rest} />;
+}
+
 const SettingsStep = withForm({
   defaultValues: EMPTY_CAMPAIGN_FORM,
   props: {
@@ -288,7 +325,6 @@ const SettingsStep = withForm({
     source: "vendor" as "vendor" | "processed",
     file: null as File | null,
     onSelectFile: (_file: File | null) => {},
-    loading: false,
     error: null as string | null,
     submitting: false,
   },
@@ -298,23 +334,9 @@ const SettingsStep = withForm({
     source,
     file,
     onSelectFile,
-    loading,
     error,
     submitting,
   }) {
-    if (loading) {
-      // A skeleton rather than an empty form: the defaults *are* the settings,
-      // and letting someone type into a blank floor for a second and submit it
-      // is how a run goes out priced from the discount table alone.
-      return (
-        <div className="space-y-4">
-          {Array.from({ length: 3 }).map((_, index) => (
-            <Skeleton key={index} className="h-40 w-full rounded-xl" />
-          ))}
-        </div>
-      );
-    }
-
     return (
       <form
         className="space-y-4"

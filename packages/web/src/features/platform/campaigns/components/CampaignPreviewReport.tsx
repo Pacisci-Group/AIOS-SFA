@@ -147,10 +147,7 @@ export function CampaignPreviewReport({
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <StatTile label="Rows read" value={formatCount(stats.inputRows)} />
-              <StatTile
-                label="Will import"
-                value={formatCount(stats.outputRows)}
-              />
+              <StatTile label="Rows out" value={formatCount(stats.outputRows)} />
               <StatTile
                 label="Duplicates removed"
                 value={formatCount(stats.duplicatesRemoved)}
@@ -366,10 +363,8 @@ export function CampaignPreviewReport({
       )}
 
       {/* --- Rejections --------------------------------------------------- */}
-      <RejectionsTable
-        rejections={preview.rejections}
-        total={stats ? stats.inputRows - stats.outputRows : null}
-      />
+      {/* `total` is unknown here on purpose — see `RejectionsTable`. */}
+      <RejectionsTable rejections={preview.rejections} total={null} />
 
       {/* --- Commit ------------------------------------------------------- */}
       <div className="flex flex-wrap items-center gap-3">
@@ -391,8 +386,16 @@ export function CampaignPreviewReport({
           ) : (
             <>
               <CheckCircle2 className="size-4" />
+              {/*
+               * "rows", not "mailers", and deliberately not `outputRows` minus
+               * the rejections: `preview.rejections` is a capped sample, so the
+               * real skip count is not knowable until the import runs. Naming
+               * the transform's own output is a number that is exactly true;
+               * subtracting a sample from it would be a number that is usually
+               * wrong.
+               */}
               Import {formatCount(stats?.outputRows ?? null)}{" "}
-              {stats?.outputRows === 1 ? "mailer" : "mailers"}
+              {stats?.outputRows === 1 ? "row" : "rows"}
             </>
           )}
         </Button>
