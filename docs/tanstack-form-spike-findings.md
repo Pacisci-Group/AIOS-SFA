@@ -153,3 +153,63 @@ exercise it directly.*
 3. Retype `CARD_FIELDS` to `DeepKeys`, dropping the existing cast.
 4. Drop `showPremium`; compose the premium field at the Quote Recap call site.
 5. Keep `LeadIntakeForm`'s `householdAddress` memo; drop the RHF loop comment.
+
+---
+
+## Trap 3 — `form.reset()` does not redraw a `mode="array"` field
+
+*Not from the spike. Found in PAC-93 / PAC-71 while fixing a reported bug, and
+recorded here because this is where the version-specific traps live. Same
+version, `@tanstack/react-form` 1.33.3.*
+
+**Never seed a mounted form from the server with `form.reset(serverValues)`.**
+It reaches the form's state and updates every scalar field, and leaves an array
+field rendering the zero rows it mounted with.
+
+`useField` with `mode: "array"` deliberately subscribes to nothing except the
+field's own array version — that is the optimisation the mode exists for:
+
+```ts
+// react-form/useField.cjs
+opts.mode === "array" ? (state) => state.meta._arrayVersion || 0 : (state) => state.value
+```
+
+`FormApi.update()` knows this and calls `bumpArrayVersion` on every array field
+whenever it rewrites values. **`FormApi.reset()` does not**: it replaces all
+field meta with `defaultFieldMeta`, whose `_arrayVersion` is `0` — so a reset
+lands the rows in state and the subscription never fires.
+
+There is a second edge on the same blade. `useForm` calls `formApi.update(opts)`
+in a **layout effect with no dependency array**, so it runs on every render, and
+it rewrites values whenever `defaultValues` changes identity on a form nobody
+has touched yet. A `defaultValues` computed inline from a query is exactly that.
+
+### What it looks like
+
+Silent, and it reads like a backend bug. The page shows its empty state over
+data the API returned; the row is in form state, invisible. The next "Add row"
+bumps the version and the hidden row appears *beside* the new one, so one click
+looks like it added two. Saving and reloading returns to the same invisible
+state, so nothing looks like it persisted either.
+
+Hit twice on the same branch before the cause was found: the campaign wizard's
+discount bands and market phones (PAC-71), and the carrier-appointments editor
+(PAC-93), which is where it was finally diagnosed.
+
+### The working pattern
+
+Split the component in two: a loader that renders a skeleton until the query
+resolves, and an inner component that passes the real values to `useAppForm`'s
+`defaultValues`. Freeze that object for the component's life (`useState`) and
+re-seed by **remounting with a `key`**, never by a new prop or a reset.
+
+```tsx
+if (query.isPending) return <Skeleton />;
+return <TheForm key={seed} initial={toFormValues(query.data)} … />;
+```
+
+Mounting the form only once its real values exist makes the ordering impossible
+to get wrong, instead of relying on a reset landing. It also removes the
+`isDirty` guard such effects need: with no reset, a background refetch has
+nothing to clobber. Worked examples: `RunCampaignPage`'s `SetupStep` and
+`CarrierAppointmentsEditor`'s `AppointmentsForm`.
