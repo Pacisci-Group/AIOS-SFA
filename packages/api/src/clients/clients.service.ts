@@ -1,6 +1,5 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -8,7 +7,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
   ContactSummary,
-  DataScope,
   HouseholdListResponse,
   HouseholdListRow,
   HouseholdMatch,
@@ -52,6 +50,11 @@ import {
   toDateKey,
 } from '../leads/intake/intake.normalize';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
+import {
+  clientAgencyId,
+  clientScopeFilter,
+  type ClientScopeFilter,
+} from './client-scope';
 import { AddHouseholdMemberDto } from './dto/add-household-member.dto';
 import { ListHouseholdsDto } from './dto/list-households.dto';
 import { SetPrimaryContactDto } from './dto/set-primary-contact.dto';
@@ -137,44 +140,17 @@ export class ClientsService {
    * Tenant + data-scope filter. NOTE: `TenantRecord.agencyId` / `branchId` are
    * plain strings on these collections (unlike `ServiceTicket`, where they are
    * ObjectIds) — do not cast them.
-   */
-  /**
-   * The caller's tenant, as the plain string these collections store.
    *
-   * Separate from {@link scopeFilter} because a `FilterQuery` value is not a
-   * `string` to TypeScript, and the membership queries need one. Both throw on
-   * the same condition, which the guards already prevent.
+   * The rule itself lives in `client-scope.ts` since `UnlinkedRecordsService`
+   * came to need the same one (PAC-91 §10); these two stay as thin private
+   * methods because every call site in this file reads better for them.
    */
   private agencyIdOf(access: AccessContext): string {
-    if (!access.agencyId) {
-      throw new ForbiddenException('Agency context required');
-    }
-    return access.agencyId;
+    return clientAgencyId(access);
   }
 
-  private scopeFilter(access: AccessContext): FilterQuery<{
-    agencyId: string;
-    branchId: string;
-  }> {
-    if (!access.agencyId) {
-      // Defensive; the guards prevent this.
-      throw new ForbiddenException('Agency context required');
-    }
-
-    const filter: FilterQuery<{ agencyId: string; branchId: string }> = {
-      agencyId: access.agencyId,
-    };
-
-    if (access.dataScope === DataScope.Agency) {
-      return filter;
-    }
-
-    // `branch` and `own` both resolve to branch: client records are shared and
-    // have no assigned user for `own` to key on.
-    if (access.branchId) {
-      filter.branchId = access.branchId;
-    }
-    return filter;
+  private scopeFilter(access: AccessContext): ClientScopeFilter {
+    return clientScopeFilter(access);
   }
 
   /**

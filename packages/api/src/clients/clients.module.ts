@@ -12,11 +12,13 @@ import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
 import { ClientsService } from './clients.service';
 import { HouseholdRecordsController } from './household-records.controller';
 import { PolicyRecordsController } from './policy-records.controller';
+import { UnlinkedRecordsController } from './unlinked-records.controller';
+import { UnlinkedRecordsService } from './unlinked-records.service';
 
 /**
  * APIs over the migrated client-record schemas — reads, plus adding a member to
- * a household. Exporting `MongooseModule` also makes these models injectable in
- * the seed scripts.
+ * a household, plus the Unlinked records work list (PAC-91 §10). Exporting
+ * `MongooseModule` also makes these models injectable in the seed scripts.
  */
 @Module({
   imports: [
@@ -33,8 +35,12 @@ import { PolicyRecordsController } from './policy-records.controller';
     // `POST /households/:id/primary-contact` (PAC-91 §7).
     PrimaryContactModule,
   ],
-  controllers: [HouseholdRecordsController, PolicyRecordsController],
-  providers: [ClientsService],
+  controllers: [
+    HouseholdRecordsController,
+    PolicyRecordsController,
+    UnlinkedRecordsController,
+  ],
+  providers: [ClientsService, UnlinkedRecordsService],
   exports: [ClientsService, MongooseModule],
 })
 export class ClientsModule {}

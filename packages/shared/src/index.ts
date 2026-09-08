@@ -52,3 +52,4 @@ export * from './types/module-entitlement.type';
 export * from './service/renewal';
 export * from './service/service-ticket';
 export * from './clients/client-records';
+export * from './clients/unlinked-records';

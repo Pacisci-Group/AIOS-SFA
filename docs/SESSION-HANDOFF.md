@@ -612,3 +612,92 @@ baseline (same 7 files, 140 problems); `lint -w @sfa/web` clean.
 
 **Production has not been run for Phase 4 either.** Local rehearsal only. Next:
 Phase 5 (the "unlinked records" work list, ticket §10).
+
+
+**Phase 5 is done (2026-09-08) and rehearsed on the local dump — the ticket is
+now code-complete.** The **Unlinked records** work list (§10) is David's answer
+to "what about the records the backfill cannot link": leave them, but give the
+team a list. `GET /clients/unlinked?kind=policies|contacts|households`
+(`clients:read`) plus `GET /clients/unlinked/counts`, served by
+`clients/unlinked-records.service.ts` behind `UnlinkedRecordsController`; on the
+web it is an **Unlinked** tab on the Clients page with the three counts as
+chips, held in the URL (`?view=unlinked&kind=…`) so a work queue can be pasted
+to a colleague.
+
+`/clients` rather than `/households` or `/policies` because the resource is the
+page's backlog and it spans three collections. `clients:read` **only** — not the
+`clients:read` OR `crm_service:read` gate the record controllers carry: those
+exist because one record renders in a CRM ticket drawer, and this is a report
+about the state of the book. Scope is `clientScopeFilter`, extracted from
+`ClientsService` into `clients/client-scope.ts` so the two readers cannot drift
+(these collections store `agencyId`/`branchId` as **strings**, and the wrong
+type returns zero rows with no error).
+
+**Two decisions the plan predated, both made explicitly:**
+
+1. **The households filter is ONE list, not two.** `Household.dataQuality:
+   'no_primary'` (Phase 4) says somebody *deliberately* left a household without
+   a primary; `null` says nobody ever looked. Both satisfy "no
+   `primaryContactId`", both still need one named, and a count that disagreed
+   with the database would undermine the one thing a data-quality list is for —
+   so the reason rides **on the row** and the UI badges it. It also keeps the
+   page at the three chips David asked for.
+2. **No index, therefore no migration.** Because of (1), `dataQuality` is
+   *projected, never predicated*, so it stays unindexed exactly as Phase 4 left
+   it. Every query rides an index that already exists: `{agencyId, householdId}`
+   on `policies`, `primaryContactId_1` on `households` (non-sparse, so missing
+   values are indexed as null), and `{agencyId, contactId}` /
+   `{agencyId, householdId, contactId}` on `householdMembers` for the two
+   lookups.
+
+`UnlinkedHouseholdRow.memberCount` goes slightly beyond the plan's letter and
+earns it: **47 of the 59 households with no primary have no members at all**, so
+"pick somebody out of the roster" and "add a member before anybody can be picked"
+are different jobs, and the number is what tells them apart. It is one indexed
+`$lookup` computed *after* `$skip`/`$limit`, so it costs one count per rendered
+row. The contacts list is the opposite shape — an anti-join whose `$lookup` must
+run before the filter can, over every in-scope contact (3,082 on the dump); if
+the book ever outgrows that, the fix is a stored flag maintained by the
+membership writers, not a bigger pipeline.
+
+**No new actions.** A household row opens `/clients/:id`, where Phase 4's
+*Change primary contact* lives — the one kind whose fix is fully in the app. A
+policy row opens `/policies/:id`, where **nothing assigns it to a household**.
+A contact row is deliberately **not a link at all**: there is no contact page,
+and "+ Member" *creates* a contact rather than attaching an existing one. Both
+gaps are stated in the UI copy rather than papered over; filling them is a
+follow-up ticket, per the plan.
+
+**Rehearsal (local `sfa`, from `pac91-before-phase5`).** Phase 5 changes no data,
+so the rehearsal is behavioural again: the service driven against the dump
+through a standalone Nest context (`DB_MIGRATE_ON_BOOT=false`; the dump's users
+carry a junk password hash and cannot log in). It returned **135 policies · 280
+contacts · 59 households**, matching the raw-driver counts exactly; pagination
+showed no overlap between pages and an empty page past the end for all three
+kinds. The dump was **unchanged** afterwards — still 4 changelog entries, still
+no `agencyId_1_primaryContactId_1`, same row counts. ⚠ Booting a Nest context
+against `sfa` fires `autoIndex`, which *tries* and fails to build that index
+over the three double primaries; it creates nothing and writes nothing, but it
+is why the boot logs an index error.
+
+The UI was checked against `sfa_bruno` in both themes and at 375px (the tables
+scroll inside their own card; the page body does not), using two throwaway
+households inserted and deleted afterwards, because the demo seed has no
+unlinked policies or households of its own.
+
+⚠ **One real behaviour the list surfaced:** the Bruno collection's Households
+chain ends a membership every run, and each run therefore leaves one more
+contact with no current membership. That is `DELETE /households/:id/members/:contactId`
+(Phase 3) working as designed — the person still exists — and this list is what
+makes the consequence visible. Worth knowing before reading the demo counts.
+
+Verified: `build -w @sfa/api` + `tsc -p packages/api` + `lint -w @sfa/web`
+(tsc) clean, **850** unit, **854** e2e in 26 suites, Bruno **213/213 requests,
+625/625 tests**, run three times against one database. `lint -w @sfa/api` is on
+its exact pre-existing baseline (same 7 files, 140 problems).
+
+**Production has not been run for any phase.** With Phase 5 done the branch is
+code-complete and the outstanding items before the PR are: the **three
+double-primary pairs** (David), and the production deploy sequence in Phase 4's
+report — one boot with `DB_MIGRATE_ON_BOOT=false`, resolve the pairs in the app,
+restart with migrations on.

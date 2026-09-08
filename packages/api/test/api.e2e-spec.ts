@@ -13,7 +13,11 @@ import {
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
-import type { HouseholdListResponse } from '@sfa/shared';
+import type {
+  HouseholdListResponse,
+  UnlinkedCounts,
+  UnlinkedRecordsResponse,
+} from '@sfa/shared';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
@@ -2675,6 +2679,401 @@ describe('SFA API (e2e)', () => {
 
       it('returns an empty page past the end, not an error', async () => {
         const body = await listBody(ownerToken, '?page=9999');
+        expect(body.items).toEqual([]);
+      });
+    });
+  });
+
+  /*
+   * `GET /clients/unlinked` — the Unlinked records work list (PAC-91 §10).
+   *
+   * David's answer to "what about the records the link backfill cannot repair"
+   * was to leave them unlinked and give the team a list. These cases pin the
+   * three predicates and the one exclusion that makes the list trustworthy:
+   * a Sample/Test row must never appear as work.
+   *
+   * The fixtures are built and torn down inside this block rather than added to
+   * `seedTestData`, because "how many households have no primary contact" is a
+   * number several other suites' assertions would start disagreeing with.
+   */
+  describe('Unlinked records (PAC-91 §10)', () => {
+    let householdModel: Model<Household>;
+    let contactModel: Model<Contact>;
+    let policyModel: Model<Policy>;
+    let memberModel: Model<HouseholdMember>;
+
+    /** Undo thunks for everything this block creates, run in reverse. */
+    const cleanup: Array<() => Promise<unknown>> = [];
+
+    let unlinkedPolicyId: string;
+    let testPolicyId: string;
+    let unlinkedContactId: string;
+    let departedContactId: string;
+    let testContactId: string;
+    let flaggedHouseholdId: string;
+    let testHouseholdId: string;
+    let countedHouseholdId: string;
+    let primaryContactId: string;
+
+    const unlinked = (token: string, query: string) =>
+      request(app.getHttpServer())
+        .get(`/api/v1/clients/unlinked${query}`)
+        .set(authHeader(token));
+
+    const page = async (
+      kind: 'policies' | 'contacts' | 'households',
+      extra = '',
+    ): Promise<UnlinkedRecordsResponse> => {
+      const res = await unlinked(ownerToken, `?kind=${kind}${extra}`).expect(
+        200,
+      );
+      return res.body as UnlinkedRecordsResponse;
+    };
+
+    /*
+     * `items` is a union of three row arrays, so `.map` over it degrades to
+     * `any`. Every row shape carries `id: string`, which is the only field this
+     * needs — narrow to that rather than switching on `kind` in a helper whose
+     * whole job is one field.
+     */
+    const idsIn = (body: UnlinkedRecordsResponse): string[] =>
+      (body.items as ReadonlyArray<{ id: string }>).map((item) => item.id);
+
+    const counts = async (token = ownerToken): Promise<UnlinkedCounts> => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/clients/unlinked/counts')
+        .set(authHeader(token))
+        .expect(200);
+      return res.body as UnlinkedCounts;
+    };
+
+    beforeAll(async () => {
+      householdModel = app.get<Model<Household>>(getModelToken(Household.name));
+      contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      memberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
+
+      const tenant = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      // The seeded household's primary contact — a current member, so the
+      // contacts list must never show them.
+      const seeded = await householdModel.findById(seed.householdId).lean();
+      primaryContactId = String(seeded!.primaryContactId);
+
+      // A policy nobody can attribute — 136 of these in production.
+      const orphanPolicy = await policyModel.create({
+        ...tenant,
+        policyNumber: 'UNLINKED-1',
+        policyType: 'Auto',
+        carrier: 'Test Carrier',
+        active: true,
+        policyStatus: 'Active',
+        premium: 500,
+        items: 1,
+      });
+      unlinkedPolicyId = orphanPolicy._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: orphanPolicy._id }));
+
+      // The same gap on a declared test row: work the team must never be shown.
+      const junkPolicy = await policyModel.create({
+        ...tenant,
+        policyNumber: 'UNLINKED-TEST-1',
+        policyType: 'Auto',
+        premium: 0,
+        items: 0,
+        isTestRecord: true,
+      });
+      testPolicyId = junkPolicy._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: junkPolicy._id }));
+
+      const orphanContact = await contactModel.create({
+        ...tenant,
+        firstName: 'Unlinked',
+        lastName: 'Person',
+      });
+      unlinkedContactId = orphanContact._id.toString();
+      cleanup.push(() => contactModel.deleteOne({ _id: orphanContact._id }));
+
+      const junkContact = await contactModel.create({
+        ...tenant,
+        firstName: 'Sample',
+        lastName: 'Unlinked',
+        isTestRecord: true,
+      });
+      testContactId = junkContact._id.toString();
+      cleanup.push(() => contactModel.deleteOne({ _id: junkContact._id }));
+
+      /*
+       * Somebody whose only membership has ENDED. "Unlinked" is the absence of
+       * a current row, not of every row — the book no longer connects them to
+       * anything, which is the whole question this list answers.
+       */
+      const departed = await contactModel.create({
+        ...tenant,
+        firstName: 'Departed',
+        lastName: 'Member',
+      });
+      departedContactId = departed._id.toString();
+      cleanup.push(() => contactModel.deleteOne({ _id: departed._id }));
+      const endedMembership = await memberModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        contactId: departed._id,
+        addedAt: new Date('2026-01-01T00:00:00.000Z'),
+        endedAt: new Date('2026-06-01T00:00:00.000Z'),
+        source: 'manual',
+      });
+      cleanup.push(() => memberModel.deleteOne({ _id: endedMembership._id }));
+
+      // A household somebody DELIBERATELY left without a primary (PAC-91 §7) —
+      // the only reader `Household.dataQuality` has ever had.
+      const flagged = await householdModel.create({
+        ...tenant,
+        name: 'Flagged No Primary Household',
+        status: 'Active',
+        dataQuality: 'no_primary',
+      });
+      flaggedHouseholdId = flagged._id.toString();
+      cleanup.push(() => householdModel.deleteOne({ _id: flagged._id }));
+
+      const junkHousehold = await householdModel.create({
+        ...tenant,
+        name: 'Sample Household',
+        status: 'Active',
+        isTestRecord: true,
+      });
+      testHouseholdId = junkHousehold._id.toString();
+      cleanup.push(() => householdModel.deleteOne({ _id: junkHousehold._id }));
+
+      /*
+       * A household with a roster of a known size — two current members and one
+       * who has left. `memberCount` is what tells the reader whether a primary
+       * can be named at all, so it has to count the two and not the three.
+       *
+       * Built here rather than asserted against a seeded household because
+       * earlier blocks add members to those, and a count that drifts with the
+       * suite order proves nothing.
+       */
+      const counted = await householdModel.create({
+        ...tenant,
+        name: 'Counted Roster Household',
+        status: 'Active',
+      });
+      countedHouseholdId = counted._id.toString();
+      cleanup.push(() => householdModel.deleteOne({ _id: counted._id }));
+
+      for (const firstName of ['Roster', 'Rota']) {
+        const member = await contactModel.create({
+          ...tenant,
+          firstName,
+          lastName: 'Member',
+        });
+        cleanup.push(() => contactModel.deleteOne({ _id: member._id }));
+        const membership = await memberModel.create({
+          ...tenant,
+          householdId: counted._id,
+          contactId: member._id,
+          addedAt: new Date('2026-01-01T00:00:00.000Z'),
+          source: 'manual',
+        });
+        cleanup.push(() => memberModel.deleteOne({ _id: membership._id }));
+      }
+
+      const leftCounted = await memberModel.create({
+        ...tenant,
+        householdId: counted._id,
+        contactId: departed._id,
+        addedAt: new Date('2026-01-01T00:00:00.000Z'),
+        endedAt: new Date('2026-06-01T00:00:00.000Z'),
+        source: 'manual',
+      });
+      cleanup.push(() => memberModel.deleteOne({ _id: leftCounted._id }));
+    });
+
+    afterAll(async () => {
+      for (const undo of cleanup.reverse()) await undo();
+    });
+
+    describe('permissions', () => {
+      it('403s for a CSR — this is the Clients page backlog, not a record', async () => {
+        await unlinked(csrToken, '?kind=policies').expect(403);
+      });
+
+      it('401s unauthenticated', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/clients/unlinked?kind=policies')
+          .expect(401);
+      });
+    });
+
+    describe('validation', () => {
+      it('400s without a kind — three row shapes, no default', async () => {
+        await unlinked(ownerToken, '').expect(400);
+      });
+
+      it('400s on an unknown kind', async () => {
+        await unlinked(ownerToken, '?kind=leads').expect(400);
+      });
+
+      it('400s on a pageSize past the cap', async () => {
+        await unlinked(ownerToken, '?kind=contacts&pageSize=500').expect(400);
+      });
+    });
+
+    describe('kind=policies', () => {
+      it('lists a policy with no household', async () => {
+        const body = await page('policies', '&pageSize=100');
+        expect(body.kind).toBe('policies');
+        expect(idsIn(body)).toContain(unlinkedPolicyId);
+      });
+
+      it('never lists a policy that has one', async () => {
+        const body = await page('policies', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(seed.policyId);
+      });
+
+      it('serializes the row without leaking internals', async () => {
+        const body = await page('policies', '&pageSize=100');
+        const row = body.items.find((item) => item.id === unlinkedPolicyId);
+        expect(row).toMatchObject({
+          policyNumber: 'UNLINKED-1',
+          policyType: 'Auto',
+          premium: 500,
+          active: true,
+        });
+        const raw = row as unknown as Record<string, unknown>;
+        for (const key of ['agencyId', 'branchId', 'isTestRecord']) {
+          expect(raw[key]).toBeUndefined();
+        }
+      });
+    });
+
+    describe('kind=contacts', () => {
+      it('lists a contact with no membership', async () => {
+        const body = await page('contacts', '&pageSize=100');
+        expect(body.kind).toBe('contacts');
+        expect(idsIn(body)).toContain(unlinkedContactId);
+      });
+
+      it('never lists a current member', async () => {
+        const body = await page('contacts', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(primaryContactId);
+      });
+
+      it('lists somebody whose only membership has ended', async () => {
+        const body = await page('contacts', '&pageSize=100');
+        expect(idsIn(body)).toContain(departedContactId);
+      });
+    });
+
+    describe('kind=households', () => {
+      it('lists a household with no primary contact', async () => {
+        const body = await page('households', '&pageSize=100');
+        expect(body.kind).toBe('households');
+        expect(idsIn(body)).toContain(seed.secondHouseholdId);
+      });
+
+      it('never lists one that has a primary', async () => {
+        const body = await page('households', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(seed.householdId);
+      });
+
+      /*
+       * One list, not two. A deliberate `no_primary` and a household nobody
+       * ever looked at both satisfy "has no primary contact", and both still
+       * need one named — the flag rides on the row so the UI can say which is
+       * which without the count disagreeing with the database.
+       */
+      it('includes a deliberately flagged household, carrying the reason', async () => {
+        const body = await page('households', '&pageSize=100');
+        const row = body.items.find((item) => item.id === flaggedHouseholdId);
+        expect(row).toBeDefined();
+        expect(row).toMatchObject({ dataQuality: 'no_primary' });
+      });
+
+      it('counts current members only, so a row says whether one can be named', async () => {
+        const body = await page('households', '&pageSize=100');
+        // Two current members and one who left — the count is the two.
+        expect(
+          body.items.find((item) => item.id === countedHouseholdId),
+        ).toMatchObject({ memberCount: 2 });
+        expect(
+          body.items.find((item) => item.id === flaggedHouseholdId),
+        ).toMatchObject({ memberCount: 0 });
+      });
+    });
+
+    describe('test records are never work', () => {
+      it('excludes a declared test policy, contact and household', async () => {
+        const [policies, contacts, households] = await Promise.all([
+          page('policies', '&pageSize=100'),
+          page('contacts', '&pageSize=100'),
+          page('households', '&pageSize=100'),
+        ]);
+        expect(idsIn(policies)).not.toContain(testPolicyId);
+        expect(idsIn(contacts)).not.toContain(testContactId);
+        expect(idsIn(households)).not.toContain(testHouseholdId);
+      });
+    });
+
+    describe('counts', () => {
+      it('returns the three numbers the chips show', async () => {
+        const body = await counts();
+        expect(Object.keys(body).sort()).toEqual([
+          'contacts',
+          'households',
+          'policies',
+        ]);
+        expect(typeof body.policies).toBe('number');
+        expect(typeof body.contacts).toBe('number');
+        expect(typeof body.households).toBe('number');
+      });
+
+      it('agrees with the list it summarises', async () => {
+        const summary = await counts();
+        const [policies, contacts, households] = await Promise.all([
+          page('policies', '&pageSize=100'),
+          page('contacts', '&pageSize=100'),
+          page('households', '&pageSize=100'),
+        ]);
+        expect(summary.policies).toBe(policies.total);
+        expect(summary.contacts).toBe(contacts.total);
+        expect(summary.households).toBe(households.total);
+      });
+
+      it('403s for a CSR', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/clients/unlinked/counts')
+          .set(authHeader(csrToken))
+          .expect(403);
+      });
+    });
+
+    describe('tenancy', () => {
+      it("never lists another agency's household", async () => {
+        const body = await page('households', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(seed.otherAgencyHouseholdId);
+      });
+    });
+
+    describe('pagination', () => {
+      it('bounds the page and reports the total honestly', async () => {
+        const body = await page('households', '&pageSize=1');
+        expect(body.items).toHaveLength(1);
+        expect(body.pageSize).toBe(1);
+        expect(body.totalPages).toBe(body.total);
+      });
+
+      it('does not repeat a row across pages', async () => {
+        const first = await page('households', '&pageSize=1&page=1');
+        const second = await page('households', '&pageSize=1&page=2');
+        expect(idsIn(first)[0]).not.toBe(idsIn(second)[0]);
+      });
+
+      it('returns an empty page past the end, not an error', async () => {
+        const body = await page('contacts', '&page=9999');
         expect(body.items).toEqual([]);
       });
     });

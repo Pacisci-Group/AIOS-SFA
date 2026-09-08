@@ -1,4 +1,5 @@
-import { HOUSEHOLD_STATUSES } from "@sfa/shared";
+import { HOUSEHOLD_STATUSES, UNLINKED_RECORD_KINDS } from "@sfa/shared";
+import type { UnlinkedRecordKind } from "@sfa/shared";
 import { useCallback, useMemo } from "react";
 import { useUrlState } from "@/hooks/useUrlState";
 import {
@@ -24,6 +25,16 @@ const DEFAULTS = {
   status: [] as string[],
   sort: "name" as string,
   page: "",
+  /*
+   * Which tab is open, and which unlinked kind it is showing (PAC-91 §10).
+   *
+   * In the URL like everything else on this page: the Unlinked list is a work
+   * queue two people share, so "the 59 households with no primary contact" has
+   * to be a link somebody can paste. `page` is shared with the main list
+   * because switching tab or kind resets it either way.
+   */
+  view: "all" as string,
+  kind: "policies" as string,
 };
 
 const ALLOWED = {
@@ -33,9 +44,17 @@ const ALLOWED = {
   dateOfBirth: (value: string) => ISO_DATE.test(value),
   sort: ["name", "policies", "updated"] as const,
   page: (value: string) => /^[1-9]\d*$/.test(value),
+  view: ["all", "unlinked"] as const,
+  kind: UNLINKED_RECORD_KINDS,
 } as const;
 
+export type HouseholdsView = "all" | "unlinked";
+
 export interface HouseholdsUrlState {
+  /** Which tab: the whole book, or the unlinked work list (PAC-91 §10). */
+  view: HouseholdsView;
+  /** Which unlinked list the Unlinked tab is showing. */
+  kind: UnlinkedRecordKind;
   /** The omni box. */
   search: string;
   filters: HouseholdFilters;
@@ -47,6 +66,8 @@ export interface HouseholdsUrlState {
   setSort: (sort: HouseholdSort) => void;
   setPage: (page: number) => void;
   clearFilters: () => void;
+  setView: (view: HouseholdsView) => void;
+  setKind: (kind: UnlinkedRecordKind) => void;
 }
 
 /**
@@ -108,7 +129,19 @@ export function useHouseholdsUrlState(): HouseholdsUrlState {
     [setValues],
   );
 
+  const setView = useCallback(
+    (view: HouseholdsView) => setValues({ view, page: "" }),
+    [setValues],
+  );
+
+  const setKind = useCallback(
+    (kind: UnlinkedRecordKind) => setValues({ kind, page: "" }),
+    [setValues],
+  );
+
   return {
+    view: values.view as HouseholdsView,
+    kind: values.kind as UnlinkedRecordKind,
     search: values.q,
     filters,
     sort: values.sort as HouseholdSort,
@@ -118,5 +151,7 @@ export function useHouseholdsUrlState(): HouseholdsUrlState {
     setSort,
     setPage,
     clearFilters,
+    setView,
+    setKind,
   };
 }

@@ -101,12 +101,17 @@ export class Household extends TenantRecord {
    * household that simply never had one — 77 of them on the 2026-09-04
    * production data — is not flagged, because nobody decided that.
    * `primaryContactId: null` already says *what*; this says *somebody chose it
-   * and it still needs an answer*, which is what makes it worth a filter on the
-   * Clients page. Cleared the moment a primary is assigned.
+   * and it still needs an answer*. Cleared the moment a primary is assigned.
    *
-   * Deliberately **not indexed**: the Clients-page filter that reads it is
-   * PAC-91 §10 / Phase 5, and an index for a predicate nobody queries yet is the
-   * cost the two dead `producerId` indexes on `activities` taught.
+   * Its one reader is the Unlinked records work list (PAC-91 §10), and that
+   * view **projects it, never filters on it**: both classes of household —
+   * flagged and never-looked-at — are one list keyed on `primaryContactId`,
+   * with the reason shown on the row, because `no_primary` is not a resolution
+   * and a count that disagreed with the database would undermine the list.
+   *
+   * So it stays **unindexed**, deliberately: nothing queries it, and an index
+   * for a predicate nobody uses is the cost the two dead `producerId` indexes
+   * on `activities` taught.
    */
   @Prop({ type: String, trim: true })
   dataQuality?: string;
