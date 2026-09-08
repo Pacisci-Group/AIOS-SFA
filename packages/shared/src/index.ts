@@ -27,6 +27,7 @@ export * from './domain/mailer-campaign';
 export * from './domain/mailer-control-number';
 export * from './domain/performance';
 export * from './domain/platform-user';
+export * from './domain/primary-contact';
 export * from './domain/policy-check';
 export * from './domain/policy-edit';
 export * from './domain/policy-number';

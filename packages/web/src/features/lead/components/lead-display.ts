@@ -243,6 +243,20 @@ export const activityDisplay: Record<
     tone: "text-amber-600 dark:text-amber-400",
     tint: "bg-amber-400/12",
   },
+  /*
+   * A household's primary contact was named, changed or cleared (PAC-91 §7).
+   * Violet, matching `lead_reassigned`: both are "this record changed hands"
+   * rather than a pipeline milestone.
+   *
+   * Mapped here because `Record<ActivityType, …>` is exhaustive by design, not
+   * because it renders on the lead timeline — the row hangs off a household,
+   * and nothing queries activities by household yet.
+   */
+  primary_contact_changed: {
+    icon: UserCheck,
+    tone: "text-violet-600 dark:text-violet-400",
+    tint: "bg-violet-400/12",
+  },
 };
 
 /** Human label for an activity type, used when a row carries no `summary`. */
@@ -269,6 +283,9 @@ export const activityLabel: Record<ActivityType, string> = {
   // Also a fallback: the row's summary names which detail disagreed, and its
   // `changes` carry both values.
   contact_conflict: "Submitted contact detail differs",
+  // A fallback: `PrimaryContactService` always writes a summary saying whether
+  // the primary was changed, cleared, or reassigned after a death.
+  primary_contact_changed: "Primary contact changed",
 };
 
 /** Up to two initials for an avatar; `?` when there is no name to work with. */

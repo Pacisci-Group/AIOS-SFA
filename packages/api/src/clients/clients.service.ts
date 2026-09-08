@@ -41,6 +41,7 @@ import {
   rolesByContact,
 } from '../households/household-members.service';
 import { pickPrimaryContact } from '../households/primary-contact';
+import { PrimaryContactService } from '../households/primary-contact.service';
 import {
   Household,
   HouseholdDocument,
@@ -53,6 +54,7 @@ import {
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import { AddHouseholdMemberDto } from './dto/add-household-member.dto';
 import { ListHouseholdsDto } from './dto/list-households.dto';
+import { SetPrimaryContactDto } from './dto/set-primary-contact.dto';
 import { routeSearchTerm } from './search-routing';
 
 /**
@@ -128,6 +130,7 @@ export class ClientsService {
     @InjectModel(Contact.name) private contactModel: Model<ContactDocument>,
     private readonly identity: ContactIdentityService,
     private readonly memberships: HouseholdMembersService,
+    private readonly primaryContacts: PrimaryContactService,
   ) {}
 
   /**
@@ -945,6 +948,55 @@ export class ClientsService {
   }
 
   /**
+   * Name the household's primary contact, or deliberately leave it without one
+   * (PAC-91 §7).
+   *
+   * Scope is settled here — the household is loaded through the same filter as
+   * `GET /households/:id`, so one outside the caller's branch reads as 404 —
+   * and every rule about *who may lead* it belongs to
+   * {@link PrimaryContactService}, which the deceased-contact path in
+   * `PATCH /contacts/:id` calls with the same arguments. Two entry points, one
+   * set of rules, one activity row.
+   *
+   * The full `HouseholdView` comes back because the write moves more than the
+   * one ref: the roster's `isPrimary`, the resolved `primaryEmail` / `primaryPhone`
+   * and the `no_primary` flag all change together, and a caller reconstructing
+   * that from `{ ok: true }` would get at least one of them wrong.
+   */
+  async setPrimaryContact(
+    access: AccessContext,
+    householdId: string,
+    dto: SetPrimaryContactDto,
+  ): Promise<HouseholdView> {
+    const scope = this.scopeFilter(access);
+    if (!Types.ObjectId.isValid(householdId)) {
+      throw new NotFoundException('Household not found');
+    }
+
+    const household = await this.householdModel
+      .findOne({ ...scope, _id: new Types.ObjectId(householdId) })
+      .lean();
+    if (!household) throw new NotFoundException('Household not found');
+
+    // A malformed contact id is a 404 on the *contact*, not a CastError. The
+    // household exists; the person named does not.
+    if (dto.contactId && !Types.ObjectId.isValid(dto.contactId)) {
+      throw new NotFoundException('Contact not found');
+    }
+
+    await this.primaryContacts.assign({
+      household,
+      contactId: dto.contactId ? new Types.ObjectId(dto.contactId) : null,
+      allowNoPrimary: dto.allowNoPrimary,
+      actorUserId: Types.ObjectId.isValid(access.userId)
+        ? new Types.ObjectId(access.userId)
+        : null,
+    });
+
+    return this.getHousehold(access, householdId);
+  }
+
+  /**
    * End a membership — "remove from household", without deleting the person.
    *
    * Soft (`endedAt`), because the two are different facts: somebody moving out
@@ -1045,6 +1097,15 @@ function toHouseholdSummary(
     // code, and what stops `b5qvJ` reaching a badge if one ever reappears.
     status: normalizeHouseholdStatus(household.status) || null,
     primaryContactName: primary?.name ?? null,
+    /*
+     * Beside the name, not instead of it (PAC-91 §7). The name is how a list
+     * row identifies the household and it goes on rendering; what this changes
+     * is the `primaryEmail` / `primaryPhone` next to it, which every client
+     * must stop offering as a way to reach somebody. A row has no roster to
+     * look this up in, so it has to travel on the summary.
+     */
+    primaryContactDeceasedAt: primary?.deceasedAt ?? null,
+    dataQuality: household.dataQuality ?? null,
     totalActivePolicies: household.totalActivePolicies ?? 0,
   };
 }
@@ -1086,6 +1147,10 @@ function toContactSummary(
     roleInHousehold: normalizeContactRole(role) || null,
     isPrimary,
     dateOfBirth: toIso(contact.dateOfBirth),
+    // A calendar date, unlike `dateOfBirth`'s ISO instant above: the client
+    // renders it as a plain date and `toDateKey` is what the rest of PAC-91
+    // serializes a death with.
+    deceasedAt: toDateKey(contact.deceasedAt),
   };
 }
 

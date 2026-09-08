@@ -48,6 +48,37 @@ export class Contact extends TenantRecord {
   @Prop({ type: Date })
   dateOfBirth?: Date;
 
+  /**
+   * When this person died (PAC-91 §7).
+   *
+   * A **date, not a boolean and not a delete**. The owner's ground truth (David,
+   * 2026-09-04) is that a contact can die, and nothing in the schema modelled it
+   * — `grep -i deceased` over the repo returned nothing at all. Deleting the row
+   * is not the alternative: the person is on historical policies, quotes,
+   * activities and tickets, every one of which has to keep rendering their name.
+   * A boolean would lose the one thing an office actually needs to reconcile a
+   * policy against.
+   *
+   * Stored UTC-midnight from explicit components, like `dateOfBirth`, because a
+   * death is a calendar date.
+   *
+   * ⚠ **Not part of the identity rule, and not in the identity indexes.** A dead
+   * person is still a person whose row must not be duplicated, so the two
+   * partial unique indexes below keep indexing them and
+   * `ContactIdentityService.findDuplicate` keeps finding them. What changes is
+   * what the *callers* do with a hit: intake refuses the submission
+   * (`contact_deceased`) rather than filing a new lead against a dead person or
+   * creating a duplicate the index would then reject as an E11000. The fuzzy
+   * matcher in `resolve-contact.step.ts` excludes them outright — a name-only
+   * resemblance to somebody deceased is not a reason to reuse their record.
+   *
+   * Deliberately **not indexed**: it is a filter on candidate sets already
+   * narrowed by the name collation index or by a household roster, never a
+   * predicate a query leads with.
+   */
+  @Prop({ type: Date })
+  deceasedAt?: Date;
+
   @Prop()
   notes?: string;
 

@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ContactsModule } from '../contacts/contacts.module';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { HouseholdMembersModule } from '../households/household-members.module';
+import { PrimaryContactModule } from '../households/primary-contact.module';
 import {
   Household,
   HouseholdSchema,
@@ -29,6 +30,8 @@ import { PolicyRecordsController } from './policy-records.controller';
     ContactsModule,
     // The roster, its roles, and adding/ending a membership (PAC-91 §5).
     HouseholdMembersModule,
+    // `POST /households/:id/primary-contact` (PAC-91 §7).
+    PrimaryContactModule,
   ],
   controllers: [HouseholdRecordsController, PolicyRecordsController],
   providers: [ClientsService],

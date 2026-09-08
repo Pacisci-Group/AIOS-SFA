@@ -65,6 +65,18 @@ docs {
       sort **before `Auth`** and run with no `accessToken`. Its tests assert
       the response *envelope* only — a machine with no `GOOGLE_MAPS_API_KEY`
       gets `{ available: false }`, which is a pass.
+  - **Households** — the Clients list and one household's record, plus the three
+    writes that record owns: add a member, name the primary contact, end a
+    membership (PAC-89, PAC-91 §5/§7). Self-contained and **paired**, so it is
+    re-runnable: `Get Household` remembers who leads the household,
+    `Set Primary Contact` moves it to the member just added,
+    `Restore Primary Contact` hands it back, and `End Household Membership`
+    removes the member again — which only works in that order, because the
+    primary contact's membership cannot be ended. It logs in as the **owner**
+    under its own variable for the two `PATCH /contacts/:id` requests, which
+    need agency scope: a member added through the "+ Member" dialog has no lead,
+    and the producer's reach over a contact is derived from the leads that
+    touch it.
   - **Performance** — Sold + Quoted scorecards for a time range
     (PAC-10 / PAC-11, read).
   - **Public Intake** — the unauthenticated share-link form: render + submit,

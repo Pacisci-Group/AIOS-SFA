@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { CONTACT_DECEASED_CODE } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { ContactIdentityService } from '../../contacts/contact-identity.service';
 import {
@@ -38,7 +39,19 @@ type MatchedContact = Pick<
   '_id' | 'email' | 'phone' | 'dateOfBirth'
 >;
 
-/** Step 1 — person-first contact resolution. */
+/**
+ * Step 1 — person-first contact resolution.
+ *
+ * ── Deceased contacts drop out of both halves (PAC-91 §7) ───────────────────
+ * The fuzzy matcher never sees them: a name resemblance to somebody who has
+ * died is not a reason to reuse their record, and a new contact is created
+ * instead. The definite identity check still finds them — the unique indexes
+ * cover deceased rows and a check that disagreed with its own index would turn
+ * a duplicate into an unexplained E11000 — but a hit there **refuses the
+ * submission** rather than filing a lead against a dead person. See
+ * {@link deceasedContact} at the foot of this file for why that is the only
+ * honest third option.
+ */
 @Injectable()
 export class ResolveContactStep {
   constructor(
@@ -94,6 +107,9 @@ export class ResolveContactStep {
       { firstName, lastName, dateOfBirth, email, phone },
       { session: deps.session },
     );
+    if (definite?.deceasedAt) {
+      throw deceasedContact(definite._id.toString(), firstName, lastName);
+    }
     if (definite) {
       return this.resolveExisting(
         definite,
@@ -115,6 +131,12 @@ export class ResolveContactStep {
         firstName,
         lastName,
         isTestRecord: { $ne: true },
+        // A deceased contact is never a fuzzy match (PAC-91 §7). `null` also
+        // matches an absent field, so every living contact qualifies without a
+        // backfill. A name-and-maybe-a-phone resemblance to somebody who has
+        // died is not a reason to reuse their record — the definite identity
+        // check above already handled the case where it provably *is* them.
+        deceasedAt: null,
         ...(memberIds ? { _id: { $in: memberIds } } : {}),
       })
       .collation(NAME_COLLATION)
@@ -265,4 +287,40 @@ export class ResolveContactStep {
 
     return conflicts;
   }
+}
+
+/**
+ * A submission that provably names a **deceased** contact (PAC-91 §7).
+ *
+ * The one outcome intake cannot produce is a new lead filed against a dead
+ * person — §7 lists "not the target of new leads" among the forward-looking
+ * exclusions. Creating a second contact instead is not available either: the
+ * identity indexes still cover deceased rows, so a duplicate would fail at the
+ * write as a bare E11000 with nothing said about why.
+ *
+ * So it fails here, loudly and specifically, with the contact id so the office
+ * can see whose record it is — either the death was recorded in error, or this
+ * submission needs a human. The precedent is `AmbiguousHouseholdException`: when
+ * intake cannot proceed honestly, it asks rather than guesses.
+ *
+ * Rare by construction. It requires the same name *and* the same date of birth
+ * *and* the same phone or email as somebody recorded as deceased; a surviving
+ * spouse reusing a shared phone has a different name and never reaches here.
+ */
+function deceasedContact(
+  contactId: string,
+  firstName: string,
+  lastName: string,
+): ConflictException {
+  const name =
+    [firstName, lastName].filter(Boolean).join(' ') || 'That contact';
+  return new ConflictException({
+    statusCode: 409,
+    error: 'Conflict',
+    code: CONTACT_DECEASED_CODE,
+    message:
+      `${name} is recorded as deceased, so this submission cannot be filed ` +
+      'against them. Check the record before continuing.',
+    contactId,
+  });
 }

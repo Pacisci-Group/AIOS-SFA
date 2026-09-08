@@ -673,6 +673,14 @@ export class LeadDetailService {
       // household, because then there is no membership to read it from.
       role: normalizeContactRole(roles.get(contact._id.toString())) || null,
       isPrimary,
+      /*
+       * The lead keeps rendering a deceased contact's name and details
+       * (PAC-91 §7) — this is a historical record, and the person on it did not
+       * stop having been on it. The card uses this to stop *offering* the
+       * click-to-call and the mailto, which is the distinction the ticket
+       * draws: history renders, outreach does not.
+       */
+      deceasedAt: dateOnly(contact.deceasedAt),
     };
   }
 

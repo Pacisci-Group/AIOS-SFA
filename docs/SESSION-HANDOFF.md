@@ -539,3 +539,76 @@ requests fail for want of a queue, not a defect.
 Phase 4 (`Contact.deceasedAt`, `POST /households/:id/primary-contact`), which is
 also what resolves a household left without a primary.
 
+
+**Phase 4 is done (2026-09-08) and rehearsed on the local dump.** `Contact.deceasedAt`
+is a **date** (not a boolean, not a delete), and `POST /households/:id/primary-contact`
+is the reassign operation that **did not exist for any reason at all** —
+`Household.primaryContactId` was only ever *filled* by intake and never changed,
+so a death, a divorce and a wrong primary picked at intake had no supported fix.
+Reassignment is the first-class operation; the death flow in
+`PATCH /contacts/:id` calls it, not the reverse.
+
+Rules, all in `households/primary-contact.service.ts` (`PrimaryContactService`,
+its own `PrimaryContactModule` because `clients` and `contacts` both perform it):
+a new primary must be a **current member**, must **not be deceased**, and must
+**not already lead another household** — pre-checked in application code so the
+409 can name the other household, with the partial unique index as the backstop
+(E11000 → the same 409). ⚠ On a database where Phase 3's index migration has not
+run, the pre-check is the *only* enforcement.
+
+`contactId: null` + `allowNoPrimary: true` is a legitimate answer and goes
+beyond the plan's letter: it records "this household deliberately has no primary
+contact" as `Household.dataQuality: 'no_primary'`. A bare `null` is a **400** —
+a body that cleared the ref by accident is the one mistake a household record
+cannot survive quietly. This is also **the tool that resolves the three
+double-primary pairs blocking Phase 3's index migration**.
+
+Marking a **primary contact** deceased requires an answer in the same request:
+`successorContactId` (rule a) or `allowNoPrimary` (rule c). Without one it is a
+**409 `primary_contact_succession_required`** carrying the household and every
+eligible member — and it writes **nothing**, because succession is settled
+*before* the contact is saved. Auto-promotion by role precedence (rule b) is
+deliberately absent.
+
+Forward-looking exclusions: the intake fuzzy matcher filters `deceasedAt: null`;
+a *definite* identity hit on a deceased contact **refuses the submission**
+(409 `contact_deceased`) rather than filing a lead against a dead person or
+creating a duplicate the identity indexes would reject as a bare E11000 — those
+indexes deliberately still cover deceased rows. Successor pickers, the
+defensive-driver picker, quote prefill and every `tel:` / `mailto:` skip them;
+the roster, the Lead Detail card and every historical record keep the name.
+
+**No migration.** Both new fields are optional with nothing to backfill, and
+neither is indexed (nothing queries them yet — `dataQuality`'s reader is Phase 5).
+
+**Rehearsal (local `sfa`, from `pac91-before-phase4`).** Phase 4 changes no data,
+so the rehearsal is behavioural: the services were driven against the dump
+through a standalone Nest context (no HTTP — the dump's users carry a junk
+password hash). Both guard rails fired on real records; the three double-primary
+pairs were resolved **as a demonstration** (Rivera keeps HH-4775 with the 2
+policies and the deal, Sarah Rivera leads HH-4774; dudley keeps HH-4792, karen
+stoke leads HH-4790; Lubbers keeps HH-4527 and HH-4540 has no other member, so
+it is flagged `no_primary`) — and `20260907172120-household-primary-contact-index.js`
+**then applied**, `[PAC-91] built agencyId_1_primaryContactId_1`. Re-applying
+every resolution changed nothing. **The database was restored afterwards**: the
+three pairs are still David's decision, and `sfa` is back at 4 changelog entries
+with the index absent.
+
+⚠ **The rehearsal caught one defect, fixed:** clearing an already-cleared primary
+appended another `primary_contact_changed` row reading `null → null`. Data
+identical, timeline one row longer — the shape of history that makes an audit
+trail useless. There is now a no-op guard and an e2e case for it.
+
+⚠ **Deployment ordering.** Migration 3 runs at boot *before* the API binds a
+port, so a deploy carrying Phase 3 and Phase 4 together stops at the wall and
+never serves the UI that fixes it. Production therefore needs a stop point:
+boot once with `DB_MIGRATE_ON_BOOT=false`, resolve the pairs through the new
+endpoint, then restart with migrations on.
+
+Verified: `build -w @sfa/api` + `tsc -p packages/api` + `build -w @sfa/web`,
+**850** unit, **831** e2e in 26 suites, Bruno **208/208 requests, 606/606 tests**,
+run twice against one database. `lint -w @sfa/api` is on its exact pre-existing
+baseline (same 7 files, 140 problems); `lint -w @sfa/web` clean.
+
+**Production has not been run for Phase 4 either.** Local rehearsal only. Next:
+Phase 5 (the "unlinked records" work list, ticket §10).

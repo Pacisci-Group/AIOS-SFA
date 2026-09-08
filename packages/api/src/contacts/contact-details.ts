@@ -1,3 +1,5 @@
+import { toDateKey } from '../leads/intake/intake.normalize';
+
 /**
  * Reading a contact's display details through a reference, in one query.
  *
@@ -23,12 +25,23 @@ export interface ContactDetails {
   name: string | null;
   email: string | null;
   phone: string | null;
+  /**
+   * `YYYY-MM-DD` when this person has died, else null (PAC-91 §7).
+   *
+   * Carried alongside the name rather than instead of it: the name is what
+   * identifies the household on every list and drawer and must keep rendering,
+   * while the email and phone beside it must stop being offered as a way to
+   * reach anybody. A list row has no roster to look this up in, which is why it
+   * travels with the details.
+   */
+  deceasedAt: string | null;
 }
 
 export const NO_CONTACT_DETAILS: ContactDetails = {
   name: null,
   email: null,
   phone: null,
+  deceasedAt: null,
 };
 
 /** The contact fields this reads. Structural, so a lean doc satisfies it. */
@@ -38,6 +51,7 @@ export interface ContactDetailSource {
   lastName?: string | null;
   email?: string | null;
   phone?: string | null;
+  deceasedAt?: Date | string | null;
 }
 
 /** `null` when there is no name to show, so a caller's `??` chain continues. */
@@ -61,6 +75,7 @@ export function toContactDetails(
     name: contactDisplayName(contact),
     email: contact.email?.trim() || null,
     phone: contact.phone?.trim() || null,
+    deceasedAt: toDateKey(contact.deceasedAt),
   };
 }
 
@@ -92,7 +107,7 @@ export async function loadContactDetails(
 
   const found = await contacts
     .find({ ...extraFilter, _id: { $in: unique } })
-    .select('firstName lastName email phone')
+    .select('firstName lastName email phone deceasedAt')
     .lean();
 
   for (const contact of found) {

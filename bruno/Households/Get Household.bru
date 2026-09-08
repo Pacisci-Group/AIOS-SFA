@@ -14,6 +14,28 @@ headers {
   ~X-Branch-Id: {{branchId}}
 }
 
+script:post-response {
+  /*
+   * Remember who leads this household, so `Restore Primary Contact` can put it
+   * back after `Set Primary Contact` moves it (PAC-91 §7). Captured *before*
+   * anything in this folder writes, and re-captured on every run, so the
+   * collection leaves the household exactly as it found it.
+   *
+   * The JSON form is what the restore body interpolates: a household with no
+   * primary at all yields the literal `null`, which the endpoint accepts
+   * alongside `allowNoPrimary` — so the pairing holds even on a household the
+   * migration never linked.
+   */
+  if (res.getStatus() === 200) {
+    const primary = (res.getBody().contacts || []).find((c) => c.isPrimary);
+    bru.setVar("householdPrimaryContactId", primary ? primary.id : null);
+    bru.setVar(
+      "householdPrimaryContactJson",
+      primary ? JSON.stringify(primary.id) : "null",
+    );
+  }
+}
+
 tests {
   test("returns 200 OK", function () {
     expect(res.getStatus()).to.equal(200);
@@ -33,8 +55,21 @@ tests {
     // one phone; these were `primaryEmails` / `primaryPhones` arrays.
     expect(body).to.have.property("primaryEmail");
     expect(body).to.have.property("primaryPhone");
+    // PAC-91 §7 — the primary's death rides on the summary so a list row with
+    // no roster can stop offering the phone number beside the name, and
+    // `dataQuality` flags a household deliberately left without a primary.
+    expect(body).to.have.property("primaryContactDeceasedAt");
+    expect(body).to.have.property("dataQuality");
     expect(body.contacts).to.be.an("array");
     expect(body.policies).to.be.an("array");
+  });
+
+  test("every member carries its own deceased marker (PAC-91 §7)", function () {
+    for (const contact of res.getBody().contacts) {
+      // Present on every row, `null` for the living. A deceased member stays on
+      // the roster — they are on this household's policies and its history.
+      expect(contact).to.have.property("deceasedAt");
+    }
   });
 
   test("address is normalized, not the raw stored object", function () {

@@ -27,6 +27,7 @@ const CONTACTS: HouseholdView["contacts"] = [
     roleInHousehold: "Primary Insured",
     isPrimary: true,
     dateOfBirth: "1984-03-22T00:00:00.000Z",
+    deceasedAt: null,
   },
   {
     id: `${DEMO_ID}-c2`,
@@ -37,6 +38,7 @@ const CONTACTS: HouseholdView["contacts"] = [
     roleInHousehold: "Spouse",
     isPrimary: false,
     dateOfBirth: "1982-11-04T00:00:00.000Z",
+    deceasedAt: null,
   },
   {
     // `toMembers` flags this one as a driver by matching /driver/i on the role.
@@ -48,6 +50,7 @@ const CONTACTS: HouseholdView["contacts"] = [
     roleInHousehold: "Teen Driver · Excluded",
     isPrimary: false,
     dateOfBirth: "2008-07-19T00:00:00.000Z",
+    deceasedAt: null,
   },
 ];
 
@@ -116,6 +119,10 @@ export const DEMO_HOUSEHOLD: HouseholdView = {
   name: "The Cobb Household",
   status: "Active",
   primaryContactName: "Jessica Cobb",
+  // The demo household is a healthy record on purpose — it exists to show the
+  // page's normal state, not its edge cases (PAC-91 §7).
+  primaryContactDeceasedAt: null,
+  dataQuality: null,
   totalActivePolicies: POLICIES.filter((p) => p.active).length,
   // The normalized shape the API resolves for a live record; `propertyAddress`
   // below keeps the demo seed's raw key set so the fixture still stands in for

@@ -1,0 +1,130 @@
+meta {
+  name: Set Primary Contact
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/households/{{householdId}}/primary-contact
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "contactId": "{{householdMemberContactId}}"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the named member now leads the household, and only them", function () {
+    const contacts = res.getBody().contacts;
+    const primaries = contacts.filter((c) => c.isPrimary);
+    // Exactly one: primacy is a single field on the household, so a
+    // reassignment that left two would be the bug the unique index exists for.
+    expect(primaries).to.have.lengthOf(1);
+    expect(primaries[0].id).to.equal(bru.getVar("householdMemberContactId"));
+  });
+
+  test("the response is the whole household, already re-resolved", function () {
+    const body = res.getBody();
+    // The primary's name, email and phone are resolved from the new
+    // `primaryContactId`, so the caller re-renders from this rather than
+    // guessing what else moved.
+    expect(body.primaryContactName).to.equal("Dana Tyson");
+    expect(body).to.have.property("primaryEmail");
+    expect(body).to.have.property("primaryPhone");
+  });
+
+  test("naming a primary clears any no_primary flag", function () {
+    expect(res.getBody().dataQuality).to.equal(null);
+  });
+}
+
+docs {
+  # POST /households/:id/primary-contact
+
+  Name the household's primary contact — or deliberately leave it without one
+  (PAC-91 §7).
+
+  - **Module:** `clients` (the class-level OR-gate also accepts `crm_service`
+    for the **reads** on this controller; this write does not).
+  - **Permission:** `clients:write`.
+  - **Data scope:** the household is loaded through the same scope filter as
+    `GET /households/:id` — `own` collapses to branch on client records. Out of
+    scope reads as 404.
+
+  ## The operation that did not exist
+
+  `Household.primaryContactId` was only ever *filled*: lead intake sets it on
+  create, or when it is currently unset, and deliberately never reassigns so a
+  second lead cannot steal it. The consequence was that there was **no supported
+  way to change a household's primary contact at all** — not after a death, not
+  after a divorce, not to correct a primary picked wrongly at intake.
+
+  This is that operation. Succession after a death calls it too
+  (`PATCH /contacts/:id` with `successorContactId`), rather than the reverse:
+  the ordinary cases are the common ones and the death flow is one caller.
+
+  ## Body
+  | Field | Required | Notes |
+  |---|---|---|
+  | `contactId` | yes | The new primary, or `null` together with `allowNoPrimary` |
+  | `allowNoPrimary` | only to clear | `true` confirms leaving the household without a primary. Ignored when `contactId` is given |
+
+  A bare `"contactId": null` is a **400**. "This household has no primary
+  contact" is a decision somebody makes and the office has to come back to — it
+  sets `dataQuality: "no_primary"` — and a request that cleared the ref because
+  a field arrived empty is the one mistake a household record cannot survive
+  quietly. Requiring the second field makes the two impossible to confuse.
+
+  ## The three rules
+
+  1. **A current member.** A household whose primary is not on its roster is a
+     state no reader can render: the roster comes from `householdMembers` and
+     the primary is picked out of it by id, so a non-member primary disappears
+     from the very page that names them.
+  2. **Not deceased.** The whole of §7 is that a dead person stops being the
+     forward-looking answer to anything.
+  3. **Not already primary elsewhere.** A contact leads **at most one**
+     household (David, 2026-09-04), enforced by the partial unique index on
+     `{agencyId, primaryContactId}`. Checked in application code first so the
+     409 can name the other household; the index is the backstop for the race,
+     and an E11000 is mapped onto the same body. ⚠ On a database where Phase 3's
+     index migration has not yet run — one still holding pre-existing double
+     primaries — the pre-check is the *only* enforcement, which is why it is a
+     real query rather than a reliance on the write failing.
+
+  ## Response
+  The whole `HouseholdView`, because the write moves more than one field: the
+  roster's `isPrimary`, the resolved `primaryEmail` / `primaryPhone`, and
+  `dataQuality` all change together.
+
+  It also writes a `primary_contact_changed` activity against the household —
+  the only provenance a single-field reassignment leaves. It carries both names
+  in `changes`; nothing queries activities by household yet, so there is
+  deliberately no index for it.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | `contactId: null` without `allowNoPrimary: true` |
+  | 401 | Missing/expired bearer token |
+  | 403 | `clients` disabled for the agency, or the caller lacks `clients:write` |
+  | 404 | Unknown household, malformed household or contact id, or a household outside the caller's scope |
+  | 409 `contact_not_a_member` | The contact is not a current member of this household (or is not in this agency) |
+  | 409 `contact_deceased` | The contact is recorded as deceased |
+  | 409 `primary_of_another_household` | The contact already leads a different household; the body names it |
+
+  Branch on the `code`, never on the message — the messages are written for a
+  human and will be reworded.
+}

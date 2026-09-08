@@ -1,5 +1,6 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { CONTACT_DECEASED_CODE } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { HouseholdMembersService } from '../households/household-members.service';
 import {
@@ -18,6 +19,18 @@ export interface DuplicateContact {
   email?: string;
   phone?: string;
   dateOfBirth?: Date;
+  /**
+   * Set when this person has died (PAC-91 §7).
+   *
+   * ⚠ Deceased contacts are deliberately **still matched** here. A dead person
+   * is still a person whose row must not be duplicated, the two partial unique
+   * indexes go on indexing them, and a check that disagreed with its own index
+   * would turn a duplicate into an unexplained E11000 at the write. What
+   * changes is what each caller does with the hit — see `ResolveContactStep`,
+   * which refuses the submission rather than filing a lead against a dead
+   * person.
+   */
+  deceasedAt?: Date;
 }
 
 /**
@@ -68,7 +81,7 @@ export class ContactIdentityService {
 
     const query = this.contactModel
       .findOne(buildIdentityFilter(agencyId, identity, options.excludeId))
-      .select('firstName lastName email phone dateOfBirth');
+      .select('firstName lastName email phone dateOfBirth deceasedAt');
     if (options.session) query.session(options.session as never);
 
     return query.lean<DuplicateContact | null>();
@@ -146,7 +159,16 @@ export function toConflict(
   return new ConflictException({
     statusCode: 409,
     error: 'Conflict',
-    message: `${name} already exists in this agency`,
+    /*
+     * A deceased duplicate gets its own `code` (PAC-91 §7), because the client's
+     * next move is different: "use the existing contact" is the right offer for
+     * a live one and the wrong offer for somebody who has died. The rest of the
+     * body is unchanged, so a client that only reads `contactId` keeps working.
+     */
+    ...(existing.deceasedAt ? { code: CONTACT_DECEASED_CODE } : {}),
+    message: existing.deceasedAt
+      ? `${name} already exists in this agency and is recorded as deceased`
+      : `${name} already exists in this agency`,
     // The whole point of the 409: the client can offer "use the existing
     // contact" instead of leaving the user with a dead end.
     contactId: existing._id.toString(),

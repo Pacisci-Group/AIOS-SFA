@@ -411,6 +411,12 @@ export class SoldDealsService {
    * the role comes from — a person who is a Named Insured at home may be listed
    * here only as a Driver, and that is exactly the distinction this picker
    * exists to show.
+   *
+   * Deceased members are excluded (PAC-91 §7). This picker names who a **new**
+   * policy's discount applies to, which is as forward-looking as it gets — a
+   * defensive-driver certificate for somebody who has died is not a discount,
+   * it is a compliance finding. They stay on the deals already sold; they are
+   * simply not offered for the next one.
    */
   private async householdContacts(
     household: HouseholdDocument,
@@ -426,6 +432,9 @@ export class SoldDealsService {
       .find({
         _id: { $in: memberships.map((membership) => membership.contactId) },
         agencyId: household.agencyId,
+        // `null` also matches an absent field, so every living member qualifies
+        // without a backfill (PAC-91 §7).
+        deceasedAt: null,
       })
       .select('firstName lastName')
       .lean<

@@ -89,6 +89,28 @@ export class Household extends TenantRecord {
   @Prop({ type: ObjectIdType, ref: 'Contact', index: true })
   primaryContactId?: Types.ObjectId;
 
+  /**
+   * Why this household is flagged for someone to come back to (PAC-91 §7).
+   *
+   * One value today — `no_primary` — and a scalar rather than an array on the
+   * `AGENTS.md` §11 test: nothing here can say what a *second* simultaneous flag
+   * would mean, so it is not a list. Widen it when a second reason exists.
+   *
+   * Written **only** by the deliberate "leave this household without a primary
+   * contact" path, when a primary has died and no successor can be named. A
+   * household that simply never had one — 77 of them on the 2026-09-04
+   * production data — is not flagged, because nobody decided that.
+   * `primaryContactId: null` already says *what*; this says *somebody chose it
+   * and it still needs an answer*, which is what makes it worth a filter on the
+   * Clients page. Cleared the moment a primary is assigned.
+   *
+   * Deliberately **not indexed**: the Clients-page filter that reads it is
+   * PAC-91 §10 / Phase 5, and an index for a predicate nobody queries yet is the
+   * cost the two dead `producerId` indexes on `activities` taught.
+   */
+  @Prop({ type: String, trim: true })
+  dataQuality?: string;
+
   /*
    * ⚠ No `memberContactIds`, deliberately (PAC-91 §5).
    *

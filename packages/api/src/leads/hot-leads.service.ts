@@ -252,6 +252,9 @@ export class HotLeadsService {
        */
       phone: contact?.phone ?? null,
       email: contact?.email ?? null,
+      // The quick actions on this row place a call, a text or an email
+      // (PAC-91 §7). They must not offer to do that for somebody who has died.
+      primaryContactDeceasedAt: contact?.deceasedAt ?? null,
       // Null rather than invented copy — the UI falls back to the status.
       lastActivitySummary: latest?.summary ?? null,
       lastActivityType: latest?.type ?? null,

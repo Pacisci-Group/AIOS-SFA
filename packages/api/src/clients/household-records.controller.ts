@@ -21,6 +21,8 @@ import { ClientsService } from './clients.service';
 import { addHouseholdMemberSchema } from './dto/add-household-member.dto';
 import type { AddHouseholdMemberDto } from './dto/add-household-member.dto';
 import { listHouseholdsSchema } from './dto/list-households.dto';
+import { setPrimaryContactSchema } from './dto/set-primary-contact.dto';
+import type { SetPrimaryContactDto } from './dto/set-primary-contact.dto';
 import type { ListHouseholdsDto } from './dto/list-households.dto';
 import { SearchRecordsQueryDto } from './dto/search-records.dto';
 
@@ -104,6 +106,36 @@ export class HouseholdRecordsController {
     body: AddHouseholdMemberDto,
   ) {
     return this.clientsService.addHouseholdMember(access, id, body);
+  }
+
+  /**
+   * Name the household's primary contact — or deliberately leave it without one
+   * (PAC-91 §7).
+   *
+   * The operation that did not exist for any reason at all: `primaryContactId`
+   * was only ever filled, never changed. It serves the ordinary cases (a
+   * divorce, a wrong primary picked at intake) as well as succession after a
+   * death, which is why it is built as the first-class endpoint and the death
+   * flow in `PATCH /contacts/:id` calls *it*, rather than the other way round.
+   *
+   * `POST` rather than `PATCH /households/:id`: this is one decision with its
+   * own rules and its own 409s, not a field on a household patch — and there is
+   * no household patch endpoint to hang it off.
+   *
+   * Returns the whole `HouseholdView`, so the page that performed it re-renders
+   * from the response rather than guessing what else changed (the roster's
+   * `isPrimary`, the resolved primary email and phone, and the `no_primary`
+   * flag all move together).
+   */
+  @Post(':id/primary-contact')
+  @RequireWrite(ModuleKey.Clients)
+  setPrimaryContact(
+    @Access() access: AccessContext,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(setPrimaryContactSchema))
+    body: SetPrimaryContactDto,
+  ) {
+    return this.clientsService.setPrimaryContact(access, id, body);
   }
 
   /**

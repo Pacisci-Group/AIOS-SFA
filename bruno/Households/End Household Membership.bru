@@ -1,7 +1,7 @@
 meta {
   name: End Household Membership
   type: http
-  seq: 4
+  seq: 11
 }
 
 delete {
@@ -28,6 +28,14 @@ tests {
     // database: the member added a moment ago is removed again, so a second run
     // does not grow the household by another Dana Tyson.
     expect(bru.getVar("householdMemberContactId")).to.be.a("string");
+  });
+
+  test("works because Restore Primary Contact handed primacy back first", function () {
+    // `Set Primary Contact` (PAC-91 §7) makes this member the household's
+    // primary, and the primary's membership cannot be ended — that is the 409
+    // documented below. `Restore Primary Contact` runs in between, which is why
+    // this is a 200 rather than that 409.
+    expect(res.getStatus()).to.not.equal(409);
   });
 }
 

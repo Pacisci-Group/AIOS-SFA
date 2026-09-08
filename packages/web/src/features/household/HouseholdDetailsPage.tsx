@@ -16,6 +16,7 @@ import { AddMemberDialog } from "./components/AddMemberDialog";
 import { HouseholdHeader } from "./components/HouseholdHeader";
 import { StartQuoteDialog } from "./components/StartQuoteDialog";
 import { HouseholdProfile } from "./components/HouseholdProfile";
+import { SetPrimaryContactDialog } from "./components/SetPrimaryContactDialog";
 import { PolicyPortfolio } from "./components/PolicyPortfolio";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { HouseholdOnboarding } from "./components/HouseholdOnboarding";
@@ -54,6 +55,7 @@ export default function HouseholdDetailsPage() {
   const { canRead, canWrite } = usePermissions();
   const [createTicketOpen, setCreateTicketOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [primaryContactOpen, setPrimaryContactOpen] = useState(false);
   const [startQuoteOpen, setStartQuoteOpen] = useState(false);
 
   /**
@@ -193,7 +195,18 @@ export default function HouseholdDetailsPage() {
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:flex-row xl:overflow-hidden">
             {/* Left — Household profile (25%) */}
             <div className="flex min-h-0 shrink-0 flex-col border-b border-border xl:w-1/4 xl:min-w-[260px] xl:max-w-[320px] xl:overflow-hidden xl:border-b-0 xl:border-r">
-              <HouseholdProfile household={household} isDemo={isDemo} />
+              <HouseholdProfile
+                household={household}
+                isDemo={isDemo}
+                // Not offered on the demo household (no record to write
+                // against) or without `clients:write` — an enabled control
+                // that 403s on save is worse than one that is not there.
+                onChangePrimaryContact={
+                  isDemo || !canWrite("clients")
+                    ? undefined
+                    : () => setPrimaryContactOpen(true)
+                }
+              />
             </div>
 
             {/* Middle — Policy portfolio (50%) */}
@@ -246,6 +259,17 @@ export default function HouseholdDetailsPage() {
             open={addMemberOpen}
             onOpenChange={setAddMemberOpen}
           />
+
+          {/* Mounted only for a live record: the dialog writes through
+              `POST /households/:id/primary-contact`, and the demo household has
+              no id to write against. */}
+          {!isDemo && canWrite("clients") && (
+            <SetPrimaryContactDialog
+              household={household}
+              open={primaryContactOpen}
+              onOpenChange={setPrimaryContactOpen}
+            />
+          )}
 
           {/* Stays on the household rather than jumping to the workspace: the
               new ticket appears at the top of the feed on the right, which is

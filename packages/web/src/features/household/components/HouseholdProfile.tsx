@@ -1,4 +1,4 @@
-import { Phone, Mail, MapPin, Star, Shield, Car } from "lucide-react";
+import { Phone, Mail, MapPin, Star, Shield, Car, UserCog } from "lucide-react";
 import type { ContactSummary, HouseholdView } from "@sfa/shared";
 import {
   isActiveHouseholdStatus,
@@ -6,11 +6,13 @@ import {
 } from "@sfa/shared";
 import { SectionLabel } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { formatPhone } from "@/lib/leads-api";
 
 interface Member {
+  id: string;
   name: string;
   role: string;
   initials: string;
@@ -18,6 +20,7 @@ interface Member {
   tint: string;
   isPrimary?: boolean;
   isDriver?: boolean;
+  isDeceased?: boolean;
 }
 
 /**
@@ -63,12 +66,16 @@ function toMembers(household: HouseholdView): Member[] {
     const name = fullName(contact) ?? "Unnamed";
     const role = contact.roleInHousehold ?? "Household Member";
     return {
+      id: contact.id,
       name,
       role,
       initials: initialsOf(name),
       ...MEMBER_ACCENTS[i % MEMBER_ACCENTS.length],
       isPrimary: contact.isPrimary,
       isDriver: /driver/i.test(role),
+      // Still on the roster (PAC-91 §7) — they are on this household's
+      // policies and its history. Marked, not hidden.
+      isDeceased: Boolean(contact.deceasedAt),
     };
   });
 }
@@ -134,10 +141,31 @@ interface HouseholdProfileProps {
    * records omit them rather than showing invented values.
    */
   isDemo?: boolean;
+  /**
+   * Opens the "change primary contact" dialog (PAC-91 §7). Omitted — and the
+   * control not rendered — when the caller cannot write, or on the demo
+   * household, which is not a real record to write against.
+   */
+  onChangePrimaryContact?: () => void;
 }
 
-export function HouseholdProfile({ household, isDemo = false }: HouseholdProfileProps) {
+export function HouseholdProfile({
+  household,
+  isDemo = false,
+  onChangePrimaryContact,
+}: HouseholdProfileProps) {
   const primaryContact = household.contacts.find((c) => c.isPrimary);
+  /*
+   * The primary contact has died (PAC-91 §7).
+   *
+   * Their name goes on rendering — this is the household's record and they led
+   * it — but the two rows below stop being ways to reach anybody: no
+   * click-to-call, no mailto. That is the distinction §7 draws between history,
+   * which keeps the name, and anything forward-looking, which does not.
+   */
+  const primaryDeceased = Boolean(
+    household.primaryContactDeceasedAt ?? primaryContact?.deceasedAt,
+  );
 
   // Normalised, not raw (PAC-80): most migrated records carry an opaque code
   // rather than a word. The name and the `HH-…` record number are rendered by
@@ -199,7 +227,35 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
 
       {/* Primary Contact */}
       <div className="border-b border-border px-4 py-4 md:px-5">
-        <SectionLabel className="mb-3">Primary contact</SectionLabel>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <SectionLabel>Primary contact</SectionLabel>
+          {/* The operation that did not exist before PAC-91 §7. Offered whether
+              or not the household has a primary today, because "nobody leads
+              this yet" is one of the states it fixes. */}
+          {onChangePrimaryContact && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+              onClick={onChangePrimaryContact}
+            >
+              <UserCog size={12} />
+              Change
+            </Button>
+          )}
+        </div>
+
+        {/* Two different absences, said differently. `no_primary` means somebody
+            decided to leave the seat open — usually after a death with nobody
+            to promote — and it is a task for the office. A household that
+            simply never had a primary is not flagged and reads as the em dash
+            below. */}
+        {household.dataQuality === "no_primary" && (
+          <p className="mb-3 rounded-md border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-foreground">
+            This household is deliberately without a primary contact and needs
+            one named.
+          </p>
+        )}
 
         <div className="mb-4 flex items-center gap-3">
           <span
@@ -213,10 +269,12 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
               {contactName}
             </p>
             <p className="truncate text-sm text-muted-foreground">
-              {primaryContact?.roleInHousehold ?? "Account holder"}
+              {primaryDeceased
+                ? "Deceased"
+                : (primaryContact?.roleInHousehold ?? "Account holder")}
             </p>
           </div>
-          {primaryContact && (
+          {primaryContact && !primaryDeceased && (
             <Star
               aria-label="Primary contact"
               className="ml-auto size-4 shrink-0 fill-amber-500 text-amber-600 dark:fill-amber-400 dark:text-amber-400"
@@ -232,15 +290,31 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
             // (PAC-91 §1 normalises every writer), so the raw value would show
             // as `9188082556`.
             value={formatPhone(phone)}
-            caption={phone ? "Mobile · Click to call" : "No phone on file"}
-            href={phone ? `tel:${phone.replace(/[^\d+]/g, "")}` : undefined}
+            caption={
+              primaryDeceased
+                ? "On file for this record — do not call"
+                : phone
+                  ? "Mobile · Click to call"
+                  : "No phone on file"
+            }
+            href={
+              phone && !primaryDeceased
+                ? `tel:${phone.replace(/[^\d+]/g, "")}`
+                : undefined
+            }
           />
           <ContactRow
             icon={Mail}
             iconTone="text-success"
             value={email ?? "—"}
-            caption={email ? "Primary email" : "No email on file"}
-            href={email ? `mailto:${email}` : undefined}
+            caption={
+              primaryDeceased
+                ? "On file for this record — do not email"
+                : email
+                  ? "Primary email"
+                  : "No email on file"
+            }
+            href={email && !primaryDeceased ? `mailto:${email}` : undefined}
           />
           <div className="flex items-start gap-2.5 rounded-md bg-muted px-3 py-2">
             <MapPin
@@ -268,7 +342,9 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
           )}
           {members.map((m) => (
             <div
-              key={m.name}
+              // Keyed by id, not name: two members of one household can share a
+              // name (a junior), and a duplicate React key drops one of them.
+              key={m.id}
               className="flex items-center gap-3 rounded-md border border-border bg-muted px-3 py-2.5"
             >
               <span
@@ -286,7 +362,7 @@ export function HouseholdProfile({ household, isDemo = false }: HouseholdProfile
                   {m.name}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {m.role}
+                  {m.isDeceased ? `${m.role} · Deceased` : m.role}
                 </p>
               </div>
               {m.isPrimary && (

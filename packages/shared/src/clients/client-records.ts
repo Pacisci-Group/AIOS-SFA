@@ -41,6 +41,15 @@ export interface ContactSummary {
   isPrimary: boolean;
   /** ISO date, or null when unknown. */
   dateOfBirth: string | null;
+  /**
+   * `YYYY-MM-DD` when this person has died, otherwise `null` (PAC-91 §7).
+   *
+   * The roster keeps listing them — they are on the household's policies and
+   * its history — but every forward-looking affordance reads this first: no
+   * click-to-call, no mailto, no quote prefill, and not offered as a successor
+   * when a new primary contact is named.
+   */
+  deceasedAt: string | null;
 }
 
 /** A policy as listed inside a household. */
@@ -70,6 +79,22 @@ export interface HouseholdSummary {
    * household rendered an em dash). Null when there is no primary contact.
    */
   primaryContactName: string | null;
+  /**
+   * `YYYY-MM-DD` when the primary contact has died (PAC-91 §7).
+   *
+   * Carried beside the name rather than replacing it: the name still identifies
+   * the household on every list and drawer, while `primaryEmail` / `primaryPhone`
+   * beside it must stop being offered as a way to reach anybody. A list row has
+   * no roster to look this up in, which is why it rides on the summary.
+   */
+  primaryContactDeceasedAt: string | null;
+  /**
+   * Why this household is flagged for someone's attention — today only
+   * `no_primary`, written when a caller deliberately left it without a primary
+   * contact (PAC-91 §7). Null for every household nobody has made that choice
+   * about, including the ones that simply never had a primary.
+   */
+  dataQuality: string | null;
   totalActivePolicies: number;
 }
 

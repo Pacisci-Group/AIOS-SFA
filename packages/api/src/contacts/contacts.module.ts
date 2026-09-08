@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { HouseholdMembersModule } from '../households/household-members.module';
+import { PrimaryContactModule } from '../households/primary-contact.module';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { ContactAccessService } from './contact-access.service';
 import { ContactIdentityService } from './contact-identity.service';
@@ -31,6 +32,10 @@ import { Contact, ContactSchema } from './schemas/contact.schema';
     // `ContactAccessService` derives ownership through the contact's
     // households, and the duplicate 409 names them (PAC-91 §5).
     HouseholdMembersModule,
+    // Marking a household's primary contact deceased has to name a successor in
+    // the same request, which is the same operation the standalone endpoint
+    // performs (PAC-91 §7).
+    PrimaryContactModule,
   ],
   controllers: [ContactsController],
   providers: [ContactsService, ContactAccessService, ContactIdentityService],

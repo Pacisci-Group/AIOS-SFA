@@ -88,6 +88,23 @@ export const ACTIVITY_TYPES = [
    * a human to reconcile, rather than silently stored as a second identity.
    */
   'contact_conflict',
+  /**
+   * A household's primary contact was named, changed, or deliberately cleared
+   * (PAC-91 §7). System-emitted by `PrimaryContactService`, so absent from
+   * `LOGGABLE_ACTIVITY_TYPES`.
+   *
+   * The only provenance this operation leaves. `Household.primaryContactId` is
+   * a single field with no history of its own, and it decides which policies,
+   * which producer and which contact details the whole family hangs off — "who
+   * changed this, when, and to whom" is not something to reconstruct from a
+   * `updatedBy` stamp.
+   *
+   * Hangs off the **household** (`subjectType: 'household'`, `householdId`),
+   * which is the first activity row that does. There is no query for it yet and
+   * so deliberately no index — the same rule the two dead `producerId` indexes
+   * taught: add one with the reader, not before.
+   */
+  'primary_contact_changed',
 ] as const;
 
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
@@ -192,6 +209,12 @@ export const ACTIVITY_SUBJECT_TYPES = [
    * *audit*, while `audit_resolved` still hangs off the individual item.
    */
   'dealAudit',
+  /**
+   * The household itself (PAC-91 §7) — `primary_contact_changed` is the first
+   * row that belongs to a client record rather than to something in the
+   * pipeline.
+   */
+  'household',
 ] as const;
 
 export type ActivitySubjectType = (typeof ACTIVITY_SUBJECT_TYPES)[number];
