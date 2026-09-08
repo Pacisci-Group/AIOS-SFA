@@ -18,6 +18,7 @@ import {
   PolicyView,
   formatHouseholdRef,
   householdStatusQueryValues,
+  nextRenewalDate,
   normalizeCarrier,
   normalizeContactRole,
   normalizeHouseholdStatus,
@@ -547,6 +548,74 @@ export class ClientsService {
   }
 
   /**
+   * Advance policies whose stored renewal date has gone by, and fill in ones
+   * that never had it.
+   *
+   * `policies.renewalDate` is a **derived cache**: the next occurrence of a
+   * term that repeats forever, not a fact a carrier sends once. Two things
+   * would otherwise leave it wrong:
+   *
+   *   - A renewal passes. The policy drops out of the outreach window 14 days
+   *     later and, with nothing to move it on, is never seen again — one term
+   *     of outreach, then silence for the life of the policy.
+   *   - A policy has no `renewalDate` at all: everything the SmartSuite import
+   *     brought over, since that column held the *effective* date, and until
+   *     the write paths were fixed, everything sold through the app.
+   *
+   * Rolling forward from the existing `renewalDate` when there is one keeps a
+   * policy on the cycle it is genuinely on, and needs no join. Falling back to
+   * `effectiveDate` — then `expirationDate`, which is what
+   * `renewalAnchorDate` has always documented — is what repairs the rest.
+   * A policy with none of the three is left alone: there is nothing to count
+   * down to, and a guessed date would schedule real calls to real clients.
+   *
+   * Bounded per pass, and ordered so the null and most-overdue rows are
+   * repaired first. Uses `bulkWrite` deliberately: this is a system-derived
+   * field, and stamping `updatedBy` with whichever CSR happened to load the
+   * desk would put a person's name on a write they did not make.
+   *
+   * @returns how many policies were advanced.
+   */
+  async rollForwardRenewalDates(
+    access: AccessContext,
+    now: Date,
+    limit = 500,
+  ): Promise<number> {
+    const scope = this.scopeFilter(access);
+    const stale = await this.policyModel
+      .find({
+        ...scope,
+        active: true,
+        $or: [{ renewalDate: null }, { renewalDate: { $lt: now } }],
+      })
+      .select('policyType renewalDate effectiveDate expirationDate')
+      .sort({ renewalDate: 1 })
+      .limit(limit)
+      .lean();
+
+    const writes = stale.flatMap((policy) => {
+      const anchor =
+        policy.renewalDate ?? policy.effectiveDate ?? policy.expirationDate;
+      const next = nextRenewalDate(anchor, policy.policyType, now);
+      // No anchor, or one too far gone to reach the present — leave it be and
+      // let the migration's report be what surfaces it.
+      if (!next) return [];
+      return [
+        {
+          updateOne: {
+            filter: { _id: policy._id },
+            update: { $set: { renewalDate: next } },
+          },
+        },
+      ];
+    });
+
+    if (!writes.length) return 0;
+    await this.policyModel.bulkWrite(writes);
+    return writes.length;
+  }
+
+  /**
    * Active policies whose renewal falls inside a window, for proactive renewal
    * outreach.
    *
@@ -560,19 +629,38 @@ export class ClientsService {
    * Backed by `{agencyId, active, renewalDate}` on `policies`; `limit` bounds
    * one pass so a large book converges over several requests rather than
    * blocking one.
+   *
+   * ⚠ `limit` bounds the pass, so **the caller must pass `after` to page**.
+   * Ordered by `renewalDate`, an unpaged call returns the same earliest `limit`
+   * policies every time; a window holding more than that would never have its
+   * tail scanned. `after` resumes the sweep just past the last renewal date
+   * seen — see `RenewalScanState.scanCursor`.
+   *
+   * Only `renewalDate` is matched, deliberately. It used to be the *only*
+   * populated anchor for part of the book while `renewalAnchorDate` documented
+   * an `expirationDate` fallback the query silently defeated. That gap is now
+   * closed upstream: the scan's roll-forward pass fills `renewalDate` from
+   * whichever anchor a policy has, so by the time this runs every eligible
+   * policy carries one and a single indexed range is both correct and complete.
    */
   async findRenewalWindow(
     access: AccessContext,
     from: Date,
     to: Date,
     limit = 500,
+    after: Date | null = null,
   ): Promise<PolicyRenewalCandidate[]> {
     const scope = this.scopeFilter(access);
+    // `after` is a renewal *date*, not a unique key, so resuming strictly past
+    // it would drop every policy sharing that date with the last one seen —
+    // and renewal dates collide constantly. Re-reading them is the safe side of
+    // the trade: `ensureRenewalCycle` is idempotent, so a repeat costs a lookup.
+    const lowerBound = after && after > from ? after : from;
     const policies = await this.policyModel
       .find({
         ...scope,
         active: true,
-        renewalDate: { $ne: null, $gte: from, $lte: to },
+        renewalDate: { $ne: null, $gte: lowerBound, $lte: to },
       })
       .sort({ renewalDate: 1 })
       .limit(limit)

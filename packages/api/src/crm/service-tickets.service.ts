@@ -13,7 +13,9 @@ import {
   ONBOARDING_STEP_KEYS,
   ONBOARDING_STEP_LABELS,
   DEFAULT_RENEWAL_STEP_DEFINITIONS,
+  RENEWAL_BACKLOG_GRACE_DAYS,
   RENEWAL_OUTCOME_LABELS,
+  RENEWAL_OUTREACH_CUTOVER,
   RENEWAL_STEP_LABELS,
   renewalTrackFor,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
@@ -82,6 +84,7 @@ import {
   daysUntil,
   formatTermKey,
   renewalAnchorDate,
+  renewalStepsToOpen,
   scheduleRenewalSteps,
   type PlannedRenewalStep,
 } from './renewal/renewal-scheduling';
@@ -1396,24 +1399,32 @@ export class ServiceTicketsService {
    * ------------------------------------------------------------------ */
 
   /**
-   * Claim the next scan window, or return false if someone else holds it.
+   * Claim the next scan window, or return null if someone else holds it.
    *
    * The duplicate-key catch is the *normal* path once a document exists: when
    * `lastScanAt` is inside the window the filter misses, the upsert attempts an
    * insert, and the unique index rejects it.
+   *
+   * Returns the claimed state rather than a bare boolean because the winner
+   * needs `scanCursor` off the same document — reading it separately would
+   * race the next claimant.
    */
-  private async claimScanWindow(agencyId: Types.ObjectId): Promise<boolean> {
+  private async claimScanWindow(
+    agencyId: Types.ObjectId,
+  ): Promise<RenewalScanStateDocument | null> {
     const cutoff = new Date(Date.now() - RENEWAL_SCAN_INTERVAL_MS);
     try {
-      const claimed = await this.scanStateModel.findOneAndUpdate(
+      // The `$set` touches only `lastScanAt`, so the returned document still
+      // carries the cursor the previous pass left — which is the one to resume
+      // from. `upsert` seeds it as null on a first scan: start of the window.
+      return await this.scanStateModel.findOneAndUpdate(
         { agencyId, lastScanAt: { $lt: cutoff } },
         { $set: { lastScanAt: new Date() } },
         { upsert: true, new: true },
       );
-      return Boolean(claimed);
     } catch (error) {
       if (isDuplicateKeyError(error)) {
-        return false;
+        return null;
       }
       throw error;
     }
@@ -1430,16 +1441,19 @@ export class ServiceTicketsService {
   /**
    * Bring an agency's renewal cycles in line with its book.
    *
-   * Two-sided on purpose. Side A creates cycles for policies entering the
-   * horizon; Side B sweeps the cycles already open, because Side A cannot see
-   * a policy that was deleted, deactivated, or whose date moved out of range.
+   * Three-sided. Side 0 repairs the anchors themselves, because a renewal date
+   * that has gone by is not a date anything can count down to; Side A creates
+   * cycles for policies entering the horizon; Side B sweeps the cycles already
+   * open, because Side A cannot see a policy that was deleted, deactivated, or
+   * whose date moved out of range.
    */
   async materializeRenewalCycles(access: AccessContext): Promise<void> {
     if (!access.agencyId) {
       return;
     }
     const agencyId = new Types.ObjectId(access.agencyId);
-    if (!(await this.claimScanWindow(agencyId))) {
+    const claim = await this.claimScanWindow(agencyId);
+    if (!claim) {
       return;
     }
 
@@ -1447,16 +1461,39 @@ export class ServiceTicketsService {
     const horizonStart = new Date(now.getTime() - RENEWAL_GRACE_DAYS * DAY_MS);
     const horizonEnd = new Date(now.getTime() + RENEWAL_HORIZON_DAYS * DAY_MS);
 
-    // Side A — policies entering the horizon.
+    // Side 0 — advance anchors that have gone by, and fill in missing ones.
+    // Runs first so Side A sees a book whose dates are all in the future.
+    await this.clientsService.rollForwardRenewalDates(
+      access,
+      now,
+      RENEWAL_SCAN_BATCH,
+    );
+
+    // Side A — policies entering the horizon, resumed from where the last pass
+    // stopped. Without the cursor this re-reads the same earliest batch every
+    // time and the tail of the window is never scanned at all.
     const candidates = await this.clientsService.findRenewalWindow(
       access,
       horizonStart,
       horizonEnd,
       RENEWAL_SCAN_BATCH,
+      claim.scanCursor ?? null,
     );
     for (const group of groupRenewalCandidates(candidates)) {
       await this.ensureRenewalCycle(access, agencyId, group);
     }
+
+    // A short batch means the window is exhausted; start the next sweep from
+    // the beginning, which is also what re-reads policies whose dates have
+    // since moved backwards into it.
+    const nextCursor =
+      candidates.length < RENEWAL_SCAN_BATCH
+        ? null
+        : (candidates[candidates.length - 1]?.renewalDate ?? null);
+    await this.scanStateModel.updateOne(
+      { agencyId },
+      { $set: { scanCursor: nextCursor } },
+    );
 
     // Side B — cycles already open, which may have drifted or gone stale.
     const open = await this.cycleModel
@@ -1480,6 +1517,23 @@ export class ServiceTicketsService {
       termKey,
     });
     if (existing) {
+      // Adopt any policy in this group the cycle does not already carry.
+      //
+      // The scan reads a bounded batch, so a household's Home and Auto renewing
+      // the same week can arrive in *different* passes. The first creates the
+      // cycle; without this the second would find it, reconcile, and silently
+      // drop its own policy — `reconcileRenewalCycle` rebuilds the checklist
+      // from `cycle.policies`, so a line that never got in never appears. The
+      // CSR would then review the Home on a call whose Auto is invisible.
+      const known = new Set(
+        existing.policies.map((policy) => String(policy.policyId)),
+      );
+      const added = group.policies.filter((policy) => !known.has(policy.id));
+      if (added.length) {
+        existing.policies.push(...added.map(toCyclePolicy));
+        existing.markModified('policies');
+        await existing.save();
+      }
       await this.reconcileRenewalCycle(access, existing);
       return existing;
     }
@@ -1614,8 +1668,20 @@ export class ServiceTicketsService {
     );
 
     // (4) Every call gets a ticket up front — renewal steps do not chain, so
-    // nothing waits on the call before it.
-    for (const step of planned) {
+    // nothing waits on the call before it. The only calls held back are ones
+    // whose date passed before outreach went live; see `renewalStepsToOpen`.
+    const existingStepKeys = new Set<RenewalStepKey>(
+      tickets
+        .map((ticket) => ticket.renewal?.stepKey)
+        .filter((key): key is RenewalStepKey => Boolean(key)),
+    );
+    const opening = renewalStepsToOpen(
+      planned,
+      existingStepKeys,
+      RENEWAL_OUTREACH_CUTOVER,
+      RENEWAL_BACKLOG_GRACE_DAYS,
+    );
+    for (const step of opening) {
       await this.ensureRenewalTicket(cycle, step, planned.length);
     }
 
@@ -1832,15 +1898,23 @@ export class ServiceTicketsService {
     cycle.markModified('policies');
     await cycle.save();
 
+    /*
+     * **No timeline entry.** Ticking a checklist box is not an event worth
+     * recording, and writing one per toggle made the timeline unreadable: a CSR
+     * working a two-policy call generated ten "discussed on the call" /
+     * "un-ticked" lines, burying the two entries that actually matter — the
+     * status change and the renewal outcome.
+     *
+     * Nothing is lost by dropping them. The tick is *state*, not history: it
+     * lives on the cycle as `discussedAt`/`discussedBy`, renders in the
+     * checklist itself, and `completeRenewalStep` refuses a completion while
+     * any policy is unticked. The timeline is for the result of the review —
+     * `completeRenewalStep` and `setRenewalOutcome` write that.
+     *
+     * `lastActivityAt` still moves, because this genuinely is the CSR working
+     * the ticket and the queue sorts on it. That is the part worth keeping.
+     */
     ticket.lastActivityAt = now;
-    ticket.timeline.push({
-      type: 'system',
-      author: userName,
-      content: `${entry.policyType} ${entry.policyNumber} ${
-        discussed ? 'discussed on the call' : 'un-ticked'
-      }.`,
-      at: now,
-    });
     await ticket.save();
 
     return serializeTicket(ticket.toObject());
