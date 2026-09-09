@@ -1,0 +1,101 @@
+meta {
+  name: Get Domain Config
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{baseUrl}}/agency/domains/config
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the two fields the add form needs", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("baseDomain");
+    expect(body).to.have.property("reservedLabels");
+    expect(body.reservedLabels).to.be.an("array");
+  });
+
+  test("baseDomain is a bare hostname, never a URL", function () {
+    const base = res.getBody().baseDomain;
+    // `null` is a valid answer — it means subdomains are disabled here.
+    if (base !== null) {
+      expect(base).to.be.a("string");
+      expect(base).to.not.match(/^[a-z]+:\/\//);
+      expect(base).to.not.include("/");
+      expect(base).to.equal(base.toLowerCase());
+    }
+  });
+
+  test("reserved labels are sorted and include the platform's own", function () {
+    const labels = res.getBody().reservedLabels;
+    expect(labels).to.include("app");
+    expect(labels).to.include("api");
+    expect([...labels].sort()).to.deep.equal(labels);
+  });
+}
+
+docs {
+  # GET /agency/domains/config
+
+  What a **subdomain looks like on this deployment** — the fixed suffix an
+  agency's own label hangs off, plus the labels nobody may take.
+
+  **Module** — none (`@SkipModule`), like every other route on this controller:
+  a domain is not a product module that can be switched off, it is how the
+  agency reaches the product at all.
+  **Permission** — `agency:domains:read`.
+  **Branch** — skipped; a domain belongs to the agency, not one of its offices.
+  **Data scope** — none. The response is deployment configuration, identical for
+  every tenant, and contains nothing belonging to the calling agency.
+
+  ## Why it exists
+
+  The Domains page shows the suffix beside the field so the owner types only
+  `texasholdings` rather than the whole of
+  `texasholdings.dev.smithfamily.agency`. Less typing, and the half of the
+  address with exactly one correct value cannot be mistyped.
+
+  **The browser cannot derive this.** `BASE_DOMAIN` and `PLATFORM_HOST` are
+  deliberately independent settings (see `config/tenant-host.config.ts`) —
+  nothing guarantees the admin host is a child of the base zone — so stripping a
+  label off the current hostname is a guess that breaks exactly when the two are
+  shaped differently, which is the normal case for a nested zone like
+  `dev.smithfamily.agency`.
+
+  ## Response `200`
+  ```json
+  {
+    "baseDomain": "dev.smithfamily.agency",
+    "reservedLabels": ["admin", "api", "app", "assets", "auth", "..."]
+  }
+  ```
+
+  | field | type | notes |
+  |---|---|---|
+  | baseDomain | string \| null | The parent zone, bare (no scheme, no port, no trailing dot). **`null` when `BASE_DOMAIN` is unset**, which disables subdomains entirely — the UI then offers only "a domain you own". |
+  | reservedLabels | string[] | Sorted. Labels the platform holds (`app`, `api`, `admin`, `platform`, `inngest`, `dev`, `staging`) plus conventional infrastructure names (`www`, `mail`, `ns1`, `smtp`). |
+
+  `reservedLabels` comes from `RESERVED_SUBDOMAIN_LABELS` in `@sfa/shared` — the
+  same set `assertClaimableSubdomain` rejects against, so what the form refuses
+  and what the server refuses cannot drift.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired access token.
+  - `403 Forbidden` — missing `agency:domains:read`, or a platform account with
+    no agency context.
+
+  > Creating the subdomain is still `POST /agency/domains` with the **full**
+  > hostname and `kind: "subdomain"` (see **Add Custom Domain** for the body).
+  > Splitting the field is a property of the form, not of the API: the server
+  > composes nothing and `assertClaimableSubdomain` validates the whole name.
+}

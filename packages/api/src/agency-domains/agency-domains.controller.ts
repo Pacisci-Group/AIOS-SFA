@@ -24,6 +24,7 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { AgencyDomainsService } from './agency-domains.service';
 import {
   createAgencyDomainSchema,
+  type AgencyDomainConfigView,
   type CreateAgencyDomainDto,
 } from './dto/agency-domain.dto';
 
@@ -44,6 +45,25 @@ import {
 @UseGuards(PermissionsGuard)
 export class AgencyDomainsController {
   constructor(private readonly domains: AgencyDomainsService) {}
+
+  /**
+   * What a subdomain on this deployment would look like.
+   *
+   * Declared **before** the parameterized routes below, though none of them is
+   * a bare `@Get(':id')` today — keeping static segments first is what stops
+   * the next one from swallowing this path.
+   *
+   * The web app cannot derive this. `BASE_DOMAIN` and `PLATFORM_HOST` are
+   * separate settings on purpose (see `tenant-host.config.ts`), so stripping a
+   * label off the current hostname is a guess that breaks exactly when the two
+   * are shaped differently — which is the normal case for a nested zone like
+   * `dev.smithfamily.agency`.
+   */
+  @Get('config')
+  @RequirePermissions(AgencyPermission.DomainsRead)
+  config(): AgencyDomainConfigView {
+    return this.domains.subdomainConfig();
+  }
 
   @Get()
   @RequirePermissions(AgencyPermission.DomainsRead)
