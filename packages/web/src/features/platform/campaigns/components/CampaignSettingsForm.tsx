@@ -9,6 +9,10 @@ import {
   EMPTY_CAMPAIGN_FORM,
   emptyMarketPhone,
   emptySquareFootageBand,
+  isGeneratedFileName,
+  toCampaignFileName,
+  toCampaignName,
+  toCampaignNumber,
 } from "../campaign-schemas";
 
 /**
@@ -24,6 +28,15 @@ import {
  * record), just not shown, because a control that cannot affect the outcome is
  * worse than no control.
  *
+ * ## Why the campaign is two numbers
+ *
+ * A run is identified by the year and the week of that year, and nothing else
+ * an operator has to compose: the display name, the printed `Week_Number-NN`
+ * and the `FileName` column written to all ~20,000 rows are derived from that
+ * pair. The file name stays in step with the week while it still looks
+ * generated, so an operator who corrects the week does not mail the corrected
+ * week under the old file name.
+ *
  * ⚠ Discount rates are **percentages** on screen and fractions on the wire. See
  * `campaign-schemas.ts`.
  */
@@ -38,36 +51,93 @@ export const CampaignSettingsForm = withForm({
   render: function Render({ form, agencies, source, disabled }) {
     const isVendor = source === "vendor";
 
+    /**
+     * Keep the `FileName` column in step with the campaign it names.
+     *
+     * Only ever overwrites a value this form generated (or an empty one) — an
+     * `SFA-QBP` inherited from a past run, or anything hand-typed, is the
+     * operator's answer and is left exactly as it stands.
+     */
+    const syncFileName = (year: string, week: string) => {
+      const current = form.getFieldValue("settings.fileName");
+      if (current && !isGeneratedFileName(current)) return;
+      form.setFieldValue("settings.fileName", toCampaignFileName(year, week));
+    };
+
     return (
       <div className="space-y-4">
         <FormSection
           title="Campaign"
-          description="What this run is called, and which week it belongs to."
+          description="The year and the week of that year this run belongs to. Everything printed is named from them."
         >
           <FormGrid>
-            <form.AppField name="name">
+            <form.AppField
+              name="campaignYear"
+              listeners={{
+                onChange: ({ value }) =>
+                  syncFileName(value, form.getFieldValue("campaignWeek")),
+              }}
+            >
               {(f) => (
-                <f.TextField
-                  label="Name"
-                  description="Left blank, the week and file name are used."
-                  placeholder="Week 36 — Allstate home"
+                <f.NumberField
+                  label="Campaign year"
+                  description="Also the year the transform prices against — re-running a past week needs its own year, or every home ages."
+                  inputMode="numeric"
+                  step="1"
+                  min="2000"
+                  max="2100"
+                  placeholder="2026"
                   disabled={disabled}
                   inputClassName="bg-card border-border"
                 />
               )}
             </form.AppField>
-            <form.AppField name="campaignNumber">
+            <form.AppField
+              name="campaignWeek"
+              listeners={{
+                onChange: ({ value }) =>
+                  syncFileName(form.getFieldValue("campaignYear"), value),
+              }}
+            >
               {(f) => (
-                <f.TextField
-                  label="Campaign number"
-                  description="Normalized to Week_Number-NN and printed on the piece."
-                  placeholder="Week_Number-36"
+                <f.NumberField
+                  label="Campaign week"
+                  description="Week of the year, 1–53. Printed on the piece as Week_Number-NN."
+                  inputMode="numeric"
+                  step="1"
+                  min="1"
+                  max="53"
+                  placeholder="36"
                   disabled={disabled}
                   inputClassName="bg-card border-border"
                 />
               )}
             </form.AppField>
           </FormGrid>
+
+          <form.Subscribe
+            selector={(state) =>
+              [
+                toCampaignName(
+                  state.values.campaignYear,
+                  state.values.campaignWeek,
+                ),
+                toCampaignNumber(state.values.campaignWeek),
+              ].join("|")
+            }
+          >
+            {(identity) => {
+              const [name, number] = identity.split("|");
+              return name && number ? (
+                <p className="text-xs text-muted-foreground">
+                  Recorded as{" "}
+                  <span className="text-foreground">{name}</span>, printed as{" "}
+                  <code className="rounded bg-sunken px-1 py-0.5">{number}</code>
+                  .
+                </p>
+              ) : null;
+            }}
+          </form.Subscribe>
         </FormSection>
 
         <AssignmentSection
@@ -90,18 +160,6 @@ export const CampaignSettingsForm = withForm({
                       description="Per campaign, never a constant."
                       step="0.01"
                       min="0"
-                      disabled={disabled}
-                      inputClassName="bg-card border-border"
-                    />
-                  )}
-                </form.AppField>
-                <form.AppField name="settings.runYear">
-                  {(f) => (
-                    <f.NumberField
-                      label="Run year"
-                      description="Drives the home-age discount. Re-running a past campaign needs its original year."
-                      inputMode="numeric"
-                      step="1"
                       disabled={disabled}
                       inputClassName="bg-card border-border"
                     />
@@ -337,8 +395,8 @@ export const CampaignSettingsForm = withForm({
                 {(f) => (
                   <f.TextField
                     label="File name column"
-                    description="Written to every row's FileName column. Apex uses the input name with RTP swapped for QBP."
-                    placeholder="SFA-QBP"
+                    description="Written to every row's FileName column. Prefilled SFA-RTP-<year>-<week> from the campaign above, and follows it until you type your own."
+                    placeholder="SFA-RTP-2026-36"
                     disabled={disabled}
                     inputClassName="bg-card border-border"
                   />

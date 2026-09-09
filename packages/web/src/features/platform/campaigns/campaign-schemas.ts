@@ -18,6 +18,19 @@ import { numericString } from "@/lib/zod-helpers";
  * and the recipient list is one textarea. {@link toCampaignSettings} is the
  * single conversion boundary.
  *
+ * ## The year and the week are the campaign's identity
+ *
+ * They are the only two things an operator names a run with, and both are
+ * numbers. The display name, the printed `Week_Number-NN` and the `FileName`
+ * column are all *derived* from that pair ({@link toCampaignName},
+ * {@link toCampaignNumber}, {@link toCampaignFileName}) rather than typed a
+ * second time — three fields saying the same week is how a file goes to print
+ * stamped with a different one.
+ *
+ * The year is also the year the transform prices against (`settings.runYear`),
+ * which is why there is no second control for it: a run whose week says 37 and
+ * whose pricing says 2019 is not a state worth being able to reach.
+ *
  * ## ⚠ Discount rates are percentages here and fractions on the wire
  *
  * The API stores `0.44`; David talks in "44% off", and a form that asks for
@@ -42,18 +55,20 @@ export interface SquareFootageRow {
 }
 
 export interface CampaignFormValues {
-  name: string;
-  campaignNumber: string;
+  /** Four digits, e.g. `"2026"`. Also the run year the transform prices with. */
+  campaignYear: string;
+  /** Week of the year, 1–53. Sent as `Week_Number-NN`. */
+  campaignWeek: string;
   assignment: {
     mode: MailerAssignmentMode;
     agencyIds: string[];
   };
   settings: {
     premiumFloor: string;
+    /** The `FileName` column. Prefilled from the year and week; still editable. */
     fileName: string;
     defaultMarket: string;
     defaultPhone: string;
-    runYear: string;
     marketPhones: MarketPhoneRow[];
     squareFootage: SquareFootageRow[];
     homeAge: {
@@ -75,15 +90,14 @@ export interface CampaignFormValues {
  * every `withForm` component need a value-shaped default to type against.
  */
 export const EMPTY_CAMPAIGN_FORM: CampaignFormValues = {
-  name: "",
-  campaignNumber: "",
+  campaignYear: String(new Date().getFullYear()),
+  campaignWeek: "",
   assignment: { mode: "carrier_agency_id", agencyIds: [] },
   settings: {
     premiumFloor: "",
     fileName: "",
     defaultMarket: "",
     defaultPhone: "",
-    runYear: String(new Date().getFullYear()),
     marketPhones: [],
     squareFootage: [],
     homeAge: { maxNewYears: "", newRatePercent: "", oldRatePercent: "" },
@@ -125,12 +139,25 @@ const percent = (label: string) =>
   });
 
 export const campaignFormSchema = z.object({
-  name: z.string().trim().max(160, "That name is too long"),
-  campaignNumber: z
-    .string()
-    .trim()
-    .min(1, "Enter the campaign week")
-    .max(40, "That campaign number is too long"),
+  campaignYear: numericString({
+    required: "Enter the campaign year",
+    min: 2000,
+    max: 2100,
+    tooSmall: "Before 2000 is not a campaign year",
+    tooLarge: "After 2100 is not a campaign year",
+    integer: "Whole years only",
+  }),
+  // 53, not 52: an ISO year with 53 weeks is not rare — 2026 is one — and a
+  // rule that refuses the last week of the year would refuse it in December,
+  // which is exactly when nobody can wait for a fix.
+  campaignWeek: numericString({
+    required: "Enter the campaign week",
+    min: 1,
+    max: 53,
+    tooSmall: "Weeks start at 1",
+    tooLarge: "A year has at most 53 weeks",
+    integer: "Whole weeks only",
+  }),
   assignment: z
     .object({
       mode: z.enum(["carrier_agency_id", "agencies", "all"]),
@@ -166,14 +193,6 @@ export const campaignFormSchema = z.object({
       .trim()
       .min(1, "Enter the fallback phone number")
       .max(40, "That phone number is too long"),
-    runYear: numericString({
-      required: "Enter the year this run prices against",
-      min: 2000,
-      max: 2100,
-      tooSmall: "Before 2000 is not a run year",
-      tooLarge: "After 2100 is not a run year",
-      integer: "Whole years only",
-    }),
     marketPhones: z.array(
       z.object({
         market: z
@@ -229,6 +248,66 @@ export const campaignFormSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Derived identity — everything printed comes from the year and the week
+// ---------------------------------------------------------------------------
+
+/** The prefix Apex's own output files carry. */
+const FILE_NAME_PREFIX = "SFA-RTP";
+
+/**
+ * A number field's string, normalized: `" 07 "` → `"7"`.
+ *
+ * Every derived value goes through this, so the week is written the same way in
+ * the name, the campaign number and the file name. Non-numeric text passes
+ * through untouched — the field is mid-edit and the schema will refuse it at
+ * blur; mangling it into `NaN` on the way would only hide what was typed.
+ */
+function digits(value: string): string {
+  const trimmed = value.trim();
+  const parsed = Number(trimmed);
+  return trimmed && Number.isFinite(parsed) ? String(parsed) : trimmed;
+}
+
+/** `"2026"`, `"37"` → `2026 Week 37` — the campaign's display name. */
+export function toCampaignName(year: string, week: string): string {
+  const y = digits(year);
+  const w = digits(week);
+  if (!y || !w) return "";
+  return `${y} Week ${w}`;
+}
+
+/** `"37"` → `Week_Number-37`, the form the API normalizes to and prints. */
+export function toCampaignNumber(week: string): string {
+  const w = digits(week);
+  return w ? `Week_Number-${w}` : "";
+}
+
+/** `"2026"`, `"37"` → `SFA-RTP-2026-37`, written to every row's `FileName`. */
+export function toCampaignFileName(year: string, week: string): string {
+  const y = digits(year);
+  const w = digits(week);
+  if (!y || !w) return "";
+  return `${FILE_NAME_PREFIX}-${y}-${w}`;
+}
+
+/**
+ * Is this file name one we generated, rather than one somebody typed?
+ *
+ * The wizard keeps the `FileName` column in step with the week while the
+ * operator has not overridden it, and this is how it tells the two apart — an
+ * `SFA-QBP` inherited from a past run, or anything hand-written, is left alone.
+ */
+export function isGeneratedFileName(value: string): boolean {
+  return /^SFA-RTP-\d+-\d+$/i.test(value.trim());
+}
+
+/** `Week_Number-37` → `"37"`. Anything else (or nothing) → `""`. */
+export function weekNumberOf(campaignNumber: string | null | undefined): string {
+  const match = /^Week_Number-(\d+)$/i.exec(campaignNumber?.trim() ?? "");
+  return match ? digits(match[1]) : "";
+}
+
+// ---------------------------------------------------------------------------
 // Conversion
 // ---------------------------------------------------------------------------
 
@@ -252,7 +331,9 @@ export function toCampaignSettings(
     fileName: s.fileName.trim(),
     defaultMarket: s.defaultMarket.trim(),
     defaultPhone: s.defaultPhone.trim(),
-    runYear: Number(s.runYear),
+    // The campaign year *is* the run year — one field, so a run cannot be filed
+    // under week 37 of 2026 while pricing every home as if it were 2019.
+    runYear: Number(values.campaignYear),
     marketPhones: Object.fromEntries(
       s.marketPhones
         .filter((row) => row.market.trim() && row.phone.trim())
@@ -304,7 +385,6 @@ export function toFormSettings(
     fileName: settings.fileName,
     defaultMarket: settings.defaultMarket,
     defaultPhone: settings.defaultPhone,
-    runYear: String(settings.runYear),
     marketPhones: Object.entries(settings.marketPhones).map(
       ([market, phone]) => ({ market, phone }),
     ),
@@ -315,18 +395,34 @@ export function toFormSettings(
   };
 }
 
-/** Prefill the wizard from `GET /platform/mailer-campaigns/defaults`. */
+/**
+ * Prefill the wizard from `GET /platform/mailer-campaigns/defaults`.
+ *
+ * The year and week come back as *now* — the API is deliberate about that, and
+ * re-running a past week is a deliberate act of editing them.
+ *
+ * ⚠ The `FileName` column is **not** the one inherited with the rest of the
+ * settings. Those are the last imported run's, and its file name named that
+ * week; carried forward it would stamp this week's 20,000 pieces with the last
+ * one's number. It is generated from the week instead, and stays in step with
+ * it until somebody types their own — see {@link isGeneratedFileName}.
+ */
 export function fromDefaults(
   defaults: MailerCampaignDefaults,
 ): CampaignFormValues {
+  const campaignYear = String(defaults.settings.runYear);
+  const campaignWeek = weekNumberOf(defaults.campaignNumber);
   return {
-    name: "",
-    campaignNumber: defaults.campaignNumber,
+    campaignYear,
+    campaignWeek,
     assignment: {
       mode: defaults.assignment.mode,
       agencyIds: defaults.assignment.agencyIds,
     },
-    settings: toFormSettings(defaults.settings),
+    settings: {
+      ...toFormSettings(defaults.settings),
+      fileName: toCampaignFileName(campaignYear, campaignWeek),
+    },
   };
 }
 
@@ -344,12 +440,21 @@ export function fromDefaults(
  */
 export function fromCampaign(campaign: MailerCampaign): CampaignFormValues {
   return {
-    name: campaign.name,
-    campaignNumber: campaign.campaignNumber ?? "",
+    // `year` is what the run priced against — the same number `settings.runYear`
+    // holds, which is what the create endpoint stored it from.
+    campaignYear: String(
+      campaign.year ?? campaign.settings?.runYear ?? new Date().getFullYear(),
+    ),
+    campaignWeek:
+      campaign.weekNumber != null
+        ? String(campaign.weekNumber)
+        : weekNumberOf(campaign.campaignNumber),
     assignment: {
       mode: campaign.assignment.mode,
       agencyIds: campaign.assignment.agencyIds,
     },
+    // The stored file name, never a regenerated one: this is what the run
+    // actually stamped its rows with.
     settings: campaign.settings
       ? toFormSettings(campaign.settings)
       : EMPTY_CAMPAIGN_FORM.settings,
