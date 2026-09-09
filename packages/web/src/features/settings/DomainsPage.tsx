@@ -10,6 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { subdomainLabelIssue } from '@sfa/shared';
 import { DetailCard } from '@/components/common/DetailCard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -30,8 +31,10 @@ import {
 } from '@/components/ui/radio-group';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
 import {
   addDomain,
+  getDomainConfig,
   listDomains,
   removeDomain,
   setPrimaryDomain,
@@ -308,11 +311,47 @@ function CopyButton({ value }: { value: string }) {
 
 function AddDomainDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
+  /** The whole address, for a custom domain. */
   const [hostname, setHostname] = useState('');
+  /** Just the first label, for a subdomain — the suffix is shown, not typed. */
+  const [label, setLabel] = useState('');
   const [kind, setKind] = useState<AgencyDomainKind>('subdomain');
 
+  const configQuery = useQuery({
+    queryKey: ['agency-domain-config'],
+    queryFn: getDomainConfig,
+    // Deployment configuration: identical for every tenant and unchanged for
+    // the life of the deployment, so there is nothing to revalidate.
+    staleTime: Infinity,
+  });
+  const baseDomain = configQuery.data?.baseDomain ?? null;
+
+  /*
+   * Subdomains need a configured `BASE_DOMAIN`. Until this was known in the
+   * browser the option was always offered and the API refused it on submit,
+   * which read as a broken form rather than an unavailable feature.
+   */
+  const subdomainsAvailable = configQuery.isSuccess && baseDomain !== null;
+  const isSubdomain = kind === 'subdomain';
+
+  // Only surfaced once the field has been typed in: a red message under an
+  // untouched input is a telling-off for not having started yet.
+  const labelIssue = label.trim() ? subdomainLabelIssue(label) : null;
+  const composed = baseDomain ? `${label.trim().toLowerCase()}.${baseDomain}` : '';
+
+  const canSubmit = isSubdomain
+    ? subdomainsAvailable && !!label.trim() && !labelIssue
+    : !!hostname.trim();
+
   const add = useMutation({
-    mutationFn: () => addDomain({ hostname: hostname.trim(), kind }),
+    mutationFn: () =>
+      addDomain({
+        // The server takes a full hostname on both paths — the split is a
+        // property of the form, not of the API. Composing here keeps the
+        // contract (and `assertClaimableSubdomain`) exactly as it was.
+        hostname: isSubdomain ? composed : hostname.trim(),
+        kind,
+      }),
     onSuccess: (domain) => {
       toast.success(
         domain.status === 'active'
@@ -321,6 +360,7 @@ function AddDomainDialog({ onAdded }: { onAdded: () => void }) {
       );
       setOpen(false);
       setHostname('');
+      setLabel('');
       onAdded();
     },
     onError: (err) => toast.error(errorMessage(err)),
@@ -347,14 +387,29 @@ function AddDomainDialog({ onAdded }: { onAdded: () => void }) {
             onValueChange={(v) => setKind(v as AgencyDomainKind)}
             className="gap-3"
           >
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
-              <RadioGroupItem value="subdomain" className="mt-0.5" />
+            <label
+              className={cn(
+                'flex items-start gap-3 rounded-lg border border-border p-3',
+                subdomainsAvailable
+                  ? 'cursor-pointer'
+                  : 'cursor-not-allowed opacity-50',
+              )}
+            >
+              <RadioGroupItem
+                value="subdomain"
+                className="mt-0.5"
+                disabled={!subdomainsAvailable}
+              />
               <span>
                 <span className="block text-sm font-medium">
                   A subdomain of ours
                 </span>
                 <span className="block text-xs text-muted-foreground">
-                  Works straight away — no DNS setup needed.
+                  {configQuery.isPending
+                    ? 'Checking availability…'
+                    : baseDomain
+                      ? `Works straight away — no DNS setup needed. Your address ends in .${baseDomain}.`
+                      : 'Not available on this deployment — add a domain you own instead.'}
                 </span>
               </span>
             </label>
@@ -371,23 +426,84 @@ function AddDomainDialog({ onAdded }: { onAdded: () => void }) {
             </label>
           </RadioGroup>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="hostname" className="text-xs">
-              Address
-            </Label>
-            <Input
-              id="hostname"
-              value={hostname}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={
-                kind === 'subdomain'
-                  ? 'youragency.example.agency'
-                  : 'youragency.com'
-              }
-              onChange={(e) => setHostname(e.target.value)}
-            />
-          </div>
+          {isSubdomain ? (
+            /*
+             * Label field + fixed suffix, rather than one box asking for the
+             * whole address.
+             *
+             * Our subdomains are four labels deep (`texasholdings.dev.smithfamily.agency`),
+             * so asking an owner to type the whole thing is both the longest
+             * possible way to say "texasholdings" and an invitation to typo the
+             * part that has exactly one correct value. The suffix comes from the
+             * server's own `BASE_DOMAIN`, so what is shown is what will be
+             * accepted.
+             */
+            <div className="space-y-1.5">
+              <Label htmlFor="subdomain-label" className="text-xs">
+                Address
+              </Label>
+              <div
+                className={cn(
+                  'flex h-9 w-full items-center rounded-md border border-input bg-transparent text-base shadow-xs transition-[color,box-shadow] md:text-sm dark:bg-input/30',
+                  'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
+                  labelIssue &&
+                    'border-destructive ring-destructive/20 dark:ring-destructive/40',
+                )}
+              >
+                <input
+                  id="subdomain-label"
+                  value={label}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  disabled={!subdomainsAvailable}
+                  aria-invalid={!!labelIssue}
+                  aria-describedby="subdomain-hint"
+                  placeholder="youragency"
+                  // Lowercased on the way in rather than on submit, so the field
+                  // always shows exactly what will be created — a DNS label has
+                  // no uppercase form to preserve.
+                  onChange={(e) => setLabel(e.target.value.toLowerCase())}
+                  className="h-full min-w-0 flex-1 rounded-l-md bg-transparent px-3 py-1 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                {/* `select-none` and not focusable: it is a statement of fact,
+                    not a field. Truncated from the left so the end of a long
+                    zone — the part that identifies it — stays visible. */}
+                <span
+                  className="max-w-[55%] select-none truncate rounded-r-md border-l border-input bg-sunken px-3 py-1 text-sm text-muted-foreground"
+                  title={baseDomain ?? undefined}
+                >
+                  .{baseDomain ?? '…'}
+                </span>
+              </div>
+              <p
+                id="subdomain-hint"
+                className={cn(
+                  'text-xs',
+                  labelIssue ? 'text-destructive' : 'text-muted-foreground',
+                )}
+              >
+                {labelIssue ??
+                  (label.trim() && composed
+                    ? `Your team will sign in at ${composed}`
+                    : 'Lowercase letters, numbers and hyphens.')}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor="hostname" className="text-xs">
+                Address
+              </Label>
+              <Input
+                id="hostname"
+                value={hostname}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="youragency.com"
+                onChange={(e) => setHostname(e.target.value)}
+              />
+            </div>
+          )}
         </div>
 
         <DialogFooter>
@@ -396,7 +512,7 @@ function AddDomainDialog({ onAdded }: { onAdded: () => void }) {
           </Button>
           <Button
             variant="brand"
-            disabled={!hostname.trim() || add.isPending}
+            disabled={!canSubmit || add.isPending}
             onClick={() => add.mutate()}
           >
             {add.isPending ? 'Adding…' : 'Add domain'}

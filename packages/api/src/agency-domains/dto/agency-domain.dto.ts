@@ -56,3 +56,18 @@ export interface DnsInstruction {
   /** Why this record is needed, in the owner's terms. */
   purpose: string;
 }
+
+/**
+ * `GET /agency/domains/config` — what a subdomain would look like here.
+ *
+ * `baseDomain` is `null` when `BASE_DOMAIN` is unset, which disables subdomains
+ * entirely. The web app renders the option as unavailable rather than letting
+ * an owner fill the form in and be refused on submit, which is what it did
+ * before this existed.
+ */
+export interface AgencyDomainConfigView {
+  /** e.g. `dev.smithfamily.agency`, or `null` when subdomains are disabled. */
+  baseDomain: string | null;
+  /** Labels an owner cannot take. Sorted, so the UI can list them verbatim. */
+  reservedLabels: string[];
+}

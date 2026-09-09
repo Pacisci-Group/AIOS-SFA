@@ -1,5 +1,6 @@
 export * from './domain/activity';
 export * from './domain/agency-onboarding';
+export * from './domain/subdomain';
 export * from './domain/address';
 export * from './domain/bug-report';
 export * from './domain/business-type';

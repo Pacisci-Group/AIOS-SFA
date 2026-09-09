@@ -24,6 +24,24 @@ export interface AgencyDomain {
   dnsInstructions: DnsInstruction[] | null;
 }
 
+export interface AgencyDomainConfig {
+  /** e.g. `dev.smithfamily.agency`. `null` means subdomains are unavailable. */
+  baseDomain: string | null;
+  reservedLabels: string[];
+}
+
+/**
+ * What a subdomain looks like on this deployment.
+ *
+ * A separate request from {@link listDomains} rather than a field on it,
+ * because it is deployment configuration and not agency data — it is identical
+ * for every tenant and never changes between renders, so it caches on its own
+ * terms.
+ */
+export function getDomainConfig(): Promise<AgencyDomainConfig> {
+  return apiFetch<AgencyDomainConfig>('/agency/domains/config');
+}
+
 export function listDomains(): Promise<AgencyDomain[]> {
   return apiFetch<AgencyDomain[]>('/agency/domains');
 }

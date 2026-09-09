@@ -25,6 +25,7 @@ import {
   VERIFICATION_TXT_PREFIX,
 } from './dns-verifier';
 import type {
+  AgencyDomainConfigView,
   AgencyDomainView,
   CreateAgencyDomainDto,
   DnsInstruction,
@@ -226,6 +227,21 @@ export class AgencyDomainsService {
   async isCertificateAllowed(rawHost: string | undefined): Promise<boolean> {
     const host = await this.hostResolver.resolve(rawHost);
     return host.kind !== 'unknown';
+  }
+
+  /**
+   * The deployment's subdomain shape, for the Domains page's add form.
+   *
+   * Reads the same `hostResolver.baseDomain` that {@link assertClaimableSubdomain}
+   * validates against, so the suffix an owner is shown and the suffix the server
+   * will accept cannot disagree — and `null` (subdomains disabled) reaches the
+   * UI as a fact rather than as a rejection after the form is filled in.
+   */
+  subdomainConfig(): AgencyDomainConfigView {
+    return {
+      baseDomain: this.hostResolver.baseDomain,
+      reservedLabels: [...RESERVED_SUBDOMAIN_LABELS].sort(),
+    };
   }
 
   /** Reject anything that is not a free label directly under our own zone. */

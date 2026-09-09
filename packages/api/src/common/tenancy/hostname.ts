@@ -74,49 +74,15 @@ export function isValidHostname(host: string): boolean {
 }
 
 /**
- * Labels an agency may not claim as its subdomain.
+ * Re-exported from `@sfa/shared` so this module stays the one place tenancy
+ * code imports hostname rules from.
  *
- * Two different hazards, deliberately in one list:
- * - **Ours to keep.** `app` is the platform host itself; handing it to a tenant
- *   would lock every super admin out of the platform. `api`, `inngest` and
- *   `static` name infrastructure that may need its own record later.
- * - **Confusable.** `admin`, `support`, `billing`, `security` and friends read
- *   as *the platform speaking*, which is precisely the sentence a phishing page
- *   wants to borrow.
- *
- * Cheap to extend and expensive to have forgotten, so it errs long.
+ * The list itself moved to `shared` because the web app needs it too: the
+ * Domains page has to tell an owner a label is reserved *before* they submit,
+ * and a second copy of this list would drift — with a claimable `app` as the
+ * failure mode.
  */
-export const RESERVED_SUBDOMAIN_LABELS: ReadonlySet<string> = new Set([
-  'admin',
-  'api',
-  'app',
-  'assets',
-  'auth',
-  'billing',
-  'cdn',
-  'dashboard',
-  'dev',
-  'docs',
-  'ftp',
-  'help',
-  'inngest',
-  'localhost',
-  'login',
-  'mail',
-  'ns',
-  'ns1',
-  'ns2',
-  'platform',
-  'root',
-  'security',
-  'smtp',
-  'staging',
-  'static',
-  'status',
-  'support',
-  'test',
-  'www',
-]);
+export { RESERVED_SUBDOMAIN_LABELS } from '@sfa/shared';
 
 /**
  * The label an agency subdomain would occupy under `baseDomain`, or `null` when
