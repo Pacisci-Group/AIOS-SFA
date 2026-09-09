@@ -103,6 +103,27 @@ jobs:
             echo "::warning::INNGEST_ENABLED is '${enabled}' (not 'true') for the '${{ inputs.environment }}' Environment — deploy-inngest will be skipped and no async work will run. Set it under Settings > Environments > ${{ inputs.environment }} > Environment variables (NOT Secrets)."
           fi
 
+          # Migrations normally apply themselves at API startup, which is what
+          # makes "merge, deploy, done" the usual path. Setting this Environment
+          # variable to 'false' suppresses that for the next deploy - the escape
+          # hatch DEPLOYMENT.md describes, needed when a one-shot script has to
+          # run BETWEEN two migrations (see scripts/migration/run-upgrade.sh).
+          #
+          # Unset means 'true'. It has to come from here rather than being
+          # hand-edited on the droplet, because the .env below is rewritten in
+          # full on every deploy - a hand edit does not survive the very deploy
+          # it was meant to control.
+          migrate_on_boot="${{ vars.DB_MIGRATE_ON_BOOT || 'true' }}"
+          if [ "$migrate_on_boot" = "false" ]; then
+            # Loud, and deliberately a warning rather than a note: left set, every
+            # later deploy ships without applying its migrations and the app runs
+            # against a database older than its code - silently, until something
+            # reads a field that is not there yet.
+            echo "::warning::DB_MIGRATE_ON_BOOT is 'false' for the '${{ inputs.environment }}' Environment - this deploy will NOT apply pending migrations. Run them by hand, then set the variable back to 'true' (or delete it) and re-run this workflow."
+          else
+            echo "Migrations WILL be applied at API startup for '${{ inputs.environment }}'."
+          fi
+
       # Fail here rather than mid-rollout. Object storage in particular degrades
       # *silently*: with STORAGE_ENDPOINT unset, StorageService logs a warning,
       # disables itself, and the health check still passes — so a deploy missing
@@ -222,6 +243,9 @@ jobs:
             NODE_ENV=production
             PORT=4000
             MONGODB_URI=${{ secrets.MONGODB_URI }}
+            # 'false' suppresses the startup migration run for this deploy - see
+            # "Resolve environment flags" above, and DEPLOYMENT.md.
+            DB_MIGRATE_ON_BOOT=${{ vars.DB_MIGRATE_ON_BOOT || 'true' }}
             JWT_ACCESS_SECRET=${{ secrets.JWT_ACCESS_SECRET }}
             JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
             JWT_ACCESS_EXPIRES=15m

@@ -42,17 +42,27 @@
 #     2. merge dev -> main; the deploy builds and pushes the image
 #     3. ssh to the droplet, cd /opt/sfa
 #     4. docker compose -f docker-compose.prod.yml stop api worker
-#     5. ./run-upgrade.sh --mode compose --dry-run     # read the reports
-#     6. ./run-upgrade.sh --mode compose --yes
-#     7. docker compose -f docker-compose.prod.yml up -d
-#     8. set DB_MIGRATE_ON_BOOT back to true and re-run the deploy workflow
+#     5. drop the three unique indexes the deploy's boot created (see below)
+#     6. ./run-upgrade.sh --mode compose --dry-run     # read the reports
+#     7. ./run-upgrade.sh --mode compose --yes
+#     8. docker compose -f docker-compose.prod.yml up -d
+#     9. set DB_MIGRATE_ON_BOOT back to true and re-run the deploy workflow
 #
-#   ⚠ `deploy.reusable.yml` rewrites /opt/sfa/.env in full on every deploy and
-#   does not carry DB_MIGRATE_ON_BOOT, so editing that file by hand does not
-#   survive the deploy that the merge triggers. It has to come from the
-#   workflow. Until it does, merging to main boots the API with migrations on:
-#   step 5 applies, step 6 throws on the duplicates, and the container
-#   crash-loops against a half-migrated database.
+#   ⚠ `deploy.reusable.yml` rewrites /opt/sfa/.env in full on every deploy, so
+#   DB_MIGRATE_ON_BOOT is read from the GitHub Environment *variable* of that
+#   name and written into the file by the workflow; editing the file by hand
+#   does not survive the deploy that the merge triggers. Left on, merging to
+#   main boots the API with migrations: step 6 applies, step 7 throws on the
+#   duplicates, and the container crash-loops against a half-migrated database.
+#
+#   ⚠ Step 5 is not a contingency. Migrations off or not, the deploy runs
+#   `up -d` and a health check, and creating the Nest app fires `autoIndex`
+#   over every schema - including the two contact identity indexes and the
+#   household primary-contact index, which are declared on the schemas as well
+#   as built by migrations. All three build fine over the *old* data (no
+#   contact has keys yet, only two households have a primary) and then sit
+#   there as loaded guns for steps 1 and 2. The preflight below refuses while
+#   any of them exists ahead of its migration, and prints the drop commands.
 #
 # ── WHY THIS ORDER ──────────────────────────────────────────────────────────
 #
@@ -123,7 +133,7 @@ while [ $# -gt 0 ]; do
     --households)    HOUSEHOLDS_CSV="$2"; shift 2 ;;
     --policies)      POLICIES_CSV="$2"; shift 2 ;;
     --compose-file)  COMPOSE_FILE="$2"; shift 2 ;;
-    -h|--help)       sed -n '2,86p' "$0"; exit 0 ;;
+    -h|--help)       sed -n '2,105p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -241,27 +251,43 @@ fi
 # stamps keys into a unique index over data that still holds duplicates, dies
 # mid-write on a raw E11000, is never recorded, and retries from the top forever.
 # The fix is to drop them; the migration builds them properly, after the merge.
+#
+# The same trap, one collection over: `agencyId_1_primaryContactId_1` on
+# households. Step 1 fills ~2,400 primaries under it, and the migration that
+# owns it treats an existing index as "already built" WITHOUT checking for
+# conflicts - so a double primary that slipped in would fail step 1 on E11000
+# (or, with the unordered bulk write, silently skip that household) instead of
+# stopping migration 4 at its named wall.
 IDENTITY_INDEX=agencyId_1_nameKey_1_dobKey_1_email_1
 SCALARS_MIGRATION=20260907105040-contact-scalars-and-identity-keys.js
+PRIMARY_INDEX=agencyId_1_primaryContactId_1
+PRIMARY_MIGRATION=20260907172120-household-primary-contact-index.js
 
+# Exit 3 = a unique index exists ahead of the migration that builds it (which
+# ones is printed on stdout); 0 = clean; 4 = could not reach the database.
 probe='const {MongoClient}=require("mongodb");(async()=>{
   const c=await MongoClient.connect(process.env.MONGODB_URI);
   const db=c.db();
-  const applied=await db.collection("migrations_changelog")
-    .countDocuments({fileName:process.env.SCALARS_MIGRATION});
-  const names=(await db.collection("contacts").indexes()).map(i=>i.name);
+  const applied=f=>db.collection("migrations_changelog").countDocuments({fileName:f});
+  const has=async(col,name)=>(await db.collection(col).indexes()).some(i=>i.name===name);
+  const early=[];
+  if(!(await applied(process.env.SCALARS_MIGRATION)) && await has("contacts",process.env.IDENTITY_INDEX)) early.push("contacts");
+  if(!(await applied(process.env.PRIMARY_MIGRATION)) && await has("households",process.env.PRIMARY_INDEX)) early.push("households");
   await c.close();
-  process.exit(!applied && names.includes(process.env.IDENTITY_INDEX) ? 3 : 0);
+  console.log(early.join(" "));
+  process.exit(early.length ? 3 : 0);
 })().catch(e=>{console.error(e.message);process.exit(4);});'
 
 set +e
 if [ "$MODE" = compose ]; then
-  docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+  probe_out="$(docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
     -e IDENTITY_INDEX="$IDENTITY_INDEX" -e SCALARS_MIGRATION="$SCALARS_MIGRATION" \
-    api node -e "$probe" >/dev/null 2>&1
+    -e PRIMARY_INDEX="$PRIMARY_INDEX" -e PRIMARY_MIGRATION="$PRIMARY_MIGRATION" \
+    api node -e "$probe" 2>/dev/null)"
 else
-  IDENTITY_INDEX="$IDENTITY_INDEX" SCALARS_MIGRATION="$SCALARS_MIGRATION" \
-    node -e "$probe" >/dev/null 2>&1
+  probe_out="$(IDENTITY_INDEX="$IDENTITY_INDEX" SCALARS_MIGRATION="$SCALARS_MIGRATION" \
+    PRIMARY_INDEX="$PRIMARY_INDEX" PRIMARY_MIGRATION="$PRIMARY_MIGRATION" \
+    node -e "$probe" 2>/dev/null)"
 fi
 probe_status=$?
 set -e
@@ -269,20 +295,40 @@ set -e
 if [ $probe_status -eq 3 ]; then
   cat >&2 <<EOF
 
-Preflight failed: the contact identity indexes already exist, but
-$SCALARS_MIGRATION has not run.
+Preflight failed: a unique index exists ahead of the migration that builds it
+(on: $(printf '%s' "$probe_out" | tr -d '\r')).
 
-Something booted Mongoose against this database first — an \`api:dev\`, or a
-Nest-booting one-shot — and autoIndex created them over data that still holds
-duplicate contacts. Left in place, the migration dies mid-write on E11000,
-is never recorded, and retries forever.
+Something booted Mongoose against this database first - the deploy's own
+\`up -d\` (this is the expected case on the droplet), an \`api:dev\`, or a
+Nest-booting one-shot - and autoIndex created the index over data the upgrade
+has not converted yet. Left in place:
+  - contacts:   migration 2 stamps identity keys into a unique index over
+                data that still holds duplicates, dies mid-write on E11000,
+                is never recorded, and retries forever;
+  - households: step 1 fills primaries under a unique index, and migration 4
+                then treats the existing index as done without checking for
+                a double primary - the wall it exists to stop at.
 
-Drop them and re-run; the migration rebuilds them after the merge:
+Drop whichever exist and re-run; the migrations rebuild them after the merge:
 
   db.contacts.dropIndex("agencyId_1_nameKey_1_dobKey_1_email_1")
   db.contacts.dropIndex("agencyId_1_nameKey_1_dobKey_1_phone_1")
+  db.households.dropIndex("agencyId_1_primaryContactId_1")
 
-If the migration already got partway through, also clear the half-written keys:
+Without mongosh (on the droplet), the same through the image:
+
+  docker compose -f $COMPOSE_FILE run --rm --no-deps -T api node -e '
+    const {MongoClient}=require("mongodb");(async()=>{
+      const c=await MongoClient.connect(process.env.MONGODB_URI);const db=c.db();
+      for(const [col,name] of [["contacts","agencyId_1_nameKey_1_dobKey_1_email_1"],
+                               ["contacts","agencyId_1_nameKey_1_dobKey_1_phone_1"],
+                               ["households","agencyId_1_primaryContactId_1"]]){
+        const has=(await db.collection(col).indexes()).some(i=>i.name===name);
+        if(has){await db.collection(col).dropIndex(name);console.log("dropped",col,name)}
+        else console.log("absent",col,name)}
+      await c.close()})()'
+
+If migration 2 already got partway through, also clear the half-written keys:
 
   db.contacts.updateMany({}, { \$unset: { nameKey: "", dobKey: "" } })
 EOF
