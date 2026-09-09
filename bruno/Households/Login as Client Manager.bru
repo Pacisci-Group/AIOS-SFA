@@ -1,0 +1,64 @@
+meta {
+  name: Login as Client Manager
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Captured under its OWN name, never as `accessToken` — overwriting the
+  // collection bearer would silently re-run every later folder as the owner and
+  // invalidate the `own`-scope assertions in Performance / Leaderboard.
+  if (res.getStatus() === 201) {
+    bru.setVar("clientAdminToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("captures an agency-scoped token", function () {
+    expect(bru.getVar("clientAdminToken")).to.be.a("string");
+  });
+}
+
+docs {
+  # Login as the agency owner — for the two `PATCH /contacts/:id` requests below
+
+  `PATCH /contacts/:id` is the one endpoint in this folder whose reach is
+  **derived** rather than tenant-wide. A `Contact` carries no `producerId`, so
+  under `DataScope.Own` there is nothing to clamp on and a bare `agencyId`
+  filter would let any producer edit any client in the agency. Instead
+  `ContactAccessService` requires the caller to own a **lead** that reaches the
+  contact — through `primaryContactId`, `memberContactIds`, or one of the
+  contact's households.
+
+  The member this folder creates (`Add Household Member`) has no lead at all, by
+  construction: the "+ Member" dialog records a person, not an enquiry. So the
+  collection's producer token cannot reach them, and the deceased-contact
+  requests below would 404 for a reason that has nothing to do with what they
+  are testing.
+
+  The agency owner holds `DataScope.Agency`, where the probe short-circuits.
+  Same self-contained pattern as `Platform Bug Reports` and
+  `Leads › Login as Lead Manager`: the token is captured under its own name so
+  it cannot leak into the folders that assert producer scope.
+}

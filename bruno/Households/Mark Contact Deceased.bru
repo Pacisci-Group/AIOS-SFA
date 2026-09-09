@@ -1,0 +1,103 @@
+meta {
+  name: Mark Contact Deceased
+  type: http
+  seq: 9
+}
+
+patch {
+  url: {{baseUrl}}/contacts/{{householdMemberContactId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{clientAdminToken}}
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "deceasedAt": "2026-02-14"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("records the death as a calendar date, echoed back exactly", function () {
+    // Parsed to UTC midnight from explicit components, like a date of birth —
+    // `new Date("2026-02-14")` re-rendered west of Greenwich shows the 13th.
+    expect(res.getBody().deceasedAt).to.equal("2026-02-14");
+  });
+
+  test("the person is untouched otherwise", function () {
+    const body = res.getBody();
+    // A date, not a delete: the contact stays, with its name, on every
+    // historical policy, quote, activity and ticket.
+    expect(body.firstName).to.equal("Dana");
+    expect(body.lastName).to.equal("Tyson");
+  });
+
+  test("no successor is demanded of a contact who leads nothing", function () {
+    // `Restore Primary Contact` handed the household back to its original
+    // primary, so this member now leads no household and there is no succession
+    // to settle. The same request one step earlier is a 409.
+    expect(res.getStatus()).to.not.equal(409);
+  });
+}
+
+docs {
+  # PATCH /contacts/:id — recording a death
+
+  The success half of PAC-91 §7, on a contact who leads no household.
+
+  - **Module:** `clients`. **Permission:** `clients:write`.
+  - Sent as the agency owner, for the reason `Login as Client Manager` explains.
+
+  ## A date, not a boolean and not a delete
+
+  Nothing in the schema modelled this before — `grep -i deceased` over the repo
+  returned nothing at all. Deleting the row was never the alternative: the
+  person is on historical policies, quotes, activities and tickets, every one of
+  which has to keep rendering their name. A boolean would lose the one thing an
+  office needs to reconcile a policy against.
+
+  Clearing it (`"deceasedAt": null`, see `Clear Contact Deceased`) undoes it. A
+  death recorded in error has to be reversible, which is half the reason this is
+  a date rather than a delete.
+
+  ## What changes for a deceased contact
+
+  Everything forward-looking, and nothing historical:
+
+  - **Lead intake** stops matching them. The fuzzy scorer never sees them, and a
+    *definite* identity hit (same name, DOB, and phone or email) refuses the
+    submission with **409 `contact_deceased`** rather than filing a new lead
+    against a dead person.
+  - **Not offered as a successor** when a household names a new primary, and
+    refused outright if named — `POST /households/:id/primary-contact` answers
+    409 `contact_deceased`.
+  - **Not offered as a defensive driver** on a new sold deal.
+  - **Quote prefill** seeds a living member instead.
+  - **Outbound details** stop being offered: the Household page's click-to-call
+    and mailto go inert, and the Producer Dashboard's Call / Text / Email quick
+    actions grey out with a reason.
+
+  They stay on the household roster, on the Lead Detail card (with a banner
+  saying not to make contact), and on every record they were already on.
+
+  ⚠ They also stay in the **identity indexes**. A dead person is still a person
+  whose row must not be duplicated, and a duplicate check that disagreed with
+  its own index would turn a duplicate into an unexplained E11000 at the write.
+  That is why intake refuses rather than silently creating a second contact.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | A future date, a malformed date, or `successorContactId` / `allowNoPrimary` sent without `deceasedAt` |
+  | 404 | Unknown contact, malformed id, or one the caller's scope cannot reach |
+  | 409 `primary_contact_succession_required` | The contact leads a household and no successor was named — see the previous request |
+}

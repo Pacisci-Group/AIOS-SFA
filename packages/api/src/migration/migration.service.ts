@@ -19,6 +19,7 @@ import { AgencyRole } from '../roles/schemas/agency-role.schema';
 import { provisionTenant } from '../seed/provision-tenant';
 import { SequenceService } from '../common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../households/household-ref';
+import { HouseholdMember } from '../households/schemas/household-member.schema';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { auditItemDueAt } from '../audit-generation/audit-due';
@@ -105,9 +106,15 @@ import {
   deriveDealType,
   normalizeTemperature,
   policyTypeLabels,
+  resolveContactHousehold,
   resolvePremium,
 } from './helpers/derive';
 import { buildLegacyTicket } from './helpers/legacy-ticket';
+import { loadPrimaryContacts } from '../households/primary-contact';
+import {
+  normalizeEmail,
+  normalizePhone,
+} from '../leads/intake/intake.normalize';
 import { recentChicagoMonths } from '../performance/performance.range';
 import {
   CollectionStat,
@@ -170,12 +177,52 @@ interface ProducerEntry {
   monthlyGoal: number;
 }
 
+/**
+ * A migrated household plus the *legacy* ids of its contact links (PAC-91 §8).
+ *
+ * The two link fields cannot be resolved during the household pass — contacts
+ * are imported afterwards, so their ObjectIds do not exist yet — so they travel
+ * here and are resolved by `migrateHouseholdLinks`.
+ */
+interface HouseholdEntry {
+  id: Types.ObjectId;
+  /** SmartSuite `Primary Contact` (`sdb36b3217`). Single link. */
+  legacyPrimaryContactId?: string;
+  /** SmartSuite `Household Members` (`suxra4lb`). Multi link. */
+  legacyMemberIds: string[];
+}
+
+/**
+ * What the contact pass hands the `Household links` pass (PAC-91 §5, §8).
+ *
+ * The role travels here rather than onto the contact document, because it is a
+ * property of the *membership*: SmartSuite's single `Role in Household` is the
+ * role in whichever household its single `Household` link named, and a contact
+ * back-linked from two households has one role per household as far as the
+ * domain is concerned.
+ */
+interface ContactEntry {
+  id: Types.ObjectId;
+  /** SmartSuite `Role in Household` (`se79ae4f7f`), normalised to a label. */
+  role?: string;
+  /** The household resolved in legacy's fallback order, if any. */
+  legacyHouseholdId?: string;
+}
+
 interface LeadRef {
   id: Types.ObjectId;
   legacyId: string;
   producerId?: Types.ObjectId;
   occurredAt?: Date;
   isTest: boolean;
+  /**
+   * The lead's own legacy links, carried so `migrateHouseholdLinks` can resolve
+   * `householdId` / `primaryContactId` / `memberContactIds` without re-fetching
+   * the Leads table (PAC-91 §2).
+   */
+  legacyHouseholdId?: string;
+  legacyPrimaryInsuredId?: string;
+  legacyMemberIds: string[];
 }
 
 interface QuoteRef {
@@ -204,7 +251,7 @@ interface DealRef {
  * mislabels a log line, it cannot break the run — but keep it in step with the
  * `this.step(...)` calls in `run()`.
  */
-const MIGRATION_STEP_COUNT = 22;
+const MIGRATION_STEP_COUNT = 23;
 
 /**
  * How many failed rows to log as they happen. A table that fails wholesale
@@ -257,6 +304,8 @@ export class MigrationService {
     @InjectModel(User.name) private readonly userModel: Model<User>,
     @InjectModel(Household.name)
     private readonly householdModel: Model<Household>,
+    @InjectModel(HouseholdMember.name)
+    private readonly householdMemberModel: Model<HouseholdMember>,
     @InjectModel(Lead.name) private readonly leadModel: Model<Lead>,
     @InjectModel(QuoteRecap.name)
     private readonly quoteRecapModel: Model<QuoteRecap>,
@@ -325,11 +374,21 @@ export class MigrationService {
         'households',
         () => this.migrateHouseholds(ss, ctx, producers, options, report),
       );
-      await this.step(report, 'Contacts', 'contacts', () =>
+      const contacts = await this.step(report, 'Contacts', 'contacts', () =>
         this.migrateContacts(ss, ctx, households, options, report),
       );
       const leads = await this.step(report, 'Leads', 'leads', () =>
         this.migrateLeads(ss, ctx, producers, options, report),
+      );
+
+      /*
+       * After contacts *and* leads, before anything that reads a household's
+       * membership (PAC-91 §8). Households import first, so neither
+       * `primaryContactId` nor a lead's `primaryContactId` can be resolved in
+       * the pass that writes the rest of those rows.
+       */
+      await this.step(report, 'Household links', 'householdLinks', () =>
+        this.migrateHouseholdLinks(ctx, households, contacts, leads, report),
       );
 
       // Legacy id -> Mongo `_id`, so recaps and deals can be written with real
@@ -564,6 +623,20 @@ export class MigrationService {
     map: Map<string, Types.ObjectId>,
   ): Types.ObjectId | undefined {
     return legacyId ? map.get(legacyId) : undefined;
+  }
+
+  /**
+   * A household link's Mongo `_id` from the households map.
+   *
+   * Exists only because that map's values gained the legacy contact links
+   * (PAC-91) and stopped being bare ObjectIds; every caller wanted the id and
+   * nothing else, so one accessor keeps them all unchanged.
+   */
+  private householdRef(
+    legacyId: string | undefined,
+    households: Map<string, HouseholdEntry>,
+  ): Types.ObjectId | undefined {
+    return legacyId ? households.get(legacyId)?.id : undefined;
   }
 
   /** A producer/user link's Mongo _id from the producers map. */
@@ -931,10 +1004,10 @@ export class MigrationService {
     producers: Map<string, ProducerEntry>,
     options: MigrationOptions,
     report: MigrationReport,
-  ): Promise<Map<string, Types.ObjectId>> {
+  ): Promise<Map<string, HouseholdEntry>> {
     const stat = emptyStat();
     report.collections.households = stat;
-    const map = new Map<string, Types.ObjectId>();
+    const map = new Map<string, HouseholdEntry>();
 
     stat.source = await ss.count(SMARTSUITE_TABLE_IDS.households);
     const records = await ss.listAll(
@@ -980,8 +1053,14 @@ export class MigrationService {
           ),
           propertyAddress: this.asObject(rec[HOUSEHOLD_FIELDS.propertyAddress]),
           mailingAddress: this.asObject(rec[HOUSEHOLD_FIELDS.mailingAddress]),
-          primaryEmails: this.deepEmails(rec[HOUSEHOLD_FIELDS.primaryEmail]),
-          primaryPhones: this.deepPhones(rec[HOUSEHOLD_FIELDS.primaryPhone]),
+          /*
+           * No `primaryContactName` / `primaryEmails` / `primaryPhones`
+           * (PAC-91 §4). SmartSuite's household row does carry a lookup of its
+           * primary's email and phone, but importing it would recreate exactly
+           * the copy this ticket deletes — and one that goes stale the moment
+           * the contact is edited. The `Household links` pass writes
+           * `primaryContactId`, and every reader follows it.
+           */
           assignedCrmId: crm?.userId,
           legacyAssignedCrmId: legacyCrmId,
           totalActivePolicies: toNumber(
@@ -992,7 +1071,23 @@ export class MigrationService {
         stat,
         report,
       );
-      if (id) map.set(legacyId, id);
+      if (id) {
+        /*
+         * The contact links are read here but written by the `Household links`
+         * pass: contacts import after households, so nothing on this row can be
+         * resolved to an ObjectId yet (PAC-91 §8). Carrying the legacy ids is
+         * what lets the household side be honoured at all — before PAC-91 they
+         * were never read, and every migrated household came out with an empty
+         * `primaryContactId` and `memberContactIds` by construction.
+         */
+        map.set(legacyId, {
+          id,
+          legacyPrimaryContactId: firstLinkedId(
+            rec[HOUSEHOLD_FIELDS.primaryContact],
+          ),
+          legacyMemberIds: allLinkedIds(rec[HOUSEHOLD_FIELDS.householdMembers]),
+        });
+      }
     }
 
     // Leaves the agency's household numbering consistent in one pass, so the
@@ -1029,15 +1124,33 @@ export class MigrationService {
   // Contacts
   // ---------------------------------------------------------------------------
 
+  /**
+   * Contacts, with their household link resolved in legacy's own fallback order
+   * (PAC-91 §8) rather than from the writable `Household` field alone.
+   *
+   * Returns `legacyId -> `{@link ContactEntry}` so the `Household links` pass
+   * can resolve the household side, which it could not do while this returned
+   * `void`, and can write the membership with the role this row carried.
+   */
   private async migrateContacts(
     ss: SmartSuiteClient,
     ctx: TenantCtx,
-    households: Map<string, Types.ObjectId>,
+    households: Map<string, HouseholdEntry>,
     options: MigrationOptions,
     report: MigrationReport,
-  ): Promise<void> {
+  ): Promise<Map<string, ContactEntry>> {
     const stat = emptyStat();
     report.collections.contacts = stat;
+    const map = new Map<string, ContactEntry>();
+    const links = {
+      viaHouseholdField: 0,
+      viaBacklink: 0,
+      unlinked: 0,
+      multiMembership: 0,
+      multiPrimary: 0,
+      unresolved: 0,
+    };
+    stat.householdLinks = links;
 
     stat.source = await ss.count(SMARTSUITE_TABLE_IDS.contacts);
     const records = await ss.listAll(
@@ -1059,32 +1172,67 @@ export class MigrationService {
       const test = isTestRecord(null, name, toText(rec.title));
       if (test) stat.excludedTest++;
 
-      const legacyHouseholdId = firstLinkedId(rec[CONTACT_FIELDS.household]);
+      const household = resolveContactHousehold(rec);
+      const legacyHouseholdId = household.householdLegacyId;
+      if (household.via === 'household') links.viaHouseholdField++;
+      else if (household.via === 'none') links.unlinked++;
+      else links.viaBacklink++;
+      if (household.memberLegacyIds.length > 1) links.multiMembership++;
+      if (household.primaryLegacyIds.length > 1) links.multiPrimary++;
+      if (legacyHouseholdId && !households.has(legacyHouseholdId)) {
+        links.unresolved++;
+      }
 
-      await this.persist(
+      const contactDetails = this.singleContactDetails(
+        rec[CONTACT_FIELDS.email],
+        rec[CONTACT_FIELDS.phone],
+        stat,
+      );
+
+      const role = normalizeContactRole(
+        selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
+      );
+
+      const id = await this.persist(
         this.contactModel,
         ctx,
         legacyId,
         {
           firstName,
           lastName,
-          emails: toStringArray(rec[CONTACT_FIELDS.email]),
-          phones: toPhoneArray(rec[CONTACT_FIELDS.phone]),
+          ...contactDetails,
           dateOfBirth: toDate(rec[CONTACT_FIELDS.dateOfBirth]),
-          roleInHousehold: normalizeContactRole(
-            selectCode(rec[CONTACT_FIELDS.roleInHousehold]),
-          ),
-          isPrimary: toBool(rec[CONTACT_FIELDS.isPrimary]),
           notes: toText(rec[CONTACT_FIELDS.notes]),
-          householdId: this.ref(legacyHouseholdId, households),
-          legacyHouseholdId,
           isTestRecord: test,
+          /*
+           * No `householdId` / `legacyHouseholdId` / `isPrimary` /
+           * `roleInHousehold` (PAC-91 §5). All four were the SmartSuite shape
+           * — one household per contact, a checkbox for primacy, one role —
+           * and the domain is many-to-many. The `Household links` pass turns
+           * the resolved links into `householdMembers` rows carrying `role`,
+           * and primacy stays `Household.primaryContactId`. `isPrimary`
+           * (`s413f031d4`) is not read at all any more: the household side
+           * names its own primary, which is the same fact from the end that
+           * owns it.
+           */
         },
         stat,
         report,
       );
+      if (id) {
+        map.set(legacyId, {
+          id,
+          ...(role ? { role } : {}),
+          ...(legacyHouseholdId ? { legacyHouseholdId } : {}),
+        });
+      }
     }
-    this.logger.log(`Contacts: fetched ${stat.fetched}`);
+    this.logger.log(
+      `Contacts: fetched ${stat.fetched} — ${links.viaHouseholdField} linked via ` +
+        `the Household field, ${links.viaBacklink} via a back-link, ` +
+        `${links.unlinked} unlinked at source`,
+    );
+    return map;
   }
 
   // ---------------------------------------------------------------------------
@@ -1144,8 +1292,15 @@ export class MigrationService {
         {
           firstName,
           lastName,
-          emails: toStringArray(rec[LEAD_FIELDS.email]),
-          phones: toPhoneArray(rec[LEAD_FIELDS.phone]),
+          /*
+           * No `emails` / `phones` (PAC-91 §2). This used to import the
+           * SmartSuite *Leads* table's own email and phone columns, which are
+           * empty on most legacy rows because the real values live on the
+           * linked contact — which is why most migrated leads rendered a blank
+           * Phone and Email on the Leads list. The lead carries no copy now;
+           * the `Household links` pass fills `primaryContactId` and every
+           * reader follows it.
+           */
           status: selectCode(rec[LEAD_FIELDS.status]),
           temperature: normalizeTemperature(rec[LEAD_FIELDS.temperature]),
           leadSource: { code: leadSource.code, label: leadSource.label },
@@ -1169,11 +1324,271 @@ export class MigrationService {
           producerId: producer?.userId,
           occurredAt: createdDate,
           isTest: test,
+          // Resolved to ObjectIds by the `Household links` pass (PAC-91 §2):
+          // contacts are imported before leads, but households-side membership
+          // is only complete once that pass has run.
+          legacyHouseholdId: firstLinkedId(rec[LEAD_FIELDS.household]),
+          legacyPrimaryInsuredId: firstLinkedId(
+            rec[LEAD_FIELDS.primaryInsured],
+          ),
+          legacyMemberIds: allLinkedIds(rec[LEAD_FIELDS.householdMembers]),
         });
       }
     }
     this.logger.log(`Leads: fetched ${stat.fetched}`);
     return refs;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Household links
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Resolve the contact↔household links, after both sides have been imported
+   * (PAC-91 §8).
+   *
+   * WHY A SEPARATE PASS
+   * -------------------
+   * Households are imported before contacts, so `migrateHouseholds` cannot turn
+   * `Primary Contact` / `Household Members` into ObjectIds — the contacts do not
+   * exist yet. That ordering is why the household side was never written at all
+   * before PAC-91, leaving every migrated household with an empty
+   * `primaryContactId` and `memberContactIds` regardless of the source data.
+   * Leads are in the same pass for the same reason: their `Primary Insured`
+   * points at a contact, and their household's primary is only known once the
+   * loop above has run.
+   *
+   * WHY `$set` IS CORRECT HERE
+   * --------------------------
+   * On a first import the migration *is* the source of truth, and on a re-run
+   * the value it writes is the same legacy fact, so `$set` is idempotent rather
+   * than destructive. Membership is an **upsert into `householdMembers`**
+   * (PAC-91 §5) rather than an array push, because a household can also gain
+   * members through intake — which SmartSuite never knew about — and because
+   * the role and the end date belong to the membership, not to either end.
+   *
+   * MEMBERSHIP SOURCES
+   * ------------------
+   * The union of three, and the report counts each (the §6 reconciliation):
+   * the household's `Primary Contact`, its `Household Members`, and the
+   * contact's own resolved household. All three are needed for the same reason
+   * §8 already found on the first two — 266 primaries are absent from their own
+   * member list — each side only ever *misses* links, none of them invents one.
+   *
+   * ⚠ This is **not** the mechanism that repairs an existing production
+   * database. `persist` `$set`s every mapped field on every migrated row, so
+   * re-running the import to fix links would overwrite whatever the agency has
+   * edited since go-live. That is what `backfill/backfill-household-links.ts`
+   * exists for.
+   */
+  private async migrateHouseholdLinks(
+    ctx: TenantCtx,
+    households: Map<string, HouseholdEntry>,
+    contacts: Map<string, ContactEntry>,
+    leads: LeadRef[],
+    report: MigrationReport,
+  ): Promise<void> {
+    const stat = emptyStat();
+    report.collections.householdLinks = stat;
+    const links = {
+      unlinked: 0,
+      multiMembership: 0,
+      multiPrimary: 0,
+      unresolved: 0,
+      memberships: 0,
+    };
+    stat.householdLinks = links;
+    stat.source = households.size + leads.length;
+    stat.fetched = stat.source;
+
+    /** contact legacy id -> how many households name it, per side. */
+    const primaryCount = new Map<string, number>();
+    const membershipCount = new Map<string, number>();
+    const bump = (map: Map<string, number>, key: string) =>
+      map.set(key, (map.get(key) ?? 0) + 1);
+
+    /** Resolve a legacy contact id, counting the ones the run never imported. */
+    const contactRef = (legacyId: string): Types.ObjectId | undefined => {
+      const entry = contacts.get(legacyId);
+      if (!entry) links.unresolved++;
+      return entry?.id;
+    };
+
+    /** `<householdId>|<contactId>` already written this run. */
+    const written = new Set<string>();
+
+    /**
+     * Upsert one membership. Keyed on `(agencyId, householdId, contactId)`, so
+     * a re-import revives rather than duplicates, and a member added through
+     * intake since go-live is left exactly as they are.
+     */
+    const addMembership = async (
+      household: HouseholdEntry,
+      legacyContactId: string,
+      contactId: Types.ObjectId,
+    ): Promise<void> => {
+      const key = `${household.id.toString()}|${contactId.toString()}`;
+      if (written.has(key)) return;
+      written.add(key);
+      links.memberships++;
+      if (ctx.dryRun) return;
+
+      const role = contacts.get(legacyContactId)?.role;
+      await this.householdMemberModel.updateOne(
+        {
+          agencyId: ctx.agencyId,
+          householdId: household.id,
+          contactId,
+        },
+        {
+          $set: { endedAt: null },
+          $setOnInsert: {
+            branchId: ctx.branchId,
+            addedAt: new Date(),
+            ...(role ? { role } : {}),
+            source: 'smartsuite',
+          },
+        },
+        { upsert: true },
+      );
+    };
+
+    let householdsUpdated = 0;
+    for (const entry of households.values()) {
+      const legacyPrimary = entry.legacyPrimaryContactId;
+      // Union of both link fields, primary included: 266 contacts in the
+      // 2026-09-04 export are a household's primary without appearing in its
+      // member list, so taking `Household Members` alone loses them.
+      const legacyMembers = [
+        ...new Set(
+          [legacyPrimary, ...entry.legacyMemberIds].filter(
+            (id): id is string => !!id,
+          ),
+        ),
+      ];
+
+      if (!legacyMembers.length) {
+        links.unlinked++;
+        continue;
+      }
+      if (legacyPrimary) bump(primaryCount, legacyPrimary);
+      legacyMembers.forEach((id) => bump(membershipCount, id));
+
+      const primaryContactId = legacyPrimary
+        ? contactRef(legacyPrimary)
+        : undefined;
+      const resolvedMembers = legacyMembers
+        .map((legacyContactId) => ({
+          legacyContactId,
+          contactId:
+            legacyContactId === legacyPrimary
+              ? primaryContactId
+              : contactRef(legacyContactId),
+        }))
+        .filter(
+          (
+            member,
+          ): member is { legacyContactId: string; contactId: Types.ObjectId } =>
+            !!member.contactId,
+        );
+
+      if (!primaryContactId && !resolvedMembers.length) {
+        // Every id on this household names a contact we did not import.
+        stat.skipped++;
+        continue;
+      }
+
+      try {
+        for (const member of resolvedMembers) {
+          await addMembership(entry, member.legacyContactId, member.contactId);
+        }
+        if (primaryContactId && !ctx.dryRun) {
+          await this.householdModel.updateOne(
+            { _id: entry.id },
+            { $set: { primaryContactId } },
+          );
+        }
+      } catch (err) {
+        stat.skipped++;
+        this.recordError(
+          report,
+          `Household links ${entry.id.toString()}: ${(err as Error).message}`,
+        );
+        continue;
+      }
+      householdsUpdated++;
+      stat.migrated += ctx.dryRun ? 0 : 1;
+    }
+
+    /*
+     * The third source: a contact whose own `Household` link (or back-link)
+     * resolved to a household that does not list them back. 19 such rows on the
+     * 2026-09-04 production data — dropping them is the §6 defect this pass
+     * exists to close.
+     */
+    for (const [legacyContactId, contact] of contacts) {
+      if (!contact.legacyHouseholdId) continue;
+      const household = households.get(contact.legacyHouseholdId);
+      if (!household) continue;
+      await addMembership(household, legacyContactId, contact.id);
+    }
+
+    links.multiMembership = [...membershipCount.values()].filter(
+      (n) => n > 1,
+    ).length;
+    links.multiPrimary = [...primaryCount.values()].filter((n) => n > 1).length;
+
+    let leadsUpdated = 0;
+    for (const lead of leads) {
+      const household = lead.legacyHouseholdId
+        ? households.get(lead.legacyHouseholdId)
+        : undefined;
+      // The lead's own Primary Insured wins; the household's primary is the
+      // fallback, so a lead that names no insured still reaches a person.
+      const primaryContactId = lead.legacyPrimaryInsuredId
+        ? contactRef(lead.legacyPrimaryInsuredId)
+        : household?.legacyPrimaryContactId
+          ? contacts.get(household.legacyPrimaryContactId)?.id
+          : undefined;
+      const memberContactIds = lead.legacyMemberIds
+        .map((id) => contactRef(id))
+        .filter((id): id is Types.ObjectId => !!id);
+
+      const set: Record<string, unknown> = {};
+      if (household) set.householdId = household.id;
+      if (primaryContactId) set.primaryContactId = primaryContactId;
+
+      if (!Object.keys(set).length && !memberContactIds.length) continue;
+
+      const update: Record<string, unknown> = {};
+      if (Object.keys(set).length) update.$set = set;
+      if (memberContactIds.length) {
+        update.$addToSet = { memberContactIds: { $each: memberContactIds } };
+      }
+
+      if (!ctx.dryRun) {
+        try {
+          await this.leadModel.updateOne({ _id: lead.id }, update);
+        } catch (err) {
+          stat.skipped++;
+          this.recordError(
+            report,
+            `Lead links ${lead.id.toString()}: ${(err as Error).message}`,
+          );
+          continue;
+        }
+      }
+      leadsUpdated++;
+      stat.migrated += ctx.dryRun ? 0 : 1;
+    }
+
+    this.logger.log(
+      `Household links: ${householdsUpdated} households and ${leadsUpdated} leads ` +
+        `linked${ctx.dryRun ? ' (dry run)' : ''}, ${links.memberships} memberships ` +
+        `— ${links.unlinked} households unlinked at source, ${links.unresolved} ` +
+        `link ids named a contact this run did not import, ${links.multiPrimary} ` +
+        `contacts are primary of more than one household`,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1197,7 +1612,7 @@ export class MigrationService {
     ss: SmartSuiteClient,
     ctx: TenantCtx,
     producers: Map<string, ProducerEntry>,
-    households: Map<string, Types.ObjectId>,
+    households: Map<string, HouseholdEntry>,
     leadIds: Map<string, Types.ObjectId>,
     options: MigrationOptions,
     report: MigrationReport,
@@ -1288,7 +1703,7 @@ export class MigrationService {
           legacyProducerId: firstLinkedId(rec[QUOTE_RECAP_FIELDS.producer]),
           leadId,
           legacyLeadId,
-          householdId: this.ref(legacyHouseholdId, households),
+          householdId: this.householdRef(legacyHouseholdId, households),
           legacyHouseholdId,
           isTestRecord: test,
         },
@@ -1331,7 +1746,7 @@ export class MigrationService {
     ss: SmartSuiteClient,
     ctx: TenantCtx,
     producers: Map<string, ProducerEntry>,
-    households: Map<string, Types.ObjectId>,
+    households: Map<string, HouseholdEntry>,
     leadIds: Map<string, Types.ObjectId>,
     quoteIds: Map<string, Types.ObjectId>,
     options: MigrationOptions,
@@ -1428,7 +1843,7 @@ export class MigrationService {
           legacyProducerId: firstLinkedId(rec[DEAL_FIELDS.producer]),
           leadId,
           legacyLeadId,
-          householdId: this.ref(legacyHouseholdId, households),
+          householdId: this.householdRef(legacyHouseholdId, households),
           legacyHouseholdId,
           quoteRecapId: this.ref(legacyQuoteRecapId, quoteIds),
           legacyQuoteRecapId,
@@ -1592,7 +2007,7 @@ export class MigrationService {
   private async migratePolicies(
     ss: SmartSuiteClient,
     ctx: TenantCtx,
-    households: Map<string, Types.ObjectId>,
+    households: Map<string, HouseholdEntry>,
     deals: Map<string, DealRef>,
     options: MigrationOptions,
     report: MigrationReport,
@@ -1672,7 +2087,7 @@ export class MigrationService {
             selectCode(rec[POLICY_FIELDS.policyStatus]),
           ),
           notes: toText(rec[POLICY_FIELDS.notes]),
-          householdId: this.ref(legacyHouseholdId, households),
+          householdId: this.householdRef(legacyHouseholdId, households),
           legacyHouseholdId,
           dealId: deal?.dealId,
           legacyDealId,
@@ -1843,7 +2258,7 @@ export class MigrationService {
   private async migrateInterestedParties(
     ss: SmartSuiteClient,
     ctx: TenantCtx,
-    households: Map<string, Types.ObjectId>,
+    households: Map<string, HouseholdEntry>,
     policies: Map<string, Types.ObjectId>,
     options: MigrationOptions,
     report: MigrationReport,
@@ -1884,7 +2299,7 @@ export class MigrationService {
           notes: toText(rec[INTERESTED_PARTY_FIELDS.notes]),
           policyId: this.ref(legacyPolicyId, policies),
           legacyPolicyId,
-          householdId: this.ref(legacyHouseholdId, households),
+          householdId: this.householdRef(legacyHouseholdId, households),
           legacyHouseholdId,
           isTestRecord: false,
         },
@@ -1903,7 +2318,7 @@ export class MigrationService {
     ss: SmartSuiteClient,
     ctx: TenantCtx,
     producers: Map<string, ProducerEntry>,
-    households: Map<string, Types.ObjectId>,
+    households: Map<string, HouseholdEntry>,
     deals: Map<string, DealRef>,
     options: MigrationOptions,
     report: MigrationReport,
@@ -1970,7 +2385,7 @@ export class MigrationService {
           ),
           dealId: deal?.dealId,
           legacyDealId,
-          householdId: this.ref(legacyHouseholdId, households),
+          householdId: this.householdRef(legacyHouseholdId, households),
           legacyHouseholdId,
           producerId: this.userRef(legacyProducerId, producers),
           legacyProducerId,
@@ -1990,7 +2405,7 @@ export class MigrationService {
   private async migratePriorPolicies(
     ss: SmartSuiteClient,
     ctx: TenantCtx,
-    households: Map<string, Types.ObjectId>,
+    households: Map<string, HouseholdEntry>,
     deals: Map<string, DealRef>,
     options: MigrationOptions,
     report: MigrationReport,
@@ -2053,7 +2468,7 @@ export class MigrationService {
           completedDate: toDate(rec[PRIOR_POLICY_FIELDS.completedDate]),
           dealId: deal?.dealId,
           legacyDealId,
-          householdId: this.ref(legacyHouseholdId, households),
+          householdId: this.householdRef(legacyHouseholdId, households),
           legacyHouseholdId,
           legacyPriorInsuranceId,
           isTestRecord: test,
@@ -2073,7 +2488,7 @@ export class MigrationService {
     ss: SmartSuiteClient,
     ctx: TenantCtx,
     producers: Map<string, ProducerEntry>,
-    households: Map<string, Types.ObjectId>,
+    households: Map<string, HouseholdEntry>,
     policies: Map<string, Types.ObjectId>,
     options: MigrationOptions,
     report: MigrationReport,
@@ -2103,7 +2518,7 @@ export class MigrationService {
     const [householdDocs, policyDocs] = await Promise.all([
       this.householdModel
         .find({ agencyId: ctx.agencyId })
-        .select('name primaryContactName primaryPhones primaryEmails')
+        .select('name primaryContactId')
         .lean(),
       this.policyModel
         .find({ agencyId: ctx.agencyId })
@@ -2112,6 +2527,15 @@ export class MigrationService {
     ]);
     const householdById = new Map(householdDocs.map((h) => [String(h._id), h]));
     const policyById = new Map(policyDocs.map((p) => [String(p._id), p]));
+    // The ticket's `clientName`, `phone` and `email` come from the household's
+    // primary contact, which the household no longer stores a copy of
+    // (PAC-91 §4). One batched query for the whole pass — the same "two queries
+    // for the run, not two per row" rule the block above is written to.
+    const primaryByHousehold = await loadPrimaryContacts(
+      this.contactModel,
+      householdDocs,
+      { agencyId: ctx.agencyId },
+    );
 
     for (const rec of records) {
       const legacyId = rec.id as string;
@@ -2135,7 +2559,7 @@ export class MigrationService {
       if (test) stat.excludedTest++;
 
       const policyId = this.ref(legacyPolicyId, policies);
-      const householdId = this.ref(legacyHouseholdId, households);
+      const householdId = this.householdRef(legacyHouseholdId, households);
       const createdBy = legacyCreatedById
         ? producers.get(legacyCreatedById)
         : undefined;
@@ -2168,6 +2592,9 @@ export class MigrationService {
         {
           household: householdId
             ? householdById.get(String(householdId))
+            : null,
+          primaryContact: householdId
+            ? (primaryByHousehold.get(String(householdId)) ?? null)
             : null,
           policy: policyId ? policyById.get(String(policyId)) : null,
           createdByDisplayName: createdBy?.name,
@@ -2681,29 +3108,41 @@ export class MigrationService {
     return code ? [code] : [];
   }
 
-  private deepFlatten(value: unknown): unknown[] {
-    const out: unknown[] = [];
-    const walk = (v: unknown): void => {
-      if (Array.isArray(v)) v.forEach(walk);
-      else if (v !== null && v !== undefined) out.push(v);
+  /**
+   * A contact's **one** email and **one** phone (PAC-91 §1).
+   *
+   * SmartSuite types these as `string[]` and `phone[]`, which is what the old
+   * schema copied. The domain has one of each, legacy always read and wrote one
+   * of each, and the 2026-09-04 export has zero rows with a second value — so
+   * this takes the first and **counts** anything beyond it into the report,
+   * which is the footprint number the ticket asks for. A count rather than a
+   * silent drop: if the assumption is ever wrong on some other agency's data,
+   * the report says so instead of the values vanishing.
+   *
+   * Normalised on the way in, through the intake normalisers rather than a
+   * local re-implementation. This is the point at which a migrated contact
+   * becomes comparable to an app-created one: contact matching, the identity
+   * indexes and `merge-duplicate-contacts.ts` all compare normalised values, so
+   * importing `(918) 808-2556` raw would leave every migrated row invisible to
+   * all three.
+   */
+  private singleContactDetails(
+    emailValue: unknown,
+    phoneValue: unknown,
+    stat: CollectionStat,
+  ): { email?: string; phone?: string } {
+    const emails = toStringArray(emailValue);
+    const phones = toPhoneArray(phoneValue);
+
+    if (emails.length > 1 || phones.length > 1) {
+      const multi = (stat.multiValued ??= { emails: 0, phones: 0 });
+      if (emails.length > 1) multi.emails++;
+      if (phones.length > 1) multi.phones++;
+    }
+
+    return {
+      email: normalizeEmail(emails[0]) ?? undefined,
+      phone: normalizePhone(phones[0]) ?? undefined,
     };
-    walk(value);
-    return out;
-  }
-
-  private deepEmails(value: unknown): string[] {
-    return this.deepFlatten(value)
-      .filter((v): v is string => typeof v === 'string' && v.includes('@'))
-      .map((v) => v.toLowerCase());
-  }
-
-  private deepPhones(value: unknown): string[] {
-    return this.deepFlatten(value)
-      .map((v): string => {
-        if (typeof v === 'string') return v;
-        const o = this.asObject(v);
-        return o && typeof o.phone_number === 'string' ? o.phone_number : '';
-      })
-      .filter((v) => v.length > 0);
   }
 }

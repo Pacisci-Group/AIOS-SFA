@@ -35,6 +35,10 @@ import {
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
+import {
+  HouseholdMembersService,
+  rolesByContact,
+} from '../households/household-members.service';
 import { HouseholdDocument } from '../households/schemas/household.schema';
 import { toLeadDetailPolicy } from '../policies/policy-view';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
@@ -63,6 +67,19 @@ const ACTIVITY_LIMIT = 50;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+/**
+ * The household roster plus the role each member holds *in that household*
+ * (PAC-91 §5).
+ *
+ * The two travel together because they come from the same read: the membership
+ * rows name the contacts and carry the roles, and a reader that fetched the
+ * contacts without them would have nothing to put in `role` but a guess.
+ */
+interface ContactRoster {
+  contacts: ContactDocument[];
+  roles: Map<string, string | null>;
+}
+
 /** ISO-8601 instant, or `null`. */
 function iso(value?: Date | null): string | null {
   return value ? value.toISOString() : null;
@@ -81,11 +98,6 @@ function dateOnly(value?: Date | null): string | null {
 }
 
 /** First non-empty entry of a stored array field, or `null`. */
-function first(values?: string[]): string | null {
-  const found = values?.find((value) => Boolean(value?.trim()));
-  return found ?? null;
-}
-
 function fullName(firstName?: string, lastName?: string): string {
   return [firstName, lastName]
     .filter((part) => Boolean(part?.trim()))
@@ -126,6 +138,7 @@ export class LeadDetailService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly leadAccess: LeadAccessService,
     private readonly leadTickets: LeadTicketsService,
+    private readonly memberships: HouseholdMembersService,
   ) {}
 
   /**
@@ -155,7 +168,7 @@ export class LeadDetailService {
     // structurally true rather than a convention.
     const agencyId = lead.agencyId;
 
-    const [contacts, policies, recaps, deal, activities] = await Promise.all([
+    const [roster, policies, recaps, deal, activities] = await Promise.all([
       this.loadContacts(lead, household, agencyId),
       this.loadPolicies(household, agencyId),
       this.loadQuoteRecaps(lead, household, agencyId),
@@ -182,8 +195,6 @@ export class LeadDetailService {
       status: normalizeLeadStatus(lead.status),
       temperature: lead.temperature ?? 'Unknown',
       leadSource: this.toLeadSource(lead),
-      emails: lead.emails ?? [],
-      phones: lead.phones ?? [],
       address: resolveHouseholdAddress(
         lead.address,
         household?.propertyAddress,
@@ -229,8 +240,8 @@ export class LeadDetailService {
       ...(access.permissions.includes(AgencyPermission.UsersRead)
         ? { producerId: lead.producerId?.toString() ?? null }
         : {}),
-      primaryContact: this.findPrimaryContact(lead, household, contacts),
-      household: this.toHousehold(household, lead, contacts, policies),
+      primaryContact: this.findPrimaryContact(lead, household, roster),
+      household: this.toHousehold(household, lead, roster, policies),
       latestQuoteRecap: latestRecap
         ? this.toQuoteRecap(latestRecap, userNames)
         : null,
@@ -354,6 +365,10 @@ export class LeadDetailService {
    * later lead still belongs on it — and falls back to the lead's own contact
    * refs when the lead has no household.
    *
+   * The roster comes from `householdMembers` since PAC-91 §5; `role` comes back
+   * with it, because the role is a property of the membership rather than of
+   * the person ("Named Insured" at home, "Driver" on a parent's policy).
+   *
    * Deliberately **no** `.collation()`: the collated `{agencyId, lastName,
    * firstName}` index exists for intake's case-insensitive name matching. The
    * schema's warning about repeating the collation applies to that query, not
@@ -363,18 +378,36 @@ export class LeadDetailService {
     lead: LeadDocument,
     household: HouseholdDocument | null,
     agencyId: string,
-  ): Promise<ContactDocument[]> {
+  ): Promise<{
+    contacts: ContactDocument[];
+    roles: Map<string, string | null>;
+  }> {
     if (household) {
-      return this.contactModel.find({ agencyId, householdId: household._id });
+      const memberships = await this.memberships.listByHousehold(
+        agencyId,
+        household._id,
+      );
+      const contacts = memberships.length
+        ? await this.contactModel.find({
+            agencyId,
+            _id: { $in: memberships.map((m) => m.contactId) },
+          })
+        : [];
+      return { contacts, roles: rolesByContact(memberships) };
     }
 
     const ids = [
       lead.primaryContactId,
       ...(lead.memberContactIds ?? []),
     ].filter((id): id is Types.ObjectId => Boolean(id));
-    if (!ids.length) return [];
+    if (!ids.length) return { contacts: [], roles: new Map() };
 
-    return this.contactModel.find({ agencyId, _id: { $in: ids } });
+    // No household, so no membership and no role: the lead's own contact refs
+    // are all there is, and inventing a role for them would be a guess.
+    return {
+      contacts: await this.contactModel.find({ agencyId, _id: { $in: ids } }),
+      roles: new Map(),
+    };
   }
 
   /** Household-level policies — `Policy` has no contact link, so this is as fine-grained as it gets. */
@@ -599,31 +632,34 @@ export class LeadDetailService {
   /**
    * The lead's primary contact.
    *
-   * `lead.primaryContactId` wins; the household's own primary is the fallback
-   * for migrated leads that never carried the ref, and `isPrimary` the last
-   * resort.
+   * `lead.primaryContactId` wins and the household's own primary is the
+   * fallback for migrated leads that never carried the ref. The old third
+   * resort — `contact.isPrimary` — is gone with the field (PAC-91 §5): it could
+   * not say primary *of what*, and legacy intake set it on every contact it
+   * created, so it named the wrong person as often as the right one.
    */
   private findPrimaryContact(
     lead: LeadDocument,
     household: HouseholdDocument | null,
-    contacts: ContactDocument[],
+    roster: ContactRoster,
   ): LeadDetailContact | null {
     const preferred = [lead.primaryContactId, household?.primaryContactId]
       .filter((id): id is Types.ObjectId => Boolean(id))
       .map((id) => id.toString());
 
     for (const id of preferred) {
-      const match = contacts.find((contact) => contact._id.toString() === id);
-      if (match) return this.toContact(match, true);
+      const match = roster.contacts.find(
+        (contact) => contact._id.toString() === id,
+      );
+      if (match) return this.toContact(match, true, roster.roles);
     }
-
-    const flagged = contacts.find((contact) => contact.isPrimary);
-    return flagged ? this.toContact(flagged, true) : null;
+    return null;
   }
 
   private toContact(
     contact: ContactDocument,
     isPrimary: boolean,
+    roles: Map<string, string | null>,
   ): LeadDetailContact {
     return {
       id: contact._id.toString(),
@@ -631,10 +667,20 @@ export class LeadDetailService {
       lastName: contact.lastName ?? '',
       name: fullName(contact.firstName, contact.lastName) || 'Unnamed contact',
       dateOfBirth: dateOnly(contact.dateOfBirth),
-      email: first(contact.emails),
-      phone: first(contact.phones),
-      role: normalizeContactRole(contact.roleInHousehold) || null,
+      email: contact.email ?? null,
+      phone: contact.phone ?? null,
+      // Per membership, not per person (PAC-91 §5). Null when the lead has no
+      // household, because then there is no membership to read it from.
+      role: normalizeContactRole(roles.get(contact._id.toString())) || null,
       isPrimary,
+      /*
+       * The lead keeps rendering a deceased contact's name and details
+       * (PAC-91 §7) — this is a historical record, and the person on it did not
+       * stop having been on it. The card uses this to stop *offering* the
+       * click-to-call and the mailto, which is the distinction the ticket
+       * draws: history renders, outreach does not.
+       */
+      deceasedAt: dateOnly(contact.deceasedAt),
     };
   }
 
@@ -642,7 +688,7 @@ export class LeadDetailService {
   private toHousehold(
     household: HouseholdDocument | null,
     lead: LeadDocument,
-    contacts: ContactDocument[],
+    roster: ContactRoster,
     policies: PolicyDocument[],
   ): LeadDetailHousehold | null {
     if (!household) return null;
@@ -653,9 +699,9 @@ export class LeadDetailService {
 
     // Primary first, then whatever order the roster came back in — the card
     // leads with the named insured.
-    const members = [...contacts].sort((a, b) => {
-      const aPrimary = a._id.toString() === primaryId || a.isPrimary;
-      const bPrimary = b._id.toString() === primaryId || b.isPrimary;
+    const members = [...roster.contacts].sort((a, b) => {
+      const aPrimary = a._id.toString() === primaryId;
+      const bPrimary = b._id.toString() === primaryId;
       return Number(bPrimary) - Number(aPrimary);
     });
 
@@ -672,7 +718,11 @@ export class LeadDetailService {
         household.mailingAddress,
       ),
       members: members.map((contact) =>
-        this.toContact(contact, contact._id.toString() === primaryId),
+        this.toContact(
+          contact,
+          contact._id.toString() === primaryId,
+          roster.roles,
+        ),
       ),
       policies: policies.map((policy) => toLeadDetailPolicy(policy)),
       totalActivePolicies: household.totalActivePolicies ?? 0,

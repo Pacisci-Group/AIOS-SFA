@@ -48,13 +48,22 @@ export interface LegacyTicketSource {
   isTestRecord: boolean;
 }
 
-/** Display fields off the linked records, resolved by the caller. */
+/**
+ * Display fields off the linked records, resolved by the caller.
+ *
+ * The household's own name, plus its **primary contact's** name, phone and
+ * email — which the caller resolves through `primaryContactId`, because the
+ * household stores no copy of them (PAC-91 §4). `loadPrimaryContacts` does that
+ * in one batched query for the whole import.
+ */
 export interface LegacyTicketLinks {
   household?: {
     name?: string | null;
-    primaryContactName?: string | null;
-    primaryPhones?: string[];
-    primaryEmails?: string[];
+  } | null;
+  primaryContact?: {
+    name?: string | null;
+    phone?: string | null;
+    email?: string | null;
   } | null;
   policy?: {
     policyNumber?: string | null;
@@ -81,6 +90,7 @@ export function buildLegacyTicket(
   if (!ticketNumber) return null;
 
   const household = links.household ?? null;
+  const primaryContact = links.primaryContact ?? null;
   const policy = links.policy ?? null;
   const category = toServiceTicketCategory(source.category);
   const status = toServiceTicketStatus(source.status);
@@ -90,7 +100,7 @@ export function buildLegacyTicket(
   // name blank — three of the 286 legacy rows do.
   const clientName =
     source.clientName?.trim() ||
-    household?.primaryContactName?.trim() ||
+    primaryContact?.name?.trim() ||
     household?.name?.trim() ||
     'Unnamed client';
   const createdByName =
@@ -124,8 +134,8 @@ export function buildLegacyTicket(
     policyId: source.policyId ?? null,
     householdId: source.householdId ?? null,
     leadId: null,
-    phone: household?.primaryPhones?.[0] ?? '',
-    email: household?.primaryEmails?.[0] ?? '',
+    phone: primaryContact?.phone ?? '',
+    email: primaryContact?.email ?? '',
     openedAt,
     // The archive window reads `resolvedAt ?? lastActivityAt`, so a closed
     // ticket whose source never recorded a resolve date still ages out on its

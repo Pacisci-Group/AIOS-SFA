@@ -1,0 +1,118 @@
+meta {
+  name: Mark Primary Contact Deceased (Succession Required)
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/contacts/{{householdMemberContactId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{clientAdminToken}}
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "deceasedAt": "2026-02-14"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("asks who takes over, by code", function () {
+    const body = res.getBody();
+    expect(body.code).to.equal("primary_contact_succession_required");
+    expect(body.householdId).to.equal(bru.getVar("householdId"));
+    expect(body.contactId).to.equal(bru.getVar("householdMemberContactId"));
+  });
+
+  test("offers the household's other living members as candidates", function () {
+    const body = res.getBody();
+    expect(body.candidates).to.be.an("array");
+    // Never the person dying, and never anyone who already leads another
+    // household — the exclusivity rule applies to the promotion too.
+    for (const candidate of body.candidates) {
+      expect(candidate.id).to.not.equal(bru.getVar("householdMemberContactId"));
+      expect(candidate).to.have.property("name");
+      expect(candidate).to.have.property("role");
+    }
+  });
+
+  test("writes nothing — the refusal leaves the contact alive", function () {
+    // Succession is settled BEFORE the contact is saved, so a refusal cannot
+    // leave a household led by somebody already recorded as dead.
+    expect(res.getBody()).to.not.have.property("deceasedAt");
+  });
+}
+
+docs {
+  # PATCH /contacts/:id — marking a household's primary contact deceased
+
+  The refusal half of PAC-91 §7's succession rule. Runs against the member
+  `Set Primary Contact` just promoted, so the target is **provably** a
+  household's primary contact on any database — and the request writes nothing,
+  so it is safe to re-run.
+
+  - **Module:** `clients`. **Permission:** `clients:write`.
+  - Sent as the **agency owner** (`Login as Client Manager`), not the
+    collection's producer: `PATCH /contacts/:id` derives an `own`-scope caller's
+    reach from the leads that touch the contact, and a member added through the
+    "+ Member" dialog has none.
+
+  ## Why one edit needs two answers
+
+  A contact can die (David, 2026-09-04), and when the deceased was a household's
+  primary contact another member has to take over. Recording the death alone
+  would leave the household headed by somebody who is dead — so the same request
+  has to answer who leads it now. The owner's rule, written down: **(a) name the
+  successor in the same operation**, falling back to **(c) a deliberate, flagged
+  gap**.
+
+  Auto-promotion by role precedence (Spouse -> adult member -> ...) was
+  considered and rejected. It guesses at something the producer knows, on the
+  record that decides which policies and which producer the whole family hangs
+  off.
+
+  ## Body
+  | Field | Notes |
+  |---|---|
+  | `deceasedAt` | `YYYY-MM-DD`, or `null` to undo. A future date is a **400** |
+  | `successorContactId` | Rule (a). Held to the same three rules as `POST /households/:id/primary-contact` |
+  | `allowNoPrimary` | Rule (c). Clears the primary and sets `dataQuality: "no_primary"` |
+
+  The last two are only meaningful alongside a `deceasedAt` that is being set;
+  sent alone they are a **400** rather than a silent no-op.
+
+  ## Response — 409 `primary_contact_succession_required`
+
+  ```json
+  {
+    "statusCode": 409,
+    "code": "primary_contact_succession_required",
+    "contactId": "...",
+    "householdId": "...",
+    "householdRef": "HH-2614",
+    "householdName": "Tyson Household",
+    "candidates": [{ "id": "...", "name": "Sasha Successor", "role": "Spouse" }]
+  }
+  ```
+
+  `candidates` is every current member who could take over: alive, and not
+  already the primary of another household. It can be **empty** and that is not
+  an error — a household whose only member has died has nobody to promote, and
+  the caller's next step is `allowNoPrimary`.
+
+  Nothing is written. Succession is settled *before* the contact is saved, so
+  the only reachable partial state is a household with a new primary whose old
+  one is not yet marked — merely out of date. The other order would leave a
+  household led by a dead person, which is the state §7 exists to make
+  unreachable.
+}

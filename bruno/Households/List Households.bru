@@ -124,8 +124,11 @@ docs {
   1. `contacts` (name, DOB) and `policies` (number) are queried under the same
      scope filter and resolved to household ids, each capped at 500 so one broad
      term cannot build an unbounded `$in`.
-  2. Households are filtered by `$or` of `name`, `primaryContactName`,
-     `householdRef` and those ids.
+  2. Households are filtered by `$or` of `name`, `householdRef` and those ids.
+     There is no `primaryContactName` clause: PAC-91 §4 removed the stored copy,
+     and none is needed — the `contacts` pass in step 1 already matches every
+     member's name, the primary included, and returns a `matchedOn` label the
+     stored copy never could.
 
   `q` is routed by shape before it is used — `HH-\d+` to the reference, a parsed
   date (`YYYY-MM-DD` or `MM/DD/YYYY`) to date of birth, a normalized key of at
@@ -138,6 +141,10 @@ docs {
 
   Each row is a `HouseholdSummary` plus `householdRef`, `primaryEmail`,
   `primaryPhone`, `city`, `state`, `assignedCrmId`, `updatedAt`, and:
+
+  `primaryContactName`, `primaryEmail` and `primaryPhone` are all **resolved
+  from the household's `primaryContactId`** in one batched lookup per page — the
+  household stores no copy of any of them (PAC-91 §1, §4).
 
   - **`matchedOn`** — `{ field, value }` or `null`. Why the row is in the
     results, set **only** for a reason the row cannot already show: `member`,

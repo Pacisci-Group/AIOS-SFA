@@ -119,12 +119,27 @@ docs {
   | submissionToken         | string | no       | 8–200 chars; per-form-session idempotency key |
 
   ## Behaviour worth knowing
-  **Contact matching.** Candidates are found by exact (case-insensitive) first +
-  last name, then scored: matching DOB +4, matching email +2, matching phone +2.
-  A **conflicting** DOB disqualifies a candidate outright — two people sharing a
-  name but not a birth date are different people. No positive score → a new
-  contact is created. Creating a duplicate is recoverable; merging two people is
-  not.
+  **Contact matching**, in two steps since PAC-91 §9.
+
+  1. **The owner's identity rule, which is definite.** Same full name, same date
+     of birth, and the same phone *or* the same email is the *same person* —
+     agency-wide, not just within the pinned household. A hit resolves to that
+     contact with no scoring.
+  2. **The fuzzy scorer, for everything the rule cannot decide.** Candidates are
+     found by exact (case-insensitive) first + last name, then scored: matching
+     DOB +4, matching email +2, matching phone +2. A **conflicting** DOB
+     disqualifies a candidate outright — two people sharing a name but not a
+     birth date are different people. No positive score → a new contact is
+     created. Creating a duplicate is recoverable; merging two people is not,
+     which is why a missing DOB still resolves toward "new contact".
+
+  **A submitted email or phone never overwrites a stored one, and never adds a
+  second** (PAC-91 §1). A contact holds one of each. A blank field is filled; a
+  value that *disagrees* is left alone and recorded on the lead's timeline as a
+  `contact_conflict` activity carrying both values, for a human to reconcile.
+  This endpoint used to `$addToSet` the submitted value as a second array
+  element, which is how those arrays grew in the first place — an intake form is
+  a weak source of truth about an existing client.
 
   **Household.** Derived from the resolved contact, never looked up by address —
   that is what stops an existing client acquiring a second household. Migrated
@@ -223,4 +238,15 @@ docs {
   - `403 Forbidden` — `leads` module disabled, missing `leads:write`, a
     platform-admin caller with no agency, or an agency with no default branch.
   - `404 Not Found` — `householdId` names no household in the caller's agency.
+  - `409 Conflict` — the submitter belongs to **more than one household** and
+    none was pinned (PAC-91 §5). Membership is many-to-many, so "the contact's
+    household" is not a lookup, and picking one silently is how an inquiry lands
+    against the wrong household's policies and producer. The body is
+    `{ code: "ambiguous_household", contactId, households: [{ id, reference,
+    name, address }] }` — resubmit with `householdId` set to the one the user
+    chose. The **public** share-link path cannot pin a household, so a public
+    submission from a multi-household contact needs the office to log it; that
+    is 14 of 3,082 contacts on the production data.
+  - `409 Conflict` — a mailer already logged as a lead by another agency
+    (PAC-71).
 }

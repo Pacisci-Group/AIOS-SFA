@@ -77,6 +77,23 @@ export class Activity extends TenantRecord {
   dealId?: Types.ObjectId;
 
   /**
+   * The household a `primary_contact_changed` row belongs to (PAC-91 §7).
+   *
+   * The first activity that hangs off a **client record** rather than off
+   * something in the Lead → Quote → Sold pipeline. It exists because
+   * `Household.primaryContactId` is a single field with no history of its own,
+   * and it decides which policies, which producer and which contact details a
+   * whole family hangs off — "who changed this, when, and to whom" is not
+   * something to reconstruct afterwards from an `updatedBy` stamp.
+   *
+   * Deliberately **not indexed**, on the same rule as `policyId` below: nothing
+   * queries activities by household yet (the Household page's feed reads service
+   * tickets). Add the index with the reader, not before.
+   */
+  @Prop({ type: ObjectIdType, ref: 'Household' })
+  householdId?: Types.ObjectId;
+
+  /**
    * Set by `POST /quote-recaps` (PAC-39). Unset on migrated `quoted` rows,
    * which identify their subject through `legacySubjectId` instead.
    */

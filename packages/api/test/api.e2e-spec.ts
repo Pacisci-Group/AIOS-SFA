@@ -5,6 +5,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import {
   AgencyPermission,
+  AMBIGUOUS_HOUSEHOLD_CODE,
   DataScope,
   DEFAULT_ROLE_TEMPLATES,
   ModuleKey,
@@ -12,7 +13,11 @@ import {
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
-import type { HouseholdListResponse } from '@sfa/shared';
+import type {
+  HouseholdListResponse,
+  UnlinkedCounts,
+  UnlinkedRecordsResponse,
+} from '@sfa/shared';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
@@ -38,6 +43,7 @@ import { ServiceTicketsService } from '../src/crm/service-tickets.service';
 import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
 import { DealAuditItem } from '../src/deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
+import { HouseholdMember } from '../src/households/schemas/household-member.schema';
 import { Household } from '../src/households/schemas/household.schema';
 import { InterestedParty } from '../src/interested-parties/schemas/interested-party.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
@@ -1772,6 +1778,557 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  /**
+   * Membership is a join collection (PAC-91 §5).
+   *
+   * The three things that were impossible before it, pinned here so a later
+   * change cannot quietly take them away again: a contact belongs to **several**
+   * households, the role is per household, and leaving one is an operation of
+   * its own rather than a `$pull` that erases the fact.
+   */
+  describe('Household membership (PAC-91 §5)', () => {
+    interface MemberBody {
+      id: string;
+      roleInHousehold: string | null;
+      isPrimary: boolean;
+    }
+    interface HouseholdBody {
+      contacts: MemberBody[];
+    }
+
+    const roster = async (householdId: string) => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/households/${householdId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      return (res.body as HouseholdBody).contacts;
+    };
+
+    const addMember = async (
+      householdId: string,
+      body: Record<string, unknown>,
+      expected = 201,
+    ) => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/households/${householdId}/members`)
+        .set(authHeader(ownerToken))
+        .send(body)
+        .expect(expected);
+      return res.body as MemberBody;
+    };
+
+    it('adds a member with the role on the membership, and lists them', async () => {
+      const member = await addMember(seed.householdId, {
+        firstName: 'Rowan',
+        lastName: 'Membership',
+        role: 'Driver',
+      });
+      expect(member.roleInHousehold).toBe('Driver');
+      // Never primary: that is the household's Named Insured, and this dialog
+      // does not offer it.
+      expect(member.isPrimary).toBe(false);
+
+      const listed = await roster(seed.householdId);
+      const row = listed.find((c) => c.id === member.id);
+      expect(row?.roleInHousehold).toBe('Driver');
+      expect(row?.isPrimary).toBe(false);
+      // Exactly one contact in the roster is the primary, resolved against the
+      // household's own `primaryContactId` rather than a flag on the person.
+      expect(listed.filter((c) => c.isPrimary)).toHaveLength(1);
+    });
+
+    it('the same person can be a member of a second household, with a different role', async () => {
+      const householdMemberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
+      const first = await addMember(seed.householdId, {
+        firstName: 'Wren',
+        lastName: 'Twohomes',
+        role: 'Child',
+      });
+
+      // The second membership is written directly: the "+ Member" dialog always
+      // creates a new contact, and the point here is the *model*, not the
+      // dialog — a merge or a future "add existing contact" flow produces this.
+      await householdMemberModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: new Types.ObjectId(seed.secondHouseholdId),
+        contactId: new Types.ObjectId(first.id),
+        role: 'Driver',
+        addedAt: new Date(),
+        source: 'manual',
+      });
+
+      expect(
+        (await roster(seed.householdId)).find((c) => c.id === first.id)
+          ?.roleInHousehold,
+      ).toBe('Child');
+      expect(
+        (await roster(seed.secondHouseholdId)).find((c) => c.id === first.id)
+          ?.roleInHousehold,
+      ).toBe('Driver');
+    });
+
+    it('DELETE ends the membership without deleting the contact, and is 404 the second time', async () => {
+      const member = await addMember(seed.householdId, {
+        firstName: 'Pax',
+        lastName: 'Leaving',
+        role: 'Driver',
+      });
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/households/${seed.householdId}/members/${member.id}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+
+      expect(
+        (await roster(seed.householdId)).some((c) => c.id === member.id),
+      ).toBe(false);
+
+      // The person is still there — leaving a household is not ceasing to exist.
+      const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      expect(await contactModel.findById(member.id)).not.toBeNull();
+
+      // Soft-ended, so the row survives and a second call has nothing current
+      // left to end.
+      await request(app.getHttpServer())
+        .delete(`/api/v1/households/${seed.householdId}/members/${member.id}`)
+        .set(authHeader(ownerToken))
+        .expect(404);
+    });
+
+    it('refuses to end the primary contact’s membership (409)', async () => {
+      const listed = await roster(seed.householdId);
+      const primary = listed.find((c) => c.isPrimary);
+      expect(primary).toBeDefined();
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/households/${seed.householdId}/members/${primary!.id}`)
+        .set(authHeader(ownerToken))
+        .expect(409);
+    });
+
+    it('DELETE needs clients:write — a CSR with only crm_service:read is 403', async () => {
+      const listed = await roster(seed.householdId);
+      await request(app.getHttpServer())
+        .delete(
+          `/api/v1/households/${seed.householdId}/members/${listed[0].id}`,
+        )
+        .set(authHeader(csrToken))
+        .expect(403);
+    });
+  });
+
+  /*
+   * PAC-91 §7 — the two halves of "a contact can die, and a household's primary
+   * contact can be reassigned".
+   *
+   * Every household here is created inside the block rather than reusing
+   * `seed.householdId`: the operation moves `primaryContactId`, and doing that
+   * to the shared fixture would silently change what every later suite reads.
+   */
+  describe('Primary contact + deceased contacts (PAC-91 §7)', () => {
+    let householdModel: Model<Household>;
+    let contactModel: Model<Contact>;
+    let memberModel: Model<HouseholdMember>;
+    let activityModel: Model<Activity>;
+
+    const base = () => ({ agencyId: seed.agencyId, branchId: seed.branchId });
+
+    /** A household with a primary contact and, optionally, extra members. */
+    const makeHousehold = async (
+      name: string,
+      members: Array<{ first: string; last: string; role: string }>,
+    ) => {
+      const household = await householdModel.create({ ...base(), name });
+      const contacts: Types.ObjectId[] = [];
+      for (const member of members) {
+        const contact = await contactModel.create({
+          ...base(),
+          firstName: member.first,
+          lastName: member.last,
+        });
+        await memberModel.create({
+          ...base(),
+          householdId: household._id,
+          contactId: contact._id,
+          role: member.role,
+          addedAt: new Date(),
+          source: 'manual',
+        });
+        contacts.push(contact._id);
+      }
+      if (contacts.length) {
+        await householdModel.updateOne(
+          { _id: household._id },
+          { $set: { primaryContactId: contacts[0] } },
+        );
+      }
+      return { householdId: household._id.toString(), contacts };
+    };
+
+    const setPrimary = (
+      householdId: string,
+      body: Record<string, unknown>,
+      token = ownerToken,
+    ) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/households/${householdId}/primary-contact`)
+        .set(authHeader(token))
+        .send(body);
+
+    const view = async (householdId: string) => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/households/${householdId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      return res.body as {
+        dataQuality: string | null;
+        primaryContactDeceasedAt: string | null;
+        contacts: Array<{
+          id: string;
+          isPrimary: boolean;
+          deceasedAt: string | null;
+        }>;
+      };
+    };
+
+    beforeAll(() => {
+      householdModel = app.get<Model<Household>>(getModelToken(Household.name));
+      contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      memberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
+      activityModel = app.get<Model<Activity>>(getModelToken(Activity.name));
+    });
+
+    it('promotes a current member and records the change on the household', async () => {
+      const { householdId, contacts } = await makeHousehold('Promote HH', [
+        { first: 'Pia', last: 'Primary', role: 'Named Insured' },
+        { first: 'Sasha', last: 'Successor', role: 'Spouse' },
+      ]);
+
+      await setPrimary(householdId, {
+        contactId: contacts[1].toString(),
+      }).expect(201);
+
+      const after = await view(householdId);
+      const primary = after.contacts.filter((c) => c.isPrimary);
+      // Exactly one, and it is the person named — primacy is one field, so a
+      // reassignment that left two would be the bug the index exists to stop.
+      expect(primary).toHaveLength(1);
+      expect(primary[0].id).toBe(contacts[1].toString());
+
+      const logged = await activityModel.findOne({
+        householdId: new Types.ObjectId(householdId),
+        type: 'primary_contact_changed',
+      });
+      expect(logged).not.toBeNull();
+      // The names live in `changes`, not in `summary` — the only provenance a
+      // single-field reassignment leaves.
+      expect(logged!.changes?.[0]).toMatchObject({
+        field: 'primaryContactId',
+        from: 'Pia Primary',
+        to: 'Sasha Successor',
+      });
+    });
+
+    it('refuses somebody who is not a member of the household (409)', async () => {
+      const { householdId } = await makeHousehold('Stranger HH', [
+        { first: 'Nadia', last: 'Named', role: 'Named Insured' },
+      ]);
+      const stranger = await contactModel.create({
+        ...base(),
+        firstName: 'Stan',
+        lastName: 'Stranger',
+      });
+
+      const res = await setPrimary(householdId, {
+        contactId: stranger._id.toString(),
+      }).expect(409);
+      expect((res.body as { code: string }).code).toBe('contact_not_a_member');
+    });
+
+    /*
+     * The exclusivity rule, in application code.
+     *
+     * The partial unique index on `{agencyId, primaryContactId}` is the
+     * backstop, and on a database where Phase 3's index migration has not yet
+     * run (one still holding pre-existing double primaries) it is the *only*
+     * enforcement — so this asserts the pre-check, not the index.
+     */
+    it('refuses a contact who is already the primary of another household (409)', async () => {
+      const first = await makeHousehold('Exclusive A', [
+        { first: 'Elin', last: 'Exclusive', role: 'Named Insured' },
+      ]);
+      const second = await makeHousehold('Exclusive B', [
+        { first: 'Bram', last: 'Bystander', role: 'Named Insured' },
+      ]);
+      // Elin belongs to both, but leads only the first.
+      await memberModel.create({
+        ...base(),
+        householdId: new Types.ObjectId(second.householdId),
+        contactId: first.contacts[0],
+        role: 'Driver',
+        addedAt: new Date(),
+        source: 'manual',
+      });
+
+      const res = await setPrimary(second.householdId, {
+        contactId: first.contacts[0].toString(),
+      }).expect(409);
+      expect((res.body as { code: string }).code).toBe(
+        'primary_of_another_household',
+      );
+      // And the household it already leads is named, so the message can be
+      // specific rather than "somewhere else".
+      expect(
+        (res.body as { household: { id: string } | null }).household?.id,
+      ).toBe(first.householdId);
+    });
+
+    it('refuses a deceased contact as primary (409)', async () => {
+      const { householdId, contacts } = await makeHousehold('Deceased HH', [
+        { first: 'Lena', last: 'Living', role: 'Named Insured' },
+        { first: 'Dara', last: 'Departed', role: 'Spouse' },
+      ]);
+      await contactModel.updateOne(
+        { _id: contacts[1] },
+        { $set: { deceasedAt: new Date('2026-01-05T00:00:00.000Z') } },
+      );
+
+      const res = await setPrimary(householdId, {
+        contactId: contacts[1].toString(),
+      }).expect(409);
+      expect((res.body as { code: string }).code).toBe('contact_deceased');
+    });
+
+    it('clearing the primary has to be explicit, and flags the household', async () => {
+      const { householdId, contacts } = await makeHousehold('Cleared HH', [
+        { first: 'Cleo', last: 'Cleared', role: 'Named Insured' },
+      ]);
+
+      // A bare null is refused: a body that cleared the ref by accident is the
+      // one mistake a household record cannot survive quietly.
+      await setPrimary(householdId, { contactId: null }).expect(400);
+
+      await setPrimary(householdId, {
+        contactId: null,
+        allowNoPrimary: true,
+      }).expect(201);
+
+      const cleared = await view(householdId);
+      expect(cleared.contacts.some((c) => c.isPrimary)).toBe(false);
+      expect(cleared.dataQuality).toBe('no_primary');
+
+      /*
+       * Clearing an already-cleared household writes nothing.
+       *
+       * Caught by the local rehearsal: without the guard, replaying the same
+       * request left the data identical and appended another
+       * `primary_contact_changed` row reading `null → null`, which is the shape
+       * of history that makes an audit trail useless.
+       */
+      const rows = () =>
+        activityModel.countDocuments({
+          householdId: new Types.ObjectId(householdId),
+          type: 'primary_contact_changed',
+        });
+      const before = await rows();
+      await setPrimary(householdId, {
+        contactId: null,
+        allowNoPrimary: true,
+      }).expect(201);
+      expect(await rows()).toBe(before);
+
+      // Naming one again answers the question the flag was raised about.
+      await setPrimary(householdId, {
+        contactId: contacts[0].toString(),
+      }).expect(201);
+      expect((await view(householdId)).dataQuality).toBeNull();
+    });
+
+    it('needs clients:write — a CSR with only crm_service:read is 403', async () => {
+      const { householdId, contacts } = await makeHousehold('CSR HH', [
+        { first: 'Cass', last: 'Csr', role: 'Named Insured' },
+      ]);
+      await setPrimary(
+        householdId,
+        { contactId: contacts[0].toString() },
+        csrToken,
+      ).expect(403);
+    });
+
+    /*
+     * The deceased-primary path on `PATCH /contacts/:id`.
+     *
+     * The owner's rule is (a) name the successor in the same operation, falling
+     * back to (c) a deliberate flagged gap. Neither is assumed: without one of
+     * them the request is refused, carrying the members eligible to take over.
+     */
+    describe('marking the primary contact deceased', () => {
+      const markDeceased = (contactId: string, extra = {}) =>
+        request(app.getHttpServer())
+          .patch(`/api/v1/contacts/${contactId}`)
+          .set(authHeader(ownerToken))
+          .send({ deceasedAt: '2026-02-14', ...extra });
+
+      it('refuses without a successor, and offers the eligible members', async () => {
+        const { householdId, contacts } = await makeHousehold('Succession HH', [
+          { first: 'Mira', last: 'Mortal', role: 'Named Insured' },
+          { first: 'Ines', last: 'Inheritor', role: 'Spouse' },
+        ]);
+
+        const res = await markDeceased(contacts[0].toString()).expect(409);
+        const body = res.body as {
+          code: string;
+          householdId: string;
+          candidates: Array<{ id: string; role: string | null }>;
+        };
+        expect(body.code).toBe('primary_contact_succession_required');
+        expect(body.householdId).toBe(householdId);
+        // The other member, with the role from the *membership*.
+        expect(body.candidates).toEqual([
+          {
+            id: contacts[1].toString(),
+            name: 'Ines Inheritor',
+            role: 'Spouse',
+          },
+        ]);
+
+        // Nothing was written: the succession is settled before the save, so a
+        // refusal leaves the contact alive rather than half-applied.
+        expect(
+          (await contactModel.findById(contacts[0]))!.deceasedAt,
+        ).toBeUndefined();
+      });
+
+      it('promotes the named successor and records the death in one request', async () => {
+        const { householdId, contacts } = await makeHousehold('Handover HH', [
+          { first: 'Hal', last: 'Handover', role: 'Named Insured' },
+          { first: 'Nell', last: 'Next', role: 'Spouse' },
+        ]);
+
+        const res = await markDeceased(contacts[0].toString(), {
+          successorContactId: contacts[1].toString(),
+        }).expect(200);
+        expect((res.body as ContactDetail).deceasedAt).toBe('2026-02-14');
+
+        const after = await view(householdId);
+        expect(after.contacts.find((c) => c.isPrimary)?.id).toBe(
+          contacts[1].toString(),
+        );
+        // The deceased member stays on the roster — they are on this
+        // household's policies and its history.
+        expect(
+          after.contacts.find((c) => c.id === contacts[0].toString())
+            ?.deceasedAt,
+        ).toBe('2026-02-14');
+      });
+
+      it('allowNoPrimary leaves the household flagged when nobody can take over', async () => {
+        const { householdId, contacts } = await makeHousehold('Alone HH', [
+          { first: 'Solo', last: 'Sole', role: 'Named Insured' },
+        ]);
+
+        // The only member is the person who died, so the 409 offers nothing.
+        const refused = await markDeceased(contacts[0].toString()).expect(409);
+        expect(
+          (refused.body as { candidates: unknown[] }).candidates,
+        ).toHaveLength(0);
+
+        await markDeceased(contacts[0].toString(), {
+          allowNoPrimary: true,
+        }).expect(200);
+
+        const after = await view(householdId);
+        expect(after.contacts.some((c) => c.isPrimary)).toBe(false);
+        expect(after.dataQuality).toBe('no_primary');
+        // The household summary carries the death so a list row can stop
+        // offering the phone number beside the name.
+        expect(after.primaryContactDeceasedAt).toBeNull();
+      });
+
+      it('a contact who leads no household needs no successor', async () => {
+        const contact = await contactModel.create({
+          ...base(),
+          firstName: 'Lone',
+          lastName: 'Leaderless',
+        });
+        const res = await request(app.getHttpServer())
+          .patch(`/api/v1/contacts/${contact._id.toString()}`)
+          .set(authHeader(ownerToken))
+          .send({ deceasedAt: '2026-03-01' })
+          .expect(200);
+        expect((res.body as ContactDetail).deceasedAt).toBe('2026-03-01');
+      });
+
+      it('rejects a future date, and succession answers without a death (400)', async () => {
+        const contact = await contactModel.create({
+          ...base(),
+          firstName: 'Val',
+          lastName: 'Validation',
+        });
+        const id = contact._id.toString();
+        const patch = (body: Record<string, unknown>) =>
+          request(app.getHttpServer())
+            .patch(`/api/v1/contacts/${id}`)
+            .set(authHeader(ownerToken))
+            .send(body);
+
+        await patch({ deceasedAt: '2099-01-01' }).expect(400);
+        // Meaningless on their own — they resolve the household a death leaves
+        // leaderless, so without one they would silently do nothing.
+        await patch({ allowNoPrimary: true }).expect(400);
+      });
+    });
+
+    /*
+     * Intake stops matching a deceased contact.
+     *
+     * Two halves, both required by §7: the fuzzy scorer never sees them, and a
+     * *definite* identity hit refuses the submission rather than filing a lead
+     * against a dead person or creating a duplicate the unique index would then
+     * reject as a bare E11000.
+     */
+    it('lead intake refuses a submission that names a deceased contact (409)', async () => {
+      const person = {
+        firstName: 'Dorian',
+        lastName: 'Gone',
+        dateOfBirth: '1970-08-08',
+        email: 'dorian.gone@example.com',
+        phone: '5557770001',
+      };
+      await contactModel.create({
+        ...base(),
+        firstName: person.firstName,
+        lastName: person.lastName,
+        dateOfBirth: new Date('1970-08-08T00:00:00.000Z'),
+        email: person.email,
+        phone: person.phone,
+        deceasedAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/leads')
+        .set(authHeader(producerToken))
+        .send({
+          primaryContact: person,
+          address: {
+            street: '9 Wake Street',
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74101',
+          },
+          members: [],
+          leadSourceCode: 'WCO7l',
+        })
+        .expect(409);
+      expect((res.body as { code: string }).code).toBe('contact_deceased');
+    });
+  });
+
   describe('Clients list (PAC-89)', () => {
     /*
      * `GET /households` — the Clients list and its cross-record search.
@@ -2122,6 +2679,401 @@ describe('SFA API (e2e)', () => {
 
       it('returns an empty page past the end, not an error', async () => {
         const body = await listBody(ownerToken, '?page=9999');
+        expect(body.items).toEqual([]);
+      });
+    });
+  });
+
+  /*
+   * `GET /clients/unlinked` — the Unlinked records work list (PAC-91 §10).
+   *
+   * David's answer to "what about the records the link backfill cannot repair"
+   * was to leave them unlinked and give the team a list. These cases pin the
+   * three predicates and the one exclusion that makes the list trustworthy:
+   * a Sample/Test row must never appear as work.
+   *
+   * The fixtures are built and torn down inside this block rather than added to
+   * `seedTestData`, because "how many households have no primary contact" is a
+   * number several other suites' assertions would start disagreeing with.
+   */
+  describe('Unlinked records (PAC-91 §10)', () => {
+    let householdModel: Model<Household>;
+    let contactModel: Model<Contact>;
+    let policyModel: Model<Policy>;
+    let memberModel: Model<HouseholdMember>;
+
+    /** Undo thunks for everything this block creates, run in reverse. */
+    const cleanup: Array<() => Promise<unknown>> = [];
+
+    let unlinkedPolicyId: string;
+    let testPolicyId: string;
+    let unlinkedContactId: string;
+    let departedContactId: string;
+    let testContactId: string;
+    let flaggedHouseholdId: string;
+    let testHouseholdId: string;
+    let countedHouseholdId: string;
+    let primaryContactId: string;
+
+    const unlinked = (token: string, query: string) =>
+      request(app.getHttpServer())
+        .get(`/api/v1/clients/unlinked${query}`)
+        .set(authHeader(token));
+
+    const page = async (
+      kind: 'policies' | 'contacts' | 'households',
+      extra = '',
+    ): Promise<UnlinkedRecordsResponse> => {
+      const res = await unlinked(ownerToken, `?kind=${kind}${extra}`).expect(
+        200,
+      );
+      return res.body as UnlinkedRecordsResponse;
+    };
+
+    /*
+     * `items` is a union of three row arrays, so `.map` over it degrades to
+     * `any`. Every row shape carries `id: string`, which is the only field this
+     * needs — narrow to that rather than switching on `kind` in a helper whose
+     * whole job is one field.
+     */
+    const idsIn = (body: UnlinkedRecordsResponse): string[] =>
+      (body.items as ReadonlyArray<{ id: string }>).map((item) => item.id);
+
+    const counts = async (token = ownerToken): Promise<UnlinkedCounts> => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/clients/unlinked/counts')
+        .set(authHeader(token))
+        .expect(200);
+      return res.body as UnlinkedCounts;
+    };
+
+    beforeAll(async () => {
+      householdModel = app.get<Model<Household>>(getModelToken(Household.name));
+      contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      memberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
+
+      const tenant = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      // The seeded household's primary contact — a current member, so the
+      // contacts list must never show them.
+      const seeded = await householdModel.findById(seed.householdId).lean();
+      primaryContactId = String(seeded!.primaryContactId);
+
+      // A policy nobody can attribute — 136 of these in production.
+      const orphanPolicy = await policyModel.create({
+        ...tenant,
+        policyNumber: 'UNLINKED-1',
+        policyType: 'Auto',
+        carrier: 'Test Carrier',
+        active: true,
+        policyStatus: 'Active',
+        premium: 500,
+        items: 1,
+      });
+      unlinkedPolicyId = orphanPolicy._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: orphanPolicy._id }));
+
+      // The same gap on a declared test row: work the team must never be shown.
+      const junkPolicy = await policyModel.create({
+        ...tenant,
+        policyNumber: 'UNLINKED-TEST-1',
+        policyType: 'Auto',
+        premium: 0,
+        items: 0,
+        isTestRecord: true,
+      });
+      testPolicyId = junkPolicy._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: junkPolicy._id }));
+
+      const orphanContact = await contactModel.create({
+        ...tenant,
+        firstName: 'Unlinked',
+        lastName: 'Person',
+      });
+      unlinkedContactId = orphanContact._id.toString();
+      cleanup.push(() => contactModel.deleteOne({ _id: orphanContact._id }));
+
+      const junkContact = await contactModel.create({
+        ...tenant,
+        firstName: 'Sample',
+        lastName: 'Unlinked',
+        isTestRecord: true,
+      });
+      testContactId = junkContact._id.toString();
+      cleanup.push(() => contactModel.deleteOne({ _id: junkContact._id }));
+
+      /*
+       * Somebody whose only membership has ENDED. "Unlinked" is the absence of
+       * a current row, not of every row — the book no longer connects them to
+       * anything, which is the whole question this list answers.
+       */
+      const departed = await contactModel.create({
+        ...tenant,
+        firstName: 'Departed',
+        lastName: 'Member',
+      });
+      departedContactId = departed._id.toString();
+      cleanup.push(() => contactModel.deleteOne({ _id: departed._id }));
+      const endedMembership = await memberModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        contactId: departed._id,
+        addedAt: new Date('2026-01-01T00:00:00.000Z'),
+        endedAt: new Date('2026-06-01T00:00:00.000Z'),
+        source: 'manual',
+      });
+      cleanup.push(() => memberModel.deleteOne({ _id: endedMembership._id }));
+
+      // A household somebody DELIBERATELY left without a primary (PAC-91 §7) —
+      // the only reader `Household.dataQuality` has ever had.
+      const flagged = await householdModel.create({
+        ...tenant,
+        name: 'Flagged No Primary Household',
+        status: 'Active',
+        dataQuality: 'no_primary',
+      });
+      flaggedHouseholdId = flagged._id.toString();
+      cleanup.push(() => householdModel.deleteOne({ _id: flagged._id }));
+
+      const junkHousehold = await householdModel.create({
+        ...tenant,
+        name: 'Sample Household',
+        status: 'Active',
+        isTestRecord: true,
+      });
+      testHouseholdId = junkHousehold._id.toString();
+      cleanup.push(() => householdModel.deleteOne({ _id: junkHousehold._id }));
+
+      /*
+       * A household with a roster of a known size — two current members and one
+       * who has left. `memberCount` is what tells the reader whether a primary
+       * can be named at all, so it has to count the two and not the three.
+       *
+       * Built here rather than asserted against a seeded household because
+       * earlier blocks add members to those, and a count that drifts with the
+       * suite order proves nothing.
+       */
+      const counted = await householdModel.create({
+        ...tenant,
+        name: 'Counted Roster Household',
+        status: 'Active',
+      });
+      countedHouseholdId = counted._id.toString();
+      cleanup.push(() => householdModel.deleteOne({ _id: counted._id }));
+
+      for (const firstName of ['Roster', 'Rota']) {
+        const member = await contactModel.create({
+          ...tenant,
+          firstName,
+          lastName: 'Member',
+        });
+        cleanup.push(() => contactModel.deleteOne({ _id: member._id }));
+        const membership = await memberModel.create({
+          ...tenant,
+          householdId: counted._id,
+          contactId: member._id,
+          addedAt: new Date('2026-01-01T00:00:00.000Z'),
+          source: 'manual',
+        });
+        cleanup.push(() => memberModel.deleteOne({ _id: membership._id }));
+      }
+
+      const leftCounted = await memberModel.create({
+        ...tenant,
+        householdId: counted._id,
+        contactId: departed._id,
+        addedAt: new Date('2026-01-01T00:00:00.000Z'),
+        endedAt: new Date('2026-06-01T00:00:00.000Z'),
+        source: 'manual',
+      });
+      cleanup.push(() => memberModel.deleteOne({ _id: leftCounted._id }));
+    });
+
+    afterAll(async () => {
+      for (const undo of cleanup.reverse()) await undo();
+    });
+
+    describe('permissions', () => {
+      it('403s for a CSR — this is the Clients page backlog, not a record', async () => {
+        await unlinked(csrToken, '?kind=policies').expect(403);
+      });
+
+      it('401s unauthenticated', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/clients/unlinked?kind=policies')
+          .expect(401);
+      });
+    });
+
+    describe('validation', () => {
+      it('400s without a kind — three row shapes, no default', async () => {
+        await unlinked(ownerToken, '').expect(400);
+      });
+
+      it('400s on an unknown kind', async () => {
+        await unlinked(ownerToken, '?kind=leads').expect(400);
+      });
+
+      it('400s on a pageSize past the cap', async () => {
+        await unlinked(ownerToken, '?kind=contacts&pageSize=500').expect(400);
+      });
+    });
+
+    describe('kind=policies', () => {
+      it('lists a policy with no household', async () => {
+        const body = await page('policies', '&pageSize=100');
+        expect(body.kind).toBe('policies');
+        expect(idsIn(body)).toContain(unlinkedPolicyId);
+      });
+
+      it('never lists a policy that has one', async () => {
+        const body = await page('policies', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(seed.policyId);
+      });
+
+      it('serializes the row without leaking internals', async () => {
+        const body = await page('policies', '&pageSize=100');
+        const row = body.items.find((item) => item.id === unlinkedPolicyId);
+        expect(row).toMatchObject({
+          policyNumber: 'UNLINKED-1',
+          policyType: 'Auto',
+          premium: 500,
+          active: true,
+        });
+        const raw = row as unknown as Record<string, unknown>;
+        for (const key of ['agencyId', 'branchId', 'isTestRecord']) {
+          expect(raw[key]).toBeUndefined();
+        }
+      });
+    });
+
+    describe('kind=contacts', () => {
+      it('lists a contact with no membership', async () => {
+        const body = await page('contacts', '&pageSize=100');
+        expect(body.kind).toBe('contacts');
+        expect(idsIn(body)).toContain(unlinkedContactId);
+      });
+
+      it('never lists a current member', async () => {
+        const body = await page('contacts', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(primaryContactId);
+      });
+
+      it('lists somebody whose only membership has ended', async () => {
+        const body = await page('contacts', '&pageSize=100');
+        expect(idsIn(body)).toContain(departedContactId);
+      });
+    });
+
+    describe('kind=households', () => {
+      it('lists a household with no primary contact', async () => {
+        const body = await page('households', '&pageSize=100');
+        expect(body.kind).toBe('households');
+        expect(idsIn(body)).toContain(seed.secondHouseholdId);
+      });
+
+      it('never lists one that has a primary', async () => {
+        const body = await page('households', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(seed.householdId);
+      });
+
+      /*
+       * One list, not two. A deliberate `no_primary` and a household nobody
+       * ever looked at both satisfy "has no primary contact", and both still
+       * need one named — the flag rides on the row so the UI can say which is
+       * which without the count disagreeing with the database.
+       */
+      it('includes a deliberately flagged household, carrying the reason', async () => {
+        const body = await page('households', '&pageSize=100');
+        const row = body.items.find((item) => item.id === flaggedHouseholdId);
+        expect(row).toBeDefined();
+        expect(row).toMatchObject({ dataQuality: 'no_primary' });
+      });
+
+      it('counts current members only, so a row says whether one can be named', async () => {
+        const body = await page('households', '&pageSize=100');
+        // Two current members and one who left — the count is the two.
+        expect(
+          body.items.find((item) => item.id === countedHouseholdId),
+        ).toMatchObject({ memberCount: 2 });
+        expect(
+          body.items.find((item) => item.id === flaggedHouseholdId),
+        ).toMatchObject({ memberCount: 0 });
+      });
+    });
+
+    describe('test records are never work', () => {
+      it('excludes a declared test policy, contact and household', async () => {
+        const [policies, contacts, households] = await Promise.all([
+          page('policies', '&pageSize=100'),
+          page('contacts', '&pageSize=100'),
+          page('households', '&pageSize=100'),
+        ]);
+        expect(idsIn(policies)).not.toContain(testPolicyId);
+        expect(idsIn(contacts)).not.toContain(testContactId);
+        expect(idsIn(households)).not.toContain(testHouseholdId);
+      });
+    });
+
+    describe('counts', () => {
+      it('returns the three numbers the chips show', async () => {
+        const body = await counts();
+        expect(Object.keys(body).sort()).toEqual([
+          'contacts',
+          'households',
+          'policies',
+        ]);
+        expect(typeof body.policies).toBe('number');
+        expect(typeof body.contacts).toBe('number');
+        expect(typeof body.households).toBe('number');
+      });
+
+      it('agrees with the list it summarises', async () => {
+        const summary = await counts();
+        const [policies, contacts, households] = await Promise.all([
+          page('policies', '&pageSize=100'),
+          page('contacts', '&pageSize=100'),
+          page('households', '&pageSize=100'),
+        ]);
+        expect(summary.policies).toBe(policies.total);
+        expect(summary.contacts).toBe(contacts.total);
+        expect(summary.households).toBe(households.total);
+      });
+
+      it('403s for a CSR', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/clients/unlinked/counts')
+          .set(authHeader(csrToken))
+          .expect(403);
+      });
+    });
+
+    describe('tenancy', () => {
+      it("never lists another agency's household", async () => {
+        const body = await page('households', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(seed.otherAgencyHouseholdId);
+      });
+    });
+
+    describe('pagination', () => {
+      it('bounds the page and reports the total honestly', async () => {
+        const body = await page('households', '&pageSize=1');
+        expect(body.items).toHaveLength(1);
+        expect(body.pageSize).toBe(1);
+        expect(body.totalPages).toBe(body.total);
+      });
+
+      it('does not repeat a row across pages', async () => {
+        const first = await page('households', '&pageSize=1&page=1');
+        const second = await page('households', '&pageSize=1&page=2');
+        expect(idsIn(first)[0]).not.toBe(idsIn(second)[0]);
+      });
+
+      it('returns an empty page past the end, not an error', async () => {
+        const body = await page('contacts', '&page=9999');
         expect(body.items).toEqual([]);
       });
     });
@@ -3010,10 +3962,21 @@ describe('SFA API (e2e)', () => {
       const activityModel = app.get<Model<Activity>>(
         getModelToken(Activity.name),
       );
+      const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
 
       const producer = await userModel.findOne({ email: seed.producerEmail });
       const base = { agencyId: seed.agencyId, branchId: seed.branchId };
       const own = { ...base, producerId: producer!._id };
+
+      // The panel's phone and email come from the lead's primary contact since
+      // PAC-91 §2 — the lead carries no copy — so this fixture links one.
+      const staleContact = await contactModel.create({
+        ...base,
+        firstName: 'Stale',
+        lastName: 'Hotlead',
+        phone: '5550001111',
+        email: 'stale@example.test',
+      });
 
       const [stale, recent, warm, lost, foreign] = await leadModel.create([
         {
@@ -3023,8 +3986,7 @@ describe('SFA API (e2e)', () => {
           status: 'Contacted',
           temperature: 'Hot',
           lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
-          phones: ['5550001111'],
-          emails: ['stale@example.test'],
+          primaryContactId: staleContact._id,
         },
         {
           ...own,
@@ -3106,6 +4068,30 @@ describe('SFA API (e2e)', () => {
       expect(Array.isArray(body.items)).toBe(true);
       // A detail response would have `id`/`contact` at the top level instead.
       expect(body).not.toHaveProperty('id');
+    });
+
+    /*
+     * The bug PAC-91 §2 fixes, as a regression guard: the panel tells the
+     * producer who to call, and it rendered no phone number for most migrated
+     * leads because it read the lead's own copy — which the importer filled
+     * from the SmartSuite *Leads* table, empty on rows whose details live on
+     * the linked contact.
+     */
+    it('reads phone and email from the primary contact, not the lead', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/leads/hot')
+        .set(authHeader(producerToken))
+        .expect(200);
+
+      const items = (res.body as HotLeadListResponse).items;
+      const row = items.find((i) => i.name === 'Stale Hotlead');
+      expect(row?.phone).toBe('5550001111');
+      expect(row?.email).toBe('stale@example.test');
+
+      // A lead with no primary contact shows blanks rather than inventing them.
+      const unlinked = items.find((i) => i.name === 'Recent Hotlead');
+      expect(unlinked?.phone).toBeNull();
+      expect(unlinked?.email).toBeNull();
     });
 
     it('orders stalest first — the inverse of the Leads list', async () => {
@@ -4325,11 +5311,35 @@ describe('SFA API (e2e)', () => {
     beforeAll(async () => {
       const userModel = app.get<Model<User>>(getModelToken(User.name));
       const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
 
       const producer = await userModel.findOne({ email: seed.producerEmail });
       const owner = await userModel.findOne({ email: seed.ownerEmail });
 
       const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+
+      /*
+       * The list's phone and email come from the lead's **primary contact**
+       * since PAC-91 §2 — the lead carries no copy — so the fixture has to
+       * create the contact and link it. Stored in the raw formats a migrated
+       * row holds, which is what the digit-tolerant search must still match.
+       */
+      const [maria, john] = await contactModel.create([
+        {
+          ...base,
+          firstName: 'Maria',
+          lastName: 'Rodriguez',
+          phone: '(555) 123-4567',
+          email: 'maria.rodriguez@example.com',
+        },
+        {
+          ...base,
+          firstName: 'John',
+          lastName: 'Smith',
+          phone: '555-987-6543',
+          email: 'john.smith@example.com',
+        },
+      ]);
 
       await leadModel.create([
         {
@@ -4341,8 +5351,7 @@ describe('SFA API (e2e)', () => {
           status: 'arW7O',
           temperature: 'Hot',
           leadSource: { code: 'WCO7l', label: 'Mailer' },
-          phones: ['(555) 123-4567'],
-          emails: ['maria.rodriguez@example.com'],
+          primaryContactId: maria._id,
           quoteControlNumber: 'QCN-100001',
           producerId: producer!._id,
           lastActivityAt: new Date(),
@@ -4355,8 +5364,7 @@ describe('SFA API (e2e)', () => {
           status: 'New',
           temperature: 'Cold',
           leadSource: { code: 'X2Wrh', label: 'Facebook' },
-          phones: ['555-987-6543'],
-          emails: ['john.smith@example.com'],
+          primaryContactId: john._id,
           producerId: producer!._id,
           lastActivityAt: new Date(Date.now() - 86_400_000),
           isTestRecord: false,
@@ -4528,6 +5536,7 @@ describe('SFA API (e2e)', () => {
 
     let contactModel: Model<Contact>;
     let householdModel: Model<Household>;
+    let householdMemberModel: Model<HouseholdMember>;
     let leadModel: Model<Lead>;
     let userModel: Model<User>;
 
@@ -4574,6 +5583,9 @@ describe('SFA API (e2e)', () => {
     beforeAll(() => {
       contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
       householdModel = app.get<Model<Household>>(getModelToken(Household.name));
+      householdMemberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
       leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
       userModel = app.get<Model<User>>(getModelToken(User.name));
     });
@@ -4591,9 +5603,14 @@ describe('SFA API (e2e)', () => {
       expect(lead!.primaryContactId).toBeTruthy();
       expect(lead!.intakeSource?.channel).toBe('internal');
       expect(lead!.addressKey).toBe('77 alderton lane|74101');
-      // Normalised on the way in.
-      expect(lead!.emails).toEqual(['dana.alderton@example.com']);
-      expect(lead!.phones).toEqual(['5552223333']);
+      /*
+       * The lead carries no email or phone of its own (PAC-91 §2) — they are
+       * read through `primaryContactId`, which is asserted above. Normalised on
+       * the way in, on the contact.
+       */
+      const primary = await contactModel.findById(lead!.primaryContactId);
+      expect(primary!.email).toBe('dana.alderton@example.com');
+      expect(primary!.phone).toBe('5552223333');
     });
 
     /**
@@ -4816,7 +5833,151 @@ describe('SFA API (e2e)', () => {
       );
     });
 
-    it('creates member contacts with the right role and isPrimary=false', async () => {
+    /*
+     * PAC-91 §9 — the owner's identity rule, which runs *ahead* of the fuzzy
+     * scorer. It is deliberately agency-wide: the pinned-household filter the
+     * scorer uses is precisely what created a second copy of a member who
+     * already existed under another household.
+     */
+    it('reuses the existing person when name + DOB + email match, even pinned elsewhere', async () => {
+      const other = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Somewhere Else Household',
+      });
+
+      await createAs(producerToken, payload('Ikeda'));
+      const before = await contactModel.findOne({ lastName: 'Ikeda' });
+      expect(before).not.toBeNull();
+
+      await createAs(
+        producerToken,
+        payload(
+          'Ikeda',
+          { householdId: other._id.toString() },
+          // Same person by the rule: same full name, same DOB, same email.
+          // Only the phone differs, which is not enough to make them someone
+          // else — and is reported rather than stored (below).
+          { phone: '(555) 000-1212' },
+        ),
+      );
+
+      expect(await contactModel.countDocuments({ lastName: 'Ikeda' })).toBe(1);
+    });
+
+    /*
+     * PAC-91 §5 — membership is many-to-many, so "the contact's household" is
+     * no longer a lookup. The single `Contact.householdId` this replaces
+     * answered it with whichever household was linked *last*: an arbitrary
+     * choice, made silently, on the record that decides which policies and
+     * which producer a new inquiry lands against.
+     */
+    it('refuses to guess when the submitter belongs to two households (409)', async () => {
+      const second = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: 'Second Ambrose Household',
+      });
+
+      // First submission: no membership yet, so a household is created.
+      await createAs(producerToken, payload('Ambrose'));
+      const contact = await contactModel.findOne({ lastName: 'Ambrose' });
+
+      // A second membership, as a merge or an "add existing contact" flow
+      // would produce.
+      await householdMemberModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: second._id,
+        contactId: contact!._id,
+        role: 'Driver',
+        addedAt: new Date(),
+        source: 'manual',
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/leads')
+        .set(authHeader(producerToken))
+        .send(payload('Ambrose', { submissionToken: 'ambrose-ambiguous' }))
+        .expect(409);
+
+      const body = res.body as {
+        code: string;
+        contactId: string;
+        households: Array<{ id: string; name: string | null }>;
+      };
+      expect(body.code).toBe(AMBIGUOUS_HOUSEHOLD_CODE);
+      expect(body.contactId).toBe(contact!._id.toString());
+      // Both candidates, so the form can offer a chooser rather than a dead end.
+      expect(body.households).toHaveLength(2);
+      expect(body.households.map((h) => h.id)).toContain(second._id.toString());
+
+      // Pinning one of them resolves it — choosing explicitly is the whole
+      // point, and it must not create a third household.
+      const before = await householdModel.countDocuments({
+        agencyId: seed.agencyId,
+      });
+      await createAs(
+        producerToken,
+        payload('Ambrose', { householdId: second._id.toString() }),
+      );
+      expect(
+        await householdModel.countDocuments({ agencyId: seed.agencyId }),
+      ).toBe(before);
+    });
+
+    /*
+     * PAC-91 §1 — a contact holds ONE phone. Intake used to `$addToSet` the
+     * submitted value as a second array element, which is how those arrays grew
+     * in the first place; the stored value now wins and the disagreement is
+     * recorded for a human instead.
+     */
+    it('records a conflicting submitted phone instead of storing a second one', async () => {
+      await createAs(producerToken, payload('Jorgensen'));
+      const stored = await contactModel.findOne({ lastName: 'Jorgensen' });
+      expect(stored!.phone).toBe('5552223333');
+
+      const second = await createAs(
+        producerToken,
+        payload(
+          'Jorgensen',
+          {
+            address: {
+              street: '12 Conflict Row',
+              city: 'Tulsa',
+              state: 'OK',
+              zip: '74107',
+            },
+          },
+          { phone: '(555) 777-8888' },
+        ),
+      );
+
+      // Not overwritten, and not joined by a second value.
+      const after = await contactModel.findById(stored!._id);
+      expect(after!.phone).toBe('5552223333');
+
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      const conflict = await activityModel.findOne({
+        leadId: new Types.ObjectId(second.id),
+        type: 'contact_conflict',
+      });
+      expect(conflict).not.toBeNull();
+      expect(conflict!.changes?.[0]).toMatchObject({
+        field: 'phone',
+        from: '5552223333',
+        to: '5557778888',
+      });
+    });
+
+    /*
+     * PAC-91 §5 — role and primacy are properties of the *membership*, not of
+     * the person. The contact carries neither any more; a `householdMembers`
+     * row carries the role, and `Household.primaryContactId` names the primary.
+     */
+    it('writes a membership per contact, with the role, and names the primary', async () => {
       const created = await createAs(
         producerToken,
         payload('Harlow', {
@@ -4837,22 +5998,35 @@ describe('SFA API (e2e)', () => {
         .sort({ firstName: 1 });
       expect(contacts).toHaveLength(3);
 
-      const primary = contacts.find((c) => c.firstName === 'Dana');
-      expect(primary!.isPrimary).toBe(true);
-      expect(primary!.roleInHousehold).toBe('Named Insured');
-
-      const child = contacts.find((c) => c.firstName === 'Kit');
-      expect(child!.isPrimary).toBe(false);
-      expect(child!.roleInHousehold).toBe('Child');
-
       const lead = await leadModel.findById(created.id);
       expect(lead!.memberContactIds).toHaveLength(2);
 
       const household = await householdModel.findById(lead!.householdId);
-      expect(household!.memberContactIds).toHaveLength(2);
       expect(household!.leadIds.map((id) => id.toString())).toContain(
         created.id,
       );
+
+      const memberships = await householdMemberModel.find({
+        householdId: household!._id,
+      });
+      // The primary is a member too — they belong to the household they head.
+      expect(memberships).toHaveLength(3);
+      const roleOf = (firstName: string) => {
+        const contact = contacts.find((c) => c.firstName === firstName);
+        return memberships.find(
+          (m) => m.contactId.toString() === contact!._id.toString(),
+        )!.role;
+      };
+      expect(roleOf('Dana')).toBe('Named Insured');
+      expect(roleOf('Sam')).toBe('Spouse');
+      expect(roleOf('Kit')).toBe('Child');
+
+      const primary = contacts.find((c) => c.firstName === 'Dana');
+      expect(household!.primaryContactId!.toString()).toBe(
+        primary!._id.toString(),
+      );
+      // Every membership is current — nothing here ends one.
+      expect(memberships.every((m) => !m.endedAt)).toBe(true);
     });
     it('stores the policies of interest with their item counts (PAC-56 #2)', async () => {
       const created = await createAs(
@@ -5195,6 +6369,9 @@ describe('SFA API (e2e)', () => {
         getModelToken(Household.name),
       );
       const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+      const householdMemberModel = app.get<Model<HouseholdMember>>(
+        getModelToken(HouseholdMember.name),
+      );
       const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
       const recapModel = app.get<Model<QuoteRecap>>(
         getModelToken(QuoteRecap.name),
@@ -5233,32 +6410,44 @@ describe('SFA API (e2e)', () => {
           ...base,
           firstName: 'Dana',
           lastName: 'Detail',
-          roleInHousehold: 'Spouse',
-          householdId: household._id,
           dateOfBirth: new Date('1981-09-02T00:00:00.000Z'),
         },
         {
           ...base,
           firstName: 'Devon',
           lastName: 'Detail',
-          roleInHousehold: 'Primary',
-          isPrimary: true,
-          householdId: household._id,
-          emails: ['devon.detail@example.com'],
-          phones: ['5551110000'],
+          email: 'devon.detail@example.com',
+          phone: '5551110000',
           dateOfBirth: new Date('1978-04-12T00:00:00.000Z'),
         },
       ]);
       primaryContactId = primary._id.toString();
 
+      // Membership carries the role, `primaryContactId` names the primary
+      // (PAC-91 §5). Both are needed: the roster is read from the memberships,
+      // and "primary first" is resolved against the household's own ref.
+      await householdMemberModel.create([
+        {
+          ...base,
+          householdId: household._id,
+          contactId: spouse._id,
+          role: 'Spouse',
+          addedAt: new Date(),
+          source: 'seed',
+        },
+        {
+          ...base,
+          householdId: household._id,
+          contactId: primary._id,
+          role: 'Named Insured',
+          addedAt: new Date(),
+          source: 'seed',
+        },
+      ]);
+
       await householdModel.updateOne(
         { _id: household._id },
-        {
-          $set: {
-            primaryContactId: primary._id,
-            memberContactIds: [spouse._id],
-          },
-        },
+        { $set: { primaryContactId: primary._id } },
       );
 
       const lead = await leadModel.create({
@@ -5269,8 +6458,6 @@ describe('SFA API (e2e)', () => {
         status: 'arW7O',
         temperature: 'Hot',
         leadSource: { code: 'WCO7l', label: 'Mailer' },
-        emails: ['devon.detail@example.com'],
-        phones: ['5551110000'],
         quoteControlNumber: 'QCN-380001',
         // `PYgez` is stored as the raw Quote Recaps choice code, to prove the
         // read path normalizes this field like every other policy type here.
@@ -6250,8 +7437,8 @@ describe('SFA API (e2e)', () => {
         lastName: 'Contact',
         isPrimary: true,
         householdId: ownHousehold._id,
-        emails: ['corin.contact@example.com', 'corin.alt@example.com'],
-        phones: ['5554440000', '5554441111'],
+        email: 'corin.contact@example.com',
+        phone: '5554440000',
       });
       ownContactId = ownContact._id.toString();
 
@@ -6261,7 +7448,7 @@ describe('SFA API (e2e)', () => {
         lastName: 'Foreign',
         isPrimary: true,
         householdId: foreignHousehold._id,
-        emails: ['fenna.foreign@example.com'],
+        email: 'fenna.foreign@example.com',
       });
       foreignContactId = foreignContact._id.toString();
 
@@ -6281,8 +7468,6 @@ describe('SFA API (e2e)', () => {
         producerId: producer!._id,
         householdId: ownHousehold._id,
         primaryContactId: ownContact._id,
-        emails: ['corin.contact@example.com'],
-        phones: ['5554440000'],
         isTestRecord: false,
       });
       ownLeadId = ownLead._id.toString();
@@ -6315,13 +7500,48 @@ describe('SFA API (e2e)', () => {
       expect(body.phone).toBe('5559998888');
     });
 
-    it('preserves the additional emails and phones the form does not show', async () => {
+    /*
+     * PAC-91 §1 replaced the array with a scalar, so there is no longer a
+     * "second number the form does not show" to preserve — the edit simply
+     * replaces the one value. What has to hold instead is that the identity
+     * keys are re-stamped, or the corrected contact silently drops out of the
+     * §9 unique indexes.
+     */
+    it('re-stamps the identity keys when the name or DOB changes', async () => {
       const stored = await contactModel.findById(ownContactId);
-      // Only element 0 is replaced — a second number nobody asked to remove
-      // must not silently disappear.
-      expect(stored?.phones).toEqual(['5559998888', '5554441111']);
-      expect(stored?.emails).toHaveLength(2);
-      expect(stored?.emails[1]).toBe('corin.alt@example.com');
+      expect(stored?.phone).toBe('5559998888');
+      expect(stored?.email).toBe('corin.contact@example.com');
+      expect(stored?.nameKey).toBe('corin corrected');
+      expect(stored?.dobKey).toBe('1985-06-30');
+    });
+
+    it('refuses an edit that would duplicate another contact (PAC-91 §9)', async () => {
+      // Same name + DOB + email as the corrected contact above: the same
+      // person by the owner's rule, so the edit that would create the second
+      // copy is refused with the id of the first.
+      const twin = await contactModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        firstName: 'Corin',
+        lastName: 'Twin',
+        dateOfBirth: new Date('1985-06-30T00:00:00.000Z'),
+        email: 'corin.contact@example.com',
+      });
+
+      const res = await patchAs(producerToken, ownContactId, {
+        firstName: 'Corin',
+        lastName: 'Twin',
+      }).expect(409);
+
+      expect((res.body as { contactId: string }).contactId).toBe(
+        twin._id.toString(),
+      );
+
+      // Refused, not partially applied.
+      const stored = await contactModel.findById(ownContactId);
+      expect(stored?.lastName).toBe('Corrected');
+
+      await contactModel.deleteOne({ _id: twin._id });
     });
 
     it('mirrors the correction onto leads this contact is primary for', async () => {
@@ -6329,7 +7549,9 @@ describe('SFA API (e2e)', () => {
       // and the producer would conclude the edit failed.
       const lead = await leadModel.findById(ownLeadId);
       expect(lead?.lastName).toBe('Corrected');
-      expect(lead?.phones?.[0]).toBe('5559998888');
+      // Only the name is mirrored: the lead has no phone of its own to update
+      // any more, which is the point of dropping the copy (PAC-91 §2).
+      expect(lead).not.toHaveProperty('phones');
     });
 
     it("another producer's contact is a 404 AND is not modified", async () => {
@@ -8904,11 +10126,31 @@ describe('SFA API (e2e)', () => {
      */
     const seedLead = async () => {
       const who = `Handoff ${(genCounter += 1).toString().padStart(3, '0')}`;
+      /*
+       * The board's `client` column comes from `Deal.clientName`, which
+       * `SoldDealsService` resolves through the household's **primary contact**
+       * — the household stores no `primaryContactName` since PAC-91 §4. Without
+       * the contact the card would fall through to the household's own name and
+       * this block's "my row" filter would match nothing.
+       */
+      // Split so the contact's *display* name is exactly `who` — that string is
+      // what every assertion in this block filters the board by.
+      const [contactFirst, contactLast] = who.split(' ');
+      const primaryContact = await app
+        .get<Model<Contact>>(getModelToken(Contact.name))
+        .create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: contactFirst,
+          lastName: contactLast,
+          roleInHousehold: 'Named Insured',
+          isPrimary: true,
+        });
       const household = await genHouseholdModel.create({
         agencyId: seed.agencyId,
         branchId: seed.branchId,
         name: `${who} Household`,
-        primaryContactName: who,
+        primaryContactId: primaryContact._id,
       });
       const lead = await genLeadModel.create({
         agencyId: seed.agencyId,
@@ -10434,11 +11676,27 @@ describe('SFA API (e2e)', () => {
       overrides: Record<string, unknown> = {},
       householdOverrides: Record<string, unknown> = {},
     ) => {
+      /*
+       * A real primary **contact**, linked by `primaryContactId`: the household
+       * stores no `primaryContactName` since PAC-91 §4, so the deal's
+       * `clientName` — which the hand-off board renders directly — is resolved
+       * through the ref or not at all.
+       */
+      const primaryContact = await app
+        .get<Model<Contact>>(getModelToken(Contact.name))
+        .create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          firstName: 'Sam',
+          lastName: 'Sold',
+          roleInHousehold: 'Named Insured',
+          isPrimary: true,
+        });
       const household = await soldHouseholdModel.create({
         agencyId: seed.agencyId,
         branchId: seed.branchId,
         name: 'Sellable Household',
-        primaryContactName: 'Sam Sold',
+        primaryContactId: primaryContact._id,
         ...householdOverrides,
       });
       const lead = await soldLeadModel.create({
@@ -10969,12 +12227,21 @@ describe('SFA API (e2e)', () => {
           branchId: seed.branchId,
           firstName: 'Dana',
           lastName: 'Driver',
-          roleInHousehold: 'Driver',
         });
-      await soldHouseholdModel.updateOne(
-        { _id: household._id },
-        { $set: { memberContactIds: [contact._id] } },
-      );
+      // The picker reads the roster from `householdMembers`, and the role from
+      // the membership — a Named Insured at home can be a Driver here
+      // (PAC-91 §5).
+      await app
+        .get<Model<HouseholdMember>>(getModelToken(HouseholdMember.name))
+        .create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          householdId: household._id,
+          contactId: contact._id,
+          role: 'Driver',
+          addedAt: new Date(),
+          source: 'seed',
+        });
 
       const res = await request(app.getHttpServer())
         .get(`${SOLD}/context`)

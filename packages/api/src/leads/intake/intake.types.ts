@@ -121,12 +121,42 @@ export interface StepDeps {
   created: CreatedRegistry;
 }
 
+/**
+ * A submitted contact detail that disagrees with the one already stored
+ * (PAC-91 §1).
+ *
+ * A contact holds **one** email and **one** phone. Intake used to `$addToSet`
+ * the submitted value as a second array element, which is how those arrays grew
+ * in the first place — an intake form is a weak source of truth about an
+ * existing client, and silently recording a second identity for them is worse
+ * than recording none. The stored value wins, and the disagreement is carried
+ * back here so the pipeline can put it on the lead's timeline for a human.
+ */
+export interface ContactFieldConflict {
+  contactId: Types.ObjectId;
+  field: 'email' | 'phone';
+  stored: string;
+  submitted: string;
+}
+
 export interface ResolvedContact {
   contactId: Types.ObjectId;
   isNew: boolean;
-  /** Present when the matched contact already belonged to a household. */
-  householdId?: Types.ObjectId;
-  legacyHouseholdId?: string;
+  /**
+   * Empty unless the submission disagreed with the stored contact.
+   *
+   * ⚠ No `householdId` / `legacyHouseholdId` any more (PAC-91 §5). A contact
+   * can belong to several households, so "the contact's household" is not a
+   * field to carry — `ResolveHouseholdStep` reads the memberships and says what
+   * it does when there is more than one.
+   */
+  conflicts?: ContactFieldConflict[];
+}
+
+/** A resolved additional member, with the role *this household* knows them by. */
+export interface IntakeMemberContact {
+  contactId: Types.ObjectId;
+  role: HouseholdMemberRole;
 }
 
 export interface ResolvedHousehold {
@@ -144,6 +174,12 @@ export interface IntakeOutcome {
   leadIsNew: boolean;
   contactIsNew: boolean;
   householdIsNew: boolean;
+  /**
+   * Contact details the submission disagreed with, written to the lead's
+   * timeline after the transaction commits. Absent on a token replay, which
+   * short-circuits before any contact is resolved.
+   */
+  contactConflicts?: ContactFieldConflict[];
 }
 
 /**

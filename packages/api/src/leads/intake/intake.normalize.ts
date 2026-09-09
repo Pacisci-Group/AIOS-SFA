@@ -47,7 +47,7 @@ export function phonesMatch(a: string | null, b: string | null): boolean {
 }
 
 /**
- * Parse a `YYYY-MM-DD` date of birth to **UTC midnight**.
+ * Parse a `YYYY-MM-DD` **calendar date** to UTC midnight.
  *
  * Built from explicit components rather than `new Date(str)`: a date-only ISO
  * string is spec'd as UTC, but the near-identical `new Date('1990-02-05T00:00')`
@@ -55,7 +55,7 @@ export function phonesMatch(a: string | null, b: string | null): boolean {
  * A birthday that shifts by a day breaks contact matching, so this never goes
  * near the local timezone.
  */
-export function parseDateOfBirth(raw?: string | null): Date | null {
+export function parseCalendarDate(raw?: string | null): Date | null {
   const value = raw?.trim();
   if (!value) return null;
 
@@ -79,6 +79,17 @@ export function parseDateOfBirth(raw?: string | null): Date | null {
   }
   return parsed;
 }
+
+/**
+ * The original name, kept because every DOB call site reads better with it —
+ * and because the function is genuinely about a birthday's failure mode.
+ *
+ * {@link parseCalendarDate} is the same function under the name that fits its
+ * other callers: `Contact.deceasedAt` (PAC-91 §7) is a calendar date with the
+ * identical timezone hazard, and `parseDateOfBirth(dto.deceasedAt)` would read
+ * as a bug at the one place a reviewer most needs to trust it.
+ */
+export const parseDateOfBirth = parseCalendarDate;
 
 /** A stored `Date` back to `YYYY-MM-DD` in UTC — the comparison key for DOB. */
 export function toDateKey(value?: Date | string | null): string | null {

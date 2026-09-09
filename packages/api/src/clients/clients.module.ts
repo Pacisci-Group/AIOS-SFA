@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ContactsModule } from '../contacts/contacts.module';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { HouseholdMembersModule } from '../households/household-members.module';
+import { PrimaryContactModule } from '../households/primary-contact.module';
 import {
   Household,
   HouseholdSchema,
@@ -9,11 +12,13 @@ import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
 import { ClientsService } from './clients.service';
 import { HouseholdRecordsController } from './household-records.controller';
 import { PolicyRecordsController } from './policy-records.controller';
+import { UnlinkedRecordsController } from './unlinked-records.controller';
+import { UnlinkedRecordsService } from './unlinked-records.service';
 
 /**
  * APIs over the migrated client-record schemas — reads, plus adding a member to
- * a household. Exporting `MongooseModule` also makes these models injectable in
- * the seed scripts.
+ * a household, plus the Unlinked records work list (PAC-91 §10). Exporting
+ * `MongooseModule` also makes these models injectable in the seed scripts.
  */
 @Module({
   imports: [
@@ -22,9 +27,20 @@ import { PolicyRecordsController } from './policy-records.controller';
       { name: Policy.name, schema: PolicySchema },
       { name: Contact.name, schema: ContactSchema },
     ]),
+    // The Household form creates contacts too, and must refuse the same
+    // duplicates lead intake refuses (PAC-91 §9).
+    ContactsModule,
+    // The roster, its roles, and adding/ending a membership (PAC-91 §5).
+    HouseholdMembersModule,
+    // `POST /households/:id/primary-contact` (PAC-91 §7).
+    PrimaryContactModule,
   ],
-  controllers: [HouseholdRecordsController, PolicyRecordsController],
-  providers: [ClientsService],
+  controllers: [
+    HouseholdRecordsController,
+    PolicyRecordsController,
+    UnlinkedRecordsController,
+  ],
+  providers: [ClientsService, UnlinkedRecordsService],
   exports: [ClientsService, MongooseModule],
 })
 export class ClientsModule {}
