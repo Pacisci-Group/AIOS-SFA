@@ -12,6 +12,8 @@ import { buildSubmissionToken } from './intake.normalize';
 import {
   IntakeContext,
   IntakeInput,
+  ContactFieldConflict,
+  IntakeMemberContact,
   IntakeOutcome,
   ResolvedContact,
   StepDeps,
@@ -110,7 +112,6 @@ export class LeadIntakeService {
 
         const contact = await this.contacts.run(
           input.primaryContact,
-          'primary',
           deps,
           pinned?.householdId,
         );
@@ -139,7 +140,7 @@ export class LeadIntakeService {
             householdIsNew: household.isNew,
             leadId: lead.leadId,
             leadIsNew: lead.isNew,
-            memberContactIds: members,
+            members: members.contacts,
           },
           deps,
         );
@@ -153,6 +154,10 @@ export class LeadIntakeService {
           leadIsNew: lead.isNew,
           contactIsNew: contact.isNew,
           householdIsNew: household.isNew,
+          contactConflicts: [
+            ...(contact.conflicts ?? []),
+            ...members.conflicts,
+          ],
         };
       });
 
@@ -160,6 +165,7 @@ export class LeadIntakeService {
       // a timeline entry must not report the whole intake as failed.
       // (Same precedent as DealAuditsService.resolveItem.)
       await this.recordCreatedActivity(ctx, outcome);
+      await this.recordContactConflicts(ctx, outcome);
       return outcome;
     } catch (error) {
       // A concurrent duplicate submit — two in-flight requests with the same
@@ -199,18 +205,25 @@ export class LeadIntakeService {
     input: IntakeInput,
     deps: StepDeps,
     householdId?: Types.ObjectId,
-  ): Promise<Types.ObjectId[]> {
-    const resolved: Types.ObjectId[] = [];
+  ): Promise<{
+    contacts: IntakeMemberContact[];
+    conflicts: ContactFieldConflict[];
+  }> {
+    const contacts: IntakeMemberContact[] = [];
+    const conflicts: ContactFieldConflict[] = [];
     for (const member of input.members) {
       const contact: ResolvedContact = await this.contacts.run(
         member,
-        member.role,
         deps,
         householdId,
       );
-      resolved.push(contact.contactId);
+      // The role travels with the resolved contact rather than onto it: it is
+      // a property of this membership, and the same person may be a Driver
+      // here and a Named Insured at home (PAC-91 §5).
+      contacts.push({ contactId: contact.contactId, role: member.role });
+      conflicts.push(...(contact.conflicts ?? []));
     }
-    return resolved;
+    return { contacts, conflicts };
   }
 
   /**
@@ -273,6 +286,58 @@ export class LeadIntakeService {
     } catch (error) {
       this.logger.error(
         `Failed to record lead_created activity for lead ${outcome.leadId.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /**
+   * Surface a submission that disagreed with a stored contact detail
+   * (PAC-91 §1).
+   *
+   * The submitted value was **not** written — see
+   * `ResolveContactStep.mergeIntoExisting`. This row is the whole of the
+   * disagreement's visibility, so it carries both values in `changes` where a
+   * human can act on them; `summary` stays value-free, like every other row
+   * whose text can reach the Hot Leads card.
+   *
+   * Post-commit and best-effort, on the same precedent as the `lead_created`
+   * row above: the lead is already saved and a failed timeline write must not
+   * report the intake as failed.
+   */
+  private async recordContactConflicts(
+    ctx: IntakeContext,
+    outcome: IntakeOutcome,
+  ): Promise<void> {
+    if (!outcome.contactConflicts?.length) return;
+    const now = new Date();
+    try {
+      await this.activityModel.create(
+        outcome.contactConflicts.map((conflict) => ({
+          agencyId: ctx.agencyId,
+          branchId: ctx.branchId,
+          type: 'contact_conflict',
+          subjectType: 'lead',
+          leadId: outcome.leadId,
+          userId: ctx.actorUserId ?? undefined,
+          occurredAt: now,
+          summary: `Submitted ${conflict.field} differs from the one on file — not applied`,
+          changes: [
+            {
+              field: conflict.field,
+              label: conflict.field === 'email' ? 'Email' : 'Phone',
+              kind: 'text',
+              from: conflict.stored,
+              to: conflict.submitted,
+            },
+          ],
+          source: ctx.channel,
+          isTestRecord: false,
+        })),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to record contact_conflict activity for lead ${outcome.leadId.toString()}`,
         error instanceof Error ? error.stack : String(error),
       );
     }

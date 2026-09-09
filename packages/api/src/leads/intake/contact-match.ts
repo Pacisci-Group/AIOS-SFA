@@ -22,8 +22,9 @@ import {
 /** The stored fields matching reads. Structural, so a lean doc satisfies it. */
 export interface ContactCandidate {
   _id: Types.ObjectId;
-  emails?: string[] | null;
-  phones?: string[] | null;
+  /** One each since PAC-91 §1 — these were `string[]`, mirroring SmartSuite. */
+  email?: string | null;
+  phone?: string | null;
   dateOfBirth?: Date | string | null;
 }
 
@@ -69,17 +70,19 @@ export function scoreCandidate(
 
   // Both sides are normalised here. Legacy compared a normalised submission
   // against the raw stored value and required `typeof === 'string'` where the
-  // store held arrays — so this tiebreak never once fired in production.
-  if (signals.email) {
-    const emails = (candidate.emails ?? []).map(normalizeEmail);
-    if (emails.includes(signals.email)) score += SCORE_EMAIL;
+  // store held arrays — so this tiebreak never once fired in production. The
+  // store now holds one scalar of each (PAC-91 §1), but the normalisation stays
+  // on both sides: a contact written before every writer normalised still holds
+  // a raw value, and this must keep matching it.
+  if (signals.email && normalizeEmail(candidate.email) === signals.email) {
+    score += SCORE_EMAIL;
   }
 
-  if (signals.phone) {
-    const phones = (candidate.phones ?? []).map(normalizePhone);
-    if (phones.some((phone) => phonesMatch(phone, signals.phone))) {
-      score += SCORE_PHONE;
-    }
+  if (
+    signals.phone &&
+    phonesMatch(normalizePhone(candidate.phone), signals.phone)
+  ) {
+    score += SCORE_PHONE;
   }
 
   return score;

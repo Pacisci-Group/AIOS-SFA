@@ -1,0 +1,122 @@
+meta {
+  name: List Unlinked Policies
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/clients/unlinked?kind=policies&page=1&pageSize=25
+  body: none
+  auth: inherit
+}
+
+params:query {
+  kind: policies
+  page: 1
+  pageSize: 25
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope discriminated by kind", function () {
+    const body = res.getBody();
+    expect(body.kind).to.equal("policies");
+    expect(body).to.have.property("page");
+    expect(body).to.have.property("pageSize");
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("the envelope is internally consistent", function () {
+    // Always runs, whatever the seed holds: a page never exceeds its own size,
+    // and `totalPages` is derived from `total`, never reported independently.
+    const body = res.getBody();
+    expect(body.items.length).to.be.at.most(body.pageSize);
+    expect(body.totalPages).to.equal(
+      Math.max(1, Math.ceil(body.total / body.pageSize)),
+    );
+  });
+
+  test("agrees with the count on the chip", function () {
+    const counted = bru.getVar("unlinkedPolicyCount");
+    if (counted !== undefined) {
+      expect(res.getBody().total).to.equal(counted);
+    }
+  });
+
+  test("rows expose only display fields (no internals leak)", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      const row = items[0];
+      expect(row).to.have.property("id");
+      expect(row).to.have.property("policyNumber");
+      expect(row).to.have.property("policyType");
+      expect(row).to.have.property("carrier");
+      expect(row).to.have.property("premium");
+      expect(row).to.have.property("createdAt");
+      // The household is the whole point of the list — it is never on the row.
+      expect(row).to.not.have.property("householdId");
+      expect(row).to.not.have.property("isTestRecord");
+      expect(row).to.not.have.property("agencyId");
+      expect(row).to.not.have.property("branchId");
+      expect(row).to.not.have.property("legacySmartSuiteId");
+    }
+  });
+}
+
+docs {
+  # GET /clients/unlinked?kind=policies
+
+  Policies that belong to **no household** — 136 of them on the 2026-09-04
+  production export (PAC-91 §10).
+
+  - **Module:** `clients`
+  - **Permission:** `clients:read` (see `Unlinked Counts` for why this route
+    does not take the CRM OR-gate)
+  - **Data scope:** `own` collapses to **branch**
+
+  ## Query params
+  | Param | Default | Notes |
+  |---|---|---|
+  | `kind` | — | **Required.** `policies` · `contacts` · `households` |
+  | `page` | 1 | 1-based |
+  | `pageSize` | 50 | max 100 |
+
+  `kind` has no default on purpose: the three lists carry three different row
+  shapes, so a request that forgot to say which one it wants is a 400 rather
+  than a guess. The response repeats it as a **discriminant**, so a client
+  narrows the row type from what it received rather than from what it asked for.
+
+  ## Response
+  `{ kind, page, pageSize, total, totalPages, items: UnlinkedPolicyRow[] }`
+
+  A row is `id`, `policyNumber`, `policyType`, `carrier`, `policyStatus`,
+  `active`, `premium`, `items`, `effectiveDate`, `createdAt`. Sorted **newest
+  first** (`createdAt`, then `_id`). Every migrated record shares one
+  `createdAt` — the moment the import ran — so on migrated data this puts
+  anything the app has created since go-live at the top, which is the useful
+  answer: a record created without a link is a live defect, the migrated
+  backlog is the known one.
+
+  Rows exclude `isTestRecord` policies.
+
+  ## What the client does with a row
+  Opens `/policies/:id`. **Assigning a policy to a household has no UI yet** —
+  that is a separate ticket, and this view exists to make the gap visible rather
+  than to fill it.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | `kind` missing or outside the vocabulary, `page`/`pageSize` out of bounds |
+  | 401 | Missing/expired bearer token |
+  | 403 | `clients` disabled, or the caller lacks `clients:read` |
+}

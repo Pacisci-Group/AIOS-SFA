@@ -1,0 +1,49 @@
+meta {
+  name: Clear Contact Deceased
+  type: http
+  seq: 10
+}
+
+patch {
+  url: {{baseUrl}}/contacts/{{householdMemberContactId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{clientAdminToken}}
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "deceasedAt": null
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the marker is gone", function () {
+    expect(res.getBody().deceasedAt).to.equal(null);
+  });
+}
+
+docs {
+  # PATCH /contacts/:id — undoing a death recorded in error
+
+  `null` clears `deceasedAt`, the same way it clears `dateOfBirth`, `email` and
+  `phone`. This is half the reason PAC-91 §7 modelled a death as a **date on the
+  contact** rather than as a delete or a separate archived collection: a
+  mis-keyed record has to be recoverable, and every exclusion the marker causes
+  — intake matching, successor eligibility, quote prefill, outbound details —
+  comes straight back when it is removed.
+
+  Paired with `Mark Contact Deceased` so the collection leaves no residue.
+  Without it the member would stay flagged, and the next run's
+  `End Household Membership` would be ending the membership of a contact this
+  folder had quietly killed.
+}

@@ -1,0 +1,92 @@
+meta {
+  name: End Household Membership
+  type: http
+  seq: 11
+}
+
+delete {
+  url: {{baseUrl}}/households/{{householdId}}/members/{{householdMemberContactId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("reports the membership as ended", function () {
+    expect(res.getBody().ended).to.equal(true);
+  });
+
+  test("ends the membership of the member Add Household Member just created", function () {
+    // The pairing is what keeps this collection re-runnable against one
+    // database: the member added a moment ago is removed again, so a second run
+    // does not grow the household by another Dana Tyson.
+    expect(bru.getVar("householdMemberContactId")).to.be.a("string");
+  });
+
+  test("works because Restore Primary Contact handed primacy back first", function () {
+    // `Set Primary Contact` (PAC-91 §7) makes this member the household's
+    // primary, and the primary's membership cannot be ended — that is the 409
+    // documented below. `Restore Primary Contact` runs in between, which is why
+    // this is a 200 rather than that 409.
+    expect(res.getStatus()).to.not.equal(409);
+  });
+}
+
+docs {
+  # DELETE /households/:id/members/:contactId
+
+  End a membership — **"remove from household"**, on the Household Details page
+  (`/clients/:id`).
+
+  - **Module:** `clients` (the class-level OR-gate also accepts `crm_service`
+    for the **reads** on this controller; this write does not).
+  - **Permission:** `clients:write`.
+  - **Data scope:** the household is loaded through the same scope filter as
+    `GET /households/:id` — `own` collapses to branch on client records. Out of
+    scope reads as 404.
+
+  ## Why this is a DELETE on the *membership*, not on the contact
+
+  Membership is a join collection since PAC-91 §5 (`householdMembers`), because
+  a contact can belong to several households and the two facts that matter here
+  belong to the **pair**: the role in this household, and when it ended.
+
+  So the person is untouched. They keep existing, they keep every other
+  household they belong to, and they keep appearing on this household's
+  historical policies, deals and tickets. Only the link stops.
+
+  ## Soft, not removed
+
+  The row stays and `endedAt` is stamped. "Was a driver here until March" is a
+  fact a service rep needs, and the `$pull` from an array this replaces left
+  nothing behind at all. Re-adding the same person later revives the same row
+  rather than inserting a second one.
+
+  A second call therefore finds no **current** membership and returns **404** —
+  the row is still there, but there is nothing left to end.
+
+  ## The primary contact cannot be removed
+
+  A household whose `primaryContactId` names somebody who is not a member of it
+  is a state no reader can render sensibly, so the request is refused with
+  **409**. Assign a different primary contact first — a deliberate operation of
+  its own (PAC-91 §7).
+
+  ## Response
+  `{ "ended": true }`
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | `clients` disabled for the agency, or the caller lacks `clients:write` |
+  | 404 | Unknown household or contact, a malformed id, a household outside the caller's scope, or no current membership to end |
+  | 409 | The contact is the household's primary contact |
+}

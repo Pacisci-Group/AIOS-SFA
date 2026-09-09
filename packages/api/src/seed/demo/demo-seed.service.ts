@@ -20,6 +20,7 @@ import { Agency } from '../../platform/schemas/agency.schema';
 import { Branch } from '../../branches/schemas/branch.schema';
 import { User } from '../../users/schemas/user.schema';
 import { AgencyRole } from '../../roles/schemas/agency-role.schema';
+import { HouseholdMember } from '../../households/schemas/household-member.schema';
 import { Household } from '../../households/schemas/household.schema';
 import { Contact } from '../../contacts/schemas/contact.schema';
 import { Lead } from '../../leads/schemas/lead.schema';
@@ -81,6 +82,7 @@ import { MailerCampaign } from '../../mailers/schemas/mailer-campaign.schema';
 import { implicitCampaignDoc } from '../../common/mailers/implicit-campaign';
 import { DEFAULT_MAILER_CARRIER } from '../../common/mailers/mailer-carrier';
 import { mailerControlNumberKeys } from '../../common/mailers/mailer-control-number';
+import { normalizePhone } from '../../leads/intake/intake.normalize';
 
 export interface DemoSeedOptions {
   agencySlug: string;
@@ -151,6 +153,8 @@ interface ContactRef {
   id: Types.ObjectId;
   legacyId: string;
   isPrimary: boolean;
+  /** The role *in this household* — it lives on the membership (PAC-91 §5). */
+  role: string;
 }
 
 interface LeadRef {
@@ -220,6 +224,8 @@ export class DemoSeedService {
     private readonly roleModel: Model<AgencyRole>,
     @InjectModel(Household.name)
     private readonly householdModel: Model<Household>,
+    @InjectModel(HouseholdMember.name)
+    private readonly householdMemberModel: Model<HouseholdMember>,
     @InjectModel(Contact.name) private readonly contactModel: Model<Contact>,
     @InjectModel(Lead.name) private readonly leadModel: Model<Lead>,
     @InjectModel(QuoteRecap.name)
@@ -526,9 +532,8 @@ export class DemoSeedService {
           status: rng.pick(['Active', 'Prospect', 'Active', 'Active']),
           propertyAddress: address,
           mailingAddress: address,
-          primaryContactName: `${clientFirst} ${clientLast}`,
-          primaryEmails: [this.email(clientFirst, clientLast)],
-          primaryPhones: [this.phone(rng)],
+          // No name/email/phone copy (PAC-91 §4) — `seedContacts` below fills
+          // `primaryContactId`, and every reader follows it.
           assignedCrmId: assignedCrm?.userId,
           totalActivePolicies: rng.int(0, 4),
           isTestRecord: false,
@@ -574,8 +579,9 @@ export class DemoSeedService {
    * `primaryContactId`/`memberContactIds` refs rather than reaching their
    * contacts only through `legacyHouseholdId`.
    *
-   * Also backfills the household's own `primaryContactId`/`memberContactIds`,
-   * which `seedHouseholds` cannot set — it runs before the contacts exist.
+   * Also backfills the household's own `primaryContactId` and writes a
+   * `householdMembers` row per member (PAC-91 §5), neither of which
+   * `seedHouseholds` can do — it runs before the contacts exist.
    */
   private async seedContacts(
     ctx: Ctx,
@@ -627,15 +633,30 @@ export class DemoSeedService {
 
       await this.householdModel.updateOne(
         { agencyId: ctx.agencyId, legacySmartSuiteId: hh.legacyId },
-        {
-          $set: {
-            primaryContactId: roster.find((c) => c.isPrimary)?.id,
-            memberContactIds: roster
-              .filter((c) => !c.isPrimary)
-              .map((c) => c.id),
-          },
-        },
+        { $set: { primaryContactId: roster.find((c) => c.isPrimary)?.id } },
       );
+
+      // Membership is a row per (household, contact) since PAC-91 §5 — the
+      // primary included, because they are a member of the household they head.
+      for (const member of roster) {
+        await this.householdMemberModel.updateOne(
+          {
+            agencyId: ctx.agencyId,
+            householdId: hh.id,
+            contactId: member.id,
+          },
+          {
+            $set: { endedAt: null },
+            $setOnInsert: {
+              branchId: hh.branchId,
+              addedAt: new Date(),
+              role: member.role,
+              source: 'seed',
+            },
+          },
+          { upsert: true },
+        );
+      }
     }
     return byHousehold;
   }
@@ -662,18 +683,31 @@ export class DemoSeedService {
         legacySmartSuiteId: legacyId,
         firstName: base.firstName,
         lastName: base.lastName,
-        emails: [this.email(base.firstName, base.lastName)],
-        phones: [this.phone(rng)],
+        /*
+         * One each, normalised, and unique by construction (PAC-91 §1, §9).
+         *
+         * The index is in the address on purpose: the demo book draws names
+         * from a small pool, so two contacts sharing a first *and* last name is
+         * routine — and with a name-derived address they would then differ only
+         * by a randomly-generated birthday. That is a collision on the identity
+         * indexes waiting to happen on somebody's machine, which is not a thing
+         * a seed should leave to chance.
+         */
+        email: this.email(base.firstName, base.lastName, index),
+        phone: normalizePhone(this.phone(rng)) ?? undefined,
         dateOfBirth: this.birthDate(rng, base.roleInHousehold === 'Child'),
-        roleInHousehold: base.roleInHousehold,
-        isPrimary: base.isPrimary,
-        householdId: hh.id,
-        legacyHouseholdId: hh.legacyId,
+        // No household link on the contact (PAC-91 §5) — the caller writes a
+        // `householdMembers` row instead, which is where the role lives too.
         isTestRecord: false,
       },
     );
     this.inc('contacts');
-    return { id, legacyId, isPrimary: base.isPrimary };
+    return {
+      id,
+      legacyId,
+      isPrimary: base.isPrimary,
+      role: base.roleInHousehold,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -749,8 +783,8 @@ export class DemoSeedService {
           legacySmartSuiteId: legacyId,
           firstName: first,
           lastName: last,
-          emails: [this.email(first, last)],
-          phones: [this.phone(rng)],
+          // No email/phone copy (PAC-91 §2) — the list reads them off
+          // `primaryContactId`, which is set below.
           status,
           temperature,
           leadSource: { code: source.code, label: source.label },
@@ -1994,6 +2028,11 @@ export class DemoSeedService {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
+    // Same exception again: a membership is a *link*, not an imported record,
+    // so it has no `legacySmartSuiteId` to match the filter above. Purged on
+    // its provenance marker instead — which is also what keeps a membership
+    // added by hand in the demo tenant out of the way of `--fresh`.
+    await this.householdMemberModel.deleteMany({ agencyId, source: 'seed' });
     // Same exception as producer goals: `Mailer` has no `legacySmartSuiteId`,
     // so it is keyed and purged on its provenance marker instead. It also has no
     // `agencyId` any more (PAC-71), so the campaign is what scopes the purge to
@@ -2114,8 +2153,10 @@ export class DemoSeedService {
     };
   }
 
-  private email(first: string, last: string): string {
-    return `${first}.${last}@example.com`.toLowerCase();
+  private email(first: string, last: string, index?: number): string {
+    const local =
+      index === undefined ? `${first}.${last}` : `${first}.${last}.${index}`;
+    return `${local}@example.com`.toLowerCase();
   }
 
   private phone(rng: Rng): string {

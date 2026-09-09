@@ -4,6 +4,7 @@ import type {
   HouseholdMemberRole,
   HouseholdSummary,
   HouseholdView,
+  SetPrimaryContactInput,
 } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
 
@@ -43,6 +44,32 @@ export function addHouseholdMember(
     method: 'POST',
     body: JSON.stringify(input),
   });
+}
+
+/**
+ * `POST /households/:id/primary-contact` — name the household's primary
+ * contact, or deliberately leave it without one (PAC-91 §7).
+ *
+ * `clients:write`. The operation did not exist before: `primaryContactId` was
+ * only ever filled by intake and never reassigned, so a wrong primary, a
+ * divorce or a death had no supported fix.
+ *
+ * Returns the whole `HouseholdView` because the write moves more than one
+ * field — the roster's `isPrimary`, the resolved `primaryEmail`/`primaryPhone`
+ * and the `dataQuality` flag all change together.
+ *
+ * Refusals arrive as **409s carrying a `code`**: `contact_not_a_member`,
+ * `contact_deceased`, `primary_of_another_household`. Read `ApiError.body.code`,
+ * never the message.
+ */
+export function setPrimaryContact(
+  householdId: string,
+  input: SetPrimaryContactInput,
+) {
+  return apiFetch<HouseholdView>(
+    `${BASE}/${encodeURIComponent(householdId)}/primary-contact`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
 }
 
 /**

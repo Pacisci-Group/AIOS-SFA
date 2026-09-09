@@ -1,3 +1,9 @@
+import {
+  loadContactDetails,
+  type ContactDetails,
+  type ContactFinder,
+} from '../contacts/contact-details';
+
 /**
  * Which of a household's contacts is *the* primary.
  *
@@ -41,4 +47,38 @@ export function pickPrimaryContact<T extends PrimaryContactCandidate>(
   // still has to name someone, and the roster arrives primary-first by
   // `lastName`, so this is at least stable across reads rather than arbitrary.
   return contacts.find((contact) => contact.isPrimary) ?? null;
+}
+
+/**
+ * Resolve several households' primary contacts in **one** query, keyed by
+ * household id.
+ *
+ * The household stopped carrying `primaryContactName` / `primaryEmails` /
+ * `primaryPhones` (PAC-91 §1, §4), so every reader that rendered those now has
+ * to follow `primaryContactId`. Batched deliberately: the call sites are list
+ * builders (the policies list, the legacy-ticket import), and one lookup per
+ * row is how an import that ran two queries starts running two thousand.
+ *
+ * Households with no `primaryContactId` are simply absent from the map — the
+ * caller's `??` chain falls through to the household's own name, exactly as it
+ * did when the stored copy was empty.
+ */
+export async function loadPrimaryContacts(
+  contacts: ContactFinder,
+  households: ReadonlyArray<{ _id: IdLike; primaryContactId?: IdLike | null }>,
+  extraFilter: Record<string, unknown> = {},
+): Promise<Map<string, ContactDetails>> {
+  const byContactId = await loadContactDetails(
+    contacts,
+    households.map((household) => household.primaryContactId),
+    extraFilter,
+  );
+
+  const out = new Map<string, ContactDetails>();
+  for (const household of households) {
+    if (!household.primaryContactId) continue;
+    const details = byContactId.get(String(household.primaryContactId));
+    if (details) out.set(String(household._id), details);
+  }
+  return out;
 }

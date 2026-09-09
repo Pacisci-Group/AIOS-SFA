@@ -4,11 +4,13 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { listHouseholds, type ListHouseholdsParams } from "@/lib/households-api";
 import { HouseholdCard } from "./components/HouseholdCard";
 import { HouseholdsSearch } from "./components/HouseholdsSearch";
 import { HouseholdsTable } from "./components/HouseholdsTable";
+import { UnlinkedRecords } from "./components/UnlinkedRecords";
 import { useHouseholdsUrlState } from "./useHouseholdsUrlState";
 
 const PAGE_SIZE = 50;
@@ -22,9 +24,17 @@ const PAGE_SIZE = 50;
  * this many". The whole query lives in the URL (`useHouseholdsUrlState`), which
  * matters more here than on Leads: the point of this page is to open a record,
  * so every user leaves it and comes back.
+ *
+ * The second tab is the **Unlinked records** work list (PAC-91 §10) — the
+ * records the SmartSuite link repair could not fix, which the team works by
+ * hand. It lives here rather than on a page of its own because every row's next
+ * step is opening a client record, and because the counts are a standing signal
+ * about the book this page already shows.
  */
 export default function HouseholdsListPage() {
   const {
+    view,
+    kind,
     search,
     filters,
     sort,
@@ -34,6 +44,8 @@ export default function HouseholdsListPage() {
     setSort,
     setPage,
     clearFilters,
+    setView,
+    setKind,
   } = useHouseholdsUrlState();
 
   const debouncedSearch = useDebouncedValue(search, 300);
@@ -57,6 +69,9 @@ export default function HouseholdsListPage() {
   const { data, isPending, isError, isFetching, refetch } = useQuery({
     queryKey: ["households", params],
     queryFn: () => listHouseholds(params),
+    // The other tab reads a different endpoint entirely; there is nothing here
+    // to keep warm while it is open.
+    enabled: view === "all",
     // Keep the previous page visible while refetching so the table doesn't
     // flash empty on every keystroke.
     placeholderData: keepPreviousData,
@@ -76,85 +91,113 @@ export default function HouseholdsListPage() {
           <div className="min-w-0">
             <h1 className="text-lg font-semibold tracking-tight">Clients</h1>
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              {isPending || isError ? " " : `${total} households`}
+              {view === "unlinked"
+                ? "Records still to be linked"
+                : isPending || isError
+                  ? " "
+                  : `${total} households`}
             </p>
           </div>
         </div>
       </header>
 
       <main className="px-4 md:px-6 py-6">
-        <HouseholdsSearch
-          search={search}
-          onSearchChange={setSearch}
-          filters={filters}
-          onChange={patchFilters}
-          onClear={clearFilters}
-          sort={sort}
-          onSortChange={setSort}
-        />
+        <Tabs
+          value={view}
+          onValueChange={(next) => setView(next as typeof view)}
+          className="mb-5"
+        >
+          <TabsList>
+            <TabsTrigger value="all">All households</TabsTrigger>
+            <TabsTrigger value="unlinked">Unlinked</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
-        {isError ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-16 text-center rounded-xl bg-card border border-border">
-            <AlertCircle size={22} className="text-destructive" />
-            <p className="text-sm text-muted-foreground">
-              Couldn't load households.
-            </p>
-            <Button variant="outline" size="sm" onClick={() => refetch()}>
-              Retry
-            </Button>
-          </div>
-        ) : !isPending && items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-1 py-16 text-center rounded-xl bg-card border border-border">
-            <p className="text-sm text-muted-foreground">No households found.</p>
-            <p className="text-xs text-muted-foreground">
-              Search by a member's name or date of birth, an HH- number, or a
-              policy number.
-            </p>
-          </div>
+        {view === "unlinked" ? (
+          <UnlinkedRecords
+            kind={kind}
+            onKindChange={setKind}
+            page={page}
+            onPageChange={setPage}
+          />
         ) : (
           <>
-            {/* Desktop: the 7-column table — see `HouseholdsTable` for why `lg`. */}
-            <div className="hidden lg:block">
-              <HouseholdsTable
-                households={items}
-                isPending={isPending}
-                pageSize={PAGE_SIZE}
-              />
-            </div>
+            <HouseholdsSearch
+              search={search}
+              onSearchChange={setSearch}
+              filters={filters}
+              onChange={patchFilters}
+              onClear={clearFilters}
+              sort={sort}
+              onSortChange={setSort}
+            />
 
-            {/* Phone and tablet: one card per household. */}
-            <div className="flex flex-col gap-2 lg:hidden">
-              {items.map((household) => (
-                <HouseholdCard key={household.id} household={household} />
-              ))}
-            </div>
+            {isError ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-16 text-center rounded-xl bg-card border border-border">
+                <AlertCircle size={22} className="text-destructive" />
+                <p className="text-sm text-muted-foreground">
+                  Couldn't load households.
+                </p>
+                <Button variant="outline" size="sm" onClick={() => refetch()}>
+                  Retry
+                </Button>
+              </div>
+            ) : !isPending && items.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-1 py-16 text-center rounded-xl bg-card border border-border">
+                <p className="text-sm text-muted-foreground">
+                  No households found.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Search by a member's name or date of birth, an HH- number, or a
+                  policy number.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Desktop: the 7-column table — see `HouseholdsTable` for why `lg`. */}
+                <div className="hidden lg:block">
+                  <HouseholdsTable
+                    households={items}
+                    isPending={isPending}
+                    pageSize={PAGE_SIZE}
+                  />
+                </div>
 
-            {!isPending && (
-              <div className="flex items-center justify-between gap-3 mt-4">
-                <span className="text-sm text-muted-foreground">
-                  Showing {firstRow} to {lastRow} of {total}
-                </span>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page <= 1 || isFetching}
-                      onClick={() => setPage(Math.max(1, page - 1))}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page >= totalPages || isFetching}
-                      onClick={() => setPage(Math.min(totalPages, page + 1))}
-                    >
-                      Next
-                    </Button>
+                {/* Phone and tablet: one card per household. */}
+                <div className="flex flex-col gap-2 lg:hidden">
+                  {items.map((household) => (
+                    <HouseholdCard key={household.id} household={household} />
+                  ))}
+                </div>
+
+                {!isPending && (
+                  <div className="flex items-center justify-between gap-3 mt-4">
+                    <span className="text-sm text-muted-foreground">
+                      Showing {firstRow} to {lastRow} of {total}
+                    </span>
+                    {totalPages > 1 && (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={page <= 1 || isFetching}
+                          onClick={() => setPage(Math.max(1, page - 1))}
+                        >
+                          Previous
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={page >= totalPages || isFetching}
+                          onClick={() => setPage(Math.min(totalPages, page + 1))}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+              </>
             )}
           </>
         )}

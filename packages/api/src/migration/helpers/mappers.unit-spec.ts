@@ -8,8 +8,10 @@ import {
   deriveDealType,
   normalizeTemperature,
   policyTypeLabels,
+  resolveContactHousehold,
   resolvePremium,
 } from './derive';
+import { CONTACT_FIELDS } from '../smartsuite/field-ids';
 import {
   firstLinkedId,
   selectCode,
@@ -259,10 +261,13 @@ describe('buildLegacyTicket', () => {
     const fields = buildLegacyTicket(
       source(),
       {
-        household: {
-          name: 'Watson Household',
-          primaryPhones: ['918 808 2556'],
-          primaryEmails: ['cw@example.com'],
+        household: { name: 'Watson Household' },
+        // Resolved by the caller from `Household.primaryContactId` — the
+        // household stores no copy of these (PAC-91 §4).
+        primaryContact: {
+          name: 'Christopher Watson',
+          phone: '9188082556',
+          email: 'cw@example.com',
         },
         policy: { policyNumber: '845776459', policyType: 'Auto' },
       },
@@ -285,7 +290,7 @@ describe('buildLegacyTicket', () => {
       policyId: policy,
       householdId: household,
       leadId: null,
-      phone: '918 808 2556',
+      phone: '9188082556',
       email: 'cw@example.com',
       openedAt: opened,
       lastActivityAt: opened,
@@ -355,5 +360,71 @@ describe('buildLegacyTicket', () => {
   it('refuses a row whose title is not a ticket number', () => {
     expect(buildLegacyTicket({ ...source(), title: 'Record 1' })).toBeNull();
     expect(buildLegacyTicket({ ...source(), title: undefined })).toBeNull();
+  });
+});
+
+describe('contact household resolution (PAC-91 §8)', () => {
+  const direct = CONTACT_FIELDS.household;
+  const primary = CONTACT_FIELDS.householdPrimaryBacklink;
+  const member = CONTACT_FIELDS.householdMemberBacklink;
+
+  it('prefers the writable Household field, as legacy did', () => {
+    expect(
+      resolveContactHousehold({
+        [direct]: ['hh-direct'],
+        [primary]: ['hh-primary'],
+        [member]: ['hh-member'],
+      }),
+    ).toMatchObject({ householdLegacyId: 'hh-direct', via: 'household' });
+  });
+
+  it('falls back to the primary back-link', () => {
+    expect(
+      resolveContactHousehold({ [primary]: ['hh-primary'], [member]: [] }),
+    ).toMatchObject({
+      householdLegacyId: 'hh-primary',
+      via: 'primary-backlink',
+    });
+  });
+
+  it('falls back to the member back-link last', () => {
+    expect(resolveContactHousehold({ [member]: ['hh-member'] })).toMatchObject({
+      householdLegacyId: 'hh-member',
+      via: 'member-backlink',
+    });
+  });
+
+  it('reports a contact linked on no side at all', () => {
+    expect(resolveContactHousehold({})).toEqual({
+      householdLegacyId: undefined,
+      memberLegacyIds: [],
+      primaryLegacyIds: [],
+      via: 'none',
+    });
+  });
+
+  it('unions every link source, primary first, deduped', () => {
+    // The 266-contact case: primary of a household that does not list them as
+    // a member. Taking `Household Members` alone would lose the membership.
+    const links = resolveContactHousehold({
+      [direct]: ['hh-b'],
+      [primary]: ['hh-a'],
+      [member]: ['hh-b', 'hh-c'],
+    });
+    expect(links.memberLegacyIds).toEqual(['hh-a', 'hh-b', 'hh-c']);
+  });
+
+  it('keeps both households of a contact primary of two', () => {
+    const links = resolveContactHousehold({
+      [primary]: ['hh-3932', 'hh-4717'],
+    });
+    expect(links.primaryLegacyIds).toHaveLength(2);
+    expect(links.householdLegacyId).toBe('hh-3932');
+  });
+
+  it('reads hydrated linked-record objects, not just id strings', () => {
+    expect(
+      resolveContactHousehold({ [primary]: [{ id: 'hh-hydrated' }] }),
+    ).toMatchObject({ householdLegacyId: 'hh-hydrated' });
   });
 });

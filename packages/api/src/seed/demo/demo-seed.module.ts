@@ -11,6 +11,10 @@ import {
   AgencyRoleSchema,
 } from '../../roles/schemas/agency-role.schema';
 import {
+  HouseholdMember,
+  HouseholdMemberSchema,
+} from '../../households/schemas/household-member.schema';
+import {
   Household,
   HouseholdSchema,
 } from '../../households/schemas/household.schema';
@@ -111,6 +115,7 @@ import { DemoSeedService } from './demo-seed.service';
       { name: User.name, schema: UserSchema },
       { name: AgencyRole.name, schema: AgencyRoleSchema },
       { name: Household.name, schema: HouseholdSchema },
+      { name: HouseholdMember.name, schema: HouseholdMemberSchema },
       { name: Lead.name, schema: LeadSchema },
       { name: QuoteRecap.name, schema: QuoteRecapSchema },
       { name: Deal.name, schema: DealSchema },

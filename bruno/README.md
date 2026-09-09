@@ -117,9 +117,10 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Sold Deals | Create Sold Deal (Foreign Lead) | `POST /sold-deals` | **PAC-40** — asserts an out-of-scope lead 404s. |
 | Sold Deals | Check Policy Number (Match) | `GET /policies/check` | **PAC-40** — the duplicate-found branch. |
 
-> ⚠ **This table is not exhaustive.** `Carriers`, `Households` and `Users` are
-> in the collection but were never added here; every request still carries its
-> own `docs` block, which is the actual source of truth.
+> ⚠ **This table is not exhaustive.** `Carriers`, `Households`, `Unlinked
+> Records` and `Users` are in the collection but were never added here; every
+> request still carries its own `docs` block, which is the actual source of
+> truth.
 >
 > **`Platform Mailer Campaigns` pauses on purpose.** Two of its requests sleep
 > in a pre-request script, because the preview and the commit are queued Inngest

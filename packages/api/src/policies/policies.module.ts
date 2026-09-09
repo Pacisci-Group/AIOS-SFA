@@ -5,6 +5,7 @@ import {
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
 import { CarriersModule } from '../carriers/carriers.module';
+import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 import {
   Household,
@@ -35,6 +36,9 @@ import { Policy, PolicySchema } from './schemas/policy.schema';
       { name: Deal.name, schema: DealSchema },
       { name: Household.name, schema: HouseholdSchema },
       { name: Activity.name, schema: ActivitySchema },
+      // The policies list renders the household's primary contact's name,
+      // which the household no longer stores a copy of (PAC-91 §4).
+      { name: Contact.name, schema: ContactSchema },
     ]),
     // Supplies the carrier's policy-number rule when a correction changes the
     // number (PAC-56 #20).

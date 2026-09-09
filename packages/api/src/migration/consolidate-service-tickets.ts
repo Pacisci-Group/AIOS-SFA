@@ -6,6 +6,8 @@ import {
   ServiceTicket,
   ServiceTicketDocument,
 } from '../crm/schemas/service-ticket.schema';
+import { Contact } from '../contacts/schemas/contact.schema';
+import { loadPrimaryContacts } from '../households/primary-contact';
 import { Household } from '../households/schemas/household.schema';
 import { Policy } from '../policies/schemas/policy.schema';
 import { User } from '../users/schemas/user.schema';
@@ -120,6 +122,7 @@ async function reshapeMirrorRows(
   householdModel: Model<Household>,
   policyModel: Model<Policy>,
   userModel: Model<User>,
+  contactModel: Model<Contact>,
   summary: Summary,
 ): Promise<void> {
   // The raw driver, not the model: these rows do not fit the schema yet, and
@@ -138,7 +141,7 @@ async function reshapeMirrorRows(
   const [households, policies, users] = await Promise.all([
     householdModel
       .find({ _id: { $in: ids((r) => r.householdId) } })
-      .select('name primaryContactName primaryPhones primaryEmails')
+      .select('name primaryContactId')
       .lean(),
     policyModel
       .find({ _id: { $in: ids((r) => r.policyId) } })
@@ -152,6 +155,12 @@ async function reshapeMirrorRows(
   const householdById = new Map(households.map((h) => [String(h._id), h]));
   const policyById = new Map(policies.map((p) => [String(p._id), p]));
   const userById = new Map(users.map((u) => [String(u._id), u]));
+  // The ticket's client name, phone and email come from the household's primary
+  // contact — the household stores no copy of them (PAC-91 §4).
+  const primaryByHousehold = await loadPrimaryContacts(
+    contactModel,
+    households,
+  );
 
   for (const row of rows) {
     const label = `${row.legacySmartSuiteId ?? String(row._id)} (${row.title ?? 'untitled'})`;
@@ -174,6 +183,9 @@ async function reshapeMirrorRows(
       {
         household: row.householdId
           ? householdById.get(String(row.householdId))
+          : null,
+        primaryContact: row.householdId
+          ? (primaryByHousehold.get(String(row.householdId)) ?? null)
           : null,
         policy: row.policyId ? policyById.get(String(row.policyId)) : null,
         createdByDisplayName: row.createdById
@@ -378,6 +390,7 @@ async function main() {
     );
     const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
     const userModel = app.get<Model<User>>(getModelToken(User.name));
+    const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
 
     await reshapeMirrorRows(
       logger,
@@ -386,6 +399,7 @@ async function main() {
       householdModel,
       policyModel,
       userModel,
+      contactModel,
       summary,
     );
     await moveLiveRows(logger, options, connection, ticketModel, summary);

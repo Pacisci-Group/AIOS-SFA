@@ -9,10 +9,13 @@ import { RenewalCycle } from '../crm/schemas/renewal-cycle.schema';
 import { RenewalScanState } from '../crm/schemas/renewal-scan-state.schema';
 import { ServiceTicket } from '../crm/schemas/service-ticket.schema';
 import { ServiceTicketsService } from '../crm/service-tickets.service';
+import { Contact } from '../contacts/schemas/contact.schema';
+import { HouseholdMember } from '../households/schemas/household-member.schema';
 import { Household } from '../households/schemas/household.schema';
 import { Agency } from '../platform/schemas/agency.schema';
 import { Policy } from '../policies/schemas/policy.schema';
 import { User } from '../users/schemas/user.schema';
+import { seedPrimaryContact } from './seed-primary-contact';
 
 /**
  * Walkthrough fixtures for proactive renewal outreach, with an emphasis on the
@@ -188,6 +191,10 @@ async function run() {
   const householdModel = app.get<Model<Household>>(
     getModelToken(Household.name),
   );
+  const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+  const memberModel = app.get<Model<HouseholdMember>>(
+    getModelToken(HouseholdMember.name),
+  );
   const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
   const ticketModel = app.get<Model<ServiceTicket>>(
     getModelToken(ServiceTicket.name),
@@ -268,12 +275,22 @@ async function run() {
       legacySmartSuiteId: key,
       name: scenario.householdName,
       status: 'Active',
-      primaryContactName: scenario.clientName,
-      primaryEmails: [`${firstName}@example.com`],
-      primaryPhones: ['(512) 555-0188'],
       assignedCrmId: csr?._id ?? null,
       isTestRecord: true,
     });
+    // The client's name, email and phone live on the contact now (PAC-91 §4).
+    household.primaryContactId = await seedPrimaryContact(
+      contactModel,
+      memberModel,
+      household,
+      key,
+      {
+        name: scenario.clientName,
+        email: `${firstName}@example.com`,
+        phone: '(512) 555-0188',
+      },
+    );
+    await household.save();
 
     for (const policy of scenario.policies) {
       const renewalDate = new Date(now + policy.renewsInDays * DAY);

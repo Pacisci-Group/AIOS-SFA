@@ -41,3 +41,4 @@ SFA-RTP-*.csv
 Mailer_Test_Alteryx*.csv
 
 temp/
+mongo-backup/

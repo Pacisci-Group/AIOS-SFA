@@ -1,11 +1,46 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CalendarClock, Lightbulb, PhoneCall, ChevronRight, Loader2 } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { useUrlState } from "@/hooks/useUrlState";
 import { getRenewalDesk, type RenewalDeskRow } from "@/lib/service-tickets-api";
 
 interface RenewalOutreachDeskProps {
   /** Opens the call's ticket in the workspace. */
   onOpenTicket: (ticketId: string) => void;
 }
+
+/**
+ * Rows per page.
+ *
+ * Paginated in the browser, not on the server, for the same reason the ticket
+ * queue is: everything around the rows needs the whole set. The header counts
+ * Active and Opening-soon across the desk, and the rows arrive pre-ranked by
+ * `compareRenewalDeskRows`. Paging on the server would mean porting that
+ * ranking into Mongo and recounting per badge — and the set is already bounded
+ * by the 90-day renewal horizon.
+ *
+ * Four, not the queue's eight: a renewal row is a client header, an optional
+ * overdue banner, the call band and a full-width CTA — roughly three times the
+ * height of a ticket row — and this card sits in the narrower 40% column at the
+ * same height as the queue.
+ */
+const PAGE_SIZE = 4;
+
+/**
+ * The page lives in the URL, like the queue's — but under **its own key**.
+ *
+ * `PriorityTicketQueue` already owns `?page=` on this very route, so reusing it
+ * would wire the two boxes together: paging the renewals would silently page
+ * the ticket queue beside it, and vice versa.
+ *
+ * Frozen at module scope so `useUrlState`'s memo dependencies stay stable
+ * across renders. The default is `''`, so `?renewalPage=1` never appears.
+ */
+const URL_DEFAULTS = { renewalPage: "" };
+
+const URL_ALLOWED = {
+  renewalPage: (value: string) => /^[1-9]\d*$/.test(value),
+} as const;
 
 const priorityConfig = {
   high: { ring: "border-[#F59E0B]/30", badge: "bg-[#F59E0B]/10 text-[#F59E0B]", label: "High Priority" },
@@ -55,6 +90,13 @@ function daysLabel(days: number): string {
 }
 
 export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) {
+  const [urlState, setUrlState] = useUrlState({
+    defaults: URL_DEFAULTS,
+    allowed: URL_ALLOWED,
+  });
+  const page = Number(urlState.renewalPage) || 1;
+  const listRef = useRef<HTMLDivElement>(null);
+
   // Reading the desk is also what materializes renewal cycles — there is no
   // cron, so this request is what makes newly-due renewals appear.
   const deskQuery = useQuery({
@@ -63,12 +105,53 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
   });
 
   const rows = deskQuery.data ?? [];
-  // The badge counts work, not rows. Previewed calls are listed but cannot be
-  // made, so folding them into "Active" would overstate the desk.
+  // The badge counts work, not rows — and they count the whole desk, not the
+  // page. Previewed calls are listed but cannot be made, so folding them into
+  // "Active" would overstate the desk.
   const activeCount = rows.filter((row) => !isScheduled(row)).length;
   const scheduledCount = rows.length - activeCount;
-  // Rows arrive actionable-first, so this is where the previewed run starts.
-  const firstScheduledId = rows.find(isScheduled)?.cycleId;
+
+  /*
+   * Clamped while rendering, so the desk never paints a frame of "No policies
+   * renewing" — completing the last call on the last page shrinks `rows` out
+   * from under `page`, and correcting that in an effect alone would show the
+   * empty state for one frame before fixing it.
+   */
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const pageRows = rows.slice(pageStart, pageStart + PAGE_SIZE);
+
+  /*
+   * Where the previewed run starts **on this page**, not across the whole desk.
+   *
+   * Rows arrive actionable-first, so computed globally this would label only
+   * the page holding the transition: a later page made entirely of previewed
+   * calls would render a run of disabled rows with no explanation, which is the
+   * exact confusion the divider exists to prevent.
+   */
+  const firstScheduledId = pageRows.find(isScheduled)?.cycleId;
+
+  const goToPage = (next: number) => {
+    setUrlState({ renewalPage: next <= 1 ? "" : String(next) });
+    // Rows are tall enough that a page can still scroll on a short viewport, so
+    // land at the top of the new one rather than wherever the last was left.
+    listRef.current?.scrollTo({ top: 0 });
+  };
+
+  /*
+   * Reconcile the URL with the clamp above.
+   *
+   * The render already shows the right page, so this only fixes the address
+   * bar — but leaving `?renewalPage=3` on a two-page desk is both a lie in a
+   * URL somebody might paste and a trap: one new cycle materializing on the
+   * next refetch would grow `totalPages` and silently jump the rep to page 3.
+   */
+  useEffect(() => {
+    if (page !== currentPage) {
+      setUrlState({ renewalPage: currentPage <= 1 ? "" : String(currentPage) });
+    }
+  }, [page, currentPage, setUrlState]);
 
   return (
     <div className="flex flex-col rounded-xl border border-white/8 bg-card overflow-hidden h-full">
@@ -88,7 +171,7 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
       </div>
 
       {/* Client stack */}
-      <div className="flex-1 overflow-y-auto divide-y divide-white/5 px-4 py-2">
+      <div ref={listRef} className="flex-1 overflow-y-auto divide-y divide-white/5 px-4 py-2">
         {deskQuery.isPending && (
           <div className="flex items-center justify-center gap-2 h-32 text-sm text-muted-foreground">
             <Loader2 size={14} className="animate-spin" />
@@ -108,7 +191,7 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
           </div>
         )}
 
-        {rows.map((row) => {
+        {pageRows.map((row) => {
           const cfg = priorityConfig[priorityOf(row)];
           const isMerged = row.mergedFrom.length > 0;
           const scheduled = isScheduled(row);
@@ -223,6 +306,46 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
           );
         })}
       </div>
+
+      {/* Pagination. Hidden on a single page: a footer that can only say "1 / 1"
+          is chrome, and this card is short on vertical room.
+
+          Markup mirrors `PriorityTicketQueue`'s footer deliberately — the two
+          sit side by side in the same row, and two different paginators on one
+          screen reads as an inconsistency rather than a distinction. That also
+          means the same `white/8` + `bg-secondary` values: this whole card is
+          written in them, so reaching for theme tokens here alone would leave a
+          footer that does not match the box above it. The Service Dashboard is
+          slated for a light-theme pass as a unit. */}
+      {totalPages > 1 && (
+        <nav
+          aria-label="Renewal outreach pagination"
+          className="flex-shrink-0 flex items-center justify-between gap-3 px-5 py-3 border-t border-white/8"
+        >
+          <span className="text-[11px] text-muted-foreground tabular-nums">
+            Showing {pageStart + 1}–{pageStart + pageRows.length} of {rows.length}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              disabled={currentPage <= 1}
+              onClick={() => goToPage(currentPage - 1)}
+              className="px-2.5 py-1 rounded-md bg-secondary border border-white/8 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary/80 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted-foreground disabled:hover:bg-secondary"
+            >
+              Prev
+            </button>
+            <span className="px-1 text-[11px] text-muted-foreground tabular-nums">
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              disabled={currentPage >= totalPages}
+              onClick={() => goToPage(currentPage + 1)}
+              className="px-2.5 py-1 rounded-md bg-secondary border border-white/8 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary/80 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted-foreground disabled:hover:bg-secondary"
+            >
+              Next
+            </button>
+          </div>
+        </nav>
+      )}
     </div>
   );
 }
