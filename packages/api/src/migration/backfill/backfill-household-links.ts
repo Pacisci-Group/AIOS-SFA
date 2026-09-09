@@ -176,6 +176,13 @@ interface RemoveHouseholdDecision {
   repointLeadsTo?: string;
   repointLeadsToRecordId?: string;
   unlinkLeads?: boolean;
+  /**
+   * This household is a **duplicate of** `repointLeadsTo`, not a spurious row —
+   * so a member with nowhere else to go moves there rather than being left
+   * unlinked. See `resolveStrandedContact` for why this must be declared and
+   * cannot be inferred.
+   */
+  mergeMembers?: boolean;
 }
 
 interface OwnerDecisions {
@@ -220,6 +227,8 @@ interface ContactStats {
   unlinkedInSource: number;
   householdNotMigrated: number;
   targetRemovedByOwner: number;
+  /** Landed on the household their own was merged into (2026-09-09 pairs). */
+  movedByMerge: number;
 }
 
 interface HouseholdStats {
@@ -266,6 +275,8 @@ interface OwnerDecisionsReport {
   leadsRepointed: number;
   leadsUnlinked: number;
   contactsRelinked: number;
+  /** Moved to the kept household by a `mergeMembers` decision. */
+  contactsMovedToKeptHousehold: number;
   contactsLeftUnlinked: number;
   primaryContactsSet: number;
   primaryContactsAlreadyCorrect: number;
@@ -423,6 +434,16 @@ async function backfill(db: Db, options: Options): Promise<BackfillReport> {
   const removedHouseholdIds = new Set(
     decisions.removeHouseholds.map((d) => d.recordId),
   );
+  /*
+   * The subset of those removals that are *merges* — a duplicate household
+   * folded into the one that survives it. Everything on the doomed side lands
+   * on the kept side rather than being unlinked; see `pickTargetHousehold`.
+   */
+  const mergedInto = new Map(
+    decisions.removeHouseholds
+      .filter((d) => d.mergeMembers && d.repointLeadsToRecordId)
+      .map((d) => [d.recordId, d.repointLeadsToRecordId as string]),
+  );
 
   const households = db.collection('households');
   const contacts = db.collection('contacts');
@@ -490,6 +511,7 @@ async function backfill(db: Db, options: Options): Promise<BackfillReport> {
       unlinkedInSource: 0,
       householdNotMigrated: 0,
       targetRemovedByOwner: 0,
+      movedByMerge: 0,
     },
     households: {
       inCsv: csvHouseholds.size,
@@ -529,14 +551,6 @@ async function backfill(db: Db, options: Options): Promise<BackfillReport> {
   // 1. Contacts — one household each, fill-if-empty
   // -------------------------------------------------------------------------
 
-  /** The household each CSV contact should land on, excluding removed ones. */
-  const targetHouseholdForContact = (
-    row: ContactCsvRow,
-  ): string | undefined => {
-    const target = pickTargetHousehold(row, removedHouseholdIds);
-    return target.kind === 'ok' ? target.legacyHouseholdId : undefined;
-  };
-
   const contactOps: AnyBulkWriteOperation[] = [];
   for (const row of csvContacts.values()) {
     const doc = contactByLegacyId.get(row.recordId);
@@ -546,7 +560,7 @@ async function backfill(db: Db, options: Options): Promise<BackfillReport> {
     }
     report.contacts.matched++;
 
-    const target = pickTargetHousehold(row, removedHouseholdIds);
+    const target = pickTargetHousehold(row, removedHouseholdIds, mergedInto);
     if (target.kind === 'unlinked-in-source') {
       report.contacts.unlinkedInSource++;
       continue;
@@ -575,6 +589,7 @@ async function backfill(db: Db, options: Options): Promise<BackfillReport> {
           },
         });
         report.contacts.filled++;
+        if (target.viaMerge) report.contacts.movedByMerge++;
         // Keep the in-memory copy true, so later steps see the post-run state.
         doc.householdId = household._id;
         doc.legacyHouseholdId = target.legacyHouseholdId;
@@ -833,7 +848,8 @@ async function backfill(db: Db, options: Options): Promise<BackfillReport> {
       csvContacts,
       householdByLegacyId,
       contactByLegacyId,
-      targetHouseholdForContact,
+      removedHouseholdIds,
+      mergedInto,
     });
   }
 
@@ -859,7 +875,10 @@ async function applyOwnerDecisions(args: {
   csvContacts: Map<string, ContactCsvRow>;
   householdByLegacyId: Map<string, HouseholdDoc>;
   contactByLegacyId: Map<string, ContactDoc>;
-  targetHouseholdForContact: (row: ContactCsvRow) => string | undefined;
+  /** Every household the decisions file removes — a link never lands on one. */
+  removedHouseholdIds: ReadonlySet<string>;
+  /** The subset of those that are merges: doomed rec id -> the survivor. */
+  mergedInto: ReadonlyMap<string, string>;
 }): Promise<OwnerDecisionsReport> {
   const {
     db,
@@ -870,7 +889,8 @@ async function applyOwnerDecisions(args: {
     csvContacts,
     householdByLegacyId,
     contactByLegacyId,
-    targetHouseholdForContact,
+    removedHouseholdIds,
+    mergedInto,
   } = args;
   const dryRun = options.dryRun;
   const households = db.collection('households');
@@ -891,6 +911,7 @@ async function applyOwnerDecisions(args: {
     leadsRepointed: 0,
     leadsUnlinked: 0,
     contactsRelinked: 0,
+    contactsMovedToKeptHousehold: 0,
     contactsLeftUnlinked: 0,
     primaryContactsSet: 0,
     primaryContactsAlreadyCorrect: 0,
@@ -1104,25 +1125,31 @@ async function applyOwnerDecisions(args: {
       .toArray()) as unknown as ContactDoc[];
     for (const contact of strandedContacts) {
       const csvRow = csvContacts.get(contact.legacySmartSuiteId);
-      const targetLegacyId = csvRow
-        ? targetHouseholdForContact(csvRow)
-        : undefined;
-      const target = targetLegacyId
-        ? householdByLegacyId.get(targetLegacyId)
-        : undefined;
-      if (target) {
+      const resolution = csvRow
+        ? pickTargetHousehold(csvRow, removedHouseholdIds, mergedInto)
+        : ({ kind: 'unlinked-in-source' } as const);
+      const target =
+        resolution.kind === 'ok'
+          ? householdByLegacyId.get(resolution.legacyHouseholdId)
+          : undefined;
+
+      if (resolution.kind === 'ok' && target) {
         if (!dryRun) {
           await contacts.updateOne(
             { _id: contact._id },
             {
               $set: {
                 householdId: target._id,
-                legacyHouseholdId: targetLegacyId,
+                legacyHouseholdId: resolution.legacyHouseholdId,
               },
             },
           );
         }
-        out.contactsRelinked++;
+        // Counted apart from an ordinary re-link: a merge *moving* somebody is
+        // the thing a reviewer needs to see happened, and the number is small
+        // enough to check by name against the decisions file.
+        if (resolution.viaMerge) out.contactsMovedToKeptHousehold++;
+        else out.contactsRelinked++;
       } else {
         if (!dryRun) {
           await contacts.updateOne(

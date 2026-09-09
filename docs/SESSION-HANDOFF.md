@@ -701,3 +701,80 @@ code-complete and the outstanding items before the PR are: the **three
 double-primary pairs** (David), and the production deploy sequence in Phase 4's
 report — one boot with `DB_MIGRATE_ON_BOOT=false`, resolve the pairs in the app,
 restart with migrations on.
+
+
+**The three double-primary pairs are resolved (2026-09-09) — merged, not
+re-primaried, and the last owner decision is closed.** David's answer was to
+**merge** each pair, and the evidence supports it: HH-4774/HH-4775 (Rivera) and
+HH-4790/HH-4792 (dudley) carry the **identical property address** and their
+SmartSuite rows were created minutes apart — one household submitted twice.
+HH-4527/HH-4540 (Lubbers) is the same person filed on two Edmond households.
+
+They are three more entries in `backfill/pac-91-owner-decisions.json`, applied by
+the Phase 1 backfill's `--apply-owner-decisions` exactly like the five removals
+of 2026-09-07. **That is the load-bearing choice**: the backfill runs *before any
+migration*, so the duplicates are gone before Phase 2's contact merge ever runs —
+and the merge therefore never creates a double primary in the first place.
+Measured: **0 of the 24 merge groups now have their two rows on different
+households**, where 3 did before.
+
+⚠ **New concept in the decisions file: `mergeMembers`.** A *removal* says the
+household was spurious and its people have homes elsewhere (`#HH4764` — Alarid
+and Alavanja keep theirs), so somebody with nowhere left is honestly unlinked. A
+*merge* says the household is another one filed twice, so everybody on it
+belongs on the survivor. The two look identical from the data — **karen stoke is
+a member of HH-4790 and of nothing else** — so the distinction is declared, not
+inferred, and `pickTargetHousehold` takes a `mergedInto` map beside
+`removedHouseholdIds`. Guessing either way is a defect: one invents a
+membership, the other loses one. Five unit cases cover it, including the refusal
+to follow a merge into another doomed household.
+
+**Rehearsal — the full production sequence replayed from `pac91-before-phase1`**,
+not just the changed step:
+
+| | Result |
+|---|---|
+| Phase 1 backfill (dry → live) | 8 households removed, **0 refused**, 2 leads re-pointed, 4 contacts moved to the kept household |
+| Re-run | 0 fills, 8 already removed, conflicts back to the 4 genuine ones |
+| `db:migrate` #1 | migration 1 applied, **wall fired** at the same 24 duplicate groups |
+| Contact merge (dry → live) | 24 groups, 24 merged, **0 groups spanning two households**, 0 dangling |
+| `db:migrate` #2 | `[PAC-91] built agencyId_1_primaryContactId_1` — **all 5 migrations applied** |
+| `db:migrate` #3 | no-op |
+
+End state: 3,082 contacts · 2,539 households · 2,810 memberships · **0 contacts
+primary of more than one household** · 0 dangling references · 0 primaries who
+are not members. HH-4775 keeps its 2 policies, the deal, the lead and the quote
+recap; **karen stoke is on HH-4792's roster**, which is the whole point of
+`mergeMembers`. Phase 5's counts are **unchanged at 135 / 280 / 59** — all three
+removed households *had* primaries, and nobody was stranded.
+
+⚠ **The production sequence no longer needs a human mid-deploy.** Phase 4's
+report described stopping to resolve the pairs *in the app*; that step is gone.
+`DB_MIGRATE_ON_BOOT=false` is still needed for the first boot — the backfill and
+the contact merge are CLI scripts that must run before the migrations — but the
+whole thing is now scriptable end to end:
+
+1. deploy with `DB_MIGRATE_ON_BOOT=false`
+2. Phase 1 backfill: `--dry-run` → review → live
+3. `db:migrate` (applies migration 1, stops at the identity wall)
+4. contact merge: `--dry-run` → review → live
+5. `db:migrate` (applies 2–5, builds both walls' indexes)
+6. restart with migrations on — a no-op
+
+⚠ **One data question left open on purpose.** The Lubbers direction is *forced,
+not chosen*: HH-4527 holds the $6,658.10 quote recap and the removal refuses to
+delete a household with one, so HH-4540 goes. The survivor is therefore still
+named **"Diann Fry"** and carries **no street address**, while HH-4540's
+"2425 Redvine Rd" is lost. Correcting the survivor's name and address is a
+separate data edit — not done here, because "Diann Fry" may well be the right
+household name and that is not ours to decide.
+
+Snapshots: **`pac91-before-merges`** is the old post-Phase-3 state (3 double
+primaries, index absent); **`pac91-after-merges`** is this replayed end state,
+which is what local `sfa` now holds — all 5 migrations applied, unlike every
+earlier phase which was restored afterwards.
+
+Verified: `build -w @sfa/api` + `tsc -p packages/api` clean, **855** unit
+(5 new), **854** e2e in 26 suites. `lint -w @sfa/api` on its exact baseline
+(same 7 files, 140 problems). Bruno not re-run — this commit changes no API
+surface, the same reason Phase 1 gave.

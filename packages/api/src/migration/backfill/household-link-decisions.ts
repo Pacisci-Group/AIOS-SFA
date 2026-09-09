@@ -32,10 +32,18 @@ export function decideLink(
 }
 
 export type HouseholdTarget =
-  | { kind: 'ok'; legacyHouseholdId: string }
+  | {
+      kind: 'ok';
+      legacyHouseholdId: string;
+      /** Reached through a merge rather than named by the export directly. */
+      viaMerge: boolean;
+    }
   /** The export links this contact to no household on either side. */
   | { kind: 'unlinked-in-source' }
-  /** Every household the export offers is one the owner decided to remove. */
+  /**
+   * Every household the export offers is one the owner decided to remove, and
+   * none of those removals is a merge that would carry the contact somewhere.
+   */
   | { kind: 'target-removed' };
 
 /**
@@ -47,6 +55,25 @@ export type HouseholdTarget =
  * lands on a record that is about to be deleted — regardless of whether the
  * removals run before or after the fill.
  *
+ * ── Removals vs merges ──────────────────────────────────────────────────────
+ * `mergedInto` is what separates the two kinds of decision, and it has to be
+ * declared rather than inferred, because "this contact's only household is
+ * going away" looks identical in both cases:
+ *
+ * - A **removal** (the five decided 2026-09-07) says the household was
+ *   spurious and its people have homes elsewhere — `#HH4764` is the worked
+ *   example, where Rebecca Alarid and Peter Alavanja keep their other
+ *   households. Anyone with nowhere left really is unlinked, and saying so is
+ *   the honest answer.
+ * - A **merge** (the three pairs decided 2026-09-09) says the household is
+ *   another one filed twice, so everybody on it belongs on the survivor.
+ *   karen stoke is a member of `#HH4790` and of nothing else, and `#HH4790`
+ *   *is* the `#HH4792` that outlives it — dropping her would lose a real
+ *   membership the export is telling us about.
+ *
+ * Guessing either way is a defect: one invents a membership, the other loses
+ * one.
+ *
  * ⚠ This deliberately collapses a many-to-many fact into one field, because
  * that is the shape the schema has today. Nothing is lost: the household side
  * keeps every membership in `memberContactIds`, which is what Phase 3's join
@@ -55,13 +82,29 @@ export type HouseholdTarget =
 export function pickTargetHousehold(
   row: ContactCsvRow,
   removedHouseholdIds: ReadonlySet<string>,
+  /** Removed household rec id -> the household it is being merged into. */
+  mergedInto: ReadonlyMap<string, string> = new Map(),
 ): HouseholdTarget {
   const candidates = [...row.primaryHouseholdIds, ...row.memberHouseholdIds];
   if (!candidates.length) return { kind: 'unlinked-in-source' };
-  const target = candidates.find((id) => !removedHouseholdIds.has(id));
-  return target
-    ? { kind: 'ok', legacyHouseholdId: target }
-    : { kind: 'target-removed' };
+
+  const surviving = candidates.find((id) => !removedHouseholdIds.has(id));
+  if (surviving) {
+    return { kind: 'ok', legacyHouseholdId: surviving, viaMerge: false };
+  }
+
+  /*
+   * Every candidate is going. Follow the first that is a *merge* — and only to
+   * a survivor, so a merge pointed at another doomed household cannot resurrect
+   * a dangling link.
+   */
+  for (const id of candidates) {
+    const kept = mergedInto.get(id);
+    if (kept && !removedHouseholdIds.has(kept)) {
+      return { kind: 'ok', legacyHouseholdId: kept, viaMerge: true };
+    }
+  }
+  return { kind: 'target-removed' };
 }
 
 /**

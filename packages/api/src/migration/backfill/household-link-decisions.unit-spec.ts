@@ -51,7 +51,7 @@ describe('pickTargetHousehold', () => {
         }),
         none,
       ),
-    ).toEqual({ kind: 'ok', legacyHouseholdId: 'hh-primary' });
+    ).toEqual({ kind: 'ok', legacyHouseholdId: 'hh-primary', viaMerge: false });
   });
 
   it('falls back to the first membership', () => {
@@ -60,7 +60,7 @@ describe('pickTargetHousehold', () => {
         contact({ memberHouseholdIds: ['hh-a', 'hh-b'] }),
         none,
       ),
-    ).toEqual({ kind: 'ok', legacyHouseholdId: 'hh-a' });
+    ).toEqual({ kind: 'ok', legacyHouseholdId: 'hh-a', viaMerge: false });
   });
 
   it('reports a contact the export links to nothing', () => {
@@ -76,7 +76,7 @@ describe('pickTargetHousehold', () => {
         contact({ primaryHouseholdIds: ['hh-3932', 'hh-4717'] }),
         new Set(['hh-4717']),
       ),
-    ).toEqual({ kind: 'ok', legacyHouseholdId: 'hh-3932' });
+    ).toEqual({ kind: 'ok', legacyHouseholdId: 'hh-3932', viaMerge: false });
   });
 
   it('leaves a contact unlinked when every candidate is removed', () => {
@@ -127,5 +127,65 @@ describe('buildHouseholdMembership', () => {
       contact({ recordId: 'c-2', primaryHouseholdIds: ['hh-1'] }),
     ]);
     expect(primaryContactsFor.get('hh-1')).toEqual(['c-1', 'c-2']);
+  });
+});
+
+describe('pickTargetHousehold — removals vs merges', () => {
+  const DOOMED = 'rec-doomed';
+  const KEPT = 'rec-kept';
+  const removed = new Set([DOOMED]);
+  const merged = new Map([[DOOMED, KEPT]]);
+
+  it('unlinks a contact whose only household is a plain removal', () => {
+    // The 2026-09-07 removals: the household was spurious, so somebody with
+    // nowhere left really is unlinked and the report should say so.
+    expect(
+      pickTargetHousehold(contact({ memberHouseholdIds: [DOOMED] }), removed)
+        .kind,
+    ).toBe('target-removed');
+  });
+
+  it('carries that contact to the survivor when the removal is a merge', () => {
+    // karen stoke: a member of #HH4790 and of nothing else, and #HH4790 is the
+    // #HH4792 that outlives it.
+    expect(
+      pickTargetHousehold(
+        contact({ memberHouseholdIds: [DOOMED] }),
+        removed,
+        merged,
+      ),
+    ).toEqual({ kind: 'ok', legacyHouseholdId: KEPT, viaMerge: true });
+  });
+
+  it('never overrides a household the export names and keeps', () => {
+    // Sarah Rivera is a member of both #HH4774 and #HH4775, so the merge has
+    // nothing to decide — her own surviving household wins, and `viaMerge`
+    // stays false so the report does not claim the merge moved her.
+    expect(
+      pickTargetHousehold(
+        contact({ memberHouseholdIds: [DOOMED, 'rec-own'] }),
+        removed,
+        merged,
+      ),
+    ).toEqual({ kind: 'ok', legacyHouseholdId: 'rec-own', viaMerge: false });
+  });
+
+  it('leaves a contact the export never linked alone, merge or not', () => {
+    // Inventing a membership is the opposite failure from losing one, and just
+    // as wrong.
+    expect(pickTargetHousehold(contact(), removed, merged).kind).toBe(
+      'unlinked-in-source',
+    );
+  });
+
+  it('refuses to follow a merge into another doomed household', () => {
+    // A chain would otherwise resurrect a dangling link.
+    expect(
+      pickTargetHousehold(
+        contact({ memberHouseholdIds: [DOOMED] }),
+        new Set([DOOMED, KEPT]),
+        merged,
+      ).kind,
+    ).toBe('target-removed');
   });
 });
