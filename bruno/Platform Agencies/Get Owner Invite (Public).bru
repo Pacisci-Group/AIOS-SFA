@@ -1,0 +1,61 @@
+meta {
+  name: Get Owner Invite (Public)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/auth/invite/{{onboardInviteToken}}
+  body: none
+  auth: none
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("greets the invited owner by the name the operator typed", function () {
+    const body = res.getBody();
+    expect(body.email).to.equal(bru.getVar("onboardOwnerEmail"));
+    expect(body.firstName).to.equal("Pac");
+    expect(body.roleNames).to.include("Agency Owner");
+  });
+
+  test("flags that the agency's own setup is still waiting", function () {
+    // What makes the wizard show "Step 1 of 5" rather than "Step 1 of 2" and
+    // then growing — it is known before any session exists.
+    expect(res.getBody().agencySetupPending).to.equal(true);
+  });
+}
+
+docs {
+  # GET /auth/invite/:token — public preview of an invite
+
+  Unauthenticated, so the accept-invite page can greet the invitee before any
+  session exists.
+
+  - **Module:** none (`@Public()`)
+  - **Permission:** none
+
+  ## Non-disclosure contract
+  Every field is something the holder of the emailed link already knows.
+  `firstName` / `lastName` are what the inviter typed and already appear in the
+  email's greeting; `agencySetupPending` is a fact about the **agency's** setup
+  state, not the person. Anything added here has to survive the question "would
+  I email this to whoever forwarded the link?".
+
+  ## Response `200`
+  ```json
+  {
+    "email": "…", "agencyName": "…", "roleNames": ["Agency Owner"],
+    "expiresAt": "…", "firstName": "Pac", "lastName": "Owner",
+    "agencySetupPending": true
+  }
+  ```
+
+  ## Errors
+  - `404 Not Found` — unknown token, or already used.
+  - `410 Gone` — expired. Distinguished from 404 on purpose: the page tells an
+    expired invitee to ask for a resend, which is actionable.
+}

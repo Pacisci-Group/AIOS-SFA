@@ -4,6 +4,7 @@ import {
   SEMIANNUAL_TERM_POLICY_TYPES,
   isSemiannualPolicyType,
   renewalTrackFor,
+  nextRenewalDate,
   normalizeRenewalPolicyType,
 } from '@sfa/shared';
 import type { RenewalStepDefinition } from '@sfa/shared';
@@ -13,7 +14,9 @@ import {
   daysUntil,
   formatTermKey,
   renewalAnchorDate,
+  renewalStepsToOpen,
   scheduleRenewalSteps,
+  type PlannedRenewalStep,
 } from './renewal-scheduling';
 
 const HOUR_MS = 3_600_000;
@@ -308,5 +311,168 @@ describe('daysUntil', () => {
   it('floors a partial day rather than rounding up', () => {
     // 44 days and 23 hours out is still "44 days away", never 45.
     expect(daysUntil(RENEWAL, before(45, HOUR_MS))).toBe(44);
+  });
+});
+
+describe('nextRenewalDate', () => {
+  /** Today, for every case below. */
+  const NOW = new Date('2026-09-08T14:30:00.000Z');
+  const iso = (date: Date | null) => date?.toISOString().slice(0, 10) ?? null;
+
+  it('carries an annual policy a whole year past its effective date', () => {
+    // The worked example: a home policy bought 8 Dec 2025 renews 8 Dec 2026,
+    // which is 91 days out — so its T-90 call is due about now.
+    expect(iso(nextRenewalDate(new Date('2025-12-08'), 'Home', NOW))).toBe(
+      '2026-12-08',
+    );
+  });
+
+  it('renews an auto policy every six months', () => {
+    // Same purchase date, half the term: 8 Jun 2026 has already gone by, so
+    // the next one is 8 Dec 2026.
+    expect(iso(nextRenewalDate(new Date('2025-12-08'), 'Auto', NOW))).toBe(
+      '2026-12-08',
+    );
+    // The same anchor on each track, to show the 6-month step really is being
+    // taken: auto has already renewed once since April and comes round again
+    // in October, while a home policy bought that day waits until next April.
+    expect(iso(nextRenewalDate(new Date('2026-04-08'), 'Auto', NOW))).toBe(
+      '2026-10-08',
+    );
+    expect(iso(nextRenewalDate(new Date('2026-04-08'), 'Home', NOW))).toBe(
+      '2027-04-08',
+    );
+  });
+
+  it('keeps the day of the month across many terms', () => {
+    // Five years of annual terms must not drift the 8th by a single day.
+    expect(iso(nextRenewalDate(new Date('2021-03-08'), 'Home', NOW))).toBe(
+      '2027-03-08',
+    );
+  });
+
+  it('clamps a month-end anchor instead of overflowing into the next month', () => {
+    // 31 Aug + 6 months is 28/29 Feb, never 2 or 3 March. `setUTCMonth` alone
+    // overflows, which would walk the date forward every single term.
+    expect(iso(nextRenewalDate(new Date('2025-08-31'), 'Auto', NOW))).toBe(
+      '2027-02-28',
+    );
+  });
+
+  it('survives a 29 February anchor in a non-leap year', () => {
+    expect(iso(nextRenewalDate(new Date('2024-02-29'), 'Home', NOW))).toBe(
+      '2027-02-28',
+    );
+  });
+
+  it('returns the anchor itself when coverage has not started yet', () => {
+    // A policy sold with a future effective date renews on its own first term,
+    // not one term after it.
+    expect(iso(nextRenewalDate(new Date('2026-11-01'), 'Home', NOW))).toBe(
+      '2026-11-01',
+    );
+  });
+
+  it('treats a renewal falling today as still due today', () => {
+    // Midnight has passed but the day has not. Comparing instants rather than
+    // calendar days would push this a whole term out.
+    expect(iso(nextRenewalDate(new Date('2025-09-08'), 'Home', NOW))).toBe(
+      '2026-09-08',
+    );
+  });
+
+  it('resolves a raw SmartSuite code to the right term', () => {
+    // Thousands of migrated rows hold `Zgsh3` rather than "Auto"; reading it as
+    // annual would schedule an auto policy's calls six months late.
+    expect(POLICY_TYPE_CODE_ALIASES.Zgsh3).toBe('Auto');
+    expect(iso(nextRenewalDate(new Date('2026-04-08'), 'Zgsh3', NOW))).toBe(
+      '2026-10-08',
+    );
+  });
+
+  it('falls back to an annual term for an uncatalogued type', () => {
+    // ~91 active policies carry codes in no catalogue. Annual is the safe
+    // guess, and it must not throw or return null.
+    expect(iso(nextRenewalDate(new Date('2025-09-08'), 'BK08B', NOW))).toBe(
+      '2026-09-08',
+    );
+  });
+
+  it('has no anchor to count from when the date is missing or unusable', () => {
+    expect(nextRenewalDate(null, 'Home', NOW)).toBeNull();
+    expect(nextRenewalDate(undefined, 'Home', NOW)).toBeNull();
+    expect(nextRenewalDate(new Date('not a date'), 'Home', NOW)).toBeNull();
+  });
+});
+
+describe('renewalStepsToOpen', () => {
+  const CUTOVER = new Date('2026-09-08T00:00:00.000Z');
+  const GRACE = 7;
+
+  /** A planned step opening `days` before the cutover. */
+  const step = (
+    stepKey: 'annual_review' | 'renewal_review',
+    days: number,
+  ): PlannedRenewalStep => ({
+    stepKey,
+    label: stepKey,
+    sortOrder: stepKey === 'annual_review' ? 0 : 1,
+    sequence: stepKey === 'annual_review' ? 1 : 2,
+    completedAt: null,
+    mergedFrom: [],
+    availableAt: new Date(CUTOVER.getTime() - days * DAY_MS),
+    dueAt: new Date(CUTOVER.getTime() - days * DAY_MS + 48 * HOUR_MS),
+  });
+
+  const none = new Set<'annual_review' | 'renewal_review'>();
+  const keys = (steps: PlannedRenewalStep[]) => steps.map((s) => s.stepKey);
+
+  it('opens every call that is current', () => {
+    const planned = [step('annual_review', -30), step('renewal_review', -75)];
+    expect(keys(renewalStepsToOpen(planned, none, CUTOVER, GRACE))).toEqual([
+      'annual_review',
+      'renewal_review',
+    ]);
+  });
+
+  it('opens a call missed within the grace week', () => {
+    const planned = [step('renewal_review', 6)];
+    expect(keys(renewalStepsToOpen(planned, none, CUTOVER, GRACE))).toEqual([
+      'renewal_review',
+    ]);
+  });
+
+  it('drops a dead warm-up but keeps the review that still matters', () => {
+    // The T-90 passed four months ago and cannot be made on time; the T-45 is
+    // days away. Opening both would bury the queue in unmakeable calls.
+    const planned = [step('annual_review', 120), step('renewal_review', -5)];
+    expect(keys(renewalStepsToOpen(planned, none, CUTOVER, GRACE))).toEqual([
+      'renewal_review',
+    ]);
+  });
+
+  it('never lets a cycle go dark, even when every call is long past', () => {
+    // The renewal is still coming. Calling late beats not calling at all, so
+    // the latest step survives on its own.
+    const planned = [step('annual_review', 200), step('renewal_review', 155)];
+    expect(keys(renewalStepsToOpen(planned, none, CUTOVER, GRACE))).toEqual([
+      'renewal_review',
+    ]);
+  });
+
+  it('keeps a step that already has a ticket, however stale', () => {
+    // Otherwise `ensureRenewalTicket` would stop adopting its re-planned
+    // timing and the existing ticket would freeze on a stale date.
+    const planned = [step('annual_review', 300), step('renewal_review', 255)];
+    const existing = new Set<'annual_review' | 'renewal_review'>([
+      'annual_review',
+    ]);
+    expect(keys(renewalStepsToOpen(planned, existing, CUTOVER, GRACE))).toEqual(
+      ['annual_review', 'renewal_review'],
+    );
+  });
+
+  it('has nothing to open for an empty plan', () => {
+    expect(renewalStepsToOpen([], none, CUTOVER, GRACE)).toEqual([]);
   });
 });

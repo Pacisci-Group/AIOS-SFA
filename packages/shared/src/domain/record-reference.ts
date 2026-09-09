@@ -75,3 +75,33 @@ export function parseHouseholdRef(
   const seq = Number(match[1]);
   return Number.isSafeInteger(seq) && seq >= 1 ? seq : null;
 }
+
+/**
+ * Legacy service-ticket numbers.
+ *
+ * SmartSuite titled every ticket `#SFAS-030`, and the agency reads those numbers
+ * off printed notes and call logs, so a migrated ticket keeps its number rather
+ * than being reallocated under the CRM's per-category prefixes (`ENDR-101`).
+ * Same two departures as the household reference: no `#`, no zero padding —
+ * `#SFAS-030` becomes `SFAS-30`, next to `HH-30`, not `HH-0030`.
+ *
+ * The prefix is taken from the title rather than fixed to `SFAS`, so a second
+ * agency's `#XYZ-12` imports as `XYZ-12` without a code change.
+ */
+const LEGACY_TICKET_NUMBER_PATTERN = /^#?([A-Z]+)-?0*(\d+)$/i;
+
+/**
+ * `SFAS-30` from a legacy ticket title, or `null` when the title is not a
+ * number — a ticket without one cannot be imported, since the CRM requires a
+ * number and inventing one would collide with the live allocator.
+ */
+export function parseLegacyTicketNumber(
+  value: string | null | undefined,
+): string | null {
+  if (!value) return null;
+  const match = LEGACY_TICKET_NUMBER_PATTERN.exec(value.trim());
+  if (!match) return null;
+  const seq = Number(match[2]);
+  if (!Number.isSafeInteger(seq) || seq < 1) return null;
+  return `${match[1].toUpperCase()}-${seq}`;
+}

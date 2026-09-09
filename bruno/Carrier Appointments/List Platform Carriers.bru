@@ -1,0 +1,68 @@
+meta {
+  name: List Platform Carriers
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/platform/carriers
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const allstate = res.getBody().carriers.find((c) => c.name === "Allstate");
+    if (allstate) bru.setVar("allstateCarrierId", allstate.id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the seeded catalog", function () {
+    // Seeded by the core seed (`carriers.seed.ts`), not by any migration, so
+    // this holds on every environment.
+    const names = res.getBody().carriers.map((c) => c.name);
+    expect(names).to.include("Allstate");
+  });
+}
+
+docs {
+  # GET /platform/carriers — the global carrier catalog
+
+  Backs the Super Admin onboarding wizard's carrier picker, and is the read half
+  of the eventual super-admin carrier CRUD (PAC-93).
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:agencies:read`
+  - **Data scope:** none — above the tenant boundary. `@SkipTenant()` and
+    `@SkipBranch()` are both set.
+
+  ## Why this exists next to `GET /carriers`
+
+  `/carriers` is gated on the `deal_audits` / `crm_service` **modules**, and a
+  platform operator has no agency, so no entitlement can satisfy it — widening
+  its permission list would not help. This route is what `carrier.schema.ts`
+  reserved for super-admin access.
+
+  It returns **globals only** (`agencyId: null`), which is exactly the set a
+  carrier appointment may target: appointments are unique across tenants, so an
+  agency-scoped custom carrier would make "the same carrier" undecidable.
+
+  ## Response `200`
+  ```json
+  { "carriers": [ { "id": "6a86…", "name": "Allstate",
+                    "policyNumberPattern": "\\d+", "policyNumberHint": null } ] }
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — not a platform account.
+}

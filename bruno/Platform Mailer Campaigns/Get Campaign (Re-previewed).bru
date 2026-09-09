@@ -1,0 +1,64 @@
+meta {
+  name: Get Campaign (Re-previewed)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:pre-request {
+  // Same reason as `Get Campaign (Previewed)`: the re-preview `PATCH` queued is
+  // a job, not a synchronous recompute.
+  await new Promise((resolve) => setTimeout(resolve, 6000));
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("previewed again", function () {
+    expect(res.getBody().status).to.equal("previewed");
+  });
+
+  test("the resolved ZIP is no longer unmatched", function () {
+    // The proof that a preview resolution actually reaches the transform: the
+    // market it decides is the market printed on the piece.
+    expect(res.getBody().preview.unmatchedZips).to.not.include("99999");
+  });
+
+  test("the overlap panel is populated, not merely present", function () {
+    // On a first run there is nothing to overlap; on a re-run of this
+    // collection the earlier campaign shows up here. Both are correct, so the
+    // assertion is on the shape rather than on a number that depends on
+    // history.
+    const overlap = res.getBody().preview.overlap;
+    expect(overlap).to.have.property("existingInOtherCampaigns");
+    expect(overlap).to.have.property("replacedRecordCount");
+    expect(overlap).to.have.property("deleteCountIfOverwrite");
+    expect(res.getBody().preview.existingCampaigns).to.be.an("array");
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/:campaignId — after the inline ZIP resolution
+
+  Same endpoint as `Get Campaign (Previewed)`; see that request's docs for the
+  full contract. This exists as its own request because "a ZIP resolved in the
+  preview is actually used by the run" is the behaviour the resolver flow exists
+  for, and worth a standing assertion rather than a comment.
+
+  The ZIP table is layered lowest-first: seeded global rows, then any per-agency
+  override (nothing writes those yet), then the campaign's own
+  `settings.zipResolutions`. The campaign's answer wins because it is the most
+  recent human decision, and the run must use exactly what the operator was
+  shown.
+}

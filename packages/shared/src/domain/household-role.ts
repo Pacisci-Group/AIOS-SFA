@@ -2,8 +2,10 @@
  * Household-member relationship vocabulary (PAC-37).
  *
  * Shared because the New Lead form renders these as the member-row dropdown and
- * the intake pipeline writes them to `contacts.roleInHousehold`, which is a free
+ * the intake pipeline writes them to `householdMembers.role`, which is a free
  * string on the schema — this is the only thing keeping the two sides in step.
+ * (It was `contacts.roleInHousehold` until PAC-91 §5 made role a property of the
+ * membership rather than of the person.)
  *
  * The `./sfaforms` prototype offers only three roles; **Child is missing there**
  * and is required here.
@@ -18,8 +20,11 @@ export const HOUSEHOLD_MEMBER_ROLES = [
 export type HouseholdMemberRole = (typeof HOUSEHOLD_MEMBER_ROLES)[number];
 
 /**
- * The primary contact's role. Not selectable in the form — it's implied by
- * `contacts.isPrimary`, and intake stamps it on create.
+ * The primary contact's role. Not selectable in the form — it is implied by the
+ * household's `primaryContactId`, and intake stamps it onto the membership it
+ * creates (PAC-91 §5; it used to be stamped onto `contacts.roleInHousehold`
+ * alongside a `contacts.isPrimary` flag, neither of which could say *which*
+ * household it meant).
  */
 export const PRIMARY_HOUSEHOLD_ROLE = 'Named Insured';
 

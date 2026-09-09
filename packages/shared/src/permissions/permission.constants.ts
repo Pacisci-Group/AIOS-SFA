@@ -18,6 +18,15 @@ export const PlatformPermission = {
   /** Upload an RTP file and commit the mailers it produces (PAC-73). */
   MailersWrite: 'platform:mailers:write',
   /**
+   * Search the cross-agency user directory in the Super Admin panel (PAC-70).
+   *
+   * The only read that returns users from *every* tenant. Separate from
+   * `UsersImpersonate` so "can find a person" and "can act as a person" stay
+   * independently grantable — an operator who triages support tickets needs
+   * the first without the second.
+   */
+  UsersRead: 'platform:users:read',
+  /**
    * Mint a session as another user, without their password (PAC-70).
    *
    * The strongest capability on the platform: it hands the holder every
@@ -80,6 +89,47 @@ export const AgencyPermission = {
    * that flag — and an already-seeded agency needs `npm run api:sync:roles`.
    */
   ChangeLogsRead: 'agency:changelogs:read',
+  /**
+   * White-labelling (§ the white-label epic). Three pairs rather than one
+   * because they carry three very different blast radii, and an owner may well
+   * want to delegate the harmless one without the other two:
+   *
+   * | Pair | Worst case if misused |
+   * |---|---|
+   * | `branding` | A wrong logo. Cosmetic, instantly reversible. |
+   * | `domains`  | The agency's app is unreachable at its own hostname. |
+   * | `email`    | Every invite and share link stops arriving. |
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, for
+   * the same three reasons written up there — a bare `branding:read` would be
+   * read as a *module* key by `resolvePermissionSet`'s enabled-module filter
+   * and dropped, and `RolesService.updateLevels` would discard it the first
+   * time an owner touched the role matrix.
+   */
+  BrandingRead: 'agency:branding:read',
+  BrandingWrite: 'agency:branding:write',
+  DomainsRead: 'agency:domains:read',
+  DomainsWrite: 'agency:domains:write',
+  EmailRead: 'agency:email:read',
+  EmailWrite: 'agency:email:write',
+  /**
+   * Carrier appointments — the agency code each carrier issued this agency
+   * (PAC-93). A fourth pair for the same reason the three above are three: its
+   * blast radius is its own. A wrong code files this agency's mailer prospects
+   * under another tenant, or under none — the appointment is what PAC-71 routes
+   * a vendor file's `agencyid` column by.
+   *
+   * ⚠ **Not `agency:carriers:*`.** `carrier.schema.ts` already reserves that
+   * for agency-owner CRUD over the carrier *catalog*, which is a different
+   * thing: the catalog says which insurers exist, an appointment says which of
+   * them appointed you and under what code. Two capabilities must not share a
+   * string.
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, for
+   * the same three reasons written up there.
+   */
+  CarrierAppointmentsRead: 'agency:carrier_appointments:read',
+  CarrierAppointmentsWrite: 'agency:carrier_appointments:write',
 } as const;
 
 export type ModuleAction = 'read' | 'write';

@@ -98,7 +98,6 @@ export class LeadTicketsService {
           .getHousehold(access, String(lead.householdId))
           .catch(() => null)
       : null;
-    const primaryContact = household?.contacts?.find((c) => c.isPrimary);
     const leadName = [lead.firstName, lead.lastName]
       .filter(Boolean)
       .join(' ')
@@ -134,16 +133,15 @@ export class LeadTicketsService {
         leadId: lead._id,
         householdId: lead.householdId ?? null,
         household: household?.name ?? '',
-        phone:
-          primaryContact?.phones?.[0] ??
-          household?.primaryPhones?.[0] ??
-          lead.phones?.[0] ??
-          '',
-        email:
-          primaryContact?.emails?.[0] ??
-          household?.primaryEmails?.[0] ??
-          lead.emails?.[0] ??
-          '',
+        /*
+         * One source, not a three-step chain (PAC-91 §1). `primaryEmail` /
+         * `primaryPhone` on the household view are *resolved from the primary
+         * contact* by `ClientsService.getHousehold`, so the old first two links
+         * were the same value read twice — and the third, the lead's own copy,
+         * no longer exists.
+         */
+        phone: household?.primaryPhone ?? '',
+        email: household?.primaryEmail ?? '',
         openedAt: now,
         lastActivityAt: now,
         resolvedAt: null,

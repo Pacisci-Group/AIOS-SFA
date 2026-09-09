@@ -12,6 +12,7 @@ import type {
   RenewalTrack,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type RenewalCycleDocument = HydratedDocument<RenewalCycle>;
 
@@ -25,7 +26,7 @@ export type RenewalCycleDocument = HydratedDocument<RenewalCycle>;
  */
 @Schema({ _id: false, timestamps: false })
 export class RenewalPolicyEntry {
-  @Prop({ type: Types.ObjectId, ref: 'Policy', required: true })
+  @Prop({ type: ObjectIdType, ref: 'Policy', required: true })
   policyId: Types.ObjectId;
 
   @Prop({ trim: true, default: '' })
@@ -47,7 +48,7 @@ export class RenewalPolicyEntry {
   @Prop({ type: Date, default: null })
   discussedAt: Date | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   discussedBy: Types.ObjectId | null;
 
   @Prop({ trim: true, default: '' })
@@ -71,10 +72,10 @@ export const RenewalPolicySchema =
  */
 @Schema({ timestamps: true, collection: 'renewalCycles' })
 export class RenewalCycle {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', required: true, index: true })
   agencyId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Branch', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Branch', index: true, default: null })
   branchId?: Types.ObjectId | null;
 
   /**
@@ -86,10 +87,10 @@ export class RenewalCycle {
   @Prop({ required: true, trim: true })
   groupKey: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Deal', default: null })
+  @Prop({ type: ObjectIdType, ref: 'Deal', default: null })
   dealId: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true, default: null })
   householdId: Types.ObjectId | null;
 
   /**
@@ -153,7 +154,7 @@ export class RenewalCycle {
   @Prop({ type: Date, default: null })
   outcomeAt: Date | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   outcomeBy: Types.ObjectId | null;
 
   @Prop({ trim: true, default: '' })
@@ -162,7 +163,7 @@ export class RenewalCycle {
   @Prop({ trim: true, default: '' })
   outcomeNote: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   assignedCsrId: Types.ObjectId | null;
 }
 

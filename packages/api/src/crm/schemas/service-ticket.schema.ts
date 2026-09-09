@@ -20,6 +20,8 @@ import type {
   ServiceTicketStatus,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
+import { LEGACY_DEDUPE_INDEX_OPTIONS } from '../../common/schemas/tenant-record.schema';
 
 export type ServiceTicketDocument = HydratedDocument<ServiceTicket>;
 
@@ -59,7 +61,7 @@ export const ServiceTicketActivitySchema = SchemaFactory.createForClass(
 @Schema({ _id: false, timestamps: false })
 export class OnboardingStepEntry {
   /** The parent `Onboarding` this ticket belongs to. */
-  @Prop({ type: Types.ObjectId, ref: 'Onboarding', required: true })
+  @Prop({ type: ObjectIdType, ref: 'Onboarding', required: true })
   onboardingId: Types.ObjectId;
 
   @Prop({ type: String, enum: ONBOARDING_STEP_KEYS, required: true })
@@ -82,7 +84,7 @@ export class OnboardingStepEntry {
   @Prop({ type: Date, default: null })
   completedAt: Date | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   completedBy: Types.ObjectId | null;
 
   /** Denormalized display name, so the panel needs no user lookup. */
@@ -109,7 +111,7 @@ export const OnboardingStepSchema =
 @Schema({ _id: false, timestamps: false })
 export class RenewalStepEntry {
   /** The parent `RenewalCycle` this ticket belongs to. */
-  @Prop({ type: Types.ObjectId, ref: 'RenewalCycle', required: true })
+  @Prop({ type: ObjectIdType, ref: 'RenewalCycle', required: true })
   renewalCycleId: Types.ObjectId;
 
   @Prop({ type: String, enum: RENEWAL_STEP_KEYS, required: true })
@@ -143,7 +145,7 @@ export class RenewalStepEntry {
   @Prop({ type: Date, default: null })
   completedAt: Date | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   completedBy: Types.ObjectId | null;
 
   @Prop({ trim: true, default: '' })
@@ -162,12 +164,24 @@ export class RenewalStepEntry {
 
 export const RenewalStepSchema = SchemaFactory.createForClass(RenewalStepEntry);
 
-@Schema({ timestamps: true, collection: 'service_tickets' })
+/**
+ * The one service-ticket collection.
+ *
+ * `serviceTickets`, camel-cased like every other collection here. There used to
+ * be two: the SmartSuite migration wrote a thin import mirror to this name from
+ * `service-tickets/schemas/` while the CRM read a `service_tickets` collection
+ * through this schema, and because both classes were named `ServiceTicket`,
+ * `@nestjs/mongoose` would have silently handed whichever registered first to
+ * both had they ever shared a Nest context. The mirror is gone; the migration
+ * and the demo seed write this shape, and `consolidate-service-tickets.ts`
+ * folded the rows the old mirror had already imported into here.
+ */
+@Schema({ timestamps: true, collection: 'serviceTickets' })
 export class ServiceTicket {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', required: true, index: true })
   agencyId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Branch', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Branch', index: true, default: null })
   branchId?: Types.ObjectId | null;
 
   /** Human-facing ticket reference, unique within an agency (e.g. RENEW-280). */
@@ -217,11 +231,11 @@ export class ServiceTicket {
   assignedRep: string;
 
   /** The user this ticket belongs to (drives `own` data-scope filtering). */
-  @Prop({ type: Types.ObjectId, ref: 'User', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', index: true, default: null })
   assignedUserId?: Types.ObjectId | null;
 
   /** Who opened the ticket. Stamped from the caller, never client-supplied. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   createdByUserId?: Types.ObjectId | null;
 
   @Prop({ trim: true, default: '' })
@@ -241,10 +255,10 @@ export class ServiceTicket {
    * `policyType` / `household` strings above stay as the display fallback for
    * tickets that have no linked record.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Policy', index: true, default: null })
   policyId: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true, default: null })
   householdId: Types.ObjectId | null;
 
   /**
@@ -258,7 +272,7 @@ export class ServiceTicket {
    * the point — a quote's service work is finished exactly when the quote is,
    * and letting the two disagree is what this prevents.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Lead', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Lead', index: true, default: null })
   leadId: Types.ObjectId | null;
 
   @Prop({ trim: true, default: '' })
@@ -298,12 +312,34 @@ export class ServiceTicket {
   @Prop({ type: RenewalStepSchema, default: null })
   renewal: RenewalStepEntry | null;
 
+  /**
+   * The SmartSuite record this ticket was imported from, or unset for a ticket
+   * opened in the app. The migration upserts on `{ agencyId, legacySmartSuiteId }`
+   * so a re-run heals an imported ticket in place rather than duplicating it;
+   * the demo seed uses the same key with a `demo:` prefix so it can purge its
+   * own rows. Same convention as every other imported collection
+   * (`TenantRecord.legacySmartSuiteId`), declared here because this schema
+   * carries ObjectId tenancy and does not extend `TenantRecord`.
+   */
   @Prop()
   legacySmartSuiteId?: string;
+
+  /**
+   * Flagged by the migration's test-record heuristic, like every other
+   * imported collection. Informational — no query filters on it.
+   */
+  @Prop({ default: false })
+  isTestRecord: boolean;
 }
 
 export const ServiceTicketSchema = SchemaFactory.createForClass(ServiceTicket);
 ServiceTicketSchema.index({ agencyId: 1, ticketNumber: 1 }, { unique: true });
+// The migration's idempotency key. Partial on `$type: 'string'` so the tickets
+// opened in the app, which carry no legacy id, do not collide on null.
+ServiceTicketSchema.index(
+  { agencyId: 1, legacySmartSuiteId: 1 },
+  LEGACY_DEDUPE_INDEX_OPTIONS,
+);
 ServiceTicketSchema.index({ agencyId: 1, branchId: 1, status: 1 });
 ServiceTicketSchema.index({ assignedUserId: 1, status: 1 });
 ServiceTicketSchema.index({ agencyId: 1, status: 1, resolvedAt: 1 });

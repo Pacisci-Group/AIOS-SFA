@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import type { SoldPolicyDiscounts } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
   TenantRecord,
@@ -74,6 +75,27 @@ export class Policy extends TenantRecord {
   @Prop({ type: Date })
   expirationDate?: Date;
 
+  /**
+   * **The next renewal — derived, not reported.**
+   *
+   * A term repeats forever, so "the renewal date" is a moving target rather
+   * than a fact recorded once. This holds the next occurrence, computed by
+   * `nextRenewalDate` from `effectiveDate` and the policy type's term (6 months
+   * for the auto family, 12 otherwise), and it is the anchor every renewal call
+   * counts backwards from.
+   *
+   * Maintained in three places, all of which must stay in step: the Sold form
+   * and `PATCH /policies/:id` set it on write, and the renewal scan's
+   * roll-forward pass advances it once a renewal goes by. **Never accept it
+   * from a client** — an anchor that disagrees with the effective date
+   * schedules real calls to real clients on the wrong day.
+   *
+   * ⚠ The SmartSuite import wrote something else entirely into this field:
+   * legacy's Renewal Date column held the *effective* date (every migrated row
+   * had the two exactly one day apart), so every value was historical and no
+   * renewal cycle was ever created. The
+   * `backfill-renewal-anchors` migration replaced them.
+   */
   @Prop({ type: Date })
   renewalDate?: Date;
 
@@ -89,13 +111,13 @@ export class Policy extends TenantRecord {
   @Prop()
   notes?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Household', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Household', index: true })
   householdId?: Types.ObjectId;
 
   @Prop({ index: true })
   legacyHouseholdId?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Deal', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Deal', index: true })
   dealId?: Types.ObjectId;
 
   @Prop()
@@ -112,10 +134,10 @@ export class Policy extends TenantRecord {
    * place — a transfer keeps both rows, because the client genuinely had two
    * policies over time and the old one's history has to survive.
    */
-  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Policy', index: true, default: null })
   transferredToPolicyId: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'Policy', index: true, default: null })
+  @Prop({ type: ObjectIdType, ref: 'Policy', index: true, default: null })
   transferredFromPolicyId: Types.ObjectId | null;
 
   /**

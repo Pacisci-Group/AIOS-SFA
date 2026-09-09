@@ -1,0 +1,70 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("ownerAccessToken", res.getBody().accessToken);
+    bru.setVar("ownerAgencyId", res.getBody().user.agencyId);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the owner holds the white-label permissions", function () {
+    // They reach the Agency Owner through the `AgencyPermission` spread, not
+    // through `grantsAllEnabledModules` — see `default-role-templates.ts`.
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("agency:branding:write");
+    expect(perms).to.include("agency:domains:write");
+    expect(perms).to.include("agency:email:write");
+  });
+}
+
+docs {
+  # POST /auth/login — white-label folder helper
+
+  Captures `ownerAccessToken` for the requests below, and doubles as the
+  regression guard that the three new permission pairs actually reach the Agency
+  Owner.
+
+  **A seeded agency needs `npm run api:sync:roles:dev` after deploying this
+  work.** The permissions are added to the role *template*; already-seeded
+  agencies carry a stored copy of their roles and do not pick them up otherwise.
+  If the permission assertions here fail against an existing database, that is
+  the missing step — not a code bug.
+
+  ## Host binding
+  Login is host-aware (`AuthService.assertBelongsOnHost`). The collection works
+  against a default local stack because of the **bootstrap fallback**: an agency
+  with no domain of its own may still sign in on the platform host. Add a domain
+  for the seeded agency (see **Add Custom Domain**) and this request starts
+  failing on `localhost` — which is the correct behaviour, not a regression.
+  Point `baseUrl` at that agency's hostname to continue.
+
+  The check happens **after** the password is verified, deliberately: doing it
+  first would turn the login form into an agency-membership oracle for arbitrary
+  email addresses.
+}

@@ -1,4 +1,5 @@
 import type { MailerSourceSystem } from '@sfa/shared';
+import { appointmentCodeKey } from '@sfa/shared';
 import { mailerControlNumberKeys } from './mailer-control-number';
 import {
   parseInteger,
@@ -18,9 +19,27 @@ export type RawMailerRow = Record<string, unknown>;
 
 /** Everything the mapper needs that is not in the row itself. */
 export interface MailerMapContext {
-  agencyId: string;
+  /** The `mailerCampaigns` document every row of this import belongs to. */
+  campaignId: string;
+  /**
+   * Resolve a row's audience from its own carrier agency code (PAC-71).
+   *
+   * Three answers, all meaningful and all different:
+   * - `string[]` — the agencies this row is visible to.
+   * - `null` — **every** agency (assignment mode `all`), stored literally.
+   * - `undefined` — **unassignable**. The row is rejected with a reason naming
+   *   the code, never guessed at and never silently dropped: filing one
+   *   agency's prospects under another is worse than refusing the file.
+   *
+   * Takes the already-normalized `codeKey` (`appointmentCodeKey`), or `null`
+   * when the row carries no code at all, so both sides of the match use one
+   * normalization — see the note on `appointmentCodeKey` in `@sfa/shared`.
+   */
+  visibleAgencyIdsFor: (
+    carrierAgencyCodeKey: string | null,
+  ) => string[] | null | undefined;
   system: MailerSourceSystem;
-  /** `MailerImportRun._id`, or the backfill's run stamp. */
+  /** `<campaignId>:<attempt>`, or an offline backfill's run stamp. */
   runId?: string;
   uploadedFilename?: string;
   storageKey?: string;
@@ -154,6 +173,20 @@ export function mapMailerRow(
     };
   }
 
+  // The row's own carrier agency code, and who that makes it visible to.
+  // Resolved before anything else is mapped: an unassignable row is a rejection,
+  // and there is no point coercing 120 columns for a document nobody may see.
+  const carrierAgencyId = parseText(row.agencyid)?.toUpperCase();
+  const codeKey = carrierAgencyId ? appointmentCodeKey(carrierAgencyId) : null;
+  const visibleAgencyIds = ctx.visibleAgencyIdsFor(codeKey);
+  if (visibleAgencyIds === undefined) {
+    return {
+      ok: false,
+      reason: `No agency is assigned for carrier agency code ${codeKey ?? '(blank)'}.`,
+      controlNumber: displayControlNumber(row),
+    };
+  }
+
   const zip = splitZip(row.zip ?? row.zipcodes);
   // `zip1` / `Zip Codes` carry the 5-digit form and `zip2` / `zip4` the +4, so
   // prefer the split columns when present and fall back to splitting `zip`.
@@ -208,7 +241,8 @@ export function mapMailerRow(
   const { firstName, lastName, fullName } = names(row);
 
   const doc: Record<string, unknown> = compact({
-    agencyId: ctx.agencyId,
+    campaignId: ctx.campaignId,
+    carrierAgencyId,
     controlNumber: parseText(row.controlno),
     newControlNumber: parseText(row.newcontrolnumber),
     firstName,
@@ -248,6 +282,12 @@ export function mapMailerRow(
   // future edit to it should not be able to silently unset a suppression flag.
   doc.doNotCall = parseYesNo(row.donotcall);
   doc.doNotMail = parseYesNo(row.donotmail);
+
+  // Reinstated after `compact` for the same reason, and one more: `null` here is
+  // "visible to every agency" and is the value mode `all` stores. `compact`
+  // drops only `undefined`, but a future edit that widened it would turn a
+  // platform-wide campaign into a hidden one with no error anywhere.
+  doc.visibleAgencyIds = visibleAgencyIds;
 
   return { ok: true, mapped: { primaryKey: keys[0], keys, doc } };
 }
@@ -321,16 +361,15 @@ function isEmpty(input: Record<string, unknown>): boolean {
 /**
  * What the file says about itself, read off the first data row.
  *
- * Safe to take from one row because these columns hold **exactly one distinct
- * value across all 20,405 rows** of a real file — `agencyid`, `agencyname`,
- * `Campaign Number`, `FileName`, `quotedate`, `type`, `product`. That is the
- * evidence behind "one file = one campaign, one agency, one product", and it is
- * what makes agency selection a per-upload choice rather than a per-row
- * attribution. The importer still verifies it holds (see `importMailerRows`)
- * rather than assuming it.
+ * A convenience summary for the campaign record, **not** an attribution rule.
+ * These columns held one distinct value across all 20,405 rows of the week-29
+ * file, but PAC-71 routes per row from `agencyid` regardless — a file carrying
+ * two codes splits across two tenants rather than being mis-filed under
+ * whichever one happened to be first. `importMailerRows` reports the full
+ * distinct set through `inconsistentColumns`.
  */
 export function detectFromRow(row: RawMailerRow): {
-  agencyId: string | null;
+  carrierAgencyId: string | null;
   agencyName: string | null;
   campaignNumber: string | null;
   weekNumber: number | null;
@@ -342,7 +381,7 @@ export function detectFromRow(row: RawMailerRow): {
   const campaignNumber = parseText(row.campaignnumber) ?? null;
   const quoteDate = parseSourceDate(row.quotedate);
   return {
-    agencyId: parseText(row.agencyid)?.toUpperCase() ?? null,
+    carrierAgencyId: parseText(row.agencyid)?.toUpperCase() ?? null,
     agencyName: parseText(row.agencyname) ?? null,
     campaignNumber,
     weekNumber:

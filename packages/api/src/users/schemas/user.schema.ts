@@ -1,14 +1,15 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type UserDocument = HydratedDocument<User>;
 
 @Schema({ timestamps: true, collection: 'users' })
 export class User {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', index: true })
   agencyId?: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Branch', index: true })
+  @Prop({ type: ObjectIdType, ref: 'Branch', index: true })
   branchId?: Types.ObjectId;
 
   @Prop({ required: true, unique: true, lowercase: true, trim: true })
@@ -44,6 +45,15 @@ export class User {
   lastName?: string;
 
   /**
+   * Object key of the user's profile photo (PAC-81). A pointer only — the
+   * bytes live in object storage and are streamed by `GET /me/avatar`. Keys
+   * are per-user (`agencies/<scope>/avatars/<userId>/…`), so ownership checks
+   * are exact.
+   */
+  @Prop()
+  avatarKey?: string;
+
+  /**
    * ⚠ `isActive: false` alone does **not** mean "pending invite".
    *
    * It meant exactly that until removal landed, and a good deal of code was
@@ -70,7 +80,7 @@ export class User {
   deactivatedAt: Date | null;
 
   /** Who removed them. Null when never deactivated. */
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
   deactivatedByUserId: Types.ObjectId | null;
 
   @Prop()

@@ -26,9 +26,16 @@ import {
   passwordResetCooldownSeconds,
   passwordResetExpiryHours,
 } from '../config/password-reset.config';
+import {
+  HostTenantResolver,
+  type HostTenant,
+} from '../common/tenancy/host-tenant.resolver';
+import { TenantUrlService } from '../common/tenancy/tenant-url.service';
+import { TenantBrandingService } from '../tenant-branding/tenant-branding.service';
 import { MailService } from '../mail/mail.service';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
+import { Branch, BranchDocument } from '../branches/schemas/branch.schema';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import {
   AgencyRole,
@@ -44,10 +51,12 @@ import {
   ActingUser,
   OwnerProtectionService,
 } from '../permissions/owner-protection.service';
-import { UserRole } from '../permissions/schemas/user-role.schema';
 import {
   AgencyUserListItem,
+  InviteKind,
   InviteResponse,
+  InviteUserInput,
+  MintedInvite,
   PasswordResetResponse,
   UserDetailResponse,
 } from './users.types';
@@ -70,7 +79,7 @@ export class UsersService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
-    @InjectModel(UserRole.name) private userRoleModel: Model<UserRole>,
+    @InjectModel(Branch.name) private branchModel: Model<BranchDocument>,
     private permissionsService: PermissionsService,
     private roleAssignments: RoleAssignmentsService,
     private ownerProtection: OwnerProtectionService,
@@ -78,49 +87,10 @@ export class UsersService {
     private mailService: MailService,
     private configService: ConfigService,
     private workRelease: UserWorkReleaseService,
+    private tenantUrls: TenantUrlService,
+    private tenantBranding: TenantBrandingService,
+    private hostResolver: HostTenantResolver,
   ) {}
-
-  /**
-   * Roles for a set of users, as the `{ _id, name, slug }` shape the web has
-   * always received from `.populate('roleIds')`.
-   *
-   * Replaces that populate now that the assignment lives in `userRoles`. Batched
-   * over all the users at once — the alternative, a lookup per row, is how a
-   * 15-person agency turns one query into sixteen.
-   */
-  private async rolesByUser(
-    userIds: Types.ObjectId[],
-  ): Promise<
-    Map<string, { _id: Types.ObjectId; name: string; slug: string }[]>
-  > {
-    const byUser = new Map<
-      string,
-      { _id: Types.ObjectId; name: string; slug: string }[]
-    >();
-    if (!userIds.length) return byUser;
-
-    const links = await this.userRoleModel
-      .find({ userId: { $in: userIds } })
-      .select({ userId: 1, roleId: 1 })
-      .lean();
-    if (!links.length) return byUser;
-
-    const roles = await this.roleModel
-      .find({ _id: { $in: links.map((link) => link.roleId) } })
-      .select({ name: 1, slug: 1 })
-      .lean();
-    const roleById = new Map(roles.map((role) => [role._id.toString(), role]));
-
-    for (const link of links) {
-      const role = roleById.get(link.roleId.toString());
-      if (!role) continue;
-      const key = link.userId.toString();
-      const list = byUser.get(key) ?? [];
-      list.push({ _id: role._id, name: role.name, slug: role.slug });
-      byUser.set(key, list);
-    }
-    return byUser;
-  }
 
   async findByAgency(agencyId: string): Promise<AgencyUserListItem[]> {
     const users = await this.userModel
@@ -131,7 +101,9 @@ export class UsersService {
       .select('-passwordHash -inviteToken -passwordResetToken')
       .lean();
 
-    const byUser = await this.rolesByUser(users.map((user) => user._id));
+    const byUser = await this.roleAssignments.rolesForUsers(
+      users.map((user) => user._id),
+    );
     return users.map((user) => ({
       ...user,
       roleIds: byUser.get(user._id.toString()) ?? [],
@@ -157,7 +129,7 @@ export class UsersService {
       await Promise.all([
         this.permissionsService.resolveForUser(user as UserDocument),
         this.permissionsService.resolveRoleDefaults(user as UserDocument),
-        this.rolesByUser([user._id]),
+        this.roleAssignments.rolesForUsers([user._id]),
         this.roleAssignments.userOverrides(user._id),
       ]);
 
@@ -185,16 +157,24 @@ export class UsersService {
    * outcome. Sending first and creating second would mean a delivered link
    * pointing at no account.
    */
-  async inviteUser(input: {
-    agencyId: string;
-    branchId?: string;
-    email: string;
-    roleIds: string[];
-    firstName?: string;
-    lastName?: string;
-    invitedByUserId?: string;
-  }): Promise<InviteResponse> {
+  async inviteUser(input: InviteUserInput): Promise<InviteResponse> {
+    const user = await this.createPendingUser(input);
+    return this.issueInvite(user, input.invitedByUserId);
+  }
+
+  /**
+   * The account half of an invite: validate, create the inactive row, assign
+   * roles. **Sends nothing.**
+   *
+   * Split out of {@link inviteUser} for agency onboarding (PAC-69), which needs
+   * the two halves on opposite sides of a rollback boundary — the tenant it
+   * creates must be undoable while the write is in flight, and must *not* be
+   * undone once an email has been requested. Everything the ordinary invite
+   * path does is unchanged; it simply calls these in sequence.
+   */
+  async createPendingUser(input: InviteUserInput): Promise<UserDocument> {
     await this.validateRoles(input.agencyId, input.roleIds);
+    await this.validateBranch(input.agencyId, input.branchId);
 
     const email = input.email.toLowerCase();
     await this.assertEmailAvailable(email);
@@ -214,17 +194,24 @@ export class UsersService {
     // The inviter is the actor. Owner protection does not fire on a brand-new
     // user — there is no owner role to strip — but routing through the one
     // writer is what keeps that true as the rules grow.
+    //
+    // `isPlatformAdmin` is passed through rather than hard-coded false: a
+    // platform operator onboarding an agency (PAC-69) assigns the Agency Owner
+    // role, and `assertMayChangeOwnerRole` reserves that for platform accounts.
+    // It happens to be permitted either way here — the user is brand new and
+    // holds no owner role to change — but a false claim about who is acting is
+    // not the thing to leave lying around in an authorization call.
     await this.roleAssignments.setUserRoles(
       {
         userId: input.invitedByUserId ?? user._id.toString(),
-        isPlatformAdmin: false,
+        isPlatformAdmin: input.invitedByIsPlatformAdmin ?? false,
       },
       input.agencyId,
       user._id,
       input.roleIds,
     );
 
-    return this.issueInvite(user, input.invitedByUserId);
+    return user;
   }
 
   /**
@@ -469,6 +456,30 @@ export class UsersService {
       }
     }
 
+    const { resetToken, resetUrl, expiresAt } =
+      await this.mintAndSendReset(user);
+
+    return {
+      userId: user._id.toString(),
+      resetUrl,
+      expiresAt: expiresAt.toISOString(),
+      // Withheld in production, where the email is the only delivery channel.
+      // See `exposeTokensForDev`.
+      ...(this.exposeTokensForDev() ? { resetToken } : {}),
+    };
+  }
+
+  /**
+   * The mint-and-email core shared by the admin trigger above and the public
+   * self-service request below (PAC-81), extracted so the two entry points can
+   * never drift on expiry, digesting, URL host or email content. Assumes the
+   * caller has already decided this user *may* receive a link — eligibility
+   * and cooldown live at the entry points, because they answer differently
+   * (loud 409s for an owner, silence for the public).
+   */
+  private async mintAndSendReset(
+    user: UserDocument,
+  ): Promise<{ resetToken: string; resetUrl: string; expiresAt: Date }> {
     const resetToken = mintResetToken();
     const expiryHours = passwordResetExpiryHours(
       this.configService.get<string>('PASSWORD_RESET_EXPIRY_HOURS'),
@@ -476,26 +487,29 @@ export class UsersService {
     const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
 
     // Only the digest is persisted. The raw token exists in the email and, in
-    // development, in the response below — nowhere else, ever.
+    // development, in the admin response — nowhere else, ever.
     user.passwordResetToken = hashResetToken(resetToken);
     user.passwordResetExpiresAt = expiresAt;
     user.passwordResetLastSentAt = new Date();
     /*
      * One live credential per account. In practice an active user has no
-     * pending invite — `findPendingInvite` and the guards above make the two
-     * states disjoint — so this is belt-and-braces, kept so the invariant holds
-     * by construction rather than by a chain of reasoning.
+     * pending invite — `findPendingInvite` and the eligibility checks make the
+     * two states disjoint — so this is belt-and-braces, kept so the invariant
+     * holds by construction rather than by a chain of reasoning.
      */
     user.inviteToken = undefined;
     user.inviteTokenExpiresAt = undefined;
     await user.save();
 
-    const resetUrl = this.buildPasswordResetUrl(resetToken);
+    const resetUrl = await this.buildPasswordResetUrl(
+      resetToken,
+      user.agencyId?.toString() ?? null,
+    );
     const agencyName = await this.resolveAgencyName(user.agencyId);
 
-    // Same guarantee as `issueInvite`: both callers reach here with an agency
-    // (the user was loaded scoped by one), and the event schema would otherwise
-    // reject an empty string with a message about hex digits.
+    // Same guarantee as `issueInvite`: every caller reaches here with an
+    // agency (loaded scoped by one, or filtered above), and the event schema
+    // would otherwise reject an empty string with a message about hex digits.
     if (!user.agencyId) {
       throw new Error(
         `Cannot reset password for user ${user._id.toString()}: no agencyId on the record.`,
@@ -513,14 +527,75 @@ export class UsersService {
       expiresAt,
     });
 
-    return {
-      userId: user._id.toString(),
-      resetUrl,
-      expiresAt: expiresAt.toISOString(),
-      // Withheld in production, where the email is the only delivery channel.
-      // See `exposeTokensForDev`.
-      ...(this.exposeTokensForDev() ? { resetToken } : {}),
-    };
+    return { resetToken, resetUrl, expiresAt };
+  }
+
+  /**
+   * The public "Forgot password?" entry point (PAC-81). Reuses the exact same
+   * token scheme as the admin trigger — one credential namespace, one email.
+   *
+   * **Every refusal is silent.** The route always answers the same 202, so
+   * this method must not leak *why* nothing was sent: an unknown address, a
+   * deactivated user, a pending invite, a platform admin, a cooldown, or an
+   * address that belongs to a different host all look identical from outside.
+   * The admin path above stays loud (404/409) because its caller is
+   * authenticated and entitled to the reason.
+   *
+   * The host check mirrors {@link AuthService.assertBelongsOnHost} without
+   * throwing: a reset link is only mailed when the request arrived on a host
+   * the account could actually sign in on. Without it, this route would
+   * happily mint links for any tenant's users from any other tenant's domain.
+   */
+  async requestPasswordResetByEmail(
+    email: string,
+    host: HostTenant | undefined,
+  ): Promise<void> {
+    if (!host || host.kind === 'unknown') {
+      return;
+    }
+
+    const user = await this.userModel.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return;
+    }
+
+    // Platform admins are deliberately outside self-service: the reset email
+    // event requires an agency, and an account with platform-wide authority
+    // should not be resettable from an unauthenticated form anyway.
+    if (user.isPlatformAdmin || !user.agencyId) {
+      return;
+    }
+
+    if (host.kind === 'agency') {
+      if (user.agencyId.toString() !== host.agencyId) {
+        return;
+      }
+    } else {
+      // Platform host: open only to agencies with no domain of their own —
+      // the same bootstrap fallback `HostTenantGuard` and login apply.
+      const hasDomains = await this.hostResolver.agencyHasDomains(
+        user.agencyId.toString(),
+      );
+      if (hasDomains) {
+        return;
+      }
+    }
+
+    // Deactivated or never-activated accounts get nothing: a reset is not a
+    // reactivation, and an invitee's way in is their invite link.
+    if (user.deactivatedAt || !user.isActive) {
+      return;
+    }
+
+    const cooldownSeconds = passwordResetCooldownSeconds(
+      this.configService.get<string>('PASSWORD_RESET_COOLDOWN_SECONDS'),
+    );
+    const lastSentAt = user.passwordResetLastSentAt?.getTime();
+    if (lastSentAt && (Date.now() - lastSentAt) / 1000 < cooldownSeconds) {
+      return;
+    }
+
+    await this.mintAndSendReset(user);
   }
 
   /**
@@ -531,6 +606,18 @@ export class UsersService {
     user: UserDocument,
     invitedByUserId?: string,
   ): Promise<InviteResponse> {
+    const minted = await this.mintInviteToken(user);
+    await this.dispatchInviteEmail(user, minted, invitedByUserId);
+    return this.inviteResponse(user, minted);
+  }
+
+  /**
+   * Mint a fresh invite token onto the user and save it. **Sends nothing.**
+   *
+   * Issuing a token invalidates any previous one, which is what makes a resend
+   * revoke the old link.
+   */
+  async mintInviteToken(user: UserDocument): Promise<MintedInvite> {
     const inviteToken = randomBytes(32).toString('hex');
     const expiryDays = inviteExpiryDays(
       this.configService.get<string>('INVITE_EXPIRY_DAYS'),
@@ -542,16 +629,80 @@ export class UsersService {
     user.inviteLastSentAt = new Date();
     await user.save();
 
-    const inviteUrl = this.buildInviteUrl(inviteToken);
+    const baseUrl = await this.tenantUrls.baseUrlFor(
+      user.agencyId?.toString() ?? null,
+    );
 
+    return {
+      inviteToken,
+      expiresAt,
+      inviteUrl: `${baseUrl}/auth/accept-invite?token=${inviteToken}`,
+      baseUrl,
+    };
+  }
+
+  /**
+   * Ask the async platform to deliver the invite for an already-minted token.
+   *
+   * ⚠ **A caller that rolls back on failure must not call this inside the
+   * rollback region.** `InngestService.send` records the event before handing
+   * it to Inngest, and the event-log sweep replays a stranded row later; the
+   * send function mails whatever the payload says without re-reading the user.
+   * So a "delete the tenant, the email failed" path produces a real email with
+   * a link to a deleted account. Commit first, dispatch last — which is exactly
+   * what `AgencyProvisioningService` does with it.
+   */
+  async dispatchInviteEmail(
+    user: UserDocument,
+    minted: MintedInvite,
+    invitedByUserId?: string,
+    options?: { kind?: InviteKind },
+  ): Promise<void> {
+    try {
+      await this.buildAndSendInvite(user, minted, invitedByUserId, options);
+    } catch (error) {
+      /*
+       * Nothing was sent, so nothing should look like it was.
+       *
+       * `inviteLastSentAt` is what the resend cooldown is measured from, and
+       * `mintInviteToken` stamps it before this runs. Left in place after a
+       * failed dispatch it tells the very person trying to recover — an owner
+       * whose invite errored, or an operator looking at a failed onboarding —
+       * "an invite was just sent to this address", which is both false and the
+       * exact opposite of the action they need to take.
+       *
+       * ⚠ It does mean a *replayed* event (the event-log sweep) and a manual
+       * resend can both reach the recipient. That is the better failure: the
+       * resend rotates the token, so the second link is the working one, and
+       * two emails beats a locked-out owner.
+       */
+      user.inviteLastSentAt = undefined;
+      await user.save();
+      throw error;
+    }
+  }
+
+  private async buildAndSendInvite(
+    user: UserDocument,
+    minted: MintedInvite,
+    invitedByUserId?: string,
+    options?: { kind?: InviteKind },
+  ): Promise<void> {
+    const agencyIdString = user.agencyId?.toString() ?? null;
     const [agencyName, roleNames, inviterName] = await Promise.all([
       this.resolveAgencyName(user.agencyId),
       this.permissionsService.resolveRoleNames(user),
       this.resolveUserName(invitedByUserId),
     ]);
 
+    // Same origin as the invite link, so the logo is fetched from the host the
+    // invitee is about to visit — and so a tenant with its own domain never
+    // makes a mail client load an asset from a name the recipient has never
+    // heard of.
+    const brand = await this.resolveEmailBrand(agencyIdString, minted.baseUrl);
+
     // `agencyId` is optional on the schema (a platform super admin has none)
-    // but is guaranteed on both paths into here: `inviteUser` sets it from a
+    // but is guaranteed on every path into here: `inviteUser` sets it from a
     // required input, and `resendInvite` loads the user scoped by it. Asserting
     // rather than defaulting keeps that guarantee visible — the event schema
     // would otherwise reject an empty string with a message about hex digits,
@@ -571,20 +722,25 @@ export class UsersService {
       agencyName,
       inviterName,
       roleNames,
-      inviteUrl,
-      expiresAt,
+      inviteUrl: minted.inviteUrl,
+      expiresAt: minted.expiresAt,
+      brand,
+      ...(options?.kind ? { kind: options.kind } : {}),
     });
+  }
 
+  /** The `POST /users/invite` body, shared by both halves of the flow. */
+  inviteResponse(user: UserDocument, minted: MintedInvite): InviteResponse {
     return {
       userId: user._id.toString(),
-      inviteUrl,
-      expiresAt: expiresAt.toISOString(),
+      inviteUrl: minted.inviteUrl,
+      expiresAt: minted.expiresAt.toISOString(),
       // The raw token is a bearer credential and the email is its delivery
       // channel, so it is withheld in production. It is still returned outside
       // production because mail delivery is a logging stub (see `MailService`) —
       // without it there is no way to walk the flow locally or in e2e. Remove
       // this the moment a real transport lands.
-      ...(this.exposeTokensForDev() ? { inviteToken } : {}),
+      ...(this.exposeTokensForDev() ? { inviteToken: minted.inviteToken } : {}),
     };
   }
 
@@ -594,7 +750,7 @@ export class UsersService {
    * would be useless. Checked explicitly rather than leaning on the unique
    * `email` index, which can only report that *something* collided.
    */
-  private async assertEmailAvailable(email: string): Promise<void> {
+  async assertEmailAvailable(email: string): Promise<void> {
     const existing = await this.userModel
       .findOne({ email })
       .select('isActive')
@@ -646,11 +802,29 @@ export class UsersService {
    * Absolute, because the link is opened from an email client that has no origin
    * to resolve a relative path against.
    */
-  private buildInviteUrl(token: string): string {
-    const base = this.configService
-      .get<string>('APP_BASE_URL', 'http://localhost:5173')
-      .replace(/\/+$/, '');
-    return `${base}/auth/accept-invite?token=${token}`;
+  /**
+   * The agency's identity for the email masthead, or `undefined` to fall back
+   * to the platform wordmark.
+   *
+   * The logo URL is made **absolute against the same base as the invite link**.
+   * It cannot be a relative path (a mail client has no origin to resolve it
+   * against) and it cannot be a presigned storage URL (those expire, and an
+   * invite may sit unread for days — a broken image in a "set your password"
+   * email is exactly the thing that makes it look like phishing).
+   */
+  private async resolveEmailBrand(
+    agencyId: string | null,
+    baseUrl: string,
+  ): Promise<{ name: string; logoUrl: string | null } | undefined> {
+    if (!agencyId) return undefined;
+
+    const branding = await this.tenantBranding.forAgency(agencyId);
+    if (branding.kind !== 'agency') return undefined;
+
+    return {
+      name: branding.name,
+      logoUrl: branding.logoUrl ? `${baseUrl}${branding.logoUrl}` : null,
+    };
   }
 
   /**
@@ -665,14 +839,23 @@ export class UsersService {
   }
 
   /**
-   * Absolute, for the same reason {@link buildInviteUrl} is — this is opened
-   * from an email client, which has no origin to resolve a relative path
-   * against.
+   * Absolute, for the same reason the invite link is — this is opened from an
+   * email client, which has no origin to resolve a relative path against.
+   *
+   * Built on the **recipient's own agency host** (`TenantUrlService`), never on
+   * `APP_BASE_URL`: `HostTenantGuard` binds a session to the hostname it was
+   * created on, and `AuthService.resetPassword` refuses to mint one on a host
+   * the user does not belong to — so a link on the platform base URL is not
+   * merely off-brand, it is a link that cannot be completed.
    */
-  private buildPasswordResetUrl(token: string): string {
-    const base = this.configService
-      .get<string>('APP_BASE_URL', 'http://localhost:5173')
-      .replace(/\/+$/, '');
+  private async buildPasswordResetUrl(
+    token: string,
+    agencyId: string | null,
+  ): Promise<string> {
+    const base = (await this.tenantUrls.baseUrlFor(agencyId)).replace(
+      /\/+$/,
+      '',
+    );
     return `${base}/auth/reset-password?token=${token}`;
   }
 
@@ -839,6 +1022,30 @@ export class UsersService {
       throw new BadRequestException(
         'One or more roles are invalid for this agency',
       );
+    }
+  }
+
+  /**
+   * A branch, when one is given, must belong to the inviting agency.
+   *
+   * `InviteUserDto` only checks that `branchId` is *a* valid id, so without this
+   * a caller could place a new employee in another tenant's branch — the id is
+   * never re-derived from the session afterwards, and `BranchGuard` scopes reads
+   * by `user.branchId`, so the mistake would be a standing cross-tenant leak
+   * rather than a rejected request.
+   *
+   * `undefined` stays allowed: the invite form pre-selects the default branch,
+   * but the seed and the SmartSuite migration create users with no branch at all.
+   */
+  private async validateBranch(agencyId: string, branchId?: string) {
+    if (!branchId) return;
+
+    const exists = await this.branchModel.exists({
+      _id: new Types.ObjectId(branchId),
+      agencyId: new Types.ObjectId(agencyId),
+    });
+    if (!exists) {
+      throw new BadRequestException('Branch is invalid for this agency');
     }
   }
 

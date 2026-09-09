@@ -37,8 +37,49 @@ const path = require('path');
  *   dist/migration/mailers/import-bigquery-mailers.js
  *                                                  BigQuery mailer backfill.
  *                                                  Needs BQ_* + GCP creds.
+ *   dist/migration/backfill/mailer-campaigns.js    PAC-71: moves `mailers` from
+ *                                                  agency tenancy to campaign
+ *                                                  tenancy and rebuilds the
+ *                                                  dedupe index. A REQUIRED
+ *                                                  deploy step, run with the API
+ *                                                  and worker stopped — so it
+ *                                                  has to exist in the image.
  *
  * Occasional operations (not part of a bring-up):
+ *   dist/migration/consolidate-service-tickets.js  fold a database migrated
+ *                                                  before Sept 2026 into the
+ *                                                  one `serviceTickets`
+ *                                                  collection. Once per
+ *                                                  environment; delete when
+ *                                                  none needs it.
+ *   dist/migration/backfill/allstate-id-to-carrier-appointment.js
+ *                                                  PAC-93: carries
+ *                                                  `Agency.allstateAgencyId`
+ *                                                  into `carrierAppointments`.
+ *                                                  REQUIRED on any database
+ *                                                  that predates the field's
+ *                                                  removal — the code is
+ *                                                  otherwise lost, and PAC-71
+ *                                                  routes mailers by it.
+ *   dist/migration/backfill/backfill-household-links.js
+ *                                                  PAC-91 §8: repairs household
+ *                                                  links from the SmartSuite
+ *                                                  CSV export and applies the
+ *                                                  owner decisions. Needs the
+ *                                                  three CSVs mounted in.
+ *   dist/migration/backfill/merge-duplicate-contacts.js
+ *                                                  PAC-91 §9: merges the
+ *                                                  duplicate contacts that the
+ *                                                  identity-index migration
+ *                                                  refuses to build over. Runs
+ *                                                  BETWEEN two migrate-mongo
+ *                                                  passes, so it has to exist
+ *                                                  in the image.
+ *
+ *                                                  All three are driven by
+ *                                                  `scripts/migration/run-upgrade.sh`,
+ *                                                  which is the only thing that
+ *                                                  gets their order right.
  *   dist/seed/sync-role-templates.js               push a role-template change
  *                                                  out to already-provisioned
  *                                                  tenants. A fresh database
@@ -64,6 +105,16 @@ const ONE_SHOT_ENTRIES = {
   'migration/migrate': 'src/migration/migrate.ts',
   'migration/mailers/import-bigquery-mailers':
     'src/migration/mailers/import-bigquery-mailers.ts',
+  'migration/consolidate-service-tickets':
+    'src/migration/consolidate-service-tickets.ts',
+  'migration/backfill/mailer-campaigns':
+    'src/migration/backfill/mailer-campaigns.ts',
+  'migration/backfill/allstate-id-to-carrier-appointment':
+    'src/migration/backfill/allstate-id-to-carrier-appointment.ts',
+  'migration/backfill/backfill-household-links':
+    'src/migration/backfill/backfill-household-links.ts',
+  'migration/backfill/merge-duplicate-contacts':
+    'src/migration/backfill/merge-duplicate-contacts.ts',
 };
 
 module.exports = (options) => ({

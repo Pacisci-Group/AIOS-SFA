@@ -1,42 +1,54 @@
 import {
-  Phone,
-  Mail,
-  ExternalLink,
-  Users,
-  FileText,
-  Clock,
-  MessageSquare,
-  CheckCircle2,
   AlertCircle,
+  ArrowLeft,
   ArrowLeftRight,
-  ChevronDown,
+  Clock,
+  ExternalLink,
+  FileText,
   Lock,
-  Send,
+  Mail,
+  MessageSquare,
+  Phone,
   Plus,
+  Send,
   User,
+  Users,
   Zap,
+  type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  SERVICE_TICKET_PICKER_STATUSES,
-  type OnboardingChecklistKey,
-  type OnboardingStepKey,
-  type RenewalOutcome,
-  type RenewalStepKey,
-  type ServiceTicketNoteType,
+import { Link } from "react-router-dom";
+import type {
+  OnboardingChecklistKey,
+  OnboardingStepKey,
+  RenewalOutcome,
+  RenewalStepKey,
+  ServiceTicketNoteType,
 } from "@sfa/shared";
+import { DataRow, DetailCard } from "@/components/common/DetailCard";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { HouseholdDrawer } from "@/features/clients/components/HouseholdDrawer";
 import { PolicyDrawer } from "@/features/clients/components/PolicyDrawer";
-import { Link } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { OnboardingPanel } from "./OnboardingPanel";
 import { PolicyTransferPanel } from "./PolicyTransferPanel";
 import { RenewalPanel } from "./RenewalPanel";
+import { TicketStatusSelect } from "./TicketStatusSelect";
 import {
-  TICKET_STATUS_CONFIG as STATUS_CONFIG,
-  Ticket,
-  TicketStatus,
-  TimelineEntry,
+  TICKET_PRIORITY_CLASS,
+  TICKET_STATUS_CONFIG,
+  type Ticket,
+  type TicketStatus,
+  type TimelineEntry,
 } from "./ticket-data";
 
 interface WorkspacePanelProps {
@@ -46,6 +58,11 @@ interface WorkspacePanelProps {
   isMutating?: boolean;
   /** Gates the onboarding controls; falls back to read-only when omitted. */
   canWrite?: boolean;
+  /**
+   * Returns to the ticket list. Rendered only below `lg`, where the two panes
+   * are stacked rather than side by side and the list is off-screen.
+   */
+  onBack?: () => void;
   onCompleteOnboardingStep?: (id: string, stepKey: OnboardingStepKey) => void;
   onToggleOnboardingChecklist?: (
     id: string,
@@ -66,47 +83,64 @@ interface WorkspacePanelProps {
   onChangeRenewalOutcome?: (id: string, outcome: RenewalOutcome) => void;
 }
 
-type DropStatus = TicketStatus;
-
-const TIMELINE_ICONS: Record<TimelineEntry["type"], React.ReactNode> = {
-  created: <Plus className="w-3.5 h-3.5" />,
-  note: <MessageSquare className="w-3.5 h-3.5" />,
-  status: <Zap className="w-3.5 h-3.5" />,
-  system: <AlertCircle className="w-3.5 h-3.5" />,
-  call: <Phone className="w-3.5 h-3.5" />,
-  email: <Mail className="w-3.5 h-3.5" />,
-};
-
-const TIMELINE_ICON_BG: Record<TimelineEntry["type"], string> = {
-  created: "bg-[var(--kpi-blue)] text-white",
-  note: "bg-slate-700 text-white",
-  status: "bg-[var(--kpi-amber)] text-white",
-  system: "bg-muted text-muted-foreground",
-  call: "bg-[var(--kpi-purple)] text-white",
-  email: "bg-[var(--kpi-green)] text-white",
+/**
+ * Icon and accent per timeline entry type — the same `{ icon, tone, tint }`
+ * shape the lead timeline uses (`features/lead/components/lead-display.ts`), so
+ * an event bubble looks the same on a ticket as it does on a lead.
+ *
+ * Colours read from the theme tokens rather than the `--kpi-*` variables these
+ * used to carry, which were declared only under `.dark` and rendered as solid
+ * white-on-nothing circles on the light theme.
+ */
+const TIMELINE_DISPLAY: Record<
+  TimelineEntry["type"],
+  { icon: LucideIcon; tone: string; tint: string }
+> = {
+  created: { icon: Plus, tone: "text-primary", tint: "bg-primary/12" },
+  note: {
+    icon: MessageSquare,
+    tone: "text-slate-600 dark:text-slate-400",
+    tint: "bg-slate-400/12",
+  },
+  status: {
+    icon: Zap,
+    tone: "text-amber-600 dark:text-amber-500",
+    tint: "bg-amber-500/15",
+  },
+  system: {
+    icon: AlertCircle,
+    tone: "text-muted-foreground",
+    tint: "bg-muted",
+  },
+  call: {
+    icon: Phone,
+    tone: "text-violet-600 dark:text-violet-400",
+    tint: "bg-violet-400/12",
+  },
+  email: { icon: Mail, tone: "text-success", tint: "bg-success/12" },
 };
 
 const NOTE_TYPE_CONFIG: Record<
   ServiceTicketNoteType,
-  { label: string; action: string; placeholder: string; icon: React.ReactNode }
+  { label: string; action: string; placeholder: string; icon: LucideIcon }
 > = {
   note: {
     label: "Note",
-    action: "Post Note",
+    action: "Post note",
     placeholder: "Type your note here — visible only to agency staff…",
-    icon: <MessageSquare className="w-3.5 h-3.5" />,
+    icon: MessageSquare,
   },
   call: {
-    label: "Phone Call",
-    action: "Log Call",
+    label: "Phone call",
+    action: "Log call",
     placeholder: "Summarize the call — who you spoke to and the outcome…",
-    icon: <Phone className="w-3.5 h-3.5" />,
+    icon: Phone,
   },
   email: {
     label: "Email",
-    action: "Log Email",
+    action: "Log email",
     placeholder: "Summarize the email you sent or received…",
-    icon: <Mail className="w-3.5 h-3.5" />,
+    icon: Mail,
   },
 };
 
@@ -118,6 +152,7 @@ export function WorkspacePanel({
   onAddNote,
   isMutating,
   canWrite,
+  onBack,
   onCompleteOnboardingStep,
   onToggleOnboardingChecklist,
   onToggleRenewalPolicy,
@@ -125,9 +160,7 @@ export function WorkspacePanel({
   onChangeRenewalOutcome,
 }: WorkspacePanelProps) {
   const [note, setNote] = useState("");
-  const [statusDropdown, setStatusDropdown] = useState(false);
   const [noteType, setNoteType] = useState<ServiceTicketNoteType>("note");
-  const [noteTypeDropdown, setNoteTypeDropdown] = useState(false);
   const [householdOpen, setHouseholdOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
   const noteCfg = NOTE_TYPE_CONFIG[noteType];
@@ -152,10 +185,6 @@ export function WorkspacePanel({
     [ticket?.timeline],
   );
 
-  // The ticket's persisted status from the server is the source of truth.
-  const status: DropStatus = ticket?.status ?? "open";
-  const sc = STATUS_CONFIG[status];
-
   /**
    * Why the status picker is missing on a quote ticket.
    *
@@ -171,40 +200,100 @@ export function WorkspacePanel({
 
   if (!ticket) {
     return (
-      <div className="flex flex-col items-center justify-center h-full bg-background text-center px-8">
-        <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-3">
-          <FileText className="w-5 h-5 text-muted-foreground" />
-        </div>
-        <p className="text-sm font-medium text-foreground mb-1">No ticket selected</p>
-        <p className="text-xs text-muted-foreground">
-          Click any ticket in the left panel to open the workspace.
+      <div className="flex h-full flex-col items-center justify-center bg-background px-8 text-center">
+        <span className="mb-3 flex size-12 items-center justify-center rounded-full bg-muted">
+          <FileText aria-hidden className="size-5 text-muted-foreground" />
+        </span>
+        <p className="text-base font-medium text-foreground">
+          No ticket selected
         </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Pick any ticket in the list to open its workspace.
+        </p>
+        {/*
+          The way out, and not decoration: below `lg` the queue pane is
+          `hidden` while this one shows, and a `?ticket=` deep link opens
+          straight onto this pane. If the queue then comes back empty — every
+          ticket resolved and archived, or an id outside the reader's scope —
+          nothing is selected, and without this the only exit is browser-back.
+        */}
+        {onBack && (
+          <Button variant="outline" size="sm" onClick={onBack} className="mt-4 lg:hidden">
+            <ArrowLeft />
+            Back to tickets
+          </Button>
+        )}
       </div>
     );
   }
 
+  const status = TICKET_STATUS_CONFIG[ticket.status];
+
   return (
-    <div className="flex flex-col h-full bg-background overflow-hidden">
-      {/* Header */}
-      <div className="bg-card border-b border-border px-5 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 mb-0.5">
-              <h1 className="text-lg font-semibold text-foreground">{ticket.clientName}</h1>
-              <span className="text-sm font-mono text-muted-foreground">#{ticket.ticketNumber}</span>
-            </div>
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <Phone className="w-3 h-3" />
-                {ticket.phone}
-              </span>
-              <span className="flex items-center gap-1">
-                <Mail className="w-3 h-3" />
-                {ticket.email}
-              </span>
+    <div className="flex h-full flex-col overflow-hidden bg-background">
+      <header className="border-b border-border bg-card px-4 py-4 md:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-2">
+            {onBack && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={onBack}
+                aria-label="Back to tickets"
+                className="-ml-1 lg:hidden"
+              >
+                <ArrowLeft />
+              </Button>
+            )}
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-baseline gap-2">
+                {/* `h2`, not `h1`: the page's own header above already owns the
+                    `h1` ("Service tickets" / "Archived tickets"), and this pane
+                    is a section of that page. */}
+                <h2 className="truncate text-lg font-semibold tracking-tight text-card-foreground">
+                  {ticket.clientName}
+                </h2>
+                <span className="text-sm tabular-nums text-muted-foreground">
+                  {ticket.ticketNumber}
+                </span>
+              </div>
+              {/* Linkified only when there is something to dial or mail — a
+                  migrated ticket can carry an empty string, and `tel:` with no
+                  number is a link that does nothing when tapped. */}
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                <ContactLink
+                  icon={Phone}
+                  value={ticket.phone}
+                  href={
+                    ticket.phone
+                      ? `tel:${ticket.phone.replace(/[^\d+]/g, "")}`
+                      : undefined
+                  }
+                />
+                <ContactLink
+                  icon={Mail}
+                  value={ticket.email}
+                  href={ticket.email ? `mailto:${ticket.email}` : undefined}
+                />
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {/*
+              A policy transfer is recorded in the full Sold wizard, so this
+              navigates rather than opening a dialog. Hidden once one exists —
+              one transfer per ticket, and the panel below then shows it.
+            */}
+            {ticket.allowsPolicyTransfer && !ticket.policyTransfer && canWrite && (
+              <Button asChild size="sm" variant="outline">
+                <Link to={`/policy-transfers/new?ticketId=${ticket.id}`}>
+                  <ArrowLeftRight />
+                  Policy transfer
+                </Link>
+              </Button>
+            )}
+
             {/*
               A quote ticket's status belongs to its lead, so there is nothing
               to pick here — a static badge plus the one route that *can* move
@@ -212,186 +301,131 @@ export function WorkspacePanel({
               way to act on. The server enforces the same thing (400 on
               `PATCH …/status`); this is the affordance, not the gate.
             */}
-            {/*
-              A policy transfer is recorded in the full Sold wizard, so this
-              navigates rather than opening a dialog. Hidden once one exists —
-              one transfer per ticket, and the panel below then shows it.
-            */}
-            {ticket?.allowsPolicyTransfer &&
-              !ticket.policyTransfer &&
-              canWrite && (
-                <Button asChild size="sm" variant="outline" className="h-7">
-                  <Link to={`/policy-transfers/new?ticketId=${ticket.id}`}>
-                    <ArrowLeftRight className="w-3 h-3" />
-                    Policy Transfer
+            {ticket.isStatusLocked ? (
+              <>
+                <Badge
+                  size="lg"
+                  variant="ghost"
+                  className={cn("gap-1.5", status.bg, status.text)}
+                  title={leadLockHint}
+                >
+                  <Lock aria-hidden className="opacity-70" />
+                  {status.label}
+                </Badge>
+                <Button asChild variant="link" size="sm">
+                  <Link to={`/leads/${ticket.leadId}`} title={leadLockHint}>
+                    Open lead
+                    <ExternalLink />
                   </Link>
                 </Button>
-              )}
-            {ticket?.isStatusLocked ? (
-              <div className="flex items-center gap-2">
-                <span
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border ${sc.bg} ${sc.text} border-current/20`}
-                  title={leadLockHint}
-                >
-                  <Lock className="w-3 h-3 opacity-70" />
-                  {sc.label}
-                </span>
-                <a
-                  href={`/leads/${ticket.leadId}`}
-                  className="flex items-center gap-1 text-xs text-primary hover:underline"
-                  title={leadLockHint}
-                >
-                  Open lead
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              </div>
+              </>
             ) : (
-            <div className="relative">
-              <button
-                onClick={() => setStatusDropdown(!statusDropdown)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border ${sc.bg} ${sc.text} border-current/20 hover:opacity-80 transition-opacity`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
-                {sc.label}
-                <ChevronDown className="w-3 h-3 opacity-60" />
-              </button>
-              {statusDropdown && (
-                <div className="absolute right-0 top-full mt-1 bg-popover border border-border rounded-md shadow-lg z-20 min-w-[130px] py-0.5">
-                  {SERVICE_TICKET_PICKER_STATUSES.map((s) => {
-                    const c = STATUS_CONFIG[s];
-                    return (
-                      <button
-                        key={s}
-                        onClick={() => {
-                          setStatusDropdown(false);
-                          if (ticket && s !== status) {
-                            onChangeStatus?.(ticket.id, s);
-                          }
-                        }}
-                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted transition-colors text-left ${
-                          s === status ? "font-semibold" : ""
-                        }`}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
-                        {c.label}
-                        {s === status && (
-                          <CheckCircle2 className="w-3 h-3 ml-auto text-[var(--kpi-green)]" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+              <TicketStatusSelect
+                value={ticket.status}
+                onChange={(next) => onChangeStatus?.(ticket.id, next)}
+                disabled={!canWrite || isMutating}
+              />
             )}
           </div>
         </div>
-        {ticket?.isStatusLocked && (
-          <p className="mt-2 text-xs text-muted-foreground">{leadLockHint}</p>
+
+        {ticket.isStatusLocked && (
+          <p className="mt-2 text-sm text-muted-foreground">{leadLockHint}</p>
         )}
-      </div>
+      </header>
 
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] px-5 py-4 space-y-4"
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 md:p-5"
       >
-        {/* Data grid */}
-        <div className="bg-card rounded-lg border border-border p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
-            Ticket Details
-          </h3>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2.5">
+        <DetailCard title="Ticket details" icon={FileText}>
+          <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
             <DataRow
-              label="Assigned Rep"
+              label="Assigned rep"
               value={
                 <span className="flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded-full bg-[var(--kpi-blue-bg)] flex items-center justify-center">
-                    <User className="w-3 h-3 text-[var(--kpi-blue)]" />
+                  <span className="flex size-5 items-center justify-center rounded-full bg-primary/12">
+                    <User aria-hidden className="size-3 text-primary" />
                   </span>
                   {ticket.assignedRep}
                 </span>
               }
             />
+            <DataRow label="Category" value={ticket.category} />
             <DataRow
-              label="Category"
-              value={ticket.category}
-            />
-            <DataRow
-              label="Policy Linked"
+              label="Policy linked"
               value={
                 // Only a ticket with a real linked record opens the drawer;
                 // otherwise show the denormalized display string as plain text.
                 ticket.policyId ? (
-                  <button
-                    type="button"
+                  <Button
+                    variant="link"
+                    size="xs"
+                    className="h-auto p-0"
                     onClick={() => setPolicyOpen(true)}
-                    className="flex items-center gap-1 text-[var(--kpi-blue)] hover:underline"
                   >
                     {ticket.policyType} — {ticket.policyNumber}
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
+                    <ExternalLink />
+                  </Button>
                 ) : (
-                  <span>
-                    {ticket.policyType} — {ticket.policyNumber}
-                  </span>
+                  `${ticket.policyType} — ${ticket.policyNumber}`
                 )
               }
             />
             <DataRow
               label="Priority"
               value={
-                <span
-                  className={`px-1.5 py-0.5 rounded text-xs ${
-                    ticket.priority === "high"
-                      ? "bg-red-500/15 text-red-400"
-                      : ticket.priority === "medium"
-                      ? "bg-amber-500/15 text-amber-400"
-                      : "bg-slate-500/15 text-slate-300"
-                  }`}
+                <Badge
+                  size="sm"
+                  variant="ghost"
+                  className={cn(
+                    "capitalize",
+                    TICKET_PRIORITY_CLASS[ticket.priority],
+                  )}
                 >
                   {ticket.priority}
-                </span>
+                </Badge>
               }
             />
             <DataRow
               label="Household"
               value={
                 ticket.householdId ? (
-                  <button
-                    type="button"
+                  <Button
+                    variant="link"
+                    size="xs"
+                    className="h-auto p-0"
                     onClick={() => setHouseholdOpen(true)}
-                    className="flex items-center gap-1 text-[var(--kpi-blue)] hover:underline"
                   >
-                    <Users className="w-3 h-3" />
+                    <Users />
                     {ticket.household}
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
+                    <ExternalLink />
+                  </Button>
                 ) : (
-                  <span className="flex items-center gap-1">
-                    <Users className="w-3 h-3" />
+                  <span className="flex items-center gap-1.5">
+                    <Users aria-hidden className="size-4 text-muted-foreground" />
                     {ticket.household}
                   </span>
                 )
               }
             />
             <DataRow
-              label="Days Open"
+              label="Days open"
               value={
                 <span
-                  className={`font-mono text-sm font-semibold ${
-                    ticket.daysOpen > 10
-                      ? "text-[var(--kpi-amber)]"
-                      : "text-foreground"
-                  }`}
+                  className={cn(
+                    "font-semibold tabular-nums",
+                    ticket.daysOpen > 10 && "text-destructive",
+                  )}
                 >
                   {ticket.daysOpen}d
                 </span>
               }
             />
           </div>
-        </div>
+        </DetailCard>
 
-        {/* Onboarding steps — the only category-specific panel. Absent for
+        {/* Onboarding steps — one of three category-specific panels. Absent for
             every other category, so nothing shifts for a normal ticket. */}
         {ticket.onboarding && onCompleteOnboardingStep ? (
           <OnboardingPanel
@@ -430,119 +464,131 @@ export function WorkspacePanel({
           />
         ) : null}
 
-        {/* Timeline */}
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Activity Timeline
-            </h3>
-            <span className="text-xs text-muted-foreground">
-              {ticket.timeline.length} event{ticket.timeline.length !== 1 ? "s" : ""}
+        <DetailCard
+          title="Activity timeline"
+          icon={Clock}
+          action={
+            <span className="text-sm text-muted-foreground">
+              {ticket.timeline.length}{" "}
+              {ticket.timeline.length === 1 ? "event" : "events"}
             </span>
-          </div>
+          }
+        >
+          {orderedTimeline.length === 0 ? (
+            <p className="text-base text-muted-foreground">
+              Nothing has been logged against this ticket yet.
+            </p>
+          ) : (
+            <ol>
+              {orderedTimeline.map((entry, index) => {
+                const {
+                  icon: Icon,
+                  tone,
+                  tint,
+                } = TIMELINE_DISPLAY[entry.type] ?? TIMELINE_DISPLAY.system;
+                const isLast = index === orderedTimeline.length - 1;
 
-          <div className="relative">
-            {/* Vertical line */}
-            <div className="absolute left-3.5 top-4 bottom-4 w-px bg-border" />
-
-            <div className="space-y-4">
-              {orderedTimeline.map((entry) => (
-                <div key={entry.id} className="flex gap-3 relative">
-                  <div
-                    className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 z-10 ${TIMELINE_ICON_BG[entry.type]}`}
-                  >
-                    {TIMELINE_ICONS[entry.type]}
-                  </div>
-                  <div className="flex-1 pb-0.5">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-xs font-mono text-muted-foreground">
-                        {entry.timestamp}
-                      </span>
-                      {entry.author && (
-                        <span className="text-xs text-muted-foreground">· {entry.author}</span>
+                return (
+                  <li key={entry.id} className="relative flex gap-3">
+                    {/* The connector, stopping at the last entry. */}
+                    {!isLast && (
+                      <span
+                        aria-hidden
+                        className="absolute bottom-0 left-4 top-10 w-px bg-border"
+                      />
+                    )}
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "relative z-10 mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full",
+                        tint,
                       )}
-                    </div>
-                    <p className="text-sm text-foreground leading-relaxed">{entry.content}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Note input */}
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="w-3.5 h-3.5 text-muted-foreground" />
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Log Activity
-              </h3>
-            </div>
-            {/* Note-type dropdown */}
-            <div className="relative">
-              <button
-                onClick={() => setNoteTypeDropdown(!noteTypeDropdown)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border border-border bg-[var(--input-background)] text-foreground hover:opacity-80 transition-opacity"
-              >
-                {noteCfg.icon}
-                {noteCfg.label}
-                <ChevronDown className="w-3 h-3 opacity-60" />
-              </button>
-              {noteTypeDropdown && (
-                <div className="absolute right-0 top-full mt-1 bg-popover border border-border rounded-md shadow-lg z-20 min-w-[150px] py-0.5">
-                  {NOTE_TYPES.map((t) => {
-                    const c = NOTE_TYPE_CONFIG[t];
-                    return (
-                      <button
-                        key={t}
-                        onClick={() => {
-                          setNoteType(t);
-                          setNoteTypeDropdown(false);
-                        }}
-                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted transition-colors text-left ${
-                          t === noteType ? "font-semibold" : ""
-                        }`}
-                      >
-                        {c.icon}
-                        {c.label}
-                        {t === noteType && (
-                          <CheckCircle2 className="w-3 h-3 ml-auto text-[var(--kpi-green)]" />
+                    >
+                      <Icon className={cn("size-4", tone)} />
+                    </span>
+                    <div className="min-w-0 flex-1 pb-4">
+                      <div className="flex flex-wrap items-baseline gap-x-2">
+                        <span className="text-sm tabular-nums text-muted-foreground">
+                          {entry.timestamp}
+                        </span>
+                        {entry.author && (
+                          <span className="text-sm text-muted-foreground">
+                            · {entry.author}
+                          </span>
                         )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-          <textarea
+                      </div>
+                      <p className="mt-0.5 text-base leading-relaxed text-card-foreground">
+                        {entry.content}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </DetailCard>
+
+        <DetailCard
+          title="Log activity"
+          icon={MessageSquare}
+          action={
+            <Select
+              value={noteType}
+              onValueChange={(value) =>
+                setNoteType(value as ServiceTicketNoteType)
+              }
+            >
+              <SelectTrigger size="sm" aria-label="Activity type" className="w-auto gap-1.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {NOTE_TYPES.map((type) => {
+                  const config = NOTE_TYPE_CONFIG[type];
+                  const Icon = config.icon;
+                  return (
+                    <SelectItem key={type} value={type}>
+                      <span className="inline-flex items-center gap-2">
+                        <Icon className="size-4" />
+                        {config.label}
+                      </span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          }
+        >
+          {/* No `rows`: `ui/textarea` sets `field-sizing-content`, which makes
+              the box size to its own content and ignores the attribute. It
+              opens at the primitive's `min-h-16` and grows as you type. */}
+          <Textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder={noteCfg.placeholder}
-            rows={3}
-            className="w-full text-sm bg-[var(--input-background)] border border-border rounded-md px-3 py-2 outline-none focus:ring-2 focus:ring-[var(--ring)] resize-none placeholder:text-muted-foreground"
+            aria-label={noteCfg.action}
+            disabled={!canWrite}
+            className="resize-none"
           />
-          <div className="flex items-center justify-between mt-2">
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              Will be timestamped and logged to timeline
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Clock aria-hidden className="size-4" />
+              Timestamped and added to the timeline
             </span>
-            <button
+            <Button
+              size="sm"
+              disabled={!canWrite || !note.trim() || isMutating}
               onClick={() => {
-                if (ticket && note.trim()) {
+                if (note.trim()) {
                   onAddNote?.(ticket.id, note.trim(), noteType);
                   setNote("");
                 }
               }}
-              disabled={!note.trim() || isMutating}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--kpi-blue)] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
             >
-              <Send className="w-3 h-3" />
+              <Send />
               {noteCfg.action}
-            </button>
+            </Button>
           </div>
-        </div>
+        </DetailCard>
       </div>
 
       <HouseholdDrawer
@@ -559,17 +605,33 @@ export function WorkspacePanel({
   );
 }
 
-function DataRow({
-  label,
+/** A phone or email in the ticket header — a link only when there is a value. */
+function ContactLink({
+  icon: Icon,
   value,
+  href,
 }: {
-  label: string;
-  value: React.ReactNode;
+  icon: LucideIcon;
+  value: string;
+  href?: string;
 }) {
+  const body = (
+    <>
+      <Icon aria-hidden className="size-4 shrink-0" />
+      <span className="truncate">{value || "—"}</span>
+    </>
+  );
+
+  if (!href) {
+    return <span className="flex min-w-0 items-center gap-1.5">{body}</span>;
+  }
+
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-sm text-foreground">{value}</span>
-    </div>
+    <a
+      href={href}
+      className="flex min-w-0 items-center gap-1.5 transition-colors hover:text-foreground"
+    >
+      {body}
+    </a>
   );
 }

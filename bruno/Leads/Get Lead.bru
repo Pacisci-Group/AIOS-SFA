@@ -277,8 +277,6 @@ docs {
     "status": "Quoted",
     "temperature": "Hot",
     "leadSource": { "code": "WCO7l", "label": "Mailer" },
-    "emails": ["maria.rodriguez@example.com"],
-    "phones": ["5551234567"],
     "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
     "quoteControlNumber": "QCN-11741",
     "policiesOfInterest": [
@@ -303,7 +301,7 @@ docs {
       "dateOfBirth": "1978-04-12",
       "email": "maria.rodriguez@example.com",
       "phone": "5551234567",
-      "role": "Primary",
+      "role": "Named Insured",
       "isPrimary": true
     },
     "household": {
@@ -376,7 +374,7 @@ docs {
   | propertyAddress    | object \| null  | **lead-level** dwelling — migrated records and pre-PAC-56-#14 leads only; read the per-row one first |
   | agingDays          | int             | recomputed live, **not** the stale migrated value          |
   | intakeChannel      | enum \| null    | `internal` \| `share_link` \| `mailer`; `null` on migrated leads |
-  | primaryContact     | object \| null  | DOB is `YYYY-MM-DD`, never a timestamp                    |
+  | primaryContact     | object \| null  | DOB is `YYYY-MM-DD`, never a timestamp. **The lead's email and phone live here and nowhere else** — PAC-91 §2 deleted the lead's own copy, which the importer filled from the SmartSuite *Leads* table and so left empty on most migrated leads |
   | household          | object \| null  | `null` when the lead has no household (a migrated gap)     |
   | latestQuoteRecap   | object \| null  | newest by `quoteDate`                                      |
   | earlierQuoteRecaps | array           | summaries, newest first                                    |

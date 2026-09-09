@@ -1,0 +1,96 @@
+meta {
+  name: List Campaign Records
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/records?q=9c41b2d7ee01
+  body: none
+  auth: bearer
+}
+
+params:query {
+  q: 9c41b2d7ee01
+  ~page: 1
+  ~pageSize: 25
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the short printed form resolves to the row", function () {
+    // The assertion `controlNumberKeys` exists for: either printed form is one
+    // indexed equality, not a substring scan.
+    const body = res.getBody();
+    expect(body.total).to.equal(1);
+    expect(body.items[0].name).to.equal("Dana Okafor");
+    expect(body.items[0].controlNumber).to.equal(
+      "#7c1e4a90-1111-4b8a-9f10-9c41b2d7ee01",
+    );
+  });
+
+  test("the row carries its market and its own carrier agency code", function () {
+    const row = res.getBody().items[0];
+    // 99999 was resolved to Tulsa in the preview, and the run used exactly that.
+    expect(row.market).to.equal("Tulsa");
+    expect(row.carrierAgencyId).to.equal("A0B9049");
+    // `null` = visible to every agency, matching `assignment.mode: 'all'`.
+    expect(row.visibleAgencyIds).to.equal(null);
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/:campaignId/records — the detail's records table
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Query
+  | param | notes |
+  |---|---|
+  | q | **Either printed control-number form, or a name prefix.** |
+  | page / pageSize | 1-based; pageSize ≤ 100, default 25. |
+
+  ## How `q` is resolved
+
+  It is normalized to a control-number key first (`mailerControlNumberKey`:
+  upper-case, non-alphanumerics stripped). When that succeeds the query is one
+  indexed equality against `controlNumberKeys`, which answers **both** printed
+  forms — `controlno` (`#` + a UUID) and `New Control Number` (that UUID's last
+  12 hex characters) are different strings on every one of the 671,339 legacy
+  rows, and legacy fell back to `ENDS_WITH`/`CONTAINS_SUBSTR`, a collection scan
+  on every keystroke.
+
+  Only when the query is not control-number shaped does it fall back to an
+  anchored, case-insensitive match on the last or first name, which the
+  `{campaignId, lastName, firstName}` index serves.
+
+  ## Response `200`
+  ```json
+  {
+    "page": 1, "pageSize": 25, "total": 1, "totalPages": 1,
+    "items": [{
+      "id": "…",
+      "controlNumber": "#7c1e4a90-1111-4b8a-9f10-9c41b2d7ee01",
+      "newControlNumber": "9c41b2d7ee01",
+      "name": "Dana Okafor", "city": "Bartlesville", "state": "OK",
+      "zip": "99999-5807", "market": "Tulsa", "premiumYearly": 1886.15,
+      "carrierAgencyId": "A0B9049", "visibleAgencyIds": null
+    }]
+  }
+  ```
+
+  `visibleAgencyIds: null` means every agency, including ones onboarded later.
+
+  ## Errors
+  - `401` / `403` — missing token, or missing `platform:mailers:read`.
+  - `404 Not Found` — no such campaign.
+}

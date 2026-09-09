@@ -7,7 +7,7 @@ The migration pipeline lives in the API package so it reuses the Mongoose schema
 - Runner/service: `packages/api/src/migration/migration.service.ts`
 - SmartSuite REST client + field/table ids: `packages/api/src/migration/smartsuite/`
 - Mapping/derivation helpers: `packages/api/src/migration/helpers/`
-- Collection schemas: `packages/api/src/{deals,quote-recaps,leads,households,contacts,policies,service-tickets,deal-audits,audit-records,audit-templates,interested-parties,prior-insurance,prior-policies,producer-assignments,crm-rotations,time-off-requests,activities,producer-goals}/schemas/`
+- Collection schemas: `packages/api/src/{deals,quote-recaps,leads,households,contacts,policies,crm,deal-audits,audit-records,audit-templates,interested-parties,prior-insurance,prior-policies,producer-assignments,crm-rotations,time-off-requests,activities,producer-goals}/schemas/`
 
 ## What it does (PAC-18)
 
@@ -81,6 +81,18 @@ refs (`leadId` / `householdId` / `quoteRecapId`), its own match keys
 `HH-…` numbering at the end of its household pass. The repair passes that used to
 follow it existed for databases migrated by older code and have been removed.
 
+**One exception, for databases migrated before September 2026.** Those runs
+wrote service tickets as a mirror of the SmartSuite table, through a second
+`ServiceTicket` schema the CRM never read, while the app kept its own tickets
+in a separate `service_tickets` collection. There is one schema and one
+collection (`serviceTickets`) now; `npm run migrate:tickets` (`migrate:tickets:dev`
+locally, `--dry-run` to report only) folds an older database into it — reshapes
+the mirror rows in place, keeping `_id` and `legacySmartSuiteId`, moves the app's
+tickets over, drops `service_tickets`, and syncs the indexes. Idempotent. Run it
+once per environment **before** starting the API on this code, then delete the
+script once no environment needs it — the same lifecycle as the dedupe-index
+fix before it.
+
 The migration **provisions the tenant it imports into** — agency, branch,
 default roles, audit templates. The core seed creates no agency; it supplies the
 permission catalog the default roles are built from.
@@ -112,6 +124,13 @@ cover agency CRUD and module toggles — not tenant roles.
 
 Flags: `--dry-run` (provisions nothing), `--agency <slug>` (default
 `smith-family-agency`), `--branch <slug>` (default `main`), `--agency-name`,
-`--branch-name`, `--ticker` (default `SFA`) and `--allstate-id` (default
-`A0B9049`) for the mailer identity step 3 attributes rows by, `--owner-email`
-(default `davidhowad@allstate.com`), and `--page-size <n>` (default `500`).
+`--branch-name`, and for the mailer identity step 3 attributes rows by:
+`--ticker` (default `SFA`) plus the carrier appointment `--carrier-slug`
+(default `allstate`) and `--carrier-code` (default `A0B9049`). Also
+`--owner-email` (default `davidhowad@allstate.com`) and `--page-size <n>`
+(default `500`).
+
+⚠ `--carrier-slug` names a **global** carrier from the core seed's catalog, so
+the core seed has to have run first — the migration fails loudly rather than
+provisioning a tenant with no appointment, which would leave every mailer
+upload warning for no visible reason.

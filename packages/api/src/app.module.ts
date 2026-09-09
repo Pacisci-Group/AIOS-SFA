@@ -5,11 +5,13 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { Connection } from 'mongoose';
 import { AuthModule } from './auth/auth.module';
+import { HostTenantMiddleware } from './common/context/host-tenant.middleware';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { authorshipPlugin } from './common/mongo/authorship.plugin';
 import { MongoDuplicateKeyFilter } from './common/filters/mongo-duplicate-key.filter';
 import { AccessContextGuard } from './common/guards/access-context.guard';
 import { BranchGuard } from './common/guards/branch.guard';
+import { HostTenantGuard } from './common/guards/host-tenant.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { ModuleGuard } from './common/guards/module.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
@@ -25,6 +27,8 @@ import {
 } from './config/rate-limit.config';
 import { ActivitiesModule } from './activities/activities.module';
 import { AddressModule } from './address/address.module';
+import { AgencyDomainsModule } from './agency-domains/agency-domains.module';
+import { AgencyEmailModule } from './agency-email/agency-email.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
@@ -43,10 +47,14 @@ import { FeatureModulesModule } from './feature-modules/feature-modules.module';
 import { HealthController } from './health.controller';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PlatformModule } from './platform/platform.module';
+import { ProfileModule } from './profile/profile.module';
 import { RolesModule } from './roles/roles.module';
 import { ShareLinksModule } from './share-links/share-links.module';
 import { SoldDealsModule } from './sold-deals/sold-deals.module';
 import { StorageModule } from './storage/storage.module';
+import { AgencySetupModule } from './agency-setup/agency-setup.module';
+import { AgencyCarrierAppointmentsModule } from './agency-carrier-appointments/agency-carrier-appointments.module';
+import { TenantBrandingModule } from './tenant-branding/tenant-branding.module';
 import { UsersModule } from './users/users.module';
 import { ENV_FILE_PATH } from './config/env.config';
 import { InngestModule } from './inngest/inngest.module';
@@ -117,9 +125,26 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     AuthModule,
     PermissionsModule,
     PlatformModule,
+    // White-labelling. Both route under their own prefixes (`agency/domains`,
+    // `agency/branding`, `public/*`), so neither participates in the route
+    // ordering hazards documented further down.
+    AgencyDomainsModule,
+    AgencyEmailModule,
+    TenantBrandingModule,
+    // The owner's first-run setup flag (PAC-69). Sits with the white-label
+    // modules because that is the wizard it gates, and routes under its own
+    // `agency/setup` prefix.
+    AgencySetupModule,
+    // The agency's carrier appointments (PAC-93). Same shape as the modules
+    // above — its own `agency/carrier-appointments` prefix, its own
+    // `agency:carrier_appointments:*` gate, no module entitlement.
+    AgencyCarrierAppointmentsModule,
     BranchesModule,
     RolesModule,
     UsersModule,
+    // Self-service profile (`/me/*`, PAC-81). Own prefix, so no route-ordering
+    // hazards with anything above.
+    ProfileModule,
     /*
      * Must precede **CrmModule**, not merely ClientsModule, so `/policies/check`
      * is registered ahead of `/policies/:id`. "check" is not a valid ObjectId,
@@ -188,6 +213,11 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     { provide: APP_GUARD, useClass: TrustedProxyThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: AccessContextGuard },
+    // White-labelling: binds the session to the hostname it arrived on. Must
+    // sit AFTER AccessContextGuard (it compares `access.agencyId`) and BEFORE
+    // TenantGuard, so a token replayed against another agency's host is
+    // rejected before any tenant is resolved for it.
+    { provide: APP_GUARD, useClass: HostTenantGuard },
     { provide: APP_GUARD, useClass: TenantGuard },
     { provide: APP_GUARD, useClass: BranchGuard },
     { provide: APP_GUARD, useClass: ModuleGuard },
@@ -200,14 +230,22 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
 })
 export class AppModule implements NestModule {
   /**
-   * Opens the per-request context store for every route (PAC-72).
+   * Two per-request middlewares, in this order:
    *
-   * Middleware, not an interceptor: the store has to be established
-   * synchronously around the whole request so every async continuation inherits
-   * it — see `runWithRequestContext`. It runs before the guards, which is why
-   * the store starts empty and `AccessContextGuard` fills in the user.
+   * 1. {@link RequestContextMiddleware} opens the per-request context store for
+   *    every route (PAC-72). Middleware, not an interceptor: the store has to be
+   *    established synchronously around the whole request so every async
+   *    continuation inherits it — see `runWithRequestContext`. It runs before
+   *    the guards, which is why the store starts empty and `AccessContextGuard`
+   *    fills in the user.
+   * 2. {@link HostTenantMiddleware} resolves the request's `Host` to a tenant.
+   *    Middleware rather than a guard because `@Public()` routes need it too —
+   *    the login form and the branding bootstrap are both unauthenticated and
+   *    both have to know which agency's host they are on.
    */
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(RequestContextMiddleware).forRoutes('*');
+    consumer
+      .apply(RequestContextMiddleware, HostTenantMiddleware)
+      .forRoutes('*');
   }
 }

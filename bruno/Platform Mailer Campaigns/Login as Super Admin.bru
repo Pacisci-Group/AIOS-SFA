@@ -1,0 +1,65 @@
+meta {
+  name: Login as Super Admin
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{adminEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Captured as its own variable rather than overwriting `accessToken`: the
+  // folders that run after this one are producer- or owner-scoped, and a
+  // platform token would fail every one of them — a platform admin holds
+  // `platform:*` and no module permissions at all.
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    bru.setVar("platformAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("holds the platform mailer permissions", function () {
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("platform:mailers:read");
+    expect(perms).to.include("platform:mailers:write");
+  });
+}
+
+docs {
+  # POST /auth/login — sign in as the platform super admin (PAC-71)
+
+  Seeded by `npm run api:seed:dev` as `admin@sfa.local`. This folder logs in for
+  itself rather than relying on another one, the same way **Platform Bug
+  Reports** does: the CLI walks folders alphabetically and a folder that depends
+  on a token another folder happens to set is a folder that cannot be run on its
+  own.
+
+  - **Module:** none (`@Public()`)
+  - **Permission:** none
+
+  `PermissionsService.resolveForUser` short-circuits on `isPlatformAdmin` and
+  returns `ALL_PLATFORM_PERMISSIONS` verbatim, so this account holds every
+  `platform:*` string and **no** module permission. It cannot open `/leads`, and
+  a producer cannot open anything in this folder.
+
+  ## Errors
+  - `401 Unauthorized` — wrong credentials, or the core seed has not been run.
+}

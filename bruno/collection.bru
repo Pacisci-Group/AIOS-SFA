@@ -65,6 +65,23 @@ docs {
       sort **before `Auth`** and run with no `accessToken`. Its tests assert
       the response *envelope* only — a machine with no `GOOGLE_MAPS_API_KEY`
       gets `{ available: false }`, which is a pass.
+  - **Households** — the Clients list and one household's record, plus the three
+    writes that record owns: add a member, name the primary contact, end a
+    membership (PAC-89, PAC-91 §5/§7). Self-contained and **paired**, so it is
+    re-runnable: `Get Household` remembers who leads the household,
+    `Set Primary Contact` moves it to the member just added,
+    `Restore Primary Contact` hands it back, and `End Household Membership`
+    removes the member again — which only works in that order, because the
+    primary contact's membership cannot be ended. It logs in as the **owner**
+    under its own variable for the two `PATCH /contacts/:id` requests, which
+    need agency scope: a member added through the "+ Member" dialog has no lead,
+    and the producer's reach over a contact is derived from the leads that
+    touch it.
+  - **Unlinked Records** — the Clients page's **Unlinked** tab: the three
+    counts plus one page of each kind, and the 400 that documents why `kind` has
+    no default (PAC-91 §10). Read-only, self-contained and order-independent —
+    the only coupling is that `Unlinked Counts` runs first (seq 1) and stashes
+    the three totals the list requests assert against.
   - **Performance** — Sold + Quoted scorecards for a time range
     (PAC-10 / PAC-11, read).
   - **Public Intake** — the unauthenticated share-link form: render + submit,
@@ -79,10 +96,27 @@ docs {
     that requires **no permission at all**; see `Presign Screenshot`'s docs for
     why, and `Platform Bug Reports/List Bug Reports (Producer Rejected)` for the
     other half of that trade.
+  - **CRM Service** — the service desk: the household ticket feed, the renewal
+    outreach desk, and the full company-transfer chain (find a client → its
+    active policy → open a ticket → presign → upload → book the transfer). The
+    only folder that logs in as somebody other than the producer, because a
+    producer holds **no** `crm_service` permission at all.
   - **Platform Bug Reports** — the Super Admin queue that reads them
     (`platform:bugs:read` / `:write`). Self-contained: it logs in as the super
-    admin itself, because it sorts **before** `Platform Mailers` and so cannot
-    rely on that folder's login.
+    admin itself rather than relying on a folder that happens to sort earlier.
+  - **Platform Mailer Campaigns** — running a mail campaign from the vendor file
+    (PAC-71): presign → PUT → create → preview → resolve a ZIP inline →
+    commit → the finished report, plus the list, the records table, the output
+    download, the completion email and the wrong-status refusal. It then borrows
+    two *tenant* tokens to prove the cross-agency rules the campaign creates —
+    see the run-order note below. ⚠ **Needs the Inngest dev server**: the
+    preview, the commit and the completion email are queued jobs, and the
+    `Get Campaign (…)` requests wait for them rather than asserting vacuously
+    against a campaign that has not started.
+  - **Platform Zip Markets** — the ZIP → market table those campaigns resolve
+    against (PAC-71). Self-contained and idempotent: it upserts a throwaway ZIP
+    and deletes it again, and deliberately leaves the row the campaign folder's
+    inline resolver wrote.
 
   > `GET /auth/invite/:token` is an `auth/*` route but lives under **Users**, for
   > the same ordering reason as activity logging (below): in the **Auth** folder
@@ -94,8 +128,9 @@ docs {
   > **before `Auth`** and run with no `accessToken`.
 
   ## Run order
-  A full `npx @usebruno/cli run --env Local` passes as-is — the collection is
-  order-independent. Worth knowing why, since it is not obvious:
+  A full `npx @usebruno/cli run --env Local` passes as-is, and passes again
+  immediately afterwards — the collection is order-independent and re-runnable.
+  Worth knowing why, since it is not obvious:
 
   The CLI walks folders alphabetically, so `Leads › Share Links › Revoke Share
   Link` always runs *before* `Public Intake`. If Revoke destroyed the shared
@@ -113,7 +148,51 @@ docs {
   `Create Bug Report` with `bru.setVar` — is live by the time the queue reads it.
   Neither folder can be renamed without checking that still holds.
 
-  **Users** is self-contained and idempotent: it logs in, invites a
+  **Platform Mailer Campaigns** and **Platform Zip Markets** lean on the same
+  walk, and the coupling is worth knowing about because it is a *feature* being
+  tested rather than an accident. The campaign folder resolves ZIP `99999`
+  mid-run, and the API **persists that answer** to the ZIP table so the next
+  campaign starts with it — which is exactly what the resolver flow is for, and
+  which means the campaign folder's "99999 is unmatched" assertion is only true
+  on a table that does not already hold it. `Platform Zip Markets` sorts after
+  `Platform Mailer Campaigns`, reads the row as proof the write-back happened,
+  and then deletes it, leaving the table as the run found it. Running the
+  campaign folder **twice on its own** therefore fails the second time; running
+  the collection, or the two folders in order, does not.
+
+  **Platform Mailer Campaigns' last three requests are tenant requests**, and
+  they are there rather than in **Mailers** for an ordering reason. Proving
+  PAC-71's "one lead per mailer, platform-wide" needs two agencies that can both
+  see one mailer: the demo producer (`accessToken`, from **Auth › Login**) and
+  the owner of the agency **Platform Agencies › Onboard Agency** creates
+  (`onboardOwnerAccessToken`). `Mailers` sorts before `Platform Agencies`, so
+  that second token does not exist yet when it runs — and the demo seed's own
+  mailer is visible to one agency by construction, so it could not show this
+  even with a token. The campaign folder has both, plus a mailer committed with
+  `assignment.mode: "all"`. That is also why **Onboard Agency** enables the
+  `mailers` module.
+
+    **CRM Service builds its own fixtures every run**, and has to. Three of the
+  endpoints it covers are one-shot by design: **one transfer per ticket**
+  (unique index on `{agencyId, ticketId}` over `deals`, `409` in front of it),
+  policy numbers are unique per agency and digits-only for Allstate, and a
+  transfer **retires** the policy it replaces. So the folder finds a client,
+  reads that client's currently *active* policy, opens a disposable
+  `Policy Change` ticket, and books the transfer with a timestamped policy
+  number. The line-up rotates rather than being consumed — run 1 transfers
+  policy A and creates B, run 2 transfers B — which is what makes the folder
+  re-runnable instead of green exactly once.
+
+  **The two password-reset paths deliberately use different accounts.** The
+  cooldown is per user, `Auth › Forgot Password (Public)` runs within seconds of
+  the start, and `Users › Send Password Reset` runs about forty seconds later.
+  Pointed at the same person, the second is a correct `409` that takes
+  `Get Password Reset (Public)` and `Reset Password (Public)` down with it for
+  want of a token. The public probe therefore uses `resetProbeEmail`; the
+  admin-triggered one keeps the producer, whose stamp `Deactivate User` clears
+  earlier in that same folder — which is also what keeps back-to-back runs green.
+
+    **Users** is self-contained and idempotent: it logs in, invites a
   freshly-generated address, and revokes it again, so it can be re-run
   indefinitely without colliding on the unique `email` index. One request there
   accepts two statuses by design — `Resend Invite` returns `409` inside the

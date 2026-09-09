@@ -2,7 +2,7 @@
 
 > Auto-loaded by coding agents opened at the `AIOS-SFA/` repo root (Claude Code
 > reads it via the `@AGENTS.md` import in `CLAUDE.md`). This is the
-> **new, greenfield replacement** for the legacy SFA app. Three read-only reference
+> **new, greenfield replacement** for the legacy SFA app. Four read-only reference
 > checkouts are symlinked in (gitignored, never committed here):
 > - `./SFA` → legacy Next.js app, **source-of-truth for behaviour** being ported —
 >   see `.claude/rules/legacy-sfa-reference.md`.
@@ -12,10 +12,15 @@
 > - `./sfaforms` → standalone Next.js prototype of the Lead→Quote→Sold→Audit
 >   intake forms (localStorage mock API), **behavioural reference for the native
 >   forms** replacing Fillout — see `.claude/rules/sfaforms-reference.md`.
+> - `./apex-mail-companion` → **ApexReports**, the live TanStack/Cloudflare
+>   operations & reporting portal for Apex Agency (mail campaigns, chargebacks,
+>   transaction/commission reports, producer analytics, data-quality scrubbers),
+>   **behavioural source-of-truth for mailer campaigns and for any metric it
+>   already computes** — see `.claude/rules/apex-mail-companion-reference.md`.
 >
-> **Never edit, create, or delete anything under `./SFA`, `./agencyops_fe_mockups`
-> or `./sfaforms`.** They are read-only reference checkouts; all work goes in
-> `packages/*`.
+> **Never edit, create, or delete anything under `./SFA`, `./agencyops_fe_mockups`,
+> `./sfaforms` or `./apex-mail-companion`.** They are read-only reference
+> checkouts; all work goes in `packages/*`.
 
 ---
 
@@ -76,6 +81,13 @@ each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 load-bearing and the permission *strings* are the contract for the guards and the
 whole web app — full detail in `packages/api/CLAUDE.md`, which loads whenever you
 work under `packages/api`.
+
+A tenant is created one of three ways: the **SmartSuite migration** (the real
+agency), the **demo seed** (a throwaway one), or the Super Admin panel's
+**Onboard Agency** wizard (PAC-69) at `/admin/agencies/onboard`, which is the
+only one that also creates a user — the agency's owner, invited by email. The
+owner then completes a two-phase onboarding: personal (name + password) and a
+skippable agency white-label phase, tracked by `Agency.setup`.
 
 ---
 
@@ -145,6 +157,33 @@ temperature/aging that aren't first-class in legacy payloads. See
 - `./agencyops_fe_mockups/` — **read-only symlink** to the Figma FE mockups repo
   (design screenshots, exported React components/CSS, per-dashboard `guidelines/`).
   UI design source-of-truth — see `.claude/rules/figma-mockups-reference.md`.
+- `./apex-mail-companion/` — **read-only symlink** to **ApexReports**, Apex
+  Agency's live operations & reporting portal (~24 tabs across Pipelines /
+  Reports / Tools / System). It runs the real mailer campaign pipeline
+  (Quote Burst · SFA Processor · Lead Update · Aggregated Reports ·
+  Search Mailer) and writes the `Mailer_Test_Alteryx*` BigQuery tables our
+  `mailers` collection came from — but also owns chargebacks, monthly
+  transaction/commission reports, quote-to-sold analytics, producer
+  performance, and the quote/policy scrubbers. Behavioural source-of-truth for
+  campaign features and for metrics it already defines — see
+  `.claude/rules/apex-mail-companion-reference.md`. What **our** side has
+  already settled lives in the Linear tickets (PAC-61 · PAC-73 · PAC-71) and in
+  the docblocks under `packages/api/src/mailers/**` and
+  `packages/api/src/common/mailers/**` — read those before re-deciding
+  something.
+- `docs/plans/pac-71-mailer-campaigns-implementation-plan.md` — the four-PR
+  execution order for mailer campaigns (PAC-71). ⚠ **Add Mailers is gone** (page,
+  route, panel tile, endpoints and worker function): a mailer now belongs to a
+  *campaign* rather than an agency. Its flow lives on as **Import a processed
+  file** at `/admin/campaigns/new?source=processed`; mailers otherwise arrive
+  from a campaign run or the demo seed. Moving an existing database across:
+  **stop the API and the worker**, run
+  `npm run backfill:mailer-campaigns:dev -w @sfa/api` (`--dry-run` first) from
+  the new build, *then* deploy — old code would insert un-stamped rows while it
+  runs, and new code's `autoIndex` would try to build the platform-wide unique
+  index before duplicates have been verified. Afterwards, drop the orphaned
+  `mailerImportRuns` collection by hand (`db.mailerImportRuns.drop()`): no code
+  references it any more, so nothing will.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**
@@ -170,6 +209,17 @@ whenever you work under `packages/web`.
 
 - Keep shared enums/permissions/types in `packages/shared` — never hard-code or duplicate module keys / permission strings.
 - Every new API endpoint goes through the guard chain and declares its module + required permission + data scope.
+- **Anything that builds a user-facing URL must go through `TenantUrlService.baseUrlFor(agencyId)`**, never `APP_BASE_URL` / `PUBLIC_FORM_BASE_URL` directly. A link on the wrong host is not merely off-brand — `HostTenantGuard` rejects the recipient there, so the link is broken. Same for the logo URL in an email, which must be absolute and unauthenticated.
+- **Object keys carry their own ownership check.** A client hands back the key
+  it was given, so every key lives under a prefix the server can test:
+  `agencies/<agencyId>/<purpose>/…` for tenant files (`assertKeyOwnership`) and
+  `platform/<purpose>/<year>/…` for files belonging to no tenant
+  (`assertPlatformKeyOwnership` — mailer campaigns are the first, PAC-71). Build
+  them with `StorageService.buildObjectKey` / `buildPlatformObjectKey`, never by
+  hand: the sanitizer is what makes `..` unrepresentable and the prefix
+  unforgeable. A **presigned URL is a bearer capability** — never store one on a
+  record, mint it per read; the one link that travels (the campaign completion
+  email's 7-day download) is a deliberate exception with its own TTL setting.
 - **Mirror every new/changed API endpoint in the Bruno collection (`bruno/`)** — our version-controlled API docs + test client. Add/update the matching `.bru` request (with a real `docs` block) and verify with `cd bruno && npx @usebruno/cli run --env Local`. See `.claude/rules/api-bruno-docs.md` and `bruno/README.md`.
 - TypeScript strict; functional React components with named exports; keep reusable UI modular.
 - Forms: prefer **TanStack Form** + `zod` (wired via Standard Schema — pass the
@@ -186,6 +236,7 @@ whenever you work under `packages/web`.
   Two API traps are written up in `docs/tanstack-form-spike-findings.md` —
   read it before touching the Sold wizard's per-card validation.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
+- **Model the domain, never the SmartSuite field type.** When a SmartSuite field is an array, a select code or a `{ date, include_time }` object, the Mongo field is whatever the *business fact* actually is — not a mirror of how SmartSuite happens to type it. The schemas were generated straight from the API docs and this went wrong three times, each costing a ticket: `Contact.emails: string[]` / `phones: string[]` because SmartSuite's Email field is `string[]` and its Phone field is `phone[]`, when a contact is **one person with one email and one phone** (PAC-91 §1 — every consumer already read `[0]`, which is the tell); raw option codes stored where labels belong, so 2,095 households render `b5qvJ` (PAC-80 §6); and a single `Contact.householdId` because SmartSuite's `Household` link is single-valued, when membership is genuinely many-to-many (PAC-91 §5). The test: if you cannot say what the array's *second* element would mean, it is not an array. **A denormalised copy is the same mistake in another shape** — `Lead.emails`, `Household.primaryContactName/primaryEmails/primaryPhones` were all copies of a fact that lives on the contact, nothing kept them in step, and they read as empty on every migrated record (PAC-91 §1–§4). Store the reference and resolve through it.
 - **Changes to data or indexes that already exist go in `packages/api/migrations/`** — the versioned migrate-mongo setup (`npm run db:migrate:create -- <description>`). Each file runs once per database, in filename order, recorded in `migrations_changelog`, and **the API applies pending ones at startup** before it binds a port, so a deploy migrates itself. Read `packages/api/migrations/README.md` first; the short version is that applied migrations are immutable (fix a mistake with a *new* one), they use the raw `db` handle and never a Mongoose model (importing a schema fires `autoIndex` and races the migration), and they must be idempotent because a failure is not recorded and retries from the top. Do **not** write another one-off `src/migration/backfill/`-style script — that pattern is what this replaces. Note `src/migration/` is a *different thing*: the one-time SmartSuite→Mongo data import for bringing up an empty database.
 - **Changing the *options* of an existing index is the case that most often needs one.** Mongoose's `autoIndex` only creates indexes that are missing — it never rebuilds one whose options changed. Editing the schema therefore fixes only collections created *afterwards*, and silently leaves existing ones on the old definition (this is how the `agencyId + legacySmartSuiteId` dedupe index stayed `sparse` on three collections after being corrected to a partial filter, breaking lead creation with E11000). Discover affected collections by index name rather than hard-coding them (which collections are stale depends on when each was created, so it differs per environment), and check for conflicting data *before* dropping — rebuilding a unique index over real duplicates fails, and failing after the drop leaves no uniqueness at all. `git log -- packages/api/src/migration/backfill/fix-legacy-dedupe-indexes.ts` has a worked example of the logic (the script itself was deleted once production had no database old enough to need it); the logic is what to reuse, in a migration file rather than a standalone script.
 - **`createdBy` / `updatedBy` are stamped for you — except on `bulkWrite`.** `authorshipPlugin` (`src/common/mongo/authorship.plugin.ts`) is registered connection-wide and fills both fields from the request context for `save()`/`create()`, `updateOne`, `updateMany`, `findOneAndUpdate` and `insertMany` on every schema extending `TenantRecord`. **`Model.bulkWrite()` bypasses Mongoose middleware entirely**, so a bulk call site that should record an author must spread `authorshipForInsert()` into the document itself — see `AuditGenerationService.buildItem`. Writes with no request context (migration, seeds, the worker) leave both null, which reads as "system"; never mint a placeholder user id, and never backfill.

@@ -71,13 +71,13 @@ variable "domain" {
 }
 
 variable "enable_tls" {
-  description = "Auto-run Certbot on droplet first boot to issue a Let's Encrypt cert for var.domain. Requires DNS for var.domain to already point at the droplet (best paired with a reserved IP)."
+  description = "Whether the site is served over HTTPS. Since the edge moved to Caddy this no longer triggers anything on the droplet — certificates are obtained on demand per hostname — but it still selects the scheme for derived values such as web_origin (Spaces CORS). Leave it true for any environment with a real domain."
   type        = bool
   default     = false
 }
 
 variable "certbot_email" {
-  description = "Email for Let's Encrypt registration/expiry notices. Required when enable_tls = true."
+  description = "Email for Let's Encrypt registration/expiry notices. Required — Caddy registers with it on first boot and it receives expiry warnings for every tenant certificate."
   type        = string
   default     = ""
 }

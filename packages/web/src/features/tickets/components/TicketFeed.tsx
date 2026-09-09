@@ -1,11 +1,27 @@
-import { Search, SlidersHorizontal } from "lucide-react";
+import { Check, ListFilter, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   SERVICE_TICKET_CATEGORIES,
   type ServiceTicketCategory,
 } from "@sfa/shared";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { FilterToggles } from "@/components/common/FilterToggles";
 import { compareTicketUrgency } from "@/lib/ticket-urgency";
-import { Ticket, TicketStatus } from "./ticket-data";
+import { cn } from "@/lib/utils";
+import {
+  CATEGORY_SHORT,
+  TICKET_PRIORITY_CLASS,
+  TICKET_STATUS_CONFIG,
+  type Ticket,
+} from "./ticket-data";
 
 type FilterTab = "all" | "open" | "waiting" | "resolved";
 
@@ -21,40 +37,23 @@ interface TicketFeedProps {
   emptyLabel?: string;
 }
 
-const STATUS_COLORS: Record<TicketStatus, { dot: string; text: string }> = {
-  open: { dot: "bg-[var(--kpi-blue)]", text: "text-[var(--kpi-blue)]" },
-  waiting: { dot: "bg-[var(--kpi-purple)]", text: "text-[var(--kpi-purple)]" },
-  resolved: { dot: "bg-[var(--kpi-green)]", text: "text-[var(--kpi-green)]" },
-  overdue: { dot: "bg-[var(--kpi-amber)]", text: "text-[var(--kpi-amber)]" },
-  in_progress: { dot: "bg-[var(--kpi-blue)]", text: "text-[var(--kpi-blue)]" },
-  waiting_on_client: {
-    dot: "bg-[var(--kpi-purple)]",
-    text: "text-[var(--kpi-purple)]",
-  },
-  waiting_on_carrier: {
-    dot: "bg-[var(--kpi-purple)]",
-    text: "text-[var(--kpi-purple)]",
-  },
-  closed: { dot: "bg-muted-foreground", text: "text-muted-foreground" },
-};
+const TABS: readonly { label: string; value: FilterTab }[] = [
+  { label: "All", value: "all" },
+  { label: "Open", value: "open" },
+  { label: "Waiting", value: "waiting" },
+  { label: "Resolved", value: "resolved" },
+];
 
-/** Abbreviations for the narrow feed rows; anything unlisted falls back to the full name. */
-const CATEGORY_SHORT: Record<string, string> = {
-  "Renewal Review": "Renewal",
-  "Renewal Taken": "Renewal Taken",
-  "Claims Assist": "Claims",
-  "Policy Change": "Pol. Change",
-  "Company Transfer": "Transfer",
-  Endorsement: "Endorse",
-  Onboarding: "Onboard",
-};
-
-const PRIORITY_COLOR: Record<string, string> = {
-  high: "bg-red-500/15 text-red-400",
-  medium: "bg-amber-500/15 text-amber-400",
-  low: "bg-slate-500/15 text-slate-300",
-};
-
+/**
+ * The queue on the left of the ticket workspace.
+ *
+ * Search, the status filters and the category filter go through `Input`,
+ * `FilterToggles` and `DropdownMenu` rather than the hand-rolled equivalents
+ * this had before — the previous search box drew its own focus ring off
+ * `--ring`, the filter row was bare `<button>`s with no group semantics or
+ * pressed state, and the category picker was a `fixed inset-0` click-away layer
+ * with no escape handling and no `aria-expanded`.
+ */
 export function TicketFeed({
   tickets,
   selectedId,
@@ -65,7 +64,6 @@ export function TicketFeed({
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterTab>("all");
   const [category, setCategory] = useState<ServiceTicketCategory | "all">("all");
-  const [categoryOpen, setCategoryOpen] = useState(false);
 
   // Only offer categories actually present in the queue — a picker listing all
   // twelve when the CSR has three is noise.
@@ -104,201 +102,210 @@ export function TicketFeed({
     return matches.sort(compareTicketUrgency);
   }, [tickets, filter, category, query]);
 
-  const tabs: { label: string; value: FilterTab }[] = [
-    { label: "All", value: "all" },
-    { label: "Open", value: "open" },
-    { label: "Waiting", value: "waiting" },
-    { label: "Resolved", value: "resolved" },
-  ];
-
   return (
-    <div className="flex flex-col h-full bg-card border-r border-border overflow-hidden">
-      {/* Search + filter */}
-      <div className="px-3 pt-3 pb-2 border-b border-border space-y-2">
+    <div className="flex h-full flex-col overflow-hidden border-border bg-card lg:border-r">
+      <div className="space-y-3 border-b border-border px-4 py-3">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-          <input
-            type="text"
+          <Search
+            aria-hidden
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            type="search"
+            aria-label="Search tickets"
             placeholder="Search name, policy, phone, ID…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 text-sm bg-[var(--input-background)] border border-border rounded-md outline-none focus:ring-2 focus:ring-[var(--ring)] placeholder:text-muted-foreground"
+            className="pl-9 bg-card border-border"
           />
         </div>
+
         {showStatusTabs && (
-        <div className="flex items-center bg-muted rounded-md p-0.5 gap-0.5">
-          {tabs.map((tab) => (
-            <button
-              key={tab.value}
-              onClick={() => setFilter(tab.value)}
-              className={`flex-1 text-xs py-1 rounded transition-all ${
-                filter === tab.value
-                  ? "bg-secondary text-foreground shadow-sm font-medium"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+          <FilterToggles
+            label="Filter tickets by status"
+            options={TABS}
+            value={filter}
+            onChange={setFilter}
+          />
         )}
       </div>
 
-      {/* Count + category filter */}
-      <div className="px-3 py-1.5 flex items-center justify-between relative">
-        <span className="text-xs text-muted-foreground">
+      <div className="flex items-center justify-between gap-2 px-4 py-2">
+        <span className="truncate text-sm text-muted-foreground">
           {filtered.length} ticket{filtered.length !== 1 ? "s" : ""}
-          {category !== "all" ? (
+          {category !== "all" && (
             <span className="text-foreground"> · {category}</span>
-          ) : null}
+          )}
         </span>
-        <button
-          type="button"
-          onClick={() => setCategoryOpen((open) => !open)}
-          title="Filter by category"
-          className={`transition-colors ${
-            category === "all"
-              ? "text-muted-foreground hover:text-foreground"
-              : "text-[var(--kpi-blue)]"
-          }`}
-        >
-          <SlidersHorizontal className="w-3.5 h-3.5" />
-        </button>
 
-        {categoryOpen && (
-          <>
-            {/* Click-away layer, matching the dropdown idiom in WorkspacePanel. */}
-            <div
-              className="fixed inset-0 z-10"
-              onClick={() => setCategoryOpen(false)}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Filter by category"
+              className={cn(category !== "all" && "text-primary")}
+            >
+              <ListFilter />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="max-h-64 w-48 overflow-y-auto">
+            <CategoryOption
+              label="All categories"
+              active={category === "all"}
+              onSelect={() => setCategory("all")}
             />
-            <div className="absolute right-3 top-8 z-20 w-44 max-h-64 overflow-y-auto rounded-md border border-border bg-card py-1 shadow-lg">
+            {availableCategories.map((c) => (
               <CategoryOption
-                label="All categories"
-                active={category === "all"}
-                onClick={() => {
-                  setCategory("all");
-                  setCategoryOpen(false);
-                }}
+                key={c}
+                label={c}
+                active={category === c}
+                onSelect={() => setCategory(c)}
               />
-              {availableCategories.map((c) => (
-                <CategoryOption
-                  key={c}
-                  label={c}
-                  active={category === c}
-                  onClick={() => {
-                    setCategory(c);
-                    setCategoryOpen(false);
-                  }}
-                />
-              ))}
-            </div>
-          </>
-        )}
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* List — scrolls independently of the workspace pane. `min-h-0` keeps
           this flex child from growing past its parent instead of scrolling. */}
-      <div className="flex-1 min-h-0 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {filtered.length === 0 && (
-          <div className="flex items-center justify-center h-32 text-sm text-muted-foreground px-4 text-center">
+          <p className="flex h-32 items-center justify-center px-4 text-center text-sm text-muted-foreground">
             {emptyLabel}
-          </div>
+          </p>
         )}
-        {filtered.map((ticket) => {
-          const sc = STATUS_COLORS[ticket.status];
-          const isSelected = selectedId === ticket.id;
-          const isOverdue = ticket.daysOpen > 10 && ticket.status !== "resolved";
-          // Each onboarding ticket IS one call, so the row shows its own step.
-          const onboardingStep = ticket.onboarding ?? null;
-
-          return (
-            <button
-              key={ticket.id}
-              onClick={() => onSelect(ticket.id)}
-              className={`w-full text-left px-3 py-2.5 border-b border-border transition-colors group ${
-                isSelected
-                  ? "bg-[var(--kpi-blue-bg)] border-l-2 border-l-[var(--kpi-blue)]"
-                  : "hover:bg-muted/50 border-l-2 border-l-transparent"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2 mb-1">
-                <span className={`text-sm font-semibold leading-tight ${isSelected ? "text-[var(--kpi-blue)]" : "text-foreground"}`}>
-                  {ticket.clientName}
-                </span>
-                <span
-                  className={`shrink-0 text-xs font-mono px-1.5 py-0.5 rounded ${
-                    isOverdue
-                      ? "bg-[var(--kpi-amber-bg)] text-[var(--kpi-amber)] font-semibold"
-                      : "bg-muted text-muted-foreground"
-                  } ${isOverdue ? "animate-pulse" : ""}`}
-                >
-                  {ticket.status === "resolved" ? "✓ Done" : `${ticket.daysOpen}d open`}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <span className={`inline-block w-1.5 h-1.5 rounded-full ${sc.dot} shrink-0`} />
-                <span className="text-xs text-muted-foreground font-mono">{ticket.ticketNumber}</span>
-                <span className="text-xs text-muted-foreground">·</span>
-                <span className="text-xs text-muted-foreground">{CATEGORY_SHORT[ticket.category] ?? ticket.category}</span>
-              </div>
-              {/* Which call this is and when it is owed, so a CSR can triage
-                  without opening the ticket. */}
-              {onboardingStep && (
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span
-                    className={`text-xs px-1.5 py-0.5 rounded-sm ${
-                      onboardingStep.isOverdue
-                        ? "bg-red-500/15 text-red-400 font-medium"
-                        : onboardingStep.completedAt
-                          ? "bg-muted text-muted-foreground"
-                          : "bg-[var(--kpi-blue-bg)] text-[var(--kpi-blue)]"
-                    }`}
-                  >
-                    {onboardingStep.label}
-                  </span>
-                  <span className="text-xs text-muted-foreground truncate">
-                    {onboardingStep.completedAt
-                      ? `step ${onboardingStep.sequence}/${onboardingStep.totalSteps} · done`
-                      : onboardingStep.isOverdue
-                        ? `overdue since ${shortDate(onboardingStep.dueAt)}`
-                        : `due ${shortDate(onboardingStep.dueAt)}`}
-                  </span>
-                </div>
-              )}
-              <div className="flex items-center justify-between">
-                <span className={`text-xs px-1.5 py-0.5 rounded-sm ${PRIORITY_COLOR[ticket.priority]}`}>
-                  {ticket.priority}
-                </span>
-                <span className="text-xs text-muted-foreground">{ticket.lastActivity}</span>
-              </div>
-            </button>
-          );
-        })}
+        {filtered.map((ticket) => (
+          <TicketRow
+            key={ticket.id}
+            ticket={ticket}
+            selected={selectedId === ticket.id}
+            onSelect={() => onSelect(ticket.id)}
+          />
+        ))}
       </div>
     </div>
+  );
+}
+
+function TicketRow({
+  ticket,
+  selected,
+  onSelect,
+}: {
+  ticket: Ticket;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const status = TICKET_STATUS_CONFIG[ticket.status];
+  const isOverdue = ticket.daysOpen > 10 && ticket.status !== "resolved";
+  // Each onboarding ticket IS one call, so the row shows its own step.
+  const onboardingStep = ticket.onboarding ?? null;
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected ? "true" : undefined}
+      className={cn(
+        "w-full border-b border-l-2 border-border px-4 py-3 text-left transition-colors",
+        selected
+          ? "border-l-primary bg-primary/12"
+          : "border-l-transparent hover:bg-muted/50",
+      )}
+    >
+      <span className="mb-1 flex items-start justify-between gap-2">
+        <span
+          className={cn(
+            "text-sm font-semibold leading-tight",
+            selected ? "text-primary" : "text-card-foreground",
+          )}
+        >
+          {ticket.clientName}
+        </span>
+        <Badge
+          size="sm"
+          variant="ghost"
+          className={cn(
+            "shrink-0 tabular-nums",
+            isOverdue
+              ? "bg-destructive/12 font-semibold text-destructive"
+              : "bg-muted text-muted-foreground",
+          )}
+        >
+          {ticket.status === "resolved" ? "Done" : `${ticket.daysOpen}d open`}
+        </Badge>
+      </span>
+
+      <span className="mb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span className={cn("size-2 shrink-0 rounded-full", status.dot)} />
+        <span className="tabular-nums">{ticket.ticketNumber}</span>
+        <span>·</span>
+        <span className="truncate">
+          {CATEGORY_SHORT[ticket.category] ?? ticket.category}
+        </span>
+      </span>
+
+      {/* Which call this is and when it is owed, so a CSR can triage without
+          opening the ticket. */}
+      {onboardingStep && (
+        <span className="mb-1.5 flex items-center gap-1.5">
+          <Badge
+            size="sm"
+            variant="ghost"
+            className={cn(
+              onboardingStep.isOverdue
+                ? "bg-red-500/12 font-medium text-red-600 dark:text-red-400"
+                : onboardingStep.completedAt
+                  ? "bg-muted text-muted-foreground"
+                  : "bg-primary/12 text-primary",
+            )}
+          >
+            {onboardingStep.label}
+          </Badge>
+          <span className="truncate text-xs text-muted-foreground">
+            {onboardingStep.completedAt
+              ? `step ${onboardingStep.sequence}/${onboardingStep.totalSteps} · done`
+              : onboardingStep.isOverdue
+                ? `overdue since ${shortDate(onboardingStep.dueAt)}`
+                : `due ${shortDate(onboardingStep.dueAt)}`}
+          </span>
+        </span>
+      )}
+
+      <span className="flex items-center justify-between gap-2">
+        <Badge
+          size="sm"
+          variant="ghost"
+          className={cn("capitalize", TICKET_PRIORITY_CLASS[ticket.priority])}
+        >
+          {ticket.priority}
+        </Badge>
+        <span className="truncate text-xs text-muted-foreground">
+          {ticket.lastActivity}
+        </span>
+      </span>
+    </button>
   );
 }
 
 function CategoryOption({
   label,
   active,
-  onClick,
+  onSelect,
 }: {
   label: string;
   active: boolean;
-  onClick: () => void;
+  onSelect: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-muted ${
-        active ? "text-[var(--kpi-blue)] font-medium" : "text-foreground"
-      }`}
+    <DropdownMenuItem
+      onSelect={onSelect}
+      className={cn(active && "font-medium text-primary")}
     >
       {label}
-    </button>
+      {active && <Check className="ml-auto size-4" />}
+    </DropdownMenuItem>
   );
 }
 

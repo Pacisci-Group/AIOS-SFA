@@ -22,32 +22,35 @@ const CONTACTS: HouseholdView["contacts"] = [
     id: `${DEMO_ID}-c1`,
     firstName: "Jessica",
     lastName: "Cobb",
-    emails: ["jessica.cobb@email.com"],
-    phones: ["(404) 555-0182"],
+    email: "jessica.cobb@email.com",
+    phone: "(404) 555-0182",
     roleInHousehold: "Primary Insured",
     isPrimary: true,
     dateOfBirth: "1984-03-22T00:00:00.000Z",
+    deceasedAt: null,
   },
   {
     id: `${DEMO_ID}-c2`,
     firstName: "Tyler",
     lastName: "Cobb",
-    emails: ["tyler.cobb@email.com"],
-    phones: ["(404) 555-0199"],
+    email: "tyler.cobb@email.com",
+    phone: "(404) 555-0199",
     roleInHousehold: "Spouse",
     isPrimary: false,
     dateOfBirth: "1982-11-04T00:00:00.000Z",
+    deceasedAt: null,
   },
   {
     // `toMembers` flags this one as a driver by matching /driver/i on the role.
     id: `${DEMO_ID}-c3`,
     firstName: "Driver",
     lastName: "Token",
-    emails: [],
-    phones: [],
+    email: null,
+    phone: null,
     roleInHousehold: "Teen Driver · Excluded",
     isPrimary: false,
     dateOfBirth: "2008-07-19T00:00:00.000Z",
+    deceasedAt: null,
   },
 ];
 
@@ -116,7 +119,20 @@ export const DEMO_HOUSEHOLD: HouseholdView = {
   name: "The Cobb Household",
   status: "Active",
   primaryContactName: "Jessica Cobb",
+  // The demo household is a healthy record on purpose — it exists to show the
+  // page's normal state, not its edge cases (PAC-91 §7).
+  primaryContactDeceasedAt: null,
+  dataQuality: null,
   totalActivePolicies: POLICIES.filter((p) => p.active).length,
+  // The normalized shape the API resolves for a live record; `propertyAddress`
+  // below keeps the demo seed's raw key set so the fixture still stands in for
+  // one of the three stored shapes.
+  address: {
+    street: "412 Magnolia Lane",
+    city: "Alpharetta",
+    state: "GA",
+    zip: "30022",
+  },
   propertyAddress: {
     line1: "412 Magnolia Lane",
     city: "Alpharetta",
@@ -124,8 +140,8 @@ export const DEMO_HOUSEHOLD: HouseholdView = {
     postalCode: "30022",
   },
   mailingAddress: null,
-  primaryEmails: ["jessica.cobb@email.com"],
-  primaryPhones: ["(404) 555-0182"],
+  primaryEmail: "jessica.cobb@email.com",
+  primaryPhone: "(404) 555-0182",
   assignedCrmId: null,
   contacts: CONTACTS,
   policies: POLICIES,

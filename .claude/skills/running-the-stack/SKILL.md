@@ -64,13 +64,18 @@ applies identically in both modes.
 >   (`src/seed/demo/`): its own "Demo Agency" (slug `demo-agency`, kept separate
 >   from the migration's `smith-family-agency` so the two never mix) + a 2nd
 >   branch, a complete
->   role roster (owner, manager, 5 producers, 2 CRMs, data team — all
+>   role roster (owner, manager, 5 producers, 2 CSRs, 2 CRMs, data team — all
 >   `ChangeMe123!`), and ~500 realistic CRM records across **every** collection
 >   (households, contacts, leads, quotes, deals, policies, audit/hand-off items,
 >   service tickets, goals, activities, …). Deterministic (fixed RNG seed) and
 >   **idempotent** (upserts on stable `demo:*` keys); pass `--fresh` to purge and
 >   reseed. No SmartSuite/network needed. "Pat Producer"
->   (`producer@smithfamily.local`) is the data-rich hero for the Producer Dashboard.
+>   (`producer@demoagency.local`) is the data-rich hero for the Producer Dashboard.
+>   **A second tenant:** `-- --agency texas-holdings --agency-name "Texas Holdings"`
+>   adds another fully populated agency (its roster gets `@texasholdings.local`
+>   addresses, or `--email-domain <domain>`), leaving the first untouched — what
+>   the Super Admin's cross-agency user directory and impersonation (PAC-70)
+>   need to be meaningful locally.
 > - `api:migrate:dev` — real **SmartSuite → Mongo** import; needs SmartSuite
 >   credentials (run `api:seed:dev` first).
 > - `api:migrate:mailers:dev` — **BigQuery → Mongo** backfill of the legacy
@@ -80,13 +85,21 @@ applies identically in both modes.
 >   RTP upload and the demo seed both populate a working `mailers` collection
 >   without it. Re-runnable: upserts on the control-number key, so a second run
 >   appends what is new and updates what changed.
+> - `api:migrate:tickets:dev` — **one-off**, only for a database migrated
+>   before September 2026 (a restored dump, dev, prod). Folds the old
+>   service-ticket mirror rows and the separate `service_tickets` collection
+>   into the one `serviceTickets` collection the CRM reads, then syncs its
+>   indexes. `--dry-run` reports without writing. Idempotent; no SmartSuite
+>   needed. A database seeded or migrated by current code never needs it.
 >
 > **Nothing needs running after the migration.** It writes its own cross-record
 > refs (`leadId` / `householdId` / `quoteRecapId`), its own match keys
 > (`policies.policyNumberKey`, `quoteRecaps.quoteDateYmd`) and reconciles
 > household `HH-…` numbering at the end of its household pass. The repair passes
 > that used to follow it were for databases migrated by older code and have been
-> removed — a run against real data found them doing nothing.
+> removed — a run against real data found them doing nothing. The ticket
+> consolidation above is the one current exception, and it has the same
+> lifecycle: delete it once no environment is old enough to need it.
 
 > **Careful — "migration" means two different things in this repo.**
 > Everything above *populates an empty database*. **Schema migrations** are the

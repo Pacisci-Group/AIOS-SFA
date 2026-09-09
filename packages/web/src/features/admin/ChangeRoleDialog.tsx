@@ -111,7 +111,7 @@ export function ChangeRoleDialog({
 
         {isPending ? (
           <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <Loader2 size={14} className="animate-spin" />
+            <Loader2 className="size-4 animate-spin" />
             Loading roles…
           </div>
         ) : (
@@ -156,7 +156,7 @@ export function ChangeRoleDialog({
           </Button>
           <Button onClick={() => save.mutate()} disabled={save.isPending}>
             {save.isPending ? (
-              <Loader2 size={14} className="mr-1 animate-spin" />
+              <Loader2 className="size-4 mr-1 animate-spin" />
             ) : null}
             Save roles
           </Button>

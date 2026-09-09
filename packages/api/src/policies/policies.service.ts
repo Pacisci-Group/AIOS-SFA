@@ -9,6 +9,7 @@ import {
   DataScope,
   carrierPolicyNumberMatches,
   carrierSlug,
+  nextRenewalDate,
   normalizeCarrier,
   normalizePolicyType,
   policyTypeQueryValues,
@@ -34,6 +35,8 @@ import {
   snapshot,
 } from '../activities/change-log';
 import { CarriersService } from '../carriers/carriers.service';
+import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
+import { loadPrimaryContacts } from '../households/primary-contact';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   Household,
@@ -141,6 +144,8 @@ export class PoliciesService {
     private readonly householdModel: Model<HouseholdDocument>,
     @InjectModel(Activity.name)
     private readonly activityModel: Model<ActivityDocument>,
+    @InjectModel(Contact.name)
+    private readonly contactModel: Model<ContactDocument>,
     private readonly carriers: CarriersService,
   ) {}
 
@@ -308,6 +313,26 @@ export class PoliciesService {
     if (dto.expirationDate !== undefined) {
       policy.expirationDate = dto.expirationDate ?? undefined;
     }
+
+    /*
+     * `renewalDate` is derived, never sent: it is the next occurrence of the
+     * term, and the term is a function of the effective date and the policy
+     * type. Both of those are editable here, so both have to re-derive it —
+     * correcting an Auto policy to Home moves its renewal by six months, and
+     * leaving the old date would keep counting down to a renewal that is not
+     * happening.
+     *
+     * Recomputed from the *saved* fields rather than the DTO so a patch that
+     * touches only one of the pair still reads the other correctly. Cleared
+     * when the effective date is cleared — there is then nothing to count from,
+     * and a stale anchor would keep opening calls for a date nobody set.
+     */
+    if (dto.effectiveDate !== undefined || dto.policyType !== undefined) {
+      policy.renewalDate =
+        nextRenewalDate(policy.effectiveDate, policy.policyType, new Date()) ??
+        undefined;
+    }
+
     if (dto.status !== undefined) policy.policyStatus = dto.status ?? undefined;
 
     await policy.save();
@@ -594,17 +619,24 @@ export class PoliciesService {
 
     const households = await this.householdModel
       .find({ _id: { $in: ids } })
-      .select('name primaryContactName')
+      .select('name primaryContactId')
       .lean<
         Array<{
           _id: Types.ObjectId;
           name?: string;
-          primaryContactName?: string;
+          primaryContactId?: Types.ObjectId;
         }>
       >();
 
+    // The primary contact's name, resolved through the ref: the household
+    // stores no copy of it (PAC-91 §4), and the copy this used to read was
+    // empty on every migrated household — so these rows all fell through to
+    // the household's own name.
+    const primary = await loadPrimaryContacts(this.contactModel, households);
+
     for (const household of households) {
-      const name = household.primaryContactName ?? household.name;
+      const name =
+        primary.get(household._id.toString())?.name ?? household.name;
       if (name) map.set(household._id.toString(), name);
     }
     return map;

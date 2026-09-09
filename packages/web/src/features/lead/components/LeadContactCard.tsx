@@ -7,11 +7,12 @@ import {
   MapPin,
   Phone,
   ShieldCheck,
+  UserX,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { formatPhone } from "@/lib/leads-api";
 import { cn } from "@/lib/utils";
-import { DetailCard, SectionLabel } from "./DetailCard";
+import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { EditContactDialog } from "./EditContactDialog";
 import { LeadSourceSelect } from "./lead-inline-selects";
 import { formatAddress, formatDate } from "./lead-display";
@@ -75,6 +76,23 @@ export function LeadContactCard({
         </>
       }
     >
+      {/*
+        * The lead keeps every detail of a deceased contact (PAC-91 §7) — this is
+        * a historical record and the person on it was on it. What the banner
+        * does is stop anyone acting on those details: the Producer Dashboard's
+        * quick actions already go inert, and this says why on the page where
+        * someone would otherwise pick up the phone.
+        */}
+      {contact?.deceasedAt && (
+        <p className="flex items-center gap-2 border-b border-border bg-muted px-5 py-2.5 text-sm text-muted-foreground">
+          <UserX aria-hidden className="size-4 shrink-0" />
+          <span>
+            Recorded as deceased on {formatDate(contact.deceasedAt)}. The
+            details below stay on this record — do not use them to make contact.
+          </span>
+        </p>
+      )}
+
       <div className="grid gap-x-8 gap-y-4 px-5 py-4 sm:grid-cols-2">
         <Field
           icon={MapPin}
@@ -89,12 +107,12 @@ export function LeadContactCard({
         <Field
           icon={Mail}
           label="Email"
-          value={contact?.email ?? lead.emails[0] ?? "—"}
+          value={contact?.email ?? "—"}
         />
         <Field
           icon={Phone}
           label="Phone"
-          value={formatPhone(contact?.phone ?? lead.phones[0] ?? null)}
+          value={formatPhone(contact?.phone ?? null)}
         />
         {lead.quoteControlNumber && (
           <Field

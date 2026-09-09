@@ -15,7 +15,14 @@ import {
   type OnboardingStepKey,
   type OnboardingStepRef,
 } from "@sfa/shared";
+import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
+import { DisabledHint } from "@/components/common/DisabledHint";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { getOnboarding } from "@/lib/service-tickets-api";
+import { cn } from "@/lib/utils";
 
 interface OnboardingPanelProps {
   step: OnboardingStepRef;
@@ -54,135 +61,153 @@ export function OnboardingPanel({
 
   const state = stepState(step);
   const cfg = STEP_STATE_CONFIG[state];
+  const StateIcon = cfg.icon;
   const checklistKeys = ONBOARDING_STEP_CHECKLIST[step.stepKey] ?? [];
 
   return (
-    <div className="bg-card rounded-lg border border-border p-4 space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Onboarding
-          </h3>
-          <p className="mt-1 text-sm text-foreground">
+    <DetailCard
+      title="Onboarding"
+      icon={UserCheck}
+      action={
+        state === "done" ? (
+          <Badge size="sm" variant="ghost" className="bg-success/12 text-success">
+            Completed
+          </Badge>
+        ) : (
+          // The hint sits on the wrapper because `Button` is
+          // `disabled:pointer-events-none` and would never show a `title` of its
+          // own — see `DisabledHint`.
+          <DisabledHint
+            hint={
+              !canWrite
+                ? "You do not have permission to update onboarding"
+                : !step.isActionable
+                  ? "This call has not opened yet"
+                  : undefined
+            }
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!canWrite || !step.isActionable || isMutating}
+              onClick={() => onCompleteStep(step.stepKey)}
+              title={
+                canWrite && step.isActionable
+                  ? "Mark this call complete"
+                  : undefined
+              }
+            >
+              Complete
+            </Button>
+          </DisabledHint>
+        )
+      }
+    >
+      <div className="space-y-5">
+        <div>
+          <p className="text-base text-card-foreground">
             {step.label}
-            <span className="ml-2 text-xs text-muted-foreground">
+            <span className="ml-2 text-sm text-muted-foreground">
               Step {step.sequence} of {step.totalSteps}
             </span>
           </p>
-          {onboarding?.salesProducerName ? (
-            <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <UserCheck className="w-3 h-3" />
+          {onboarding?.salesProducerName && (
+            <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+              <UserCheck aria-hidden className="size-4" />
               Sold by{" "}
               <span className="text-foreground">
                 {onboarding.salesProducerName}
               </span>
             </p>
-          ) : null}
+          )}
         </div>
 
-        {state === "done" ? (
-          <span className="shrink-0 text-xs text-[var(--kpi-green)]">
-            Completed
-          </span>
-        ) : (
-          <button
-            type="button"
-            disabled={!canWrite || !step.isActionable || isMutating}
-            onClick={() => onCompleteStep(step.stepKey)}
-            className="shrink-0 rounded-md border border-border px-2.5 py-1 text-xs text-foreground transition-colors enabled:hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
-            title={
-              !canWrite
-                ? "You do not have permission to update onboarding"
-                : step.isActionable
-                  ? "Mark this call complete"
-                  : "This call has not opened yet"
-            }
-          >
-            Complete
-          </button>
-        )}
-      </div>
-
-      {/* This step's timing */}
-      <div className={`flex items-start gap-3 rounded-md border p-2.5 ${cfg.wrap}`}>
-        <span className={`mt-0.5 shrink-0 ${cfg.iconColor}`}>{cfg.icon}</span>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-foreground">{cfg.title}</span>
-            {state === "overdue" ? (
-              <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[11px] text-red-400">
-                Overdue
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {stepDetail(step, state)}
-          </p>
-        </div>
-      </div>
-
-      {/* Chain progress across all three calls */}
-      {onboarding ? (
-        <section>
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-            Client Onboarding
-            {onboarding.isComplete ? (
-              <span className="ml-2 font-normal normal-case text-[var(--kpi-green)]">
-                Complete
-              </span>
-            ) : null}
-          </h4>
-          <ol className="space-y-1">
-            {onboarding.chain.map((link) => (
-              <ChainRow
-                key={link.stepKey}
-                link={link}
-                isCurrent={link.stepKey === step.stepKey}
-              />
-            ))}
-          </ol>
-        </section>
-      ) : null}
-
-      {/* Checklist for this call only */}
-      {checklistKeys.length > 0 && onboarding ? (
-        <section>
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-            {step.label} Checklist
-          </h4>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
-            {checklistKeys.map((key) => (
-              <label
-                key={key}
-                className={`flex items-center gap-2 text-xs ${
-                  canWrite ? "cursor-pointer" : "cursor-default"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  className="accent-[var(--kpi-blue)]"
-                  checked={onboarding.checklist[key]}
-                  disabled={!canWrite || isMutating}
-                  onChange={(e) => onToggleChecklist(key, e.target.checked)}
-                />
-                <span
-                  className={
-                    onboarding.checklist[key]
-                      ? "text-foreground"
-                      : "text-muted-foreground"
-                  }
+        {/* This step's timing */}
+        <div className={cn("flex items-start gap-3 rounded-md border p-3", cfg.wrap)}>
+          <StateIcon aria-hidden className={cn("mt-0.5 size-5 shrink-0", cfg.tone)} />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-base text-card-foreground">{cfg.title}</span>
+              {state === "overdue" && (
+                <Badge
+                  size="sm"
+                  variant="ghost"
+                  className="bg-red-500/12 text-red-600 dark:text-red-400"
                 >
-                  {ONBOARDING_CHECKLIST_LABELS[key]}
-                </span>
-              </label>
-            ))}
+                  Overdue
+                </Badge>
+              )}
+            </div>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              {stepDetail(step, state)}
+            </p>
           </div>
-        </section>
-      ) : null}
+        </div>
 
-      {/* No email section: completing a call implies its email went out, so
-          tracking them separately was double bookkeeping for the CSR. */}
-    </div>
+        {/* Chain progress across all three calls */}
+        {onboarding && (
+          <section>
+            <div className="mb-2 flex items-center gap-2">
+              <SectionLabel>Client onboarding</SectionLabel>
+              {onboarding.isComplete && (
+                <Badge
+                  size="sm"
+                  variant="ghost"
+                  className="bg-success/12 text-success"
+                >
+                  Complete
+                </Badge>
+              )}
+            </div>
+            <ol className="space-y-1">
+              {onboarding.chain.map((link) => (
+                <ChainRow
+                  key={link.stepKey}
+                  link={link}
+                  isCurrent={link.stepKey === step.stepKey}
+                />
+              ))}
+            </ol>
+          </section>
+        )}
+
+        {/* Checklist for this call only */}
+        {checklistKeys.length > 0 && onboarding && (
+          <section>
+            <SectionLabel className="mb-2">{step.label} checklist</SectionLabel>
+            <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+              {checklistKeys.map((key) => (
+                <div key={key} className="flex items-center gap-2">
+                  <Checkbox
+                    id={`onboarding-${step.onboardingId}-${key}`}
+                    checked={onboarding.checklist[key]}
+                    disabled={!canWrite || isMutating}
+                    onCheckedChange={(checked) =>
+                      onToggleChecklist(key, checked === true)
+                    }
+                  />
+                  <Label
+                    htmlFor={`onboarding-${step.onboardingId}-${key}`}
+                    className={cn(
+                      "text-sm font-normal",
+                      onboarding.checklist[key]
+                        ? "text-foreground"
+                        : "text-muted-foreground",
+                      canWrite ? "cursor-pointer" : "cursor-default",
+                    )}
+                  >
+                    {ONBOARDING_CHECKLIST_LABELS[key]}
+                  </Label>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* No email section: completing a call implies its email went out, so
+            tracking them separately was double bookkeeping for the CSR. */}
+      </div>
+    </DetailCard>
   );
 }
 
@@ -197,33 +222,35 @@ function ChainRow({
 
   return (
     <li
-      className={`flex items-center gap-2 rounded px-2 py-1 text-xs ${
-        isCurrent ? "bg-[var(--kpi-blue-bg)]" : ""
-      }`}
+      className={cn(
+        "flex items-center gap-2 rounded-md px-2 py-1 text-sm",
+        isCurrent && "bg-primary/12",
+      )}
     >
       <span className="shrink-0">
         {done ? (
-          <Check className="w-3.5 h-3.5 text-[var(--kpi-green)]" />
+          <Check aria-hidden className="size-4 text-success" />
         ) : link.isOverdue ? (
-          <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+          <AlertTriangle
+            aria-hidden
+            className="size-4 text-red-600 dark:text-red-400"
+          />
         ) : link.isActionable ? (
-          <Star className="w-3.5 h-3.5 text-[var(--kpi-blue)]" />
+          <Star aria-hidden className="size-4 text-primary" />
         ) : (
-          <Lock className="w-3 h-3 text-muted-foreground" />
+          <Lock aria-hidden className="size-4 text-muted-foreground" />
         )}
       </span>
       <span className={done ? "text-muted-foreground" : "text-foreground"}>
         {link.sequence}. {link.label}
       </span>
-      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
         {done
           ? shortDate(link.completedAt)
           : link.ticketId
-            ? link.isOverdue
+            ? link.isOverdue || link.isActionable
               ? `due ${shortDate(link.dueAt)}`
-              : link.isActionable
-                ? `due ${shortDate(link.dueAt)}`
-                : `opens ${shortDate(link.availableAt)}`
+              : `opens ${shortDate(link.availableAt)}`
             : // No ticket yet — it is created when the call before it closes.
               "not scheduled"}
       </span>
@@ -242,30 +269,30 @@ function stepState(step: OnboardingStepRef): StepState {
 
 const STEP_STATE_CONFIG: Record<
   StepState,
-  { icon: React.ReactNode; iconColor: string; wrap: string; title: string }
+  { icon: typeof CheckCircle2; tone: string; wrap: string; title: string }
 > = {
   done: {
-    icon: <CheckCircle2 className="w-4 h-4" />,
-    iconColor: "text-[var(--kpi-green)]",
-    wrap: "border-border bg-transparent",
+    icon: CheckCircle2,
+    tone: "text-success",
+    wrap: "border-border",
     title: "Call completed",
   },
   overdue: {
-    icon: <AlertTriangle className="w-4 h-4" />,
-    iconColor: "text-red-400",
-    wrap: "border-red-500/30 bg-red-500/5",
+    icon: AlertTriangle,
+    tone: "text-red-600 dark:text-red-400",
+    wrap: "border-red-500/30 bg-red-500/10",
     title: "Call overdue",
   },
   actionable: {
-    icon: <Star className="w-4 h-4" />,
-    iconColor: "text-[var(--kpi-blue)]",
-    wrap: "border-[var(--kpi-blue)]/30 bg-[var(--kpi-blue)]/5",
+    icon: Star,
+    tone: "text-primary",
+    wrap: "border-primary/30 bg-primary/10",
     title: "Ready to call",
   },
   scheduled: {
-    icon: <Lock className="w-3.5 h-3.5" />,
-    iconColor: "text-muted-foreground",
-    wrap: "border-border bg-transparent",
+    icon: Lock,
+    tone: "text-muted-foreground",
+    wrap: "border-border",
     title: "Scheduled",
   },
 };

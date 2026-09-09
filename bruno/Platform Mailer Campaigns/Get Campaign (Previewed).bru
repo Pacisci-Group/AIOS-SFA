@@ -1,0 +1,112 @@
+meta {
+  name: Get Campaign (Previewed)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:pre-request {
+  // The preview is a queued Inngest job, so it is not done the instant
+  // `Create Campaign` returns. Without this pause the assertions below pass
+  // vacuously against a campaign still in `uploaded`, and `Commit Campaign`
+  // gets a correct-but-useless 409 — the chain would go green while proving
+  // nothing. Requires the Inngest dev server; see `bruno/README.md`.
+  await new Promise((resolve) => setTimeout(resolve, 6000));
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && res.getBody().preview) {
+    const zips = res.getBody().preview.unmatchedZips;
+    if (zips.length > 0) bru.setVar("campaignUnmatchedZip", zips[0]);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("has finished previewing", function () {
+    expect(res.getBody().status).to.equal("previewed");
+  });
+
+  test("the column contract is satisfied", function () {
+    expect(res.getBody().preview.missingRequiredColumns).to.eql([]);
+  });
+
+  test("reports what the transform would produce", function () {
+    const stats = res.getBody().preview.stats;
+    expect(stats.inputRows).to.equal(3);
+    expect(stats.outputRows).to.be.above(0);
+    expect(stats.premium).to.not.equal(null);
+  });
+
+  test("surfaces the unmapped ZIP for the inline resolver", function () {
+    // 99999 is not in the seeded table. An unmapped ZIP silently mails the
+    // default market's phone number into a town it is not local to, which is
+    // why the operator is asked rather than told afterwards.
+    //
+    // ⚠ Depends on `Platform Zip Markets/Delete Campaign Zip Resolution` having
+    // cleaned up after the previous run — `Patch Zip Resolutions` below
+    // *persists* the answer, which is the whole point of the flow. Running this
+    // folder twice on its own fails here; running the collection does not. See
+    // the Run order section in the collection docs.
+    expect(res.getBody().preview.unmatchedZips).to.include("99999");
+  });
+
+  test("counts the row with no control number as a rejection", function () {
+    const preview = res.getBody().preview;
+    expect(preview.rejections.length).to.be.at.least(1);
+    expect(preview.rejections[0].reason).to.match(/control number/i);
+  });
+
+  test("nothing is written until the commit", function () {
+    expect(res.getBody().importCounts).to.equal(null);
+    expect(res.getBody().outputFile).to.equal(null);
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/:campaignId — the poll target and the report
+
+  While a job works this is what the panel polls; once it settles this is the
+  report. Same shape either way.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Status
+  `uploaded → previewed → processing → imported`, with `failed` reachable from
+  either working state and recoverable by re-dispatching, plus `superseded` for
+  a campaign an overwrite replaced. **Nothing reaches `mailers` until the
+  commit** — a campaign left at `previewed` has changed nothing.
+
+  ## What `preview` carries
+  | field | notes |
+  |---|---|
+  | `missingRequiredColumns` | Non-empty ⇒ the campaign is `failed`. `firstname`, `lastname`, `address`, `city`, `state`, `zip`. |
+  | `missingRecommendedColumns` | Informational: no `controlno` means no mailer can be looked up, no `yearlyprem` means nothing to discount. |
+  | `stats` | The transform's own numbers. `null` on a `processed` source. |
+  | `unmatchedZips` | 5-digit ZIPs the market table does not know, for the inline resolver. |
+  | `floorHitRate` | `floorRaised / outputRows`. ~0.95 on real files. |
+  | `assignment.resolved` | One row per distinct carrier agency code: `"A0B9049 → Smith Family Agency, 20,024 rows"`. |
+  | `assignment.unmatched` | Codes matching no agency. **Non-empty blocks the commit** with a `422`. |
+  | `existingCampaigns` | Imported/processing campaigns for the same carrier, week and year. |
+  | `overlap` | `existingInOtherCampaigns` (rows of this file someone else already owns), `replacedRecordCount`, and `deleteCountIfOverwrite` — the number an overwrite must confirm. |
+  | `rejections` | A capped **sample**; `importCounts.skipped` is the authoritative total. |
+  | `inconsistentColumns` | Columns holding more than one value. **Informational** — several `agencyid` values is the normal multi-agency case, and the real week-36 file carries two `quotedate`s. |
+
+  ## Errors
+  - `401` / `403` — note this is `platform:mailers:read`, not `:write`.
+  - `404 Not Found` — no such campaign, or a malformed id.
+}

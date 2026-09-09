@@ -1,11 +1,14 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ModuleKey, PlatformPermission } from '@sfa/shared';
-import { AuthProvider } from '@/contexts/auth-context';
+import { AgencyPermission, ModuleKey, PlatformPermission } from '@sfa/shared';
+import { AuthProvider, useAuth } from '@/contexts/auth-context';
+import { TenantProvider, useTenant } from '@/contexts/tenant-context';
+import { UnknownHostPage } from '@/pages/UnknownHostPage';
 import { ThemeProvider } from '@/app/ThemeProvider';
 import { ProtectedRoute, PublicOnlyRoute } from '@/components/layout/ProtectedRoute';
 import { RequirePermission } from '@/components/layout/RequirePermission';
+import { SETTINGS_PERMISSIONS } from '@/features/settings/settings-sections';
 import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -60,17 +63,51 @@ const RolePermissionsPage = lazy(
   () => import('@/features/admin/RolePermissionsPage'),
 );
 const UsersPage = lazy(() => import('@/features/admin/UsersPage'));
+const BrandingPage = lazy(() => import('@/features/settings/BrandingPage'));
+const DomainsPage = lazy(() => import('@/features/settings/DomainsPage'));
+const EmailSenderPage = lazy(
+  () => import('@/features/settings/EmailSenderPage'),
+);
+const CarrierAppointmentsPage = lazy(
+  () => import('@/features/settings/CarrierAppointmentsPage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
-const AddMailersPage = lazy(
-  () => import('@/features/platform/AddMailersPage'),
+const OnboardAgencyPage = lazy(
+  () => import('@/features/platform/onboard/OnboardAgencyPage'),
+);
+const AgencySetupPage = lazy(
+  () => import('@/features/agency-setup/AgencySetupPage'),
+);
+const PlatformUsersPage = lazy(
+  () => import('@/features/platform/PlatformUsersPage'),
+);
+const ImpersonateHandoffPage = lazy(
+  () => import('@/pages/ImpersonateHandoffPage')
 );
 const BugReportsPage = lazy(
   () => import('@/features/platform/BugReportsPage'),
 );
+const MailerCampaignsPage = lazy(
+  () => import('@/features/platform/campaigns/MailerCampaignsPage'),
+);
+const RunCampaignPage = lazy(
+  () => import('@/features/platform/campaigns/RunCampaignPage'),
+);
+const ZipMarketsPage = lazy(
+  () => import('@/features/platform/campaigns/ZipMarketsPage'),
+);
+const MailerCampaignDetailPage = lazy(
+  () => import('@/features/platform/campaigns/MailerCampaignDetailPage'),
+);
 const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
+const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
+const ProfilePage = lazy(() => import('@/features/settings/ProfilePage'));
+const WorkspaceSettingsPage = lazy(
+  () => import('@/features/settings/WorkspaceSettingsPage'),
+);
 const UserPermissionsPage = lazy(
   () => import('@/features/admin/UserPermissionsPage'),
 );
@@ -83,6 +120,22 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+/**
+ * Short-circuits the whole app when the hostname serves no tenant.
+ *
+ * Placed **inside** `TenantProvider` (it needs the resolution) but **outside**
+ * `AuthProvider` and the router, so an unrecognised host never reaches a login
+ * form or a route at all — see `UnknownHostPage` for why that matters.
+ *
+ * Renders children while the first fetch is in flight rather than blocking on
+ * it: gating every cold load on a network round-trip to spare a mistyped domain
+ * one frame of the login page is the wrong trade.
+ */
+function TenantGate({ children }: { children: React.ReactNode }) {
+  const { unknownHost } = useTenant();
+  return unknownHost ? <UnknownHostPage /> : <>{children}</>;
+}
 
 function PageLoader() {
   return (
@@ -105,12 +158,25 @@ function LazyPage({ children }: { children: React.ReactNode }) {
  */
 function RoleLanding() {
   const { canRead, can } = usePermissions();
+  const { user } = useAuth();
 
   // A platform operator holds only `platform:*` and no module permissions, so
   // without this they fall all the way through to the dev navigator — a page
   // full of tenant dashboards they cannot open (PAC-73).
   if (can(PlatformPermission.AgenciesRead)) {
     return <Navigate to="/admin" replace />;
+  }
+  /*
+   * An owner who has not finished their agency's first-run setup goes there
+   * first (PAC-69) — the case being an owner who closed the tab partway through
+   * the invite wizard, who would otherwise have no route back to it.
+   *
+   * Server-resolved on every `/auth/me`, not a client guess, and it clears the
+   * moment they finish *or skip*: skipping completes the setup precisely so this
+   * redirect cannot become a thing they have to dismiss on every sign-in.
+   */
+  if (user?.agencySetupPending) {
+    return <Navigate to="/welcome/agency" replace />;
   }
   if (canRead(ModuleKey.Management)) {
     return <Navigate to="/dashboard/management" replace />;
@@ -140,6 +206,10 @@ export function App() {
           rather than per call site (first needed by the dashboard's lead quick
           actions, PAC-16). */}
       <TooltipProvider delayDuration={200}>
+        {/* Above `AuthProvider` on purpose: the login and accept-invite pages
+            are branded, and both render before anyone is authenticated. */}
+        <TenantProvider>
+        <TenantGate>
         <AuthProvider>
           <BrowserRouter>
           <Routes>
@@ -427,6 +497,44 @@ export function App() {
                 />
               </Route>
 
+              {/*
+                The workspace-settings hub — the single sidebar entry that
+                replaced the five-row Administration section.
+
+                `anyOf` over every section's read permission, not the owner
+                capability: the page is a list of separately-gated links, so
+                anyone who can reach one of them should be able to reach the
+                list. `SETTINGS_SECTIONS` is the one place that list lives, and
+                each section's own route keeps its own gate below.
+              */}
+              <Route
+                element={<RequirePermission anyOf={SETTINGS_PERMISSIONS} />}
+              >
+                <Route
+                  path="/settings"
+                  element={
+                    <LazyPage>
+                      <WorkspaceSettingsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/*
+                The signed-in user's own profile (PAC-81). Deliberately the
+                one `/settings/*` route with **no** `RequirePermission` gate:
+                everyone owns their own profile, including a platform admin
+                who holds no agency permission at all.
+              */}
+              <Route
+                path="/settings/profile"
+                element={
+                  <LazyPage>
+                    <ProfilePage />
+                  </LazyPage>
+                }
+              />
+
               {/* Owner-only role & per-user permission management */}
               {/*
                 `agency:roles:read`, not `agency:users:permissions`: this page
@@ -455,6 +563,68 @@ export function App() {
                 />
               </Route>
 
+              {/*
+                White-label settings. Three separate permissions rather than
+                one, matching three very different blast radii — see the
+                docblock on `AgencyPermission`.
+              */}
+              <Route
+                element={<RequirePermission permission="agency:branding:read" />}
+              >
+                <Route
+                  path="/settings/branding"
+                  element={
+                    <LazyPage>
+                      <BrandingPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+              <Route
+                element={<RequirePermission permission="agency:domains:read" />}
+              >
+                <Route
+                  path="/settings/domains"
+                  element={
+                    <LazyPage>
+                      <DomainsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+              <Route
+                element={<RequirePermission permission="agency:email:read" />}
+              >
+                <Route
+                  path="/settings/email"
+                  element={
+                    <LazyPage>
+                      <EmailSenderPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/*
+                Carrier appointments (PAC-93). Gated on `:read` like every
+                section beside it; the page hides its write controls without
+                `agency:carrier_appointments:write`.
+              */}
+              <Route
+                element={
+                  <RequirePermission permission="agency:carrier_appointments:read" />
+                }
+              >
+                <Route
+                  path="/settings/carriers"
+                  element={
+                    <LazyPage>
+                      <CarrierAppointmentsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               {/* Owner-only user directory */}
               <Route
                 element={<RequirePermission permission="agency:users:read" />}
@@ -476,10 +646,30 @@ export function App() {
 
                 `/admin` gates on `platform:agencies:read` because every
                 platform admin holds it (`ALL_PLATFORM_PERMISSIONS`), so it is
-                the cheapest "is this a platform operator" test. The one live
+                the cheapest "is this a platform operator" test. Each live
                 feature gates on its own permission and falls back to the panel
                 rather than to `/`, which would bounce the operator out of it.
               */}
+              {/* Phase 2 of agency onboarding, on its own (PAC-69) — where
+                  `RoleLanding` sends an owner who has not finished it. Gated on
+                  `agency:branding:write`, the permission its steps actually
+                  write with, so nobody else can reach a wizard whose every
+                  action would 403. */}
+              <Route
+                element={
+                  <RequirePermission permission={AgencyPermission.BrandingWrite} />
+                }
+              >
+                <Route
+                  path="/welcome/agency"
+                  element={
+                    <LazyPage>
+                      <AgencySetupPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               <Route
                 element={
                   <RequirePermission
@@ -495,19 +685,43 @@ export function App() {
                     </LazyPage>
                   }
                 />
+                {/* Onboarding writes a whole tenant, so it gates on the write
+                    permission rather than the panel's read one, and falls back
+                    to the panel rather than to `/` — which would bounce the
+                    operator out of the surface they are working in. */}
                 <Route
                   element={
                     <RequirePermission
-                      permission={PlatformPermission.MailersWrite}
+                      permission={PlatformPermission.AgenciesWrite}
                       redirectTo="/admin"
                     />
                   }
                 >
                   <Route
-                    path="/admin/mailers/add"
+                    path="/admin/agencies/onboard"
                     element={
                       <LazyPage>
-                        <AddMailersPage />
+                        <OnboardAgencyPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+                {/* Find / Impersonate User (PAC-70). Gated on the directory's
+                    read permission; the Impersonate action inside gates itself
+                    on `platform:users:impersonate`. */}
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={PlatformPermission.UsersRead}
+                      redirectTo="/admin"
+                    />
+                  }
+                >
+                  <Route
+                    path="/admin/users"
+                    element={
+                      <LazyPage>
+                        <PlatformUsersPage />
                       </LazyPage>
                     }
                   />
@@ -530,6 +744,68 @@ export function App() {
                     element={
                       <LazyPage>
                         <BugReportsPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
+                {/* Mailer Campaigns (PAC-71). The list and the detail gate on
+                    `:read`; running one, editing the ZIP table and committing
+                    all write, so those gate on `:write` and an operator holding
+                    only read never reaches a wizard whose every action would
+                    403.
+
+                    ⚠ Static paths are declared **above** `:campaignId`. React
+                    Router ranks static segments over dynamic ones, so this
+                    ordering is belt-and-braces rather than load-bearing — but
+                    it matches the API's own route order, where Nest matches in
+                    declaration order and `new` would otherwise be read as a
+                    campaign id. */}
+                <Route
+                  element={
+                    <RequirePermission
+                      permission={PlatformPermission.MailersRead}
+                      redirectTo="/admin"
+                    />
+                  }
+                >
+                  <Route
+                    path="/admin/campaigns"
+                    element={
+                      <LazyPage>
+                        <MailerCampaignsPage />
+                      </LazyPage>
+                    }
+                  />
+                  <Route
+                    element={
+                      <RequirePermission
+                        permission={PlatformPermission.MailersWrite}
+                        redirectTo="/admin/campaigns"
+                      />
+                    }
+                  >
+                    <Route
+                      path="/admin/campaigns/new"
+                      element={
+                        <LazyPage>
+                          <RunCampaignPage />
+                        </LazyPage>
+                      }
+                    />
+                    <Route
+                      path="/admin/campaigns/zip-markets"
+                      element={
+                        <LazyPage>
+                          <ZipMarketsPage />
+                        </LazyPage>
+                      }
+                    />
+                  </Route>
+                  <Route
+                    path="/admin/campaigns/:campaignId"
+                    element={
+                      <LazyPage>
+                        <MailerCampaignDetailPage />
                       </LazyPage>
                     }
                   />
@@ -580,6 +856,37 @@ export function App() {
               }
             />
 
+            {/* Request a reset link — the entry point into the page above
+                (PAC-81). Outside both guards for the same reasons: the people
+                it serves cannot sign in, and a signed-in user checking the
+                flow must not be redirected away. Must sit above the
+                catch-all. */}
+            <Route
+              path="/auth/forgot-password"
+              element={
+                <LazyPage>
+                  <ForgotPasswordPage />
+                </LazyPage>
+              }
+            />
+
+            {/* Impersonation landing (PAC-70). The Super Admin panel navigates
+                the browser here, on the *target agency's* origin, with a fresh
+                session in the URL fragment. Outside both guards: there is no
+                session on this origin yet (`ProtectedRoute` would bounce to
+                /login), and when the agency has no domain this IS the platform
+                host, where the operator's own session is live
+                (`PublicOnlyRoute` would redirect them away). Must sit above the
+                catch-all. */}
+            <Route
+              path="/auth/impersonate"
+              element={
+                <LazyPage>
+                  <ImpersonateHandoffPage />
+                </LazyPage>
+              }
+            />
+
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
 
@@ -594,6 +901,8 @@ export function App() {
               no-opped. Used by the share-link dialog's copy action. */}
           <Toaster richColors position="top-right" />
         </AuthProvider>
+        </TenantGate>
+        </TenantProvider>
       </TooltipProvider>
     </QueryClientProvider>
     </ThemeProvider>

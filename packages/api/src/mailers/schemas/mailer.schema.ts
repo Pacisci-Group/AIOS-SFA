@@ -1,6 +1,6 @@
 import type { MailerSourceSystem } from '@sfa/shared';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { HydratedDocument, IndexOptions } from 'mongoose';
 
 export type MailerDocument = HydratedDocument<Mailer>;
 
@@ -77,17 +77,21 @@ export class MailerPremium {
 export const MailerPremiumSchema = SchemaFactory.createForClass(MailerPremium);
 
 /**
- * Enough campaign context for PAC-71 to group mailers into campaigns later,
- * without modelling a campaign here.
+ * The campaign columns **the source row carries**, kept verbatim.
+ *
+ * ⚠ Not to be confused with `MailerCampaign` in `mailer-campaign.schema.ts`,
+ * which is the first-class campaign record {@link Mailer.campaignId} points at.
+ * This block is provenance read off the file; that one is the run we performed.
+ * The `Info` suffix exists purely to keep the two apart in one import list.
  *
  * ⚠ `campaignNumber` is **not a campaign id.** Every value is `Week_Number-NN`,
  * a restatement of the week number — 37 distinct values across 671k legacy
  * rows. `mailDropDate`, `startMon`, `endSun` and `campaignStatus` exist only in
- * BigQuery and are absent from an uploaded RTP file; they are optional for
- * exactly that reason and must never be treated as required.
+ * BigQuery and are absent from a vendor file; they are optional for exactly
+ * that reason and must never be treated as required.
  */
 @Schema({ _id: false })
-export class MailerCampaign {
+export class MailerCampaignInfo {
   @Prop({ trim: true }) campaignNumber?: string;
   /** Derived from `campaignNumber` when the source does not carry it directly. */
   @Prop() weekNumber?: number;
@@ -107,8 +111,8 @@ export class MailerCampaign {
   /** `Active` / `Closed` / absent. Never fabricate this for an upload. */
   @Prop({ trim: true }) campaignStatus?: string;
 }
-export const MailerCampaignSchema =
-  SchemaFactory.createForClass(MailerCampaign);
+export const MailerCampaignInfoSchema =
+  SchemaFactory.createForClass(MailerCampaignInfo);
 
 /**
  * Provenance, deliberately source-agnostic so the RTP upload and the BigQuery
@@ -140,7 +144,7 @@ export class MailerSource {
    * retained rather than discarded once parsed.
    */
   @Prop({ trim: true }) storageKey?: string;
-  /** `MailerImportRun._id`, or the backfill's run stamp. */
+  /** `<campaignId>:<commitAttempt>`, or an offline backfill's run stamp. */
   @Prop({ trim: true }) runId?: string;
   @Prop({ type: Date }) uploadedAt?: Date;
   /** BigQuery's `last_updated`; the tiebreak when duplicates collapse. */
@@ -168,7 +172,7 @@ export class MailerSource {
 export const MailerSourceSchema = SchemaFactory.createForClass(MailerSource);
 
 /**
- * One direct-mail prospect record (PAC-73).
+ * One direct-mail prospect record (PAC-73, re-tenanted in PAC-71).
  *
  * ## Why this does not extend `TenantRecord`
  *
@@ -185,17 +189,59 @@ export const MailerSourceSchema = SchemaFactory.createForClass(MailerSource);
  * Its absence is deliberate, not an oversight. Dedupe happens on
  * {@link controlNumberKeys} instead.
  *
- * ## Tenancy
+ * ## Tenancy lives on the campaign, not on the mailer (PAC-71)
  *
- * `agencyId` is **required**. There is no global or unattributed mailer: the
- * operator picks the agency explicitly on upload, and the backfill resolves it
- * from the `FileName` ticker, skipping rows it cannot resolve rather than
- * guessing.
+ * A mailer has **no `agencyId`**. It belongs to a {@link campaignId}, and a
+ * campaign is run once and can serve many agencies — a file whose `agencyid`
+ * column carries two carrier agency codes splits across two tenants without
+ * being uploaded twice. Who may see the row is {@link visibleAgencyIds},
+ * resolved per row from the campaign's assignment mode.
+ *
+ * The lead a mailer produces is still created in the **caller's** agency. Only
+ * the mailer's visibility is multi-tenant.
  */
 @Schema({ timestamps: true, collection: 'mailers' })
 export class Mailer {
+  /**
+   * The `mailerCampaigns` document this row was written by. Required — every
+   * mailer belongs to a run, including the implicit campaigns the PAC-71
+   * backfill mints for rows that predate campaigns.
+   *
+   * A **string**, not an `ObjectId`, to match how every id is threaded through
+   * the import engine (which is model-agnostic by design) and how
+   * `Lead.mailer.campaignId` denormalizes it.
+   */
   @Prop({ required: true, index: true })
-  agencyId: string;
+  campaignId: string;
+
+  /**
+   * The agencies this row is visible to. `null` means **every agency**,
+   * including ones onboarded later.
+   *
+   * ⚠ Two traps, both load-bearing.
+   *
+   * 1. **Query it with `{ $type: 'null' }`, never `null`.** A bare `null` also
+   *    matches a *missing* field, so any mailer a migration has not yet reached
+   *    would read as visible to every tenant.
+   * 2. **`type: [String]` with `default: null`.** Mongoose defaults an array
+   *    prop to `[]`, and `[]` means "visible to nobody" — the opposite. The
+   *    importer writes through `bulkWrite`, which bypasses casting and stores
+   *    the literal `null` regardless, so the two write paths would otherwise
+   *    disagree about what the same field means.
+   */
+  @Prop({ type: [String], default: null })
+  visibleAgencyIds: string[] | null;
+
+  /**
+   * The row's own `agencyid` column, uppercased — the **carrier's** code for the
+   * issuing agency (`A0B9049`), not one of our agency ids.
+   *
+   * Provenance in every assignment mode, and the routing key in
+   * `carrier_agency_id` mode, where it is matched against the carrier
+   * appointments (PAC-93) under the campaign's carrier.
+   */
+  @Prop({ trim: true, uppercase: true })
+  carrierAgencyId?: string;
 
   /** `controlno` — `#` followed by a UUID. */
   @Prop({ trim: true })
@@ -240,7 +286,7 @@ export class Mailer {
 
   @Prop({ type: MailerCoverageSchema }) coverage?: MailerCoverage;
   @Prop({ type: MailerPremiumSchema }) premium?: MailerPremium;
-  @Prop({ type: MailerCampaignSchema }) campaign?: MailerCampaign;
+  @Prop({ type: MailerCampaignInfoSchema }) campaign?: MailerCampaignInfo;
   @Prop({ type: Date }) quoteDate?: Date;
 
   /**
@@ -285,27 +331,54 @@ export const MailerSchema = SchemaFactory.createForClass(Mailer);
 /**
  * The dedupe key, and the lookup PAC-61's drawer runs on every keystroke.
  *
- * `unique` is safe because **both** importers upsert on this key, so duplicate
- * source rows — BigQuery has 30,991 of them — collapse before the index ever
- * sees a conflict. (Contrast `Policy.policyNumberKey`, which is non-unique on
- * purpose because carriers reuse numbers.)
+ * ## Platform-wide since PAC-71
  *
- * `partialFilterExpression`, **never** `sparse`. MongoDB omits a document from
- * a *compound* sparse index only when **every** indexed field is missing, and
- * `agencyId` is always present — so a control-number-less row would index as
- * `(agencyId, null)` and the second one in an agency would die on E11000. Same
- * trap documented on `LEGACY_DEDUPE_INDEX_OPTIONS`.
+ * It used to be `{ agencyId, controlNumberKeys }`. A control number is a UUID
+ * and **one mailer exists once on the platform**: the same row reaching two
+ * agencies is one prospect visible to both, not two prospects. Making the key
+ * agency-prefixed would let one campaign's row be duplicated per audience,
+ * which then makes "which lead worked this mailer" unanswerable.
+ *
+ * `unique` is safe because every writer upserts on this key, so duplicate
+ * source rows — BigQuery has 30,991 of them — collapse before the index sees a
+ * conflict. (Contrast `Policy.policyNumberKey`, non-unique on purpose because
+ * carriers reuse numbers.)
+ *
+ * `partialFilterExpression`, **never** `sparse`, per the house rule on
+ * `LEGACY_DEDUPE_INDEX_OPTIONS`. It is what keeps control-number-less rows out
+ * of the index entirely rather than colliding on `null`.
+ *
+ * ⚠ The three constants are exported because the PAC-71 backfill creates this
+ * index itself, *before* the schema's `autoIndex` can. A restated, drifted copy
+ * there would make the next boot throw `IndexOptionsConflict`.
  */
-MailerSchema.index(
-  { agencyId: 1, controlNumberKeys: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { controlNumberKeys: { $type: 'string' } },
-  },
-);
+export const MAILER_DEDUPE_INDEX_NAME = 'controlNumberKeys_1';
+export const MAILER_DEDUPE_INDEX_KEY = { controlNumberKeys: 1 } as const;
+export const MAILER_DEDUPE_INDEX_OPTIONS = {
+  unique: true,
+  partialFilterExpression: { controlNumberKeys: { $type: 'string' } },
+} satisfies IndexOptions;
 
-/** Backs the campaign grouping PAC-71 will need, and the per-run report here. */
-MailerSchema.index({ agencyId: 1, 'campaign.campaignNumber': 1 });
+MailerSchema.index(MAILER_DEDUPE_INDEX_KEY, {
+  name: MAILER_DEDUPE_INDEX_NAME,
+  ...MAILER_DEDUPE_INDEX_OPTIONS,
+});
 
-/** Backs "everything this import wrote", for a re-run or a rollback. */
-MailerSchema.index({ agencyId: 1, 'source.runId': 1 });
+/**
+ * The campaign detail's records table: count, and the last/first name sort.
+ *
+ * Replaces the four `agencyId_*` indexes, which the PAC-71 backfill drops —
+ * nothing queries mailers by agency any more.
+ */
+MailerSchema.index({ campaignId: 1, lastName: 1, firstName: 1 });
+
+/** Backs "everything this run wrote", for a re-run or a rollback. */
+MailerSchema.index({ campaignId: 1, 'source.runId': 1 });
+
+/*
+ * There is deliberately **no index on `visibleAgencyIds`.** The drawer's lookup
+ * leads with `controlNumberKeys`, whose unique index resolves to at most one
+ * document; the visibility `$or` is then a residual filter over that single
+ * FETCH. A compound of `controlNumberKeys` and `visibleAgencyIds` is not even
+ * buildable — MongoDB refuses a compound index over two array fields.
+ */

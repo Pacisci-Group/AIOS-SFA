@@ -1,12 +1,13 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ALL_MODULE_KEYS, DataScope, policyNumberKey } from '@sfa/shared';
 import { Branch } from '../../src/branches/schemas/branch.schema';
 import { Contact } from '../../src/contacts/schemas/contact.schema';
 import { SequenceService } from '../../src/common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../../src/households/household-ref';
+import { HouseholdMember } from '../../src/households/schemas/household-member.schema';
 import { Household } from '../../src/households/schemas/household.schema';
 import { RoleAssignmentsService } from '../../src/permissions/role-assignments.service';
 import { Permission } from '../../src/permissions/schemas/permission.schema';
@@ -53,6 +54,14 @@ export interface TestSeedContext {
   otherBranchHouseholdId: string;
   /** In a different agency entirely. */
   otherAgencyHouseholdId: string;
+  /**
+   * The second agency and its one user, for the cross-agency user directory
+   * (PAC-70). The user holds **two** roles (`producer` + `csr`) so the Role
+   * filter's OR semantics and "appears once" can both be asserted.
+   */
+  otherAgencyId: string;
+  otherAgencyUserId: string;
+  otherAgencyUserEmail: string;
 }
 
 export async function seedTestData(
@@ -223,11 +232,29 @@ export async function seedTestData(
   );
   const policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
   const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+  const householdMemberModel = app.get<Model<HouseholdMember>>(
+    getModelToken(HouseholdMember.name),
+  );
 
   const tenant = {
     agencyId: agency._id.toString(),
     branchId: branch._id.toString(),
   };
+
+  /** A `householdMembers` row — membership, and the role in *this* household. */
+  const addMember = async (
+    householdId: Types.ObjectId,
+    contactId: Types.ObjectId,
+    role: string,
+  ) =>
+    householdMemberModel.create({
+      ...tenant,
+      householdId,
+      contactId,
+      role,
+      addedAt: new Date(),
+      source: 'seed',
+    });
 
   // Every record needs a distinct `legacySmartSuiteId`: the schema's
   // {agencyId, legacySmartSuiteId} index is unique+sparse, but a COMPOUND
@@ -239,23 +266,33 @@ export async function seedTestData(
     householdRef: 'HH-1',
     name: 'Test Household',
     status: 'Active',
-    primaryContactName: 'Test Client',
-    primaryEmails: ['client@test.local'],
-    primaryPhones: ['(555) 010-0100'],
     propertyAddress: { line1: '1 Test St', city: 'Austin', state: 'TX' },
     totalActivePolicies: 1,
   });
 
-  await contactModel.create({
+  /*
+   * The primary contact, linked with `primaryContactId` (PAC-91 §4).
+   *
+   * The household used to carry `primaryContactName` / `primaryEmails` /
+   * `primaryPhones` as well, and the fixture set both — which meant the reads
+   * were exercised against the copy and the link went untested. The copy is
+   * gone; the link is the only thing every household response now resolves
+   * from, so a fixture without it renders exactly the em dashes production did.
+   */
+  const primaryContact = await contactModel.create({
     ...tenant,
     legacySmartSuiteId: 'test:ct:main',
     firstName: 'Test',
     lastName: 'Client',
-    emails: ['client@test.local'],
-    roleInHousehold: 'Named Insured',
-    isPrimary: true,
-    householdId: household._id,
+    email: 'client@test.local',
+    // Stored normalised, like every writer since PAC-91 §1.
+    phone: '5550100100',
   });
+  household.primaryContactId = primaryContact._id;
+  await household.save();
+  // Membership is its own row since PAC-91 §5, and carries the role. The
+  // primary is a member too — they belong to the household they head.
+  await addMember(household._id, primaryContact._id, 'Named Insured');
 
   const policy = await policyModel.create({
     ...tenant,
@@ -280,30 +317,27 @@ export async function seedTestData(
     householdRef: 'HH-2',
     name: 'Second Test Household',
     status: 'Active',
-    primaryContactName: 'Second Client',
     totalActivePolicies: 1,
   });
 
   /*
    * A member of the second household whose name appears nowhere on the
-   * household itself — not in `name`, not in `primaryContactName`.
+   * household itself, and who is **not** its primary contact.
    *
    * That is the whole point of them: a search that finds this household by
    * "Vasquez" or by a date of birth can only have resolved it through the
    * `contacts` collection, so the Clients list's cross-collection search has
    * something it must reach that a household-only query cannot.
    */
-  await contactModel.create({
+  const secondHouseholdChild = await contactModel.create({
     ...tenant,
     legacySmartSuiteId: 'test:ct:second-child',
     firstName: 'Marguerite',
     lastName: 'Vasquez',
     // UTC midnight, exactly as `parseDateOfBirth` stores it.
     dateOfBirth: new Date(Date.UTC(1985, 2, 12)),
-    roleInHousehold: 'Child',
-    isPrimary: false,
-    householdId: secondHousehold._id,
   });
+  await addMember(secondHousehold._id, secondHouseholdChild._id, 'Child');
 
   const secondPolicy = await policyModel.create({
     ...tenant,
@@ -349,6 +383,37 @@ export async function seedTestData(
     status: 'Active',
   });
 
+  // A populated second tenant, so the cross-agency user directory (PAC-70) has
+  // something to find outside the main agency. Its user holds two roles on
+  // purpose — see `TestSeedContext.otherAgencyUserId`.
+  await roleAssignments.seedDefaultRoles(otherAgency._id);
+  const otherAgencyBranch = await branchModel.create({
+    agencyId: otherAgency._id,
+    name: 'Other Agency Branch',
+    slug: 'other-agency-branch',
+    isDefault: true,
+  });
+  const otherAgencyUserEmail = 'other-producer@sfa.local';
+  const otherAgencyUser = await userModel.create({
+    agencyId: otherAgency._id,
+    branchId: otherAgencyBranch._id,
+    email: otherAgencyUserEmail,
+    passwordHash,
+    firstName: 'Other',
+    lastName: 'Producer',
+    isActive: true,
+  });
+  const otherAgencyRoles = await roleModel
+    .find({ agencyId: otherAgency._id, slug: { $in: ['producer', 'csr'] } })
+    .select({ _id: 1 })
+    .lean();
+  await roleAssignments.setUserRoles(
+    { userId: otherAgencyUser._id.toString(), isPlatformAdmin: true },
+    otherAgency._id,
+    otherAgencyUser._id,
+    otherAgencyRoles.map((role) => role._id),
+  );
+
   /*
    * Seed the agency's household counter from the references above.
    *
@@ -368,6 +433,9 @@ export async function seedTestData(
   );
 
   return {
+    otherAgencyId: otherAgency._id.toString(),
+    otherAgencyUserId: otherAgencyUser._id.toString(),
+    otherAgencyUserEmail,
     agencyId: agency._id.toString(),
     branchId: branch._id.toString(),
     householdId: household._id.toString(),

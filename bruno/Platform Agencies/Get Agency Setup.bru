@@ -1,0 +1,56 @@
+meta {
+  name: Get Agency Setup
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/agency/setup
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{onboardOwnerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is pending for a freshly onboarded agency", function () {
+    expect(res.getBody().status).to.equal("pending");
+    expect(res.getBody().completedAt).to.equal(null);
+  });
+}
+
+docs {
+  # GET /agency/setup — where this agency is in its first-run setup (PAC-69)
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `agency:branding:read`
+  - **Data scope:** the caller's own agency (`@SkipBranch()`).
+
+  ## Why `agency:branding:*` rather than a new permission
+  This gates a wizard whose only writes *are* branding and sender-identity
+  writes, so anyone who can do the work can say they are finished. A new
+  `agency:setup:*` string would have to be granted to every existing owner role
+  before the feature worked for anyone — the argument PAC-79 made for reusing
+  `agency:users:write`.
+
+  ## Response `200`
+  ```json
+  { "status": "pending", "completedAt": null, "brandingSkipped": false }
+  ```
+
+  `complete` is the default for every agency **not** created through the panel —
+  migrated, seeded and demo tenants have nothing to be walked through. Note a
+  stored document predating this feature has no `setup` sub-document at all and
+  reads as complete; `.lean()` does not apply the schema default, so readers
+  null-guard rather than trusting it.
+
+  ## Errors
+  - `403 Forbidden` — lacks `agency:branding:read` (a producer, or a platform
+    account, which holds no agency permissions).
+}

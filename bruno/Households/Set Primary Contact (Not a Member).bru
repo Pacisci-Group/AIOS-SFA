@@ -1,0 +1,58 @@
+meta {
+  name: Set Primary Contact (Not a Member)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/households/{{householdId}}/primary-contact
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "contactId": "000000000000000000000091"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    // Well-formed request, and nothing about it is wrong — the obstacle is the
+    // record's state. 409 rather than 400, same as the rest of PAC-91.
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("carries a machine-readable code, not just a message", function () {
+    expect(res.getBody().code).to.equal("contact_not_a_member");
+  });
+
+  test("names the household it refused, so the client can say which", function () {
+    expect(res.getBody().householdId).to.equal(bru.getVar("householdId"));
+  });
+}
+
+docs {
+  # POST /households/:id/primary-contact — the "not a member" refusal
+
+  A syntactically valid ObjectId that names no contact in this agency, so the
+  request is **deterministic and writes nothing** — it can run on any database
+  and leaves it exactly as it found it.
+
+  Only a **current member** of a household can lead it (PAC-91 §7). The roster
+  is `householdMembers` and the primary is picked out of it by id, so a primary
+  who is not on the roster vanishes from the very page that names them.
+
+  A contact that does not exist in the agency answers with the same code as one
+  that exists but belongs to a different household: from the caller's side both
+  are "that person is not in this household", and distinguishing them would leak
+  whether a contact id exists in a tenant the caller may not be in.
+
+  Returns **409** with `code: "contact_not_a_member"`, `contactId` and
+  `householdId`. Branch on `code`, never on the message.
+}

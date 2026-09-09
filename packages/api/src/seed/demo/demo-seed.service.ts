@@ -6,6 +6,8 @@ import {
   ALL_MODULE_KEYS,
   DEAL_AUDIT_REASON_CODES,
   DEFAULT_DEAL_AUDIT_STATUS,
+  SERVICE_TICKET_CATEGORY_PREFIX,
+  carrierSlug,
 } from '@sfa/shared';
 import type { DealAuditStatus } from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
@@ -18,6 +20,7 @@ import { Agency } from '../../platform/schemas/agency.schema';
 import { Branch } from '../../branches/schemas/branch.schema';
 import { User } from '../../users/schemas/user.schema';
 import { AgencyRole } from '../../roles/schemas/agency-role.schema';
+import { HouseholdMember } from '../../households/schemas/household-member.schema';
 import { Household } from '../../households/schemas/household.schema';
 import { Contact } from '../../contacts/schemas/contact.schema';
 import { Lead } from '../../leads/schemas/lead.schema';
@@ -38,6 +41,10 @@ import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request
 import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema';
 import { Activity } from '../../activities/schemas/activity.schema';
 import { RoleAssignmentsService } from '../../permissions/role-assignments.service';
+import { Permission } from '../../permissions/schemas/permission.schema';
+import { Carrier } from '../../carriers/schemas/carrier.schema';
+import { seedPermissions } from '../permissions.seed';
+import { seedCarriers } from '../carriers.seed';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
 import {
   INSURANCE_MONTHS,
@@ -71,11 +78,26 @@ import {
 } from './demo-data';
 import { createRng, Rng } from './rng';
 import { Mailer } from '../../mailers/schemas/mailer.schema';
+import { MailerCampaign } from '../../mailers/schemas/mailer-campaign.schema';
+import { implicitCampaignDoc } from '../../common/mailers/implicit-campaign';
+import { DEFAULT_MAILER_CARRIER } from '../../common/mailers/mailer-carrier';
 import { mailerControlNumberKeys } from '../../common/mailers/mailer-control-number';
+import { normalizePhone } from '../../leads/intake/intake.normalize';
 
 export interface DemoSeedOptions {
   agencySlug: string;
   agencyName: string;
+  /**
+   * The domain of every team member's email, e.g. `demoagency.local`.
+   *
+   * `User.email` is globally unique and the roster is upserted by email, so
+   * two agencies seeded with the same domain would *move* one roster into the
+   * other tenant rather than add a second. Each agency gets its own domain
+   * (derived from the slug unless `--email-domain` says otherwise), which is
+   * what makes `--agency texas-holdings` add a second populated tenant for
+   * cross-agency features like the Super Admin user directory (PAC-70).
+   */
+  emailDomain: string;
   fresh: boolean;
   seed: number;
   password: string;
@@ -106,6 +128,8 @@ interface Ctx {
 
 interface TeamMember {
   spec: TeamMemberSpec;
+  /** `spec.email` re-domained for this agency — the address actually stored. */
+  email: string;
   userId: Types.ObjectId;
   branchSlug: BranchSlug;
   branchId: string;
@@ -129,6 +153,8 @@ interface ContactRef {
   id: Types.ObjectId;
   legacyId: string;
   isPrimary: boolean;
+  /** The role *in this household* — it lives on the membership (PAC-91 §5). */
+  role: string;
 }
 
 interface LeadRef {
@@ -169,6 +195,7 @@ interface DealRef {
 interface PolicyRef {
   id: Types.ObjectId;
   legacyId: string;
+  policyNumber: string;
   policyType: string;
   household: HouseholdRef;
   deal: DealRef;
@@ -197,6 +224,8 @@ export class DemoSeedService {
     private readonly roleModel: Model<AgencyRole>,
     @InjectModel(Household.name)
     private readonly householdModel: Model<Household>,
+    @InjectModel(HouseholdMember.name)
+    private readonly householdMemberModel: Model<HouseholdMember>,
     @InjectModel(Contact.name) private readonly contactModel: Model<Contact>,
     @InjectModel(Lead.name) private readonly leadModel: Model<Lead>,
     @InjectModel(QuoteRecap.name)
@@ -227,6 +256,11 @@ export class DemoSeedService {
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
     @InjectModel(Mailer.name) private readonly mailerModel: Model<Mailer>,
+    @InjectModel(MailerCampaign.name)
+    private readonly mailerCampaignModel: Model<MailerCampaign>,
+    @InjectModel(Permission.name)
+    private readonly permissionModel: Model<Permission>,
+    @InjectModel(Carrier.name) private readonly carrierModel: Model<Carrier>,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
@@ -235,14 +269,25 @@ export class DemoSeedService {
     this.summary = {};
     const rng = createRng(options.seed);
 
+    // Platform-global catalogs, before any tenant data. The skill documents
+    // `seed:demo:dev` as the first command against an empty database, so the
+    // demo seed cannot assume the core seed ran: `seedDefaultRoles` resolves
+    // every permission key to a catalog `_id` and hard-fails on an empty
+    // `permissions` collection, and an empty carrier catalog forces every sold
+    // deal through the "Other" escape. Both seeds are idempotent upserts on
+    // tenant-agnostic rows, so re-running after the core seed is a no-op.
+    await this.seedPlatformCatalogs();
+
     const { ctx } = await this.seedTenancy(options);
     if (options.fresh) {
       await this.purge(ctx.agencyId);
     }
 
-    const team = await this.seedTeam(ctx, options.password);
+    const team = await this.seedTeam(ctx, options);
     const producers = team.filter((m) => m.spec.roleSlug === 'producer');
-    const crms = team.filter((m) => m.spec.roleSlug === 'crm');
+    const crms = team.filter(
+      (m) => m.spec.roleSlug === 'csr' || m.spec.roleSlug === 'crm',
+    );
 
     const households = await this.seedHouseholds(ctx, crms, rng);
     const contactsByHousehold = await this.seedContacts(ctx, households, rng);
@@ -297,7 +342,7 @@ export class DemoSeedService {
     const mailers = await this.seedMailers(ctx, rng);
 
     const logins = team.map((m) => ({
-      email: m.spec.email,
+      email: m.email,
       role: m.spec.roleSlug,
       password: options.password,
     }));
@@ -309,6 +354,18 @@ export class DemoSeedService {
       logins,
       sampleMailerControlNumbers: mailers.slice(0, 3),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Platform-global catalogs: permission vocabulary + carriers
+  // ---------------------------------------------------------------------------
+
+  private async seedPlatformCatalogs(): Promise<void> {
+    const permissions = await seedPermissions(this.permissionModel);
+    this.inc('permissions', permissions.created + permissions.updated);
+
+    const carriers = await seedCarriers(this.carrierModel);
+    this.inc('carriers', carriers.created);
   }
 
   // ---------------------------------------------------------------------------
@@ -360,8 +417,20 @@ export class DemoSeedService {
   // Users: platform super admin + full role roster
   // ---------------------------------------------------------------------------
 
-  private async seedTeam(ctx: Ctx, password: string): Promise<TeamMember[]> {
-    const passwordHash = await bcrypt.hash(password, 10);
+  private async seedTeam(
+    ctx: Ctx,
+    options: DemoSeedOptions,
+  ): Promise<TeamMember[]> {
+    const passwordHash = await bcrypt.hash(options.password, 10);
+    // The default tenant keeps its historical keys so an existing database
+    // reseeds in place; any other slug gets its own namespace, because
+    // `legacySmartSuiteId` is globally unique on `users` and a second agency
+    // must not steal the first one's rows.
+    const isDefaultTenant = options.agencySlug === 'demo-agency';
+    const userLegacyId = (key: string) =>
+      isDefaultTenant
+        ? `demo:user:${key}`
+        : `demo:${options.agencySlug}:user:${key}`;
 
     // Platform super admin (no agency) — reconciled, not counted as team.
     const superAdminEmail =
@@ -387,8 +456,9 @@ export class DemoSeedService {
     for (const spec of TEAM) {
       const roleId = roleIdBySlug.get(spec.roleSlug);
       const branchObjectId = ctx.branchObjectIdBySlug[spec.branch];
+      const email = spec.email.replace(/@.*$/, `@${options.emailDomain}`);
       const user = await this.userModel.findOneAndUpdate(
-        { email: spec.email },
+        { email },
         {
           $set: {
             agencyId: ctx.agencyObjectId,
@@ -397,7 +467,7 @@ export class DemoSeedService {
             lastName: spec.lastName,
             isActive: true,
             isPlatformAdmin: false,
-            legacySmartSuiteId: `demo:user:${spec.key}`,
+            legacySmartSuiteId: userLegacyId(spec.key),
           },
           $setOnInsert: { passwordHash },
         },
@@ -416,6 +486,7 @@ export class DemoSeedService {
       this.inc('users');
       team.push({
         spec,
+        email,
         userId: user._id,
         branchSlug: spec.branch,
         branchId: ctx.branchIdBySlug[spec.branch],
@@ -461,9 +532,8 @@ export class DemoSeedService {
           status: rng.pick(['Active', 'Prospect', 'Active', 'Active']),
           propertyAddress: address,
           mailingAddress: address,
-          primaryContactName: `${clientFirst} ${clientLast}`,
-          primaryEmails: [this.email(clientFirst, clientLast)],
-          primaryPhones: [this.phone(rng)],
+          // No name/email/phone copy (PAC-91 §4) — `seedContacts` below fills
+          // `primaryContactId`, and every reader follows it.
           assignedCrmId: assignedCrm?.userId,
           totalActivePolicies: rng.int(0, 4),
           isTestRecord: false,
@@ -509,8 +579,9 @@ export class DemoSeedService {
    * `primaryContactId`/`memberContactIds` refs rather than reaching their
    * contacts only through `legacyHouseholdId`.
    *
-   * Also backfills the household's own `primaryContactId`/`memberContactIds`,
-   * which `seedHouseholds` cannot set — it runs before the contacts exist.
+   * Also backfills the household's own `primaryContactId` and writes a
+   * `householdMembers` row per member (PAC-91 §5), neither of which
+   * `seedHouseholds` can do — it runs before the contacts exist.
    */
   private async seedContacts(
     ctx: Ctx,
@@ -562,15 +633,30 @@ export class DemoSeedService {
 
       await this.householdModel.updateOne(
         { agencyId: ctx.agencyId, legacySmartSuiteId: hh.legacyId },
-        {
-          $set: {
-            primaryContactId: roster.find((c) => c.isPrimary)?.id,
-            memberContactIds: roster
-              .filter((c) => !c.isPrimary)
-              .map((c) => c.id),
-          },
-        },
+        { $set: { primaryContactId: roster.find((c) => c.isPrimary)?.id } },
       );
+
+      // Membership is a row per (household, contact) since PAC-91 §5 — the
+      // primary included, because they are a member of the household they head.
+      for (const member of roster) {
+        await this.householdMemberModel.updateOne(
+          {
+            agencyId: ctx.agencyId,
+            householdId: hh.id,
+            contactId: member.id,
+          },
+          {
+            $set: { endedAt: null },
+            $setOnInsert: {
+              branchId: hh.branchId,
+              addedAt: new Date(),
+              role: member.role,
+              source: 'seed',
+            },
+          },
+          { upsert: true },
+        );
+      }
     }
     return byHousehold;
   }
@@ -597,18 +683,31 @@ export class DemoSeedService {
         legacySmartSuiteId: legacyId,
         firstName: base.firstName,
         lastName: base.lastName,
-        emails: [this.email(base.firstName, base.lastName)],
-        phones: [this.phone(rng)],
+        /*
+         * One each, normalised, and unique by construction (PAC-91 §1, §9).
+         *
+         * The index is in the address on purpose: the demo book draws names
+         * from a small pool, so two contacts sharing a first *and* last name is
+         * routine — and with a name-derived address they would then differ only
+         * by a randomly-generated birthday. That is a collision on the identity
+         * indexes waiting to happen on somebody's machine, which is not a thing
+         * a seed should leave to chance.
+         */
+        email: this.email(base.firstName, base.lastName, index),
+        phone: normalizePhone(this.phone(rng)) ?? undefined,
         dateOfBirth: this.birthDate(rng, base.roleInHousehold === 'Child'),
-        roleInHousehold: base.roleInHousehold,
-        isPrimary: base.isPrimary,
-        householdId: hh.id,
-        legacyHouseholdId: hh.legacyId,
+        // No household link on the contact (PAC-91 §5) — the caller writes a
+        // `householdMembers` row instead, which is where the role lives too.
         isTestRecord: false,
       },
     );
     this.inc('contacts');
-    return { id, legacyId, isPrimary: base.isPrimary };
+    return {
+      id,
+      legacyId,
+      isPrimary: base.isPrimary,
+      role: base.roleInHousehold,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -684,8 +783,8 @@ export class DemoSeedService {
           legacySmartSuiteId: legacyId,
           firstName: first,
           lastName: last,
-          emails: [this.email(first, last)],
-          phones: [this.phone(rng)],
+          // No email/phone copy (PAC-91 §2) — the list reads them off
+          // `primaryContactId`, which is set below.
           status,
           temperature,
           leadSource: { code: source.code, label: source.label },
@@ -968,6 +1067,11 @@ export class DemoSeedService {
         expirationDate.setMonth(expirationDate.getMonth() + 6);
         const renewalDate = expirationDate;
         const legacyId = `demo:policy:${n}`;
+        // Digits only, because the carrier below is Allstate and PAC-56 #20
+        // now enforces that format. Demo data has to satisfy the rules the
+        // app enforces, or the first person to edit a seeded policy on the
+        // Sold card gets a 400 on data we shipped them.
+        const policyNumber = `9${String(200000 + n).padStart(8, '0')}`;
 
         const id = await this.upsert(
           this.policyModel,
@@ -976,11 +1080,7 @@ export class DemoSeedService {
             agencyId: ctx.agencyId,
             branchId: deal.producer.branchId,
             legacySmartSuiteId: legacyId,
-            // Digits only, because the carrier below is Allstate and PAC-56 #20
-            // now enforces that format. Demo data has to satisfy the rules the
-            // app enforces, or the first person to edit a seeded policy on the
-            // Sold card gets a 400 on data we shipped them.
-            policyNumber: `9${String(200000 + n).padStart(8, '0')}`,
+            policyNumber,
             policyType,
             carrier: 'Allstate',
             active: true,
@@ -1001,6 +1101,7 @@ export class DemoSeedService {
         refs.push({
           id,
           legacyId,
+          policyNumber,
           policyType,
           household: deal.household,
           deal,
@@ -1399,36 +1500,58 @@ export class DemoSeedService {
         ? rng.pick(branchCrms.length ? branchCrms : crms)
         : undefined;
       const policy = policies.find((p) => p.household.legacyId === hh.legacyId);
+      const category = rng.pick(SERVICE_CATEGORIES);
       const status = rng.pick(SERVICE_STATUSES);
-      const createdDate = this.daysAgo(rng.int(0, 30));
-      const resolved = status === 'Resolved';
+      const openedAt = this.daysAgo(rng.int(0, 30));
+      const resolvedAt =
+        status === 'resolved' ? this.addDays(openedAt, rng.int(1, 8)) : null;
       const legacyId = `demo:ticket:${i}`;
 
+      // The live schema, field for field, so a seeded ticket is
+      // indistinguishable from one a CSR opened — same shape the migration
+      // now writes. Tenancy is ObjectId here, unlike the `TenantRecord`
+      // collections above.
       await this.upsert(
         this.serviceTicketModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
+        { agencyId: ctx.agencyObjectId, legacySmartSuiteId: legacyId },
         {
-          agencyId: ctx.agencyId,
-          branchId: hh.branchId,
+          agencyId: ctx.agencyObjectId,
+          branchId: new Types.ObjectId(hh.branchId),
           legacySmartSuiteId: legacyId,
-          title: `${hh.name} — ${rng.pick(SERVICE_CATEGORIES)}`,
-          createdDate,
-          category: rng.pick(SERVICE_CATEGORIES),
-          priority: rng.pick(SERVICE_PRIORITIES),
-          dueDate: this.addDays(createdDate, rng.int(2, 14)),
-          status,
-          dateResolved: resolved
-            ? this.addDays(createdDate, rng.int(1, 8))
-            : undefined,
-          daysOpen: daysSince(createdDate),
+          // Below the CRM's allocator, which numbers from the document count
+          // plus 101: these sixteen take 101–116, and the first ticket opened
+          // in the app lands on 117 rather than on one of them.
+          ticketNumber: `${SERVICE_TICKET_CATEGORY_PREFIX[category]}-${101 + i}`,
           clientName: `${hh.clientFirst} ${hh.clientLast}`,
-          crmName: crm?.fullName,
-          policyId: policy?.id,
-          legacyPolicyId: policy?.legacyId,
+          category,
+          status,
+          statusOverriddenAt: null,
+          priority: rng.pick(SERVICE_PRIORITIES),
+          assignedRep: crm?.fullName ?? '',
+          assignedUserId: crm?.userId ?? null,
+          createdByUserId: crm?.userId ?? null,
+          createdByName: crm?.fullName ?? '',
+          policyNumber: policy?.policyNumber ?? '',
+          policyType: policy?.policyType ?? '',
+          household: hh.name,
+          policyId: policy?.id ?? null,
           householdId: hh.id,
-          legacyHouseholdId: hh.legacyId,
-          assignedCrmId: crm?.userId,
-          createdById: crm?.userId,
+          leadId: null,
+          phone: '',
+          email: '',
+          openedAt,
+          lastActivityAt: resolvedAt ?? openedAt,
+          resolvedAt,
+          timeline: [
+            {
+              type: 'created',
+              ...(crm ? { author: crm.fullName } : {}),
+              content: `Ticket opened — ${category}.`,
+              at: openedAt,
+            },
+          ],
+          onboarding: null,
+          renewal: null,
           isTestRecord: false,
         },
       );
@@ -1538,11 +1661,14 @@ export class DemoSeedService {
   // ---------------------------------------------------------------------------
 
   /**
-   * A handful of mailer prospects (PAC-73).
+   * A handful of mailer prospects (PAC-73), under one demo campaign (PAC-71).
    *
-   * Exists so the Mailers drawer and the Add Mailers report are testable with
-   * **neither** GCP credentials nor a real RTP file — both of which gate the
-   * two real importers, and neither of which a new contributor will have.
+   * Exists so the Mailers drawer is testable with **neither** GCP credentials
+   * nor a real vendor file — both of which gate the real importers, and neither
+   * of which a new contributor will have. Between PR1 and PR3 of PAC-71 this is
+   * the *only* way to get mailers into a local database through the app, because
+   * the Add Mailers upload was deleted with the tenancy refactor and the campaign
+   * UI has not landed yet.
    *
    * ## Deliberately not tied to demo households
    *
@@ -1566,6 +1692,11 @@ export class DemoSeedService {
     const sample: { long: string; short: string }[] = [];
     const quoteDate = this.daysAgo(21);
     const weekNumber = 29;
+    const campaignId = await this.seedMailerCampaign(
+      ctx,
+      weekNumber,
+      quoteDate,
+    );
 
     for (let i = 0; i < DEMO_CONFIG.mailers; i++) {
       // A stable, realistic-looking pair: a '#'-prefixed 32-hex "UUID" whose
@@ -1583,15 +1714,22 @@ export class DemoSeedService {
 
       await this.mailerModel.updateOne(
         {
-          agencyId: ctx.agencyId,
           // `$in` over both forms, matching the unique index's domain — see
           // the note on the same filter in `common/mailers/mailer-import.ts`.
+          // Platform-wide, with no agency clause: the dedupe key is the mailer's
+          // whole identity since PAC-71.
           controlNumberKeys: {
             $in: mailerControlNumberKeys(controlNumber, newControlNumber),
           },
         },
         {
           $set: {
+            campaignId,
+            visibleAgencyIds: [ctx.agencyId],
+            // The code the real Smith Family Agency file carries, so a demo
+            // database exercises the same carrier-appointment routing shape
+            // production does.
+            carrierAgencyId: 'A0B9049',
             controlNumber,
             newControlNumber,
             firstName: first,
@@ -1660,7 +1798,6 @@ export class DemoSeedService {
             },
           },
           $setOnInsert: {
-            agencyId: ctx.agencyId,
             controlNumberKeys: mailerControlNumberKeys(
               controlNumber,
               newControlNumber,
@@ -1674,6 +1811,57 @@ export class DemoSeedService {
     }
 
     return sample;
+  }
+
+  /**
+   * The campaign the demo mailers belong to.
+   *
+   * `Mailer.campaignId` is required (PAC-71), so the seed mints one implicit
+   * campaign per agency through the **shared** `implicitCampaignDoc` helper —
+   * the same one the migration uses, so a demo database and a migrated one have
+   * campaigns of the same shape rather than two dialects.
+   */
+  private async seedMailerCampaign(
+    ctx: Ctx,
+    weekNumber: number,
+    quoteDate: Date,
+  ): Promise<string> {
+    const carrier = await this.carrierModel
+      .findOne({ agencyId: null, slug: carrierSlug(DEFAULT_MAILER_CARRIER) })
+      .select({ _id: 1 })
+      .lean();
+    if (!carrier) {
+      // `seedPlatformCatalogs` runs first, so this cannot happen — but a
+      // required `carrierId` silently written as `undefined` would fail on save
+      // with a message about the wrong field.
+      throw new Error(
+        `Demo seed: no global ${DEFAULT_MAILER_CARRIER} carrier to attach the mailer campaign to.`,
+      );
+    }
+
+    const key = {
+      agencyId: ctx.agencyId,
+      weekNumber,
+      year: quoteDate.getUTCFullYear(),
+    };
+    const { migrationKey, ...rest } = implicitCampaignDoc(key, {
+      carrierId: carrier._id,
+      agencyName: 'Demo Agency',
+      campaignNumber: `Week_Number-${weekNumber}`,
+      fileName: 'SFA-20P',
+      source: 'demo',
+    });
+
+    const campaign = await this.mailerCampaignModel.findOneAndUpdate(
+      { migrationKey },
+      {
+        $set: { quoteDate, recordSource: 'demo:seed' },
+        $setOnInsert: { ...rest, migrationKey },
+      },
+      { upsert: true, new: true, projection: { _id: 1 } },
+    );
+    this.inc('mailerCampaigns');
+    return campaign._id.toString();
   }
 
   /** 32 stable hex characters for demo mailer `i`. Not cryptographic. */
@@ -1840,12 +2028,29 @@ export class DemoSeedService {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
+    // Same exception again: a membership is a *link*, not an imported record,
+    // so it has no `legacySmartSuiteId` to match the filter above. Purged on
+    // its provenance marker instead — which is also what keeps a membership
+    // added by hand in the demo tenant out of the way of `--fresh`.
+    await this.householdMemberModel.deleteMany({ agencyId, source: 'seed' });
     // Same exception as producer goals: `Mailer` has no `legacySmartSuiteId`,
-    // so it is keyed and purged on its provenance marker instead.
-    await this.mailerModel.deleteMany({
-      agencyId,
-      'source.recordSource': 'demo:seed',
-    });
+    // so it is keyed and purged on its provenance marker instead. It also has no
+    // `agencyId` any more (PAC-71), so the campaign is what scopes the purge to
+    // this tenant — delete the mailers first, or their campaign is gone and they
+    // are unreachable.
+    const demoCampaigns = await this.mailerCampaignModel
+      .find({ recordSource: 'demo:seed', 'assignment.agencyIds': agencyId })
+      .select({ _id: 1 })
+      .lean();
+    if (demoCampaigns.length > 0) {
+      await this.mailerModel.deleteMany({
+        campaignId: { $in: demoCampaigns.map((c) => c._id.toString()) },
+        'source.recordSource': 'demo:seed',
+      });
+      await this.mailerCampaignModel.deleteMany({
+        _id: { $in: demoCampaigns.map((c) => c._id) },
+      });
+    }
 
     // Reset the household counter too, so a `--fresh` seed is actually
     // reproducible rather than climbing `HH-44`, `HH-68`, … on every run.
@@ -1948,8 +2153,10 @@ export class DemoSeedService {
     };
   }
 
-  private email(first: string, last: string): string {
-    return `${first}.${last}@example.com`.toLowerCase();
+  private email(first: string, last: string, index?: number): string {
+    const local =
+      index === undefined ? `${first}.${last}` : `${first}.${last}.${index}`;
+    return `${local}@example.com`.toLowerCase();
   }
 
   private phone(rng: Rng): string {

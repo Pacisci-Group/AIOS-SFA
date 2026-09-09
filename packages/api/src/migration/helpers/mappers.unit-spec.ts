@@ -8,17 +8,22 @@ import {
   deriveDealType,
   normalizeTemperature,
   policyTypeLabels,
+  resolveContactHousehold,
   resolvePremium,
 } from './derive';
+import { CONTACT_FIELDS } from '../smartsuite/field-ids';
 import {
   firstLinkedId,
   selectCode,
   toDate,
   toNumber,
   toPhoneArray,
+  toRichText,
   toStringArray,
   toYmd,
 } from './value-utils';
+import { Types } from 'mongoose';
+import { buildLegacyTicket } from './legacy-ticket';
 
 describe('lead source normalization', () => {
   it('maps canonical select codes to labels', () => {
@@ -196,5 +201,230 @@ describe('SmartSuite value extraction', () => {
     expect(
       toPhoneArray([{ phone_country: 'US', phone_number: '555 437 6488' }]),
     ).toEqual(['555 437 6488']);
+  });
+});
+
+describe('toRichText', () => {
+  it('prefers the SmartDoc preview', () => {
+    expect(
+      toRichText({
+        data: { type: 'doc' },
+        html: '<p>Check on <b>endorsement</b></p>',
+        preview: 'Check on endorsement',
+      }),
+    ).toBe('Check on endorsement');
+  });
+
+  it('strips the html when the preview is blank', () => {
+    expect(
+      toRichText({
+        data: {},
+        html: '<p>Send&nbsp;updated <em>dec</em> pages.</p><p>Call back.</p>',
+        preview: '',
+      }),
+    ).toBe('Send updated dec pages. Call back.');
+  });
+
+  it('passes a plain multi-line string through', () => {
+    expect(toRichText('  lorem ipsum  ')).toBe('lorem ipsum');
+  });
+
+  it('is undefined for an empty doc, so the caller can fall back', () => {
+    expect(toRichText({ data: {}, html: '', preview: '' })).toBeUndefined();
+    expect(toRichText(null)).toBeUndefined();
+    expect(toRichText('')).toBeUndefined();
+  });
+});
+
+describe('buildLegacyTicket', () => {
+  const opened = new Date('2026-01-29T16:56:59.962Z');
+  const household = new Types.ObjectId();
+  const policy = new Types.ObjectId();
+  const crm = new Types.ObjectId();
+
+  const source = () => ({
+    title: '#SFAS-030',
+    category: '4osEm',
+    status: 'in_progress',
+    priority: 'Urgent',
+    clientName: 'Christopher Watson',
+    crmName: 'Yessenia Campos',
+    createdDate: opened,
+    policyId: policy,
+    householdId: household,
+    assignedUserId: crm,
+    createdByUserId: crm,
+    isTestRecord: false,
+  });
+
+  it('builds the document the CRM would have written itself', () => {
+    const fields = buildLegacyTicket(
+      source(),
+      {
+        household: { name: 'Watson Household' },
+        // Resolved by the caller from `Household.primaryContactId` — the
+        // household stores no copy of these (PAC-91 §4).
+        primaryContact: {
+          name: 'Christopher Watson',
+          phone: '9188082556',
+          email: 'cw@example.com',
+        },
+        policy: { policyNumber: '845776459', policyType: 'Auto' },
+      },
+      new Date('2026-09-01T00:00:00Z'),
+    );
+    expect(fields).toMatchObject({
+      ticketNumber: 'SFAS-30',
+      clientName: 'Christopher Watson',
+      category: 'Policy Change',
+      status: 'in_progress',
+      statusOverriddenAt: null,
+      priority: 'high',
+      assignedRep: 'Yessenia Campos',
+      assignedUserId: crm,
+      createdByUserId: crm,
+      createdByName: 'Yessenia Campos',
+      policyNumber: '845776459',
+      policyType: 'Auto',
+      household: 'Watson Household',
+      policyId: policy,
+      householdId: household,
+      leadId: null,
+      phone: '9188082556',
+      email: 'cw@example.com',
+      openedAt: opened,
+      lastActivityAt: opened,
+      resolvedAt: null,
+      onboarding: null,
+      renewal: null,
+      isTestRecord: false,
+    });
+    expect(fields?.timeline).toEqual([
+      {
+        type: 'created',
+        author: 'Yessenia Campos',
+        content: 'Ticket opened — Policy Change.',
+        at: opened,
+      },
+    ]);
+  });
+
+  it('opens the timeline with the ticket body when there is one', () => {
+    const fields = buildLegacyTicket({
+      ...source(),
+      notes: 'Check on endorsement (adding vehicle), send updated dec pages.',
+      createdByName: 'Ashley Medina',
+    });
+    expect(fields?.timeline).toEqual([
+      expect.objectContaining({
+        author: 'Ashley Medina',
+        content:
+          'Check on endorsement (adding vehicle), send updated dec pages.',
+      }),
+    ]);
+    expect(fields?.createdByName).toBe('Ashley Medina');
+  });
+
+  it('marks a legacy Onboarding row as status-overridden', () => {
+    // No `onboarding` payload for the schedule to derive from, so the stored
+    // status has to be the one the queue filters read.
+    const fields = buildLegacyTicket({ ...source(), category: 'Onboarding' });
+    expect(fields?.statusOverriddenAt).toEqual(opened);
+    expect(fields?.onboarding).toBeNull();
+  });
+
+  it('ages a closed ticket out on its last touch when no resolve date exists', () => {
+    const touched = new Date('2026-02-10T00:00:00Z');
+    const fields = buildLegacyTicket({
+      ...source(),
+      status: 'Closed',
+      lastUpdated: touched,
+    });
+    expect(fields?.status).toBe('closed');
+    expect(fields?.resolvedAt).toBeNull();
+    expect(fields?.lastActivityAt).toEqual(touched);
+  });
+
+  it('falls back to the household for a blank client name', () => {
+    expect(
+      buildLegacyTicket(
+        { ...source(), clientName: '' },
+        { household: { name: 'Nick A Huddleston' } },
+      )?.clientName,
+    ).toBe('Nick A Huddleston');
+    expect(buildLegacyTicket({ ...source(), clientName: '' })?.clientName).toBe(
+      'Unnamed client',
+    );
+  });
+
+  it('refuses a row whose title is not a ticket number', () => {
+    expect(buildLegacyTicket({ ...source(), title: 'Record 1' })).toBeNull();
+    expect(buildLegacyTicket({ ...source(), title: undefined })).toBeNull();
+  });
+});
+
+describe('contact household resolution (PAC-91 §8)', () => {
+  const direct = CONTACT_FIELDS.household;
+  const primary = CONTACT_FIELDS.householdPrimaryBacklink;
+  const member = CONTACT_FIELDS.householdMemberBacklink;
+
+  it('prefers the writable Household field, as legacy did', () => {
+    expect(
+      resolveContactHousehold({
+        [direct]: ['hh-direct'],
+        [primary]: ['hh-primary'],
+        [member]: ['hh-member'],
+      }),
+    ).toMatchObject({ householdLegacyId: 'hh-direct', via: 'household' });
+  });
+
+  it('falls back to the primary back-link', () => {
+    expect(
+      resolveContactHousehold({ [primary]: ['hh-primary'], [member]: [] }),
+    ).toMatchObject({
+      householdLegacyId: 'hh-primary',
+      via: 'primary-backlink',
+    });
+  });
+
+  it('falls back to the member back-link last', () => {
+    expect(resolveContactHousehold({ [member]: ['hh-member'] })).toMatchObject({
+      householdLegacyId: 'hh-member',
+      via: 'member-backlink',
+    });
+  });
+
+  it('reports a contact linked on no side at all', () => {
+    expect(resolveContactHousehold({})).toEqual({
+      householdLegacyId: undefined,
+      memberLegacyIds: [],
+      primaryLegacyIds: [],
+      via: 'none',
+    });
+  });
+
+  it('unions every link source, primary first, deduped', () => {
+    // The 266-contact case: primary of a household that does not list them as
+    // a member. Taking `Household Members` alone would lose the membership.
+    const links = resolveContactHousehold({
+      [direct]: ['hh-b'],
+      [primary]: ['hh-a'],
+      [member]: ['hh-b', 'hh-c'],
+    });
+    expect(links.memberLegacyIds).toEqual(['hh-a', 'hh-b', 'hh-c']);
+  });
+
+  it('keeps both households of a contact primary of two', () => {
+    const links = resolveContactHousehold({
+      [primary]: ['hh-3932', 'hh-4717'],
+    });
+    expect(links.primaryLegacyIds).toHaveLength(2);
+    expect(links.householdLegacyId).toBe('hh-3932');
+  });
+
+  it('reads hydrated linked-record objects, not just id strings', () => {
+    expect(
+      resolveContactHousehold({ [primary]: [{ id: 'hh-hydrated' }] }),
+    ).toMatchObject({ householdLegacyId: 'hh-hydrated' });
   });
 });

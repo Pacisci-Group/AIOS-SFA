@@ -203,10 +203,578 @@ Two endpoints: `GET /mailers/:controlNumber` (`mailers:read`) and
 form of the control number resolves, and logging is idempotent per mailer across
 both forms.
 
-**`docs/mailers-handoff.md` §7 is the record** of what PAC-61 settled — the
-premium presentation, the campaign line, the Oklahoma-only county table, the two
-places the ticket's literal spec was wrong, and the one known gap left open.
+**What PAC-61 settled is recorded on the types it settled**, not in a separate
+document: premium presentation and the campaign line on `Mailer`'s sub-schemas,
+the Oklahoma-only county table in `common/mailers/county-names.ts`, and the
+idempotency key on `buildSubmissionToken`'s `mailer` branch — the ticket's
+literal spec was wrong there, and the docblock says why. The hand-typed
+control-number gap it left open is **closed**: PAC-71 stores a normalized
+`Lead.mailer.controlNumberKey` and resolves it at write time.
 
 ⚠ **Existing agencies need `npm run api:sync:roles`**: PAC-61 gave `mailers:read`
 to every role template, and editing a template does not touch already-seeded
 roles.
+
+### Super Admin — user directory and impersonation (PAC-70)
+
+**Find / Impersonate User** is live in the Super Admin panel at `/admin/users`.
+Product decision (2026-09-02): impersonation is a plain support tool with **no
+strings attached** — full write access as the target, no audit trail, no
+notification, no banner, no "return to admin". The operator logs out when done.
+PR #44's `impersonationEvents` collection was removed; drop it by hand
+(`db.impersonationEvents.drop()`) wherever that PR was deployed.
+
+Endpoints, all under the platform guard stack:
+- `GET /platform/users` — cross-agency directory, `platform:users:read`.
+  `q` matches name, email, **agency name** and **role name**; `agencyIds[]` and
+  `roleSlugs[]` are multi-select and ORed. Roles filter by **slug**, not id,
+  because `producer` has a different id in every agency. Two-phase query
+  (resolve agency/role matches to ids, then one `users` find), no new indexes.
+- `GET /platform/users/roles` — one `{slug, name}` per distinct slug, for the
+  Role filter.
+- `POST /auth/impersonate/:userId` (`platform:users:impersonate`) now returns
+  the login envelope **plus `appBaseUrl`**.
+
+**The handoff is the non-obvious part.** `HostTenantGuard` refuses a
+domain-bearing agency's user on the platform host and a platform admin on any
+agency host, and `localStorage` is per origin — so the panel cannot keep the
+minted tokens where it is. It navigates the **same tab** to
+`<appBaseUrl>/auth/impersonate#accessToken=…&refreshToken=…`; that page (outside
+both route guards) stores the tokens in the target origin, calls `/auth/me`,
+scrubs the fragment with `replaceState`, and redirects to `/`. Fragment, not
+query string, so the tokens never reach any server or proxy log. Same tab, so a
+no-domain agency (whose handoff lands on the platform origin) replaces the
+operator's session explicitly rather than splitting it across tabs.
+`TenantUrlService.baseUrlFor` now inherits scheme and port from `APP_BASE_URL`
+so the handoff origin is reachable locally (`http://x.sfa.local:5173`, not a dead
+`https://`); production output is unchanged.
+
+Local testing of the cross-host case needs `PLATFORM_HOST`/`BASE_DOMAIN` in
+`.env`, `/etc/hosts` entries, and an active `agencyDomains` row. For a second
+populated tenant: `npm run api:seed:demo:dev -- --agency texas-holdings
+--agency-name "Texas Holdings"` (the roster gets its own email domain now, so it
+adds rather than moves users).
+
+### Agency onboarding from the Super Admin panel (PAC-69)
+
+An operator now stands up a whole tenant from `/admin/agencies/onboard`, and the
+agency's owner is walked through their own first-run setup. This is the third
+provisioning path (after the SmartSuite migration and the demo seed) and the
+**only one that creates a user**.
+
+`POST /platform/agencies` replaced its unvalidated `{name, slug}` body — which
+created an agency nobody could sign into and no record could be written to —
+with a zod DTO and `AgencyProvisioningService`: agency → default roles → first
+branch → audit templates → invited Agency Owner. Alongside it,
+`GET /platform/agencies/availability` (live slug/email/ticker checks) and
+`POST /platform/agencies/:agencyId/owner-invite/resend`.
+
+**Three decisions worth carrying forward:**
+
+1. **The invite email is dispatched outside the rollback and is never undone.**
+   `InngestService.send` records the event before handing it over and the sweep
+   replays a stranded row, so rolling the tenant back on a delivery failure
+   would mail a live link to a deleted account. A failed dispatch is reported as
+   `emailStatus: 'failed'` on a **201**, not an error.
+2. **`TransactionRunner` is deliberately not used** — on a replica set it takes
+   the transaction path, where its compensation registry is a no-op, and none of
+   the collaborators accept a session. It would have looked atomic while leaking
+   roles, templates and the user. An explicit undo stack instead.
+3. **A failed invite dispatch now clears `inviteLastSentAt`** (every invite path,
+   not just onboarding), so the person recovering from one is not told "an invite
+   was just sent to this address" when none was.
+
+`Agency.setup` tracks the owner's wizard and **defaults to `complete`**, so no
+migration was needed and no existing owner is pushed into it. ⚠ `.lean()` does
+not apply schema defaults, so a document predating the field reads back
+`undefined` — null-guard rather than trusting the default.
+
+**Still open:** there is no delete-agency endpoint, so every Bruno run of the
+`Platform Agencies` folder leaves one agency behind, and a mis-typed onboarding
+can only be undone in the database. The panel's Agencies directory (PAC-68) is
+still unbuilt, so an onboarded agency cannot be viewed or edited afterwards.
+
+
+---
+
+## 13. PAC-91 — contacts / households domain fix (handoff, 2026-09-07)
+
+**Start here for PAC-91.** Ticket: https://linear.app/paciscigroup/issue/PAC-91
+(read §8 and §9 first — they were added 2026-09-07 and carry the measured
+numbers). Plan: `docs/plans/pac-91-contact-household-links-implementation-plan.md`
+(execution order; the ticket stays authoritative). Branch:
+`asad/pac-91-contacts-households-domain-model`, cut from `dev`, pushed. **The
+whole ticket ships as one PR in five phases**; each phase is left green before
+the next starts. No product code has been written yet — the branch holds only
+the plan and this section.
+
+**What was established (analysis session, 2026-09-06/07):**
+
+- Root cause of "contacts not linked / households have no primary" is two
+  stacked importer defects: `migrateHouseholds` never reads SmartSuite's
+  `Primary Contact` (`sdb36b3217`) / `Household Members` (`suxra4lb`), and
+  `migrateContacts` reads only the contact's single `Household` link
+  (`s66cf9402f`), which legacy wrote solely from the intake form. Legacy's own
+  `SFA/lib/intake/resolveHousehold.ts` falls back to the back-links `sljrnhhg`
+  / `su8pm1bp` — that fallback order is what the importer must mirror.
+- Measured on the production dump: 1,060 / 3,064 migrated contacts have a
+  `legacyHouseholdId` (35%); 1,700 are fillable from the export, 2 disagree
+  (#C00023, #C02694), 304 have no link either side; 2 migrated households have
+  a primary (both set by intake to app-created contacts); policies need nothing
+  (4,192 agree, 0 differ); 42 contacts / 28 households / 25 policies were
+  created in the app since go-live and carry no legacy id.
+- Owner rules: a contact can belong to several households but is primary of at
+  most one; a contact can die; **a contact is unique on DOB + full name + phone
+  or email** (§9). The export has 47 full-key duplicate groups (48 contacts)
+  and 4 contacts that are primary of two households (#C01036, #C01765,
+  #C02116, #C02579) — the latter contradicts the rule and will block the §5
+  unique index until David decides.
+- No contact in the export has more than one email or phone → the §1 scalar
+  change is safe on real data.
+
+**Decisions taken (each confined to one phase, see the plan's "Decisions"):**
+repair production with a CSV-driven backfill, never a migration re-run
+(`persist` `$set`s every field over employee edits); link semantics are
+fill-if-empty with conflicts reported, never written; Phase 1 writes to today's
+schema; denormalised phone/email copies on `Lead` and `Household` are deleted
+and read through `primaryContactId`; membership becomes a `householdMembers`
+join collection; a deceased primary requires a named successor, falling back to
+a data-quality flag; migrate-mongo (`packages/api/migrations/`, runs at boot)
+for every change needing no external input, a `--dry-run` CLI script under
+`src/migration/backfill/` for anything needing a file or a human review.
+
+**Environment state left behind (main checkout, `/Users/asad/MyData/dev/pacisci-group/AIOS-SFA`):**
+
+- Local `sfa` database = **restored production dump** (agency
+  `smith-family-agency`, id `6a95edcfb1c4e8eb86f954b9`) with `migrate:tickets`
+  (286 reshaped, 60 moved, `service_tickets` dropped) and
+  `backfill:appointments` (A0B9049 → Allstate) already applied. `db:migrate:status`
+  shows nothing pending. **Do not run the SmartSuite migration against it** —
+  it would overwrite the app-created edits the backfill exists to protect.
+- David's exports: `temp/Contacts 9_4_2026.csv`, `temp/Households 9_4_2026.csv`,
+  `temp/Policies 9_4_2026.csv` (gitignored, main checkout only). Multi-valued
+  *rec-id* columns are ` | `-separated; *title* columns are `, `-separated.
+- `agencyId` on every `TenantRecord` is a **string**; a query with an
+  `ObjectId` silently matches nothing.
+
+**Owner decisions received (David, Slack, 2026-09-07) — see ticket §8 "Owner
+decisions" and plan §1.8:** remove households HH-4717 / HH-4718 / HH-4764 /
+HH-4313 / HH-0032 (resolves every double primary; HH-4717 has one lead to
+re-point to HH-3932; HH-0032 is a test row with junk policy 00006); flag
+HH-0001–HH-0017 and the six Sample/Test contacts as test records; delete the
+newer of the two identical 856719796 policy rows; unlinked policies and
+contacts stay unlinked but the team needs an in-app list → ticket §10 / plan
+Phase 5; HH-3149 — Brianne Ray becomes primary. **Nothing is outstanding with
+David for Phase 1.**
+
+**Phase 1 is done (2026-09-07) and rehearsed on the local dump.** The importer
+now reads the household side (`HOUSEHOLD_FIELDS.primaryContact` /
+`.householdMembers`, `CONTACT_FIELDS.householdPrimaryBacklink` /
+`.householdMemberBacklink`, `LEAD_FIELDS.primaryInsured` /
+`.householdMembers`), resolves a contact's household through
+`resolveContactHousehold` in legacy's own fallback order, and runs a new
+**`Household links`** pass after contacts and leads (`migrateHouseholdLinks`,
+stage 6 of 23) that writes `Household.primaryContactId` / `memberContactIds` and
+a lead's `householdId` / `primaryContactId` / `memberContactIds`. Existing
+databases are repaired instead by
+`packages/api/src/migration/backfill/backfill-household-links.ts`:
+
+```
+npm run backfill:household-links:dev -w @sfa/api -- \
+  --agency smith-family-agency \
+  --contacts "<abs>/temp/Contacts 9_4_2026.csv" \
+  --households "<abs>/temp/Households 9_4_2026.csv" \
+  --policies "<abs>/temp/Policies 9_4_2026.csv" \
+  --apply-owner-decisions --dry-run --report ./pac-91-backfill.json
+```
+
+Give the CSVs as **absolute** paths — `-w @sfa/api` runs the script with
+`packages/api` as its working directory. The exports live in the gitignored
+`temp/` of the main checkout only. `--apply-owner-decisions` replays the
+committed list in `backfill/pac-91-owner-decisions.json` (five households
+removed, test rows flagged, the duplicate 856719796 policy deleted, #HH3149
+given a primary); the decision rules themselves are pure functions in
+`backfill/household-link-decisions.ts` with a unit spec, and the CSV separator
+quirk lives in `backfill/smartsuite-csv.ts` with another. **Production has not
+been touched yet** — the local rehearsal is the only run so far.
+
+**How to begin a phase:** follow the plan's numbered steps in order. Run every
+script through the workspace (`npm run <script> -w @sfa/api -- --flags`), never a
+root alias (they swallow flags). `npm run build -w @sfa/api` catches type errors
+(`lint` does not, and `tsc -p packages/api/tsconfig.json` catches more still —
+webpack only checks what is reachable from `main.ts`, so an object literal passed
+to `persist(…: Record<string, unknown>)` type-checks against nothing);
+`npm run build -w @sfa/shared` before e2e/Bruno. Each phase's rehearsal is
+`--dry-run` → review → real → re-run, and its before/after report goes on the
+ticket as a comment.
+
+**Phase 2 is done (2026-09-07) and rehearsed on the local dump.** `Contact.email`
+/ `.phone` are scalars; `Lead.emails`/`.phones` and
+`Household.primaryContactName`/`.primaryEmails`/`.primaryPhones` are **deleted**,
+and every reader resolves the primary contact through `primaryContactId`
+(`contacts/contact-details.ts` `loadContactDetails` is the shared batched
+lookup; `households/primary-contact.ts` re-keys it by household). Intake stopped
+`$addToSet`-ing a conflicting submission — it fills a blank and records the
+disagreement as a new `contact_conflict` activity instead. §9 identity landed
+too: `Contact.nameKey`/`.dobKey` stamped by schema hooks
+(`contacts/contact-identity.ts`), one `ContactIdentityService.findDuplicate`
+shared by intake, the Household form and `PATCH /contacts/:id` (409 carrying the
+existing `contactId`), and two partial unique indexes.
+
+Two migrate-mongo migrations, in this order, and the order is load-bearing:
+
+1. `20260907105040-contact-scalars-and-identity-keys.js` — arrays → scalars
+   (normalised), keys stamped, the five denormalised fields `$unset`.
+2. `20260907110122-contact-identity-indexes.js` — builds the two partial unique
+   indexes, and **throws, naming the offending rows, if duplicates remain**.
+   That is deliberately a wall: the API applies pending migrations before it
+   binds a port, so a deploy that skipped the merge below stops here rather than
+   shipping a rule nothing enforces.
+
+Between them runs the reviewed merge script:
+
+```
+npm run merge:duplicate-contacts:dev -w @sfa/api -- \
+  --agency smith-family-agency --dry-run --report ./pac-91-merge.json
+```
+
+It groups by the **full** key only (never a partial one — the 244 name-only
+groups are for the agency to judge by hand, follow-up ticket), keeps the row with
+a household link (else the oldest), repoints `households`/`leads`
+`primaryContactId`+`memberContactIds`, `deals.primaryContactId` and
+`dealAuditItems.subjectContactId`, and audits for dangling refs on every run.
+
+⚠ **Phones are now stored normalised to digits.** Every writer already did that
+for app-created rows; migration 1 does it for migrated ones, because contact
+matching, the identity indexes and the merge script all compare normalised
+values — leaving `(918) 808-2556` raw would make 3,000 migrated contacts
+invisible to all three. `formatPhone` on the web side renders them.
+
+**Production has not been run for Phase 2 either.** Local rehearsal only.
+
+**Phase 3 is done (2026-09-07) and rehearsed on the local dump.** Membership is
+a join collection: **`householdMembers`** (`households/schemas/household-member.schema.ts`),
+one row per `(household, contact)` with the **role** and an **`endedAt`** on the
+row, because both are facts about the *pair* — the same person is a Named
+Insured at home and a Driver on a parent's policy, and leaving a household is
+not ceasing to exist. `HouseholdMembersService` is the only reader/writer;
+"current" means `endedAt: null`, which in Mongo also matches an absent field.
+
+**Five fields are gone**: `Contact.householdId` / `.legacyHouseholdId` /
+`.isPrimary` / `.roleInHousehold` and **`Household.memberContactIds`**. The last
+one goes beyond the plan's letter and is a Phase 3 decision: leaving it would
+keep two sources of membership truth with nothing reconciling them, and an array
+has nowhere to put a role or an end date — `$pull` *is* the loss §5 describes.
+Primacy stays the single `Household.primaryContactId`.
+
+Three migrations, in this order, and the order is load-bearing:
+
+1. `20260907172117-seed-household-members.js` — seeds from the **union of three**
+   sources (`primaryContactId` ∪ `memberContactIds` ∪ `Contact.householdId`),
+   not the two the plan named: the contact side alone holds **19** memberships
+   the household side never lists back, and dropping them is the §6 defect.
+2. `20260907172118-drop-contact-household-fields.js` — `$unset`s the five, and
+   drops the three now-orphaned contact indexes. Refuses to run if
+   `householdMembers` is empty while households exist. `down` throws.
+3. `20260907172120-household-primary-contact-index.js` — the partial unique
+   index on `{agencyId, primaryContactId}`, **and the wall**: it throws naming
+   the offending contacts. Last on purpose, so a database with double primaries
+   still gets its memberships and its cleanup; only the enforcement waits.
+
+**⚠ Blocked on the local dump, by design.** Phase 2's merge left three contacts
+primary of two households — susan dudley (HH-4790/HH-4792), Justin Rivera
+(HH-4774/HH-4775), Cristal Lubbers (HH-4527/HH-4540) — so migration 3 refuses.
+That is an **open owner decision** (ticket comment 2026-09-07): merge each pair,
+or keep both and name which household the person is primary of.
+
+Behaviour changes worth knowing:
+
+- **Intake adds a membership, never moves the contact.** `LinkEntitiesStep` no
+  longer `$set`s a household onto the contact, and it only sets a household's
+  `primaryContactId` when the contact is not already primary elsewhere —
+  otherwise the new index would fail the whole submission on an E11000.
+- **`ResolveHouseholdStep` refuses to guess.** No membership → create; exactly
+  one → that one; several → **409 `ambiguous_household`** carrying the
+  candidates so the form can ask. The public share-link path cannot pin a
+  household, so a public submission from a multi-household contact (14 of 3,082
+  contacts) needs the office to log it.
+- **`PATCH /contacts/:id` returns `role: null, isPrimary: false`** — always. Both
+  are per-membership and that endpoint has no household in hand; the Lead Detail
+  page reads them from `GET /leads/:id`.
+- **New endpoint** `DELETE /households/:id/members/:contactId` (`clients:write`)
+  soft-ends a membership; 409 on the primary contact, 404 when there is nothing
+  current to end.
+- The duplicate 409 now carries **`householdIds`** (a list), not `householdId`.
+
+**Rehearsal (from `pac91-before-phase2`, replaying the full production
+sequence).** Phase 2 migration 1 → the wall fired at 24 duplicate groups → merge
+dry-run reviewed (24 groups, all phone-leg, 5 both-linked) → live merge →
+snapshot `pac91-before-phase3` → the rest. **2,814 memberships** written
+(2,465 primaries + 330 member-list + **19** contact-side), 3,082 contacts and
+2,542 households cleaned, 0 dangling refs, 0 duplicate pairs, 0 primaries that
+are not members, **16 contacts in more than one household**. Re-running the seed
+is `0 inserted, 2,465 already present`; the merge re-run finds 0 groups (its
+tiebreak now reads memberships, since `householdId` is gone); the Phase 1
+backfill now **refuses** to run once memberships exist.
+
+Two defects the rehearsal itself caught, both fixed: the drop migration left
+`legacyHouseholdId_1` behind (that index comes from `index: true` on the
+`@Prop`, so grepping the schema for `schema.index(` misses it), and the seed
+copied `roleInHousehold: ''` onto 286 memberships as an empty string instead of
+leaving the field absent.
+
+Verified: `build -w @sfa/api` + `tsc -p packages/api`, 850 unit, 819 e2e in 26
+suites, Bruno **201/201 requests, 583/583 tests**, run twice against one
+database. `lint -w @sfa/api` is on its pre-existing baseline (same 7 files).
+
+⚠ **Two environment traps this phase hit.** A running `npm run api:dev` applied
+the Phase 3 migrations to the local dump *while they were still empty
+scaffolds*, recording them as applied so the real ones could never run — stop
+the watch server before touching migrations. And Bruno's
+`Platform Mailer Campaigns` folder needs the API on **port 4000** (the Inngest
+container's `-u` target) plus a running worker; on any other port those 12
+requests fail for want of a queue, not a defect.
+
+**Production has not been run for Phase 3 either.** Local rehearsal only. Next:
+Phase 4 (`Contact.deceasedAt`, `POST /households/:id/primary-contact`), which is
+also what resolves a household left without a primary.
+
+
+**Phase 4 is done (2026-09-08) and rehearsed on the local dump.** `Contact.deceasedAt`
+is a **date** (not a boolean, not a delete), and `POST /households/:id/primary-contact`
+is the reassign operation that **did not exist for any reason at all** —
+`Household.primaryContactId` was only ever *filled* by intake and never changed,
+so a death, a divorce and a wrong primary picked at intake had no supported fix.
+Reassignment is the first-class operation; the death flow in
+`PATCH /contacts/:id` calls it, not the reverse.
+
+Rules, all in `households/primary-contact.service.ts` (`PrimaryContactService`,
+its own `PrimaryContactModule` because `clients` and `contacts` both perform it):
+a new primary must be a **current member**, must **not be deceased**, and must
+**not already lead another household** — pre-checked in application code so the
+409 can name the other household, with the partial unique index as the backstop
+(E11000 → the same 409). ⚠ On a database where Phase 3's index migration has not
+run, the pre-check is the *only* enforcement.
+
+`contactId: null` + `allowNoPrimary: true` is a legitimate answer and goes
+beyond the plan's letter: it records "this household deliberately has no primary
+contact" as `Household.dataQuality: 'no_primary'`. A bare `null` is a **400** —
+a body that cleared the ref by accident is the one mistake a household record
+cannot survive quietly. This is also **the tool that resolves the three
+double-primary pairs blocking Phase 3's index migration**.
+
+Marking a **primary contact** deceased requires an answer in the same request:
+`successorContactId` (rule a) or `allowNoPrimary` (rule c). Without one it is a
+**409 `primary_contact_succession_required`** carrying the household and every
+eligible member — and it writes **nothing**, because succession is settled
+*before* the contact is saved. Auto-promotion by role precedence (rule b) is
+deliberately absent.
+
+Forward-looking exclusions: the intake fuzzy matcher filters `deceasedAt: null`;
+a *definite* identity hit on a deceased contact **refuses the submission**
+(409 `contact_deceased`) rather than filing a lead against a dead person or
+creating a duplicate the identity indexes would reject as a bare E11000 — those
+indexes deliberately still cover deceased rows. Successor pickers, the
+defensive-driver picker, quote prefill and every `tel:` / `mailto:` skip them;
+the roster, the Lead Detail card and every historical record keep the name.
+
+**No migration.** Both new fields are optional with nothing to backfill, and
+neither is indexed (nothing queries them yet — `dataQuality`'s reader is Phase 5).
+
+**Rehearsal (local `sfa`, from `pac91-before-phase4`).** Phase 4 changes no data,
+so the rehearsal is behavioural: the services were driven against the dump
+through a standalone Nest context (no HTTP — the dump's users carry a junk
+password hash). Both guard rails fired on real records; the three double-primary
+pairs were resolved **as a demonstration** (Rivera keeps HH-4775 with the 2
+policies and the deal, Sarah Rivera leads HH-4774; dudley keeps HH-4792, karen
+stoke leads HH-4790; Lubbers keeps HH-4527 and HH-4540 has no other member, so
+it is flagged `no_primary`) — and `20260907172120-household-primary-contact-index.js`
+**then applied**, `[PAC-91] built agencyId_1_primaryContactId_1`. Re-applying
+every resolution changed nothing. **The database was restored afterwards**: the
+three pairs are still David's decision, and `sfa` is back at 4 changelog entries
+with the index absent.
+
+⚠ **The rehearsal caught one defect, fixed:** clearing an already-cleared primary
+appended another `primary_contact_changed` row reading `null → null`. Data
+identical, timeline one row longer — the shape of history that makes an audit
+trail useless. There is now a no-op guard and an e2e case for it.
+
+⚠ **Deployment ordering.** Migration 3 runs at boot *before* the API binds a
+port, so a deploy carrying Phase 3 and Phase 4 together stops at the wall and
+never serves the UI that fixes it. Production therefore needs a stop point:
+boot once with `DB_MIGRATE_ON_BOOT=false`, resolve the pairs through the new
+endpoint, then restart with migrations on.
+
+Verified: `build -w @sfa/api` + `tsc -p packages/api` + `build -w @sfa/web`,
+**850** unit, **831** e2e in 26 suites, Bruno **208/208 requests, 606/606 tests**,
+run twice against one database. `lint -w @sfa/api` is on its exact pre-existing
+baseline (same 7 files, 140 problems); `lint -w @sfa/web` clean.
+
+**Production has not been run for Phase 4 either.** Local rehearsal only. Next:
+Phase 5 (the "unlinked records" work list, ticket §10).
+
+
+**Phase 5 is done (2026-09-08) and rehearsed on the local dump — the ticket is
+now code-complete.** The **Unlinked records** work list (§10) is David's answer
+to "what about the records the backfill cannot link": leave them, but give the
+team a list. `GET /clients/unlinked?kind=policies|contacts|households`
+(`clients:read`) plus `GET /clients/unlinked/counts`, served by
+`clients/unlinked-records.service.ts` behind `UnlinkedRecordsController`; on the
+web it is an **Unlinked** tab on the Clients page with the three counts as
+chips, held in the URL (`?view=unlinked&kind=…`) so a work queue can be pasted
+to a colleague.
+
+`/clients` rather than `/households` or `/policies` because the resource is the
+page's backlog and it spans three collections. `clients:read` **only** — not the
+`clients:read` OR `crm_service:read` gate the record controllers carry: those
+exist because one record renders in a CRM ticket drawer, and this is a report
+about the state of the book. Scope is `clientScopeFilter`, extracted from
+`ClientsService` into `clients/client-scope.ts` so the two readers cannot drift
+(these collections store `agencyId`/`branchId` as **strings**, and the wrong
+type returns zero rows with no error).
+
+**Two decisions the plan predated, both made explicitly:**
+
+1. **The households filter is ONE list, not two.** `Household.dataQuality:
+   'no_primary'` (Phase 4) says somebody *deliberately* left a household without
+   a primary; `null` says nobody ever looked. Both satisfy "no
+   `primaryContactId`", both still need one named, and a count that disagreed
+   with the database would undermine the one thing a data-quality list is for —
+   so the reason rides **on the row** and the UI badges it. It also keeps the
+   page at the three chips David asked for.
+2. **No index, therefore no migration.** Because of (1), `dataQuality` is
+   *projected, never predicated*, so it stays unindexed exactly as Phase 4 left
+   it. Every query rides an index that already exists: `{agencyId, householdId}`
+   on `policies`, `primaryContactId_1` on `households` (non-sparse, so missing
+   values are indexed as null), and `{agencyId, contactId}` /
+   `{agencyId, householdId, contactId}` on `householdMembers` for the two
+   lookups.
+
+`UnlinkedHouseholdRow.memberCount` goes slightly beyond the plan's letter and
+earns it: **47 of the 59 households with no primary have no members at all**, so
+"pick somebody out of the roster" and "add a member before anybody can be picked"
+are different jobs, and the number is what tells them apart. It is one indexed
+`$lookup` computed *after* `$skip`/`$limit`, so it costs one count per rendered
+row. The contacts list is the opposite shape — an anti-join whose `$lookup` must
+run before the filter can, over every in-scope contact (3,082 on the dump); if
+the book ever outgrows that, the fix is a stored flag maintained by the
+membership writers, not a bigger pipeline.
+
+**No new actions.** A household row opens `/clients/:id`, where Phase 4's
+*Change primary contact* lives — the one kind whose fix is fully in the app. A
+policy row opens `/policies/:id`, where **nothing assigns it to a household**.
+A contact row is deliberately **not a link at all**: there is no contact page,
+and "+ Member" *creates* a contact rather than attaching an existing one. Both
+gaps are stated in the UI copy rather than papered over; filling them is a
+follow-up ticket, per the plan.
+
+**Rehearsal (local `sfa`, from `pac91-before-phase5`).** Phase 5 changes no data,
+so the rehearsal is behavioural again: the service driven against the dump
+through a standalone Nest context (`DB_MIGRATE_ON_BOOT=false`; the dump's users
+carry a junk password hash and cannot log in). It returned **135 policies · 280
+contacts · 59 households**, matching the raw-driver counts exactly; pagination
+showed no overlap between pages and an empty page past the end for all three
+kinds. The dump was **unchanged** afterwards — still 4 changelog entries, still
+no `agencyId_1_primaryContactId_1`, same row counts. ⚠ Booting a Nest context
+against `sfa` fires `autoIndex`, which *tries* and fails to build that index
+over the three double primaries; it creates nothing and writes nothing, but it
+is why the boot logs an index error.
+
+The UI was checked against `sfa_bruno` in both themes and at 375px (the tables
+scroll inside their own card; the page body does not), using two throwaway
+households inserted and deleted afterwards, because the demo seed has no
+unlinked policies or households of its own.
+
+⚠ **One real behaviour the list surfaced:** the Bruno collection's Households
+chain ends a membership every run, and each run therefore leaves one more
+contact with no current membership. That is `DELETE /households/:id/members/:contactId`
+(Phase 3) working as designed — the person still exists — and this list is what
+makes the consequence visible. Worth knowing before reading the demo counts.
+
+Verified: `build -w @sfa/api` + `tsc -p packages/api` + `lint -w @sfa/web`
+(tsc) clean, **850** unit, **854** e2e in 26 suites, Bruno **213/213 requests,
+625/625 tests**, run three times against one database. `lint -w @sfa/api` is on
+its exact pre-existing baseline (same 7 files, 140 problems).
+
+**Production has not been run for any phase.** With Phase 5 done the branch is
+code-complete and the outstanding items before the PR are: the **three
+double-primary pairs** (David), and the production deploy sequence in Phase 4's
+report — one boot with `DB_MIGRATE_ON_BOOT=false`, resolve the pairs in the app,
+restart with migrations on.
+
+
+**The three double-primary pairs are resolved (2026-09-09) — merged, not
+re-primaried, and the last owner decision is closed.** David's answer was to
+**merge** each pair, and the evidence supports it: HH-4774/HH-4775 (Rivera) and
+HH-4790/HH-4792 (dudley) carry the **identical property address** and their
+SmartSuite rows were created minutes apart — one household submitted twice.
+HH-4527/HH-4540 (Lubbers) is the same person filed on two Edmond households.
+
+They are three more entries in `backfill/pac-91-owner-decisions.json`, applied by
+the Phase 1 backfill's `--apply-owner-decisions` exactly like the five removals
+of 2026-09-07. **That is the load-bearing choice**: the backfill runs *before any
+migration*, so the duplicates are gone before Phase 2's contact merge ever runs —
+and the merge therefore never creates a double primary in the first place.
+Measured: **0 of the 24 merge groups now have their two rows on different
+households**, where 3 did before.
+
+⚠ **New concept in the decisions file: `mergeMembers`.** A *removal* says the
+household was spurious and its people have homes elsewhere (`#HH4764` — Alarid
+and Alavanja keep theirs), so somebody with nowhere left is honestly unlinked. A
+*merge* says the household is another one filed twice, so everybody on it
+belongs on the survivor. The two look identical from the data — **karen stoke is
+a member of HH-4790 and of nothing else** — so the distinction is declared, not
+inferred, and `pickTargetHousehold` takes a `mergedInto` map beside
+`removedHouseholdIds`. Guessing either way is a defect: one invents a
+membership, the other loses one. Five unit cases cover it, including the refusal
+to follow a merge into another doomed household.
+
+**Rehearsal — the full production sequence replayed from `pac91-before-phase1`**,
+not just the changed step:
+
+| | Result |
+|---|---|
+| Phase 1 backfill (dry → live) | 8 households removed, **0 refused**, 2 leads re-pointed, 4 contacts moved to the kept household |
+| Re-run | 0 fills, 8 already removed, conflicts back to the 4 genuine ones |
+| `db:migrate` #1 | migration 1 applied, **wall fired** at the same 24 duplicate groups |
+| Contact merge (dry → live) | 24 groups, 24 merged, **0 groups spanning two households**, 0 dangling |
+| `db:migrate` #2 | `[PAC-91] built agencyId_1_primaryContactId_1` — **all 5 migrations applied** |
+| `db:migrate` #3 | no-op |
+
+End state: 3,082 contacts · 2,539 households · 2,810 memberships · **0 contacts
+primary of more than one household** · 0 dangling references · 0 primaries who
+are not members. HH-4775 keeps its 2 policies, the deal, the lead and the quote
+recap; **karen stoke is on HH-4792's roster**, which is the whole point of
+`mergeMembers`. Phase 5's counts are **unchanged at 135 / 280 / 59** — all three
+removed households *had* primaries, and nobody was stranded.
+
+⚠ **The production sequence no longer needs a human mid-deploy.** Phase 4's
+report described stopping to resolve the pairs *in the app*; that step is gone.
+`DB_MIGRATE_ON_BOOT=false` is still needed for the first boot — the backfill and
+the contact merge are CLI scripts that must run before the migrations — but the
+whole thing is now scriptable end to end:
+
+1. deploy with `DB_MIGRATE_ON_BOOT=false`
+2. Phase 1 backfill: `--dry-run` → review → live
+3. `db:migrate` (applies migration 1, stops at the identity wall)
+4. contact merge: `--dry-run` → review → live
+5. `db:migrate` (applies 2–5, builds both walls' indexes)
+6. restart with migrations on — a no-op
+
+⚠ **One data question left open on purpose.** The Lubbers direction is *forced,
+not chosen*: HH-4527 holds the $6,658.10 quote recap and the removal refuses to
+delete a household with one, so HH-4540 goes. The survivor is therefore still
+named **"Diann Fry"** and carries **no street address**, while HH-4540's
+"2425 Redvine Rd" is lost. Correcting the survivor's name and address is a
+separate data edit — not done here, because "Diann Fry" may well be the right
+household name and that is not ours to decide.
+
+Snapshots: **`pac91-before-merges`** is the old post-Phase-3 state (3 double
+primaries, index absent); **`pac91-after-merges`** is this replayed end state,
+which is what local `sfa` now holds — all 5 migrations applied, unlike every
+earlier phase which was restored afterwards.
+
+Verified: `build -w @sfa/api` + `tsc -p packages/api` clean, **855** unit
+(5 new), **854** e2e in 26 suites. `lint -w @sfa/api` on its exact baseline
+(same 7 files, 140 problems). Bruno not re-run — this commit changes no API
+surface, the same reason Phase 1 gave.

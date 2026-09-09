@@ -14,6 +14,15 @@ interface LeadQuickActionsProps {
   leadId: string;
   phone: string | null;
   email: string | null;
+  /**
+   * `YYYY-MM-DD` when the lead's primary contact has died (PAC-91 §7).
+   *
+   * Every action here places an outbound touch, which is exactly what a
+   * deceased contact drops out of. The row itself still renders — the lead is
+   * real and the producer needs to see it — but the three buttons go inert with
+   * a reason, the same treatment a lead with no phone number gets.
+   */
+  deceasedAt?: string | null;
 }
 
 interface Action {
@@ -74,6 +83,7 @@ export function LeadQuickActions({
   leadId,
   phone,
   email,
+  deceasedAt = null,
 }: LeadQuickActionsProps) {
   const { canWrite } = usePermissions();
   const logActivity = useLogActivity(leadId);
@@ -85,8 +95,11 @@ export function LeadQuickActions({
       {ACTIONS.map((action) => {
         const contact = action.type === "email" ? email : phone;
         const Icon = action.icon;
+        const blocked = deceasedAt
+          ? "This contact is recorded as deceased"
+          : null;
 
-        if (!contact) {
+        if (!contact || blocked) {
           return (
             <Tooltip key={action.type}>
               <TooltipTrigger asChild>
@@ -102,7 +115,7 @@ export function LeadQuickActions({
                   {action.label}
                 </span>
               </TooltipTrigger>
-              <TooltipContent>{action.missing}</TooltipContent>
+              <TooltipContent>{blocked ?? action.missing}</TooltipContent>
             </Tooltip>
           );
         }

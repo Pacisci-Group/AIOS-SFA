@@ -1,0 +1,67 @@
+meta {
+  name: Get Output File URL
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/files/output/url
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("mints a short-lived download rather than storing one", function () {
+    const body = res.getBody();
+    expect(body.url).to.be.a("string");
+    expect(body.filename).to.equal("SFA-QBP.csv");
+    expect(body.expiresIn).to.be.above(0);
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/:campaignId/files/:kind/url — download a file
+
+  `:kind` is `vendor` (what was uploaded) or `output` (the 132-column print
+  CSV). Both files are retained: the vendor file is the only way to re-import
+  after a mapping bug, and the output is what goes to print.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Why a URL rather than a redirect
+
+  The client decides how to present the download, and nothing that happens to
+  prefetch the route follows the link. The presigned URL is minted **per read**
+  rather than stored on the campaign, because presigned URLs expire — a detail
+  page left open for ten minutes would otherwise hand out a dead one. The
+  storage key never crosses the wire at all: it is a capability, not an
+  identifier.
+
+  ## Response `200`
+  ```json
+  {
+    "url": "http://localhost:9000/sfa-uploads/platform/mailer-campaigns/…?X-Amz-Signature=…",
+    "filename": "SFA-QBP.csv",
+    "expiresIn": 300
+  }
+  ```
+
+  Signed with an `attachment` disposition and the stored filename, so the
+  browser saves `SFA-QBP.csv` rather than a UUID-prefixed object key.
+
+  ## Errors
+  - `401` / `403` — missing token, or missing `platform:mailers:read`.
+  - `404 Not Found` — no such campaign, or that campaign has no file of that
+    kind (an `output` before the commit has run).
+  - `503 Service Unavailable` — object storage is not configured.
+}

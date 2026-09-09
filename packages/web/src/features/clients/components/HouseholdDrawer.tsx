@@ -10,9 +10,9 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { getHousehold, type ContactSummary } from '@/lib/households-api';
+import { getHousehold } from '@/lib/households-api';
+import { formatAddress } from '@/lib/format-address';
 import {
-  addressLine,
   DrawerError,
   DrawerRow,
   DrawerSection,
@@ -20,14 +20,7 @@ import {
   money,
   shortDate,
 } from './drawer-primitives';
-
-/** `null` rather than "Unnamed" so the caller's `??` chain can keep falling through. */
-function fullName(contact: ContactSummary | undefined) {
-  if (!contact) return null;
-  return (
-    [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null
-  );
-}
+import { formatPhone } from '@/lib/leads-api';
 
 interface HouseholdDrawerProps {
   householdId: string | null;
@@ -56,23 +49,20 @@ export function HouseholdDrawer({
   const household = query.data;
 
   /*
-   * The denormalized `primaryContactName` / `primaryEmails` / `primaryPhones`
-   * on the household are written by lead intake but **not** by the SmartSuite
-   * migration, so every migrated household leaves them empty and this drawer
-   * rendered "—" for a client whose details it had already fetched. The primary
-   * contact is right there in `contacts`; falling back to it is real data, not a
-   * placeholder. `HouseholdProfile` (the full page) has always done this — the
-   * drawer is what was inconsistent.
+   * All three are resolved by `GET /households/:id` from the household's
+   * `primaryContactId` (see `pickPrimaryContact`), which is what makes them
+   * usable for a migrated household — this drawer used to render "—" for a
+   * client whose details it had already fetched.
+   *
+   * The PAC-86 fallback to `contacts.find(isPrimary)` is gone with PAC-91 §4:
+   * the household stores no copy of these to be stale, so the resolved values
+   * *are* the primary contact's, and a second lookup here could only disagree
+   * with the API about who the primary is.
    */
-  const primaryContact = household?.contacts.find((c) => c.isPrimary);
-  const contactName =
-    household?.primaryContactName ?? fullName(primaryContact) ?? '—';
-  const email =
-    household?.primaryEmails[0] ?? primaryContact?.emails[0] ?? '—';
-  const phone =
-    household?.primaryPhones[0] ?? primaryContact?.phones[0] ?? '—';
-  /* Mailing address as the last resort — the drawer already fetches it. */
-  const address = household?.propertyAddress ?? household?.mailingAddress;
+  const contactName = household?.primaryContactName ?? '—';
+  const email = household?.primaryEmail ?? '—';
+  // Formatted on read: phones are stored normalised to digits (PAC-91 §1).
+  const phone = formatPhone(household?.primaryPhone ?? null);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -95,7 +85,10 @@ export function HouseholdDrawer({
                 <DrawerRow label="Primary contact" value={contactName} />
                 <DrawerRow label="Email" value={email} />
                 <DrawerRow label="Phone" value={phone} />
-                <DrawerRow label="Address" value={addressLine(address)} />
+                <DrawerRow
+                  label="Address"
+                  value={formatAddress(household.address) ?? '—'}
+                />
                 <DrawerRow
                   label="Active policies"
                   value={household.totalActivePolicies}
@@ -139,7 +132,7 @@ export function HouseholdDrawer({
                       <li key={policy.id} className="text-sm">
                         <button
                           type="button"
-                          className="text-[var(--kpi-blue)] hover:underline"
+                          className="text-primary hover:underline"
                           onClick={() => navigate(`/policies/${policy.id}`)}
                         >
                           {policy.policyType} — {policy.policyNumber}

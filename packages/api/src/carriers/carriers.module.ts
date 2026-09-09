@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { CarriersController } from './carriers.controller';
+import { PlatformCarriersController } from './platform-carriers.controller';
 import { CarriersService } from './carriers.service';
 import { Carrier, CarrierSchema } from './schemas/carrier.schema';
 
@@ -15,7 +16,7 @@ import { Carrier, CarrierSchema } from './schemas/carrier.schema';
   imports: [
     MongooseModule.forFeature([{ name: Carrier.name, schema: CarrierSchema }]),
   ],
-  controllers: [CarriersController],
+  controllers: [CarriersController, PlatformCarriersController],
   providers: [CarriersService],
   exports: [CarriersService, MongooseModule],
 })

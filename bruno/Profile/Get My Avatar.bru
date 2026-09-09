@@ -1,0 +1,46 @@
+meta {
+  name: Get My Avatar
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/me/avatar
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{profileAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("serves the stored content type, privately, sniff-proof", function () {
+    expect(res.getHeader("content-type")).to.equal("image/png");
+    expect(res.getHeader("x-content-type-options")).to.equal("nosniff");
+    expect(res.getHeader("cache-control")).to.contain("private");
+  });
+}
+
+docs {
+  # GET /me/avatar — the caller's own photo bytes (PAC-81)
+
+  **Module:** none. **Permission:** none beyond a valid access token.
+
+  Streamed through the API from object storage, like the tenant logo — but
+  `Cache-Control: private` where the logo is public: this is an authenticated
+  response about a person. Serves the **stored** content type (validated at
+  commit), never a guess from the key's extension, with
+  `X-Content-Type-Options: nosniff`.
+
+  Authenticated, so an `<img src>` cannot load it directly — the web client
+  fetches it with the bearer header and renders through an object URL
+  (`UserAvatar` / `apiFetchBlob`). The `?v=` cache-buster in `avatarUrl` is
+  ignored here; it exists so the client's cache key changes when the photo
+  does.
+
+  **Errors** — `401` · `404` when no photo is set (see the next request).
+}

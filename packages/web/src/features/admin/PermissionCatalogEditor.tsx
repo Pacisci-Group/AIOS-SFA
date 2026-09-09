@@ -5,8 +5,16 @@ import {
   type PageLevel,
   type PageLevelOverride,
 } from '@sfa/shared';
-import { ArrowLeft, Check, RotateCcw, Search } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowLeft,
+  Check,
+  Info,
+  RotateCcw,
+  Search,
+} from 'lucide-react';
 import { AppShell } from '@/components/layout/AppShell';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import type { PermissionDefinition } from '@/lib/roles-api';
@@ -74,7 +82,7 @@ export function PermissionCatalogEditor({
   saving = false,
   saved = false,
   error = null,
-  backTo = '/',
+  backTo = '/settings',
   headerControl,
   readOnly = false,
   readOnlyNotice = 'This role automatically has access to every enabled module. Its access is not controlled by per-page levels.',
@@ -158,11 +166,13 @@ export function PermissionCatalogEditor({
             className="text-muted-foreground hover:text-foreground"
           >
             <Link to={backTo} aria-label="Back">
-              <ArrowLeft size={16} />
+              <ArrowLeft className="size-4" />
             </Link>
           </Button>
           <div className="min-w-0">
-            <h1 className="truncate text-sm font-bold">{title}</h1>
+            <h1 className="truncate text-lg font-semibold tracking-tight">
+              {title}
+            </h1>
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               {subtitle}
             </p>
@@ -171,8 +181,8 @@ export function PermissionCatalogEditor({
         <div className="flex flex-1 items-center justify-end gap-3">
           {headerControl}
           {saved && !saving && (
-            <span className="flex items-center gap-1.5 text-xs text-emerald-500">
-              <Check size={13} /> Saved
+            <span className="flex items-center gap-1.5 text-xs text-success">
+              <Check className="size-3" /> Saved
             </span>
           )}
           <Button
@@ -188,22 +198,23 @@ export function PermissionCatalogEditor({
 
       <main className="mx-auto w-full max-w-3xl px-4 py-8 md:px-6">
         {readOnly && (
-          <div className="mb-5 px-4 py-3 rounded-lg text-sm bg-sky-400/10 border border-sky-400/25 text-sky-300">
-            {readOnlyNotice}
-          </div>
+          <Alert className="mb-5 border-primary/30 bg-primary/8">
+            <Info className="text-primary" />
+            <AlertDescription className="text-foreground">
+              {readOnlyNotice}
+            </AlertDescription>
+          </Alert>
         )}
 
         {error && (
-          <div className="mb-5 px-4 py-3 rounded-lg text-sm bg-amber-500/10 border border-amber-500/25 text-amber-500">
-            {error}
-          </div>
+          <Alert variant="destructive" className="mb-5">
+            <AlertCircle />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
         <div className="relative mb-6">
-          <Search
-            size={15}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
-          />
+          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -332,7 +343,7 @@ export function PermissionCatalogEditor({
                       onClick={() => resetToDefault(page.moduleKey)}
                       className="text-muted-foreground hover:text-foreground"
                     >
-                      <RotateCcw size={14} />
+                      <RotateCcw className="size-3.5" />
                     </Button>
                   )}
                 </div>

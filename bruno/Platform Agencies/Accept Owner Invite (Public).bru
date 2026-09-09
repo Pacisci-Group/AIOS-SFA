@@ -1,0 +1,85 @@
+meta {
+  name: Accept Owner Invite (Public)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/auth/accept-invite
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "token": "{{onboardInviteToken}}",
+    "password": "OwnerPass123!",
+    "firstName": "Pac",
+    "lastName": "Owner-Corrected"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    bru.setVar("onboardOwnerAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("signs the owner straight in", function () {
+    // A full token pair, so the wizard carries on in place rather than bouncing
+    // them to /login to type a password they set four seconds ago.
+    expect(res.getBody().accessToken).to.be.a("string");
+  });
+
+  test("writes the name correction typed in the wizard", function () {
+    expect(res.getBody().user.lastName).to.equal("Owner-Corrected");
+  });
+
+  test("tells the client the agency setup is still pending", function () {
+    expect(res.getBody().user.agencySetupPending).to.equal(true);
+  });
+
+  test("grants only the modules the agency was given", function () {
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("leads:read");
+    // `crm_service` was not in the onboarding body, so it is disabled and its
+    // permissions are filtered out of the effective set.
+    expect(perms).to.not.include("crm_service:read");
+  });
+}
+
+docs {
+  # POST /auth/accept-invite — set a password and sign in
+
+  - **Module:** none (`@Public()`)
+  - **Permission:** none
+
+  ## Body
+  `token` and `password` (min 8). `firstName` / `lastName` are **optional**
+  (PAC-69): the onboarding wizard shows the names the inviter typed and lets the
+  invitee correct them. Omitting them leaves the stored values alone — absent is
+  not the same as clearing.
+
+  ## Response `201`
+  A full token pair plus the user blob, including `agencySetupPending` — true
+  only for the owner of a freshly onboarded agency, which is what routes them
+  into the white-label wizard rather than straight to a dashboard.
+
+  Accepting also bumps `tokenVersion`, ending any other live session for the
+  account, and clears any pending reset token.
+
+  ## Errors
+  - `401 Unauthorized` — invalid, expired or already-used token.
+  - `403 Forbidden` — the link was opened on a host the user does not belong to.
+    Checked **before** the password is written, so the invite stays usable on
+    the right host.
+}

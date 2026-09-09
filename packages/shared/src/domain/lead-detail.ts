@@ -295,8 +295,13 @@ export interface LeadDetail {
   status: string;
   temperature: LeadTemperature;
   leadSource: NormalizedLeadSource;
-  emails: string[];
-  phones: string[];
+  /*
+   * ⚠ No `emails` / `phones` here. The lead used to carry a denormalised copy
+   * of its primary contact's details, which the migration filled from the
+   * SmartSuite *Leads* table — empty on most legacy rows, because the real
+   * values live on the linked contact. Read `primaryContact.email` /
+   * `.phone` instead (PAC-91 §1–§3).
+   */
   /** The household's living address, resolved from lead → household. */
   address: StructuredAddress | null;
   quoteControlNumber: string | null;

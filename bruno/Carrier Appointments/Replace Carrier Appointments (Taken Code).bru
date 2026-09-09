@@ -1,0 +1,66 @@
+meta {
+  name: Replace Carrier Appointments (Taken Code)
+  type: http
+  seq: 6
+}
+
+put {
+  url: {{baseUrl}}/agency/carrier-appointments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{appointmentsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "appointments": [
+      {
+        "carrierId": "{{appointmentCarrierId}}",
+        "carrierAgencyCode": "{{appointmentCode}}"
+      },
+      {
+        "carrierId": "{{appointmentCarrierId}}",
+        "carrierAgencyCode": "{{appointmentCode}}"
+      }
+    ]
+  }
+}
+
+tests {
+  test("refuses the same pair twice with 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("names the code, not the index", function () {
+    // The message has to be actionable: "duplicate key on
+    // carrierAppointments.codeKey" tells an operator nothing.
+    expect(res.getBody().message).to.contain(bru.getVar("appointmentCode"));
+  });
+}
+
+docs {
+  # PUT /agency/carrier-appointments — the duplicate-pair guard
+
+  Sends the same `(carrier, code)` twice in one list and expects a `400`.
+
+  ## Why this needs its own request
+
+  **The index cannot catch it.** MongoDB's unique constraint applies across
+  separate *documents*, and explicitly permits one document's array to repeat
+  index-key values — so `{ carrierAppointments.carrierId, .codeKey }` stops two
+  agencies claiming a pair but not one agency listing it twice. That rule lives
+  in `AgencyCarrierAppointmentsService.normalize` or it does not exist, and this
+  is what pins it.
+
+  The sibling failure — a pair another *agency* holds — is a `409` from the same
+  service, backed by the index for the race the pre-flight cannot close. It is
+  not exercised here because it would need a second tenant; the e2e suite
+  (`carrier-appointments.e2e-spec.ts`) covers it.
+}

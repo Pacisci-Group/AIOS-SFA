@@ -1,7 +1,7 @@
 import type { LeadDetailDeal } from "@sfa/shared";
 import { CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { DetailCard, SectionLabel } from "./DetailCard";
+import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { formatCurrency, formatDate } from "./lead-display";
 import { EditPolicyDialog } from "./EditPolicyDialog";
 import { PolicyRow } from "./PolicyRow";

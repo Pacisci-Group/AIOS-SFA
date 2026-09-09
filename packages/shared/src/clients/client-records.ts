@@ -10,18 +10,46 @@
  *   distinguish `undefined` from `null`
  */
 
+import type { StructuredAddress } from '../domain/address';
+
 /** A household member, from the `contacts` collection. */
 export interface ContactSummary {
   id: string;
   firstName: string | null;
   lastName: string | null;
-  emails: string[];
-  phones: string[];
-  /** e.g. "Named Insured", "Spouse", "Driver", "Child". */
+  /**
+   * One email, one phone — a contact is one person (PAC-91 §1). These were
+   * `emails: string[]` / `phones: string[]`, mirroring SmartSuite's field type
+   * rather than the domain, and every consumer read `[0]`.
+   */
+  email: string | null;
+  phone: string | null;
+  /**
+   * e.g. "Named Insured", "Spouse", "Driver", "Child" — the role in **this**
+   * household, read from the membership (PAC-91 §5). The contact carries no
+   * role of its own: the same person can be a Named Insured at home and a
+   * Driver on a parent's policy.
+   */
   roleInHousehold: string | null;
+  /**
+   * Resolved per household, never a stored flag: the API compares the contact
+   * against `household.primaryContactId`, so at most one contact in a roster
+   * carries it and that contact leads the list. `false` in a response with no
+   * household in hand — `Contact.isPrimary` is gone, because it could not say
+   * primary *of what* (PAC-91 §5).
+   */
   isPrimary: boolean;
   /** ISO date, or null when unknown. */
   dateOfBirth: string | null;
+  /**
+   * `YYYY-MM-DD` when this person has died, otherwise `null` (PAC-91 §7).
+   *
+   * The roster keeps listing them — they are on the household's policies and
+   * its history — but every forward-looking affordance reads this first: no
+   * click-to-call, no mailto, no quote prefill, and not offered as a successor
+   * when a new primary contact is named.
+   */
+  deceasedAt: string | null;
 }
 
 /** A policy as listed inside a household. */
@@ -45,16 +73,58 @@ export interface HouseholdSummary {
   id: string;
   name: string | null;
   status: string | null;
+  /**
+   * Resolved from the household's primary contact, not stored on the household
+   * (PAC-91 §4 — the stored copy was written only by intake, so every migrated
+   * household rendered an em dash). Null when there is no primary contact.
+   */
   primaryContactName: string | null;
+  /**
+   * `YYYY-MM-DD` when the primary contact has died (PAC-91 §7).
+   *
+   * Carried beside the name rather than replacing it: the name still identifies
+   * the household on every list and drawer, while `primaryEmail` / `primaryPhone`
+   * beside it must stop being offered as a way to reach anybody. A list row has
+   * no roster to look this up in, which is why it rides on the summary.
+   */
+  primaryContactDeceasedAt: string | null;
+  /**
+   * Why this household is flagged for someone's attention — today only
+   * `no_primary`, written when a caller deliberately left it without a primary
+   * contact (PAC-91 §7). Null for every household nobody has made that choice
+   * about, including the ones that simply never had a primary.
+   */
+  dataQuality: string | null;
   totalActivePolicies: number;
 }
 
 /** Full household read-model returned by `GET /households/:id`. */
 export interface HouseholdView extends HouseholdSummary {
+  /**
+   * The household's address, already coerced into one shape by the API's
+   * `resolveHouseholdAddress` — property address first, mailing address as the
+   * fallback.
+   *
+   * Read this, not the raw objects below. `propertyAddress` is a loose
+   * `Record<string, unknown>` whose keys differ per writer (`street` from lead
+   * intake, `line1` from the demo seed, `location_address` from the SmartSuite
+   * migration), and every client that re-implemented that lookup table got it
+   * wrong for at least one writer.
+   */
+  address: StructuredAddress | null;
+  /**
+   * The raw stored objects, kept for callers that need a key the normalized
+   * shape drops (`location_address2`). Prefer {@link HouseholdView.address}.
+   */
   propertyAddress: Record<string, unknown> | null;
   mailingAddress: Record<string, unknown> | null;
-  primaryEmails: string[];
-  primaryPhones: string[];
+  /**
+   * The primary contact's email and phone, **resolved from that contact** —
+   * the household no longer stores a copy of either (PAC-91 §1/§4). Null when
+   * the household has no primary contact, or the primary has no such value.
+   */
+  primaryEmail: string | null;
+  primaryPhone: string | null;
   assignedCrmId: string | null;
   contacts: ContactSummary[];
   policies: PolicySummary[];

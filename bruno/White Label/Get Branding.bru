@@ -1,0 +1,55 @@
+meta {
+  name: Get Branding
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/agency/branding
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("always reports the agency's fallback name", function () {
+    expect(res.getBody().agencyName).to.be.a("string").and.not.be.empty;
+  });
+}
+
+docs {
+  # GET /agency/branding
+
+  Current white-label settings, for the settings form.
+
+  **Module** — none (`@SkipModule`): branding is not a product module that can
+  be switched off, it is what the product is called. **Permission** —
+  `agency:branding:read`.
+
+  **Response `200`**
+  ```json
+  {
+    "agencyName": "Smith Family Agency",
+    "displayName": null,
+    "tagline": null,
+    "hasLogo": false,
+    "hasLogoDark": false,
+    "hasFavicon": false
+  }
+  ```
+
+  Reports `hasLogo` rather than a key or a URL: the object key is an internal
+  identifier the client has no use for, and the URL is already served by
+  `GET /public/tenant`. `displayName` is `null` when unset, and every reader
+  falls back to `agencyName` — an agency created before this feature has no
+  branding sub-document at all.
+
+  **Errors**
+  - `403` — caller lacks `agency:branding:read`.
+}

@@ -86,16 +86,32 @@ tests {
     }
   });
 
-  test("completion is a whole percent consistent with the counters", function () {
-    // The figure that replaced David's rejected checkmarks.
+  test("completion is a whole percent, bounded by the counters", function () {
+    /*
+     * The figure that replaced David's rejected checkmarks.
+     *
+     * ⚠ It is `resolvedCount / itemCount`, NOT `(itemCount - openCount) /
+     * itemCount`. `openCount` is `openFailedCount` — items that **failed** and
+     * are still open — and an item that is merely `in_progress` is in neither
+     * counter. This test used to recompute the percentage the second way and
+     * passed only by luck of which row sorted first: on the demo seed, 13 of 18
+     * audits have `resolvedCount != itemCount - openFailedCount`.
+     *
+     * So: assert the contract that actually holds. `resolvedCount` is not on
+     * the row (deliberately — the board renders a bar, not two numbers), which
+     * bounds what can be checked from here.
+     */
     const items = res.getBody().items;
     if (items.length > 0) {
       const row = items[0];
       expect(row.completionPct).to.be.within(0, 100);
-      const resolved = row.itemCount - row.openCount;
-      expect(row.completionPct).to.equal(
-        Math.round((resolved / row.itemCount) * 100),
+      expect(row.completionPct % 1).to.equal(0);
+      // Every unresolved-and-failed item is necessarily unresolved, so the
+      // percentage can never exceed what the open counter leaves room for.
+      const mostItCouldBe = Math.round(
+        ((row.itemCount - row.openCount) / row.itemCount) * 100,
       );
+      expect(row.completionPct).to.be.at.most(mostItCouldBe);
     }
   });
 
@@ -144,6 +160,13 @@ docs {
   six Resolve buttons and could fill the board by itself. Each row now carries
   the deal's whole checklist in `items`, plus a completion percentage — the
   figure that replaced the per-item checkmarks he rejected.
+
+  ⚠ `completionPct` is **`resolvedCount / itemCount`**, not
+  `(itemCount - openCount) / itemCount`. `openCount` is `openFailedCount` —
+  requirements that *failed* and are still open — so an item that is merely
+  `in_progress` counts in neither, and the two figures legitimately disagree
+  (on the demo seed, for 13 of 18 audits). `resolvedCount` is deliberately not
+  on the row: the board renders a bar, not two numbers.
 
   **`total` and `totalPages` count deals**, not requirements.
 

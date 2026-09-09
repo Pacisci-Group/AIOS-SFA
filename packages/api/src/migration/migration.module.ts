@@ -4,8 +4,13 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { MongoModule } from '../common/mongo/mongo.module';
 import { ENV_FILE_PATH } from '../config/env.config';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
+import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import {
+  HouseholdMember,
+  HouseholdMemberSchema,
+} from '../households/schemas/household-member.schema';
 import {
   Household,
   HouseholdSchema,
@@ -99,9 +104,13 @@ import { MigrationService } from './migration.service';
     PermissionsModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
+      // Resolves the global carrier the tenant's appointment is with (PAC-93).
+      { name: Carrier.name, schema: CarrierSchema },
       { name: Branch.name, schema: BranchSchema },
       { name: User.name, schema: UserSchema },
       { name: Household.name, schema: HouseholdSchema },
+      // The `Household links` pass writes memberships directly (PAC-91 §5).
+      { name: HouseholdMember.name, schema: HouseholdMemberSchema },
       { name: Lead.name, schema: LeadSchema },
       { name: QuoteRecap.name, schema: QuoteRecapSchema },
       { name: Deal.name, schema: DealSchema },

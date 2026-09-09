@@ -19,7 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { EditQuoteRecapAction } from "@/components/leads/EditQuoteRecapAction";
 import { cn } from "@/lib/utils";
-import { DetailCard, SectionLabel } from "./DetailCard";
+import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { QuoteDocumentLink } from "./QuoteDocumentLink";
 import {
   formatAddress,

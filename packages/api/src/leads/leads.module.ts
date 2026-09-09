@@ -5,8 +5,10 @@ import {
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { ContactsModule } from '../contacts/contacts.module';
 import { CrmModule } from '../crm/crm.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
+import { HouseholdMembersModule } from '../households/household-members.module';
 import {
   Household,
   HouseholdSchema,
@@ -25,7 +27,9 @@ import {
   QuoteRecapSchema,
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import { Mailer, MailerSchema } from '../mailers/schemas/mailer.schema';
 import { LeadIntakeService } from './intake/lead-intake.service';
+import { MailerLinkResolver } from './intake/mailer-link.resolver';
 import { LinkEntitiesStep } from './intake/link-entities.step';
 import { ResolveContactStep } from './intake/resolve-contact.step';
 import { ResolveHouseholdStep } from './intake/resolve-household.step';
@@ -54,12 +58,27 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
       { name: PriorInsurance.name, schema: PriorInsuranceSchema },
       { name: PriorPolicy.name, schema: PriorPolicySchema },
       { name: User.name, schema: UserSchema },
+      // Resolves a typed quote control number to its mailer at write time
+      // (PAC-71). A *schema* registration, not a module import: `MailersModule`
+      // already imports this one for `LeadIntakeService`, so importing it back
+      // would be a cycle needing `forwardRef`. Registering another module's
+      // schema is the house pattern — see the note in `crm.module.ts`.
+      { name: Mailer.name, schema: MailerSchema },
     ]),
     // `LeadTicketsService` — opens a lead's quote ticket from Start Quote, and
     // resolves it when the lead reaches a terminal status. The dependency runs
     // one way only: `CrmModule` registers the `Lead` *schema* rather than
     // importing this module back.
     CrmModule,
+    // `ContactIdentityService` — the one full-key duplicate check (PAC-91 §9),
+    // run by `ResolveContactStep` ahead of the fuzzy scorer. Shared rather than
+    // reimplemented: intake and the Household form must agree on what "the same
+    // person" means, or one of them creates the duplicate the other refuses.
+    ContactsModule,
+    // Membership is a collection now (PAC-91 §5): intake adds a membership
+    // instead of moving the contact, `ResolveHouseholdStep` derives the
+    // household from it, and the Lead Detail roster reads it.
+    HouseholdMembersModule,
   ],
   controllers: [LeadsController],
   providers: [
@@ -73,6 +92,7 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     ResolveHouseholdStep,
     ResolveLeadStep,
     LinkEntitiesStep,
+    MailerLinkResolver,
   ],
   // `LeadIntakeService` so the public share-link controller can run the same
   // pipeline; `LeadAccessService` so every lead-scoped write path (quote

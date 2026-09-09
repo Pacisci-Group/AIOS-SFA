@@ -1,6 +1,7 @@
 import type {
   HouseholdMemberRole,
   IntakeChannel,
+  LeadMailerMatchedBy,
   LeadPolicyOfInterestInput,
   NormalizedLeadSource,
 } from '@sfa/shared';
@@ -60,6 +61,15 @@ export interface IntakeMember extends IntakePerson {
   role: HouseholdMemberRole;
 }
 
+/** A mailer the caller has already resolved. See `IntakeInput.mailer`. */
+export interface IntakeMailerLink {
+  mailerId: Types.ObjectId;
+  campaignId: string;
+  /** The mailer's own normalized key, never what the submitter typed. */
+  controlNumberKey: string;
+  matchedBy: LeadMailerMatchedBy;
+}
+
 export interface IntakeInput {
   primaryContact: IntakePerson;
   address?: IntakeAddress;
@@ -74,6 +84,16 @@ export interface IntakeInput {
    */
   policiesOfInterest?: LeadPolicyOfInterestInput[];
   quoteControlNumber?: string;
+  /**
+   * An **already-resolved** mailer link (PAC-71).
+   *
+   * Set only by the drawer's log-lead, which knows for certain which mailer the
+   * producer is looking at. Every other caller passes {@link quoteControlNumber}
+   * and lets `ResolveLeadStep` resolve it — passing a link here that the caller
+   * merely guessed at would write `matchedBy: 'drawer'` onto a match nobody
+   * made.
+   */
+  mailer?: IntakeMailerLink;
   /** Raw client token; the orchestrator namespaces it before use. */
   submissionToken?: string;
   /**
@@ -101,12 +121,42 @@ export interface StepDeps {
   created: CreatedRegistry;
 }
 
+/**
+ * A submitted contact detail that disagrees with the one already stored
+ * (PAC-91 §1).
+ *
+ * A contact holds **one** email and **one** phone. Intake used to `$addToSet`
+ * the submitted value as a second array element, which is how those arrays grew
+ * in the first place — an intake form is a weak source of truth about an
+ * existing client, and silently recording a second identity for them is worse
+ * than recording none. The stored value wins, and the disagreement is carried
+ * back here so the pipeline can put it on the lead's timeline for a human.
+ */
+export interface ContactFieldConflict {
+  contactId: Types.ObjectId;
+  field: 'email' | 'phone';
+  stored: string;
+  submitted: string;
+}
+
 export interface ResolvedContact {
   contactId: Types.ObjectId;
   isNew: boolean;
-  /** Present when the matched contact already belonged to a household. */
-  householdId?: Types.ObjectId;
-  legacyHouseholdId?: string;
+  /**
+   * Empty unless the submission disagreed with the stored contact.
+   *
+   * ⚠ No `householdId` / `legacyHouseholdId` any more (PAC-91 §5). A contact
+   * can belong to several households, so "the contact's household" is not a
+   * field to carry — `ResolveHouseholdStep` reads the memberships and says what
+   * it does when there is more than one.
+   */
+  conflicts?: ContactFieldConflict[];
+}
+
+/** A resolved additional member, with the role *this household* knows them by. */
+export interface IntakeMemberContact {
+  contactId: Types.ObjectId;
+  role: HouseholdMemberRole;
 }
 
 export interface ResolvedHousehold {
@@ -124,6 +174,12 @@ export interface IntakeOutcome {
   leadIsNew: boolean;
   contactIsNew: boolean;
   householdIsNew: boolean;
+  /**
+   * Contact details the submission disagreed with, written to the lead's
+   * timeline after the transaction commits. Absent on a token replay, which
+   * short-circuits before any contact is resolved.
+   */
+  contactConflicts?: ContactFieldConflict[];
 }
 
 /**

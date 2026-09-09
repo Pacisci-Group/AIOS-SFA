@@ -1,0 +1,68 @@
+meta {
+  name: Get Email Settings
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/agency/email
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("states the address mail actually goes out as", function () {
+    // The most important field on this screen — "pending" and "verified" look
+    // identical in a form.
+    expect(res.getBody().effectiveFrom).to.be.a("string").and.not.be.empty;
+  });
+
+  test("defaults to the platform sender", function () {
+    expect(res.getBody().sendingStatus).to.equal("platform");
+  });
+}
+
+docs {
+  # GET /agency/email
+
+  How the agency's outbound email is addressed.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:email:read`.
+  Separate from `agency:branding:*` and `agency:domains:*` because the blast
+  radius differs: a bad logo is cosmetic, a bad sender address stops every
+  invite arriving.
+
+  **Response `200`**
+  ```json
+  {
+    "fromName": "Texas Holdings",
+    "fromLocalPart": "hello",
+    "replyTo": "service@texasholdings.com",
+    "sendingDomain": null,
+    "sendingStatus": "platform",
+    "verifiedAt": null,
+    "lastError": null,
+    "effectiveFrom": "\"Texas Holdings\" <notifications@smithfamily.agency>",
+    "dnsRecords": null
+  }
+  ```
+
+  ## `effectiveFrom` is computed, not stored
+  It is built with `buildFromHeader` in `common/mail/sender-address.ts` — the
+  **same** pure helper the worker uses to build the real header. That shared
+  helper is the point: it makes it impossible for this screen to display an
+  address that nothing sends from.
+
+  `sendingStatus` values: `platform` (the default — our domain, their name),
+  `pending`, `verified`, `failed`.
+
+  **Errors**
+  - `403` — caller lacks `agency:email:read`.
+}

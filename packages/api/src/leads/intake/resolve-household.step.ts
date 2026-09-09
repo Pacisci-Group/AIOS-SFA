@@ -1,22 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { resolveHouseholdAddress } from '../../common/address/household-address';
 import { SequenceService } from '../../common/mongo/sequence.service';
-import {
-  Contact,
-  ContactDocument,
-} from '../../contacts/schemas/contact.schema';
+import { HouseholdMembersService } from '../../households/household-members.service';
 import { allocateHouseholdRef } from '../../households/household-ref';
 import {
   Household,
   HouseholdDocument,
 } from '../../households/schemas/household.schema';
-import {
-  buildAddressKey,
-  normalizeEmail,
-  normalizeName,
-  normalizePhone,
-} from './intake.normalize';
+import { AmbiguousHouseholdException } from './ambiguous-household.exception';
+import { buildAddressKey, normalizeName } from './intake.normalize';
 import {
   IntakeInput,
   ResolvedContact,
@@ -42,14 +36,29 @@ import {
  *
  * {@link pin} is the one exception, and it is not an inference at all: the
  * authenticated caller names a household they already have on screen.
+ *
+ * ── Derivation reads memberships, and refuses to guess (PAC-91 §5) ──────────
+ * This step used to read `contact.householdId` — one link per person, holding
+ * whichever household was linked *last*. Under the owner's ground truth a
+ * contact can belong to several, so that field was answering a question it
+ * could not answer, arbitrarily and silently. Now:
+ *
+ * - no membership → create a household, as before;
+ * - exactly one → that one;
+ * - several → {@link AmbiguousHouseholdException}, carrying the candidates so
+ *   the form can ask. Choosing is the caller's job; the one thing this step
+ *   must not do is pick.
+ *
+ * The legacy `legacyHouseholdId` self-heal that used to sit here is gone with
+ * the field: the PAC-91 §8 backfill resolved those links into real refs, and
+ * the seed migration turned every one of them into a membership.
  */
 @Injectable()
 export class ResolveHouseholdStep {
   constructor(
     @InjectModel(Household.name)
     private readonly householdModel: Model<HouseholdDocument>,
-    @InjectModel(Contact.name)
-    private readonly contactModel: Model<ContactDocument>,
+    private readonly memberships: HouseholdMembersService,
     private readonly sequences: SequenceService,
   ) {}
 
@@ -96,44 +105,50 @@ export class ResolveHouseholdStep {
   }
 
   /**
-   * Probe order: the real ObjectId ref, then the legacy SmartSuite id.
+   * The one household this contact currently belongs to, or `null` to create.
    *
-   * The second hop is what makes migrated data work. Migrated contacts carry
-   * `legacyHouseholdId` (a SmartSuite string) and no `householdId`, so without
-   * it every returning legacy client would get a brand-new household. Finding
-   * one backfills the ref, so each record self-heals the first time it is
-   * touched and the second lookup is never needed again.
+   * Throws rather than choosing when there are several — see the class
+   * docblock. The households are re-read here (rather than trusting the
+   * membership rows alone) so the chooser can show a name and an address, and
+   * so a membership pointing at a household outside the agency, or at one that
+   * has since been removed, resolves to "no household" instead of a dead ref.
    */
   private async findExisting(
     contact: ResolvedContact,
     deps: StepDeps,
   ): Promise<HouseholdDocument | null> {
-    if (contact.householdId) {
-      const byId = await this.householdModel
-        .findOne({ _id: contact.householdId, agencyId: deps.ctx.agencyId })
-        .session(deps.session);
-      if (byId) return byId;
-    }
+    const memberships = await this.memberships.listByContact(
+      deps.ctx.agencyId,
+      contact.contactId,
+      { session: deps.session },
+    );
+    if (!memberships.length) return null;
 
-    if (contact.legacyHouseholdId) {
-      const byLegacy = await this.householdModel
-        .findOne({
-          agencyId: deps.ctx.agencyId,
-          legacySmartSuiteId: contact.legacyHouseholdId,
-        })
-        .session(deps.session);
+    const households = await this.householdModel
+      .find({
+        _id: { $in: memberships.map((membership) => membership.householdId) },
+        agencyId: deps.ctx.agencyId,
+      })
+      .session(deps.session);
 
-      if (byLegacy) {
-        await this.contactModel.updateOne(
-          { _id: contact.contactId },
-          { $set: { householdId: byLegacy._id } },
-          sessionOptions(deps.session),
-        );
-        return byLegacy;
-      }
-    }
+    if (households.length === 0) return null;
+    if (households.length === 1) return households[0];
 
-    return null;
+    throw new AmbiguousHouseholdException(
+      contact.contactId.toString(),
+      households.map((household) => ({
+        id: household._id.toString(),
+        reference: household.householdRef ?? null,
+        name: household.name ?? null,
+        // Coerced here, as everywhere else: `propertyAddress` is a loose
+        // `Record<string, unknown>` whose keys differ per writer.
+        address: resolveHouseholdAddress(
+          null,
+          household.propertyAddress,
+          household.mailingAddress,
+        ),
+      })),
+    );
   }
 
   private async create(
@@ -142,9 +157,6 @@ export class ResolveHouseholdStep {
     deps: StepDeps,
   ): Promise<ResolvedHousehold> {
     const lastName = normalizeName(input.primaryContact.lastName);
-    const firstName = normalizeName(input.primaryContact.firstName);
-    const email = normalizeEmail(input.primaryContact.email);
-    const phone = normalizePhone(input.primaryContact.phone);
     const addressKey = buildAddressKey(
       input.address?.street,
       input.address?.zip,
@@ -169,9 +181,15 @@ export class ResolveHouseholdStep {
           // different thing entirely and is captured later, on the quote.
           propertyAddress: this.toAddressObject(input),
           addressKey: addressKey ?? undefined,
-          primaryContactName: `${firstName} ${lastName}`.trim(),
-          primaryEmails: email ? [email] : [],
-          primaryPhones: phone ? [phone] : [],
+          /*
+           * No `primaryContactName` / `primaryEmails` / `primaryPhones`
+           * (PAC-91 §4). Intake was the only writer of those three, which is
+           * why every household it did *not* create rendered an em dash for
+           * them, and nothing kept them in step with the contact afterwards.
+           * `primaryContactId` is the whole of the fact now, and every reader
+           * follows it. The roster is written by `LinkEntitiesStep` as
+           * memberships (PAC-91 §5), not as an array here.
+           */
           primaryContactId: contact.contactId,
           totalActivePolicies: 0,
           isTestRecord: false,

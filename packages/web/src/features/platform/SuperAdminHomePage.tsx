@@ -21,8 +21,8 @@ export default function SuperAdminHomePage() {
           Platform operations
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Tools that sit above the tenant boundary. Only Add Mailers is
-          available in this build.
+          Tools that sit above the tenant boundary. Greyed-out areas are not
+          built yet.
         </p>
       </div>
 

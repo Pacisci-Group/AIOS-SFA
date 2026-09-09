@@ -1,0 +1,35 @@
+meta {
+  name: List Unlinked (Missing Kind)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/clients/unlinked
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("400s without a kind", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # GET /clients/unlinked — no `kind`
+
+  The negative case that documents why `kind` has no default.
+
+  The three lists return three different row shapes, so there is no answer that
+  is right for a caller who did not say which one they want. Defaulting to
+  `policies` would hand a client the wrong rows silently; a **400** says what is
+  missing. A caller who genuinely wants "all of it at once" is asking for
+  `GET /clients/unlinked/counts`.
+
+  An unknown `kind` (`?kind=leads`) fails the same way, from the same `z.enum`.
+}

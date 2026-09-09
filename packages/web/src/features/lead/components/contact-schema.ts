@@ -30,6 +30,23 @@ export const contactFormSchema = z.object({
     z.string().trim().min(10, "Enter a full phone number").max(20),
     z.literal(""),
   ]),
+  /**
+   * Date of death — `""` when the person is alive (PAC-91 §7).
+   *
+   * A future date is always a typo, the same guard the form puts on a date of
+   * birth. Nothing stops it being cleared: an erroneously recorded death has to
+   * be undoable, which is half the reason this is a date rather than a delete.
+   */
+  deceasedAt: z.union([
+    z
+      .string()
+      .trim()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+      .refine((value) => value <= new Date().toISOString().slice(0, 10), {
+        message: "Date of death can't be in the future",
+      }),
+    z.literal(""),
+  ]),
 });
 
 export type ContactFormValues = z.infer<typeof contactFormSchema>;
@@ -40,8 +57,15 @@ function orNull(value: string): string | null {
   return trimmed ? trimmed : null;
 }
 
+/**
+ * @param succession how to resolve the household this contact leads, when the
+ *   edit is marking them deceased (PAC-91 §7). Omitted on a first attempt —
+ *   the API answers with the eligible members if it needs one, so the form only
+ *   asks the question when there is really a question to ask.
+ */
 export function toUpdateContactInput(
   values: ContactFormValues,
+  succession?: { successorContactId?: string; allowNoPrimary?: boolean },
 ): UpdateContactInput {
   return {
     firstName: values.firstName.trim(),
@@ -49,5 +73,10 @@ export function toUpdateContactInput(
     dateOfBirth: orNull(values.dateOfBirth),
     email: orNull(values.email),
     phone: orNull(values.phone),
+    deceasedAt: orNull(values.deceasedAt),
+    ...(succession?.successorContactId
+      ? { successorContactId: succession.successorContactId }
+      : {}),
+    ...(succession?.allowNoPrimary ? { allowNoPrimary: true } : {}),
   };
 }

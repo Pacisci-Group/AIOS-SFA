@@ -11,6 +11,7 @@ import type {
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { AuditGenerationService } from '../audit-generation/audit-generation.service';
+import { contactDisplayName } from '../contacts/contact-details';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CrmAssignmentService } from '../crm-rotations/crm-assignment.service';
@@ -22,6 +23,10 @@ import {
   QuoteRecapDocument,
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { StorageService } from '../storage/storage.service';
+import {
+  HouseholdMembersService,
+  rolesByContact,
+} from '../households/household-members.service';
 import type { HouseholdDocument } from '../households/schemas/household.schema';
 import type { LeadDocument } from '../leads/schemas/lead.schema';
 import type {
@@ -55,6 +60,7 @@ export class SoldDealsService {
     private readonly auditGeneration: AuditGenerationService,
     private readonly crmAssignment: CrmAssignmentService,
     private readonly leadTickets: LeadTicketsService,
+    private readonly memberships: HouseholdMembersService,
   ) {}
 
   /**
@@ -272,7 +278,7 @@ export class SoldDealsService {
         ? new Types.ObjectId(dto.quoteRecapId)
         : undefined,
       primaryContactId: household.primaryContactId,
-      clientName: this.clientName(lead, household),
+      clientName: await this.clientName(lead, household),
       submissionToken: token,
     };
 
@@ -398,26 +404,44 @@ export class SoldDealsService {
     );
   }
 
-  /** Household members the producer can name as defensive drivers. */
+  /**
+   * Household members the producer can name as defensive drivers.
+   *
+   * The roster comes from `householdMembers` (PAC-91 §5), which is also where
+   * the role comes from — a person who is a Named Insured at home may be listed
+   * here only as a Driver, and that is exactly the distinction this picker
+   * exists to show.
+   *
+   * Deceased members are excluded (PAC-91 §7). This picker names who a **new**
+   * policy's discount applies to, which is as forward-looking as it gets — a
+   * defensive-driver certificate for somebody who has died is not a discount,
+   * it is a compliance finding. They stay on the deals already sold; they are
+   * simply not offered for the next one.
+   */
   private async householdContacts(
     household: HouseholdDocument,
   ): Promise<SoldHouseholdContact[]> {
-    const ids = [
-      household.primaryContactId,
-      ...(household.memberContactIds ?? []),
-    ].filter((id): id is Types.ObjectId => Boolean(id));
+    const memberships = await this.memberships.listByHousehold(
+      household.agencyId,
+      household._id,
+    );
+    if (!memberships.length) return [];
 
-    if (!ids.length) return [];
-
+    const roles = rolesByContact(memberships);
     const contacts = await this.contactModel
-      .find({ _id: { $in: ids }, agencyId: household.agencyId })
-      .select('firstName lastName roleInHousehold')
+      .find({
+        _id: { $in: memberships.map((membership) => membership.contactId) },
+        agencyId: household.agencyId,
+        // `null` also matches an absent field, so every living member qualifies
+        // without a backfill (PAC-91 §7).
+        deceasedAt: null,
+      })
+      .select('firstName lastName')
       .lean<
         Array<{
           _id: Types.ObjectId;
           firstName?: string;
           lastName?: string;
-          roleInHousehold?: string;
         }>
       >();
 
@@ -425,7 +449,7 @@ export class SoldDealsService {
       id: contact._id.toString(),
       firstName: contact.firstName ?? '',
       lastName: contact.lastName ?? '',
-      roleInHousehold: contact.roleInHousehold,
+      roleInHousehold: roles.get(contact._id.toString()) ?? undefined,
     }));
   }
 
@@ -439,13 +463,29 @@ export class SoldDealsService {
   /**
    * The deal's client name, which the hand-off board renders directly — a deal
    * without one shows every generated audit item as "Unknown Client".
+   *
+   * Async since PAC-91 §4: the household no longer stores `primaryContactName`,
+   * so the primary contact is read through `primaryContactId`. One query, on a
+   * write path that already runs several — and the name is now right for a
+   * migrated household, where the stored copy was always empty and the deal
+   * therefore fell through to the household's own name.
    */
-  private clientName(
+  private async clientName(
     lead: LeadDocument,
     household: HouseholdDocument,
-  ): string | undefined {
+  ): Promise<string | undefined> {
+    const primary = household.primaryContactId
+      ? await this.contactModel
+          .findOne({
+            _id: household.primaryContactId,
+            agencyId: household.agencyId,
+          })
+          .select('firstName lastName')
+          .lean<{ firstName?: string; lastName?: string } | null>()
+      : null;
+
     return (
-      household.primaryContactName?.trim() ||
+      contactDisplayName(primary)?.trim() ||
       household.name?.trim() ||
       this.leadName(lead)
     );

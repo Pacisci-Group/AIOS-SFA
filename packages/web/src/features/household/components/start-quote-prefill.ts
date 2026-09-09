@@ -24,15 +24,6 @@ function toMemberRole(
   return normalizeHouseholdRole(role) ?? "Driver";
 }
 
-/** Read one address part off the household's loosely-typed stored address. */
-function addressPart(
-  address: Record<string, unknown> | null,
-  key: string,
-): string {
-  const value = address?.[key];
-  return typeof value === "string" ? value : "";
-}
-
 /** ISO timestamp or date → the `YYYY-MM-DD` the form's date inputs want. */
 function toDateInput(iso: string | null): string {
   if (!iso) return "";
@@ -64,12 +55,34 @@ export function leadIntakeFromHousehold(
   household: HouseholdView,
 ): LeadIntakeFormValues {
   const blank = emptyLeadIntake();
+  /*
+   * Deceased members are excluded from every part of this (PAC-91 §7).
+   *
+   * A quote is as forward-looking as this app gets: prefilling a dead person as
+   * the lead's primary contact would file the new enquiry against them, and
+   * seeding them as a driver would put them on a policy. They keep appearing on
+   * the household page and on the policies they are already on — that is the
+   * history §7 preserves — but they are not carried into a new quote.
+   *
+   * When the primary has died the fallback is the first living member, and the
+   * producer sees a form seeded with a real person rather than one they must
+   * remember to correct.
+   */
+  const living = household.contacts.filter((contact) => !contact.deceasedAt);
   const primary =
-    household.contacts.find((contact) => contact.isPrimary) ??
-    household.contacts[0];
+    living.find((contact) => contact.isPrimary) ?? living[0];
 
+  /*
+   * The household-level fields are the *primary contact's*, resolved
+   * server-side from `primaryContactId` (PAC-91 §4). They are usable here only
+   * when the person being seeded IS that primary — otherwise they would put the
+   * primary's name, phone and email onto a different member, which is exactly
+   * what happens when the primary has died and the fallback picks somebody
+   * else.
+   */
+  const fromHousehold = primary?.isPrimary ? household : null;
   const [fallbackFirst = "", ...fallbackRest] = (
-    household.primaryContactName ?? ""
+    fromHousehold?.primaryContactName ?? ""
   ).split(" ");
 
   return {
@@ -78,22 +91,22 @@ export function leadIntakeFromHousehold(
       firstName: primary?.firstName ?? fallbackFirst,
       lastName: primary?.lastName ?? fallbackRest.join(" "),
       dateOfBirth: toDateInput(primary?.dateOfBirth ?? null),
-      // The contact's own details first, falling back to the household-level
-      // ones the migration wrote — a migrated household often carries the phone
-      // and email while its contact rows do not.
-      phone: primary?.phones[0] ?? household.primaryPhones[0] ?? "",
-      email: primary?.emails[0] ?? household.primaryEmails[0] ?? "",
+      phone: primary?.phone ?? fromHousehold?.primaryPhone ?? "",
+      email: primary?.email ?? fromHousehold?.primaryEmail ?? "",
     },
+    // `household.address`, not the raw `propertyAddress`: the raw object's keys
+    // differ per writer, and reading `street` off it prefilled a blank street
+    // for every migrated (`location_address`) and demo-seeded (`line1`)
+    // household. The API coerces it once now.
     address: {
-      street: addressPart(household.propertyAddress, "street"),
-      city: addressPart(household.propertyAddress, "city"),
+      street: household.address?.street ?? "",
+      city: household.address?.city ?? "",
       // Keep the form's own default when the household has no state on file,
       // rather than replacing a valid answer with an empty required field.
-      state:
-        addressPart(household.propertyAddress, "state") || blank.address.state,
-      zip: addressPart(household.propertyAddress, "zip"),
+      state: household.address?.state || blank.address.state,
+      zip: household.address?.zip ?? "",
     },
-    members: household.contacts
+    members: living
       .filter((contact) => contact.id !== primary?.id)
       // A member row needs both names to validate. A half-named contact would
       // seed a row that is invalid the moment it appears, blocking a form the

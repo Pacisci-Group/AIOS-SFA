@@ -1,0 +1,100 @@
+meta {
+  name: Email Output
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/email
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "recipients": ["print@vendor.invalid"]
+  }
+}
+
+tests {
+  test("returns 202 Accepted", function () {
+    // 202, not 200: the send is a queued Inngest job. A 200 would promise the
+    // mail had left, which this endpoint cannot know.
+    expect(res.getStatus()).to.equal(202);
+  });
+
+  test("reports how many recipients were queued", function () {
+    expect(res.getBody().queued).to.equal(1);
+  });
+}
+
+docs {
+  # POST /platform/mailer-campaigns/:campaignId/email — re-send the output
+
+  Mails the completion notice for an **imported** campaign: a time-limited
+  presigned download link for the print file, plus a link back to this campaign
+  page.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Why this exists when the commit already sends one
+
+  The commit emits the same event as its last step, so the happy path needs no
+  call here at all. This is the recovery: the printer never got it, the address
+  was wrong, or `settings.outputRecipients` was empty at commit time — as it is
+  in this chain, which is why the request passes a list explicitly.
+
+  Both paths emit **one** event type into the same worker function, so a re-send
+  is not a second implementation of the mail.
+
+  ## Request
+  ```json
+  { "recipients": ["print@vendor.example"] }
+  ```
+
+  ⚠ The address this request actually sends is `print@vendor.invalid` — a
+  reserved TLD that can never be delivered — because with `RESEND_API_KEY` set
+  locally this queues a **real** outbound send, exactly as
+  `Platform Agencies › Onboard Agency` does with `ada@acme.test`. Keep any
+  address you add here on a reserved domain.
+
+  `recipients` is optional: omit it and the campaign's stored
+  `settings.outputRecipients` are used. At most 20 addresses, each validated as
+  an email.
+
+  ## Response `202`
+  ```json
+  { "queued": 1 }
+  ```
+
+  Accepted, not sent. The worker signs a fresh download URL per recipient at
+  send time — **never** at commit time and never stored on the campaign, because
+  a presigned URL is a bearer capability with an expiry, and one minted hours
+  earlier would already be dead.
+
+  ## Duplicate sends
+  The provider idempotency key is
+  `mailer-campaign:<campaignId>:<commitAttempt>:<recipient>`, so calling this
+  twice with the same address for the same run delivers one email, while adding
+  a **new** address to the list still delivers to that address. That grain is
+  deliberate — a coarser key would swallow exactly the recovery this endpoint
+  is for.
+
+  ## Errors
+  - `400 Bad Request` — no recipients anywhere (empty stored list and none
+    passed), a malformed address, or more than 20.
+  - `401` / `403` — missing token, or missing `platform:mailers:write`.
+  - `404 Not Found` — no such campaign.
+  - `409 Conflict` — the campaign has not imported, so there is no output file
+    to link to.
+}

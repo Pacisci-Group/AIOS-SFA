@@ -32,6 +32,32 @@ export const HOUSEHOLD_FIELDS = {
   normalizedPrimaryName: 'sbdc50a856',
   propertyAddress: 's3c3e21ee2',
   mailingAddress: 's43e6ec449',
+  /*
+   * The household side of the contact link — the *write* side (PAC-91 §8).
+   *
+   * Both were missing from this map until PAC-91, so `migrateHouseholds` had
+   * nothing to write `primaryContactId` / `memberContactIds` from and every
+   * migrated household came out with neither, by construction. Everything the
+   * agency linked in the SmartSuite UI or by bulk import lives here and only
+   * here; the contact's own `household` link (`s66cf9402f`) was written solely
+   * by the legacy intake form.
+   *
+   * Read by the `Household links` pass, not by `migrateHouseholds`: contacts are
+   * imported *after* households, so their ObjectIds do not exist yet.
+   */
+  primaryContact: 'sdb36b3217',
+  householdMembers: 'suxra4lb',
+  /**
+   * SmartSuite's lookup of the primary contact's email and phone.
+   *
+   * ⚠ Deliberately **not imported** (PAC-91 §4). They are a lookup on the
+   * SmartSuite side and were a denormalised copy on ours, which nothing kept in
+   * step: every reader that consulted the copy first rendered an em dash for
+   * migrated households, and a promotion after a death would have left a dead
+   * person's phone number on the record. The ids stay documented here so the
+   * next person to open the Households table knows they were considered and
+   * why the answer was no.
+   */
   primaryEmail: 'se05e29831',
   primaryPhone: 'sugaqz8o',
   assignedCrm: 'se5d1492f3',
@@ -46,11 +72,25 @@ export const LEAD_FIELDS = {
   status: 'status',
   firstName: 'first_name',
   lastName: 'last_name',
+  /**
+   * The Leads table's own email and phone columns.
+   *
+   * ⚠ Deliberately **not imported** (PAC-91 §2). They are empty on most legacy
+   * rows — the real values live on the linked contact — and importing them into
+   * a copy on the lead is exactly why most migrated leads showed a blank Phone
+   * and Email column on the Leads list. Read the primary contact instead.
+   */
   email: 'email',
   phone: 'phone',
   quoteControlNumber: 's120960602',
   producer: 's2431092ba',
   household: 's4f5f73a22',
+  /**
+   * The lead's contact links (PAC-91 §8). `householdMembers` is a *single* link
+   * despite the plural name — SmartSuite's own field config, not a mistake here.
+   */
+  primaryInsured: 's8754c9e3b',
+  householdMembers: 'sa3501b7c2',
 } as const;
 
 export const QUOTE_RECAP_FIELDS = {
@@ -113,7 +153,26 @@ export const CONTACT_FIELDS = {
   roleInHousehold: 'se79ae4f7f',
   isPrimary: 's413f031d4',
   notes: 's39661d2f6',
+  /**
+   * The contact's own, writable single link to a household.
+   *
+   * ⚠ Legacy set this **only** from the intake form (`SFA/lib/intake/
+   * linkEntities.ts`). Anything linked from the household side — the SmartSuite
+   * UI, a bulk import — leaves it empty, which is why only 1,060 of 3,064
+   * migrated contacts carried a `legacyHouseholdId` (PAC-91 §8). Never resolve
+   * a contact's household from this field alone; use `resolveContactHousehold`,
+   * which mirrors legacy's own fallback order through the two back-links below.
+   */
   household: 's66cf9402f',
+  /**
+   * Back-links, mirroring `HOUSEHOLD_FIELDS.primaryContact` /
+   * `.householdMembers`. SmartSuite populates them server-side whenever the
+   * link is made from the household side, so between them they carry the
+   * memberships the writable field above never saw. Both are multi-valued: a
+   * contact can appear under several households.
+   */
+  householdPrimaryBacklink: 'sljrnhhg',
+  householdMemberBacklink: 'su8pm1bp',
 } as const;
 
 export const POLICY_FIELDS = {
@@ -148,6 +207,20 @@ export const SERVICE_TICKET_FIELDS = {
   clientName: 'setuud00',
   crmName: 's43ee2ba8f',
   firstCreated: 'first_created',
+  /*
+   * The four below were not imported by the first migration, which wrote a
+   * thin mirror of the table. They are what turns a row into a ticket a CSR
+   * can act on: the body text becomes the opening timeline entry, the system
+   * `last_updated` becomes `lastActivityAt`, and `Normalized Created By` is the
+   * creator's name (`crmName` above is the *assigned* CRM, a different person
+   * on 2 of 286 rows).
+   */
+  lastUpdated: 'last_updated',
+  /** SmartDoc richtext — `{ data, html, preview }`; see `toRichText`. */
+  notes: 'notes',
+  /** "Ticket Notes", a plain multi-line string alongside the richtext one. */
+  ticketNotes: 'sed733068f',
+  createdByName: 's6e4995d56',
 } as const;
 
 export const DEAL_AUDIT_FIELDS = {

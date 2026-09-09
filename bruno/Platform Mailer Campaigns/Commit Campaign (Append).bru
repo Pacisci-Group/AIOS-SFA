@@ -1,0 +1,103 @@
+meta {
+  name: Commit Campaign (Append)
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/commit
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "mode": "append"
+  }
+}
+
+tests {
+  test("returns 202 Accepted", function () {
+    // 202, not 200: the gates passed and the work is queued, not done.
+    expect(res.getStatus()).to.equal(202);
+  });
+
+  test("moves to processing under a compare-and-set", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("processing");
+    expect(body.commitMode).to.equal("append");
+  });
+
+  test("records who started the run", function () {
+    expect(res.getBody().requestedBy).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /platform/mailer-campaigns/:campaignId/commit — run it for real
+
+  The only call in this feature that writes mailers. It **re-verifies every
+  number the operator was shown** rather than trusting the request, then flips
+  the status through a compare-and-set and queues the commit job.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## The gates, in the order they run
+
+  1. **Status is `previewed`** — otherwise `409`. Committing something still
+     parsing would write from a file nobody has seen the shape of.
+  2. **`preview.assignment.unmatched` is empty** — otherwise `422` carrying one
+     actionable message per code. Filing one agency's prospects under another,
+     or dropping them silently, are both worse than refusing.
+  3. **The assignment is resolved again, now.** An appointment can be revoked
+     between the operator pressing Commit and this call; `422` if it was.
+  4. *(overwrite only)* **`replaceCampaignIds ⊆ preview.existingCampaigns`** —
+     otherwise `400`.
+  5. *(overwrite only)* **A live re-count of the replaced campaigns' mailers
+     must equal `preview.overlap.replacedRecordCount`** — otherwise `409`
+     naming both numbers.
+  6. *(overwrite only)* **`expectedDeleteCount` must equal
+     `preview.overlap.deleteCountIfOverwrite`** — otherwise `409` with the
+     fresh number. Echoed back rather than recomputed, so a count that moved is
+     something the operator has to look at, never a delete they did not agree to.
+  7. **`findOneAndUpdate({status: 'previewed'})`** — two operators looking at
+     the same previewed page cannot both start the run; the loser gets a `409`.
+
+  ## Body
+  ```json
+  { "mode": "append" }
+  ```
+  ```json
+  { "mode": "overwrite", "replaceCampaignIds": ["…"], "expectedDeleteCount": 12 }
+  ```
+
+  **Append** upserts on the control-number key: a row already held by an earlier
+  campaign *moves* to this one, the earlier campaign's live count drops, and
+  `Lead.mailer.campaignId` — stamped at link time — is never rewritten, so
+  attribution stays with the campaign that actually produced the lead.
+
+  **Overwrite** imports *first* and deletes the leftovers afterwards. Rows in
+  both files keep their `_id`, so a prospect still being mailed never has a
+  dangling lead link; only rows the new file does not contain are deleted, and
+  their leads have `mailer.mailerId` cleared. The replaced campaign becomes
+  `superseded` rather than being removed — leads still point at it.
+
+  ## Response `202`
+  The campaign at `status: "processing"`. Poll `GET …/:campaignId` until it
+  reaches `imported` or `failed`.
+
+  ## Errors
+  - `400` / `409` / `422` — the gates above.
+  - `401` / `403` — missing token, or missing `platform:mailers:write`.
+  - `404 Not Found` — no such campaign.
+}

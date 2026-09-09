@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { ONBOARDING_STEP_ANCHORS, ONBOARDING_STEP_KEYS } from '@sfa/shared';
 import type { OnboardingStepAnchor, OnboardingStepKey } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type OnboardingStepDefinitionDocument =
   HydratedDocument<OnboardingStepDefinitionRecord>;
@@ -19,7 +20,7 @@ export type OnboardingStepDefinitionDocument =
  */
 @Schema({ timestamps: true, collection: 'onboardingStepDefinitions' })
 export class OnboardingStepDefinitionRecord {
-  @Prop({ type: Types.ObjectId, ref: 'Agency', required: true, index: true })
+  @Prop({ type: ObjectIdType, ref: 'Agency', required: true, index: true })
   agencyId: Types.ObjectId;
 
   @Prop({ type: String, enum: ONBOARDING_STEP_KEYS, required: true })

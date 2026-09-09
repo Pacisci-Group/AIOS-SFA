@@ -1,0 +1,67 @@
+meta {
+  name: Update My Profile
+  type: http
+  seq: 2
+}
+
+patch {
+  url: {{baseUrl}}/me/profile
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{profileAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "firstName": "Pat",
+    "lastName": "Producer"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the auth-user blob with the new name", function () {
+    const body = res.getBody();
+    expect(body.firstName).to.equal("Pat");
+    expect(body.lastName).to.equal("Producer");
+    expect(body.name).to.equal("Pat Producer");
+    // Same shape as GET /auth/me — the client overwrites its stored copy.
+    expect(body).to.have.property("permissions");
+    expect(body).to.have.property("avatarUrl");
+  });
+}
+
+docs {
+  # PATCH /me/profile — edit own name (PAC-81)
+
+  **Module:** none (`@SkipTenant`, `@SkipBranch`, `@SkipModule`).
+  **Permission:** none beyond a valid access token — the route only ever
+  touches the caller's own document (`sub` from the JWT).
+
+  **Body** — both fields `clearable`: `null` (or an emptied string) removes
+  the value, omitting the key leaves it alone.
+
+  | field     | type            | rules             |
+  |-----------|-----------------|-------------------|
+  | firstName | string \| null  | trimmed, ≤ 60     |
+  | lastName  | string \| null  | trimmed, ≤ 60     |
+
+  **Response `200`** — the full auth-user blob, exactly as `GET /auth/me`
+  returns it, so the client can replace its stored copy in one step.
+
+  **Errors** — `400` validation · `401` no/expired token or deactivated user.
+
+  > Email is deliberately **not** editable here — it is the login identifier.
+  > The values in this request match the demo seed, so a collection run leaves
+  > the data as it found it.
+}

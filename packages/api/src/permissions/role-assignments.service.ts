@@ -21,6 +21,13 @@ import {
 import { UserPermission } from './schemas/user-permission.schema';
 import { UserRole } from './schemas/user-role.schema';
 
+/** A role as a list view shows it: id for wiring, name and slug for display. */
+export interface AssignedRole {
+  _id: Types.ObjectId;
+  name: string;
+  slug: string;
+}
+
 /**
  * The **only** writer of `userRoles`, `rolePermissions` and `userPermissions`.
  *
@@ -276,6 +283,55 @@ export class RoleAssignmentsService {
     return rows.map((row) => row.roleId);
   }
 
+  /** The users holding a role. The inverse of {@link userRoleIds}. */
+  async roleUserIds(
+    roleId: string | Types.ObjectId,
+  ): Promise<Types.ObjectId[]> {
+    const rows = await this.userRoleModel
+      .find({ roleId: new Types.ObjectId(roleId.toString()) })
+      .select({ userId: 1 })
+      .lean();
+    return rows.map((row) => row.userId);
+  }
+
+  /**
+   * The roles held by each of several users, for a list view.
+   *
+   * Batched over all the users at once — the alternative, a lookup per row, is
+   * how a 15-person agency turns one query into sixteen. Users with no role are
+   * simply absent from the map. Shared by the agency user list and the platform
+   * user directory (PAC-70), which is why it lives here rather than on
+   * `UsersService`.
+   */
+  async rolesForUsers(
+    userIds: Types.ObjectId[],
+  ): Promise<Map<string, AssignedRole[]>> {
+    const byUser = new Map<string, AssignedRole[]>();
+    if (!userIds.length) return byUser;
+
+    const links = await this.userRoleModel
+      .find({ userId: { $in: userIds } })
+      .select({ userId: 1, roleId: 1 })
+      .lean();
+    if (!links.length) return byUser;
+
+    const roles = await this.roleModel
+      .find({ _id: { $in: links.map((link) => link.roleId) } })
+      .select({ name: 1, slug: 1 })
+      .lean();
+    const roleById = new Map(roles.map((role) => [role._id.toString(), role]));
+
+    for (const link of links) {
+      const role = roleById.get(link.roleId.toString());
+      if (!role) continue;
+      const key = link.userId.toString();
+      const list = byUser.get(key) ?? [];
+      list.push({ _id: role._id, name: role.name, slug: role.slug });
+      byUser.set(key, list);
+    }
+    return byUser;
+  }
+
   /**
    * Replace a user's per-permission overrides.
    *
@@ -368,5 +424,26 @@ export class RoleAssignmentsService {
     const user = new Types.ObjectId(userId.toString());
     await this.userRoleModel.deleteMany({ userId: user });
     await this.userPermissionModel.deleteMany({ userId: user });
+  }
+
+  /**
+   * Remove every assignment belonging to an agency.
+   *
+   * Used by one caller: `AgencyProvisioningService` rolling back a failed
+   * onboarding (PAC-69). It is here rather than as a `deleteMany` in that
+   * service because this class is the **only** writer of these three
+   * collections — a rule that exists so cache invalidation, owner protection
+   * and catalog validation cannot be bypassed, and that a rollback path is
+   * exactly as able to break as a happy path.
+   *
+   * ⚠ Only safe on an agency being destroyed. It does not invalidate cached
+   * access contexts, because the only agency this is ever called for is one
+   * whose users were created seconds ago and never signed in.
+   */
+  async purgeAgency(agencyId: string | Types.ObjectId): Promise<void> {
+    const agency = new Types.ObjectId(agencyId.toString());
+    await this.rolePermissionModel.deleteMany({ agencyId: agency });
+    await this.userRoleModel.deleteMany({ agencyId: agency });
+    await this.userPermissionModel.deleteMany({ agencyId: agency });
   }
 }

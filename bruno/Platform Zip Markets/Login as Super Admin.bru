@@ -1,0 +1,47 @@
+meta {
+  name: Login as Super Admin
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{adminEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 200 || res.getStatus() === 201) {
+    bru.setVar("platformAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /auth/login — sign in as the platform super admin (PAC-71)
+
+  This folder logs in for itself rather than relying on **Platform Mailer
+  Campaigns**, which happens to run before it alphabetically. A folder that
+  depends on a token another folder sets is a folder that cannot be run on its
+  own, and the alphabetical accident it leans on is one rename away from
+  breaking.
+
+  - **Module:** none (`@Public()`)
+  - **Permission:** none
+}

@@ -12,9 +12,12 @@ import { Branch } from '../branches/schemas/branch.schema';
 import { scheduleSteps } from '../crm/onboarding/onboarding-scheduling';
 import { Onboarding } from '../crm/schemas/onboarding.schema';
 import { ServiceTicket } from '../crm/schemas/service-ticket.schema';
+import { Contact } from '../contacts/schemas/contact.schema';
+import { HouseholdMember } from '../households/schemas/household-member.schema';
 import { Household } from '../households/schemas/household.schema';
 import { Agency } from '../platform/schemas/agency.schema';
 import { User } from '../users/schemas/user.schema';
+import { seedPrimaryContact } from './seed-primary-contact';
 
 /**
  * Walkthrough fixtures for the onboarding flow.
@@ -112,6 +115,10 @@ async function run() {
   const agencyModel = app.get<Model<Agency>>(getModelToken(Agency.name));
   const branchModel = app.get<Model<Branch>>(getModelToken(Branch.name));
   const userModel = app.get<Model<User>>(getModelToken(User.name));
+  const contactModel = app.get<Model<Contact>>(getModelToken(Contact.name));
+  const memberModel = app.get<Model<HouseholdMember>>(
+    getModelToken(HouseholdMember.name),
+  );
   const householdModel = app.get<Model<Household>>(
     getModelToken(Household.name),
   );
@@ -158,17 +165,26 @@ async function run() {
           ...tenant,
           name: scenario.householdName,
           status: 'Active',
-          primaryContactName: scenario.clientName,
-          primaryEmails: [
-            `${scenario.clientName.split(' ')[0].toLowerCase()}@example.com`,
-          ],
-          primaryPhones: ['(512) 555-0100'],
           assignedCrmId: csr?._id ?? null,
           isTestRecord: true,
         },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
+
+    // The client's name, email and phone live on the contact now (PAC-91 §4).
+    household.primaryContactId = await seedPrimaryContact(
+      contactModel,
+      memberModel,
+      household,
+      `test:onboarding:${scenario.slug}`,
+      {
+        name: scenario.clientName,
+        email: `${scenario.clientName.split(' ')[0].toLowerCase()}@example.com`,
+        phone: '(512) 555-0100',
+      },
+    );
+    await household.save();
 
     // Re-runnable: drop this scenario's previous chain before rebuilding it.
     const previous = await onboardingModel

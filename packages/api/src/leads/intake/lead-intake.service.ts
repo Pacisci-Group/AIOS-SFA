@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { IntakeChannel } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
@@ -12,6 +12,8 @@ import { buildSubmissionToken } from './intake.normalize';
 import {
   IntakeContext,
   IntakeInput,
+  ContactFieldConflict,
+  IntakeMemberContact,
   IntakeOutcome,
   ResolvedContact,
   StepDeps,
@@ -38,6 +40,21 @@ function isDuplicateKeyError(error: unknown): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === DUPLICATE_KEY
   );
+}
+
+/**
+ * Which index a duplicate-key error came from.
+ *
+ * The two unique indexes intake can hit mean completely different things — a
+ * replayed submission (recoverable: re-read and return the winner) versus a
+ * mailer another agency already logged (not recoverable: nothing here may
+ * create a second lead for it). Reading `keyPattern` is how they are told apart;
+ * matching on the message text would break the first time Mongo reworded it.
+ */
+function isMailerLinkConflict(error: unknown): boolean {
+  const keyPattern = (error as { keyPattern?: Record<string, unknown> })
+    ?.keyPattern;
+  return Boolean(keyPattern && 'mailer.mailerId' in keyPattern);
 }
 
 /**
@@ -95,7 +112,6 @@ export class LeadIntakeService {
 
         const contact = await this.contacts.run(
           input.primaryContact,
-          'primary',
           deps,
           pinned?.householdId,
         );
@@ -124,7 +140,7 @@ export class LeadIntakeService {
             householdIsNew: household.isNew,
             leadId: lead.leadId,
             leadIsNew: lead.isNew,
-            memberContactIds: members,
+            members: members.contacts,
           },
           deps,
         );
@@ -138,6 +154,10 @@ export class LeadIntakeService {
           leadIsNew: lead.isNew,
           contactIsNew: contact.isNew,
           householdIsNew: household.isNew,
+          contactConflicts: [
+            ...(contact.conflicts ?? []),
+            ...members.conflicts,
+          ],
         };
       });
 
@@ -145,6 +165,7 @@ export class LeadIntakeService {
       // a timeline entry must not report the whole intake as failed.
       // (Same precedent as DealAuditsService.resolveItem.)
       await this.recordCreatedActivity(ctx, outcome);
+      await this.recordContactConflicts(ctx, outcome);
       return outcome;
     } catch (error) {
       // A concurrent duplicate submit — two in-flight requests with the same
@@ -154,9 +175,20 @@ export class LeadIntakeService {
       // is already aborted by the time we see it. Re-reading here is what makes
       // "a double-submit creates one lead" true under real concurrency rather
       // than only for a sequential retry.
-      if (isDuplicateKeyError(error) && token) {
-        const winner = await this.findByToken(ctx.agencyId, token);
-        if (winner) return winner;
+      if (isDuplicateKeyError(error)) {
+        // One lead per mailer, platform-wide (PAC-71). Another agency won the
+        // race, and there is no lead of ours to return — the token re-read below
+        // would find nothing and the caller would get a raw E11000. 409 with a
+        // message that reveals nothing about who holds it.
+        if (isMailerLinkConflict(error)) {
+          throw new ConflictException(
+            'This mailer has already been logged as a lead.',
+          );
+        }
+        if (token) {
+          const winner = await this.findByToken(ctx.agencyId, token);
+          if (winner) return winner;
+        }
       }
       throw error;
     }
@@ -173,18 +205,25 @@ export class LeadIntakeService {
     input: IntakeInput,
     deps: StepDeps,
     householdId?: Types.ObjectId,
-  ): Promise<Types.ObjectId[]> {
-    const resolved: Types.ObjectId[] = [];
+  ): Promise<{
+    contacts: IntakeMemberContact[];
+    conflicts: ContactFieldConflict[];
+  }> {
+    const contacts: IntakeMemberContact[] = [];
+    const conflicts: ContactFieldConflict[] = [];
     for (const member of input.members) {
       const contact: ResolvedContact = await this.contacts.run(
         member,
-        member.role,
         deps,
         householdId,
       );
-      resolved.push(contact.contactId);
+      // The role travels with the resolved contact rather than onto it: it is
+      // a property of this membership, and the same person may be a Driver
+      // here and a Named Insured at home (PAC-91 §5).
+      contacts.push({ contactId: contact.contactId, role: member.role });
+      conflicts.push(...(contact.conflicts ?? []));
     }
-    return resolved;
+    return { contacts, conflicts };
   }
 
   /**
@@ -247,6 +286,58 @@ export class LeadIntakeService {
     } catch (error) {
       this.logger.error(
         `Failed to record lead_created activity for lead ${outcome.leadId.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /**
+   * Surface a submission that disagreed with a stored contact detail
+   * (PAC-91 §1).
+   *
+   * The submitted value was **not** written — see
+   * `ResolveContactStep.mergeIntoExisting`. This row is the whole of the
+   * disagreement's visibility, so it carries both values in `changes` where a
+   * human can act on them; `summary` stays value-free, like every other row
+   * whose text can reach the Hot Leads card.
+   *
+   * Post-commit and best-effort, on the same precedent as the `lead_created`
+   * row above: the lead is already saved and a failed timeline write must not
+   * report the intake as failed.
+   */
+  private async recordContactConflicts(
+    ctx: IntakeContext,
+    outcome: IntakeOutcome,
+  ): Promise<void> {
+    if (!outcome.contactConflicts?.length) return;
+    const now = new Date();
+    try {
+      await this.activityModel.create(
+        outcome.contactConflicts.map((conflict) => ({
+          agencyId: ctx.agencyId,
+          branchId: ctx.branchId,
+          type: 'contact_conflict',
+          subjectType: 'lead',
+          leadId: outcome.leadId,
+          userId: ctx.actorUserId ?? undefined,
+          occurredAt: now,
+          summary: `Submitted ${conflict.field} differs from the one on file — not applied`,
+          changes: [
+            {
+              field: conflict.field,
+              label: conflict.field === 'email' ? 'Email' : 'Phone',
+              kind: 'text',
+              from: conflict.stored,
+              to: conflict.submitted,
+            },
+          ],
+          source: ctx.channel,
+          isTestRecord: false,
+        })),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to record contact_conflict activity for lead ${outcome.leadId.toString()}`,
         error instanceof Error ? error.stack : String(error),
       );
     }

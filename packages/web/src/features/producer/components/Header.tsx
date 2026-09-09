@@ -76,7 +76,7 @@ export function Header({ range, onRangeChange }: HeaderProps) {
             placeholder="Search leads, clients, or policy types..."
             className="border-border bg-input pl-9 pr-12"
           />
-          <kbd className="absolute top-1/2 right-3 hidden -translate-y-1/2 text-[10px] text-muted-foreground sm:block">
+          <kbd className="absolute top-1/2 right-3 hidden -translate-y-1/2 text-xs text-muted-foreground sm:block">
             ⌘K
           </kbd>
         </div>

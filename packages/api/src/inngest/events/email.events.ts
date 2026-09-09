@@ -57,6 +57,36 @@ const inviteRequestedSchema = z.object({
    */
   inviteUrl: z.string().url(),
   expiresAt: isoDateTime,
+  /**
+   * The agency's white-label identity, for the message masthead.
+   *
+   * **Optional, and it must stay optional.** Per the versioning rule above,
+   * adding an optional field does not mint a `.v2` — which is the point: events
+   * already sitting in the queue when this deploys arrive without it, and the
+   * template falls back to the platform wordmark rather than failing the run.
+   * Making it required would fail every in-flight invite at parse time.
+   *
+   * `logoUrl` is absolute because a mail client fetches it with no session from
+   * an IP we do not control — see `TenantUrlService`.
+   */
+  brand: z
+    .object({
+      name: z.string(),
+      logoUrl: z.string().url().nullable(),
+    })
+    .optional(),
+  /**
+   * Which invite this is, so the template can say the right thing (PAC-69).
+   *
+   * `owner` is an agency's first account, created by a platform operator during
+   * onboarding: nobody at the agency invited them, so the employee copy's
+   * "{inviter} invited you" would name a stranger from another company.
+   *
+   * Optional for the same reason `brand` is — an event queued before this
+   * deployed carries no `kind`, and the template must render it as the employee
+   * invite it was rather than failing the run at parse time.
+   */
+  kind: z.enum(['employee', 'owner']).optional(),
 });
 
 export const inviteRequested = eventType('email/invite.requested.v1', {
@@ -94,7 +124,8 @@ const passwordResetRequestedSchema = z.object({
    */
   agencyName: z.string(),
   /**
-   * Absolute reset URL built from `APP_BASE_URL`.
+   * Absolute reset URL, built on the recipient's own agency host
+   * (`TenantUrlService`) and falling back to `APP_BASE_URL`.
    *
    * ⚠ A **bearer credential**, and a stronger one than `inviteUrl` above: it
    * takes over an account that already exists and has data in it. Never logged

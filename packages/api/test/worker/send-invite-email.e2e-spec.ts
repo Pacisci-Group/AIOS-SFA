@@ -220,9 +220,9 @@ describe('SendInviteEmailFn (e2e)', () => {
     const { step } = inlineStep();
     await fn.handle(inviteEvent(), step);
 
+    // No "on AgencyOps" suffix: the subject is white-labelled, so it names the
+    // agency the invitee is joining and never the platform behind it.
     const row = await messages.findOne({}).lean();
-    expect(row?.subject).toBe(
-      'Dana Owner invited you to Smith Family Agency on AgencyOps',
-    );
+    expect(row?.subject).toBe('Dana Owner invited you to Smith Family Agency');
   });
 });

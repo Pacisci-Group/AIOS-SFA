@@ -1,0 +1,44 @@
+meta {
+  name: Clear Sending Domain
+  type: http
+  seq: 16
+}
+
+delete {
+  url: {{baseUrl}}/agency/email/sending-domain
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("falls back to the platform sender", function () {
+    expect(res.getBody().sendingStatus).to.equal("platform");
+    expect(res.getBody().sendingDomain).to.equal(null);
+  });
+}
+
+docs {
+  # DELETE /agency/email/sending-domain
+
+  Drop the custom sending domain and go back to the platform address.
+
+  **Module** — none. **Permission** — `agency:email:write`.
+
+  **Deliberately available even while `verified`.** This is the recovery path
+  when an agency's DNS changes underneath them and their email silently stops
+  arriving — the fastest fix is to fall back to an address that certainly works.
+  `fromName` and `replyTo` are kept, so the agency still *reads* as itself.
+
+  **Response `200`** — the **Get Email Settings** shape, `sendingStatus` back to
+  `platform`.
+
+  **Errors**
+  - `403` — caller lacks `agency:email:write`.
+}

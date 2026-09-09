@@ -28,6 +28,18 @@
 #                            disable uploads *silently* — the API still boots and
 #                            passes its health check.
 #   PUBLIC_FORM_BASE_URL  -> public site URL; share links are built from it
+#   PLATFORM_HOST         -> the ONE hostname the super-admin app answers on.
+#                            Access control, not cosmetics: agency users are
+#                            refused here and platform admins are refused on
+#                            agency hosts. A wrong value reads as "nobody can
+#                            log in".
+#   BASE_DOMAIN           -> parent zone for agency subdomains. Optional; unset
+#                            disables subdomain creation (custom domains still
+#                            work).
+#   PUBLIC_SERVER_IPS     -> comma-separated public IPs, so the settings page
+#                            can tell an owner what to put in an A record. Only
+#                            an apex domain needs one — RFC 1034 forbids a CNAME
+#                            there.
 #   API_INNGEST_BIND      -> "<droplet private IP>:4000". Inngest reaches the
 #                            serve handler here; the firewall admits only the
 #                            Inngest droplet.
@@ -69,9 +81,20 @@ services:
     # replaces the running droplet.
     #
     # ⚠ Never bind this to 0.0.0.0. /api/inngest is raw Express middleware that
-    # none of the seven global guards see; its only authentication is Inngest's
+    # none of the eight global guards see; its only authentication is Inngest's
     # request signature.
     ports:
+      # Loopback, unconditionally. Caddy's on-demand TLS gate runs on the host
+      # and calls `ask http://127.0.0.1:4000/api/v1/public/domains/allow` before
+      # issuing any certificate. The VPC binding below publishes on the private
+      # IP *only*, so without this line loopback has no listener, every `ask`
+      # is refused, and Caddy issues no certificate for any hostname — not the
+      # tenant subdomains and not the platform host itself. The symptom is a
+      # site with no TLS at all, and it appears only once the edge is Caddy.
+      - "127.0.0.1:4000:4000"
+      # The VPC binding. Collapses onto the line above when API_INNGEST_BIND is
+      # unset or empty (`:-` treats both the same, and Compose de-duplicates
+      # identical mappings), so this never degrades to 0.0.0.0.
       - "${API_INNGEST_BIND:-127.0.0.1:4000}:4000"
     networks:
       - sfa

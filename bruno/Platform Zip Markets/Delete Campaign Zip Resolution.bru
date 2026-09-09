@@ -1,0 +1,48 @@
+meta {
+  name: Delete Campaign Zip Resolution
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}/platform/mailer-zip-markets/{{campaignZipMarketId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("removes the row, or reports it was never there", function () {
+    // Two acceptable answers, by design — see the docs block. 200 when the
+    // campaign folder ran first and wrote the resolution; 404 when this folder
+    // was run on its own.
+    expect([200, 404]).to.include(res.getStatus());
+  });
+}
+
+docs {
+  # DELETE /platform/mailer-zip-markets/:id — undo the campaign's inline resolution
+
+  Same endpoint as `Delete Zip Market`; see there for the contract.
+
+  ## Why this exists
+
+  `Platform Mailer Campaigns/Patch Zip Resolutions` resolves ZIP `99999` mid-run
+  and the API **persists that answer** to this table, which is the whole point of
+  the resolver flow: the operator answers once and every campaign after it
+  benefits. That also means the campaign folder's own assertion — *"99999 is
+  surfaced as unmatched"* — is only true the first time it runs.
+
+  Removing the row here restores the starting state, so the collection stays
+  re-runnable. The CLI walks folders alphabetically, so `Platform Mailer
+  Campaigns` has already read and asserted on it by the time this runs.
+
+  ## Why it accepts a `404`
+
+  Run this folder on its own and the row was never written. A `404` is then the
+  correct answer and the collection should still go green — the same trade
+  `Users/Resend Invite` makes with its cooldown `409`.
+}

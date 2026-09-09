@@ -13,10 +13,13 @@ import {
   ONBOARDING_STEP_KEYS,
   ONBOARDING_STEP_LABELS,
   DEFAULT_RENEWAL_STEP_DEFINITIONS,
+  RENEWAL_BACKLOG_GRACE_DAYS,
   RENEWAL_OUTCOME_LABELS,
+  RENEWAL_OUTREACH_CUTOVER,
   RENEWAL_STEP_LABELS,
   renewalTrackFor,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
+  SERVICE_TICKET_CATEGORY_PREFIX,
   SERVICE_TICKET_TERMINAL_STATUSES,
   ServiceTicketActivity,
   ServiceTicketAssignee,
@@ -78,11 +81,17 @@ import {
   type StepTiming,
 } from './onboarding/onboarding-scheduling';
 import {
+  daysUntil,
   formatTermKey,
   renewalAnchorDate,
+  renewalStepsToOpen,
   scheduleRenewalSteps,
   type PlannedRenewalStep,
 } from './renewal/renewal-scheduling';
+import {
+  compareRenewalDeskRows,
+  renewalPreviewCutoff,
+} from './renewal/renewal-desk';
 import {
   renewalStepStatus,
   serializeRenewalCycle,
@@ -519,7 +528,6 @@ export class ServiceTicketsService {
       linkedHousehold?.primaryContactName ||
       householdName ||
       'Unnamed client';
-    const primaryContact = linkedHousehold?.contacts?.find((c) => c.isPrimary);
 
     // Onboarding is a chain, not a single ticket. Creating one by hand starts
     // the whole journey — the parent record plus the welcome-call ticket — and
@@ -542,16 +550,10 @@ export class ServiceTicketsService {
         policyNumber: dto.policyNumber ?? linkedPolicy?.policyNumber ?? '',
         policyType: dto.policyType ?? linkedPolicy?.policyType ?? '',
         householdName: dto.household ?? householdName ?? '',
-        phone:
-          dto.phone ??
-          primaryContact?.phones?.[0] ??
-          linkedHousehold?.primaryPhones?.[0] ??
-          '',
-        email:
-          dto.email ??
-          primaryContact?.emails?.[0] ??
-          linkedHousehold?.primaryEmails?.[0] ??
-          '',
+        // Resolved from the primary contact by `getHousehold` (PAC-91 §1) —
+        // the household stores no copy of either.
+        phone: dto.phone ?? linkedHousehold?.primaryPhone ?? '',
+        email: dto.email ?? linkedHousehold?.primaryEmail ?? '',
         createdByUserId: access.userId,
         createdByName,
         openingNote: dto.openingNote?.trim(),
@@ -594,16 +596,8 @@ export class ServiceTicketsService {
       household: dto.household ?? householdName ?? '',
       policyId: dto.policyId ? new Types.ObjectId(dto.policyId) : null,
       householdId: householdId ? new Types.ObjectId(householdId) : null,
-      phone:
-        dto.phone ??
-        primaryContact?.phones?.[0] ??
-        linkedHousehold?.primaryPhones?.[0] ??
-        '',
-      email:
-        dto.email ??
-        primaryContact?.emails?.[0] ??
-        linkedHousehold?.primaryEmails?.[0] ??
-        '',
+      phone: dto.phone ?? linkedHousehold?.primaryPhone ?? '',
+      email: dto.email ?? linkedHousehold?.primaryEmail ?? '',
       openedAt: now,
       lastActivityAt: now,
       resolvedAt: isTerminalTicketStatus(dto.status ?? 'open') ? now : null,
@@ -1320,7 +1314,11 @@ export class ServiceTicketsService {
     category: string,
     attempt = 0,
   ): Promise<string> {
-    const prefix = CATEGORY_PREFIX[category] ?? 'TKT';
+    // Typed over the category union in `@sfa/shared`; the fallback only covers
+    // a stray string reaching here through `createTicketWithNumber`'s untyped doc.
+    const prefix =
+      (SERVICE_TICKET_CATEGORY_PREFIX as Record<string, string>)[category] ??
+      'TKT';
     const count = await this.ticketModel.countDocuments({
       agencyId: new Types.ObjectId(agencyId),
     });
@@ -1386,24 +1384,32 @@ export class ServiceTicketsService {
    * ------------------------------------------------------------------ */
 
   /**
-   * Claim the next scan window, or return false if someone else holds it.
+   * Claim the next scan window, or return null if someone else holds it.
    *
    * The duplicate-key catch is the *normal* path once a document exists: when
    * `lastScanAt` is inside the window the filter misses, the upsert attempts an
    * insert, and the unique index rejects it.
+   *
+   * Returns the claimed state rather than a bare boolean because the winner
+   * needs `scanCursor` off the same document — reading it separately would
+   * race the next claimant.
    */
-  private async claimScanWindow(agencyId: Types.ObjectId): Promise<boolean> {
+  private async claimScanWindow(
+    agencyId: Types.ObjectId,
+  ): Promise<RenewalScanStateDocument | null> {
     const cutoff = new Date(Date.now() - RENEWAL_SCAN_INTERVAL_MS);
     try {
-      const claimed = await this.scanStateModel.findOneAndUpdate(
+      // The `$set` touches only `lastScanAt`, so the returned document still
+      // carries the cursor the previous pass left — which is the one to resume
+      // from. `upsert` seeds it as null on a first scan: start of the window.
+      return await this.scanStateModel.findOneAndUpdate(
         { agencyId, lastScanAt: { $lt: cutoff } },
         { $set: { lastScanAt: new Date() } },
         { upsert: true, new: true },
       );
-      return Boolean(claimed);
     } catch (error) {
       if (isDuplicateKeyError(error)) {
-        return false;
+        return null;
       }
       throw error;
     }
@@ -1420,16 +1426,19 @@ export class ServiceTicketsService {
   /**
    * Bring an agency's renewal cycles in line with its book.
    *
-   * Two-sided on purpose. Side A creates cycles for policies entering the
-   * horizon; Side B sweeps the cycles already open, because Side A cannot see
-   * a policy that was deleted, deactivated, or whose date moved out of range.
+   * Three-sided. Side 0 repairs the anchors themselves, because a renewal date
+   * that has gone by is not a date anything can count down to; Side A creates
+   * cycles for policies entering the horizon; Side B sweeps the cycles already
+   * open, because Side A cannot see a policy that was deleted, deactivated, or
+   * whose date moved out of range.
    */
   async materializeRenewalCycles(access: AccessContext): Promise<void> {
     if (!access.agencyId) {
       return;
     }
     const agencyId = new Types.ObjectId(access.agencyId);
-    if (!(await this.claimScanWindow(agencyId))) {
+    const claim = await this.claimScanWindow(agencyId);
+    if (!claim) {
       return;
     }
 
@@ -1437,16 +1446,39 @@ export class ServiceTicketsService {
     const horizonStart = new Date(now.getTime() - RENEWAL_GRACE_DAYS * DAY_MS);
     const horizonEnd = new Date(now.getTime() + RENEWAL_HORIZON_DAYS * DAY_MS);
 
-    // Side A — policies entering the horizon.
+    // Side 0 — advance anchors that have gone by, and fill in missing ones.
+    // Runs first so Side A sees a book whose dates are all in the future.
+    await this.clientsService.rollForwardRenewalDates(
+      access,
+      now,
+      RENEWAL_SCAN_BATCH,
+    );
+
+    // Side A — policies entering the horizon, resumed from where the last pass
+    // stopped. Without the cursor this re-reads the same earliest batch every
+    // time and the tail of the window is never scanned at all.
     const candidates = await this.clientsService.findRenewalWindow(
       access,
       horizonStart,
       horizonEnd,
       RENEWAL_SCAN_BATCH,
+      claim.scanCursor ?? null,
     );
     for (const group of groupRenewalCandidates(candidates)) {
       await this.ensureRenewalCycle(access, agencyId, group);
     }
+
+    // A short batch means the window is exhausted; start the next sweep from
+    // the beginning, which is also what re-reads policies whose dates have
+    // since moved backwards into it.
+    const nextCursor =
+      candidates.length < RENEWAL_SCAN_BATCH
+        ? null
+        : (candidates[candidates.length - 1]?.renewalDate ?? null);
+    await this.scanStateModel.updateOne(
+      { agencyId },
+      { $set: { scanCursor: nextCursor } },
+    );
 
     // Side B — cycles already open, which may have drifted or gone stale.
     const open = await this.cycleModel
@@ -1470,6 +1502,23 @@ export class ServiceTicketsService {
       termKey,
     });
     if (existing) {
+      // Adopt any policy in this group the cycle does not already carry.
+      //
+      // The scan reads a bounded batch, so a household's Home and Auto renewing
+      // the same week can arrive in *different* passes. The first creates the
+      // cycle; without this the second would find it, reconcile, and silently
+      // drop its own policy — `reconcileRenewalCycle` rebuilds the checklist
+      // from `cycle.policies`, so a line that never got in never appears. The
+      // CSR would then review the Home on a call whose Auto is invisible.
+      const known = new Set(
+        existing.policies.map((policy) => String(policy.policyId)),
+      );
+      const added = group.policies.filter((policy) => !known.has(policy.id));
+      if (added.length) {
+        existing.policies.push(...added.map(toCyclePolicy));
+        existing.markModified('policies');
+        await existing.save();
+      }
       await this.reconcileRenewalCycle(access, existing);
       return existing;
     }
@@ -1500,8 +1549,8 @@ export class ServiceTicketsService {
           group.policies[0]?.policyNumber ||
           'Renewal',
         householdName: household?.name ?? '',
-        phone: household?.primaryPhones?.[0] ?? '',
-        email: household?.primaryEmails?.[0] ?? '',
+        phone: household?.primaryPhone ?? '',
+        email: household?.primaryEmail ?? '',
         currentStepKey: null,
         completedAt: null,
         // The client's CSR owns the outreach. This matters more than it looks:
@@ -1604,8 +1653,20 @@ export class ServiceTicketsService {
     );
 
     // (4) Every call gets a ticket up front — renewal steps do not chain, so
-    // nothing waits on the call before it.
-    for (const step of planned) {
+    // nothing waits on the call before it. The only calls held back are ones
+    // whose date passed before outreach went live; see `renewalStepsToOpen`.
+    const existingStepKeys = new Set<RenewalStepKey>(
+      tickets
+        .map((ticket) => ticket.renewal?.stepKey)
+        .filter((key): key is RenewalStepKey => Boolean(key)),
+    );
+    const opening = renewalStepsToOpen(
+      planned,
+      existingStepKeys,
+      RENEWAL_OUTREACH_CUTOVER,
+      RENEWAL_BACKLOG_GRACE_DAYS,
+    );
+    for (const step of opening) {
       await this.ensureRenewalTicket(cycle, step, planned.length);
     }
 
@@ -1822,15 +1883,23 @@ export class ServiceTicketsService {
     cycle.markModified('policies');
     await cycle.save();
 
+    /*
+     * **No timeline entry.** Ticking a checklist box is not an event worth
+     * recording, and writing one per toggle made the timeline unreadable: a CSR
+     * working a two-policy call generated ten "discussed on the call" /
+     * "un-ticked" lines, burying the two entries that actually matter — the
+     * status change and the renewal outcome.
+     *
+     * Nothing is lost by dropping them. The tick is *state*, not history: it
+     * lives on the cycle as `discussedAt`/`discussedBy`, renders in the
+     * checklist itself, and `completeRenewalStep` refuses a completion while
+     * any policy is unticked. The timeline is for the result of the review —
+     * `completeRenewalStep` and `setRenewalOutcome` write that.
+     *
+     * `lastActivityAt` still moves, because this genuinely is the CSR working
+     * the ticket and the queue sorts on it. That is the part worth keeping.
+     */
     ticket.lastActivityAt = now;
-    ticket.timeline.push({
-      type: 'system',
-      author: userName,
-      content: `${entry.policyType} ${entry.policyNumber} ${
-        discussed ? 'discussed on the call' : 'un-ticked'
-      }.`,
-      at: now,
-    });
     await ticket.save();
 
     return serializeTicket(ticket.toObject());
@@ -2054,10 +2123,20 @@ export class ServiceTicketsService {
 
   /**
    * The Proactive Renewal Outreach desk: one row per cycle, showing the call
-   * that is actually on the CSR's plate.
+   * that is actually on the CSR's plate — plus the ones about to land on it.
    *
    * Runs the throttled scan first, which is what makes renewals appear without
-   * a cron. Scheduled calls stay out — a call that has not opened is not work.
+   * a cron.
+   *
+   * **Scheduled calls are previewed, not hidden.** Everywhere else a call that
+   * has not opened is not work and is filtered out (`scheduledStepMatches`
+   * keeps them out of the queue and the KPI strip). This desk is the exception,
+   * because it is the one surface whose job is the *next* fortnight rather than
+   * today: a T-45 call that first appears on the morning it opens cannot be
+   * planned around, which made a panel named "Proactive" reactive. Calls inside
+   * {@link RENEWAL_DESK_PREVIEW_DAYS} therefore come back carrying
+   * `daysUntilAvailable`, and stay non-actionable until they open —
+   * `completeRenewalStep` enforces that independently.
    */
   async renewalDesk(access: AccessContext): Promise<RenewalDeskRow[]> {
     await this.materializeRenewalCycles(access);
@@ -2066,6 +2145,7 @@ export class ServiceTicketsService {
       return [];
     }
     const now = new Date();
+    const previewUntil = renewalPreviewCutoff(now);
     const agencyId = new Types.ObjectId(access.agencyId);
     const cycles = await this.cycleModel
       .find({ agencyId, completedAt: null })
@@ -2084,18 +2164,32 @@ export class ServiceTicketsService {
         ...this.scopeFilter(access),
         'renewal.renewalCycleId': { $in: cycles.map((c) => c._id) },
         'renewal.completedAt': null,
-        'renewal.availableAt': { $ne: null, $lte: now },
+        // Open, or opening within the preview window.
+        'renewal.availableAt': { $ne: null, $lte: previewUntil },
       })
       .sort({ 'renewal.dueAt': 1 })
       .lean();
 
     const rows: RenewalDeskRow[] = [];
     for (const cycle of cycles) {
-      // The open call for this cycle, if any. A cycle whose only call is still
-      // scheduled has nothing to show yet.
-      const ticket = tickets.find(
+      const forCycle = tickets.filter(
         (t) => String(t.renewal?.renewalCycleId) === String(cycle._id),
       );
+      /*
+       * One row per cycle, and an open call always wins it.
+       *
+       * Both calls of an annual cycle can match at once — an annual review
+       * still open at T-50 alongside a renewal review opening at T-45. The
+       * work in hand is the open one; previewing the later call while the
+       * earlier is unfinished would bury it. Explicit rather than leaning on
+       * the `dueAt` sort to imply the same thing.
+       */
+      const ticket =
+        forCycle.find(
+          (t) =>
+            t.renewal?.availableAt &&
+            new Date(t.renewal.availableAt).getTime() <= now.getTime(),
+        ) ?? forCycle[0];
       if (!ticket?.renewal) continue;
 
       const step = serializeRenewalStep(ticket.renewal, definitions, now);
@@ -2115,6 +2209,12 @@ export class ServiceTicketsService {
         daysUntilRenewal: step.daysUntilRenewal,
         availableAt: step.availableAt,
         dueAt: step.dueAt,
+        // Null once the call is open. `availableAt` is never null here — the
+        // query matched on `$ne: null` — so the countdown is always real.
+        daysUntilAvailable:
+          step.isActionable || !step.availableAt
+            ? null
+            : daysUntil(new Date(step.availableAt), now),
         status: renewalStepStatus(ticket.renewal, now),
         isActionable: step.isActionable,
         isOverdue: step.isOverdue,
@@ -2123,12 +2223,7 @@ export class ServiceTicketsService {
       });
     }
 
-    // Most urgent first: overdue leads, then soonest renewal.
-    return rows.sort(
-      (a, b) =>
-        Number(b.isOverdue) - Number(a.isOverdue) ||
-        a.daysUntilRenewal - b.daysUntilRenewal,
-    );
+    return rows.sort(compareRenewalDeskRows);
   }
 }
 
@@ -2293,22 +2388,6 @@ function mergeCyclePolicy(
 
 /** Roles whose holders can be a ticket's Assigned Client Relation Manager. */
 const ASSIGNABLE_ROLE_SLUGS = ['csr', 'crm'];
-
-const CATEGORY_PREFIX: Record<string, string> = {
-  Onboarding: 'ONBD',
-  Endorsement: 'ENDR',
-  Billing: 'BILL',
-  'Claims Assist': 'CLAIM',
-  'Renewal Review': 'RENEW',
-  Other: 'TKT',
-  Quote: 'QTE',
-  'Policy Change': 'PCHG',
-  Payment: 'PAY',
-  'Company Transfer': 'XFER',
-  Save: 'SAVE',
-  Termination: 'TERM',
-  'Renewal Taken': 'RNWT',
-};
 
 function statusLabel(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1);

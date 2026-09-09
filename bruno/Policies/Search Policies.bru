@@ -60,7 +60,7 @@ docs {
   ## Query params
   | Param | Required | Notes |
   |---|---|---|
-  | `q` | no | Case-insensitive match on `policyNumber`, `policyType`, `carrier`, or the **owning household's** `name` / `primaryContactName`. Blank/omitted returns the first page unfiltered, so the picker has rows before the user types. Regex-escaped — a term is never compiled as a pattern |
+  | `q` | no | Case-insensitive match on `policyNumber`, `policyType`, `carrier`, or the **owning household's** `name` / primary contact's name (resolved through `primaryContactId` — PAC-91 §4 removed the stored `primaryContactName`). Blank/omitted returns the first page unfiltered, so the picker has rows before the user types. Regex-escaped — a term is never compiled as a pattern |
   | `limit` | no | 1–50, default 20 |
   | `householdId` | no | Mongo id. Restricts results to that household's policies |
 
