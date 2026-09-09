@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { DataScope, resolveItemCount } from '@sfa/shared';
+import { DataScope, nextRenewalDate, resolveItemCount } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
@@ -66,12 +66,21 @@ export class UpsertPoliciesStep {
         ? await this.retireTransferred(row.fromPolicyId, deps)
         : null;
 
+      const effectiveDate = parseFormDate(row.effectiveDate);
+
       const shared = {
         policyNumber: row.policyNumber,
         policyNumberKey: normalizePolicyNumber(row.policyNumber) ?? undefined,
         policyType: row.policyType,
         carrier: row.carrier,
-        effectiveDate: parseFormDate(row.effectiveDate),
+        effectiveDate,
+        // Derived here rather than left for the renewal scan to repair, because
+        // a policy with no anchor is invisible to outreach until something
+        // notices — and for most of this app's life nothing did. Every policy
+        // sold through this form was born unable to ever generate a renewal
+        // call. One term forward from the effective date on the policy's own
+        // cadence: 6 months for the auto family, 12 for everything else.
+        renewalDate: nextRenewalDate(effectiveDate, row.policyType, new Date()),
         premium: row.premium,
         // A type nobody is asked to count is stored as 1 — see
         // `resolveItemCount`. Kept in step with `deriveDealAggregates`.

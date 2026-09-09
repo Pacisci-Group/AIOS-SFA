@@ -111,6 +111,60 @@ export function scheduleRenewalSteps(
 }
 
 /**
+ * Which planned calls should actually get a ticket.
+ *
+ * Everything opens normally in steady state. This exists for the **cutover**:
+ * deriving real renewal dates for a book that had none makes years of calls
+ * eligible at once, and a T-90 whose date passed four months ago is not work
+ * anyone can still do on time — it is noise that would bury the queue.
+ *
+ * Three rules:
+ *
+ *   1. A step opening on or after `cutover − grace` is kept. After the cutover
+ *      that is every step, which is what makes the rule self-disarming.
+ *   2. If rule 1 keeps **nothing**, the cycle's latest call is kept anyway. The
+ *      renewal is still coming, and going dark on a client because we were late
+ *      is the one outcome worse than calling late.
+ *   3. On top of whatever survives, a step that already has a ticket is always
+ *      kept, so `ensureRenewalTicket` goes on adopting its re-planned timing
+ *      instead of leaving it frozen on a stale date.
+ *
+ * Rule 3 is a **union**, not a filter, and the order matters: applied as a
+ * filter it would let one old ticketed warm-up satisfy rule 1 and thereby
+ * suppress the very call rule 2 exists to protect.
+ *
+ * Pure, and separate from {@link scheduleRenewalSteps} on purpose: the *plan*
+ * is a property of the policy's dates, while this is a property of when we
+ * started running. `totalSteps` stays the full plan length, so a cycle that
+ * skipped its warm-up still reads "Step 2 of 2" — which is the truth.
+ */
+export function renewalStepsToOpen(
+  planned: PlannedRenewalStep[],
+  existingStepKeys: ReadonlySet<RenewalStepKey>,
+  cutover: Date,
+  graceDays: number,
+): PlannedRenewalStep[] {
+  if (!planned.length) return [];
+
+  const threshold = new Date(cutover.getTime() - graceDays * DAY_MS);
+  const current = planned.filter((step) => step.availableAt >= threshold);
+
+  const survivors = current.length
+    ? current
+    : [
+        planned.reduce((newest, step) =>
+          step.availableAt > newest.availableAt ? step : newest,
+        ),
+      ];
+
+  // Filter the plan rather than concatenating, so the result keeps plan order
+  // and cannot list a step twice.
+  return planned.filter(
+    (step) => survivors.includes(step) || existingStepKeys.has(step.stepKey),
+  );
+}
+
+/**
  * The cycle's identity: the UTC calendar day of its anchor renewal date.
  *
  * Stamped once at creation and never rewritten, so next term's renewal is a

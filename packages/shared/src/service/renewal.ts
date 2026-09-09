@@ -31,6 +31,7 @@ import {
   ANNUAL_TERM_MONTHS,
   SEMIANNUAL_TERM_MONTHS,
   isSemiannualPolicyType,
+  policyTermMonths,
 } from '../domain/policy-type';
 import type { ServiceTicketStatus } from './service-ticket';
 
@@ -92,6 +93,93 @@ export function renewalTrackFor(
 }
 
 /* -------------------------------------------------------------------------- *
+ * The anchor — when a policy actually renews next
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Midnight UTC on the day `date` falls in.
+ *
+ * Renewals are calendar days, not instants: a policy renewing *today* has not
+ * renewed "already" just because the clock has passed midnight. Comparing at
+ * day granularity is what keeps {@link nextRenewalDate} from rolling a policy
+ * a whole term forward on its own renewal day.
+ */
+function startOfUtcDay(date: Date): Date {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+}
+
+/**
+ * `date` shifted by whole calendar months, clamped to the end of the target
+ * month.
+ *
+ * `Date.setUTCMonth` **overflows** rather than clamping — 31 Jan + 1 month
+ * lands on 2 or 3 March, not 28 February. Left alone that would walk a
+ * month-end policy forward a day or two every term until its renewal date had
+ * drifted into the following month.
+ */
+function addUtcMonths(date: Date, months: number): Date {
+  const shifted = new Date(date.getTime());
+  const dayOfMonth = date.getUTCDate();
+
+  // Move to the 1st first, so the month shift itself can never overflow.
+  shifted.setUTCDate(1);
+  shifted.setUTCMonth(shifted.getUTCMonth() + months);
+
+  // Day 0 of the *next* month is the last day of this one.
+  const daysInTargetMonth = new Date(
+    Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  shifted.setUTCDate(Math.min(dayOfMonth, daysInTargetMonth));
+
+  return shifted;
+}
+
+/**
+ * A policy's next renewal on or after `now`, counted in whole terms from the
+ * date coverage began.
+ *
+ * The term comes from {@link policyTermMonths} — 6 months for the auto family,
+ * 12 for everything else — so this and the premium's `/6 mo` label are the same
+ * decision and cannot drift.
+ *
+ * **Whole calendar months, always measured from the original anchor.** A policy
+ * effective the 8th renews on the 8th, forever; adding `termMonths` repeatedly
+ * to the *running* value would let a month-end clamp compound into permanent
+ * drift. `30 * DAY` arithmetic would do the same, faster.
+ *
+ * Deterministic for a given `(anchor, policyType, now)`, which is what makes it
+ * safe to recompute: `formatTermKey` derives a cycle's identity from this date,
+ * so a value that wobbled by a day between runs would fork every cycle.
+ *
+ * Returns null for an unusable anchor — an invalid date, or one so far in the
+ * past that a sane number of terms cannot reach the present. There is nothing
+ * to count down to, and inventing a date would be worse than saying so.
+ */
+export function nextRenewalDate(
+  anchor: Date | string | null | undefined,
+  policyType: string | null | undefined,
+  now: Date,
+): Date | null {
+  if (!anchor) return null;
+  const start = anchor instanceof Date ? anchor : new Date(anchor);
+  if (Number.isNaN(start.getTime())) return null;
+
+  const termMonths = policyTermMonths(policyType);
+  const today = startOfUtcDay(now);
+
+  // 200 terms is 100 years on the annual track — far past any real policy, and
+  // a bound that stops a nonsense anchor (year 1900, a bad parse) from spinning.
+  const maxTerms = 200;
+  for (let term = 0; term <= maxTerms; term += 1) {
+    const candidate = addUtcMonths(startOfUtcDay(start), term * termMonths);
+    if (candidate >= today) return candidate;
+  }
+  return null;
+}
+
+/* -------------------------------------------------------------------------- *
  * Steps — the calls themselves
  * -------------------------------------------------------------------------- */
 
@@ -148,6 +236,35 @@ export const DEFAULT_RENEWAL_SLA_HOURS = 48;
  * only widens what is *shown*, never what can be done.
  */
 export const RENEWAL_DESK_PREVIEW_DAYS = 14;
+
+/**
+ * The day proactive renewal outreach went live.
+ *
+ * Until the anchor backfill, `policies.renewalDate` held a migration artifact —
+ * SmartSuite's Renewal Date column carried the *effective* date, so every value
+ * was historical and no cycle was ever created. Deriving real renewal dates
+ * makes the whole book eligible at once, and a book that has been running
+ * un-serviced for months has calls whose ideal date passed long ago.
+ *
+ * Those are not work anyone can still do on time, and materializing them would
+ * bury the CSR queue under years of retrospective calls on day one. So a step
+ * more than {@link RENEWAL_BACKLOG_GRACE_DAYS} before this date is suppressed —
+ * see `renewalStepsToOpen`.
+ *
+ * **Self-disarming.** Once the scan has been running, nothing is ever that
+ * stale, so this stops applying on its own. It is a constant rather than config
+ * because it describes something that happened once, on a specific day.
+ */
+export const RENEWAL_OUTREACH_CUTOVER = new Date('2026-09-08T00:00:00.000Z');
+
+/**
+ * How far before the cutover a call could open and still be worth making.
+ *
+ * A week: long enough that a renewal review missed over a single busy week is
+ * still placed in front of a CSR, short enough that nothing genuinely
+ * retrospective survives.
+ */
+export const RENEWAL_BACKLOG_GRACE_DAYS = 7;
 
 export interface RenewalStepDefinition {
   track: RenewalTrack;

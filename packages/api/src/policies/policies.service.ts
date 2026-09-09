@@ -9,6 +9,7 @@ import {
   DataScope,
   carrierPolicyNumberMatches,
   carrierSlug,
+  nextRenewalDate,
   normalizeCarrier,
   normalizePolicyType,
   policyTypeQueryValues,
@@ -312,6 +313,26 @@ export class PoliciesService {
     if (dto.expirationDate !== undefined) {
       policy.expirationDate = dto.expirationDate ?? undefined;
     }
+
+    /*
+     * `renewalDate` is derived, never sent: it is the next occurrence of the
+     * term, and the term is a function of the effective date and the policy
+     * type. Both of those are editable here, so both have to re-derive it —
+     * correcting an Auto policy to Home moves its renewal by six months, and
+     * leaving the old date would keep counting down to a renewal that is not
+     * happening.
+     *
+     * Recomputed from the *saved* fields rather than the DTO so a patch that
+     * touches only one of the pair still reads the other correctly. Cleared
+     * when the effective date is cleared — there is then nothing to count from,
+     * and a stale anchor would keep opening calls for a date nobody set.
+     */
+    if (dto.effectiveDate !== undefined || dto.policyType !== undefined) {
+      policy.renewalDate =
+        nextRenewalDate(policy.effectiveDate, policy.policyType, new Date()) ??
+        undefined;
+    }
+
     if (dto.status !== undefined) policy.policyStatus = dto.status ?? undefined;
 
     await policy.save();
