@@ -42,3 +42,5 @@ Mailer_Test_Alteryx*.csv
 
 temp/
 mongo-backup/
+# One-time upgrade runner output (see scripts/migration/run-upgrade.sh)
+upgrade-logs/
