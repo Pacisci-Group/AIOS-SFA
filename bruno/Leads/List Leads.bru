@@ -140,11 +140,21 @@ docs {
   ### How `search` is interpreted
   One branch is chosen by the shape of the query:
 
-  1. contains `@` → **email** match across the `emails` array
-  2. else ≥ 7 digits after stripping non-digits → **phone** (digit-tolerant, so
-     `5551234` matches `(555) 123-4xxx`) **or** quote control number
+  1. contains `@` → **email** on the lead's **primary contact**
+  2. else ≥ 7 digits after stripping non-digits → **phone** on the primary
+     contact (digit-tolerant, so `5551234` matches `(555) 123-4xxx`) **or**
+     quote control number
   3. else → **name** (first, last, or the combined `first last`), **lead source
      label**, or **quote control number**
+
+  Since PAC-91 §2 the lead carries **no** email or phone of its own, so 1 and 2
+  resolve `contacts` first (through `{agencyId, email}` / `{agencyId, phone}`,
+  capped at 500) and then filter leads by `primaryContactId`. That is also why
+  these searches now find migrated leads at all: the copy they used to query was
+  empty on most of them, because the importer filled it from the SmartSuite
+  *Leads* table rather than from the linked contact. A lead with no
+  `primaryContactId` is unreachable this way — as it was before, for the same
+  reason.
 
   Note `status` accepts canonical labels and matches migrated documents that
   store the raw SmartSuite code — filtering `Requote` also finds `arW7O`. Each

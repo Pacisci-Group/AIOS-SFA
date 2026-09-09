@@ -56,6 +56,53 @@ export interface CollectionStat {
    * unattributed deals sit behind a report line reading `Unmapped: 0`.
    */
   producerLinks?: { linked: number; unresolved: number; absent: number };
+  /**
+   * SmartSuite rows carrying more than one email or phone — the footprint of
+   * the array-vs-scalar quirk PAC-91 §1 removes.
+   *
+   * Absent when nothing on the collection had a second value, which is the
+   * expected reading: the 2026-09-04 production export has **zero** such rows
+   * on 3,064 contacts, which is what made the scalar change safe. It is
+   * reported rather than assumed so that a different agency's data says so
+   * out loud instead of losing the extra values silently.
+   */
+  multiValued?: { emails: number; phones: number };
+  /**
+   * How this collection's contact↔household links resolved — the §6
+   * reconciliation count PAC-91 asks for. Filled by two passes that see the
+   * link from opposite sides, so the two `via*` counters are contact-side only
+   * and absent on the household-side pass.
+   */
+  householdLinks?: {
+    /**
+     * Contacts whose household came from the writable `Household` field
+     * (`s66cf9402f`) — i.e. from the legacy intake form. Contacts pass only.
+     */
+    viaHouseholdField?: number;
+    /**
+     * Contacts whose household came only from a household-side back-link.
+     * Contacts pass only, and the number that matters: every one of these is a
+     * link the importer discarded before PAC-91.
+     */
+    viaBacklink?: number;
+    /** Rows with no household link on any side. */
+    unlinked: number;
+    /** Contacts belonging to more than one household (§5 is real but tiny). */
+    multiMembership: number;
+    /**
+     * Contacts named primary by more than one household. A data defect, not a
+     * shape we support: it blocks the §5 partial unique index from building.
+     */
+    multiPrimary: number;
+    /** Link ids naming a record the run did not import. Counted, not fatal. */
+    unresolved: number;
+    /**
+     * `householdMembers` rows written — the §6 reconciliation proper: how many
+     * memberships came across, against the three link sources above. Household
+     * links pass only.
+     */
+    memberships?: number;
+  };
 }
 
 export interface MigrationReport {
@@ -196,6 +243,50 @@ export function printReport(report: MigrationReport): void {
     }
     console.log(line);
   }
+  const householdLinked = Object.entries(report.collections).filter(
+    ([, s]) => s.householdLinks,
+  );
+  if (householdLinked.length) {
+    console.log('Household links:');
+    for (const [name, s] of householdLinked) {
+      const h = s.householdLinks!;
+      if (h.viaHouseholdField !== undefined || h.viaBacklink !== undefined) {
+        console.log(
+          `  ${name.padEnd(16)} ${String(h.viaHouseholdField ?? 0).padStart(6)} via Household field  ` +
+            `${String(h.viaBacklink ?? 0).padStart(6)} via back-link`,
+        );
+      }
+      console.log(
+        `  ${name.padEnd(16)} ${String(h.unlinked).padStart(6)} unlinked at source  ` +
+          `${String(h.unresolved).padStart(6)} unresolved  ` +
+          `${String(h.multiMembership).padStart(6)} in >1 household  ` +
+          `${String(h.multiPrimary).padStart(6)} primary of >1 household`,
+      );
+      if (h.memberships !== undefined) {
+        console.log(
+          `  ${name.padEnd(16)} ${String(h.memberships).padStart(6)} memberships written`,
+        );
+      }
+    }
+    console.log(line);
+  }
+
+  const multiValued = Object.entries(report.collections).filter(
+    ([, s]) => s.multiValued,
+  );
+  if (multiValued.length) {
+    console.log('More than one email / phone at source (PAC-91 §1):');
+    for (const [name, s] of multiValued) {
+      const m = s.multiValued!;
+      console.log(
+        `  ${name.padEnd(16)} ${String(m.emails).padStart(6)} rows with >1 email  ` +
+          `${String(m.phones).padStart(6)} with >1 phone  ` +
+          '(first kept, the rest dropped)',
+      );
+    }
+    console.log(line);
+  }
+
   const linked = Object.entries(report.collections).filter(
     ([, s]) => s.producerLinks,
   );

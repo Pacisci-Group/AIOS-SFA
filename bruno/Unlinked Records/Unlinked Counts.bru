@@ -1,0 +1,98 @@
+meta {
+  name: Unlinked Counts
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/clients/unlinked/counts
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // The three totals, so the list requests below can assert they agree.
+  // Runtime-only vars (never persisted to disk).
+  if (res.getStatus() === 200) {
+    const body = res.getBody();
+    bru.setVar("unlinkedPolicyCount", body.policies);
+    bru.setVar("unlinkedContactCount", body.contacts);
+    bru.setVar("unlinkedHouseholdCount", body.households);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns exactly the three numbers the chips show", function () {
+    const body = res.getBody();
+    expect(Object.keys(body).sort()).to.eql([
+      "contacts",
+      "households",
+      "policies",
+    ]);
+    expect(body.policies).to.be.a("number");
+    expect(body.contacts).to.be.a("number");
+    expect(body.households).to.be.a("number");
+  });
+
+  test("counts are never negative", function () {
+    const body = res.getBody();
+    for (const key of ["policies", "contacts", "households"]) {
+      expect(body[key]).to.be.at.least(0);
+    }
+  });
+}
+
+docs {
+  # GET /clients/unlinked/counts
+
+  The three numbers behind the **Unlinked** tab's filter chips on the Clients
+  page (PAC-91 §10).
+
+  - **Module:** `clients`
+  - **Permission:** `clients:read` — **not** the `clients:read` OR
+    `crm_service:read` gate that `GET /households/:id` and `GET /policies/:id`
+    carry. Those exist because one record renders inside a CRM ticket's drawer;
+    this is a report about the state of the client book, and belongs to whoever
+    works that book. A CSR holding only `crm_service:read` gets **403**.
+  - **Data scope:** `own` collapses to **branch**, exactly as `GET /households`
+    does — client records are shared and carry no per-user owner.
+
+  ## Response
+  ```json
+  { "policies": 135, "contacts": 280, "households": 59 }
+  ```
+
+  Each number is the `total` of the matching `GET /clients/unlinked?kind=…`
+  page, computed from the same filter, so a chip can never disagree with the
+  list behind it.
+
+  ## Why a separate endpoint rather than `?kind=summary`
+  The page shows all three counts whichever list is open, so they are a
+  different question with a different cache lifetime — and a paginated envelope
+  with no `items` would have made every field of the response shape optional for
+  the three real kinds.
+
+  ## What each number means
+  | Field | Predicate |
+  |---|---|
+  | `policies` | `policies` with no `householdId` |
+  | `contacts` | `contacts` with no **current** row in `householdMembers` (`endedAt: null`) |
+  | `households` | `households` with no `primaryContactId` |
+
+  All three exclude `isTestRecord` rows — the agency's Sample/Test records were
+  flagged in PAC-91 Phase 1 and must never be presented as work.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | `clients` disabled for the agency, or the caller lacks `clients:read` |
+}

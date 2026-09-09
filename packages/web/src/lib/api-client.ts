@@ -4,6 +4,19 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    /**
+     * The parsed error body, when the response carried JSON.
+     *
+     * Several API errors are **structured refusals** rather than failures: the
+     * succession 409 (PAC-91 §7) hands back the household and the members
+     * eligible to take over, and the ambiguous-household 409 (PAC-91 §5) hands
+     * back the candidate households. In both, the body is what the UI needs to
+     * offer the user a way forward — a message alone leaves them at a dead end.
+     *
+     * Narrow it with a `code` check, never by matching the message: the message
+     * is written for a human and will be reworded.
+     */
+    public body?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -189,15 +202,17 @@ export async function apiFetch<T>(
   if (!res.ok) {
     const text = await res.text();
     let message = text || res.statusText;
+    let body: unknown;
     try {
       const json = JSON.parse(text) as { message?: string | string[] };
+      body = json;
       if (json.message) {
         message = Array.isArray(json.message) ? json.message.join(', ') : json.message;
       }
     } catch {
       // use raw text
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, body);
   }
 
   if (res.status === 204) {
@@ -264,15 +279,17 @@ export async function publicFetch<T>(
   if (!res.ok) {
     const text = await res.text();
     let message = text || res.statusText;
+    let body: unknown;
     try {
       const json = JSON.parse(text) as { message?: string | string[] };
+      body = json;
       if (json.message) {
         message = Array.isArray(json.message) ? json.message.join(', ') : json.message;
       }
     } catch {
       // use raw text
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, body);
   }
 
   if (res.status === 204) {

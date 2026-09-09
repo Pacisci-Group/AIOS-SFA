@@ -43,14 +43,22 @@ export class Household extends TenantRecord {
   @Prop({ type: Object })
   mailingAddress?: Record<string, unknown>;
 
-  @Prop({ trim: true })
-  primaryContactName?: string;
-
-  @Prop({ type: [String], default: [] })
-  primaryEmails: string[];
-
-  @Prop({ type: [String], default: [] })
-  primaryPhones: string[];
+  /*
+   * ⚠ No `primaryContactName` / `primaryEmails` / `primaryPhones`, deliberately
+   * (PAC-91 §1, §4).
+   *
+   * The household used to carry a denormalised copy of its primary contact's
+   * name, email and phone. Only lead intake ever wrote it, so every migrated
+   * household had all three empty and every reader that consulted them first
+   * rendered an em dash — the gap PAC-86 patched in one drawer and left
+   * everywhere else. Nothing kept the copy in step either, which §7 makes
+   * decisive: promoting a new primary after a death would otherwise leave a
+   * dead person's phone number on the record indefinitely.
+   *
+   * Resolve the primary contact through `primaryContactId` below instead —
+   * `loadPrimaryContacts` in `households/primary-contact.ts` does it in one
+   * batched query, and `ClientsService` resolves it in the list aggregation.
+   */
 
   @Prop({ type: ObjectIdType, ref: 'User' })
   assignedCrmId?: Types.ObjectId;
@@ -65,14 +73,59 @@ export class Household extends TenantRecord {
   isTestRecord: boolean;
 
   /**
-   * Set on create, and on reuse only when currently unset — a second lead for an
+   * The household's primary contact — the whole of the fact, and the only
+   * place it lives (PAC-91 §5).
+   *
+   * Set on create, and on reuse only when currently unset: a second lead for an
    * existing household must not reassign whoever its primary already is.
+   * Reassignment is a deliberate operation of its own (PAC-91 §7).
+   *
+   * A contact is the primary of **at most one** household (David, 2026-09-04),
+   * enforced by the partial unique index below rather than only by application
+   * code. `Contact.isPrimary` used to say the same thing from the other end and
+   * could not answer "primary *of what?*" once membership went many-to-many;
+   * it is gone.
    */
   @Prop({ type: ObjectIdType, ref: 'Contact', index: true })
   primaryContactId?: Types.ObjectId;
 
-  @Prop({ type: [{ type: ObjectIdType, ref: 'Contact' }], default: [] })
-  memberContactIds: Types.ObjectId[];
+  /**
+   * Why this household is flagged for someone to come back to (PAC-91 §7).
+   *
+   * One value today — `no_primary` — and a scalar rather than an array on the
+   * `AGENTS.md` §11 test: nothing here can say what a *second* simultaneous flag
+   * would mean, so it is not a list. Widen it when a second reason exists.
+   *
+   * Written **only** by the deliberate "leave this household without a primary
+   * contact" path, when a primary has died and no successor can be named. A
+   * household that simply never had one — 77 of them on the 2026-09-04
+   * production data — is not flagged, because nobody decided that.
+   * `primaryContactId: null` already says *what*; this says *somebody chose it
+   * and it still needs an answer*. Cleared the moment a primary is assigned.
+   *
+   * Its one reader is the Unlinked records work list (PAC-91 §10), and that
+   * view **projects it, never filters on it**: both classes of household —
+   * flagged and never-looked-at — are one list keyed on `primaryContactId`,
+   * with the reason shown on the row, because `no_primary` is not a resolution
+   * and a count that disagreed with the database would undermine the list.
+   *
+   * So it stays **unindexed**, deliberately: nothing queries it, and an index
+   * for a predicate nobody uses is the cost the two dead `producerId` indexes
+   * on `activities` taught.
+   */
+  @Prop({ type: String, trim: true })
+  dataQuality?: string;
+
+  /*
+   * ⚠ No `memberContactIds`, deliberately (PAC-91 §5).
+   *
+   * Membership is many-to-many and carries two facts that belong to the *pair*
+   * — the contact's role in this household, and when they left — neither of
+   * which an array of ids can hold. Ending a membership by `$pull` would also
+   * leave no record that the person was ever here, which is the loss §5
+   * describes from the other side. It lives in the `householdMembers`
+   * collection now; read it through `HouseholdMembersService`.
+   */
 
   @Prop({ type: [{ type: ObjectIdType, ref: 'Lead' }], default: [] })
   leadIds: Types.ObjectId[];
@@ -113,4 +166,27 @@ HouseholdSchema.index(
 HouseholdSchema.index(
   { agencyId: 1, addressKey: 1 },
   { partialFilterExpression: { addressKey: { $type: 'string' } } },
+);
+
+/**
+ * "Primary of at most one household" as an index (PAC-91 §5).
+ *
+ * Partial, not sparse, for the reason spelled out on `householdRef` above: a
+ * compound sparse index still indexes every document that has `agencyId`, so
+ * the 77 households with no primary contact would all collide on
+ * `(agencyId, null)`.
+ *
+ * ⚠ Declared here **and** built by
+ * `migrations/…-household-primary-contact-index.js`, deliberately — the same
+ * arrangement as the contact identity indexes and for the same reason.
+ * `autoIndex` creates a missing index silently and a unique build over
+ * conflicting data simply fails, leaving no uniqueness and nothing naming the
+ * rows responsible. The migration checks first and throws, naming them.
+ */
+HouseholdSchema.index(
+  { agencyId: 1, primaryContactId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { primaryContactId: { $type: 'objectId' } },
+  },
 );

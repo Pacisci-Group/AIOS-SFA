@@ -4,6 +4,7 @@ import { AuditGenerationModule } from '../audit-generation/audit-generation.modu
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { CrmRotationsModule } from '../crm-rotations/crm-rotations.module';
 import { CrmModule } from '../crm/crm.module';
+import { HouseholdMembersModule } from '../households/household-members.module';
 import { LeadsModule } from '../leads/leads.module';
 import {
   QuoteRecap,
@@ -41,6 +42,9 @@ import { SoldDealsService } from './sold-deals.service';
     // `LeadTicketsService` — resolves the lead's quote service ticket once the
     // sale has advanced it to Sold.
     CrmModule,
+    // The defensive-driver picker's roster and its per-household roles
+    // (PAC-91 §5).
+    HouseholdMembersModule,
   ],
   controllers: [SoldDealsController],
   providers: [SoldDealsService],

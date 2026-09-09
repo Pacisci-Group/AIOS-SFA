@@ -1,0 +1,56 @@
+meta {
+  name: Restore Primary Contact
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/households/{{householdId}}/primary-contact
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "contactId": {{householdPrimaryContactJson}},
+    "allowNoPrimary": true
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the household leads with whoever it led with before this folder ran", function () {
+    const primary = res.getBody().contacts.find((c) => c.isPrimary) || null;
+    const expected = bru.getVar("householdPrimaryContactId");
+    expect(primary ? primary.id : null).to.equal(expected || null);
+  });
+}
+
+docs {
+  # POST /households/:id/primary-contact — putting it back
+
+  The second half of the `Set Primary Contact` pairing, and the reason this
+  folder is re-runnable: `Get Household` captured whoever led the household
+  before anything here wrote, and this hands it back to them.
+
+  Without it, every run of the collection would leave a different Dana Tyson
+  leading the household, and `End Household Membership` below would then be
+  correctly refused with a 409 — the primary contact's membership cannot be
+  ended. Same pairing principle as `Add Household Member` /
+  `End Household Membership` and `Create Disposable Share Link` /
+  `Revoke Share Link`.
+
+  `contactId` is interpolated as **JSON**, not as a quoted string, so a
+  household the migration never gave a primary yields the literal `null` — which
+  `allowNoPrimary: true` then makes a legitimate answer rather than a 400.
+  `allowNoPrimary` is ignored whenever `contactId` is a real id, so the one body
+  covers both cases.
+}

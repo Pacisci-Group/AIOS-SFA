@@ -150,11 +150,21 @@ export class Lead extends TenantRecord {
   @Prop({ trim: true })
   lastName?: string;
 
-  @Prop({ type: [String], default: [] })
-  emails: string[];
-
-  @Prop({ type: [String], default: [] })
-  phones: string[];
+  /*
+   * ⚠ No `emails` / `phones`, deliberately (PAC-91 §1–§3).
+   *
+   * The lead used to hold a denormalised copy of its primary contact's details,
+   * and it is the reason most migrated leads rendered a blank Phone and Email
+   * column: the importer filled the copy from the SmartSuite *Leads* table's
+   * own columns, which are empty on legacy rows because the real values live on
+   * the linked contact. Nothing kept the copy in step afterwards either — an
+   * app-created lead only ever held what *its* submission supplied.
+   *
+   * Read the primary contact instead, through `primaryContactId` below (which
+   * PAC-91 Phase 1 now fills on every migrated lead). `firstName` / `lastName`
+   * stay: a lead can exist before anyone has decided which contact it belongs
+   * to, and the list has to render *something*.
+   */
 
   @Prop({ index: true })
   status?: string;

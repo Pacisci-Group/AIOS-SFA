@@ -92,6 +92,7 @@ export function HotLeadRow({ lead, isLast }: HotLeadRowProps) {
           leadId={lead.id}
           phone={lead.phone}
           email={lead.email}
+          deceasedAt={lead.primaryContactDeceasedAt}
         />
       </div>
     </div>

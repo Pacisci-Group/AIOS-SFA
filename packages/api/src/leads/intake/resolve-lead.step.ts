@@ -10,13 +10,7 @@ import { normalizeStoredAddress } from '../../common/address/household-address';
 import { resolvePolicyPropertyAddress } from '../../common/address/policy-property-address';
 import { Lead, LeadDocument } from '../schemas/lead.schema';
 import type { LeadPolicyOfInterest } from '../schemas/lead.schema';
-import {
-  buildAddressKey,
-  normalizeEmail,
-  normalizeName,
-  normalizePhone,
-  phonesMatch,
-} from './intake.normalize';
+import { buildAddressKey, normalizeName } from './intake.normalize';
 import {
   IntakeInput,
   ResolvedLead,
@@ -249,8 +243,6 @@ export class ResolveLeadStep {
     link: ResolvedMailerLink | null,
   ): Promise<ResolvedLead> {
     const now = new Date();
-    const email = normalizeEmail(input.primaryContact.email);
-    const phone = normalizePhone(input.primaryContact.phone);
 
     const [created] = await this.leadModel.create(
       [
@@ -259,8 +251,6 @@ export class ResolveLeadStep {
           branchId: deps.ctx.branchId,
           firstName: normalizeName(input.primaryContact.firstName),
           lastName: normalizeName(input.primaryContact.lastName),
-          emails: email ? [email] : [],
-          phones: phone ? [phone] : [],
           status: INITIAL_STATUS,
           temperature: INITIAL_TEMPERATURE,
           // Null on the public path — stored as the schema default
@@ -320,21 +310,12 @@ export class ResolveLeadStep {
     deps: StepDeps,
     link: ResolvedMailerLink | null,
   ): Promise<void> {
-    const email = normalizeEmail(input.primaryContact.email);
-    const phone = normalizePhone(input.primaryContact.phone);
-
-    const addToSet: Record<string, string> = {};
-    if (email && !(lead.emails ?? []).map(normalizeEmail).includes(email)) {
-      addToSet.emails = email;
-    }
-    if (
-      phone &&
-      !(lead.phones ?? [])
-        .map(normalizePhone)
-        .some((p) => phonesMatch(p, phone))
-    ) {
-      addToSet.phones = phone;
-    }
+    /*
+     * No contact details are merged onto the lead any more (PAC-91 §1–§3): it
+     * carries no copy of them. A submitted value that disagrees with the stored
+     * contact is handled once, in `ResolveContactStep`, which reports it on the
+     * timeline instead of recording a second identity.
+     */
 
     // Only fill genuinely empty fields.
     const set: Record<string, unknown> = { lastActivityAt: new Date() };
@@ -354,8 +335,10 @@ export class ResolveLeadStep {
       if (mailer) set.mailer = mailer;
     }
 
-    // Additive, like the contact details above: someone re-enquiring about a
-    // second line wants both quoted, so the union is the honest answer. Merged
+    // Additive: someone re-enquiring about a second line wants both quoted, so
+    // the union is the honest answer — a policy of interest is a request, not
+    // an identity, which is why it merges where a contact detail no longer
+    // does (PAC-91 §1). Merged
     // in code rather than with `$addToSet`, which compares whole sub-documents
     // — "Auto x1" and "Auto x2" are not two interests, they are one restated.
     // See {@link policyKey} for why the dwelling is part of that identity.
@@ -374,10 +357,7 @@ export class ResolveLeadStep {
 
     await this.leadModel.updateOne(
       { _id: lead._id },
-      {
-        $set: set,
-        ...(Object.keys(addToSet).length > 0 ? { $addToSet: addToSet } : {}),
-      },
+      { $set: set },
       sessionOptions(deps.session),
     );
   }

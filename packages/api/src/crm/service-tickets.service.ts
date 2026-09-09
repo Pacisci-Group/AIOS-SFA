@@ -528,7 +528,6 @@ export class ServiceTicketsService {
       linkedHousehold?.primaryContactName ||
       householdName ||
       'Unnamed client';
-    const primaryContact = linkedHousehold?.contacts?.find((c) => c.isPrimary);
 
     // Onboarding is a chain, not a single ticket. Creating one by hand starts
     // the whole journey — the parent record plus the welcome-call ticket — and
@@ -551,16 +550,10 @@ export class ServiceTicketsService {
         policyNumber: dto.policyNumber ?? linkedPolicy?.policyNumber ?? '',
         policyType: dto.policyType ?? linkedPolicy?.policyType ?? '',
         householdName: dto.household ?? householdName ?? '',
-        phone:
-          dto.phone ??
-          primaryContact?.phones?.[0] ??
-          linkedHousehold?.primaryPhones?.[0] ??
-          '',
-        email:
-          dto.email ??
-          primaryContact?.emails?.[0] ??
-          linkedHousehold?.primaryEmails?.[0] ??
-          '',
+        // Resolved from the primary contact by `getHousehold` (PAC-91 §1) —
+        // the household stores no copy of either.
+        phone: dto.phone ?? linkedHousehold?.primaryPhone ?? '',
+        email: dto.email ?? linkedHousehold?.primaryEmail ?? '',
         createdByUserId: access.userId,
         createdByName,
         openingNote: dto.openingNote?.trim(),
@@ -603,16 +596,8 @@ export class ServiceTicketsService {
       household: dto.household ?? householdName ?? '',
       policyId: dto.policyId ? new Types.ObjectId(dto.policyId) : null,
       householdId: householdId ? new Types.ObjectId(householdId) : null,
-      phone:
-        dto.phone ??
-        primaryContact?.phones?.[0] ??
-        linkedHousehold?.primaryPhones?.[0] ??
-        '',
-      email:
-        dto.email ??
-        primaryContact?.emails?.[0] ??
-        linkedHousehold?.primaryEmails?.[0] ??
-        '',
+      phone: dto.phone ?? linkedHousehold?.primaryPhone ?? '',
+      email: dto.email ?? linkedHousehold?.primaryEmail ?? '',
       openedAt: now,
       lastActivityAt: now,
       resolvedAt: isTerminalTicketStatus(dto.status ?? 'open') ? now : null,
@@ -1564,8 +1549,8 @@ export class ServiceTicketsService {
           group.policies[0]?.policyNumber ||
           'Renewal',
         householdName: household?.name ?? '',
-        phone: household?.primaryPhones?.[0] ?? '',
-        email: household?.primaryEmails?.[0] ?? '',
+        phone: household?.primaryPhone ?? '',
+        email: household?.primaryEmail ?? '',
         currentStepKey: null,
         completedAt: null,
         // The client's CSR owns the outreach. This matters more than it looks:

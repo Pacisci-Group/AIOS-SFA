@@ -21,6 +21,16 @@ export interface HotLeadRow {
   phone: string | null;
   email: string | null;
   /**
+   * `YYYY-MM-DD` when the lead's primary contact has died (PAC-91 §7).
+   *
+   * The panel's whole purpose is to say who to call next, so this is the one
+   * dashboard field that has to know: the quick actions above it place a
+   * `tel:` / `sms:` / `mailto:`, and offering those for somebody who has died
+   * is the outbound case §7 excludes. The row still renders — the lead is real
+   * and the producer needs to see what happened to it.
+   */
+  primaryContactDeceasedAt: string | null;
+  /**
    * The narrative line: the most recent activity's summary.
    *
    * A mix of system-generated events (`lead_created`, `quoted`, `sold`) and

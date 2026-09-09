@@ -56,6 +56,8 @@ import {
   EMPTY_CAMPAIGN_FORM,
   campaignFormSchema,
   fromDefaults,
+  toCampaignName,
+  toCampaignNumber,
   toCampaignSettings,
   type CampaignFormValues,
 } from "./campaign-schemas";
@@ -133,9 +135,11 @@ export default function RunCampaignPage() {
     mutationFn: (values: CampaignFormValues) =>
       createCampaign({
         file: file as File,
-        name: values.name.trim() || undefined,
+        // Both derived from the year and the week — the only two things step 1
+        // collects for a campaign's identity.
+        name: toCampaignName(values.campaignYear, values.campaignWeek),
         source,
-        campaignNumber: values.campaignNumber.trim() || undefined,
+        campaignNumber: toCampaignNumber(values.campaignWeek),
         assignment: values.assignment,
         settings: toCampaignSettings(values),
       }),
@@ -190,9 +194,8 @@ export default function RunCampaignPage() {
     mutationFn: (values: CampaignFormValues) => {
       if (!campaign) throw new Error("There is no campaign to update.");
       return updateCampaign(campaign.id, {
-        // Blank means "keep the generated one" server-side, not "erase it".
-        name: values.name.trim() || undefined,
-        campaignNumber: values.campaignNumber.trim(),
+        name: toCampaignName(values.campaignYear, values.campaignWeek),
+        campaignNumber: toCampaignNumber(values.campaignWeek),
         assignment: values.assignment,
         settings: {
           ...toCampaignSettings(values),

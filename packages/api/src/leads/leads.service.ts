@@ -12,6 +12,11 @@ import {
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
+import {
+  loadContactDetails,
+  type ContactDetails,
+} from '../contacts/contact-details';
+import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { escapeRegex } from '../common/mongo/escape-regex';
 import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
@@ -23,26 +28,33 @@ import { IntakeContext } from './intake/intake.types';
 import { LeadListResponse, LeadRow } from './leads.types';
 import { Lead, LeadDocument } from './schemas/lead.schema';
 
+/**
+ * How many contacts one email/phone term may resolve into an `$in`.
+ *
+ * Same rule and the same reason as `CHILD_MATCH_CAP` on the Clients page: a
+ * very broad term returns the first page of matches rather than building an
+ * unbounded `$in`, which is the right trade for a search box nobody uses one
+ * character at a time.
+ */
+const CONTACT_MATCH_CAP = 500;
+
 /** Lean projection of the fields the list renders. */
 type LeadLean = Pick<
   Lead,
-  | 'firstName'
-  | 'lastName'
-  | 'emails'
-  | 'phones'
-  | 'status'
-  | 'temperature'
-  | 'quoteControlNumber'
+  'firstName' | 'lastName' | 'status' | 'temperature' | 'quoteControlNumber'
 > & {
   _id: Types.ObjectId;
   leadSource?: NormalizedLeadSource;
   lastActivityAt?: Date;
+  primaryContactId?: Types.ObjectId;
 };
 
 @Injectable()
 export class LeadsService {
   constructor(
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
+    @InjectModel(Contact.name)
+    private readonly contactModel: Model<ContactDocument>,
     private readonly tenancy: TenantContextResolver,
     private readonly intake: LeadIntakeService,
     private readonly leadAccess: LeadAccessService,
@@ -135,7 +147,7 @@ export class LeadsService {
   ): Promise<LeadListResponse> {
     const { page, pageSize } = query;
 
-    const filter = this.buildFilter(access, branchId, query);
+    const filter = await this.buildFilter(access, branchId, query);
 
     const total = await this.leadModel.countDocuments(filter);
 
@@ -150,21 +162,33 @@ export class LeadsService {
       .limit(pageSize)
       .lean<LeadLean[]>();
 
+    // One batched lookup for the page, not one per row — the lead's own copy of
+    // the primary contact's phone and email is gone (PAC-91 §2).
+    const contacts = await loadContactDetails(
+      this.contactModel,
+      records.map((record) => record.primaryContactId),
+    );
+
     return {
       page,
       pageSize,
       total,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
-      items: records.map((record) => this.toRow(record)),
+      items: records.map((record) => this.toRow(record, contacts)),
     };
   }
 
-  /** Compose the tenancy/scope clamp, the facet filters, and the search. */
-  private buildFilter(
+  /**
+   * Compose the tenancy/scope clamp, the facet filters, and the search.
+   *
+   * Async since PAC-91: an email or phone term resolves `contacts` first,
+   * because the lead no longer carries a copy of either.
+   */
+  private async buildFilter(
     access: AccessContext,
     branchId: string | null,
     query: ListLeadsDto,
-  ): FilterQuery<LeadDocument> {
+  ): Promise<FilterQuery<LeadDocument>> {
     // Tenancy + data-scope clamp. `scope`/`producerId` are the client's
     // *request*; `buildScopeFilter` only ever lets them narrow.
     const filter: FilterQuery<LeadDocument> = buildScopeFilter<LeadDocument>(
@@ -225,7 +249,7 @@ export class LeadsService {
       ];
     }
 
-    const search = this.buildSearch(query.search);
+    const search = await this.buildSearch(access.agencyId ?? '', query.search);
     if (search) {
       filter.$and = [...(filter.$and ?? []), search];
     }
@@ -262,20 +286,26 @@ export class LeadsService {
    * - Legacy matched only `first_name` server-side and refined the rest in
    *   memory. Every branch below is exact and server-side.
    */
-  private buildSearch(raw?: string): FilterQuery<LeadDocument> | null {
+  private async buildSearch(
+    agencyId: string,
+    raw?: string,
+  ): Promise<FilterQuery<LeadDocument> | null> {
     const q = (raw ?? '').trim();
     if (!q) return null;
 
     if (q.includes('@')) {
-      // Mongo matches array fields element-wise, so this hits any of `emails`.
-      return { emails: { $regex: escapeRegex(q), $options: 'i' } };
+      return this.byPrimaryContact(agencyId, {
+        email: { $regex: escapeRegex(q), $options: 'i' },
+      });
     }
 
     const digits = q.replace(/\D/g, '');
     if (digits.length >= 7) {
       return {
         $or: [
-          { phones: { $regex: this.phoneRegex(digits) } },
+          await this.byPrimaryContact(agencyId, {
+            phone: { $regex: this.phoneRegex(digits) },
+          }),
           { quoteControlNumber: { $regex: escapeRegex(q), $options: 'i' } },
         ],
       };
@@ -314,22 +344,62 @@ export class LeadsService {
   }
 
   /**
+   * Leads whose **primary contact** matches an email or phone predicate
+   * (PAC-91 §1–§3).
+   *
+   * The lead used to carry its own `emails` / `phones` copy and this was a
+   * regex over those arrays — which is also why the search found nothing for
+   * most migrated leads: the copy was empty. Two queries rather than a
+   * `$lookup` because the list is a `find()` whose sort is index-served, and
+   * `contacts` is reached by `{ agencyId, email }` / `{ agencyId, phone }`
+   * (declared on `ContactSchema` for exactly this).
+   *
+   * Capped for the same reason the Clients page caps its child resolution: a
+   * broad term must not build an unbounded `$in`. A lead with no
+   * `primaryContactId` is unreachable this way — as it was before, since its
+   * copy was empty too.
+   */
+  private async byPrimaryContact(
+    agencyId: string,
+    predicate: FilterQuery<ContactDocument>,
+  ): Promise<FilterQuery<LeadDocument>> {
+    const contacts = await this.contactModel
+      .find({ agencyId, ...predicate })
+      .select('_id')
+      .limit(CONTACT_MATCH_CAP)
+      .lean<Array<{ _id: Types.ObjectId }>>();
+
+    return {
+      primaryContactId: { $in: contacts.map((contact) => contact._id) },
+    };
+  }
+
+  /**
    * Match a digits-only query against phone numbers stored in whatever format
    * the source system used — `5551234` becomes `5\D*5\D*5\D*1\D*2\D*3\D*4`, so
    * it hits `(555) 123-4xxx` and `555.1234` alike.
    *
    * The input is digits only, so the pattern is injection-safe by construction.
-   * It is not index-backed, but it always runs ANDed under `agencyId` (plus the
-   * producer or branch clamp), which keeps the scanned set small. If this shows
-   * up in profiling, the fix is a stored `phonesNormalized` field + backfill —
-   * a separate ticket, not a speculative addition here.
+   * It runs against `contacts` under `agencyId`, which keeps the scanned set to
+   * one agency's index range rather than the collection.
    */
   private phoneRegex(digits: string): string {
     return digits.split('').join('\\D*');
   }
 
-  /** Map a stored document to the display-ready row DTO. */
-  private toRow(record: LeadLean): LeadRow {
+  /**
+   * Map a stored document to the display-ready row DTO.
+   *
+   * `contacts` is the primary-contact details resolved for this page — the lead
+   * carries no email or phone of its own any more (PAC-91 §2). A lead with no
+   * primary contact shows blanks, which is the honest rendering of a record
+   * nobody has linked yet; before PAC-91 *most* migrated leads showed blanks
+   * because the copy the list read was never filled.
+   */
+  private toRow(
+    record: LeadLean,
+    contacts: Map<string, ContactDetails>,
+  ): LeadRow {
     const name = [record.firstName, record.lastName]
       .filter((part) => Boolean(part?.trim()))
       .join(' ')
@@ -339,6 +409,9 @@ export class LeadsService {
       record.leadSource?.code,
       record.leadSource?.label,
     );
+    const contact = record.primaryContactId
+      ? contacts.get(record.primaryContactId.toString())
+      : undefined;
 
     return {
       id: record._id.toString(),
@@ -346,8 +419,8 @@ export class LeadsService {
       leadSource: source.label,
       status: normalizeLeadStatus(record.status),
       temperature: record.temperature ?? 'Unknown',
-      phone: record.phones?.[0] ?? null,
-      email: record.emails?.[0] ?? null,
+      phone: contact?.phone ?? null,
+      email: contact?.email ?? null,
       updatedAt: record.lastActivityAt?.toISOString() ?? null,
     };
   }

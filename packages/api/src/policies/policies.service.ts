@@ -35,6 +35,8 @@ import {
   snapshot,
 } from '../activities/change-log';
 import { CarriersService } from '../carriers/carriers.service';
+import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
+import { loadPrimaryContacts } from '../households/primary-contact';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   Household,
@@ -142,6 +144,8 @@ export class PoliciesService {
     private readonly householdModel: Model<HouseholdDocument>,
     @InjectModel(Activity.name)
     private readonly activityModel: Model<ActivityDocument>,
+    @InjectModel(Contact.name)
+    private readonly contactModel: Model<ContactDocument>,
     private readonly carriers: CarriersService,
   ) {}
 
@@ -615,17 +619,24 @@ export class PoliciesService {
 
     const households = await this.householdModel
       .find({ _id: { $in: ids } })
-      .select('name primaryContactName')
+      .select('name primaryContactId')
       .lean<
         Array<{
           _id: Types.ObjectId;
           name?: string;
-          primaryContactName?: string;
+          primaryContactId?: Types.ObjectId;
         }>
       >();
 
+    // The primary contact's name, resolved through the ref: the household
+    // stores no copy of it (PAC-91 §4), and the copy this used to read was
+    // empty on every migrated household — so these rows all fell through to
+    // the household's own name.
+    const primary = await loadPrimaryContacts(this.contactModel, households);
+
     for (const household of households) {
-      const name = household.primaryContactName ?? household.name;
+      const name =
+        primary.get(household._id.toString())?.name ?? household.name;
       if (name) map.set(household._id.toString(), name);
     }
     return map;

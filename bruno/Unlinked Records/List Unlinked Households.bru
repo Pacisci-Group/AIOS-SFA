@@ -1,0 +1,123 @@
+meta {
+  name: List Unlinked Households
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/clients/unlinked?kind=households&page=1&pageSize=25
+  body: none
+  auth: inherit
+}
+
+params:query {
+  kind: households
+  page: 1
+  pageSize: 25
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope discriminated by kind", function () {
+    const body = res.getBody();
+    expect(body.kind).to.equal("households");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("the envelope is internally consistent", function () {
+    // Always runs, whatever the seed holds: a page never exceeds its own size,
+    // and `totalPages` is derived from `total`, never reported independently.
+    const body = res.getBody();
+    expect(body.items.length).to.be.at.most(body.pageSize);
+    expect(body.totalPages).to.equal(
+      Math.max(1, Math.ceil(body.total / body.pageSize)),
+    );
+  });
+
+  test("agrees with the count on the chip", function () {
+    const counted = bru.getVar("unlinkedHouseholdCount");
+    if (counted !== undefined) {
+      expect(res.getBody().total).to.equal(counted);
+    }
+  });
+
+  test("every row carries the two signals that make it actionable", function () {
+    const items = res.getBody().items;
+    for (const row of items) {
+      // How many people a primary could be picked from — 0 means "add a member
+      // first", which is a different job.
+      expect(row.memberCount).to.be.a("number");
+      // 'no_primary' when somebody deliberately left it without one (§7),
+      // null when nobody has looked. Both are in this one list.
+      expect(
+        row.dataQuality === null || row.dataQuality === "no_primary",
+      ).to.equal(true);
+      expect(row).to.not.have.property("primaryContactId");
+      expect(row).to.not.have.property("isTestRecord");
+      expect(row).to.not.have.property("agencyId");
+    }
+  });
+}
+
+docs {
+  # GET /clients/unlinked?kind=households
+
+  Households with **no primary contact** — 59 on the 2026-09-04 production data
+  (PAC-91 §10).
+
+  - **Module:** `clients`
+  - **Permission:** `clients:read`
+  - **Data scope:** `own` collapses to **branch**
+
+  ## One list, not two
+  Two situations satisfy "no primary contact", and this returns both:
+
+  | `dataQuality` | Meaning |
+  |---|---|
+  | `"no_primary"` | Somebody **decided** to leave it without one (PAC-91 §7) — almost always a death with no successor |
+  | `null` | Nobody has ever looked |
+
+  They are one list because the predicate is the same, because `no_primary` is
+  not a resolution (the answer is still "add a member and name them"), and
+  because a count that disagreed with the database would undermine the one thing
+  a data-quality list is for. The reason travels **on the row** so the UI can
+  say which is which.
+
+  This endpoint is the **only reader** `Household.dataQuality` has. It is
+  projected, never used as a filter — which is why the field stays unindexed and
+  Phase 5 ships no migration.
+
+  ## Response
+  `{ kind, page, pageSize, total, totalPages, items: UnlinkedHouseholdRow[] }`
+
+  A row is `id`, `householdRef`, `name`, `status`, `city`, `state`,
+  `totalActivePolicies`, `memberCount`, `dataQuality`, `createdAt`.
+
+  - **`memberCount`** — **current** memberships (`endedAt: null`), the pool a
+    primary can be named from. `0` means a member has to be added before anybody
+    can lead the household, which is a different job from picking one, and it is
+    the number that tells the two apart at a glance.
+  - `city`/`state` come from `resolveHouseholdAddress`, which coerces the three
+    writers' differing key shapes into one — never read `propertyAddress` raw.
+
+  Rows exclude `isTestRecord` households.
+
+  ## What the client does with a row
+  Opens `/clients/:id` and uses **Change** on the primary-contact block —
+  `POST /households/:id/primary-contact`, shipped in PAC-91 §7. This is the one
+  kind whose fix is fully in the app already.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | `kind` missing or outside the vocabulary, `page`/`pageSize` out of bounds |
+  | 401 | Missing/expired bearer token |
+  | 403 | `clients` disabled, or the caller lacks `clients:read` |
+}
