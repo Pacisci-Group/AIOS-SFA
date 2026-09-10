@@ -1,21 +1,24 @@
+import { searchDigits } from '@sfa/shared';
 import {
   MATCHES_NOTHING,
+  addressPaths,
+  buildSearchFilter,
   phoneDigitsRegex,
   tokenRegex,
-  tokenizedOr,
-  tokenizedOrAsync,
 } from './search-filter';
 
 const FIELDS = ['firstName', 'lastName', 'address.city'] as const;
 
 /** The filter shape these helpers build, narrowed enough to assert against. */
-type TokenizedFilter = {
-  $and?: Array<{ $or: Array<Record<string, { $regex: string }>> }>;
+type Clause = { $or: Array<Record<string, { $regex: string }>> };
+type Built = {
+  $and?: Clause[];
+  $or?: Array<{ $and?: Clause[] } & Record<string, unknown>>;
 } | null;
 
-/** The regex each clause carries, sorted — `$and` itself is order-insensitive. */
+/** The regex each token clause carries, sorted — `$and` is order-insensitive. */
 function patternsOf(filter: unknown): string[] {
-  const clauses = (filter as TokenizedFilter)?.$and ?? [];
+  const clauses = (filter as Built)?.$and ?? [];
   return clauses.map((clause) => clause.$or[0].firstName.$regex).sort();
 }
 
@@ -30,6 +33,17 @@ describe('tokenRegex', () => {
   });
 });
 
+describe('addressPaths', () => {
+  it('expands a root into the four sub-fields', () => {
+    expect(addressPaths('address')).toEqual([
+      'address.street',
+      'address.city',
+      'address.state',
+      'address.zip',
+    ]);
+  });
+});
+
 describe('phoneDigitsRegex', () => {
   it('matches a stored number in whatever format it was saved in', () => {
     const pattern = new RegExp(phoneDigitsRegex('9185550134'));
@@ -40,15 +54,16 @@ describe('phoneDigitsRegex', () => {
   });
 
   it('does not match a different number', () => {
-    const pattern = new RegExp(phoneDigitsRegex('9185550134'));
-    expect(pattern.test('(918) 555-9999')).toBe(false);
+    expect(
+      new RegExp(phoneDigitsRegex('9185550134')).test('(918) 555-9999'),
+    ).toBe(false);
   });
 });
 
-describe('tokenizedOr', () => {
-  it('ANDs the tokens and ORs each across every field', () => {
+describe('buildSearchFilter — token clause', () => {
+  it('ANDs the tokens and ORs each across every field', async () => {
     // The `smith tulsa` criterion: the two tokens match *different* fields.
-    expect(tokenizedOr('smith tulsa', FIELDS)).toEqual({
+    expect(await buildSearchFilter('smith tulsa', { fields: FIELDS })).toEqual({
       $and: [
         {
           $or: [
@@ -68,76 +83,142 @@ describe('tokenizedOr', () => {
     });
   });
 
-  it('matches a full name in either order', () => {
-    // `$and` is order-insensitive, so both queries select the same documents:
-    // each demands a `john` hit and a `smith` hit, in any field.
-    expect(patternsOf(tokenizedOr('John Smith', FIELDS))).toEqual([
-      'john',
-      'smith',
-    ]);
-    expect(patternsOf(tokenizedOr('Smith John', FIELDS))).toEqual([
-      'john',
-      'smith',
-    ]);
-  });
-
-  it('is null — never MATCHES_NOTHING — for a cleared input', () => {
-    // Clearing the box must list the first page, not empty the table.
-    expect(tokenizedOr('', FIELDS)).toBeNull();
-    expect(tokenizedOr('   ', FIELDS)).toBeNull();
-    expect(tokenizedOr(undefined, FIELDS)).toBeNull();
-  });
-
-  it('caps fan-out at four tokens', () => {
+  it('matches a full name in either order', async () => {
+    // `$and` is order-insensitive, so both queries select the same documents.
     expect(
-      tokenizedOr('one two three four five six', FIELDS)?.$and,
-    ).toHaveLength(4);
+      patternsOf(await buildSearchFilter('John Smith', { fields: FIELDS })),
+    ).toEqual(['john', 'smith']);
+    expect(
+      patternsOf(await buildSearchFilter('Smith John', { fields: FIELDS })),
+    ).toEqual(['john', 'smith']);
+  });
+
+  it('is null — never MATCHES_NOTHING — for a cleared input', async () => {
+    // Clearing the box must list the first page, not empty the table.
+    expect(await buildSearchFilter('', { fields: FIELDS })).toBeNull();
+    expect(await buildSearchFilter('   ', { fields: FIELDS })).toBeNull();
+    expect(await buildSearchFilter(undefined, { fields: FIELDS })).toBeNull();
+  });
+
+  it('caps fan-out at four tokens', async () => {
+    const filter = (await buildSearchFilter('one two three four five six', {
+      fields: FIELDS,
+    })) as Built;
+    expect(filter?.$and).toHaveLength(4);
   });
 });
 
-describe('tokenizedOrAsync', () => {
-  /** Stands in for a capped child-collection lookup. */
+describe('buildSearchFilter — token branches', () => {
   const contactBranch = (token: string) =>
     Promise.resolve(
       token === 'tulsa' ? { primaryContactId: { $in: ['c1'] } } : null,
     );
 
   it('adds a resolved branch to that token OR, without losing the fields', async () => {
-    const filter = (await tokenizedOrAsync('tulsa', FIELDS, [
-      contactBranch,
-    ])) as TokenizedFilter;
+    const filter = (await buildSearchFilter('tulsa', {
+      fields: FIELDS,
+      tokenBranches: [contactBranch],
+    })) as Built;
     const or = filter?.$and?.[0]?.$or;
     expect(or).toHaveLength(FIELDS.length + 1);
     expect(or?.at(-1)).toEqual({ primaryContactId: { $in: ['c1'] } });
   });
 
-  it('runs each resolver once per token', async () => {
+  it('runs each token branch once per token', async () => {
     const seen: string[] = [];
-    await tokenizedOrAsync('smith tulsa', FIELDS, [
-      (token) => {
-        seen.push(token);
-        return Promise.resolve(null);
-      },
-    ]);
+    await buildSearchFilter('smith tulsa', {
+      fields: FIELDS,
+      tokenBranches: [
+        (token) => {
+          seen.push(token);
+          return Promise.resolve(null);
+        },
+      ],
+    });
     expect(seen).toEqual(['smith', 'tulsa']);
   });
 
-  it('a resolver finding nothing removes a branch, never the token', async () => {
-    const filter = (await tokenizedOrAsync('smith', FIELDS, [
-      contactBranch,
-    ])) as TokenizedFilter;
+  it('a branch finding nothing removes a branch, never the token', async () => {
+    const filter = (await buildSearchFilter('smith', {
+      fields: FIELDS,
+      tokenBranches: [contactBranch],
+    })) as Built;
     expect(filter?.$and?.[0]?.$or).toHaveLength(FIELDS.length);
   });
 
-  it('is null for a cleared input, before any resolver runs', async () => {
+  it('does not run any resolver for a cleared input', async () => {
     const resolver = jest.fn(() => Promise.resolve(null));
-    expect(await tokenizedOrAsync('', FIELDS, [resolver])).toBeNull();
+    expect(
+      await buildSearchFilter('', {
+        fields: FIELDS,
+        tokenBranches: [resolver],
+      }),
+    ).toBeNull();
     expect(resolver).not.toHaveBeenCalled();
   });
 
   it('is MATCHES_NOTHING when a real query has nowhere left to match', async () => {
-    // A supplied query with no fields and no resolved branches is a genuine
-    // empty result, not "no filter".
-    expect(await tokenizedOrAsync('smith', [], [])).toEqual(MATCHES_NOTHING);
+    expect(await buildSearchFilter('smith', { fields: [] })).toEqual(
+      MATCHES_NOTHING,
+    );
+  });
+});
+
+describe('buildSearchFilter — whole-term branches', () => {
+  /**
+   * The case that forced term branches to exist: normalization splits a printed
+   * phone number into three tokens, none of them phone-shaped, and no field
+   * holds all three. Only the raw term can answer it.
+   */
+  const phoneBranch = (raw: string) => {
+    const digits = searchDigits(raw);
+    return Promise.resolve(
+      digits.length >= 7
+        ? { phone: { $regex: phoneDigitsRegex(digits) } }
+        : null,
+    );
+  };
+
+  it.each(['(918) 555-0134', '918-555-0134', '9185550134', '918.555.0134'])(
+    'resolves %s to the same phone branch',
+    async (typed) => {
+      const filter = (await buildSearchFilter(typed, {
+        fields: FIELDS,
+        termBranches: [phoneBranch],
+      })) as Built;
+      const branch = filter?.$or?.at(-1) as { phone: { $regex: string } };
+      expect(branch.phone.$regex).toBe(phoneDigitsRegex('9185550134'));
+    },
+  );
+
+  it('ORs the term branch around the token clause, not inside it', async () => {
+    const filter = (await buildSearchFilter('9185550134', {
+      fields: FIELDS,
+      termBranches: [phoneBranch],
+    })) as Built;
+    // Either every token matches, or the whole term is that phone number.
+    expect(filter?.$or).toHaveLength(2);
+    expect(filter?.$or?.[0]).toHaveProperty('$and');
+  });
+
+  it('leaves the token clause alone when no term branch resolves', async () => {
+    const filter = (await buildSearchFilter('smith', {
+      fields: FIELDS,
+      termBranches: [phoneBranch],
+    })) as Built;
+    expect(filter?.$or).toBeUndefined();
+    expect(filter?.$and).toHaveLength(1);
+  });
+
+  it('answers on the term branch alone when the tokens have no fields', async () => {
+    // A phone-only search surface: nothing to match by name, but the number
+    // still resolves.
+    const filter = (await buildSearchFilter('9185550134', {
+      fields: [],
+      termBranches: [phoneBranch],
+    })) as Built;
+    expect(filter).toEqual({
+      phone: { $regex: phoneDigitsRegex('9185550134') },
+    });
   });
 });

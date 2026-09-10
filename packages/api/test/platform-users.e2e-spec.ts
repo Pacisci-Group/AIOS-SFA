@@ -123,6 +123,38 @@ describe('Platform user directory (e2e)', () => {
     expect(found).not.toContain(ctx.producerEmail);
   });
 
+  it('searches by agency slug, which the Agency cell renders', async () => {
+    // PAC-101 rule 1: the slug is on screen, so it has to be searchable. Only
+    // the main agency's slug carries both tokens — nothing about the other
+    // tenant's user says "test".
+    const found = emails(await list({ q: 'test-agency' }));
+    expect(found).toContain(ctx.producerEmail);
+    expect(found).not.toContain(ctx.otherAgencyUserEmail);
+  });
+
+  it('searches by branch name, a rendered column that was never searched', async () => {
+    // Without the branch arm the `branch` token matches nothing for anybody and
+    // this comes back empty, so the assertion genuinely exercises it.
+    const found = emails(await list({ q: 'Test Branch' }));
+    expect(found).toContain(ctx.producerEmail);
+    expect(found).not.toContain(ctx.otherAgencyUserEmail);
+  });
+
+  it('matches multi-token queries across different fields', async () => {
+    // The `smith tulsa` criterion: `producer` is a surname and a role name,
+    // `other` is an agency name. Neither field holds both.
+    expect(emails(await list({ q: 'producer other' }))).toEqual([
+      ctx.otherAgencyUserEmail,
+    ]);
+  });
+
+  it('matches a full name in either order', async () => {
+    // Used to need an `$expr`/`$concat` branch; tokenizing gets it for free.
+    expect(emails(await list({ q: 'Producer Other' }))).toEqual([
+      ctx.otherAgencyUserEmail,
+    ]);
+  });
+
   it('narrows to the selected agencies', async () => {
     const body = await list({ agencyIds: ctx.otherAgencyId });
     expect(body.total).toBe(1);

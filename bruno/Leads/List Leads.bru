@@ -137,15 +137,44 @@ docs {
   that is not 24 hex characters is a `400`, not a `500` — the shape is checked
   in the DTO so a malformed id never reaches Mongoose as a `CastError`.
 
-  ### How `search` is interpreted
-  One branch is chosen by the shape of the query:
+  ### How `search` is interpreted (PAC-101)
 
-  1. contains `@` → **email** on the lead's **primary contact**
-  2. else ≥ 7 digits after stripping non-digits → **phone** on the primary
-     contact (digit-tolerant, so `5551234` matches `(555) 123-4xxx`) **or**
-     quote control number
-  3. else → **name** (first, last, or the combined `first last`), **lead source
-     label**, or **quote control number**
+  **Nothing short-circuits.** The query is lower-cased, stripped of accents and
+  split on whitespace/punctuation into at most 4 tokens; **every token must
+  match something, but not all in the same field.** So `smith tulsa` finds a
+  Smith in Tulsa, and `John Smith` matches `firstName`/`lastName` in either
+  order.
+
+  Each token is matched as a case-insensitive **substring** against:
+
+  | Field | Note |
+  |---|---|
+  | `firstName`, `lastName` | a bare surname reaches `lastName: "ANN SMITH"` |
+  | `leadSource.label` | normalized label, never a raw choice code |
+  | `quoteControlNumber` | |
+  | `address.*` | the living address intake writes (street/city/state/zip) |
+  | `propertyAddress.*` | the lead-level address only migrated leads carry |
+  | `policiesOfInterest[].propertyAddress.*` | per-policy dwelling addresses |
+  | primary contact `email` | resolved through `contacts`, capped at 500 |
+
+  Two things are matched against the **whole, untokenized** query and ORed
+  around the rest, because splitting them destroys them:
+
+  - **phone** on the primary contact — `(918) 555-0134`, `918-555-0134` and
+    `9185550134` are the same query, and match a stored number in whatever
+    format the source system used. Ignored below 7 digits.
+  - **quote control number** as typed, so `QCN-11741` is not split into
+    `qcn` + `11741`. Ignored below 4 characters.
+
+  This replaces exclusive shape routing, where a term containing `@` was
+  searched as an email *and nothing else*, and a term with 7+ digits as a phone
+  or QCN *and nothing else* — so a lead with an all-digit control number could
+  not be found by name.
+
+  `status` and `temperature` are deliberately **not** searched: both have their
+  own filter, and folding them into free text would make `new` match every lead
+  whose street is "Newton". An empty or whitespace-only `search` is **no
+  filter**, never an impossible one.
 
   Since PAC-91 §2 the lead carries **no** email or phone of its own, so 1 and 2
   resolve `contacts` first (through `{agencyId, email}` / `{agencyId, phone}`,

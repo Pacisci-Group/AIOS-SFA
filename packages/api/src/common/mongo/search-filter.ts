@@ -22,6 +22,13 @@ import { escapeRegex } from './escape-regex';
  * record split across `firstName` and `lastName` in either order without an
  * `$expr`/`$concat` stage.
  *
+ * ⚠ **Some queries must not be tokenized**, and that is what
+ * {@link TermBranchResolver} is for. Splitting on punctuation is what makes
+ * `Smith-Jones` searchable as two words, but it also turns `(918) 555-0134`
+ * into three tokens too short to look like a phone number. Values that are one
+ * indivisible thing — a phone number, a control number — are matched against
+ * the raw term and ORed *around* the token clause.
+ *
  * ## Cost
  *
  * A case-insensitive *contains* regex is a scan; no index serves one. That is a
@@ -79,80 +86,123 @@ export function phoneDigitsRegex(digits: string): string {
 }
 
 /**
- * Extra `$or` branches for one token, beyond the plain field matches — a
- * child-collection lookup resolved to ids, typically.
+ * Address sub-fields, in the order a person reads them.
  *
- * Returning `null` means "this token has nothing to add here", which is not the
- * same as `MATCHES_NOTHING`: the token may still match a plain field.
+ * Exported because three collections store an address under different roots and
+ * every one of them wants the same four paths searched — restating the list per
+ * call site is how one of them ends up missing `zip`.
+ */
+export const ADDRESS_SUBFIELDS = ['street', 'city', 'state', 'zip'] as const;
+
+/** `addressPaths('address')` -> `['address.street', …]`. */
+export function addressPaths(root: string): string[] {
+  return ADDRESS_SUBFIELDS.map((field) => `${root}.${field}`);
+}
+
+/**
+ * An extra `$or` branch for **one token** — typically a child-collection
+ * lookup resolved to ids.
+ *
+ * `null` means "this token has nothing to add here", which is not the same as
+ * `MATCHES_NOTHING`: the token may still match a plain field.
  */
 export type TokenBranchResolver<T> = (
   token: string,
 ) => Promise<FilterQuery<T> | null>;
 
 /**
- * The AND-of-ORs for a set of fields, or `null` for a query with nothing
- * searchable in it.
+ * An extra `$or` branch for the **whole, untokenized query**.
  *
- * `null` rather than `MATCHES_NOTHING` is load-bearing: `?q=` is what a cleared
- * input sends, and it has to reach the caller as "no filter". Read as an
- * impossible filter, clearing the search box would empty the table.
+ * ⚠ This exists because tokenizing destroys some queries. Normalization turns
+ * punctuation into a separator — which is what makes `Smith-Jones` searchable
+ * as two words — but it also splits `(918) 555-0134` into `918`, `555`, `0134`:
+ * three tokens, none of them long enough to look like a phone number, and no
+ * lead field that all three appear in. A per-token phone branch can never fire.
+ *
+ * So anything that reads the query as **one indivisible value** — a phone
+ * number, a control number, a policy number — is resolved here instead, from
+ * the raw term, and ORed *around* the token clause rather than inside it.
  */
-export function tokenizedOr<T>(
-  raw: unknown,
-  fields: readonly string[],
-): FilterQuery<T> | null {
-  const tokens = searchTokens(raw);
-  if (!tokens.length || !fields.length) return null;
+export type TermBranchResolver<T> = (
+  raw: string,
+) => Promise<FilterQuery<T> | null>;
 
-  return {
-    $and: tokens.map((token) => ({
-      $or: fields.map((field) => ({ [field]: tokenRegex(token) })),
-    })),
-  } as FilterQuery<T>;
+export interface SearchFilterOptions<T> {
+  /** Document paths matched as a case-insensitive contains, per token. */
+  fields: readonly string[];
+  /** Extra branches resolved once per token, ANDed with the other tokens. */
+  tokenBranches?: readonly TokenBranchResolver<T>[];
+  /** Extra branches resolved once for the whole term, ORed around the rest. */
+  termBranches?: readonly TermBranchResolver<T>[];
 }
 
 /**
- * {@link tokenizedOr}, plus per-token branches that need a query of their own —
- * a contact's email, an agency's name, a branch's name.
+ * The filter behind one search box, or `null` for a query with nothing
+ * searchable in it.
  *
- * Resolvers run **once per token** and all in parallel, so a four-token query
- * costs at most `tokens × resolvers` small indexed lookups, resolved in one
- * round of `Promise.all` rather than serially. Each resolver is responsible for
- * its own cap.
+ * ```
+ * $or: [ { $and: [ {$or: [f~tok1, …]}, {$or: [f~tok2, …]} ] },  // all tokens
+ *        <whole-term branch>,                                    // …or a phone
+ *        <whole-term branch> ]                                   // …or a QCN
+ * ```
  *
- * `extraFieldsOnly` tokens are still ORed with the plain fields — a resolver
- * that finds nothing removes a branch, it never removes the token.
+ * `null` rather than {@link MATCHES_NOTHING} is load-bearing: `?q=` is what a
+ * cleared input sends, and it has to reach the caller as "no filter". Read as
+ * an impossible filter, clearing the search box would empty the table.
+ *
+ * Resolvers run in parallel — a four-token query with two token branches and
+ * one term branch costs nine small indexed lookups in one round of
+ * `Promise.all`, not nine round trips. Each resolver caps its own `$in`.
  */
-export async function tokenizedOrAsync<T>(
+export async function buildSearchFilter<T>(
   raw: unknown,
-  fields: readonly string[],
-  resolvers: readonly TokenBranchResolver<T>[] = [],
+  options: SearchFilterOptions<T>,
 ): Promise<FilterQuery<T> | null> {
   const tokens = searchTokens(raw);
   if (!tokens.length) return null;
 
-  const resolved = await Promise.all(
-    tokens.map((token) =>
-      Promise.all(resolvers.map((resolve) => resolve(token))),
+  const { fields, tokenBranches = [], termBranches = [] } = options;
+  const term = typeof raw === 'string' ? raw.trim() : '';
+
+  const [perToken, perTerm] = await Promise.all([
+    Promise.all(
+      tokens.map((token) =>
+        Promise.all(tokenBranches.map((resolve) => resolve(token))),
+      ),
     ),
-  );
+    Promise.all(termBranches.map((resolve) => resolve(term))),
+  ]);
 
   const clauses = tokens.map((token, index) => {
     const or: FilterQuery<T>[] = fields.map(
       (field) => ({ [field]: tokenRegex(token) }) as FilterQuery<T>,
     );
-    for (const branch of resolved[index]) {
+    for (const branch of perToken[index]) {
       if (branch) or.push(branch);
     }
     return { $or: or };
   });
 
-  // Every token resolved to an empty `$or` — possible only when `fields` is
-  // empty and no resolver matched. That is a real "nothing matches", not "no
-  // filter": the caller did supply a query.
-  if (clauses.every((clause) => clause.$or.length === 0)) {
-    return MATCHES_NOTHING;
+  // A plain loop, not `.filter()` with a type predicate: `Promise.all` widens
+  // the element type through `Awaited<>`, and TS will not accept a predicate
+  // narrowing to `FilterQuery<T>` from that because a generic `T` could itself
+  // be a thenable.
+  const alternatives: FilterQuery<T>[] = [];
+  for (const branch of perTerm) {
+    if (branch) alternatives.push(branch);
   }
 
-  return { $and: clauses };
+  // Every token resolved to an empty `$or`: possible only when `fields` is
+  // empty and no token branch matched. A supplied query with nowhere left to
+  // match is a genuine empty result, not "no filter" — unless a whole-term
+  // branch still answers it.
+  const tokensMatchNothing = clauses.every((clause) => clause.$or.length === 0);
+  if (tokensMatchNothing) {
+    if (!alternatives.length) return MATCHES_NOTHING;
+    return alternatives.length === 1 ? alternatives[0] : { $or: alternatives };
+  }
+
+  const tokenClause = { $and: clauses } as FilterQuery<T>;
+  if (!alternatives.length) return tokenClause;
+  return { $or: [tokenClause, ...alternatives] };
 }

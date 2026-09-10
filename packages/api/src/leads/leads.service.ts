@@ -6,9 +6,11 @@ import {
   LEAD_SOURCE_NONE,
   NormalizedLeadSource,
   ServiceTicketView,
+  isPhoneLike,
   leadStatusQueryValues,
   normalizeLeadSource,
   normalizeLeadStatus,
+  searchDigits,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
@@ -17,7 +19,12 @@ import {
   type ContactDetails,
 } from '../contacts/contact-details';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
-import { escapeRegex } from '../common/mongo/escape-regex';
+import {
+  addressPaths,
+  buildSearchFilter,
+  phoneDigitsRegex,
+  tokenRegex,
+} from '../common/mongo/search-filter';
 import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { LeadAccessService } from './lead-access.service';
@@ -37,6 +44,57 @@ import { Lead, LeadDocument } from './schemas/lead.schema';
  * character at a time.
  */
 const CONTACT_MATCH_CAP = 500;
+
+/**
+ * Every lead field the search box looks at.
+ *
+ * A superset of the rendered columns, which is the rule PAC-101 exists to
+ * enforce — plus the identity fields a row does not show but a producer still
+ * pastes in. `status` and `temperature` are deliberately absent: both have
+ * their own facet, and folding them into free text would make `new` match every
+ * lead whose street is "Newton".
+ *
+ * **Three address roots, because a lead has had three.** `address` is the
+ * living address intake writes today; `propertyAddress` is the lead-level one
+ * PAC-56 #14 stopped writing but every migrated lead still carries; and
+ * `policiesOfInterest[].propertyAddress` is where a dwelling address lives now
+ * that one lead can ask about a home *and* a rental. Searching only the first
+ * would make a new lead's rental address unfindable — the exact class of bug
+ * this ticket is about. Mongo matches a dotted path into an array against any
+ * element, so the third needs no `$elemMatch`.
+ */
+const LEAD_SEARCH_FIELDS = [
+  'firstName',
+  'lastName',
+  'leadSource.label',
+  'quoteControlNumber',
+  ...addressPaths('address'),
+  ...addressPaths('propertyAddress'),
+  ...addressPaths('policiesOfInterest.propertyAddress'),
+] as const;
+
+/**
+ * A quote control number, matched against the **whole** term.
+ *
+ * `QCN-11741` tokenizes to `qcn` + `11741`, and ANDing those is not what a
+ * producer who pasted the number meant. Legacy tested `/^[a-z0-9]{8,}$/` for
+ * this *first and exclusively*, so an ordinary surname was treated as a control
+ * number and a real `QCN-11741` failed the test on its own hyphen. It is one
+ * alternative among several now, and it never suppresses the others.
+ */
+function byQuoteControlNumber(term: string): FilterQuery<LeadDocument> | null {
+  const trimmed = term.trim();
+  if (trimmed.length < MIN_CONTROL_NUMBER_SEARCH_LENGTH) return null;
+  return { quoteControlNumber: tokenRegex(trimmed) };
+}
+
+/**
+ * Below this, a control-number "match" is noise — every two-character term
+ * would drag the whole lead collection into the query for nothing. Mirrors the
+ * floors on `MIN_POLICY_NUMBER_KEY_LENGTH` and
+ * `MIN_MAILER_CONTROL_NUMBER_KEY_LENGTH`, which exist for the same reason.
+ */
+const MIN_CONTROL_NUMBER_SEARCH_LENGTH = 4;
 
 /** Lean projection of the fields the list renders. */
 type LeadLean = Pick<
@@ -276,71 +334,71 @@ export class LeadsService {
   }
 
   /**
-   * Interpret the free-text query by shape, as legacy did — with its two worst
-   * quirks fixed:
+   * The filter behind the Leads search box.
    *
-   * - Legacy tested `/^[a-z0-9]{8,}$/` for a quote control number *first and
-   *   exclusively*, so an ordinary surname like "Rodriguez" was treated as a QCN
-   *   search (and a real `QCN-11741` failed the regex because of the hyphen).
-   *   Here QCN is just one more branch of the general `$or`.
-   * - Legacy matched only `first_name` server-side and refined the rest in
-   *   memory. Every branch below is exact and server-side.
+   * ## What was wrong (PAC-101)
+   *
+   * This routed by shape and **returned early**: a term containing `@` was
+   * searched as an email and nothing else, and a term with seven or more digits
+   * as a phone or control number and nothing else. So a producer whose lead had
+   * an all-digit quote control number could not find it by name, and an email
+   * query could never fall back to anything. Legacy had the same disease in a
+   * different place, and the docblock here used to claim it was cured.
+   *
+   * Every branch is ORed now. Shape decides what a term is *worth trying as*,
+   * never what it is *limited to*.
+   *
+   * ## Why phone and QCN are whole-term branches
+   *
+   * Tokenizing splits on punctuation, so a pasted `(918) 555-0134` becomes
+   * `918`, `555`, `0134` — three tokens, none of them phone-shaped, and no lead
+   * field carries all three. Those two are matched against the raw term and
+   * ORed around the token clause; see `TermBranchResolver`.
    */
-  private async buildSearch(
+  private buildSearch(
     agencyId: string,
     raw?: string,
   ): Promise<FilterQuery<LeadDocument> | null> {
-    const q = (raw ?? '').trim();
-    if (!q) return null;
-
-    if (q.includes('@')) {
-      return this.byPrimaryContact(agencyId, {
-        email: { $regex: escapeRegex(q), $options: 'i' },
-      });
-    }
-
-    const digits = q.replace(/\D/g, '');
-    if (digits.length >= 7) {
-      return {
-        $or: [
-          await this.byPrimaryContact(agencyId, {
-            phone: { $regex: this.phoneRegex(digits) },
-          }),
-          { quoteControlNumber: { $regex: escapeRegex(q), $options: 'i' } },
-        ],
-      };
-    }
-
-    const escaped = escapeRegex(q);
-    const contains = { $regex: escaped, $options: 'i' };
-    return {
-      $or: [
-        { firstName: contains },
-        { lastName: contains },
-        // Matches a full "first last" query, which neither single field can.
-        {
-          $expr: {
-            $regexMatch: {
-              input: {
-                $trim: {
-                  input: {
-                    $concat: [
-                      { $ifNull: ['$firstName', ''] },
-                      ' ',
-                      { $ifNull: ['$lastName', ''] },
-                    ],
-                  },
-                },
-              },
-              regex: escaped,
-              options: 'i',
-            },
-          },
-        },
-        { 'leadSource.label': contains },
-        { quoteControlNumber: contains },
+    return buildSearchFilter<LeadDocument>(raw, {
+      fields: LEAD_SEARCH_FIELDS,
+      tokenBranches: [(token) => this.byContactEmail(agencyId, token)],
+      termBranches: [
+        (term) => this.byContactPhone(agencyId, term),
+        (term) => Promise.resolve(byQuoteControlNumber(term)),
       ],
-    };
+    });
+  }
+
+  /**
+   * Leads whose **primary contact's** email contains the token.
+   *
+   * Not gated on the term containing `@`: a producer searching `rodriguez`
+   * should reach `maria.rodriguez@example.com`, and half the addresses in the
+   * book are `firstname.lastname@` anyway.
+   */
+  private byContactEmail(
+    agencyId: string,
+    token: string,
+  ): Promise<FilterQuery<LeadDocument> | null> {
+    return this.byPrimaryContact(agencyId, { email: tokenRegex(token) });
+  }
+
+  /**
+   * Leads whose **primary contact's** phone matches the whole term, digits
+   * only, in whatever format it was stored.
+   *
+   * Below {@link MIN_PHONE_SEARCH_DIGITS} this resolves to nothing rather than
+   * to a broad match: a four-digit run appears inside ZIPs, policy numbers and
+   * street numbers alike, so matching on one is noise, not a result.
+   */
+  private byContactPhone(
+    agencyId: string,
+    term: string,
+  ): Promise<FilterQuery<LeadDocument> | null> {
+    if (!isPhoneLike(term)) return Promise.resolve(null);
+    return this.byPrimaryContact(agencyId, {
+      phone: { $regex: phoneDigitsRegex(searchDigits(term)) },
+    });
   }
 
   /**
@@ -358,33 +416,24 @@ export class LeadsService {
    * broad term must not build an unbounded `$in`. A lead with no
    * `primaryContactId` is unreachable this way — as it was before, since its
    * copy was empty too.
+   *
+   * `null`, not an empty `$in`, when nothing matches: as one branch of an `$or`
+   * an unsatisfiable clause is dead weight the planner still has to carry.
    */
   private async byPrimaryContact(
     agencyId: string,
     predicate: FilterQuery<ContactDocument>,
-  ): Promise<FilterQuery<LeadDocument>> {
+  ): Promise<FilterQuery<LeadDocument> | null> {
     const contacts = await this.contactModel
       .find({ agencyId, ...predicate })
       .select('_id')
       .limit(CONTACT_MATCH_CAP)
       .lean<Array<{ _id: Types.ObjectId }>>();
 
+    if (!contacts.length) return null;
     return {
       primaryContactId: { $in: contacts.map((contact) => contact._id) },
     };
-  }
-
-  /**
-   * Match a digits-only query against phone numbers stored in whatever format
-   * the source system used — `5551234` becomes `5\D*5\D*5\D*1\D*2\D*3\D*4`, so
-   * it hits `(555) 123-4xxx` and `555.1234` alike.
-   *
-   * The input is digits only, so the pattern is injection-safe by construction.
-   * It runs against `contacts` under `agencyId`, which keeps the scanned set to
-   * one agency's index range rather than the collection.
-   */
-  private phoneRegex(digits: string): string {
-    return digits.split('').join('\\D*');
   }
 
   /**
