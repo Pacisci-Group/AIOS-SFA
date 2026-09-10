@@ -88,6 +88,40 @@ export function listUsers() {
   return apiFetch<AgencyUser[]>('/users');
 }
 
+/**
+ * One assignable person, for a picker.
+ *
+ * Not a row of {@link AgencyUser}: a picker renders a name and needs the whole
+ * list at once, where the directory renders eleven fields and is about to grow
+ * pagination (PAC-101). The server does the filtering all three call sites used
+ * to do in the browser — active people only, platform admins excluded — so
+ * there is nothing left here to filter.
+ */
+export interface AgencyUserOption {
+  _id: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+/**
+ * Everyone who can be assigned work. **Unpaginated on purpose** — see
+ * `AgencyUserOption`; a picker showing page 1 of 3 is a bug.
+ */
+export function listUserOptions() {
+  return apiFetch<AgencyUserOption[]>('/users/options');
+}
+
+/**
+ * The cache key every picker shares.
+ *
+ * ⚠ Invalidate this **alongside** `['users']` on anything that changes the
+ * roster — inviting, deactivating, reactivating. They were already two keys
+ * before PAC-101 and only `['users']` was ever invalidated, so the Lead Owner
+ * and Audit Assignee pickers went stale until remount.
+ */
+export const agencyUserOptionsKey = ['agency-users'] as const;
+
 export function inviteUser(input: InviteUserInput) {
   return apiFetch<InviteResponse>('/users/invite', {
     method: 'POST',

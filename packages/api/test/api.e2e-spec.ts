@@ -739,6 +739,71 @@ describe('SFA API (e2e)', () => {
       expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(2);
     });
 
+    describe('GET /api/v1/users/options (PAC-101)', () => {
+      const options = async (token: string) => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/users/options')
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as Array<{
+          _id: string;
+          email: string;
+          firstName?: string;
+          lastName?: string;
+        }>;
+      };
+
+      it('is a bare array, not a paginated envelope', async () => {
+        // Deliberate: a picker renders every option at once, and one showing
+        // page 1 of 3 is a bug. `GET /users` is the one that paginates.
+        const body = await options(ownerToken);
+        expect(Array.isArray(body)).toBe(true);
+        expect(body.length).toBeGreaterThanOrEqual(2);
+      });
+
+      it('is not swallowed by the :userId route', async () => {
+        // `@Get('options')` has to be declared above `@Get(':userId')` or Nest
+        // matches the bare param first and `options` arrives as a user id —
+        // which would 404, not 200.
+        const body = await options(ownerToken);
+        expect(body.every((row) => row.email.includes('@'))).toBe(true);
+      });
+
+      it('carries only what a <Select> renders', async () => {
+        const [row] = await options(ownerToken);
+        expect(Object.keys(row).sort()).toEqual(
+          ['_id', 'email', 'firstName', 'lastName'].filter((key) =>
+            Object.prototype.hasOwnProperty.call(row, key),
+          ),
+        );
+        expect(row).not.toHaveProperty('roleIds');
+        expect(row).not.toHaveProperty('deactivatedAt');
+        expect(row).not.toHaveProperty('passwordHash');
+      });
+
+      it('excludes the platform admin', async () => {
+        const emails = (await options(ownerToken)).map((row) => row.email);
+        expect(emails).not.toContain(seed.superAdminEmail);
+        expect(emails).toContain(seed.producerEmail);
+      });
+
+      it('is sorted by last name, then first, then email', async () => {
+        const keys = (await options(ownerToken)).map((row) =>
+          [row.lastName ?? '', row.firstName ?? '', row.email]
+            .join(' ')
+            .toLowerCase(),
+        );
+        expect(keys).toEqual([...keys].sort());
+      });
+
+      it('needs agency:users:read', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users/options')
+          .set(authHeader(readOnlyToken))
+          .expect(403);
+      });
+    });
+
     it('GET /api/v1/users/assignable-permissions', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/v1/users/assignable-permissions')

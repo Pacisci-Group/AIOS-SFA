@@ -48,6 +48,17 @@ export class UsersController {
     return this.usersService.listAssignablePermissions(agencyId);
   }
 
+  /**
+   * ⚠ Declared **before** `@Get(':userId')`. Nest matches in declaration order,
+   * so a literal path after a bare param is swallowed by it and `options`
+   * arrives as a user id — the same reason `assignable-permissions` sits above.
+   */
+  @Get('options')
+  @RequirePermissions(AgencyPermission.UsersRead)
+  options(@AgencyId() agencyId: string) {
+    return this.usersService.listOptions(agencyId);
+  }
+
   @Get(':userId')
   @RequirePermissions(AgencyPermission.UsersRead)
   getOne(@AgencyId() agencyId: string, @Param('userId') userId: string) {

@@ -24,7 +24,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { usePermissions } from "@/hooks/usePermissions";
-import { listUsers } from "@/lib/users-api";
+import { agencyUserOptionsKey, listUserOptions } from "@/lib/users-api";
 import {
   ANY_OPTION,
   countActiveFilters,
@@ -63,15 +63,19 @@ export function LeadsFilterSheet({
   const { can } = usePermissions();
   const canListUsers = can("agency:users:read");
 
+  // ⚠ `agencyUserOptionsKey`, not `["users"]`. This used to share a cache
+  // entry with the agency directory, which coexisted only because both wanted
+  // the same unpaginated roster — and stops being true the moment `GET /users`
+  // paginates (PAC-101).
   const producersQuery = useQuery({
-    queryKey: ["users"],
-    queryFn: listUsers,
+    queryKey: agencyUserOptionsKey,
+    queryFn: listUserOptions,
     // Only owners/managers may read the agency directory; asking without the
     // permission would just 403.
     enabled: open && showProducerFilter && canListUsers,
   });
 
-  const producers = (producersQuery.data ?? []).filter((u) => !u.isPlatformAdmin);
+  const producers = producersQuery.data ?? [];
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

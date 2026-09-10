@@ -59,6 +59,7 @@ import {
   MintedInvite,
   PasswordResetResponse,
   UserDetailResponse,
+  AgencyUserOption,
 } from './users.types';
 
 /**
@@ -91,6 +92,30 @@ export class UsersService {
     private tenantBranding: TenantBrandingService,
     private hostResolver: HostTenantResolver,
   ) {}
+
+  /**
+   * Everyone in the agency who can be assigned work, for a picker (PAC-101).
+   *
+   * Split out from `findByAgency` because the two answer different questions
+   * and only one of them is about to grow pagination. See `AgencyUserOption`
+   * for why a picker must not paginate.
+   *
+   * Sorted the way a person scans a list, with the same collation the directory
+   * uses so "adams" does not sort after "Zimmer"; `email` is the tiebreak
+   * because it is unique.
+   */
+  async listOptions(agencyId: string): Promise<AgencyUserOption[]> {
+    return this.userModel
+      .find({
+        agencyId: new Types.ObjectId(agencyId),
+        isPlatformAdmin: { $ne: true },
+        isActive: true,
+      })
+      .select('email firstName lastName')
+      .collation({ locale: 'en', strength: 2 })
+      .sort({ lastName: 1, firstName: 1, email: 1 })
+      .lean<AgencyUserOption[]>();
+  }
 
   async findByAgency(agencyId: string): Promise<AgencyUserListItem[]> {
     const users = await this.userModel
