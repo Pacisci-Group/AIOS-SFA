@@ -1,0 +1,183 @@
+meta {
+  name: List Service Tickets
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/crm/service-tickets?pageSize=5
+  body: none
+  auth: bearer
+}
+
+params:query {
+  pageSize: 5
+  ~page: 1
+  ~tab: overdue
+  ~category: Renewal Review
+  ~status: open
+  ~search: smith
+  ~archived: true
+}
+
+auth:bearer {
+  token: {{crmAccessToken}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope, not a bare array", function () {
+    const body = res.getBody();
+    expect(body).to.be.an("object");
+    expect(body.items).to.be.an("array");
+    expect(body.page).to.be.a("number");
+    expect(body.pageSize).to.be.a("number");
+    expect(body.total).to.be.a("number");
+    expect(body.totalPages).to.be.a("number");
+  });
+
+  test("honours the requested page size", function () {
+    // The cap is what makes this pagination rather than a suggestion: without
+    // it a client could ask for the collection back and undo the change.
+    expect(res.getBody().items.length).to.be.at.most(5);
+  });
+
+  test("carries the three tab counts", function () {
+    const counts = res.getBody().counts;
+    expect(counts.all).to.be.a("number");
+    expect(counts.overdue).to.be.a("number");
+    expect(counts.waiting).to.be.a("number");
+  });
+
+  test("counts describe the filtered set, not the page", function () {
+    const body = res.getBody();
+    // `counts.all` is every ticket matching scope + filters; `items` is one
+    // page of them. Equal only when the whole set fits on one page.
+    expect(body.counts.all).to.be.at.least(body.items.length);
+    expect(body.total).to.be.at.least(body.items.length);
+  });
+
+  test("rows arrive in urgency order — overdue first", function () {
+    // The server ranks by urgencyRank -> urgencyAt -> priorityRank -> _id, so
+    // the client renders them as given. Checking the leading bucket is enough
+    // to catch the sort being dropped or reversed, which is the failure that
+    // looks like nothing at all.
+    const overdue = res.getBody().items.map(function (t) {
+      return t.status === "overdue";
+    });
+    const lastOverdue = overdue.lastIndexOf(true);
+    const firstOther = overdue.indexOf(false);
+    if (lastOverdue !== -1 && firstOther !== -1) {
+      expect(lastOverdue).to.be.below(firstOther);
+    }
+  });
+
+  test("every ticket carries the fields the queue renders", function () {
+    for (const ticket of res.getBody().items) {
+      expect(ticket).to.have.property("id");
+      expect(ticket).to.have.property("ticketNumber");
+      expect(ticket).to.have.property("clientName");
+      expect(ticket).to.have.property("category");
+      expect(ticket).to.have.property("status");
+      expect(ticket).to.have.property("priority");
+      expect(ticket).to.have.property("daysOpen");
+      expect(ticket).to.have.property("isStatusLocked");
+      expect(ticket.timeline).to.be.an("array");
+    }
+  });
+
+  test("leadStatus is null on list responses", function () {
+    for (const ticket of res.getBody().items) {
+      expect(ticket.leadStatus).to.equal(null);
+    }
+  });
+}
+
+docs {
+  # GET /crm/service-tickets
+
+  The ticket queue. Backs the **Priority Ticket Queue** on the Service Dashboard
+  (`/crm/service`), the **Ticket Workspace** feed (`/crm/tickets`) and the
+  **Archived Tickets** list.
+
+  - **Module:** `crm_service`
+  - **Permission:** `crm_service:read`
+  - **Data scope:** `own` sees tickets assigned to the caller, `branch` the
+    caller's branch, `agency` the whole agency.
+
+  ## ⚠ Paginated since PAC-98 — this used to return `ServiceTicketView[]`
+
+  It returned **every** ticket in the caller's scope in one response, and the
+  browser did the ranking, the paging and the tab counts. That worked until a
+  rep's queue reached several hundred, at which point the dashboard's first
+  paint grew with the size of the book. The response is now an envelope and the
+  work happens in Mongo.
+
+  ## Params
+  | Param | In | Notes |
+  |---|---|---|
+  | `page` | query | 1-based. Default 1. |
+  | `pageSize` | query | Default 8, **capped at 100**. Past the cap is a 400, not a clamp — a silent clamp is how "pagination" becomes a suggestion. |
+  | `tab` | query | `all` (default) · `overdue` · `waiting`. The queue's three tabs, as a server-side predicate. |
+  | `category` | query | One of `SERVICE_TICKET_CATEGORIES`. |
+  | `status` | query | One stored status. |
+  | `search` | query | Free text over client name, ticket number, category, policy number and phone. Max 120 chars. |
+  | `archived` | query | `true` returns only tickets past the archive window; omitted returns the active queue. |
+
+  ## Response — `ServiceTicketListResponse`
+
+  ```json
+  {
+    "page": 1,
+    "pageSize": 8,
+    "total": 577,
+    "totalPages": 73,
+    "items": [ /* ServiceTicketView */ ],
+    "counts": { "all": 706, "overdue": 577, "waiting": 27 }
+  }
+  ```
+
+  - **`total`** is the count for the *current tab*; `totalPages` derives from it.
+  - **`counts`** is all three tabs over the filtered set (scope, category,
+    search, archive window) but **before** the tab narrows it — which is what
+    the tab chips have always meant: "how many would this tab show".
+
+  ## Ordering — render as given
+
+  Rows come back in urgency order: `urgencyRank` → `urgencyAt` → `priorityRank`
+  → `_id`. That ranking is a total order across the whole queue, so **a client
+  must not re-sort a page**: doing so orders that page against itself rather
+  than against the pages either side of it.
+
+  The first three are stored columns, materialized precisely so this sort can be
+  served by an index — a computed sort key cannot be, and Mongo would answer
+  with an in-memory sort over the caller's entire scope, which is the cost
+  pagination exists to remove. `_id` is the final tiebreak because it is unique:
+  a non-unique tiebreak lets a row appear on two pages or neither.
+
+  See `migrations/20260910123159-queue-sort-indexes.js` for the two indexes that
+  serve it (one per data scope) and the measurements behind them.
+
+  ## Statuses are stored, not derived
+
+  A scheduled onboarding or renewal call takes its status from step timing, and
+  that used to be computed on every read — leaving the stored column stale and
+  the tab filters unusable server-side. `SyncTicketStatusFn` now advances the
+  column on a five-minute cron, so `?tab=` and `?status=` mean what they say.
+  The cost is bounded staleness: a call that crossed its deadline within the
+  last tick may still read `open`.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | `pageSize` above 100, unknown `tab`/`status`/`category`, `search` over 120 chars |
+  | 401 | Missing/expired bearer token |
+  | 403 | `crm_service` disabled for the agency, or the caller lacks `crm_service:read` |
+}

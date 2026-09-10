@@ -15,6 +15,9 @@ import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
 import { SoldIntakeModule } from '../sold-deals/intake/sold-intake.module';
 import { PolicyTransfersService } from './policy-transfers.service';
+import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { TicketNumberService } from '../common/tickets/ticket-number.service';
+import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import {
   AgencyRole,
   AgencyRoleSchema,
@@ -81,6 +84,11 @@ import {
       { name: Onboarding.name, schema: OnboardingSchema },
       { name: RenewalCycle.name, schema: RenewalCycleSchema },
       { name: RenewalScanState.name, schema: RenewalScanStateSchema },
+      // The renewal materializer resolves a cycle's client name and contact
+      // details through `household.primaryContactId` (PAC-91 §4), rather than
+      // through `ClientsService.getHousehold` — which builds the whole 360°
+      // view, and which the worker could not import anyway.
+      { name: Contact.name, schema: ContactSchema },
     ]),
   ],
   controllers: [ServiceTicketsController],
@@ -88,6 +96,11 @@ import {
     ServiceTicketsService,
     LeadTicketsService,
     PolicyTransfersService,
+    // Both live in `common/` so the worker can reach them across its import
+    // boundary (PAC-99). Provided here as well so the API side resolves the
+    // same classes rather than a second copy.
+    TicketNumberService,
+    RenewalMaterializationService,
   ],
   // `LeadTicketsService` is consumed by `LeadsModule` (open the ticket, resolve
   // it on a manual status edit) and `SoldDealsModule` (resolve it when a sale

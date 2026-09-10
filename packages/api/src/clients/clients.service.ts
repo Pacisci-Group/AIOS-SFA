@@ -75,18 +75,10 @@ import { routeSearchTerm } from './search-routing';
  * strings) because the scheduler does arithmetic on them; `branchId` comes
  * through as the plain string this collection stores.
  */
-export interface PolicyRenewalCandidate {
-  id: string;
-  policyNumber: string;
-  policyType: string;
-  carrier: string;
-  premium: number;
-  renewalDate: Date | null;
-  expirationDate: Date | null;
-  householdId: string | null;
-  dealId: string | null;
-  branchId: string | null;
-}
+import type { PolicyRenewalCandidate } from '../common/renewal/renewal-scheduling';
+// Re-exported so the many call sites that import this type from the service
+// keep working; the declaration itself moved to `common/` for the worker.
+export type { PolicyRenewalCandidate };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

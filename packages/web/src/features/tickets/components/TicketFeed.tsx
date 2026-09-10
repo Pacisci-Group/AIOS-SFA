@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { FilterToggles } from "@/components/common/FilterToggles";
-import { compareTicketUrgency } from "@/lib/ticket-urgency";
 import { cn } from "@/lib/utils";
 import {
   CATEGORY_SHORT,
@@ -24,6 +23,21 @@ import {
 } from "./ticket-data";
 
 type FilterTab = "all" | "open" | "waiting" | "resolved";
+
+/**
+ * The feed's three controls, owned by the page rather than the feed.
+ *
+ * Lifted out in PAC-98. They used to be local state filtering an array the
+ * page had already fetched in full; now the list is paged server-side, so a
+ * filter applied here would only ever narrow the page in front of you. The
+ * page holds them, sends them with the request, and resets to page 1 when
+ * they change.
+ */
+export interface TicketFeedFilters {
+  query: string;
+  filter: FilterTab;
+  category: ServiceTicketCategory | 'all';
+}
 
 interface TicketFeedProps {
   tickets: Ticket[];
@@ -35,6 +49,10 @@ interface TicketFeedProps {
    */
   showStatusTabs?: boolean;
   emptyLabel?: string;
+  filters: TicketFeedFilters;
+  onFiltersChange: (next: TicketFeedFilters) => void;
+  /** Categories to offer, from the whole queue rather than the loaded page. */
+  categoryOptions?: readonly ServiceTicketCategory[];
 }
 
 const TABS: readonly { label: string; value: FilterTab }[] = [
@@ -60,47 +78,37 @@ export function TicketFeed({
   onSelect,
   showStatusTabs = true,
   emptyLabel = "No tickets match your search.",
+  filters,
+  onFiltersChange,
+  categoryOptions,
 }: TicketFeedProps) {
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<FilterTab>("all");
-  const [category, setCategory] = useState<ServiceTicketCategory | "all">("all");
+  const { query, filter, category } = filters;
+  const setQuery = (next: string) => onFiltersChange({ ...filters, query: next });
+  const setFilter = (next: FilterTab) =>
+    onFiltersChange({ ...filters, filter: next });
+  const setCategory = (next: ServiceTicketCategory | "all") =>
+    onFiltersChange({ ...filters, category: next });
 
-  // Only offer categories actually present in the queue — a picker listing all
-  // twelve when the CSR has three is noise.
-  const availableCategories = useMemo(
-    () =>
-      SERVICE_TICKET_CATEGORIES.filter((c) =>
-        tickets.some((t) => t.category === c),
-      ),
-    [tickets],
-  );
+  /*
+   * The picker offers the whole vocabulary unless the page supplies a list.
+   *
+   * It used to derive the options from `tickets` — "only offer categories
+   * actually present in the queue". That reasoning does not survive paging:
+   * `tickets` is now one page, so the options would change under the rep as
+   * they page, and a category would vanish from the picker while its tickets
+   * sat on page two. Same trap PAC-97 hit on the dashboard queue.
+   */
+  const availableCategories = categoryOptions ?? SERVICE_TICKET_CATEGORIES;
 
-  const filtered = useMemo(() => {
-    const matches = tickets.filter((t) => {
-      const matchesFilter =
-        filter === "all" ||
-        (filter === "open" && (t.status === "open" || t.status === "overdue")) ||
-        (filter === "waiting" && t.status === "waiting") ||
-        (filter === "resolved" && t.status === "resolved");
-
-      const matchesCategory = category === "all" || t.category === category;
-
-      const q = query.toLowerCase();
-      const matchesQuery =
-        !q ||
-        t.clientName.toLowerCase().includes(q) ||
-        t.ticketNumber.toLowerCase().includes(q) ||
-        t.category.toLowerCase().includes(q) ||
-        t.policyNumber.includes(q) ||
-        t.phone.includes(q);
-
-      return matchesFilter && matchesCategory && matchesQuery;
-    });
-
-    // Same ranking the Service Dashboard queue uses, so a ticket holds the
-    // same relative position wherever it is seen.
-    return matches.sort(compareTicketUrgency);
-  }, [tickets, filter, category, query]);
+  /*
+   * The rows as the server sent them.
+   *
+   * The status, category and text filtering that used to happen here is now
+   * part of the request (PAC-98), and the ranking comes back applied — so
+   * there is nothing left to do but render. Re-sorting would order one page
+   * against itself rather than against the pages either side of it.
+   */
+  const filtered = tickets;
 
   return (
     <div className="flex h-full flex-col overflow-hidden border-border bg-card lg:border-r">

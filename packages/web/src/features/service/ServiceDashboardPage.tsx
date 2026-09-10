@@ -1,9 +1,13 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Search, ChevronDown, Archive, Plus } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
+import type {
+  ServiceTicketCategory,
+  ServiceTicketQueueTab,
+} from "@sfa/shared";
 import { CreateTicketDialog } from "./components/CreateTicketDialog";
 import { ScorecardRow } from "./components/ScorecardRow";
 import { PriorityTicketQueue } from "./components/PriorityTicketQueue";
@@ -28,15 +32,46 @@ const FALLBACK_STATS: ServiceTicketStats = {
   avgLobDensity: 0,
 };
 
+/**
+ * Rows per page of the Priority Ticket Queue.
+ *
+ * Sent explicitly rather than left to the API's default so the two cannot
+ * drift: this number also decides the card's height, and a server that
+ * silently returned a different count would leave the card half empty.
+ */
+const TICKET_PAGE_SIZE = 8;
+
 export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  /*
+   * The queue's tab, page and type live in the URL — `PriorityTicketQueue`
+   * owns writing them — and since PAC-98 they are query parameters on the
+   * request rather than a client-side filter. Read them here so the fetch and
+   * the query key move together: a key that ignored them would serve page 1's
+   * rows for page 3.
+   */
+  const [searchParams] = useSearchParams();
+  const tab = (searchParams.get("tab") ?? "all") as ServiceTicketQueueTab;
+  const page = Number(searchParams.get("page")) || 1;
+  const category = searchParams.get("type") ?? undefined;
+
   const ticketsQuery = useQuery({
-    queryKey: ["service-tickets"],
-    queryFn: () => listServiceTickets(),
+    queryKey: ["service-tickets", { tab, page, category }],
+    queryFn: () =>
+      listServiceTickets({
+        tab,
+        page,
+        pageSize: TICKET_PAGE_SIZE,
+        category: category as ServiceTicketCategory | undefined,
+      }),
+    // Keep the previous page on screen while the next one loads. Without it
+    // every page turn blanks the list and collapses the card's height, which
+    // reads as a bug rather than a fetch.
+    placeholderData: (previous) => previous,
   });
   const statsQuery = useQuery({
     queryKey: ["service-tickets", "stats"],
@@ -63,7 +98,7 @@ export default function App() {
     },
   });
 
-  const tickets = ticketsQuery.data ?? [];
+  const ticketPage = ticketsQuery.data;
   const scorecardStats = statsQuery.data ?? FALLBACK_STATS;
 
   const openTicket = (id: string) => navigate(`/crm/tickets?ticket=${id}`);
@@ -182,7 +217,7 @@ export default function App() {
             style={{ gridTemplateColumns: "3fr 2fr" }}
           >
             <PriorityTicketQueue
-              tickets={tickets}
+              page={ticketPage}
               onOpen={openTicket}
               onAddNote={(id, content) => noteMutation.mutate({ id, content })}
               onChangeStatus={(id, status) => statusMutation.mutate({ id, status })}

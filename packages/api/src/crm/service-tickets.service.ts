@@ -13,13 +13,9 @@ import {
   ONBOARDING_STEP_KEYS,
   ONBOARDING_STEP_LABELS,
   DEFAULT_RENEWAL_STEP_DEFINITIONS,
-  RENEWAL_BACKLOG_GRACE_DAYS,
   RENEWAL_OUTCOME_LABELS,
-  RENEWAL_OUTREACH_CUTOVER,
   RENEWAL_STEP_LABELS,
-  renewalTrackFor,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
-  SERVICE_TICKET_CATEGORY_PREFIX,
   SERVICE_TICKET_TERMINAL_STATUSES,
   ServiceTicketActivity,
   ServiceTicketAssignee,
@@ -30,22 +26,18 @@ import {
   allowsPolicyTransfer,
 } from '@sfa/shared';
 import type {
+  ServiceTicketListResponse,
+  ServiceTicketQueueTab,
   OnboardingStepDefinition,
   OnboardingStepKey,
   OnboardingView,
   RenewalCycleView,
   RenewalDeskRow,
-  RenewalStepDefinition,
   PolicyTransferRef,
-  RenewalStepKey,
-  RenewalTrack,
   ServiceTicketStatus,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
-import {
-  ClientsService,
-  type PolicyRenewalCandidate,
-} from '../clients/clients.service';
+import { ClientsService } from '../clients/clients.service';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   DealAudit,
@@ -54,6 +46,8 @@ import {
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import { PolicyTransfersService } from './policy-transfers.service';
+import { TicketNumberService } from '../common/tickets/ticket-number.service';
+import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import type { PresignTransferDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
 import type { CreatePolicyTransferDto } from './dto/policy-transfer.dto';
 import {
@@ -74,7 +68,6 @@ import {
   UpdateStatusDto,
 } from './dto/service-ticket.dto';
 import {
-  deriveOnboardingStatus,
   isStepActionable,
   scheduleSteps,
   type PlannedStep,
@@ -82,12 +75,8 @@ import {
 } from './onboarding/onboarding-scheduling';
 import {
   daysUntil,
-  formatTermKey,
-  renewalAnchorDate,
-  renewalStepsToOpen,
   scheduleRenewalSteps,
-  type PlannedRenewalStep,
-} from './renewal/renewal-scheduling';
+} from '../common/renewal/renewal-scheduling';
 import {
   compareRenewalDeskRows,
   renewalPreviewCutoff,
@@ -149,6 +138,8 @@ export class ServiceTicketsService {
     private dealAuditModel: Model<DealAuditDocument>,
     private readonly clientsService: ClientsService,
     private readonly policyTransfers: PolicyTransfersService,
+    private readonly ticketNumbers: TicketNumberService,
+    private readonly renewalMaterialization: RenewalMaterializationService,
   ) {}
 
   /**
@@ -249,39 +240,57 @@ export class ServiceTicketsService {
   async list(
     access: AccessContext,
     query: ListTicketsQueryDto,
-  ): Promise<ServiceTicketView[]> {
+  ): Promise<ServiceTicketListResponse> {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? DEFAULT_TICKET_PAGE_SIZE;
+    const tab: ServiceTicketQueueTab = query.tab ?? 'all';
+
     const filter = this.scopeFilter(access);
     if (query.category) {
       filter.category = query.category;
     }
     if (query.status) {
-      // Onboarding status is derived from step timing unless someone set it by
-      // hand, so these tickets match on the steps — except the overridden ones,
-      // which match the stored field like every other category does.
-      const onboardingBranch = onboardingStatusMatch(query.status, new Date());
+      /*
+       * A plain equality, now that `SyncTicketStatusFn` keeps the column true.
+       *
+       * This used to be a three-branch `$or` reproducing the read-time
+       * derivation in Mongo, and it was wrong: the branches keyed on
+       * `category: 'Onboarding'`, while the derivation applies to *any*
+       * scheduled step — `onboarding ?? renewal`. So `?status=overdue` matched
+       * no overdue renewal call at all. Nothing surfaced it because no web
+       * caller passes `status`; the dashboard filtered client-side on the
+       * derived value. Deleting the mirror deletes the class of bug.
+       */
+      filter.status = query.status;
+    }
+    if (query.search?.trim()) {
+      /*
+       * The same fields the ticket feed matched in the browser.
+       *
+       * A regex `$or` is not indexable and scans the scope — but so did the
+       * client-side version, which fetched every ticket to filter it. This at
+       * least scans on the server and returns one page. If search becomes hot,
+       * the answer is a text index, not a return to shipping the collection.
+       *
+       * Escaped, so a term containing `.` or `(` is a search rather than a
+       * pattern the user did not know they were writing.
+       */
+      const term = escapeRegExp(query.search.trim());
+      const rx = new RegExp(term, 'i');
       filter.$and = [
         ...(filter.$and ?? []),
         {
           $or: [
-            { category: { $ne: 'Onboarding' }, status: query.status },
-            {
-              category: 'Onboarding',
-              statusOverriddenAt: { $ne: null },
-              status: query.status,
-            },
-            ...(onboardingBranch
-              ? [
-                  {
-                    category: 'Onboarding',
-                    statusOverriddenAt: null,
-                    ...onboardingBranch,
-                  },
-                ]
-              : []),
+            { clientName: rx },
+            { ticketNumber: rx },
+            { category: rx },
+            { policyNumber: rx },
+            { phone: rx },
           ],
         },
       ];
     }
+
     // Resolved tickets age out of the active queue after the archive window;
     // the Archived Tickets view asks for exactly the other side of that line.
     const archivedCondition = archivedMatch(archiveCutoff());
@@ -296,11 +305,52 @@ export class ServiceTicketsService {
     // view and deep links keep working.
     filter.$nor = [...(filter.$nor ?? []), ...scheduledStepMatches(new Date())];
 
-    const tickets = await this.ticketModel
-      .find(filter)
-      .sort({ lastActivityAt: -1 })
-      .lean();
-    return tickets.map((t) => serializeTicket(t));
+    /*
+     * Tab counts, over the filters but before the tab narrows them.
+     *
+     * Three `countDocuments` rather than one `$facet`: each is a count the
+     * server can answer from an index, where a faceted pipeline walks the
+     * matched set once per branch. They also run concurrently with the page
+     * fetch, so the extra round trips cost latency only under pool pressure.
+     */
+    const [all, overdue, waiting, rows] = await Promise.all([
+      this.ticketModel.countDocuments(filter),
+      this.ticketModel.countDocuments({
+        ...filter,
+        ...queueTabMatch('overdue'),
+      }),
+      this.ticketModel.countDocuments({
+        ...filter,
+        ...queueTabMatch('waiting'),
+      }),
+      this.ticketModel
+        .find({ ...filter, ...queueTabMatch(tab) })
+        /*
+         * The urgency order, served by an index rather than computed.
+         *
+         * `urgencyRank`, `urgencyAt` and `priorityRank` are materialized so
+         * this can be a plain sort — see the schema for why a computed key
+         * could not be. `_id` is the final tiebreak rather than
+         * `ticketNumber`, which the client-side comparator used: that is a
+         * string whose numeric part does not sort lexicographically
+         * (`RENEW-100` before `RENEW-99`), and a tiebreak that disagrees with
+         * itself between pages drops or repeats rows across them.
+         */
+        .sort({ urgencyRank: 1, urgencyAt: 1, priorityRank: 1, _id: 1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .lean(),
+    ]);
+
+    const total = tab === 'all' ? all : tab === 'overdue' ? overdue : waiting;
+    return {
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      items: rows.map((t) => serializeTicket(t)),
+      counts: { all, overdue, waiting },
+    };
   }
 
   /**
@@ -503,7 +553,7 @@ export class ServiceTicketsService {
       (assignee?.branchId ? String(assignee.branchId) : null);
 
     const now = new Date();
-    const ticketNumber = await this.nextTicketNumber(
+    const ticketNumber = await this.ticketNumbers.nextTicketNumber(
       access.agencyId,
       dto.category,
     );
@@ -735,6 +785,16 @@ export class ServiceTicketsService {
     const openTickets = tickets.filter(
       (t) => !isTerminalTicketStatus(t.status),
     ).length;
+    /*
+     * Reads the stored column, which `SyncTicketStatusFn` keeps true.
+     *
+     * This line is unchanged and used to be wrong (PAC-102): a scheduled call's
+     * status was derived on read, so the column said `open` forever and this
+     * counted only tickets a CSR had flagged by hand — near-zero, beside a
+     * queue tab showing hundreds. Nothing here needed fixing; the column did.
+     * Do not reintroduce a derivation to "make it accurate" — that is the bug,
+     * not the fix, and it would disagree with the sort order the queue pages by.
+     */
     const needsActionToday = tickets.filter(
       (t) => t.status === 'overdue',
     ).length;
@@ -1308,522 +1368,53 @@ export class ServiceTicketsService {
     return userDisplayName(user);
   }
 
-  /** Generate the next `<PREFIX>-<n>` ticket number for the agency. */
-  private async nextTicketNumber(
-    agencyId: string,
-    category: string,
-    attempt = 0,
-  ): Promise<string> {
-    // Typed over the category union in `@sfa/shared`; the fallback only covers
-    // a stray string reaching here through `createTicketWithNumber`'s untyped doc.
-    const prefix =
-      (SERVICE_TICKET_CATEGORY_PREFIX as Record<string, string>)[category] ??
-      'TKT';
-    const count = await this.ticketModel.countDocuments({
-      agencyId: new Types.ObjectId(agencyId),
-    });
-    // `attempt` walks the number forward on a clash. Re-counting alone is not
-    // enough: the count only moves when a ticket is actually created, so a
-    // number that is already taken — which happens once numbering has drifted
-    // from the count, e.g. after deletions — would be retried identically
-    // until the attempts ran out.
-    return `${prefix}-${100 + count + 1 + attempt}`;
-  }
-
   /**
-   * Create a ticket, allocating its number with a retry.
+   * Create a ticket with an allocated number.
    *
-   * `nextTicketNumber` is a non-atomic `countDocuments() + 1` against a unique
-   * index, so two tickets created in the same instant race. That was tolerable
-   * when every ticket came from a human clicking a button; chaining creates a
-   * ticket inside a completion handler, which makes the race real. Retrying on
-   * the duplicate-key error is cheaper and less invasive than a counter
-   * collection; each retry both re-counts *and* walks the number forward, so a
-   * number that is simply already taken is skipped rather than retried.
-   *
-   * Public for `LeadTicketsService`: a quote ticket needs the same `QTE-nnn`
-   * allocation and the same clash retry, and duplicating either would be how
-   * the two drift apart.
+   * Delegates: the allocator moved to `TicketNumberService` in `common/` when
+   * PAC-99 gave the renewal materializer — which the worker drives — its own
+   * need for one. Kept on this class because `LeadTicketsService` calls it
+   * here, and a second allocator is how two tickets get one number.
    */
   async createTicketWithNumber(
     agencyId: string,
     doc: Record<string, unknown>,
   ): Promise<ServiceTicketDocument> {
-    const category = String(doc.category ?? 'Other');
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt < TICKET_NUMBER_RETRIES; attempt += 1) {
-      try {
-        return await this.ticketModel.create({
-          ...doc,
-          ticketNumber: await this.nextTicketNumber(
-            agencyId,
-            category,
-            attempt,
-          ),
-        });
-      } catch (error) {
-        // Only a ticketNumber clash is retryable. Any other duplicate — a
-        // second ticket for the same onboarding step, say — must surface.
-        if (!isDuplicateKeyError(error) || !isTicketNumberClash(error)) {
-          throw error;
-        }
-        lastError = error;
-      }
-    }
-    throw lastError;
-  }
-
-  /* ------------------------------------------------------------------ *
-   * Proactive renewal outreach
-   *
-   * A `RenewalCycle` per deal per term, with one or two call tickets hanging
-   * off it. There is no scheduler in this API, so cycles materialize lazily
-   * from a throttled scan run on the desk and stats reads — the same
-   * reconcile-on-read bargain onboarding makes.
-   * ------------------------------------------------------------------ */
-
-  /**
-   * Claim the next scan window, or return null if someone else holds it.
-   *
-   * The duplicate-key catch is the *normal* path once a document exists: when
-   * `lastScanAt` is inside the window the filter misses, the upsert attempts an
-   * insert, and the unique index rejects it.
-   *
-   * Returns the claimed state rather than a bare boolean because the winner
-   * needs `scanCursor` off the same document — reading it separately would
-   * race the next claimant.
-   */
-  private async claimScanWindow(
-    agencyId: Types.ObjectId,
-  ): Promise<RenewalScanStateDocument | null> {
-    const cutoff = new Date(Date.now() - RENEWAL_SCAN_INTERVAL_MS);
-    try {
-      // The `$set` touches only `lastScanAt`, so the returned document still
-      // carries the cursor the previous pass left — which is the one to resume
-      // from. `upsert` seeds it as null on a first scan: start of the window.
-      return await this.scanStateModel.findOneAndUpdate(
-        { agencyId, lastScanAt: { $lt: cutoff } },
-        { $set: { lastScanAt: new Date() } },
-        { upsert: true, new: true },
-      );
-    } catch (error) {
-      if (isDuplicateKeyError(error)) {
-        return null;
-      }
-      throw error;
-    }
-  }
-
-  /** Renewal step definitions for an agency, falling back to the shared defaults. */
-  private async resolveRenewalDefinitions(): Promise<RenewalStepDefinition[]> {
-    // Config-in-DB is planned (see the onboarding equivalent); until an agency
-    // has overrides the shared constants are the source of truth, which keeps
-    // renewal outreach working on a fresh install.
-    return Promise.resolve(DEFAULT_RENEWAL_STEP_DEFINITIONS);
+    return this.ticketNumbers.createTicketWithNumber(agencyId, doc);
   }
 
   /**
    * Bring an agency's renewal cycles in line with its book.
    *
-   * Three-sided. Side 0 repairs the anchors themselves, because a renewal date
-   * that has gone by is not a date anything can count down to; Side A creates
-   * cycles for policies entering the horizon; Side B sweeps the cycles already
-   * open, because Side A cannot see a policy that was deleted, deactivated, or
-   * whose date moved out of range.
+   * Delegates to `RenewalMaterializationService`. The implementation left this
+   * class in PAC-99 so a worker cron could drive it: `src/worker/**` may not
+   * import feature services, and the scan had to become reachable from one.
+   *
+   * ⚠ **No longer called on the desk read.** `renewalDesk` used to run this
+   * inline, which is what made one request in N pay for a ninety-day scan of
+   * the policy book while a CSR waited. `MaterializeRenewalCyclesFn` runs it on
+   * a schedule now. This method remains for the demo seed, which materializes
+   * on demand and has no worker.
    */
   async materializeRenewalCycles(access: AccessContext): Promise<void> {
-    if (!access.agencyId) {
-      return;
-    }
-    const agencyId = new Types.ObjectId(access.agencyId);
-    const claim = await this.claimScanWindow(agencyId);
-    if (!claim) {
-      return;
-    }
-
-    const now = new Date();
-    const horizonStart = new Date(now.getTime() - RENEWAL_GRACE_DAYS * DAY_MS);
-    const horizonEnd = new Date(now.getTime() + RENEWAL_HORIZON_DAYS * DAY_MS);
-
-    // Side 0 — advance anchors that have gone by, and fill in missing ones.
-    // Runs first so Side A sees a book whose dates are all in the future.
-    await this.clientsService.rollForwardRenewalDates(
-      access,
-      now,
-      RENEWAL_SCAN_BATCH,
+    if (!access.agencyId) return;
+    await this.renewalMaterialization.materializeForAgency(
+      new Types.ObjectId(access.agencyId),
     );
-
-    // Side A — policies entering the horizon, resumed from where the last pass
-    // stopped. Without the cursor this re-reads the same earliest batch every
-    // time and the tail of the window is never scanned at all.
-    const candidates = await this.clientsService.findRenewalWindow(
-      access,
-      horizonStart,
-      horizonEnd,
-      RENEWAL_SCAN_BATCH,
-      claim.scanCursor ?? null,
-    );
-    for (const group of groupRenewalCandidates(candidates)) {
-      await this.ensureRenewalCycle(access, agencyId, group);
-    }
-
-    // A short batch means the window is exhausted; start the next sweep from
-    // the beginning, which is also what re-reads policies whose dates have
-    // since moved backwards into it.
-    const nextCursor =
-      candidates.length < RENEWAL_SCAN_BATCH
-        ? null
-        : (candidates[candidates.length - 1]?.renewalDate ?? null);
-    await this.scanStateModel.updateOne(
-      { agencyId },
-      { $set: { scanCursor: nextCursor } },
-    );
-
-    // Side B — cycles already open, which may have drifted or gone stale.
-    const open = await this.cycleModel
-      .find({ agencyId, completedAt: null })
-      .limit(RENEWAL_SCAN_BATCH);
-    for (const cycle of open) {
-      await this.reconcileRenewalCycle(access, cycle);
-    }
-  }
-
-  /** Create a cycle and its call tickets if this group does not have one yet. */
-  private async ensureRenewalCycle(
-    access: AccessContext,
-    agencyId: Types.ObjectId,
-    group: RenewalGroup,
-  ): Promise<RenewalCycleDocument | null> {
-    const termKey = formatTermKey(group.anchor);
-    const existing = await this.cycleModel.findOne({
-      agencyId,
-      groupKey: group.groupKey,
-      termKey,
-    });
-    if (existing) {
-      // Adopt any policy in this group the cycle does not already carry.
-      //
-      // The scan reads a bounded batch, so a household's Home and Auto renewing
-      // the same week can arrive in *different* passes. The first creates the
-      // cycle; without this the second would find it, reconcile, and silently
-      // drop its own policy — `reconcileRenewalCycle` rebuilds the checklist
-      // from `cycle.policies`, so a line that never got in never appears. The
-      // CSR would then review the Home on a call whose Auto is invisible.
-      const known = new Set(
-        existing.policies.map((policy) => String(policy.policyId)),
-      );
-      const added = group.policies.filter((policy) => !known.has(policy.id));
-      if (added.length) {
-        existing.policies.push(...added.map(toCyclePolicy));
-        existing.markModified('policies');
-        await existing.save();
-      }
-      await this.reconcileRenewalCycle(access, existing);
-      return existing;
-    }
-
-    const household = group.householdId
-      ? await this.clientsService
-          .getHousehold(access, group.householdId)
-          .catch(() => null)
-      : null;
-
-    let cycle: RenewalCycleDocument;
-    try {
-      cycle = await this.cycleModel.create({
-        agencyId,
-        branchId: group.branchId ? new Types.ObjectId(group.branchId) : null,
-        groupKey: group.groupKey,
-        dealId: group.dealId ? new Types.ObjectId(group.dealId) : null,
-        householdId: group.householdId
-          ? new Types.ObjectId(group.householdId)
-          : null,
-        termKey,
-        renewalDate: group.anchor,
-        track: group.track,
-        policies: group.policies.map(toCyclePolicy),
-        clientName:
-          household?.primaryContactName ||
-          household?.name ||
-          group.policies[0]?.policyNumber ||
-          'Renewal',
-        householdName: household?.name ?? '',
-        phone: household?.primaryPhone ?? '',
-        email: household?.primaryEmail ?? '',
-        currentStepKey: null,
-        completedAt: null,
-        // The client's CSR owns the outreach. This matters more than it looks:
-        // a `csr` user is `own`-scoped, so an unassigned ticket is invisible to
-        // exactly the person meant to work it.
-        assignedCsrId:
-          household?.assignedCrmId &&
-          Types.ObjectId.isValid(household.assignedCrmId)
-            ? new Types.ObjectId(household.assignedCrmId)
-            : null,
-      });
-    } catch (error) {
-      // A concurrent scan created it. The unique index did its job.
-      if (!isDuplicateKeyError(error)) throw error;
-      const raced = await this.cycleModel.findOne({
-        agencyId,
-        groupKey: group.groupKey,
-        termKey,
-      });
-      if (raced) await this.reconcileRenewalCycle(access, raced);
-      return raced;
-    }
-
-    await this.reconcileRenewalCycle(access, cycle);
-    return cycle;
   }
 
   /**
-   * Repair a cycle against its policies, and open whatever call tickets should
-   * exist. Idempotent, and run on every read — a cycle broken between writes
-   * self-heals the next time anyone looks at it.
+   * Repair a cycle against its policies and open whatever calls should exist.
+   *
+   * Delegates for the same reason as above. Still called on the per-cycle read
+   * — reconciling one known cycle is a bounded lookup, not a book scan, and it
+   * is what lets a cycle broken between writes self-heal when someone looks.
    */
   async reconcileRenewalCycle(
-    access: AccessContext,
+    _access: AccessContext,
     cycle: RenewalCycleDocument,
   ): Promise<RenewalCycleDocument> {
-    const now = new Date();
-    const policies = await this.clientsService.findRenewalCandidatesByIds(
-      access,
-      cycle.policies.map((p) => String(p.policyId)),
-    );
-
-    // (1) Nothing left to renew — close it out. Never delete: audit trail.
-    if (!policies.length) {
-      if (!cycle.completedAt) {
-        cycle.completedAt = now;
-        cycle.currentStepKey = null;
-        cycle.closedReason = 'policy_ineligible';
-        await cycle.save();
-        await this.closeRenewalTickets(
-          cycle,
-          'Renewal cycle closed — the policies are no longer active.',
-        );
-      }
-      return cycle;
-    }
-
-    // (2) Has the carrier moved the date?
-    const anchor = earliestAnchor(policies) ?? cycle.renewalDate;
-    const driftDays = Math.abs(
-      (anchor.getTime() - new Date(cycle.renewalDate).getTime()) / DAY_MS,
-    );
-    if (driftDays > RENEWAL_DRIFT_TOLERANCE_DAYS) {
-      // Too far to be the same outreach — a new term, or a data correction big
-      // enough that the old plan is meaningless. The next scan opens a fresh
-      // cycle under the new termKey.
-      if (!cycle.completedAt) {
-        cycle.completedAt = now;
-        cycle.currentStepKey = null;
-        cycle.closedReason = 'superseded';
-        await cycle.save();
-        await this.closeRenewalTickets(
-          cycle,
-          'Renewal date moved beyond this cycle — superseded by a new one.',
-        );
-      }
-      return cycle;
-    }
-
-    // (3) Adopt a small drift, refresh the checklist, and re-plan.
-    cycle.renewalDate = anchor;
-    cycle.policies = policies.map((policy) => mergeCyclePolicy(cycle, policy));
-    cycle.track = trackForPolicies(policies);
-    cycle.markModified('policies');
-
-    const definitions = await this.resolveRenewalDefinitions();
-    const tickets = await this.renewalTickets(cycle);
-    const completedAtByKey: Partial<Record<RenewalStepKey, Date | null>> = {};
-    for (const ticket of tickets) {
-      if (ticket.renewal) {
-        completedAtByKey[ticket.renewal.stepKey] =
-          ticket.renewal.completedAt ?? null;
-      }
-    }
-    const planned = scheduleRenewalSteps(
-      definitions,
-      cycle.track,
-      anchor,
-      completedAtByKey,
-    );
-
-    // (4) Every call gets a ticket up front — renewal steps do not chain, so
-    // nothing waits on the call before it. The only calls held back are ones
-    // whose date passed before outreach went live; see `renewalStepsToOpen`.
-    const existingStepKeys = new Set<RenewalStepKey>(
-      tickets
-        .map((ticket) => ticket.renewal?.stepKey)
-        .filter((key): key is RenewalStepKey => Boolean(key)),
-    );
-    const opening = renewalStepsToOpen(
-      planned,
-      existingStepKeys,
-      RENEWAL_OUTREACH_CUTOVER,
-      RENEWAL_BACKLOG_GRACE_DAYS,
-    );
-    for (const step of opening) {
-      await this.ensureRenewalTicket(cycle, step, planned.length);
-    }
-
-    // (5) Roll up state from the tickets.
-    const refreshed = await this.renewalTickets(cycle);
-    const outstanding = planned.find(
-      (step) =>
-        !refreshed.find((t) => t.renewal?.stepKey === step.stepKey)?.renewal
-          ?.completedAt,
-    );
-    cycle.currentStepKey = outstanding?.stepKey ?? null;
-
-    const review = refreshed.find(
-      (t) => t.renewal?.stepKey === 'renewal_review',
-    );
-    if (review?.renewal?.outcome) {
-      cycle.outcome = review.renewal.outcome;
-      cycle.outcomeAt = review.renewal.outcomeAt ?? null;
-      cycle.outcomeByName = review.renewal.completedByName ?? '';
-    }
-
-    if (!outstanding) {
-      cycle.completedAt =
-        refreshed
-          .map((t) => t.renewal?.completedAt)
-          .filter((d): d is Date => Boolean(d))
-          .sort((a, b) => b.getTime() - a.getTime())[0] ?? now;
-      cycle.closedReason = 'completed';
-    } else {
-      cycle.completedAt = null;
-      cycle.closedReason = null;
-    }
-
-    await cycle.save();
-    return cycle;
-  }
-
-  /** Every ticket belonging to a cycle, in call order. */
-  private async renewalTickets(
-    cycle: RenewalCycleDocument,
-  ): Promise<ServiceTicketDocument[]> {
-    return this.ticketModel
-      .find({
-        agencyId: cycle.agencyId,
-        'renewal.renewalCycleId': cycle._id,
-      })
-      .sort({ 'renewal.sequence': 1 });
-  }
-
-  /**
-   * Create the ticket for one call if it does not exist. The unique partial
-   * index on `{agencyId, renewalCycleId, stepKey}` is the real guarantee; a
-   * concurrent duplicate is swallowed rather than surfaced.
-   */
-  private async ensureRenewalTicket(
-    cycle: RenewalCycleDocument,
-    step: PlannedRenewalStep,
-    totalSteps: number,
-  ): Promise<void> {
-    const existing = await this.ticketModel.findOne({
-      agencyId: cycle.agencyId,
-      'renewal.renewalCycleId': cycle._id,
-      'renewal.stepKey': step.stepKey,
-    });
-
-    if (existing) {
-      // Adopt re-planned timing, but never rewrite a call already made.
-      if (!existing.renewal?.completedAt && existing.renewal) {
-        existing.renewal.availableAt = step.availableAt;
-        existing.renewal.dueAt = step.dueAt;
-        existing.renewal.renewalDate = cycle.renewalDate;
-        existing.markModified('renewal');
-        await existing.save();
-      }
-      return;
-    }
-
-    const primary = cycle.policies[0];
-    try {
-      await this.createTicketWithNumber(String(cycle.agencyId), {
-        agencyId: cycle.agencyId,
-        branchId: cycle.branchId ?? null,
-        clientName: cycle.clientName,
-        category: 'Renewal Review',
-        status: 'open',
-        priority: 'medium',
-        assignedUserId: cycle.assignedCsrId ?? null,
-        assignedRep: await this.resolveUserName(
-          cycle.assignedCsrId ? String(cycle.assignedCsrId) : null,
-        ),
-        createdByName: 'Renewal outreach',
-        policyNumber: primary?.policyNumber ?? '',
-        policyType: primary?.policyType ?? '',
-        household: cycle.householdName ?? '',
-        policyId: primary?.policyId ?? null,
-        householdId: cycle.householdId ?? null,
-        phone: cycle.phone ?? '',
-        email: cycle.email ?? '',
-        // Dated to when the call opens, not to now — a scheduled call has not
-        // been sitting on anyone's plate.
-        openedAt: step.availableAt,
-        lastActivityAt: step.availableAt,
-        resolvedAt: null,
-        timeline: [
-          {
-            type: 'system',
-            content:
-              `${step.label} scheduled — ${cycle.policies.length} ` +
-              `polic${cycle.policies.length === 1 ? 'y' : 'ies'} renewing ` +
-              `${cycle.renewalDate.toISOString().slice(0, 10)}.`,
-            at: step.availableAt,
-          },
-        ],
-        onboarding: null,
-        renewal: {
-          renewalCycleId: cycle._id,
-          stepKey: step.stepKey,
-          track: cycle.track,
-          sequence: step.sequence,
-          totalSteps,
-          renewalDate: cycle.renewalDate,
-          availableAt: step.availableAt,
-          dueAt: step.dueAt,
-          completedAt: null,
-          completedBy: null,
-          completedByName: '',
-          outcome: null,
-          outcomeAt: null,
-        },
-      });
-    } catch (error) {
-      // Swallow only the step-uniqueness duplicate — a concurrent scan opened
-      // this call, and the unique index did its job. A *ticketNumber* duplicate
-      // reaching here means `createTicketWithNumber` exhausted its retries, and
-      // silently dropping that would leave a cycle with no ticket to work.
-      if (!isDuplicateKeyError(error) || isTicketNumberClash(error)) {
-        throw error;
-      }
-    }
-  }
-
-  /** Close a dead cycle's outstanding call tickets, with a reason on each. */
-  private async closeRenewalTickets(
-    cycle: RenewalCycleDocument,
-    reason: string,
-  ): Promise<void> {
-    const tickets = await this.renewalTickets(cycle);
-    const now = new Date();
-    for (const ticket of tickets) {
-      if (ticket.renewal?.completedAt) continue;
-      ticket.status = 'closed';
-      ticket.resolvedAt = now;
-      ticket.lastActivityAt = now;
-      ticket.statusOverriddenAt = now;
-      ticket.timeline.push({ type: 'system', content: reason, at: now });
-      await ticket.save();
-    }
+    return this.renewalMaterialization.reconcileCycle(cycle);
   }
 
   /** This ticket's renewal call, or a 400. Guards every renewal mutation. */
@@ -2097,8 +1688,8 @@ export class ServiceTicketsService {
     cycle: RenewalCycleDocument,
   ): Promise<RenewalCycleView> {
     const [tickets, definitions] = await Promise.all([
-      this.renewalTickets(cycle),
-      this.resolveRenewalDefinitions(),
+      this.renewalMaterialization.renewalTickets(cycle),
+      this.renewalMaterialization.resolveRenewalDefinitions(),
     ]);
     const planned = scheduleRenewalSteps(
       definitions,
@@ -2139,8 +1730,6 @@ export class ServiceTicketsService {
    * `completeRenewalStep` enforces that independently.
    */
   async renewalDesk(access: AccessContext): Promise<RenewalDeskRow[]> {
-    await this.materializeRenewalCycles(access);
-
     if (!access.agencyId) {
       return [];
     }
@@ -2155,7 +1744,8 @@ export class ServiceTicketsService {
       return [];
     }
 
-    const definitions = await this.resolveRenewalDefinitions();
+    const definitions =
+      await this.renewalMaterialization.resolveRenewalDefinitions();
     // Scoped like every other ticket read: an `own`-scoped CSR sees the calls
     // assigned to them, not the whole agency's book. A cycle whose call is not
     // visible simply produces no row.
@@ -2231,159 +1821,53 @@ export class ServiceTicketsService {
  * Renewal outreach — tuning and grouping
  * -------------------------------------------------------------------------- */
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** How far ahead the scan looks — the widest lead time on any track. */
-const RENEWAL_HORIZON_DAYS = 90;
-/** How long after a renewal a cycle can still be closed out with an outcome. */
-const RENEWAL_GRACE_DAYS = 14;
 /**
- * How far a carrier can move a renewal date before it is treated as a new term
- * rather than the same outreach. Less than half the shortest term (6 months),
- * so an adoption can never reach into the next cycle.
+ * Rows the desk will render.
+ *
+ * ⚠ A silent truncation: a CSR with more than this many open cycles never sees
+ * the rest, and nothing on screen says so. Paginating the desk is the
+ * follow-on to PAC-99 (plan PR4).
  */
-const RENEWAL_DRIFT_TOLERANCE_DAYS = 45;
-/** Policies per scan pass. Bounds the work so a large book converges gradually. */
-const RENEWAL_SCAN_BATCH = 500;
-/** Minimum gap between scans for one agency. */
-const RENEWAL_SCAN_INTERVAL_MS = 10 * 60 * 1000;
-/** Rows the desk will render. */
 const RENEWAL_DESK_LIMIT = 100;
-/**
- * How far apart two policies in the same deal can renew and still be one call.
- * Auto (6mo) drifts out of sync with Home (12mo) inside a bundle, so a wide
- * window would merge renewals months apart into a single conversation.
- */
-const RENEWAL_GROUP_WINDOW_DAYS = 15;
-
-interface RenewalGroup {
-  groupKey: string;
-  dealId: string | null;
-  householdId: string | null;
-  branchId: string | null;
-  anchor: Date;
-  track: RenewalTrack;
-  policies: PolicyRenewalCandidate[];
-}
-
-/** The earliest renewal among a set of policies — a cycle's anchor. */
-function earliestAnchor(policies: PolicyRenewalCandidate[]): Date | null {
-  const dates = policies
-    .map((policy) => renewalAnchorDate(policy))
-    .filter((d): d is Date => Boolean(d))
-    .sort((a, b) => a.getTime() - b.getTime());
-  return dates[0] ?? null;
-}
 
 /**
- * A cycle covering any 12-month policy gets both calls; an auto-only cycle gets
- * the single merged one. Mixed bundles follow the longer term, because the
- * annual policy genuinely warrants the 90-day warm-up.
- */
-function trackForPolicies(policies: PolicyRenewalCandidate[]): RenewalTrack {
-  return policies.every(
-    (policy) => renewalTrackFor(policy.policyType) === 'semiannual',
-  )
-    ? 'semiannual'
-    : 'annual';
-}
-
-/**
- * Fold policies into one outreach per deal per renewal window.
+ * Rows per page when a caller does not say.
  *
- * The CSR makes one phone call for a deal, so policies renewing together are
- * one ticket with a checklist. Policies in the same deal renewing months apart
- * — the auto-in-a-bundle case — split into separate cycles.
- *
- * Policies with no deal group by household instead, which is why the key is a
- * single string rather than two nullable ids.
+ * Matches the Priority Ticket Queue's own `PAGE_SIZE`, which is what most
+ * requests will ask for anyway. The Ticket Workspace and Archived list send
+ * their own; the DTO caps every caller at 100 so nobody can ask for the
+ * collection back and undo this.
  */
-function groupRenewalCandidates(
-  candidates: PolicyRenewalCandidate[],
-): RenewalGroup[] {
-  const byKey = new Map<string, PolicyRenewalCandidate[]>();
-  for (const policy of candidates) {
-    if (!renewalAnchorDate(policy)) continue;
-    const key = policy.dealId
-      ? `deal:${policy.dealId}`
-      : policy.householdId
-        ? `household:${policy.householdId}`
-        : `policy:${policy.id}`;
-    byKey.set(key, [...(byKey.get(key) ?? []), policy]);
-  }
+const DEFAULT_TICKET_PAGE_SIZE = 8;
 
-  const groups: RenewalGroup[] = [];
-  for (const [groupKey, policies] of byKey) {
-    const sorted = [...policies].sort(
-      (a, b) =>
-        (renewalAnchorDate(a)?.getTime() ?? 0) -
-        (renewalAnchorDate(b)?.getTime() ?? 0),
-    );
-
-    // Walk in date order, starting a new cycle whenever the next renewal falls
-    // outside the current one's window.
-    let bucket: PolicyRenewalCandidate[] = [];
-    let bucketAnchor: Date | null = null;
-    const flush = () => {
-      if (!bucket.length || !bucketAnchor) return;
-      groups.push({
-        groupKey,
-        dealId: bucket[0].dealId,
-        householdId: bucket[0].householdId,
-        branchId: bucket[0].branchId,
-        anchor: bucketAnchor,
-        track: trackForPolicies(bucket),
-        policies: bucket,
-      });
-      bucket = [];
-      bucketAnchor = null;
+/**
+ * The Mongo predicate behind each of the queue's three tabs.
+ *
+ * These read the stored `status`, which `SyncTicketStatusFn` keeps true — the
+ * whole reason the tabs can be a server-side filter at all. Before that the
+ * column lied about scheduled calls, so the queue had to fetch everything and
+ * decide in the browser.
+ *
+ * `overdue` is a single status rather than the client's old `slaStatus ===
+ * 'critical'`; that derived value was defined as `status === 'overdue'`, so
+ * this is the same set, expressed where it can be indexed. `waiting` keeps
+ * every flavour of "blocked on someone else" the UI groups together.
+ */
+function queueTabMatch(
+  tab: ServiceTicketQueueTab,
+): FilterQuery<ServiceTicketDocument> {
+  if (tab === 'overdue') return { status: 'overdue' };
+  if (tab === 'waiting') {
+    return {
+      status: { $in: ['waiting', 'waiting_on_client', 'waiting_on_carrier'] },
     };
-
-    for (const policy of sorted) {
-      const anchor = renewalAnchorDate(policy)!;
-      if (
-        bucketAnchor &&
-        (anchor.getTime() - bucketAnchor.getTime()) / DAY_MS >
-          RENEWAL_GROUP_WINDOW_DAYS
-      ) {
-        flush();
-      }
-      bucketAnchor ??= anchor;
-      bucket.push(policy);
-    }
-    flush();
   }
-
-  return groups;
+  return {};
 }
 
-/** A policy as stored on a cycle's checklist. */
-function toCyclePolicy(policy: PolicyRenewalCandidate) {
-  return {
-    policyId: new Types.ObjectId(policy.id),
-    policyNumber: policy.policyNumber,
-    policyType: policy.policyType,
-    carrier: policy.carrier,
-    premium: policy.premium,
-    renewalDate: renewalAnchorDate(policy),
-    discussedAt: null,
-    discussedBy: null,
-    discussedByName: '',
-  };
-}
-
-/** Refresh a checklist line from the policy, preserving the "discussed" tick. */
-function mergeCyclePolicy(
-  cycle: RenewalCycleDocument,
-  policy: PolicyRenewalCandidate,
-) {
-  const existing = cycle.policies.find((p) => String(p.policyId) === policy.id);
-  return {
-    ...toCyclePolicy(policy),
-    discussedAt: existing?.discussedAt ?? null,
-    discussedBy: existing?.discussedBy ?? null,
-    discussedByName: existing?.discussedByName ?? '',
-  };
+/** Treat a search term as text, not as a pattern the user did not intend. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Roles whose holders can be a ticket's Assigned Client Relation Manager. */
@@ -2394,8 +1878,6 @@ function statusLabel(status: string): string {
 }
 
 /** How many times to re-allocate a ticket number before giving up. */
-const TICKET_NUMBER_RETRIES = 5;
-
 /** Onboarding step or a 400 — guards every onboarding mutation. */
 function requireOnboardingStep(
   ticket: ServiceTicketDocument,
@@ -2414,17 +1896,6 @@ interface MongoDuplicateKeyError {
 
 function isDuplicateKeyError(error: unknown): boolean {
   return (error as MongoDuplicateKeyError)?.code === 11000;
-}
-
-/** True when the duplicate was on `ticketNumber` rather than another index. */
-function isTicketNumberClash(error: unknown): boolean {
-  const keyPattern = (error as MongoDuplicateKeyError)?.keyPattern;
-  if (keyPattern) {
-    return Object.keys(keyPattern).includes('ticketNumber');
-  }
-  return String((error as MongoDuplicateKeyError)?.message ?? '').includes(
-    'ticketNumber',
-  );
 }
 
 /**
@@ -2460,50 +1931,6 @@ function scheduledStepMatches(now: Date): FilterQuery<ServiceTicketDocument>[] {
     scheduledOnboardingMatch(now),
     { 'renewal.availableAt': { $gt: now } },
   ];
-}
-
-/**
- * Mongo match for an onboarding ticket whose *derived* status is `status`.
- *
- * Mirrors `deriveOnboardingStatus`, so the two must change together. Now that
- * a ticket carries exactly one step, these are plain scalar predicates rather
- * than the `$elemMatch` gymnastics the embedded array needed.
- *
- * Returns null for statuses onboarding never derives into (`in_progress`,
- * `waiting_on_client`, …) — such a filter simply matches no onboarding ticket.
- *
- * The `$ne: null` guards matter: BSON sorts null before dates, so a bare
- * `{ dueAt: { $lt: now } }` would match an unscheduled step too.
- */
-function onboardingStatusMatch(
-  status: ServiceTicketStatus,
-  now: Date,
-): FilterQuery<ServiceTicketDocument> | null {
-  switch (status) {
-    case 'resolved':
-      return { 'onboarding.completedAt': { $ne: null } };
-    case 'overdue':
-      return {
-        'onboarding.completedAt': null,
-        'onboarding.dueAt': { $ne: null, $lt: now },
-      };
-    case 'open':
-      // Available but not past due — `overdue` outranks `open`.
-      return {
-        'onboarding.completedAt': null,
-        'onboarding.availableAt': { $ne: null, $lte: now },
-        'onboarding.dueAt': { $gte: now },
-      };
-    case 'waiting':
-      // Scheduled but not yet open. These are hidden from every list anyway;
-      // the predicate exists so the mapping stays complete and honest.
-      return {
-        'onboarding.completedAt': null,
-        'onboarding.availableAt': { $gt: now },
-      };
-    default:
-      return null;
-  }
 }
 
 function userDisplayName(
@@ -2570,34 +1997,31 @@ export function serializeTicket(
   const lastActivityAt = new Date(ticket.lastActivityAt);
   const resolvedAt = ticket.resolvedAt ? new Date(ticket.resolvedAt) : null;
 
-  // Onboarding tickets derive their status from their step's timing rather
-  // than the stored field: the `waiting -> open -> overdue` transitions happen
-  // through the passage of time, with no write to hang an update off.
-  //
-  // Unless a CSR has set the status by hand, that is — an explicit choice beats
-  // the schedule, and `statusOverriddenAt` records that it was made. Completing
-  // the call clears the override and hands the ticket back to the schedule.
   const onboarding = ticket.onboarding
     ? serializeOnboardingStep(ticket.onboarding, now)
     : null;
-  // Either kind of scheduled step derives a status the same way. A ticket
-  // never carries both — it is one call of one kind.
-  const scheduled = ticket.onboarding ?? ticket.renewal ?? null;
-  const status =
-    scheduled && !ticket.statusOverriddenAt
-      ? deriveOnboardingStatus(
-          {
-            availableAt: scheduled.availableAt
-              ? new Date(scheduled.availableAt)
-              : null,
-            dueAt: scheduled.dueAt ? new Date(scheduled.dueAt) : null,
-            completedAt: scheduled.completedAt
-              ? new Date(scheduled.completedAt)
-              : null,
-          },
-          now,
-        )
-      : ticket.status;
+
+  /*
+   * The stored column, not a derivation.
+   *
+   * A scheduled call's status used to be computed here on every read, because
+   * `waiting -> open -> overdue` happens through the passage of time and there
+   * was no write to hang an update off. `SyncTicketStatusFn` is that write
+   * now: it sweeps the boundaries every five minutes and stores the answer, so
+   * this reads what every other consumer reads.
+   *
+   * That is the point of the change rather than a tidy-up. While the value was
+   * derived here, anything that could not call this function saw a stale
+   * column — `stats()` counted `status === 'overdue'` and reported near-zero
+   * beside a queue showing hundreds (PAC-102) — and the queue's sort key could
+   * not be indexed, because you cannot index a value that only exists during a
+   * request (PAC-98).
+   *
+   * The cost is bounded staleness: for up to one sweep interval a call that
+   * has just crossed its deadline still reads as `open`. See
+   * `docs/plans/pac-98-service-ticket-scaling-implementation-plan.md`.
+   */
+  const status = ticket.status;
 
   const isArchived =
     isTerminalTicketStatus(status) &&
