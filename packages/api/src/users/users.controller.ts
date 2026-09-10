@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
@@ -27,7 +28,12 @@ import {
   MINUTE_MS,
   PASSWORD_RESET_ISSUE_RATE_LIMIT,
 } from '../config/rate-limit.config';
+import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { InviteUserDto } from './dto/invite-user.dto';
+import {
+  listAgencyUsersSchema,
+  type ListAgencyUsersDto,
+} from './dto/list-users.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -36,10 +42,22 @@ import { UsersService } from './users.service';
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
+  /**
+   * The agency directory — **paginated and searched server-side** since
+   * PAC-101, where it used to return the whole roster as a bare array.
+   *
+   * The three pickers that also read it were moved to `GET /users/options`
+   * first, so this shape change has one consumer.
+   */
   @Get()
   @RequirePermissions(AgencyPermission.UsersRead)
-  list(@AgencyId() agencyId: string) {
-    return this.usersService.findByAgency(agencyId);
+  list(
+    @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
+    @Query(new ZodValidationPipe(listAgencyUsersSchema))
+    query: ListAgencyUsersDto,
+  ) {
+    return this.usersService.findByAgency(agencyId, query, access);
   }
 
   @Get('assignable-permissions')

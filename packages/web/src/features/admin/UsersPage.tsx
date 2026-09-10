@@ -1,19 +1,24 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { AlertCircle, Search, Users } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SettingsPage } from '@/features/settings/SettingsPage';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { usePermissions } from '@/hooks/usePermissions';
 import { listBranches } from '@/lib/branches-api';
-import { listUsers, userStatus, type AgencyUser } from '@/lib/users-api';
+import { listUsers } from '@/lib/users-api';
 import { InviteUserDialog } from './InviteUserDialog';
 import { UserCard } from './components/UserCard';
 import { UsersTable } from './components/UsersTable';
-import { displayName } from './components/user-display';
 
-/** Status order for the directory: who needs attention, then who is here. */
-const STATUS_RANK = { invited: 0, active: 1, deactivated: 2 } as const;
+/*
+ * The status ranking that used to live here — invited, then active, then
+ * deactivated — is now the server's `{ deactivatedAt: 1, isActive: 1, … }`
+ * sort, which reproduces it exactly because BSON orders Null before Date.
+ * Ranking a page in the browser would only ever have sorted that page.
+ */
 
 /**
  * The agency directory (`/settings/users`).
@@ -27,16 +32,41 @@ const STATUS_RANK = { invited: 0, active: 1, deactivated: 2 } as const;
  * full width and the same table idiom as `/leads`, with the row actions behind
  * one `⋯` (see `UserRowMenu`).
  *
- * Sorting is client-side and so is search: `GET /users` returns the agency's
- * whole roster in one response with no paging, because an agency is tens of
- * people rather than thousands. If that stops being true this is the file that
- * grows a `ListUsersParams`, not the one that adds a second scroll container.
+ * ## Search and sort are server-side (PAC-101)
+ *
+ * This docblock used to say the opposite, and named this file as the one that
+ * would grow a `ListUsersParams` if the roster ever outgrew a single response.
+ * That is what happened — not because an agency got large, but because the
+ * filter only covered three of the five rendered columns and could not be made
+ * to satisfy the ticket's rule while it ran in the browser.
+ *
+ * The three pickers that shared this endpoint were moved to
+ * `GET /users/options` first, so this page is its only consumer.
  */
+/** Matches the API default; the roster is short enough that one page is usual. */
+const PAGE_SIZE = 25;
+
 export default function UsersPage() {
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
   const { can } = usePermissions();
 
-  const usersQuery = useQuery({ queryKey: ['users'], queryFn: listUsers });
+  // Debounced so typing four characters is one request, not four — the same
+  // 300ms every other server-searched table uses.
+  const debouncedQuery = useDebouncedValue(query, 300);
+
+  const params = useMemo(
+    () => ({ page, pageSize: PAGE_SIZE, q: debouncedQuery.trim() || undefined }),
+    [page, debouncedQuery],
+  );
+
+  const usersQuery = useQuery({
+    queryKey: ['users', params],
+    queryFn: () => listUsers(params),
+    // Keeps the current page on screen while the next one loads, so the table
+    // doesn't flash empty on every keystroke.
+    placeholderData: keepPreviousData,
+  });
 
   // Same defensive gate the invite dialog uses: the directory needs
   // `agency:users:read`, the branch names need `agency:branches:read`, and
@@ -54,32 +84,15 @@ export default function UsersPage() {
     [branchesQuery.data],
   );
 
-  // Never surface platform/super-admin accounts in the agency directory.
-  const roster = useMemo(
-    () => (usersQuery.data ?? []).filter((u) => !u.isPlatformAdmin),
-    [usersQuery.data],
-  );
-
-  const users = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const matches = q
-      ? roster.filter((user: AgencyUser) =>
-          [displayName(user), user.email, ...user.roleIds.map((r) => r.name)]
-            .join(' ')
-            .toLowerCase()
-            .includes(q),
-        )
-      : roster;
-
-    // Pending invites first — they are the rows somebody still has to act on —
-    // then alphabetically, which is the only order a directory can be scanned
-    // in. The API returns insertion order, which is seed order in practice.
-    return [...matches].sort((a, b) => {
-      const rank = STATUS_RANK[userStatus(a)] - STATUS_RANK[userStatus(b)];
-      if (rank !== 0) return rank;
-      return displayName(a).localeCompare(displayName(b));
-    });
-  }, [roster, query]);
+  /*
+   * No client-side filter, sort or platform-admin exclusion any more — all
+   * three moved to the server (PAC-101). The exclusion in particular had to:
+   * a post-fetch filter makes page sizes wrong, dropping rows the server
+   * counted.
+   */
+  const users = usersQuery.data?.items ?? [];
+  const total = usersQuery.data?.total ?? 0;
+  const totalPages = usersQuery.data?.totalPages ?? 1;
 
   const showBranch = branchesQuery.isSuccess && branchNames.size > 0;
   const canOpenPermissions = can('agency:roles:read');
@@ -91,7 +104,9 @@ export default function UsersPage() {
       caption={
         isPending || usersQuery.isError
           ? ' '
-          : `${roster.length} ${roster.length === 1 ? 'person' : 'people'}`
+          : // `total`, not the page length, or the header lies on every page
+            // after the first.
+            `${total} ${total === 1 ? 'person' : 'people'}`
       }
       icon={Users}
       width="wide"
@@ -114,17 +129,26 @@ export default function UsersPage() {
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by name, email or role…"
+          onChange={(e) => {
+            setQuery(e.target.value);
+            // A new query invalidates the page number: page 3 of the old
+            // result set is very unlikely to exist in the new one.
+            setPage(1);
+          }}
+          aria-label="Search users"
+          placeholder="Search by name, email, role or branch…"
           className="border-border bg-card pl-9"
         />
       </div>
 
-      {!isPending && users.length === 0 ? (
+      {!isPending && total === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-center">
           <p className="text-sm text-muted-foreground">
-            {query.trim()
-              ? `Nobody matches “${query.trim()}”.`
+            {/* The **debounced** value, not the raw input: keying off what the
+                user is still typing flips the copy before the request that
+                would justify it has fired. */}
+            {debouncedQuery.trim()
+              ? `Nobody matches “${debouncedQuery.trim()}”.`
               : 'No users yet.'}
           </p>
         </div>
@@ -152,6 +176,33 @@ export default function UsersPage() {
               />
             ))}
           </div>
+
+          {totalPages > 1 && (
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <span className="text-sm tabular-nums text-muted-foreground">
+                Showing {(page - 1) * PAGE_SIZE + 1} to{' '}
+                {Math.min(page * PAGE_SIZE, total)} of {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page <= 1 || usersQuery.isFetching}
+                  onClick={() => setPage(Math.max(1, page - 1))}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= totalPages || usersQuery.isFetching}
+                  onClick={() => setPage(Math.min(totalPages, page + 1))}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </>
       )}
     </SettingsPage>

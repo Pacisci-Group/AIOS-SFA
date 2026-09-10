@@ -9,6 +9,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import {
+  type AccessContext,
+  AgencyPermission,
   ALL_MODULE_KEYS,
   allPagePermissionKeys,
   PageLevel,
@@ -16,7 +18,7 @@ import {
   pageLevelToPermissions,
   permissionsToPageLevel,
 } from '@sfa/shared';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import { hashResetToken, mintResetToken } from '../common/crypto/reset-token';
 import {
   inviteExpiryDays,
@@ -52,7 +54,6 @@ import {
   OwnerProtectionService,
 } from '../permissions/owner-protection.service';
 import {
-  AgencyUserListItem,
   InviteKind,
   InviteResponse,
   InviteUserInput,
@@ -60,7 +61,14 @@ import {
   PasswordResetResponse,
   UserDetailResponse,
   AgencyUserOption,
+  AgencyUserListResponse,
 } from './users.types';
+import {
+  type AgencyUserStatus,
+  type ListAgencyUsersDto,
+} from './dto/list-users.dto';
+import { buildSearchFilter, tokenRegex } from '../common/mongo/search-filter';
+import { USER_SEARCH_FIELDS, idsMatching } from './user-search';
 
 /**
  * Per-user overrides only ever move a user between page levels, so every
@@ -72,6 +80,26 @@ const ALLOWED_PAGE_PERMISSIONS = new Set<string>(allPagePermissionKeys());
 /** `"Ada Lovelace"`, or null when neither name part is set. */
 function fullName(first?: string, last?: string): string | null {
   return [first, last].filter(Boolean).join(' ').trim() || null;
+}
+
+/**
+ * The Status facet, as Mongo clauses.
+ *
+ * Derived, not stored — see `ListAgencyUsersDto.status` for why it is a facet
+ * rather than searchable text. `undefined` (no filter) and an empty array are
+ * both "no filter": a cleared multi-select must not empty the table.
+ */
+function statusFilter(
+  selected: AgencyUserStatus[] | undefined,
+): FilterQuery<UserDocument>[] | null {
+  if (!selected?.length) return null;
+
+  const clauses: Record<AgencyUserStatus, FilterQuery<UserDocument>> = {
+    active: { isActive: true },
+    invited: { isActive: false, deactivatedAt: null },
+    deactivated: { deactivatedAt: { $ne: null } },
+  };
+  return [...new Set(selected)].map((state) => clauses[state]);
 }
 
 @Injectable()
@@ -117,22 +145,143 @@ export class UsersService {
       .lean<AgencyUserOption[]>();
   }
 
-  async findByAgency(agencyId: string): Promise<AgencyUserListItem[]> {
-    const users = await this.userModel
-      .find({
-        agencyId: new Types.ObjectId(agencyId),
-        isPlatformAdmin: { $ne: true },
-      })
-      .select('-passwordHash -inviteToken -passwordResetToken')
-      .lean();
+  /**
+   * The agency directory — one page of it (PAC-101).
+   *
+   * Used to return the whole roster unpaginated, with the page filtering it in
+   * the browser over three of its five columns; Branch and Status were
+   * rendered and not filtered at all. See `AgencyUserOption` for why the three
+   * pickers that also read this endpoint were moved off it first.
+   *
+   * ## The sort reproduces the old client-side ranking exactly
+   *
+   * The page ranked `invited` before `active` before `deactivated`, then by
+   * name. That is `{ deactivatedAt: 1, isActive: 1, … }` and needs no computed
+   * stage: BSON orders **Null before Date**, so `deactivatedAt: 1` puts invited
+   * and active ahead of deactivated, and within the nulls `isActive: 1` puts
+   * `false` (invited) ahead of `true` (active). `UserSchema` documents the
+   * three states as exactly `(true,null)/(false,null)/(false,set)` and
+   * `reactivateUser` clears both together, so `(true,set)` is unreachable and
+   * the ordering is total.
+   *
+   * ⚠ One deliberate behaviour change: the old tiebreak was `displayName`,
+   * which is `"first last"` — so it sorted by **first** name. `lastName,
+   * firstName` is the directory convention and matches the platform directory.
+   * `email` last, because it is unique and makes paging deterministic.
+   */
+  async findByAgency(
+    agencyId: string,
+    query: ListAgencyUsersDto,
+    access: AccessContext,
+  ): Promise<AgencyUserListResponse> {
+    const { page, pageSize } = query;
+    const filter: FilterQuery<UserDocument> = {
+      agencyId: new Types.ObjectId(agencyId),
+      isPlatformAdmin: { $ne: true },
+    };
+
+    const status = statusFilter(query.status);
+    if (status) filter.$or = status;
+
+    const search = await this.buildUserSearch(agencyId, query.q, access);
+    if (search) filter.$and = [search];
+
+    const [total, users] = await Promise.all([
+      this.userModel.countDocuments(filter),
+      this.userModel
+        .find(filter)
+        .collation({ locale: 'en', strength: 2 })
+        .sort({
+          deactivatedAt: 1,
+          isActive: 1,
+          lastName: 1,
+          firstName: 1,
+          email: 1,
+        })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .select('-passwordHash -inviteToken -passwordResetToken')
+        .lean(),
+    ]);
 
     const byUser = await this.roleAssignments.rolesForUsers(
       users.map((user) => user._id),
     );
-    return users.map((user) => ({
-      ...user,
-      roleIds: byUser.get(user._id.toString()) ?? [],
-    }));
+    return {
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      items: users.map((user) => ({
+        ...user,
+        roleIds: byUser.get(user._id.toString()) ?? [],
+      })),
+    };
+  }
+
+  /**
+   * The filter for the directory's search box, or `null` for no query.
+   *
+   * Name and email match on `users` directly; role and branch names live on
+   * other collections and are resolved to ids first, the way the platform
+   * directory does it.
+   *
+   * ⚠ **The branch arm is permission-gated.** The Branch column only renders
+   * for a caller holding `agency:branches:read`, so ORing that arm in
+   * unconditionally would return rows matching a column the caller cannot see —
+   * which reads as a broken search *and* leaks branch names by oracle. The
+   * platform directory has no analogue of this because a platform admin holds
+   * everything. This is the one place PAC-101's "every rendered column" has to
+   * mean "every column **this caller** renders".
+   */
+  private buildUserSearch(
+    agencyId: string,
+    raw: string | undefined,
+    access: AccessContext,
+  ): Promise<FilterQuery<UserDocument> | null> {
+    const canSeeBranches = access.permissions.includes(
+      AgencyPermission.BranchesRead,
+    );
+
+    return buildSearchFilter<UserDocument>(raw, {
+      fields: USER_SEARCH_FIELDS,
+      tokenBranches: [
+        (token) => this.usersByRoleName(agencyId, token),
+        ...(canSeeBranches
+          ? [(token: string) => this.usersByBranchName(agencyId, token)]
+          : []),
+      ],
+    });
+  }
+
+  /** Users holding a role whose **name** contains the token. */
+  private async usersByRoleName(
+    agencyId: string,
+    token: string,
+  ): Promise<FilterQuery<UserDocument> | null> {
+    const roles = await idsMatching<AgencyRoleDocument>(this.roleModel, {
+      agencyId: new Types.ObjectId(agencyId),
+      name: tokenRegex(token),
+    });
+    if (!roles.length) return null;
+
+    const userIds = await this.roleAssignments.usersHoldingAnyRole(
+      roles,
+      agencyId,
+    );
+    return userIds.length ? { _id: { $in: userIds } } : null;
+  }
+
+  /** Users whose branch's **name** contains the token. */
+  private async usersByBranchName(
+    agencyId: string,
+    token: string,
+  ): Promise<FilterQuery<UserDocument> | null> {
+    const ids = await idsMatching<BranchDocument>(this.branchModel, {
+      agencyId: new Types.ObjectId(agencyId),
+      name: tokenRegex(token),
+    });
+    return ids.length ? { branchId: { $in: ids } } : null;
   }
 
   async findById(

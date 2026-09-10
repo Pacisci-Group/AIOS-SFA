@@ -5,8 +5,15 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/users
+  url: {{baseUrl}}/users?pageSize=100
   auth: bearer
+}
+
+params:query {
+  pageSize: 100
+  ~page: 1
+  ~q: producer
+  ~status: active,invited
 }
 
 auth:bearer {
@@ -17,8 +24,14 @@ script:post-response {
   // Capture an active, non-owner user for the removal requests that follow.
   // Picked by role rather than hard-coded id so the collection works against
   // any seeded tenant.
+  //
+  // ⚠ `.items`, not the body — this endpoint returns a paginated envelope
+  // since PAC-101, and `pageSize=100` above is what keeps the producer on the
+  // first (only) page rather than trusting the default of 25. Get this wrong
+  // and `activeUserId` stays unset, which breaks `Send Password Reset`,
+  // `Deactivate User` and `Reactivate User` with a request to `/users//…`.
   if (res.getStatus() === 200) {
-    const target = res.getBody().find(
+    const target = res.getBody().items.find(
       (u) => u.isActive && !u.deactivatedAt && u.email === bru.getEnvVar("producerEmail"),
     );
     if (target) bru.setVar("activeUserId", target._id);
@@ -30,8 +43,26 @@ tests {
     expect(res.getStatus()).to.equal(200);
   });
 
+  test("returns a paginated envelope, not a bare array", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("page");
+    expect(body).to.have.property("pageSize");
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("ranks invited before active before deactivated", function () {
+    const rank = function (u) {
+      return u.deactivatedAt ? 2 : u.isActive ? 1 : 0;
+    };
+    const ranks = res.getBody().items.map(rank);
+    const sorted = ranks.slice().sort();
+    expect(ranks).to.deep.equal(sorted);
+  });
+
   test("every row carries the three-way status fields", function () {
-    const user = res.getBody()[0];
+    const user = res.getBody().items[0];
     expect(user).to.have.property("isActive");
     // `isActive` alone is ambiguous — it is false for both a pending invite and
     // a removed employee. `deactivatedAt` is what separates them.
@@ -40,15 +71,53 @@ tests {
 }
 
 docs {
-  # GET /users
+  # GET /users — the agency directory (paginated since PAC-101)
 
-  Every user in the caller's agency. Platform admins are excluded — they are not
-  the agency's to manage.
+  Every user in the caller's agency, one page at a time. Platform admins are
+  excluded — they are not the agency's to manage.
 
   **Module** — none (`@SkipModule`). **Permission** — `agency:users:read`.
 
-  **Response `200`** — array of users. Secrets (`passwordHash`, `inviteToken`,
-  `passwordResetToken`) are never returned.
+  ⚠ **This returned a bare array until PAC-101.** It is now the paginated
+  envelope every other list uses. A caller that wants *everybody* — a picker —
+  wants **`GET /users/options`** instead; that is where the three `<Select>`
+  components that used to read this endpoint went, and why this shape could
+  change with one consumer to update.
+
+  ## Query
+  | param | type | default | notes |
+  |---|---|---|---|
+  | page | int | 1 | 1-based |
+  | pageSize | int | 25 | max 100 |
+  | q | string | — | max 120; tokenized — see below |
+  | status | multi | — | `active` \| `invited` \| `deactivated`, ORed |
+
+  ### How `q` is interpreted
+
+  Lower-cased, accent-stripped, split into at most 4 tokens; every token must
+  match something, but not all in the same field. Each is a case-insensitive
+  substring against `firstName`, `lastName`, `email`, the user's **role names**,
+  and — for a caller who holds `agency:branches:read` — their **branch name**.
+
+  ⚠ **The branch arm is permission-gated.** The Branch column only renders for a
+  caller with `agency:branches:read`, so ORing it in unconditionally would
+  return rows matching a column they cannot see: a search that reads as broken,
+  and a branch-name oracle. Every *default* role holding `agency:users:read`
+  also holds `agency:branches:read`, so this only bites a custom role — which is
+  exactly what it is defending.
+
+  `status` is a **facet, not searchable text**: it is derived from `isActive` +
+  `deactivatedAt` rather than stored, so matching it as text would need an
+  `$expr` and would make `act` hit both "active" and "deactivated".
+
+  ## Sort
+  `deactivatedAt, isActive, lastName, firstName, email` under the `en`/strength-2
+  collation. BSON orders **Null before Date**, so that reproduces the ranking
+  the page used to do in the browser — invited, then active, then deactivated —
+  without a computed stage. `email` is the tiebreak, so paging is deterministic.
+
+  **Response `200`** — `{ page, pageSize, total, totalPages, items }`. Secrets
+  (`passwordHash`, `inviteToken`, `passwordResetToken`) are never returned.
 
   ## Reading the status — do not branch on `isActive` alone
   `isActive: false` covers **two different states**:

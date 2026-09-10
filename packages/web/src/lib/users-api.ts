@@ -84,8 +84,52 @@ export interface InviteResponse {
   inviteToken?: string;
 }
 
-export function listUsers() {
-  return apiFetch<AgencyUser[]>('/users');
+/** The three states the Status column shows. */
+export const AGENCY_USER_STATUSES = [
+  'active',
+  'invited',
+  'deactivated',
+] as const;
+
+export interface ListUsersParams {
+  page?: number;
+  pageSize?: number;
+  /** Name, email, role name — and branch name, for a caller who can see it. */
+  q?: string;
+  status?: UserStatus[];
+}
+
+export interface AgencyUserListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: AgencyUser[];
+}
+
+/**
+ * One page of the agency directory.
+ *
+ * ⚠ Paginated since PAC-101, where it returned the whole roster as a bare
+ * array. A caller that wants **everybody** — a picker — wants
+ * {@link listUserOptions} instead; this one is the table.
+ */
+export function listUsers(
+  params: ListUsersParams = {},
+): Promise<AgencyUserListResponse> {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === '') continue;
+    // Repeated params, not comma-joined: Express parses `?status=a&status=b`
+    // into an array, which is one of the three forms `multiValue` accepts.
+    if (Array.isArray(value)) {
+      for (const item of value) search.append(key, String(item));
+    } else {
+      search.set(key, String(value));
+    }
+  }
+  const qs = search.toString();
+  return apiFetch<AgencyUserListResponse>(`/users${qs ? `?${qs}` : ''}`);
 }
 
 /**

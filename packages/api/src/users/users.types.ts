@@ -81,6 +81,15 @@ export interface AgencyUserOption {
   lastName?: string;
 }
 
+/** One page of the agency directory (PAC-101). */
+export interface AgencyUserListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: AgencyUserListItem[];
+}
+
 export interface UserDetailResponse {
   _id: unknown;
   agencyId?: unknown;

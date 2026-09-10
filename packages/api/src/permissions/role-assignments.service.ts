@@ -5,7 +5,7 @@ import {
   normalizeLegacyPermission,
   PERMISSION_BY_KEY,
 } from '@sfa/shared';
-import { AnyBulkWriteOperation, Model, Types } from 'mongoose';
+import { FilterQuery, AnyBulkWriteOperation, Model, Types } from 'mongoose';
 import { authorshipForInsert } from '../common/context/request-context';
 import {
   AgencyRole,
@@ -292,6 +292,35 @@ export class RoleAssignmentsService {
       .select({ userId: 1 })
       .lean();
     return rows.map((row) => row.userId);
+  }
+
+  /**
+   * Every user holding **any** of these roles, deduped.
+   *
+   * The many-role counterpart of {@link roleUserIds}, added by PAC-101 so a
+   * role-name search costs one query rather than one per matching role. Scoped
+   * by agency when the caller can supply it, which keeps `userRoles` on its
+   * `{agencyId, roleId}` index — there is no `roleId`-leading index.
+   */
+  async usersHoldingAnyRole(
+    roleIds: Types.ObjectId[],
+    agencyId?: string | Types.ObjectId,
+  ): Promise<Types.ObjectId[]> {
+    if (!roleIds.length) return [];
+
+    const filter: FilterQuery<UserRole> = { roleId: { $in: roleIds } };
+    if (agencyId) {
+      filter.agencyId = new Types.ObjectId(agencyId.toString());
+    }
+    const rows = await this.userRoleModel
+      .find(filter)
+      .select({ userId: 1 })
+      .lean();
+
+    // A user holding two matching roles appears twice in the join; dedupe so
+    // the `$in` is as small as the answer.
+    const unique = new Set(rows.map((row) => row.userId.toString()));
+    return [...unique].map((id) => new Types.ObjectId(id));
   }
 
   /**

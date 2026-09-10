@@ -21,6 +21,7 @@ import type {
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
+import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import type {
   ContactDetail,
   CreateActivityResponse,
@@ -71,6 +72,20 @@ import {
   createTestApp,
   dropTestDatabase,
 } from './helpers/test-app';
+
+/** The `GET /users` envelope, as this suite asserts against it (PAC-101). */
+interface AgencyUserListEnvelope {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: Array<{
+    _id: string;
+    email: string;
+    isActive: boolean;
+    deactivatedAt?: string | null;
+  }>;
+}
 
 describe('SFA API (e2e)', () => {
   let app: INestApplication<App>;
@@ -729,14 +744,139 @@ describe('SFA API (e2e)', () => {
   describe('Users', () => {
     let invitedUserId: string;
 
-    it('GET /api/v1/users', async () => {
+    it('GET /api/v1/users — a paginated envelope (PAC-101)', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/v1/users')
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(Array.isArray(res.body)).toBe(true);
-      expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(2);
+      // Was a bare array until PAC-101. The three pickers that relied on that
+      // shape read `GET /users/options` now.
+      const body = res.body as AgencyUserListEnvelope;
+      expect(Array.isArray(body)).toBe(false);
+      expect(body).toMatchObject({ page: 1, pageSize: 25 });
+      expect(body.items.length).toBeGreaterThanOrEqual(2);
+      expect(body.total).toBeGreaterThanOrEqual(body.items.length);
+    });
+
+    describe('GET /api/v1/users — search and paging (PAC-101)', () => {
+      const list = async (token: string, qs = '') => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/users${qs}`)
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as AgencyUserListEnvelope;
+      };
+      const emails = (body: AgencyUserListEnvelope) =>
+        body.items.map((row) => row.email);
+
+      it('searches name and email', async () => {
+        expect(emails(await list(ownerToken, '?q=producer'))).toContain(
+          seed.producerEmail,
+        );
+      });
+
+      it('searches by role name, which the Roles column renders', async () => {
+        const body = await list(ownerToken, '?q=Producer');
+        expect(emails(body)).toContain(seed.producerEmail);
+      });
+
+      it('searches by branch name — a column that was never searchable', async () => {
+        const body = await list(ownerToken, '?q=Test%20Branch');
+        expect(emails(body)).toContain(seed.producerEmail);
+      });
+
+      it('hides the branch arm from a caller who cannot see the column', async () => {
+        /*
+         * `agency:branches:read` gates the Branch column. Matching on a column
+         * the caller cannot see reads as a broken search *and* leaks branch
+         * names by oracle.
+         *
+         * Every default role holding `agency:users:read` also holds
+         * `agency:branches:read`, so this needs a **custom** role — which is
+         * exactly the case the gate exists for, since agencies can create them.
+         */
+        const roles = app.get<Model<AgencyRole>>(getModelToken(AgencyRole.name));
+        const users = app.get<Model<User>>(getModelToken(User.name));
+        const assignments = app.get(RoleAssignmentsService);
+
+        const agencyId = new Types.ObjectId(seed.agencyId);
+        const auditorRole = await roles.create({
+          agencyId,
+          name: 'Directory Auditor',
+          slug: 'directory_auditor',
+          dataScope: 'agency',
+          isSystemTemplate: false,
+        });
+        await assignments.setRolePermissions(agencyId, auditorRole._id, [
+          'agency:users:read',
+        ]);
+
+        const auditorEmail = 'test-directory-auditor@sfa.local';
+        const auditor = await users.create({
+          agencyId,
+          branchId: new Types.ObjectId(seed.branchId),
+          email: auditorEmail,
+          passwordHash: await bcrypt.hash(TEST_PASSWORD, 10),
+          firstName: 'Directory',
+          lastName: 'Auditor',
+          isActive: true,
+        });
+        await assignments.setUserRoles(
+          { userId: auditor._id.toString(), isPlatformAdmin: true },
+          agencyId,
+          auditor._id,
+          [auditorRole._id],
+        );
+
+        const auditorToken = (await login(app, auditorEmail, TEST_PASSWORD))
+          .accessToken;
+
+        // The owner, who can see the column, finds the row by branch name.
+        expect((await list(ownerToken, '?q=Test%20Branch')).total).toBeGreaterThan(0);
+
+        // The auditor, who cannot, finds nothing by branch name — but the rest
+        // of the search still works for them, so this is the arm being
+        // withheld rather than the endpoint being broken.
+        expect((await list(auditorToken, '?q=Test%20Branch')).total).toBe(0);
+        expect(
+          emails(await list(auditorToken, '?q=producer')),
+        ).toContain(seed.producerEmail);
+      });
+
+      it('ranks invited before active before deactivated', async () => {
+        // The old client-side STATUS_RANK, reproduced by the server sort.
+        const body = await list(ownerToken, '?pageSize=100');
+        const rank = (row: AgencyUserListEnvelope['items'][number]) =>
+          row.deactivatedAt ? 2 : row.isActive ? 1 : 0;
+        const ranks = body.items.map(rank);
+        expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+      });
+
+      it('filters by the Status facet', async () => {
+        const body = await list(ownerToken, '?status=active&pageSize=100');
+        expect(body.items.every((row) => row.isActive)).toBe(true);
+      });
+
+      it('pages deterministically', async () => {
+        const first = await list(ownerToken, '?page=1&pageSize=1');
+        const second = await list(ownerToken, '?page=2&pageSize=1');
+        expect(first.items[0]._id).not.toBe(second.items[0]._id);
+        expect(first.total).toBe(second.total);
+      });
+
+      it('a cleared search is no filter, not an impossible one', async () => {
+        const all = await list(ownerToken, '?pageSize=100');
+        const cleared = await list(ownerToken, '?q=&pageSize=100');
+        expect(cleared.total).toBe(all.total);
+      });
+
+      it('rejects a malformed status with 400, not 500', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users?status=nonsense')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
     });
 
     describe('GET /api/v1/users/options (PAC-101)', () => {
@@ -820,7 +960,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      const users = list.body as { _id: string; email: string }[];
+      const users = (list.body as AgencyUserListEnvelope).items;
       const producer = users.find((u) => u.email === seed.producerEmail);
       expect(producer).toBeDefined();
       invitedUserId = producer!._id;
