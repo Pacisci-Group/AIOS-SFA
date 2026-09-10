@@ -56,22 +56,53 @@ docs {
   ## Query
   | param | notes |
   |---|---|
-  | q | **Either printed control-number form, or a name prefix.** |
+  | q | **Any text the table renders** — see below. |
   | page / pageSize | 1-based; pageSize ≤ 100, default 25. |
 
-  ## How `q` is resolved
+  ## How `q` is resolved (PAC-101)
 
-  It is normalized to a control-number key first (`mailerControlNumberKey`:
-  upper-case, non-alphanumerics stripped). When that succeeds the query is one
-  indexed equality against `controlNumberKeys`, which answers **both** printed
-  forms — `controlno` (`#` + a UUID) and `New Control Number` (that UUID's last
-  12 hex characters) are different strings on every one of the 671,339 legacy
-  rows, and legacy fell back to `ENDS_WITH`/`CONTAINS_SUBSTR`, a collection scan
-  on every keystroke.
+  Two things happen, and they are **ORed** — neither suppresses the other.
 
-  Only when the query is not control-number shaped does it fall back to an
-  anchored, case-insensitive match on the last or first name, which the
-  `{campaignId, lastName, firstName}` index serves.
+  **1. The whole term as a control number.** It is normalized by
+  `mailerControlNumberKey` (upper-case, non-alphanumerics stripped) and matched
+  as one indexed equality against `controlNumberKeys`, which answers **both**
+  printed forms — `controlno` (`#` + a UUID) and `New Control Number` (that
+  UUID's last 12 hex characters) are different strings on every one of the
+  671,339 legacy rows, and legacy fell back to `ENDS_WITH`/`CONTAINS_SUBSTR`, a
+  collection scan on every keystroke. This is matched against the *untokenized*
+  term on purpose: `#3f2a-91c7` must not be split into two words.
+
+  **2. Tokenized substring match across every rendered column.** The term is
+  lower-cased, accent-stripped and split into at most 4 tokens; every token must
+  match something, but not all in the same field — so `smith mcalester` finds a
+  Smith in Mcalester.
+
+  | Column | Field(s) |
+  |---|---|
+  | Name | `fullName`, `firstName`, `lastName` |
+  | Location | `address.city`, `address.state`, `address.zip` |
+  | Market | `market` |
+  | Code | `carrierAgencyId` |
+  | *(not a column)* | `address.street` |
+
+  Offer (`premium.yearly`) is **not** searched — numeric.
+
+  ### What changed
+
+  The name match used to be **anchored** (`^`) on `firstName`/`lastName` only.
+  The Name cell renders `fullName`, so pasting it back into the box asked for a
+  first or last name *beginning with* `"Karen Anderson"` — unsatisfiable. And
+  because the importer splits a combined name on the first space,
+  `MARY ANN SMITH` is stored as `lastName: "ANN SMITH"`, which an anchored match
+  could not reach even from the bare surname.
+
+  ### Cost
+
+  `campaignId` stays outside the search, so the scan is bounded by one campaign.
+  Measured on a 20,405-row campaign (the real week-29 file size): ~50ms
+  execution regardless of token count, with the
+  `{campaignId, lastName, firstName}` index still serving the sort. Token count
+  is free — `$and` short-circuits per document.
 
   ## Response `200`
   ```json

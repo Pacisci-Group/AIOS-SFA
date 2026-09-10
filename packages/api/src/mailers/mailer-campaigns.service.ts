@@ -19,7 +19,7 @@ import {
   type MailerCampaignRecordsResponse,
   type MailerCampaignSettings,
 } from '@sfa/shared';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import {
   Carrier,
   type CarrierDocument,
@@ -40,7 +40,12 @@ import {
   normalizeCampaignNumber,
 } from '../common/mailers/mailer-processor';
 import { parseWeekNumber } from '../common/mailers/mailer-parse';
-import { escapeRegex } from '../common/mongo/escape-regex';
+import {
+  addressPaths,
+  buildSearchFilter,
+  tokenRegex,
+} from '../common/mongo/search-filter';
+import { idsMatching } from '../users/user-search';
 import {
   mailerCampaignCommitRequested,
   mailerCampaignOutputEmailRequested,
@@ -109,6 +114,54 @@ const EDITABLE_STATUSES = ['uploaded', 'previewed', 'failed'] as const;
  * look at, never a silent proceed. The status transition itself is a
  * compare-and-set, so two operators pressing Commit cannot both start a run.
  */
+
+/**
+ * Every mailer field the campaign records table searches.
+ *
+ * A superset of its columns — Name (`fullName`, plus the split halves a
+ * migrated row may carry instead), Location, Market, Code — with
+ * `address.street` added because it is an identity field and the one the
+ * original bug report pasted. `premium.yearly` (Offer) is deliberately absent:
+ * it is numeric, and substring-matching money is meaningless.
+ */
+const MAILER_RECORD_SEARCH_FIELDS = [
+  'fullName',
+  'firstName',
+  'lastName',
+  'market',
+  'carrierAgencyId',
+  ...addressPaths('address'),
+] as const;
+
+/**
+ * Tokens that mean "this campaign goes to every agency".
+ *
+ * An `all` campaign renders its audience as a phrase rather than a name, so
+ * without this the one row with the broadest audience would be the only one
+ * unsearchable by audience.
+ *
+ * **Exact tokens, not a substring test.** Matching `token` as a substring of
+ * `"all every agency"` would fire on a single letter, and this ticket is
+ * explicitly not the place for loose matching. `agency` is in the set as well
+ * as out of it — it also matches real agency names, and the two branches are
+ * ORed within the token, which is the honest answer for an ambiguous word.
+ */
+const EVERY_AGENCY_WORDS = new Set(['all', 'every', 'agency', 'agencies']);
+
+/**
+ * A control number, matched against the **whole** term as one indexed equality.
+ *
+ * `mailerControlNumberKey` upper-cases and strips non-alphanumerics, so the two
+ * printed forms — `#` + a UUID, and that UUID's last 12 hex characters — both
+ * normalize onto the unique `controlNumberKeys` index. Tokenizing would split
+ * `#3f2a-91c7` into two words and lose that entirely, which is why this is a
+ * term branch rather than a searched field.
+ */
+function byControlNumber(term: string): FilterQuery<MailerDocument> | null {
+  const key = mailerControlNumberKey(term);
+  return key ? { controlNumberKeys: key } : null;
+}
+
 @Injectable()
 export class MailerCampaignsService {
   private readonly logger = new Logger(MailerCampaignsService.name);
@@ -541,16 +594,18 @@ export class MailerCampaignsService {
         { 'assignment.mode': 'all' },
       ];
     }
-    if (query.q) {
-      const escaped = escapeRegex(query.q);
-      filter.$and = [
-        {
-          $or: [
-            { name: { $regex: escaped, $options: 'i' } },
-            { campaignNumber: { $regex: escaped, $options: 'i' } },
-          ],
-        },
-      ];
+    // The row renders the audience and the requester by *name*, and neither
+    // lives on the campaign — both resolve to ids first, the same two-phase way
+    // the user directory resolves an agency or a role (PAC-101).
+    const search = await buildSearchFilter<MailerCampaignDocument>(query.q, {
+      fields: ['name', 'campaignNumber'],
+      tokenBranches: [
+        (token) => this.campaignsByAudience(token),
+        (token) => this.campaignsByRequester(token),
+      ],
+    });
+    if (search) {
+      filter.$and = [search];
     }
 
     const [total, rows] = await Promise.all([
@@ -609,13 +664,107 @@ export class MailerCampaignsService {
   }
 
   /**
+   * Campaigns whose **audience** includes an agency matching the token.
+   *
+   * An `all` campaign is shown as "every agency" rather than by name, so it is
+   * matched on the word itself — otherwise the one row whose audience is the
+   * broadest would be the only one unsearchable by audience.
+   */
+  private async campaignsByAudience(
+    token: string,
+  ): Promise<FilterQuery<MailerCampaignDocument> | null> {
+    const branches: FilterQuery<MailerCampaignDocument>[] = [];
+    if (EVERY_AGENCY_WORDS.has(token)) {
+      branches.push({ 'assignment.mode': 'all' });
+    }
+
+    const ids = await idsMatching<AgencyDocument>(this.agencyModel, {
+      name: tokenRegex(token),
+    });
+    if (ids.length) {
+      branches.push({
+        'assignment.agencyIds': { $in: ids.map((id) => id.toString()) },
+      });
+    }
+
+    if (!branches.length) return null;
+    return branches.length === 1 ? branches[0] : { $or: branches };
+  }
+
+  /** Campaigns whose **requester's** name or email matches the token. */
+  private async campaignsByRequester(
+    token: string,
+  ): Promise<FilterQuery<MailerCampaignDocument> | null> {
+    const contains = tokenRegex(token);
+    const ids = await idsMatching<UserDocument>(this.userModel, {
+      $or: [
+        { firstName: contains },
+        { lastName: contains },
+        { email: contains },
+      ],
+    });
+    return ids.length ? { requestedBy: { $in: ids } } : null;
+  }
+
+  /**
    * The campaign detail's records table.
    *
-   * `q` is normalized to a control-number key when it can be — that is one
-   * indexed equality against `controlNumberKeys`, and it answers **either**
-   * printed form. Only when the query is not control-number shaped does it fall
-   * back to an anchored name match, which the `{campaignId, lastName, firstName}`
-   * index serves.
+   * ## What was wrong (PAC-101)
+   *
+   * This is the table the ticket was opened against. The Name column renders
+   * `fullName`, but the query only touched `firstName`/`lastName` — **anchored
+   * with `^`** — so pasting the Name cell back into the search box directly
+   * above it asked for a first or last name *beginning with* `"Karen Anderson"`.
+   * Unsatisfiable by construction.
+   *
+   * The anchor was independently broken for a second reason: when the source
+   * has no split name columns, `mailer-row.mapper.ts` splits the combined name
+   * on the **first** space, so `MARY ANN SMITH` is stored as
+   * `lastName: "ANN SMITH"` — and even the bare surname `SMITH` failed an
+   * anchored match.
+   *
+   * Location, Market and Code were rendered and never searched at all;
+   * `address.street` is searched too, though it is not a column, because it is
+   * how the bug was found. Offer (`premium.yearly`) stays out — numeric.
+   *
+   * ## The control number is still one indexed equality
+   *
+   * `controlNumberKeys` answers **either** printed form (`#` + UUID, and that
+   * UUID's last 12 hex characters) through a unique index, and it must not be
+   * tokenized — `#3f2a-91c7` would split into `3f2a` + `91c7` and ANDing those
+   * is not what someone who pasted a control number meant. It is a whole-term
+   * branch, ORed around the token clause, so it neither suppresses the other
+   * fields nor is suppressed by them.
+   *
+   * ## Cost — measured, not assumed
+   *
+   * `campaignId` stays outside the search, so the scan is bounded by **one
+   * campaign** (~20k rows on a weekly vendor file) rather than the ~671k-row
+   * collection. Measured against a synthetic 20,405-row campaign, which is the
+   * real week-29 file size:
+   *
+   * | query | docs examined | exec |
+   * |---|---|---|
+   * | old, `^`-anchored on 2 fields | 25 | 33ms |
+   * | 9 fields, 1 token | 17,880 | 49ms |
+   * | 9 fields, 2 tokens | 17,908 | 54ms |
+   * | 9 fields, 4 tokens (the cap) | 17,908 | 50ms |
+   * | 9 fields, matching nothing | 20,405 | 55ms |
+   *
+   * Two things that matter in those numbers. **Token count is free** — four
+   * tokens cost the same as one, because `$and` short-circuits per document, so
+   * the cap is a guard against pathological input rather than a cost control.
+   * And the `{campaignId, lastName, firstName}` index still serves the sort in
+   * every case (no blocking `SORT` stage), which is what keeps the paging
+   * cheap; the widened predicate is evaluated as a residual on the fetch.
+   *
+   * `countDocuments` repeats the same scan, so a full request is roughly double
+   * the figure above — ~110ms worst case, comfortably inside the 300ms debounce
+   * the table types against. That is why this is a query-time `$or` and not a
+   * stored, indexed `searchText` column: the backfill over 671k rows would buy
+   * nothing here. **Revisit if a single campaign ever approaches the whole
+   * collection** — at 671k rows in one campaign this shape extrapolates to
+   * ~1.8s and would need the stored key.
    */
   async records(
     id: string,
@@ -626,14 +775,12 @@ export class MailerCampaignsService {
       campaignId: campaign._id.toString(),
     };
 
-    if (query.q) {
-      const key = mailerControlNumberKey(query.q);
-      const escaped = escapeRegex(query.q);
-      filter.$or = [
-        ...(key ? [{ controlNumberKeys: key }] : []),
-        { lastName: { $regex: `^${escaped}`, $options: 'i' } },
-        { firstName: { $regex: `^${escaped}`, $options: 'i' } },
-      ];
+    const search = await buildSearchFilter<MailerDocument>(query.q, {
+      fields: MAILER_RECORD_SEARCH_FIELDS,
+      termBranches: [(term) => Promise.resolve(byControlNumber(term))],
+    });
+    if (search) {
+      filter.$and = [search];
     }
 
     const [total, rows] = await Promise.all([
