@@ -3,10 +3,13 @@ import {
   IsBoolean,
   IsEmail,
   IsIn,
+  IsInt,
   IsMongoId,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 import {
@@ -15,6 +18,7 @@ import {
   SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_NOTE_TYPES,
   SERVICE_TICKET_PRIORITIES,
+  SERVICE_TICKET_QUEUE_TABS,
   SERVICE_TICKET_STATUSES,
 } from '@sfa/shared';
 import type {
@@ -23,6 +27,7 @@ import type {
   ServiceTicketCategory,
   ServiceTicketNoteType,
   ServiceTicketPriority,
+  ServiceTicketQueueTab,
   ServiceTicketStatus,
 } from '@sfa/shared';
 
@@ -218,4 +223,50 @@ export class ListTicketsQueryDto {
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   archived?: boolean;
+
+  /**
+   * Which of the queue's three tabs to return. Omitted means all.
+   *
+   * A server-side predicate since PAC-98: the queue used to fetch every ticket
+   * and filter in the browser, which is what made the dashboard's payload grow
+   * with the book.
+   */
+  @IsOptional()
+  @IsIn(SERVICE_TICKET_QUEUE_TABS)
+  tab?: ServiceTicketQueueTab;
+
+  /**
+   * Free text across the fields the ticket feed searches: client name, ticket
+   * number, category, policy number, phone.
+   *
+   * Server-side since PAC-98. The feed used to filter an array it already had;
+   * once the list pages, a client-side search would only ever find matches on
+   * the page in front of you — quietly, which is the worst way for a search to
+   * be wrong.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  /** 1-based. */
+  @IsOptional()
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  /**
+   * Capped so a client cannot ask for the collection back.
+   *
+   * The cap is what makes this pagination rather than a suggestion: without
+   * it `?pageSize=100000` reproduces exactly the unbounded read this replaced.
+   * 100 matches the Leads list.
+   */
+  @IsOptional()
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number;
 }

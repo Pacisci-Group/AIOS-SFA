@@ -195,6 +195,24 @@ Update `bruno/` for the new params and response shape with a real `docs` block (
 
 ---
 
+## What actually shipped
+
+All four PRs landed as **one** branch at the user's request (`awaris/pac-102-materialize-ticket-status`), in the order below. Departures from the plan above, and why:
+
+| Plan said | Shipped | Why |
+| --- | --- | --- |
+| PR0 stopgap for PAC-102 | **Not shipped** | PR1 landed in the same branch, so a holdover PR1 would delete had no window to be useful in. |
+| PR1: sweep handles `overdue` and `open`; `waiting` "written at creation" | Also derives status in a `pre('save')` hook | The assumption was wrong. Every creation path leaves `status` on its `open` default, *including* for a call scheduled days out — invisible while reads re-derived. The onboarding e2e caught it. |
+| PR2: run the scan once on worker boot | **Not shipped** | The demo seed already materializes directly, so the gap it covered is one tick for a migrated agency. A boot hook would add a multi-tenant scan to every worker start and a background write racing every e2e that boots `WorkerModule`. |
+| PR3: `$facet` for page + counts | Three `countDocuments` + a `find` | Each count is index-served; a facet walks the matched set once per branch. They run concurrently with the page fetch. |
+| PR3: sort tiebreak on `ticketNumber` | `_id` | `ticketNumber` is a string whose numeric part does not sort lexicographically (`RENEW-100` before `RENEW-99`), and a non-unique tiebreak lets a row appear on two pages or neither. |
+| PR4: desk pagination | **Not shipped** | Still open. `RENEWAL_DESK_LIMIT = 100` remains a silent truncation; see PAC-99's follow-on section. |
+
+Two things the plan did not anticipate:
+
+- **`TicketFeed`'s filters had to move server-side too.** The Workspace and Archived pages filter and search through that component, over the array they were given. Paging the endpoint without moving those would have left a search box that silently searched only the current 25 rows. `?search=` is new on the API for this.
+- **A characterization suite came first.** Renewal materialization had no integration coverage at all — only unit tests over the pure scheduling helpers — so `test/renewal-materialization.e2e-spec.ts` was written against the pre-refactor code and had to pass unchanged after the move. It did.
+
 ## Verification
 
 - `npm run lint -w @sfa/api` and `-w @sfa/web` green on each PR.

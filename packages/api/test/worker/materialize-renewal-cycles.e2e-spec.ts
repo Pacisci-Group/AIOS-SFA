@@ -35,7 +35,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Runs each step inline — same seam as `sweep-event-log.e2e-spec.ts`. */
 const inlineStep = {
-  run: <T,>(_id: string, fn: () => Promise<T> | T): Promise<unknown> =>
+  run: <T>(_id: string, fn: () => Promise<T> | T): Promise<unknown> =>
     Promise.resolve(fn()),
 };
 
@@ -142,7 +142,7 @@ describe('MaterializeRenewalCyclesFn (e2e)', () => {
       { _id: agencyA, name: 'A', slug: 'cron-a', status: 'active' },
       { _id: agencyB, name: 'B', slug: 'cron-b', status: 'active' },
       { _id: suspended, name: 'C', slug: 'cron-c', status: 'suspended' },
-    ] as unknown as Agency[]);
+    ]);
   });
 
   it('materializes cycles for every active agency, with no request context', async () => {
@@ -201,14 +201,22 @@ describe('MaterializeRenewalCyclesFn (e2e)', () => {
     await seedBook(agencyA, 'CRON-A5');
     await seedBook(agencyB, 'CRON-B5');
 
-    const renewals = app.get(RenewalMaterializationService);
-    const real = renewals.materializeForAgency.bind(renewals);
+    const renewals = app.get<RenewalMaterializationService>(
+      RenewalMaterializationService,
+    );
+    // Captured before the spy replaces it, so agency B still runs for real.
+    const real = (id: Types.ObjectId): Promise<void> =>
+      RenewalMaterializationService.prototype.materializeForAgency.call(
+        renewals,
+        id,
+      ) as Promise<void>;
     jest
       .spyOn(renewals, 'materializeForAgency')
-      .mockImplementation(async (id: Types.ObjectId) => {
-        if (String(id) === String(agencyA)) throw new Error('boom');
-        return real(id);
-      });
+      .mockImplementation((id: Types.ObjectId) =>
+        String(id) === String(agencyA)
+          ? Promise.reject(new Error('boom'))
+          : real(id),
+      );
 
     const result = await fn.handle(inlineStep);
 

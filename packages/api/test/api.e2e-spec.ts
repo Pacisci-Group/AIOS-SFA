@@ -72,6 +72,30 @@ import {
   dropTestDatabase,
 } from './helpers/test-app';
 
+/**
+ * `GET /crm/service-tickets` returns a paginated envelope (PAC-98), and
+ * supertest types `res.body` as `any`. One typed accessor rather than a cast
+ * at each of two dozen call sites — a bare `.body.items` is how a rename of
+ * the envelope stops being a compile error in the suite that guards it.
+ */
+interface TicketListBody {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: {
+    id: string;
+    status: string;
+    leadStatus: string | null;
+    isStatusLocked: boolean;
+    isArchived: boolean;
+  }[];
+  counts: { all: number; overdue: number; waiting: number };
+}
+
+const ticketList = (res: { body: unknown }): TicketListBody =>
+  res.body as TicketListBody;
+
 describe('SFA API (e2e)', () => {
   let app: INestApplication<App>;
   let seed: TestSeedContext;
@@ -3246,7 +3270,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(csrToken))
         .expect(200);
 
-      expect(Array.isArray(res.body)).toBe(true);
+      expect(Array.isArray(ticketList(res).items)).toBe(true);
     });
 
     /*
@@ -4399,10 +4423,12 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.some((t: { id: string }) => t.id === ownerTicketId)).toBe(
-        true,
-      );
+      expect(Array.isArray(ticketList(res).items)).toBe(true);
+      expect(
+        ticketList(res).items.some(
+          (t: { id: string }) => t.id === ownerTicketId,
+        ),
+      ).toBe(true);
     });
 
     it('GET /api/v1/crm/service-tickets/stats — returns ticket-derived stats', async () => {
@@ -4460,6 +4486,95 @@ describe('SFA API (e2e)', () => {
         .expect(400);
     });
 
+    /*
+     * Pagination (PAC-98).
+     *
+     * The queue used to ship every ticket in scope and page in the browser.
+     * These pin the three properties that made moving it worthwhile and are
+     * silent when broken: that a page is actually bounded, that consecutive
+     * pages do not overlap or skip, and that the tab counts describe the whole
+     * filtered set rather than the page in hand.
+     */
+    describe('pagination', () => {
+      it('bounds the page and reports the totals around it', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=1')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).items).toHaveLength(1);
+        expect(ticketList(res).page).toBe(1);
+        expect(ticketList(res).pageSize).toBe(1);
+        expect(ticketList(res).total).toBeGreaterThan(1);
+        expect(ticketList(res).totalPages).toBe(ticketList(res).total);
+      });
+
+      it('walks pages without repeating or dropping a row', async () => {
+        const first = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=1&page=1')
+          .set(authHeader(ownerToken))
+          .expect(200);
+        const second = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=1&page=2')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        // The sort has a unique final tiebreak (`_id`) precisely so this holds;
+        // ordering by a non-unique key lets a row appear on both pages or
+        // neither, which no single-page assertion would catch.
+        expect(ticketList(first).items[0].id).not.toBe(
+          ticketList(second).items[0].id,
+        );
+      });
+
+      it('counts the filtered set, not the page', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=1')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).counts.all).toBe(ticketList(res).total);
+        expect(ticketList(res).counts.all).toBeGreaterThan(
+          ticketList(res).items.length,
+        );
+      });
+
+      it('narrows to a tab, and the totals follow it', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?tab=waiting&pageSize=100')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        for (const t of ticketList(res).items as { status: string }[]) {
+          expect([
+            'waiting',
+            'waiting_on_client',
+            'waiting_on_carrier',
+          ]).toContain(t.status);
+        }
+        // `total` tracks the tab; `counts` still describes all three.
+        expect(ticketList(res).total).toBe(ticketList(res).counts.waiting);
+      });
+
+      it('rejects a page size past the cap', async () => {
+        // The cap is what makes this pagination rather than a suggestion.
+        await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=100000')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
+
+      it('searches the whole scope, not the page', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?search=zzz-no-such-client')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).items).toHaveLength(0);
+        expect(ticketList(res).total).toBe(0);
+      });
+    });
+
     it('own-scope: CSR only sees their own tickets', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/v1/crm/service-tickets')
@@ -4473,7 +4588,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(csrToken))
         .expect(200);
 
-      const ids = res.body.map((t: { id: string }) => t.id);
+      const ids = ticketList(res).items.map((t: { id: string }) => t.id);
       expect(ids).toContain(csrTicketId);
       // The owner's ticket is assigned to the owner — out of the CSR's own scope.
       expect(ids).not.toContain(ownerTicketId);
@@ -4492,7 +4607,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      const ids = res.body.map((t: { id: string }) => t.id);
+      const ids = ticketList(res).items.map((t: { id: string }) => t.id);
       expect(ids).toContain(csrTicketId);
       expect(ids).toContain(ownerTicketId);
     });
@@ -4657,14 +4772,16 @@ describe('SFA API (e2e)', () => {
         .get('/api/v1/crm/service-tickets')
         .set(authHeader(ownerToken))
         .expect(200);
-      expect(active.body.map((t: { id: string }) => t.id)).toContain(ticketId);
+      expect(
+        ticketList(active).items.map((t: { id: string }) => t.id),
+      ).toContain(ticketId);
 
       const archivedBefore = await request(app.getHttpServer())
         .get('/api/v1/crm/service-tickets?archived=true')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
-        archivedBefore.body.map((t: { id: string }) => t.id),
+        ticketList(archivedBefore).items.map((t: { id: string }) => t.id),
       ).not.toContain(ticketId);
 
       // Backdate the resolve past the window.
@@ -4685,15 +4802,15 @@ describe('SFA API (e2e)', () => {
         .get('/api/v1/crm/service-tickets')
         .set(authHeader(ownerToken))
         .expect(200);
-      expect(activeAfter.body.map((t: { id: string }) => t.id)).not.toContain(
-        ticketId,
-      );
+      expect(
+        ticketList(activeAfter).items.map((t: { id: string }) => t.id),
+      ).not.toContain(ticketId);
 
       const archivedAfter = await request(app.getHttpServer())
         .get('/api/v1/crm/service-tickets?archived=true')
         .set(authHeader(ownerToken))
         .expect(200);
-      const archivedTicket = archivedAfter.body.find(
+      const archivedTicket = ticketList(archivedAfter).items.find(
         (t: { id: string }) => t.id === ticketId,
       );
       expect(archivedTicket).toBeDefined();
@@ -4712,9 +4829,9 @@ describe('SFA API (e2e)', () => {
         .get('/api/v1/crm/service-tickets')
         .set(authHeader(ownerToken))
         .expect(200);
-      expect(queueAgain.body.map((t: { id: string }) => t.id)).toContain(
-        ticketId,
-      );
+      expect(
+        ticketList(queueAgain).items.map((t: { id: string }) => t.id),
+      ).toContain(ticketId);
     });
   });
 
@@ -4767,7 +4884,9 @@ describe('SFA API (e2e)', () => {
       chain: ChainLink[];
     }
 
-    const ids = (body: { id: string }[]) => body.map((t) => t.id);
+    // The list is a paginated envelope since PAC-98.
+    const ids = (body: unknown) =>
+      (body as TicketListBody).items.map((t) => t.id);
 
     it('starts a chain with only the welcome call', async () => {
       const res = await request(app.getHttpServer())
@@ -7344,13 +7463,16 @@ describe('SFA API (e2e)', () => {
         .expect(200);
       expect(one.body.leadStatus).toBe('New');
 
+      // Paged since PAC-98, so ask for a page big enough to hold the suite's
+      // tickets rather than relying on this one landing in the default eight.
       const list = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
-      const row = list.body.find(
+      const row = ticketList(list).items.find(
         (t: { id: string }) => t.id === ticket.body.id,
       );
+      expect(row).toBeDefined();
       expect(row.leadStatus).toBeNull();
       expect(row.isStatusLocked).toBe(true);
     });

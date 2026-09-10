@@ -391,6 +391,35 @@ ServiceTicketSchema.index({ agencyId: 1, branchId: 1, status: 1 });
 ServiceTicketSchema.index({ assignedUserId: 1, status: 1 });
 ServiceTicketSchema.index({ agencyId: 1, status: 1, resolvedAt: 1 });
 
+/*
+ * The queue's urgency sort (PAC-98), one index per data scope.
+ *
+ * `scopeFilter` clamps by `agencyId` for an agency- or branch-scoped reader
+ * and by `assignedUserId` for an `own`-scoped one, and a compound index is
+ * only usable from its left edge — so neither of these can serve the other's
+ * query. Without them the paged read answers with an in-memory `SORT` over the
+ * caller's whole scope, which is the cost paging exists to remove: measured at
+ * 1,470 documents examined to return a page of 8, against 8 with these.
+ *
+ * Declared here so a *new* database gets them from `autoIndex`, and in
+ * `migrations/20260910123159-queue-sort-indexes.js` so existing ones do —
+ * `autoIndex` only ever adds what is missing.
+ */
+ServiceTicketSchema.index({
+  agencyId: 1,
+  urgencyRank: 1,
+  urgencyAt: 1,
+  priorityRank: 1,
+  _id: 1,
+});
+ServiceTicketSchema.index({
+  assignedUserId: 1,
+  urgencyRank: 1,
+  urgencyAt: 1,
+  priorityRank: 1,
+  _id: 1,
+});
+
 // One quote ticket per lead, ever. This is the idempotency guard for
 // `LeadTicketsService.ensureForLead`, which the Start Quote dialog calls on
 // every run — including when the producer picks a lead that already has one.

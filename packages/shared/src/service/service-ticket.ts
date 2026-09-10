@@ -538,6 +538,39 @@ export interface ServiceTicketActivity {
  * web app. Field names mirror the original mock UI so components need minimal
  * changes.
  */
+/**
+ * The queue's three tabs, and the vocabulary the API accepts for `?tab=`.
+ *
+ * Shared because the tab is now a server-side predicate rather than a client
+ * filter: the web app sends it and the API narrows on it, so a tab added on
+ * one side and not the other has to be a compile error.
+ */
+export const SERVICE_TICKET_QUEUE_TABS = ['all', 'overdue', 'waiting'] as const;
+export type ServiceTicketQueueTab =
+  (typeof SERVICE_TICKET_QUEUE_TABS)[number];
+
+/**
+ * Paginated envelope for `GET /crm/service-tickets`, mirroring
+ * `LeadListResponse` and `HouseholdListResponse`.
+ *
+ * `counts` rides along because the queue header renders all three tab totals
+ * beside the rows of one of them; without it every page load would need a
+ * second round trip to label the tabs it is already showing.
+ *
+ * The counts are over the filtered set — scope, category, archive window —
+ * but *before* the tab narrows it. That is what the chips have always meant:
+ * "how many would this tab show", not "how many are on screen".
+ */
+export interface ServiceTicketListResponse {
+  page: number;
+  pageSize: number;
+  /** Rows matching the filters, before the tab predicate. */
+  total: number;
+  totalPages: number;
+  items: ServiceTicketView[];
+  counts: Record<ServiceTicketQueueTab, number>;
+}
+
 export interface ServiceTicketView {
   id: string;
   ticketNumber: string;

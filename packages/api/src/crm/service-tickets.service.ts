@@ -26,6 +26,8 @@ import {
   allowsPolicyTransfer,
 } from '@sfa/shared';
 import type {
+  ServiceTicketListResponse,
+  ServiceTicketQueueTab,
   OnboardingStepDefinition,
   OnboardingStepKey,
   OnboardingView,
@@ -238,7 +240,11 @@ export class ServiceTicketsService {
   async list(
     access: AccessContext,
     query: ListTicketsQueryDto,
-  ): Promise<ServiceTicketView[]> {
+  ): Promise<ServiceTicketListResponse> {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? DEFAULT_TICKET_PAGE_SIZE;
+    const tab: ServiceTicketQueueTab = query.tab ?? 'all';
+
     const filter = this.scopeFilter(access);
     if (query.category) {
       filter.category = query.category;
@@ -257,6 +263,34 @@ export class ServiceTicketsService {
        */
       filter.status = query.status;
     }
+    if (query.search?.trim()) {
+      /*
+       * The same fields the ticket feed matched in the browser.
+       *
+       * A regex `$or` is not indexable and scans the scope — but so did the
+       * client-side version, which fetched every ticket to filter it. This at
+       * least scans on the server and returns one page. If search becomes hot,
+       * the answer is a text index, not a return to shipping the collection.
+       *
+       * Escaped, so a term containing `.` or `(` is a search rather than a
+       * pattern the user did not know they were writing.
+       */
+      const term = escapeRegExp(query.search.trim());
+      const rx = new RegExp(term, 'i');
+      filter.$and = [
+        ...(filter.$and ?? []),
+        {
+          $or: [
+            { clientName: rx },
+            { ticketNumber: rx },
+            { category: rx },
+            { policyNumber: rx },
+            { phone: rx },
+          ],
+        },
+      ];
+    }
+
     // Resolved tickets age out of the active queue after the archive window;
     // the Archived Tickets view asks for exactly the other side of that line.
     const archivedCondition = archivedMatch(archiveCutoff());
@@ -271,11 +305,52 @@ export class ServiceTicketsService {
     // view and deep links keep working.
     filter.$nor = [...(filter.$nor ?? []), ...scheduledStepMatches(new Date())];
 
-    const tickets = await this.ticketModel
-      .find(filter)
-      .sort({ lastActivityAt: -1 })
-      .lean();
-    return tickets.map((t) => serializeTicket(t));
+    /*
+     * Tab counts, over the filters but before the tab narrows them.
+     *
+     * Three `countDocuments` rather than one `$facet`: each is a count the
+     * server can answer from an index, where a faceted pipeline walks the
+     * matched set once per branch. They also run concurrently with the page
+     * fetch, so the extra round trips cost latency only under pool pressure.
+     */
+    const [all, overdue, waiting, rows] = await Promise.all([
+      this.ticketModel.countDocuments(filter),
+      this.ticketModel.countDocuments({
+        ...filter,
+        ...queueTabMatch('overdue'),
+      }),
+      this.ticketModel.countDocuments({
+        ...filter,
+        ...queueTabMatch('waiting'),
+      }),
+      this.ticketModel
+        .find({ ...filter, ...queueTabMatch(tab) })
+        /*
+         * The urgency order, served by an index rather than computed.
+         *
+         * `urgencyRank`, `urgencyAt` and `priorityRank` are materialized so
+         * this can be a plain sort — see the schema for why a computed key
+         * could not be. `_id` is the final tiebreak rather than
+         * `ticketNumber`, which the client-side comparator used: that is a
+         * string whose numeric part does not sort lexicographically
+         * (`RENEW-100` before `RENEW-99`), and a tiebreak that disagrees with
+         * itself between pages drops or repeats rows across them.
+         */
+        .sort({ urgencyRank: 1, urgencyAt: 1, priorityRank: 1, _id: 1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .lean(),
+    ]);
+
+    const total = tab === 'all' ? all : tab === 'overdue' ? overdue : waiting;
+    return {
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      items: rows.map((t) => serializeTicket(t)),
+      counts: { all, overdue, waiting },
+    };
   }
 
   /**
@@ -1754,6 +1829,46 @@ export class ServiceTicketsService {
  * follow-on to PAC-99 (plan PR4).
  */
 const RENEWAL_DESK_LIMIT = 100;
+
+/**
+ * Rows per page when a caller does not say.
+ *
+ * Matches the Priority Ticket Queue's own `PAGE_SIZE`, which is what most
+ * requests will ask for anyway. The Ticket Workspace and Archived list send
+ * their own; the DTO caps every caller at 100 so nobody can ask for the
+ * collection back and undo this.
+ */
+const DEFAULT_TICKET_PAGE_SIZE = 8;
+
+/**
+ * The Mongo predicate behind each of the queue's three tabs.
+ *
+ * These read the stored `status`, which `SyncTicketStatusFn` keeps true — the
+ * whole reason the tabs can be a server-side filter at all. Before that the
+ * column lied about scheduled calls, so the queue had to fetch everything and
+ * decide in the browser.
+ *
+ * `overdue` is a single status rather than the client's old `slaStatus ===
+ * 'critical'`; that derived value was defined as `status === 'overdue'`, so
+ * this is the same set, expressed where it can be indexed. `waiting` keeps
+ * every flavour of "blocked on someone else" the UI groups together.
+ */
+function queueTabMatch(
+  tab: ServiceTicketQueueTab,
+): FilterQuery<ServiceTicketDocument> {
+  if (tab === 'overdue') return { status: 'overdue' };
+  if (tab === 'waiting') {
+    return {
+      status: { $in: ['waiting', 'waiting_on_client', 'waiting_on_carrier'] },
+    };
+  }
+  return {};
+}
+
+/** Treat a search term as text, not as a pattern the user did not intend. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /** Roles whose holders can be a ticket's Assigned Client Relation Manager. */
 const ASSIGNABLE_ROLE_SLUGS = ['csr', 'crm'];

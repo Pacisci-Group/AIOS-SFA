@@ -11,6 +11,8 @@ import type {
   ServiceTicketCategory,
   ServiceTicketNoteType,
   ServiceTicketPriority,
+  ServiceTicketListResponse,
+  ServiceTicketQueueTab,
   ServiceTicketStats,
   ServiceTicketStatus,
   ServiceTicketView,
@@ -38,6 +40,8 @@ export type {
   ServiceTicketPriority,
   ServiceTicketStats,
   ServiceTicketStatus,
+  ServiceTicketListResponse,
+  ServiceTicketQueueTab,
   ServiceTicketView,
 } from '@sfa/shared';
 
@@ -51,8 +55,26 @@ export interface ListServiceTicketsOptions {
    * archive window). Omitted returns the active queue, which excludes them.
    */
   archived?: boolean;
+  /** Which queue tab to return. Omitted means all. */
+  tab?: ServiceTicketQueueTab;
+  /** 1-based. */
+  page?: number;
+  /** Capped server-side at 100; the API defaults to 8 if omitted. */
+  pageSize?: number;
 }
 
+/**
+ * One page of the ticket queue, with the tab counts for its header.
+ *
+ * Paged by the server since PAC-98. This used to return every ticket in the
+ * caller's scope and let the browser rank, slice and count them — which worked
+ * until a rep's queue reached several hundred and made the dashboard's first
+ * paint proportional to the size of the book.
+ *
+ * The ranking moved with it: rows arrive in urgency order and must be rendered
+ * in the order given. Re-sorting them client-side would reorder one page
+ * against the rest.
+ */
 export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   const params = new URLSearchParams();
   if (options.status) {
@@ -64,8 +86,17 @@ export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   if (options.archived) {
     params.set('archived', 'true');
   }
+  if (options.tab && options.tab !== 'all') {
+    params.set('tab', options.tab);
+  }
+  if (options.page && options.page > 1) {
+    params.set('page', String(options.page));
+  }
+  if (options.pageSize) {
+    params.set('pageSize', String(options.pageSize));
+  }
   const qs = params.toString();
-  return apiFetch<ServiceTicketView[]>(`${BASE}${qs ? `?${qs}` : ''}`);
+  return apiFetch<ServiceTicketListResponse>(`${BASE}${qs ? `?${qs}` : ''}`);
 }
 
 export function getServiceTicketStats() {

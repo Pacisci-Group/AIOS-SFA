@@ -8,6 +8,10 @@ import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
+import type { ServiceTicketStatus } from "@sfa/shared";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { PaginationFooter } from "@/components/common/PaginationFooter";
+import type { TicketFeedFilters } from "./components/TicketFeed";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import type { TicketStatus } from "./components/ticket-data";
@@ -26,6 +30,30 @@ const ARCHIVED_KEY = ["service-tickets", "archived"];
  * active queue. Reopening one (via the status picker) pulls it straight back
  * into the working ticket list.
  */
+/**
+ * Rows per page of the feed.
+ *
+ * Larger than the dashboard queue's 8: this is a full-height list rather than
+ * a card, and the server caps every caller at 100 regardless.
+ */
+/**
+ * The feed's status tabs, as the API's `?status=`.
+ *
+ * `open` covers overdue too — an overdue ticket is an open one that is late,
+ * and the tab has always shown both. The API takes a single status, so this is
+ * expressed as "no status filter, the tab is the whole list" for `all` and a
+ * direct mapping otherwise; `open` sends nothing and relies on the queue tab
+ * instead.
+ */
+const FEED_TAB_STATUS: Record<string, ServiceTicketStatus | undefined> = {
+  all: undefined,
+  open: undefined,
+  waiting: "waiting",
+  resolved: "resolved",
+};
+
+const FEED_PAGE_SIZE = 25;
+
 export default function ArchivedTicketsPage() {
   const queryClient = useQueryClient();
   const { canWrite } = usePermissions();
@@ -40,12 +68,62 @@ export default function ArchivedTicketsPage() {
     searchParams.get("ticket") ? "workspace" : "queue",
   );
 
+  /*
+   * Paged by the server since PAC-98. This list used to fetch every ticket in
+   * the caller's scope in one response; the feed rendered all of them and the
+   * payload grew with the book.
+   */
+  const page = Number(searchParams.get("page")) || 1;
+
+  /*
+   * The feed's controls live here rather than inside it, because they are part
+   * of the *request* now — see `TicketFeedFilters`. Changing one resets to page
+   * 1: page 3 of an unfiltered list is not page 3 of a filtered one.
+   */
+  const [filters, setFilters] = useState<TicketFeedFilters>({
+    query: "",
+    filter: "all",
+    category: "all",
+  });
+  // Typing should not fire a request per keystroke.
+  const debouncedQuery = useDebouncedValue(filters.query, 300);
+
+  const feedQuery = useMemo(
+    () => ({
+      search: debouncedQuery.trim() || undefined,
+      category: filters.category === "all" ? undefined : filters.category,
+      status: FEED_TAB_STATUS[filters.filter],
+    }),
+    [debouncedQuery, filters.category, filters.filter],
+  );
+
+  const changeFilters = (next: TicketFeedFilters) => {
+    setFilters(next);
+    const params = new URLSearchParams(searchParams);
+    params.delete("page");
+    params.delete("ticket");
+    setSearchParams(params, { replace: true });
+  };
+
   const ticketsQuery = useQuery({
-    queryKey: ARCHIVED_KEY,
-    queryFn: () => listServiceTickets({ archived: true }),
+    queryKey: [...ARCHIVED_KEY, { page, ...feedQuery }],
+    queryFn: () => listServiceTickets({ archived: true, page, pageSize: FEED_PAGE_SIZE, ...feedQuery }),
+    // Hold the previous page while the next loads, so paging does not blank
+    // the feed and drop the selection out from under the workspace pane.
+    placeholderData: (previous) => previous,
   });
 
-  const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
+  const ticketPage = ticketsQuery.data;
+  const tickets = useMemo(() => ticketPage?.items ?? [], [ticketPage]);
+
+  const goToPage = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (next <= 1) params.delete("page");
+    else params.set("page", String(next));
+    // The selected ticket belongs to the page being left.
+    params.delete("ticket");
+    setSearchParams(params, { replace: true });
+  };
 
   useEffect(() => {
     if (!tickets.length) {
@@ -159,10 +237,20 @@ export default function ArchivedTicketsPage() {
             >
               <TicketFeed
                 tickets={tickets}
+                filters={filters}
+                onFiltersChange={changeFilters}
                 selectedId={selectedTicketId}
                 onSelect={handleSelect}
                 showStatusTabs={false}
                 emptyLabel={`Nothing archived yet. Tickets land here ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days after they are resolved.`}
+              />
+              <PaginationFooter
+                page={ticketPage?.page ?? page}
+                totalPages={ticketPage?.totalPages ?? 1}
+                pageCount={tickets.length}
+                total={ticketPage?.total ?? 0}
+                onChange={goToPage}
+                label="Tickets"
               />
             </div>
 
