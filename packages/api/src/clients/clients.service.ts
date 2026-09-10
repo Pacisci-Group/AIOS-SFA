@@ -28,6 +28,8 @@ import {
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { resolveHouseholdAddress } from '../common/address/household-address';
+import { escapeRegex } from '../common/mongo/escape-regex';
+import { MATCHES_NOTHING } from '../common/mongo/search-filter';
 import {
   loadContactDetails,
   toContactDetails,
@@ -106,10 +108,6 @@ const CHILD_MATCH_CAP = 500;
  */
 const CONTACT_NAME_COLLATION = { locale: 'en', strength: 2 } as const;
 
-/** A clause no household satisfies — an explicit empty result. */
-const MATCHES_NOTHING = { _id: { $in: [] as Types.ObjectId[] } };
-
-/** `_id` is the tiebreaker everywhere, so pages don't shuffle between requests. */
 /**
  * `_id` is the tiebreaker everywhere, so pages don't shuffle between requests.
  *
@@ -171,7 +169,7 @@ export class ClientsService {
       // name term reaches the primary contact the same way the Clients list
       // does — by resolving contacts first and matching on the household ids
       // they name.
-      const rx = new RegExp(escapeRegExp(q), 'i');
+      const rx = new RegExp(escapeRegex(q), 'i');
       const ids = await this.matchHouseholdsByContactName(scope, rx);
       filter.$or = [
         { name: rx },
@@ -282,7 +280,7 @@ export class ClientsService {
       const or: FilterQuery<HouseholdDocument>[] = [];
 
       if (routes.name) {
-        const rx = new RegExp(escapeRegExp(routes.name), 'i');
+        const rx = new RegExp(escapeRegex(routes.name), 'i');
         // No `primaryContactName` clause any more (PAC-91 §4) — and none is
         // needed: `matchByContact` below already searches every member's name,
         // the primary included, and returns a `matchedOn` label the stored copy
@@ -397,15 +395,15 @@ export class ClientsService {
     let byName = false;
 
     if (criteria.firstName) {
-      filter.firstName = new RegExp(escapeRegExp(criteria.firstName), 'i');
+      filter.firstName = new RegExp(escapeRegex(criteria.firstName), 'i');
       byName = true;
     }
     if (criteria.lastName) {
-      filter.lastName = new RegExp(escapeRegExp(criteria.lastName), 'i');
+      filter.lastName = new RegExp(escapeRegex(criteria.lastName), 'i');
       byName = true;
     }
     if (criteria.anyName) {
-      const rx = new RegExp(escapeRegExp(criteria.anyName), 'i');
+      const rx = new RegExp(escapeRegex(criteria.anyName), 'i');
       filter.$or = [{ firstName: rx }, { lastName: rx }];
       byName = true;
     }
@@ -474,7 +472,7 @@ export class ClientsService {
     const policies = await this.policyModel
       .find({
         ...scope,
-        policyNumberKey: new RegExp(`^${escapeRegExp(key)}`),
+        policyNumberKey: new RegExp(`^${escapeRegex(key)}`),
         householdId: { $ne: null },
       })
       .select('policyNumber policyNumberKey householdId')
@@ -521,7 +519,7 @@ export class ClientsService {
     const filter: FilterQuery<PolicyDocument> = { ...scope };
     const q = term.trim();
     if (q) {
-      const rx = new RegExp(escapeRegExp(q), 'i');
+      const rx = new RegExp(escapeRegex(q), 'i');
       const or: FilterQuery<PolicyDocument>[] = [
         { policyNumber: rx },
         { policyType: rx },
@@ -1294,11 +1292,6 @@ function householdIdClause(
   return {
     _id: { $in: [...found.keys()].map((id) => new Types.ObjectId(id)) },
   };
-}
-
-/** Search terms are user input — never let them compile as a pattern. */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function clampLimit(limit: number): number {

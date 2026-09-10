@@ -40,6 +40,7 @@ import {
   normalizeCampaignNumber,
 } from '../common/mailers/mailer-processor';
 import { parseWeekNumber } from '../common/mailers/mailer-parse';
+import { escapeRegex } from '../common/mongo/escape-regex';
 import {
   mailerCampaignCommitRequested,
   mailerCampaignOutputEmailRequested,
@@ -541,7 +542,7 @@ export class MailerCampaignsService {
       ];
     }
     if (query.q) {
-      const escaped = query.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = escapeRegex(query.q);
       filter.$and = [
         {
           $or: [
@@ -627,7 +628,7 @@ export class MailerCampaignsService {
 
     if (query.q) {
       const key = mailerControlNumberKey(query.q);
-      const escaped = query.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = escapeRegex(query.q);
       filter.$or = [
         ...(key ? [{ controlNumberKeys: key }] : []),
         { lastName: { $regex: `^${escaped}`, $options: 'i' } },
