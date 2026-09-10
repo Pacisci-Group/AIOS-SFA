@@ -210,7 +210,7 @@ export class LeadDetailService {
           itemCount: policy.itemCount,
           // Per-row since PAC-56 #14, and through the same coercion as every
           // other address on this page: the stored shape is
-          // `Record<string, unknown>` and three writers disagree about its keys.
+          // `Record<string, unknown>` — `Lead.address` is still untyped.
           propertyAddress: normalizeStoredAddress(policy.propertyAddress),
         }))
         .filter((policy) => policy.policyType.length > 0),

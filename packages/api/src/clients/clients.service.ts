@@ -900,9 +900,10 @@ export class ClientsService {
 
     return {
       ...toHouseholdSummary(household, toContactDetails(primary)),
-      // Coerced once, on the way out: the three writers' key sets are an API
-      // concern, and every client that re-implemented the lookup table got at
-      // least one of them wrong. No lead in scope here, hence the leading null.
+      // Resolved once, on the way out: which of property/mailing to show is
+      // an API concern, not the client's. No lead in scope here, hence the
+      // leading null. (Until PAC-101 this also reconciled three different key
+      // shapes; the stored address is typed now.)
       address: resolveHouseholdAddress(
         null,
         household.propertyAddress,
@@ -1234,9 +1235,10 @@ function toHouseholdListRow(
   matchedOn: HouseholdMatch | null,
   primary?: ContactDetails,
 ): HouseholdListRow {
-  // Coerced here rather than in the client: the three writers of
-  // `propertyAddress` each use their own key names, and every consumer that
-  // re-implemented that lookup table got at least one of them wrong.
+  // Resolved here rather than in the client, so the Location column and the
+  // query that searches it read the same fields. Before PAC-101 this coerced
+  // three writers' key shapes *after* the fetch, which is precisely why the
+  // column could not be searched.
   const address = resolveHouseholdAddress(
     null,
     household.propertyAddress,

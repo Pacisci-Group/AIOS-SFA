@@ -2386,9 +2386,10 @@ describe('SFA API (e2e)', () => {
         city: 'Austin',
         state: 'TX',
       });
-      // `city`/`state` above are coerced from `propertyAddress.line1` — one of
-      // the three key shapes the three writers use, which is why the API
-      // resolves it rather than each client re-implementing the lookup.
+      // `city`/`state` come straight off the typed `propertyAddress` since
+      // PAC-101. They used to be coerced at read time from whichever of three
+      // key shapes the writer happened to use, which is exactly why the
+      // Location column could not be searched.
       const raw = row as unknown as Record<string, unknown>;
       for (const key of [
         'agencyId',

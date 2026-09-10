@@ -153,9 +153,11 @@ docs {
     Searching a policy number otherwise returns households whose names match
     nothing the caller typed, and the list reads as broken.
 
-  `city`/`state` come from `resolveHouseholdAddress`, which coerces the three
-  writers' differing key shapes (`street` / `line1` / `location_address`) into
-  one — never read `propertyAddress` raw.
+  `city`/`state` come from `resolveHouseholdAddress`, which applies the
+  property -> mailing precedence. Since PAC-101 the stored address is a typed
+  sub-schema (`street`, `street2`, `city`, `state`, `zip`) rather than three
+  writers' differing key shapes, which is what makes the Location column
+  queryable at all.
 
   ## Errors
   | Status | When |

@@ -8,6 +8,7 @@ import {
   DEFAULT_DEAL_AUDIT_STATUS,
   SERVICE_TICKET_CATEGORY_PREFIX,
   carrierSlug,
+  type StoredAddress,
 } from '@sfa/shared';
 import type { DealAuditStatus } from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
@@ -146,7 +147,7 @@ interface HouseholdRef {
   branchId: string;
   assignedCrm?: TeamMember;
   city: CitySpec;
-  address: Record<string, unknown>;
+  address: StoredAddress;
 }
 
 interface ContactRef {
@@ -2144,9 +2145,16 @@ export class DemoSeedService {
     });
   }
 
-  private address(rng: Rng, city: CitySpec): Record<string, unknown> {
+  /**
+   * ⚠ `street`, not `line1`. This seed wrote `line1` until PAC-101, which is
+   * one of the three key conventions that made `households.propertyAddress`
+   * unqueryable. The field is a typed sub-schema now, so `line1` would not be
+   * rejected — it would be **silently dropped**, leaving every demo household
+   * with a city and no street.
+   */
+  private address(rng: Rng, city: CitySpec): StoredAddress {
     return {
-      line1: `${rng.int(100, 9999)} ${rng.pick(STREET_NAMES)} ${rng.pick(STREET_SUFFIXES)}`,
+      street: `${rng.int(100, 9999)} ${rng.pick(STREET_NAMES)} ${rng.pick(STREET_SUFFIXES)}`,
       city: city.city,
       state: city.state,
       zip: city.zip,
