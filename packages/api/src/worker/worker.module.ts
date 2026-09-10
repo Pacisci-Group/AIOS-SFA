@@ -7,6 +7,9 @@ import { SendInviteEmailFn } from './functions/send-invite-email.fn';
 import { SendPasswordResetEmailFn } from './functions/send-password-reset-email.fn';
 import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
+import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
+import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
+import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { MailDeliveryService } from './email/mail-delivery.service';
 import { SenderIdentityService } from './email/sender-identity.service';
 import { mailTransportProvider } from './email/mail-transport.provider';
@@ -36,6 +39,21 @@ import {
   ServiceTicket,
   ServiceTicketSchema,
 } from '../crm/schemas/service-ticket.schema';
+import {
+  RenewalCycle,
+  RenewalCycleSchema,
+} from '../crm/schemas/renewal-cycle.schema';
+import {
+  RenewalScanState,
+  RenewalScanStateSchema,
+} from '../crm/schemas/renewal-scan-state.schema';
+import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
+import {
+  Household,
+  HouseholdSchema,
+} from '../households/schemas/household.schema';
+import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { User, UserSchema } from '../users/schemas/user.schema';
 import { StorageModule } from '../storage/storage.module';
 
 /**
@@ -90,6 +108,16 @@ import { StorageModule } from '../storage/storage.module';
       // which is why the status rule and its Mongo predicates live as pure
       // helpers in `common/scheduling/` rather than under `crm/`.
       { name: ServiceTicket.name, schema: ServiceTicketSchema },
+      // The renewal materializer's collections (PAC-99). It reads the policy
+      // book, groups it into cycles and opens call tickets; the worker reaches
+      // all of that through schemas, which is the one thing the boundary lets
+      // across. The logic itself lives in `common/renewal/` for the same reason.
+      { name: RenewalCycle.name, schema: RenewalCycleSchema },
+      { name: RenewalScanState.name, schema: RenewalScanStateSchema },
+      { name: Policy.name, schema: PolicySchema },
+      { name: Household.name, schema: HouseholdSchema },
+      { name: Contact.name, schema: ContactSchema },
+      { name: User.name, schema: UserSchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports
@@ -121,6 +149,13 @@ import { StorageModule } from '../storage/storage.module';
     SendPasswordResetEmailFn,
     SweepEventLogFn,
     SyncTicketStatusFn,
+    MaterializeRenewalCyclesFn,
+    // Declared here as well as in `CrmModule`: the standalone worker does not
+    // import `AppModule`, so without these it would boot and then fail to
+    // resolve them on the first renewal tick. Same reasoning as the explicit
+    // `StorageModule` and `TenantUrlService` above.
+    TicketNumberService,
+    RenewalMaterializationService,
     MailerCampaignPreviewFn,
     MailerCampaignCommitFn,
     MailerCampaignOutputEmailFn,

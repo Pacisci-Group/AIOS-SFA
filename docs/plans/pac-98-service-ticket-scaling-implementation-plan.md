@@ -129,7 +129,11 @@ Drop the `materializeRenewalCycles` call. Update both docblocks that explain the
 
 ### 2.4 Fresh-environment behaviour
 
-Today, opening the desk is what makes renewals appear; after this a fresh or newly-migrated agency shows an empty desk until the first tick. **Decision: run the scan once on worker boot.** Noted in the PR description because it changes demo behaviour.
+Today, opening the desk is what makes renewals appear; after this a fresh or newly-migrated agency shows an empty desk until the first tick.
+
+**Decision changed during implementation: no boot-time scan.** The plan called for one, and building it showed the case it was for is already covered — the demo seed calls `materializeRenewalCycles` directly (`seed/renewal-scenarios.ts`), clearing the throttle first, so a seeded environment is populated the moment seeding finishes. That is the demo. What a boot hook would add is a full multi-tenant scan on every worker start, plus a background write racing every e2e that boots `WorkerModule` — real cost against a gap of at most one tick for the one case (a migrated agency, mid-cycle) that the cron closes on its own.
+
+`ServiceTicketsService.materializeRenewalCycles` therefore stays as a thin delegate rather than being deleted: the seed is its caller.
 
 ### 2.5 PR2 tests
 

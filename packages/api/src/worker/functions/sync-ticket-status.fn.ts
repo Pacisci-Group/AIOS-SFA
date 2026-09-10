@@ -23,8 +23,18 @@ import {
 import { Agency } from '../../platform/schemas/agency.schema';
 import { forEachAgency } from '../agency-sweep';
 
-/** Minimal surface of Inngest's `step` that this function uses. */
-type StepLike = { run<T>(id: string, fn: () => Promise<T> | T): Promise<T> };
+/**
+ * Minimal surface of Inngest's `step` that this function uses.
+ *
+ * Narrow on purpose, as in `sweep-event-log.fn.ts`: it is the seam a test
+ * substitutes. `run` returns `unknown` rather than `T` because Inngest
+ * serialises a step's result to JSON and parses it back before the next step
+ * sees it — the declared type would be a lie, and typing it honestly is what
+ * makes the cast below a decision rather than an accident.
+ */
+type StepLike = {
+  run<T>(id: string, fn: () => Promise<T> | T): Promise<unknown>;
+};
 
 /**
  * Advances the stored `status` of scheduled-call tickets as their deadlines
@@ -123,7 +133,10 @@ export class SyncTicketStatusFn implements InngestFunctionProvider {
     // next tick with nothing to show why.
     const now = new Date();
 
-    const result = await step.run('advance-statuses', async () => {
+    // The cast is safe against the JSON round trip: every field is a number,
+    // so nothing is lost on the way through (a `Date` here would come back a
+    // string, which is the trap this shape avoids).
+    const result = (await step.run('advance-statuses', async () => {
       let transitions = 0;
 
       const sweep = await forEachAgency(
@@ -135,7 +148,7 @@ export class SyncTicketStatusFn implements InngestFunctionProvider {
       );
 
       return { transitions, ...sweep };
-    });
+    })) as { transitions: number; swept: number; failed: number };
 
     if (result.transitions > 0) {
       this.logger.log(
