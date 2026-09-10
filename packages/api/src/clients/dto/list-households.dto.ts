@@ -11,8 +11,10 @@ import { multiValue } from '../../leads/dto/multi-value';
  *
  * Two kinds of search live side by side, and they compose differently:
  *
- * - `q` is the omni box. It is **shape-routed** (see `routeSearchTerm`) and
- *   ORs across households, their members and their policies.
+ * - `q` is the omni box. It is **tokenized** (every token must match something,
+ *   in any field) and additionally **shape-routed** for the values that must
+ *   not be split — a reference, a date, a policy number, a phone number (see
+ *   `routeSearchTerm`). The two are ORed, and neither suppresses the other.
  * - The five explicit fields are the advanced panel. They **AND** together, for
  *   a caller who knows exactly which identifier they are holding.
  *

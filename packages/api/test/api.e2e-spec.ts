@@ -2491,6 +2491,57 @@ describe('SFA API (e2e)', () => {
       });
     });
 
+    describe('searches every column the row renders (PAC-101)', () => {
+      it('finds a household by its primary contact email', async () => {
+        // The Contact column renders this, and PAC-91 removed the copy that
+        // used to live on the household — so it can only resolve through
+        // `contacts`.
+        const body = await listBody(ownerToken, '?q=client%40test.local');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds it by a fragment of that email', async () => {
+        const body = await listBody(ownerToken, '?q=test.local');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it.each([
+        ['raw digits', '5550100100'],
+        ['dashed', '555-010-0100'],
+        ['parenthesised', '(555)%20010-0100'],
+      ])('finds it by phone, %s', async (_label, typed) => {
+        // Stored as `5550100100`; the query must fold formatting on both sides.
+        const body = await listBody(ownerToken, `?q=${typed}`);
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds a household by the city its Location column shows', async () => {
+        // Unreachable before the address became a typed sub-schema: the city
+        // was resolved in application code after the fetch.
+        const body = await listBody(ownerToken, '?q=Austin');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds it by street, which is not a column', async () => {
+        const body = await listBody(ownerToken, '?q=1%20Test%20St');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds a household reference by its number alone', async () => {
+        // `147` must reach `HH-2147`; here `1` must reach `HH-1`.
+        const body = await listBody(ownerToken, '?q=HH-1');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('no longer lets a reference suppress the name branch', async () => {
+        // `routeSearchTerm` used to drop the name route whenever the term
+        // parsed as a reference or a date, so these two dimensions could never
+        // be searched together.
+        const body = await listBody(ownerToken, '?q=Test');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+    });
+
     describe('matchedOn', () => {
       it('names the member that put a household in the results', async () => {
         const body = await listBody(ownerToken, '?q=Vasquez');
