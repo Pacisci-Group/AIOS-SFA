@@ -74,7 +74,6 @@ import {
   UpdateStatusDto,
 } from './dto/service-ticket.dto';
 import {
-  deriveOnboardingStatus,
   isStepActionable,
   scheduleSteps,
   type PlannedStep,
@@ -255,32 +254,18 @@ export class ServiceTicketsService {
       filter.category = query.category;
     }
     if (query.status) {
-      // Onboarding status is derived from step timing unless someone set it by
-      // hand, so these tickets match on the steps — except the overridden ones,
-      // which match the stored field like every other category does.
-      const onboardingBranch = onboardingStatusMatch(query.status, new Date());
-      filter.$and = [
-        ...(filter.$and ?? []),
-        {
-          $or: [
-            { category: { $ne: 'Onboarding' }, status: query.status },
-            {
-              category: 'Onboarding',
-              statusOverriddenAt: { $ne: null },
-              status: query.status,
-            },
-            ...(onboardingBranch
-              ? [
-                  {
-                    category: 'Onboarding',
-                    statusOverriddenAt: null,
-                    ...onboardingBranch,
-                  },
-                ]
-              : []),
-          ],
-        },
-      ];
+      /*
+       * A plain equality, now that `SyncTicketStatusFn` keeps the column true.
+       *
+       * This used to be a three-branch `$or` reproducing the read-time
+       * derivation in Mongo, and it was wrong: the branches keyed on
+       * `category: 'Onboarding'`, while the derivation applies to *any*
+       * scheduled step — `onboarding ?? renewal`. So `?status=overdue` matched
+       * no overdue renewal call at all. Nothing surfaced it because no web
+       * caller passes `status`; the dashboard filtered client-side on the
+       * derived value. Deleting the mirror deletes the class of bug.
+       */
+      filter.status = query.status;
     }
     // Resolved tickets age out of the active queue after the archive window;
     // the Archived Tickets view asks for exactly the other side of that line.
@@ -735,6 +720,16 @@ export class ServiceTicketsService {
     const openTickets = tickets.filter(
       (t) => !isTerminalTicketStatus(t.status),
     ).length;
+    /*
+     * Reads the stored column, which `SyncTicketStatusFn` keeps true.
+     *
+     * This line is unchanged and used to be wrong (PAC-102): a scheduled call's
+     * status was derived on read, so the column said `open` forever and this
+     * counted only tickets a CSR had flagged by hand — near-zero, beside a
+     * queue tab showing hundreds. Nothing here needed fixing; the column did.
+     * Do not reintroduce a derivation to "make it accurate" — that is the bug,
+     * not the fix, and it would disagree with the sort order the queue pages by.
+     */
     const needsActionToday = tickets.filter(
       (t) => t.status === 'overdue',
     ).length;
@@ -2462,50 +2457,6 @@ function scheduledStepMatches(now: Date): FilterQuery<ServiceTicketDocument>[] {
   ];
 }
 
-/**
- * Mongo match for an onboarding ticket whose *derived* status is `status`.
- *
- * Mirrors `deriveOnboardingStatus`, so the two must change together. Now that
- * a ticket carries exactly one step, these are plain scalar predicates rather
- * than the `$elemMatch` gymnastics the embedded array needed.
- *
- * Returns null for statuses onboarding never derives into (`in_progress`,
- * `waiting_on_client`, …) — such a filter simply matches no onboarding ticket.
- *
- * The `$ne: null` guards matter: BSON sorts null before dates, so a bare
- * `{ dueAt: { $lt: now } }` would match an unscheduled step too.
- */
-function onboardingStatusMatch(
-  status: ServiceTicketStatus,
-  now: Date,
-): FilterQuery<ServiceTicketDocument> | null {
-  switch (status) {
-    case 'resolved':
-      return { 'onboarding.completedAt': { $ne: null } };
-    case 'overdue':
-      return {
-        'onboarding.completedAt': null,
-        'onboarding.dueAt': { $ne: null, $lt: now },
-      };
-    case 'open':
-      // Available but not past due — `overdue` outranks `open`.
-      return {
-        'onboarding.completedAt': null,
-        'onboarding.availableAt': { $ne: null, $lte: now },
-        'onboarding.dueAt': { $gte: now },
-      };
-    case 'waiting':
-      // Scheduled but not yet open. These are hidden from every list anyway;
-      // the predicate exists so the mapping stays complete and honest.
-      return {
-        'onboarding.completedAt': null,
-        'onboarding.availableAt': { $gt: now },
-      };
-    default:
-      return null;
-  }
-}
-
 function userDisplayName(
   user: { firstName?: string; lastName?: string; email?: string } | null,
 ): string {
@@ -2570,34 +2521,31 @@ export function serializeTicket(
   const lastActivityAt = new Date(ticket.lastActivityAt);
   const resolvedAt = ticket.resolvedAt ? new Date(ticket.resolvedAt) : null;
 
-  // Onboarding tickets derive their status from their step's timing rather
-  // than the stored field: the `waiting -> open -> overdue` transitions happen
-  // through the passage of time, with no write to hang an update off.
-  //
-  // Unless a CSR has set the status by hand, that is — an explicit choice beats
-  // the schedule, and `statusOverriddenAt` records that it was made. Completing
-  // the call clears the override and hands the ticket back to the schedule.
   const onboarding = ticket.onboarding
     ? serializeOnboardingStep(ticket.onboarding, now)
     : null;
-  // Either kind of scheduled step derives a status the same way. A ticket
-  // never carries both — it is one call of one kind.
-  const scheduled = ticket.onboarding ?? ticket.renewal ?? null;
-  const status =
-    scheduled && !ticket.statusOverriddenAt
-      ? deriveOnboardingStatus(
-          {
-            availableAt: scheduled.availableAt
-              ? new Date(scheduled.availableAt)
-              : null,
-            dueAt: scheduled.dueAt ? new Date(scheduled.dueAt) : null,
-            completedAt: scheduled.completedAt
-              ? new Date(scheduled.completedAt)
-              : null,
-          },
-          now,
-        )
-      : ticket.status;
+
+  /*
+   * The stored column, not a derivation.
+   *
+   * A scheduled call's status used to be computed here on every read, because
+   * `waiting -> open -> overdue` happens through the passage of time and there
+   * was no write to hang an update off. `SyncTicketStatusFn` is that write
+   * now: it sweeps the boundaries every five minutes and stores the answer, so
+   * this reads what every other consumer reads.
+   *
+   * That is the point of the change rather than a tidy-up. While the value was
+   * derived here, anything that could not call this function saw a stale
+   * column — `stats()` counted `status === 'overdue'` and reported near-zero
+   * beside a queue showing hundreds (PAC-102) — and the queue's sort key could
+   * not be indexed, because you cannot index a value that only exists during a
+   * request (PAC-98).
+   *
+   * The cost is bounded staleness: for up to one sweep interval a call that
+   * has just crossed its deadline still reads as `open`. See
+   * `docs/plans/pac-98-service-ticket-scaling-implementation-plan.md`.
+   */
+  const status = ticket.status;
 
   const isArchived =
     isTerminalTicketStatus(status) &&

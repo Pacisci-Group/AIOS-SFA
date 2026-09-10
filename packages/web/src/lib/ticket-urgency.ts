@@ -1,4 +1,5 @@
-import type { ServiceTicketStatus, ServiceTicketView } from '@sfa/shared';
+import { priorityRankFor, urgencyRankFor } from '@sfa/shared';
+import type { ServiceTicketView } from '@sfa/shared';
 
 /**
  * Shared ordering for every ticket queue: most urgent first.
@@ -11,29 +12,13 @@ import type { ServiceTicketStatus, ServiceTicketView } from '@sfa/shared';
  * was worked on last, not what needs working on next.
  */
 
-/**
- * How loudly a status demands attention. Lower sorts first.
- *
- * The finer create-form statuses collapse onto the four states the queue
- * actually reasons about: something is late, something is workable now,
- * something is blocked on someone else, or it is finished.
+/*
+ * The rank tables used to live here. They are `urgencyRankFor` and
+ * `priorityRankFor` in `@sfa/shared` now, because the API materializes both
+ * onto the ticket so the queue's sort can be served by an index — and a second
+ * copy of either table would mean the server paginating in one order while
+ * this file believed another. Nothing here is client-specific; import the rule.
  */
-const URGENCY_RANK: Record<ServiceTicketStatus, number> = {
-  overdue: 0,
-  open: 1,
-  in_progress: 1,
-  waiting: 2,
-  waiting_on_client: 2,
-  waiting_on_carrier: 2,
-  resolved: 3,
-  closed: 3,
-};
-
-const PRIORITY_RANK: Record<ServiceTicketView['priority'], number> = {
-  high: 0,
-  medium: 1,
-  low: 2,
-};
 
 /**
  * The instant a ticket started demanding attention.
@@ -63,13 +48,13 @@ export function compareTicketUrgency(
   a: ServiceTicketView,
   b: ServiceTicketView,
 ): number {
-  const byStatus = URGENCY_RANK[a.status] - URGENCY_RANK[b.status];
+  const byStatus = urgencyRankFor(a.status) - urgencyRankFor(b.status);
   if (byStatus !== 0) return byStatus;
 
   const byAge = urgencyInstant(a) - urgencyInstant(b);
   if (byAge !== 0) return byAge;
 
-  const byPriority = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+  const byPriority = priorityRankFor(a.priority) - priorityRankFor(b.priority);
   if (byPriority !== 0) return byPriority;
 
   // Stable final tiebreak so the list never reshuffles between renders.

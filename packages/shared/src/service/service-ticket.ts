@@ -64,6 +64,54 @@ export function isTerminalTicketStatus(status: ServiceTicketStatus): boolean {
   );
 }
 
+/**
+ * How loudly a status demands attention. **Lower sorts first.**
+ *
+ * The eight stored statuses collapse onto the four states a queue actually
+ * reasons about: something is late, something is workable now, something is
+ * blocked on someone else, or it is finished.
+ *
+ * Lives in `shared` rather than beside either consumer because it is written
+ * on the server and read on both sides. The API materializes it onto the
+ * ticket as `urgencyRank` so the queue's sort can be served by an index — a
+ * rank computed at query time cannot be — and the web app orders by the same
+ * numbers. Two copies of this table would mean the list silently paginating in
+ * one order while the client believed another.
+ */
+export const SERVICE_TICKET_URGENCY_RANK: Record<ServiceTicketStatus, number> =
+  {
+    overdue: 0,
+    open: 1,
+    in_progress: 1,
+    waiting: 2,
+    waiting_on_client: 2,
+    waiting_on_carrier: 2,
+    resolved: 3,
+    closed: 3,
+  };
+
+export function urgencyRankFor(status: ServiceTicketStatus): number {
+  return SERVICE_TICKET_URGENCY_RANK[status];
+}
+
+/**
+ * Priority as a sort key, for the same reason as {@link urgencyRankFor}: the
+ * stored values do not order alphabetically (`high` < `low` < `medium`), so a
+ * plain index on `priority` would sort them wrongly.
+ */
+export const SERVICE_TICKET_PRIORITY_RANK: Record<
+  ServiceTicketPriority,
+  number
+> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+export function priorityRankFor(priority: ServiceTicketPriority): number {
+  return SERVICE_TICKET_PRIORITY_RANK[priority];
+}
+
 /** Display labels for every status (the multi-word ones are stored snake_case). */
 export const SERVICE_TICKET_STATUS_LABELS: Record<
   ServiceTicketStatus,
