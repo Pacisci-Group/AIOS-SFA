@@ -1,5 +1,6 @@
-import { Search, SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import { MultiSelect } from "@/components/common/MultiSelect";
+import { TableSearchInput } from "@/components/common/TableSearchInput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +28,8 @@ import {
 interface HouseholdsSearchProps {
   search: string;
   onSearchChange: (value: string) => void;
+  /** A search or page is in flight — shows the spinner in the box. */
+  busy?: boolean;
   filters: HouseholdFilters;
   onChange: (patch: Partial<HouseholdFilters>) => void;
   onClear: () => void;
@@ -50,6 +53,7 @@ interface HouseholdsSearchProps {
 export function HouseholdsSearch({
   search,
   onSearchChange,
+  busy,
   filters,
   onChange,
   onClear,
@@ -61,12 +65,12 @@ export function HouseholdsSearch({
   return (
     <div className="flex flex-col gap-3 mb-5 md:flex-row md:items-center">
       <div className="relative flex-1 min-w-0">
-        <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-        <Input
+        <TableSearchInput
           value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search by name, date of birth, HH- number, or policy number…"
-          className="pl-9 bg-card border-border"
+          onValueChange={onSearchChange}
+          placeholder="Search by name, contact, town, HH- number, DOB or policy…"
+          label="Search households"
+          busy={busy}
         />
       </div>
 

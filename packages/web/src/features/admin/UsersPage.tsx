@@ -1,9 +1,13 @@
 import { useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { AlertCircle, Search, Users } from 'lucide-react';
+import { AlertCircle, Users } from 'lucide-react';
+import { TablePagination } from '@/components/common/TablePagination';
+import {
+  SEARCH_DEBOUNCE_MS,
+  TableSearchInput,
+} from '@/components/common/TableSearchInput';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -53,7 +57,7 @@ export default function UsersPage() {
 
   // Debounced so typing four characters is one request, not four — the same
   // 300ms every other server-searched table uses.
-  const debouncedQuery = useDebouncedValue(query, 300);
+  const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
 
   const params = useMemo(
     () => ({ page, pageSize: PAGE_SIZE, q: debouncedQuery.trim() || undefined }),
@@ -126,18 +130,17 @@ export default function UsersPage() {
       )}
 
       <div className="relative mb-4 max-w-md">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
+        <TableSearchInput
           value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
+          onValueChange={(next) => {
+            setQuery(next);
             // A new query invalidates the page number: page 3 of the old
             // result set is very unlikely to exist in the new one.
             setPage(1);
           }}
-          aria-label="Search users"
           placeholder="Search by name, email, role or branch…"
-          className="border-border bg-card pl-9"
+          label="Search users"
+          busy={usersQuery.isFetching}
         />
       </div>
 
@@ -177,32 +180,16 @@ export default function UsersPage() {
             ))}
           </div>
 
-          {totalPages > 1 && (
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <span className="text-sm tabular-nums text-muted-foreground">
-                Showing {(page - 1) * PAGE_SIZE + 1} to{' '}
-                {Math.min(page * PAGE_SIZE, total)} of {total}
-              </span>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page <= 1 || usersQuery.isFetching}
-                  onClick={() => setPage(Math.max(1, page - 1))}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page >= totalPages || usersQuery.isFetching}
-                  onClick={() => setPage(Math.min(totalPages, page + 1))}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
-          )}
+          <TablePagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            totalPages={totalPages}
+            onPageChange={setPage}
+            busy={usersQuery.isFetching}
+            noun="people"
+            className="mt-4"
+          />
         </>
       )}
     </SettingsPage>
