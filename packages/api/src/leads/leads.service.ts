@@ -361,7 +361,7 @@ export class LeadsService {
   ): Promise<FilterQuery<LeadDocument> | null> {
     return buildSearchFilter<LeadDocument>(raw, {
       fields: LEAD_SEARCH_FIELDS,
-      tokenBranches: [(token) => this.byContactEmail(agencyId, token)],
+      tokenBranches: [(token) => this.byContactText(agencyId, token)],
       termBranches: [
         (term) => this.byContactPhone(agencyId, term),
         (term) => Promise.resolve(byQuoteControlNumber(term)),
@@ -370,17 +370,35 @@ export class LeadsService {
   }
 
   /**
-   * Leads whose **primary contact's** email contains the token.
+   * Leads whose **primary contact's** email or phone contains the token.
    *
    * Not gated on the term containing `@`: a producer searching `rodriguez`
    * should reach `maria.rodriguez@example.com`, and half the addresses in the
    * book are `firstname.lastname@` anyway.
+   *
+   * ⚠ **`phone` belongs here as well as in the whole-term branch**, and leaving
+   * it out was a real bug: a *partial* number found nothing on this list while
+   * the same fragment worked on Clients, which has always matched phone
+   * per-token. `byContactPhone` below only fires at
+   * {@link MIN_PHONE_SEARCH_DIGITS} or more, so `3333` and `222333` never
+   * reached `contacts` at all.
+   *
+   * The two are complementary, not redundant:
+   *
+   * - **here**, a plain contains against the stored value — which PAC-91
+   *   normalised to digits — so any digit run a producer half-remembers hits.
+   * - **there**, digits re-interleaved with `\D*`, so a *formatted* query
+   *   matches a stored number that was never normalised. Migrated rows still
+   *   hold `(918) 808-2556`, and a plain contains on `9188082556` misses those.
    */
-  private byContactEmail(
+  private byContactText(
     agencyId: string,
     token: string,
   ): Promise<FilterQuery<LeadDocument> | null> {
-    return this.byPrimaryContact(agencyId, { email: tokenRegex(token) });
+    const contains = tokenRegex(token);
+    return this.byPrimaryContact(agencyId, {
+      $or: [{ email: contains }, { phone: contains }],
+    });
   }
 
   /**

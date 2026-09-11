@@ -796,7 +796,9 @@ describe('SFA API (e2e)', () => {
          * `agency:branches:read`, so this needs a **custom** role — which is
          * exactly the case the gate exists for, since agencies can create them.
          */
-        const roles = app.get<Model<AgencyRole>>(getModelToken(AgencyRole.name));
+        const roles = app.get<Model<AgencyRole>>(
+          getModelToken(AgencyRole.name),
+        );
         const users = app.get<Model<User>>(getModelToken(User.name));
         const assignments = app.get(RoleAssignmentsService);
 
@@ -833,15 +835,17 @@ describe('SFA API (e2e)', () => {
           .accessToken;
 
         // The owner, who can see the column, finds the row by branch name.
-        expect((await list(ownerToken, '?q=Test%20Branch')).total).toBeGreaterThan(0);
+        expect(
+          (await list(ownerToken, '?q=Test%20Branch')).total,
+        ).toBeGreaterThan(0);
 
         // The auditor, who cannot, finds nothing by branch name — but the rest
         // of the search still works for them, so this is the arm being
         // withheld rather than the endpoint being broken.
         expect((await list(auditorToken, '?q=Test%20Branch')).total).toBe(0);
-        expect(
-          emails(await list(auditorToken, '?q=producer')),
-        ).toContain(seed.producerEmail);
+        expect(emails(await list(auditorToken, '?q=producer'))).toContain(
+          seed.producerEmail,
+        );
       });
 
       it('ranks invited before active before deactivated', async () => {
@@ -5972,6 +5976,58 @@ describe('SFA API (e2e)', () => {
         .expect(200);
       const listed = (res.body as { items: { id: string }[] }).items;
       expect(listed.some((row) => row.id === created.id)).toBe(true);
+    });
+
+    describe('phone search (PAC-101 follow-up)', () => {
+      /*
+       * Reported after the PAC-101 PR: a *partial* phone number finds nothing
+       * on Leads while the same fragment works on Clients.
+       *
+       * The cause is an asymmetry between the two. Clients matches the
+       * contact's `phone` **per token**, so any digit run is a substring hit
+       * against the normalized `5552223333`. Leads only matched phone as a
+       * whole-term branch gated on `isPhoneLike` (>= 7 digits), so anything
+       * shorter never reached `contacts` at all.
+       */
+      const search = async (term: string) => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/leads?search=${encodeURIComponent(term)}`)
+          .set(authHeader(producerToken))
+          .expect(200);
+        return (res.body as { items: { id: string }[] }).items;
+      };
+
+      it.each([
+        ['the full number, as stored', '5552223333'],
+        ['the full number, as printed', '(555) 222-3333'],
+        ['a 7-digit fragment', '2223333'],
+        ['a 6-digit fragment', '222333'],
+        ['the last four', '3333'],
+        ['the area code and exchange', '555222'],
+      ])('finds a lead by %s', async (_label, term) => {
+        const created = await createAs(producerToken, payload('Pellworth'));
+        const found = await search(term);
+        expect(found.some((row) => row.id === created.id)).toBe(true);
+      });
+
+      it('still narrows — an unrelated number finds nothing', async () => {
+        await createAs(producerToken, payload('Quarrow'));
+        expect(await search('9998888')).toHaveLength(0);
+      });
+
+      it('matches the Clients list for the same fragment', async () => {
+        // The parity the report is really about: one fragment, two tables.
+        const created = await createAs(producerToken, payload('Rensworth'));
+
+        const leads = await search('222333');
+        expect(leads.some((row) => row.id === created.id)).toBe(true);
+
+        const clients = await request(app.getHttpServer())
+          .get('/api/v1/households?q=222333')
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect((clients.body as { total: number }).total).toBeGreaterThan(0);
+      });
     });
 
     // `leads:write` is held by Agency Owner too, so an owner becomes the

@@ -155,7 +155,7 @@ docs {
   | `address.*` | the living address intake writes (street/city/state/zip) |
   | `propertyAddress.*` | the lead-level address only migrated leads carry |
   | `policiesOfInterest[].propertyAddress.*` | per-policy dwelling addresses |
-  | primary contact `email` | resolved through `contacts`, capped at 500 |
+  | primary contact `email` and `phone` | resolved through `contacts`, capped at 500 |
 
   Two things are matched against the **whole, untokenized** query and ORed
   around the rest, because splitting them destroys them:
@@ -163,6 +163,13 @@ docs {
   - **phone** on the primary contact — `(918) 555-0134`, `918-555-0134` and
     `9185550134` are the same query, and match a stored number in whatever
     format the source system used. Ignored below 7 digits.
+
+    ⚠ This is the *formatted* path only, and it is why phone also appears as a
+    searched field above. A **partial** number — `3333`, `222333` — is below the
+    7-digit floor and is matched per token instead, as a plain contains against
+    the digits-only value PAC-91 normalised contacts to. Leaving it out of the
+    token set was a real bug: a fragment found nothing here while the same
+    fragment worked on Clients, which has always matched phone per token.
   - **quote control number** as typed, so `QCN-11741` is not split into
     `qcn` + `11741`. Ignored below 4 characters.
 
@@ -176,10 +183,10 @@ docs {
   whose street is "Newton". An empty or whitespace-only `search` is **no
   filter**, never an impossible one.
 
-  Since PAC-91 §2 the lead carries **no** email or phone of its own, so 1 and 2
+  Since PAC-91 §2 the lead carries **no** email or phone of its own, so both
   resolve `contacts` first (through `{agencyId, email}` / `{agencyId, phone}`,
   capped at 500) and then filter leads by `primaryContactId`. That is also why
-  these searches now find migrated leads at all: the copy they used to query was
+  these searches find migrated leads at all: the copy they used to query was
   empty on most of them, because the importer filled it from the SmartSuite
   *Leads* table rather than from the linked contact. A lead with no
   `primaryContactId` is unreachable this way — as it was before, for the same
