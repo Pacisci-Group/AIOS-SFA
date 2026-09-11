@@ -34,7 +34,7 @@ import {
   type DealAuditStatus,
 } from "@/lib/deal-audits-api";
 import { listRoles } from "@/lib/roles-api";
-import { listUsers } from "@/lib/users-api";
+import { agencyUserOptionsKey, listUserOptions } from "@/lib/users-api";
 
 /**
  * The audit's ownership, workflow actions and note thread (PAC-72 section E).
@@ -122,8 +122,8 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
   });
 
   const users = useQuery({
-    queryKey: ["agency-users"],
-    queryFn: listUsers,
+    queryKey: agencyUserOptionsKey,
+    queryFn: listUserOptions,
     enabled: canPickUsers,
   });
   const roles = useQuery({
@@ -207,9 +207,8 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
    * the default assignee exists to prevent in the first place.
    */
   const ownerOptions = [
-    ...(users.data ?? [])
-      .filter((user) => user.isActive)
-      .map((user) => ({
+    // Active-only and platform-admin-free server-side (`/users/options`).
+    ...(users.data ?? []).map((user) => ({
         value: `user:${user._id}`,
         label:
           [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||

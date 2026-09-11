@@ -7,7 +7,7 @@ import {
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { Branch, BranchDocument } from '../branches/schemas/branch.schema';
-import { escapeRegex } from '../common/mongo/escape-regex';
+import { buildSearchFilter, tokenRegex } from '../common/mongo/search-filter';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { UserRole } from '../permissions/schemas/user-role.schema';
 import {
@@ -15,6 +15,7 @@ import {
   AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import { USER_SEARCH_FIELDS, idsMatching } from '../users/user-search';
 import { ListPlatformUsersDto } from './dto/list-platform-users.dto';
 import { Agency, AgencyDocument } from './schemas/agency.schema';
 
@@ -94,9 +95,12 @@ export class PlatformUsersService {
         ),
       };
     }
+    // `$and`, not `$or`: the tokens of a multi-word query each have to match
+    // something, and `filter` already carries the agency and role narrowing
+    // they must intersect with.
     const search = await this.buildSearch(query.q, agencyIds);
     if (search) {
-      filter.$or = search;
+      filter.$and = [...(filter.$and ?? []), search];
     }
 
     const [total, users] = await Promise.all([
@@ -141,70 +145,78 @@ export class PlatformUsersService {
   }
 
   /**
-   * The `$or` branches for a free-text query, or `null` for no query.
+   * The filter for a free-text query, or `null` for no query.
    *
-   * Name and email match on `users` directly. Agency and role names are
-   * resolved to ids first; a branch that resolves to nothing is simply left
-   * out (an empty `$in` inside `$or` matches nothing anyway, so omitting it
-   * only saves Mongo a clause). The name/email branches are always present,
-   * so the `$or` is never empty.
+   * Name and email match on `users` directly. Agency, branch and role names
+   * live on other collections and are resolved to ids first (see
+   * {@link idsMatching}); a lookup that matches nothing simply contributes no
+   * branch, since the token may still match a name or an email.
+   *
+   * ## What PAC-101 changed
+   *
+   * - **The `$expr`/`$concat` branch is gone.** It existed so `John Smith`
+   *   could match a name split across two columns. Tokenizing does that for
+   *   free, in either order, without a per-document expression stage.
+   * - **Agency `slug` is searched**, not just `name`. The directory renders the
+   *   slug in the Agency cell, so it had to be searchable — rule 1.
+   * - **Branch `name` is searched.** It is a rendered column that was never
+   *   searched at all.
+   *
+   * Narrowing every lookup by `agencyIds` when the caller has narrowed is not
+   * an optimization detail: it keeps `userRoles` on its `{agencyId, roleId}`
+   * index, and it stops a broad token pulling every branch on the platform.
    */
-  private async buildSearch(
+  private buildSearch(
     raw: string | undefined,
     agencyIds: Types.ObjectId[] | undefined,
-  ): Promise<FilterQuery<UserDocument>[] | null> {
-    const q = (raw ?? '').trim();
-    if (!q) return null;
+  ): Promise<FilterQuery<UserDocument> | null> {
+    return buildSearchFilter<UserDocument>(raw, {
+      fields: USER_SEARCH_FIELDS,
+      tokenBranches: [
+        (token) => this.byAgencyName(token, agencyIds),
+        (token) => this.byBranchName(token, agencyIds),
+        (token) => this.byRoleName(token, agencyIds),
+      ],
+    });
+  }
 
-    const escaped = escapeRegex(q);
-    const contains = { $regex: escaped, $options: 'i' };
-    const branches: FilterQuery<UserDocument>[] = [
-      { firstName: contains },
-      { lastName: contains },
-      // Matches a full "first last" query, which neither single field can.
-      {
-        $expr: {
-          $regexMatch: {
-            input: {
-              $trim: {
-                input: {
-                  $concat: [
-                    { $ifNull: ['$firstName', ''] },
-                    ' ',
-                    { $ifNull: ['$lastName', ''] },
-                  ],
-                },
-              },
-            },
-            regex: escaped,
-            options: 'i',
-          },
-        },
-      },
-      { email: contains },
-    ];
+  /** Users whose agency's **name or slug** contains the token. */
+  private async byAgencyName(
+    token: string,
+    agencyIds: Types.ObjectId[] | undefined,
+  ): Promise<FilterQuery<UserDocument> | null> {
+    const contains = tokenRegex(token);
+    const filter: FilterQuery<AgencyDocument> = {
+      $or: [{ name: contains }, { slug: contains }],
+    };
+    if (agencyIds) filter._id = { $in: agencyIds };
 
-    const agencyFilter: FilterQuery<AgencyDocument> = { name: contains };
-    if (agencyIds) {
-      agencyFilter._id = { $in: agencyIds };
-    }
-    const agencies = await this.agencyModel
-      .find(agencyFilter)
-      .select({ _id: 1 })
-      .lean();
-    if (agencies.length) {
-      branches.push({ agencyId: { $in: agencies.map((a) => a._id) } });
-    }
+    const ids = await idsMatching<AgencyDocument>(this.agencyModel, filter);
+    return ids.length ? { agencyId: { $in: ids } } : null;
+  }
 
-    const byRoleName = await this.usersHoldingRoles(
-      { name: contains },
+  /** Users whose branch's **name** contains the token. */
+  private async byBranchName(
+    token: string,
+    agencyIds: Types.ObjectId[] | undefined,
+  ): Promise<FilterQuery<UserDocument> | null> {
+    const filter: FilterQuery<BranchDocument> = { name: tokenRegex(token) };
+    if (agencyIds) filter.agencyId = { $in: agencyIds };
+
+    const ids = await idsMatching<BranchDocument>(this.branchModel, filter);
+    return ids.length ? { branchId: { $in: ids } } : null;
+  }
+
+  /** Users holding a role whose **name** contains the token. */
+  private async byRoleName(
+    token: string,
+    agencyIds: Types.ObjectId[] | undefined,
+  ): Promise<FilterQuery<UserDocument> | null> {
+    const ids = await this.usersHoldingRoles(
+      { name: tokenRegex(token) },
       agencyIds,
     );
-    if (byRoleName.length) {
-      branches.push({ _id: { $in: byRoleName } });
-    }
-
-    return branches;
+    return ids.length ? { _id: { $in: ids } } : null;
   }
 
   /**

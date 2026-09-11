@@ -722,6 +722,85 @@ describe('Mailer campaigns (e2e)', () => {
       expect((miss.body as MailerCampaignRecordsResponse).total).toBe(0);
     });
 
+    it('searches every column the records table renders (PAC-101)', async () => {
+      // The row from the original report, shape included: the vendor file had
+      // no split name columns, so the importer split the combined name on the
+      // first space and stored `lastName: "ANN SMITH"`.
+      const campaign = await campaigns.create({
+        carrierId: allstateId,
+        name: 'Every column',
+        status: 'imported',
+        source: 'vendor',
+        assignment: { mode: 'all', agencyIds: [] },
+      });
+      await mailers.create({
+        campaignId: campaign._id.toString(),
+        visibleAgencyIds: null,
+        controlNumberKeys: ['EEEE5555EEEE'],
+        firstName: 'MARY',
+        lastName: 'ANN SMITH',
+        fullName: 'MARY ANN SMITH',
+        address: {
+          street: '118 Country Aire Ave',
+          city: 'Mcalester',
+          state: 'OK',
+          zip: '74501-2210',
+        },
+        market: 'Tulsa',
+        carrierAgencyId: 'A0B9049',
+        source: { system: 'spreadsheet' },
+      });
+      // A second row so every assertion below has something to *exclude*.
+      await mailers.create({
+        campaignId: campaign._id.toString(),
+        visibleAgencyIds: null,
+        controlNumberKeys: ['FFFF6666FFFF'],
+        firstName: 'John',
+        lastName: 'Doe',
+        fullName: 'John Doe',
+        address: { street: '1 Elm St', city: 'Bartlesville', state: 'OK' },
+        market: 'Oklahoma City',
+        carrierAgencyId: 'B1C2003',
+        source: { system: 'spreadsheet' },
+      });
+
+      const find = async (q: string) => {
+        const res = await api()
+          .get(`${base}/${campaign._id.toString()}/records`)
+          .query({ q })
+          .set(authHeader(superAdminToken))
+          .expect(200);
+        return res.body as MailerCampaignRecordsResponse;
+      };
+
+      // The reproduction: copy the Name cell, paste it into the box above it.
+      // Used to be an anchored `^"MARY ANN SMITH"` on first *or* last name —
+      // unsatisfiable by construction.
+      expect((await find('MARY ANN SMITH')).total).toBe(1);
+
+      // A bare surname, against a last name the importer mangled.
+      expect((await find('smith')).total).toBe(1);
+
+      // Location, Market and Code: rendered columns, never previously searched.
+      expect((await find('Mcalester')).total).toBe(1);
+      expect((await find('Tulsa')).total).toBe(1);
+      expect((await find('A0B9049')).total).toBe(1);
+
+      // Street is not a column, but it is how the bug was found.
+      expect((await find('Country Aire')).total).toBe(1);
+
+      // Multi-token across *different* fields: a surname and a city.
+      expect((await find('smith mcalester')).total).toBe(1);
+      expect((await find('doe mcalester')).total).toBe(0);
+
+      // The control number is still one indexed equality on the whole term,
+      // and it is not suppressed by the token clause.
+      expect((await find('eeee-5555-eeee')).total).toBe(1);
+
+      // Both rows are in Oklahoma; a token common to both must not narrow.
+      expect((await find('OK')).total).toBe(2);
+    });
+
     it('mints a download link on click and 404s a file that does not exist', async () => {
       const campaign = await uploadCampaign();
 

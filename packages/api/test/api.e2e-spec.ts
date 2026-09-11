@@ -21,6 +21,7 @@ import type {
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
+import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import type {
   ContactDetail,
   CreateActivityResponse,
@@ -71,6 +72,20 @@ import {
   createTestApp,
   dropTestDatabase,
 } from './helpers/test-app';
+
+/** The `GET /users` envelope, as this suite asserts against it (PAC-101). */
+interface AgencyUserListEnvelope {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: Array<{
+    _id: string;
+    email: string;
+    isActive: boolean;
+    deactivatedAt?: string | null;
+  }>;
+}
 
 describe('SFA API (e2e)', () => {
   let app: INestApplication<App>;
@@ -729,14 +744,204 @@ describe('SFA API (e2e)', () => {
   describe('Users', () => {
     let invitedUserId: string;
 
-    it('GET /api/v1/users', async () => {
+    it('GET /api/v1/users — a paginated envelope (PAC-101)', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/v1/users')
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(Array.isArray(res.body)).toBe(true);
-      expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(2);
+      // Was a bare array until PAC-101. The three pickers that relied on that
+      // shape read `GET /users/options` now.
+      const body = res.body as AgencyUserListEnvelope;
+      expect(Array.isArray(body)).toBe(false);
+      expect(body).toMatchObject({ page: 1, pageSize: 25 });
+      expect(body.items.length).toBeGreaterThanOrEqual(2);
+      expect(body.total).toBeGreaterThanOrEqual(body.items.length);
+    });
+
+    describe('GET /api/v1/users — search and paging (PAC-101)', () => {
+      const list = async (token: string, qs = '') => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/users${qs}`)
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as AgencyUserListEnvelope;
+      };
+      const emails = (body: AgencyUserListEnvelope) =>
+        body.items.map((row) => row.email);
+
+      it('searches name and email', async () => {
+        expect(emails(await list(ownerToken, '?q=producer'))).toContain(
+          seed.producerEmail,
+        );
+      });
+
+      it('searches by role name, which the Roles column renders', async () => {
+        const body = await list(ownerToken, '?q=Producer');
+        expect(emails(body)).toContain(seed.producerEmail);
+      });
+
+      it('searches by branch name — a column that was never searchable', async () => {
+        const body = await list(ownerToken, '?q=Test%20Branch');
+        expect(emails(body)).toContain(seed.producerEmail);
+      });
+
+      it('hides the branch arm from a caller who cannot see the column', async () => {
+        /*
+         * `agency:branches:read` gates the Branch column. Matching on a column
+         * the caller cannot see reads as a broken search *and* leaks branch
+         * names by oracle.
+         *
+         * Every default role holding `agency:users:read` also holds
+         * `agency:branches:read`, so this needs a **custom** role — which is
+         * exactly the case the gate exists for, since agencies can create them.
+         */
+        const roles = app.get<Model<AgencyRole>>(getModelToken(AgencyRole.name));
+        const users = app.get<Model<User>>(getModelToken(User.name));
+        const assignments = app.get(RoleAssignmentsService);
+
+        const agencyId = new Types.ObjectId(seed.agencyId);
+        const auditorRole = await roles.create({
+          agencyId,
+          name: 'Directory Auditor',
+          slug: 'directory_auditor',
+          dataScope: 'agency',
+          isSystemTemplate: false,
+        });
+        await assignments.setRolePermissions(agencyId, auditorRole._id, [
+          'agency:users:read',
+        ]);
+
+        const auditorEmail = 'test-directory-auditor@sfa.local';
+        const auditor = await users.create({
+          agencyId,
+          branchId: new Types.ObjectId(seed.branchId),
+          email: auditorEmail,
+          passwordHash: await bcrypt.hash(TEST_PASSWORD, 10),
+          firstName: 'Directory',
+          lastName: 'Auditor',
+          isActive: true,
+        });
+        await assignments.setUserRoles(
+          { userId: auditor._id.toString(), isPlatformAdmin: true },
+          agencyId,
+          auditor._id,
+          [auditorRole._id],
+        );
+
+        const auditorToken = (await login(app, auditorEmail, TEST_PASSWORD))
+          .accessToken;
+
+        // The owner, who can see the column, finds the row by branch name.
+        expect((await list(ownerToken, '?q=Test%20Branch')).total).toBeGreaterThan(0);
+
+        // The auditor, who cannot, finds nothing by branch name — but the rest
+        // of the search still works for them, so this is the arm being
+        // withheld rather than the endpoint being broken.
+        expect((await list(auditorToken, '?q=Test%20Branch')).total).toBe(0);
+        expect(
+          emails(await list(auditorToken, '?q=producer')),
+        ).toContain(seed.producerEmail);
+      });
+
+      it('ranks invited before active before deactivated', async () => {
+        // The old client-side STATUS_RANK, reproduced by the server sort.
+        const body = await list(ownerToken, '?pageSize=100');
+        const rank = (row: AgencyUserListEnvelope['items'][number]) =>
+          row.deactivatedAt ? 2 : row.isActive ? 1 : 0;
+        const ranks = body.items.map(rank);
+        expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+      });
+
+      it('filters by the Status facet', async () => {
+        const body = await list(ownerToken, '?status=active&pageSize=100');
+        expect(body.items.every((row) => row.isActive)).toBe(true);
+      });
+
+      it('pages deterministically', async () => {
+        const first = await list(ownerToken, '?page=1&pageSize=1');
+        const second = await list(ownerToken, '?page=2&pageSize=1');
+        expect(first.items[0]._id).not.toBe(second.items[0]._id);
+        expect(first.total).toBe(second.total);
+      });
+
+      it('a cleared search is no filter, not an impossible one', async () => {
+        const all = await list(ownerToken, '?pageSize=100');
+        const cleared = await list(ownerToken, '?q=&pageSize=100');
+        expect(cleared.total).toBe(all.total);
+      });
+
+      it('rejects a malformed status with 400, not 500', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users?status=nonsense')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
+    });
+
+    describe('GET /api/v1/users/options (PAC-101)', () => {
+      const options = async (token: string) => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/users/options')
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as Array<{
+          _id: string;
+          email: string;
+          firstName?: string;
+          lastName?: string;
+        }>;
+      };
+
+      it('is a bare array, not a paginated envelope', async () => {
+        // Deliberate: a picker renders every option at once, and one showing
+        // page 1 of 3 is a bug. `GET /users` is the one that paginates.
+        const body = await options(ownerToken);
+        expect(Array.isArray(body)).toBe(true);
+        expect(body.length).toBeGreaterThanOrEqual(2);
+      });
+
+      it('is not swallowed by the :userId route', async () => {
+        // `@Get('options')` has to be declared above `@Get(':userId')` or Nest
+        // matches the bare param first and `options` arrives as a user id —
+        // which would 404, not 200.
+        const body = await options(ownerToken);
+        expect(body.every((row) => row.email.includes('@'))).toBe(true);
+      });
+
+      it('carries only what a <Select> renders', async () => {
+        const [row] = await options(ownerToken);
+        expect(Object.keys(row).sort()).toEqual(
+          ['_id', 'email', 'firstName', 'lastName'].filter((key) =>
+            Object.prototype.hasOwnProperty.call(row, key),
+          ),
+        );
+        expect(row).not.toHaveProperty('roleIds');
+        expect(row).not.toHaveProperty('deactivatedAt');
+        expect(row).not.toHaveProperty('passwordHash');
+      });
+
+      it('excludes the platform admin', async () => {
+        const emails = (await options(ownerToken)).map((row) => row.email);
+        expect(emails).not.toContain(seed.superAdminEmail);
+        expect(emails).toContain(seed.producerEmail);
+      });
+
+      it('is sorted by last name, then first, then email', async () => {
+        const keys = (await options(ownerToken)).map((row) =>
+          [row.lastName ?? '', row.firstName ?? '', row.email]
+            .join(' ')
+            .toLowerCase(),
+        );
+        expect(keys).toEqual([...keys].sort());
+      });
+
+      it('needs agency:users:read', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users/options')
+          .set(authHeader(readOnlyToken))
+          .expect(403);
+      });
     });
 
     it('GET /api/v1/users/assignable-permissions', async () => {
@@ -755,7 +960,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      const users = list.body as { _id: string; email: string }[];
+      const users = (list.body as AgencyUserListEnvelope).items;
       const producer = users.find((u) => u.email === seed.producerEmail);
       expect(producer).toBeDefined();
       invitedUserId = producer!._id;
@@ -2386,9 +2591,10 @@ describe('SFA API (e2e)', () => {
         city: 'Austin',
         state: 'TX',
       });
-      // `city`/`state` above are coerced from `propertyAddress.line1` — one of
-      // the three key shapes the three writers use, which is why the API
-      // resolves it rather than each client re-implementing the lookup.
+      // `city`/`state` come straight off the typed `propertyAddress` since
+      // PAC-101. They used to be coerced at read time from whichever of three
+      // key shapes the writer happened to use, which is exactly why the
+      // Location column could not be searched.
       const raw = row as unknown as Record<string, unknown>;
       for (const key of [
         'agencyId',
@@ -2487,6 +2693,57 @@ describe('SFA API (e2e)', () => {
         const body = await listBody(ownerToken, '?q=Nonexistent%20Zzz');
         expect(body.items).toEqual([]);
         expect(body.total).toBe(0);
+      });
+    });
+
+    describe('searches every column the row renders (PAC-101)', () => {
+      it('finds a household by its primary contact email', async () => {
+        // The Contact column renders this, and PAC-91 removed the copy that
+        // used to live on the household — so it can only resolve through
+        // `contacts`.
+        const body = await listBody(ownerToken, '?q=client%40test.local');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds it by a fragment of that email', async () => {
+        const body = await listBody(ownerToken, '?q=test.local');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it.each([
+        ['raw digits', '5550100100'],
+        ['dashed', '555-010-0100'],
+        ['parenthesised', '(555)%20010-0100'],
+      ])('finds it by phone, %s', async (_label, typed) => {
+        // Stored as `5550100100`; the query must fold formatting on both sides.
+        const body = await listBody(ownerToken, `?q=${typed}`);
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds a household by the city its Location column shows', async () => {
+        // Unreachable before the address became a typed sub-schema: the city
+        // was resolved in application code after the fetch.
+        const body = await listBody(ownerToken, '?q=Austin');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds it by street, which is not a column', async () => {
+        const body = await listBody(ownerToken, '?q=1%20Test%20St');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds a household reference by its number alone', async () => {
+        // `147` must reach `HH-2147`; here `1` must reach `HH-1`.
+        const body = await listBody(ownerToken, '?q=HH-1');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('no longer lets a reference suppress the name branch', async () => {
+        // `routeSearchTerm` used to drop the name route whenever the term
+        // parsed as a reference or a date, so these two dimensions could never
+        // be searched together.
+        const body = await listBody(ownerToken, '?q=Test');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
       });
     });
 

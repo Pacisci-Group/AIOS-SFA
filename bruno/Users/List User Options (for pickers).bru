@@ -1,0 +1,112 @@
+meta {
+  name: List User Options (for pickers)
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/users/options
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is a bare array, not a paginated envelope", function () {
+    // Deliberate: a picker renders every option at once. `GET /users` is the
+    // one that paginates.
+    expect(res.getBody()).to.be.an("array");
+  });
+
+  test("carries only what a <Select> renders", function () {
+    const row = res.getBody()[0];
+    expect(row).to.have.property("_id");
+    expect(row).to.have.property("email");
+    // No roles, no branch, no status, no invite token.
+    expect(row).to.not.have.property("roleIds");
+    expect(row).to.not.have.property("deactivatedAt");
+    expect(row).to.not.have.property("inviteToken");
+    expect(row).to.not.have.property("passwordHash");
+  });
+
+  test("excludes the platform admin", function () {
+    // `adminEmail` is the seeded super admin. Both this filter and the
+    // active-only one used to run in the browser, in three separate components.
+    const all = res.getBody().map(function (row) { return row.email; });
+    expect(all).to.not.include(bru.getEnvVar("adminEmail"));
+  });
+
+  test("the owner, who is active, is in it", function () {
+    const all = res.getBody().map(function (row) { return row.email; });
+    expect(all).to.include(bru.getEnvVar("ownerEmail"));
+  });
+
+  test("is sorted the way a person scans a list", function () {
+    const names = res.getBody().map(function (row) {
+      return ((row.lastName || "") + " " + (row.firstName || "") + " " + row.email)
+        .trim()
+        .toLowerCase();
+    });
+    const sorted = names.slice().sort();
+    expect(names).to.deep.equal(sorted);
+  });
+}
+
+docs {
+  # GET /users/options — the assignable-people picker (PAC-101)
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `agency:users:read` — the same gate as the directory.
+  - **Data scope:** the caller's agency.
+
+  ## Why this exists separately from `GET /users`
+
+  They answer different questions. `GET /users` is the **agency directory**:
+  paginated, searchable, and showing everybody — pending invites and
+  de-provisioned accounts included, because the whole point of that screen is
+  acting on them. A picker wants the opposite: the **whole list at once**, and
+  only people it makes sense to assign work to.
+
+  A picker that paginates is worse UX than the unpaginated roster it replaced,
+  and one showing page 1 of 3 is a bug. So rather than teach three `<Select>`
+  components to page, PAC-101 split the two apart — which is also what let
+  `GET /users` change shape without touching them.
+
+  Three callers: the Leads producer filter, the Lead Owner reassignment picker,
+  and the Deal Audit assignee picker. All three key it on `agency-users`.
+
+  ## What it filters, server-side
+
+  - **Platform admins** — not the agency's to assign.
+  - **Anyone not `isActive`** — which excludes a **pending invite** as well as a
+    removed employee. `isActive` is false for both and `deactivatedAt` is what
+    separates them; nobody should be assigned work before accepting their
+    invitation. This was the existing behaviour of all three pickers, done in
+    the browser three times.
+
+  Sorted `lastName, firstName, email` under the `en`/strength-2 collation, so
+  "adams" does not sort after "Zimmer". `email` is the tiebreak because it is
+  unique.
+
+  ## Response `200`
+  ```json
+  [
+    { "_id": "665f…ac1", "email": "producer@demo.local",
+      "firstName": "Dana", "lastName": "Okafor" }
+  ]
+  ```
+
+  `firstName` / `lastName` are both optional — an invited user who has not
+  completed onboarding has neither, which is why the clients fall back to the
+  email.
+
+  ## Errors
+  - `401` — missing or expired bearer token.
+  - `403` — the caller lacks `agency:users:read`.
+}

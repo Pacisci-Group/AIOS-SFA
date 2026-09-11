@@ -133,11 +133,17 @@ export const DEMO_HOUSEHOLD: HouseholdView = {
     state: "GA",
     zip: "30022",
   },
+  /*
+   * The stored shape, which PAC-101 made a typed sub-schema. This fixture held
+   * `line1`/`postalCode` — one key that only the demo seed ever wrote and one
+   * that no writer produced at all, which is what the docblock on
+   * `HouseholdProfile` describes going wrong on screen.
+   */
   propertyAddress: {
-    line1: "412 Magnolia Lane",
+    street: "412 Magnolia Lane",
     city: "Alpharetta",
     state: "GA",
-    postalCode: "30022",
+    zip: "30022",
   },
   mailingAddress: null,
   primaryEmail: "jessica.cobb@email.com",

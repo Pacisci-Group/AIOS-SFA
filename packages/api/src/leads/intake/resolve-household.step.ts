@@ -1,7 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { resolveHouseholdAddress } from '../../common/address/household-address';
+import type { StoredAddress } from '@sfa/shared';
+import {
+  normalizeStoredAddress,
+  resolveHouseholdAddress,
+} from '../../common/address/household-address';
 import { SequenceService } from '../../common/mongo/sequence.service';
 import { HouseholdMembersService } from '../../households/household-members.service';
 import { allocateHouseholdRef } from '../../households/household-ref';
@@ -10,7 +14,7 @@ import {
   HouseholdDocument,
 } from '../../households/schemas/household.schema';
 import { AmbiguousHouseholdException } from './ambiguous-household.exception';
-import { buildAddressKey, normalizeName } from './intake.normalize';
+import { normalizeName } from './intake.normalize';
 import {
   IntakeInput,
   ResolvedContact,
@@ -157,10 +161,6 @@ export class ResolveHouseholdStep {
     deps: StepDeps,
   ): Promise<ResolvedHousehold> {
     const lastName = normalizeName(input.primaryContact.lastName);
-    const addressKey = buildAddressKey(
-      input.address?.street,
-      input.address?.zip,
-    );
 
     // Allocated on the same session as the insert, so a failed intake rolls the
     // number back with it and the agency's series stays gapless.
@@ -179,8 +179,8 @@ export class ResolveHouseholdStep {
           name: lastName ? `${lastName} Household` : 'New Household',
           // The household's LIVING address. An insured property address is a
           // different thing entirely and is captured later, on the quote.
+          // `addressKey` is stamped by `HouseholdSchema`'s pre-save hook.
           propertyAddress: this.toAddressObject(input),
-          addressKey: addressKey ?? undefined,
           /*
            * No `primaryContactName` / `primaryEmails` / `primaryPhones`
            * (PAC-91 §4). Intake was the only writer of those three, which is
@@ -218,30 +218,22 @@ export class ResolveHouseholdStep {
     const address = this.toAddressObject(input);
     if (!address) return;
 
-    const hasAddress =
-      household.propertyAddress &&
-      Object.keys(household.propertyAddress).length > 0;
-    if (hasAddress) return;
+    // ⚠ Not `Object.keys(household.propertyAddress).length`. Since PAC-101 this
+    // is a typed sub-document, and `Object.keys()` on one returns Mongoose's
+    // internals (`$__parent`, `$__`, `$isNew`, `_doc`) — length 4 whatever it
+    // holds, including when it is empty. That test would be permanently true
+    // and this backfill would silently stop happening.
+    if (normalizeStoredAddress(household.propertyAddress)) return;
 
-    const addressKey = buildAddressKey(
-      input.address?.street,
-      input.address?.zip,
-    );
+    // `addressKey` is stamped by `HouseholdSchema`'s pre-update hook.
     await this.householdModel.updateOne(
       { _id: household._id },
-      {
-        $set: {
-          propertyAddress: address,
-          ...(addressKey ? { addressKey } : {}),
-        },
-      },
+      { $set: { propertyAddress: address } },
       sessionOptions(deps.session),
     );
   }
 
-  private toAddressObject(
-    input: IntakeInput,
-  ): Record<string, unknown> | undefined {
+  private toAddressObject(input: IntakeInput): StoredAddress | undefined {
     const { street, city, state, zip } = input.address ?? {};
     if (!street && !city && !state && !zip) return undefined;
     return { street, city, state, zip };
