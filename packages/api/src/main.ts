@@ -1,4 +1,4 @@
-import { ValidationPipe } from '@nestjs/common';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
@@ -47,7 +47,23 @@ async function bootstrap() {
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  app.setGlobalPrefix('api/v1');
+  /*
+   * Every route lives under `api/v1` — except the ACME challenge responder.
+   *
+   * RFC 8555 fixes the validation path at `/.well-known/acme-challenge/<token>`
+   * in the root of the host being validated. There is no version of it that
+   * lives under an API prefix: the CA builds that URL itself and will not be
+   * told otherwise. Left prefixed, every certificate order fails validation
+   * with a 404 that points at nothing in particular.
+   */
+  app.setGlobalPrefix('api/v1', {
+    exclude: [
+      {
+        path: '.well-known/acme-challenge/:token',
+        method: RequestMethod.GET,
+      },
+    ],
+  });
   app.enableCors({
     origin: process.env.CORS_ORIGIN?.split(',') ?? ['http://localhost:3000'],
     credentials: true,

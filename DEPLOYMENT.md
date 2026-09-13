@@ -154,6 +154,35 @@ infrastructure all read the same flag so they cannot disagree).
 > which is two environment variables rather than a rewrite. **Back the volume
 > up** — losing it loses scheduled-function state and run history.
 
+### TLS certificates (application-managed ACME)
+
+Required **only in Environments where the variable `ACME_ENABLED` is `true`**
+(a GitHub Environment *variable*, same shape as `INNGEST_ENABLED`).
+
+The platform issues its own certificates — for the platform host, agency
+subdomains and agency-owned custom domains — and stores them in the
+`certificates` collection. That is what lets every app node serve every
+hostname, and therefore what lets the app tier scale horizontally.
+
+| Secret | Description |
+|--------|-------------|
+| `ACME_DIRECTORY_URL` | `production`, `staging`, or a full directory URL. **Required when enabled**, because the default is staging and staging certificates are not trusted by browsers. |
+| `CERT_ENCRYPTION_KEY` | Encrypts private keys at rest. `openssl rand -base64 32`, **different per environment**. |
+| `ACME_CONTACT_EMAIL` | Optional. Registered with the CA for expiry notices. |
+
+> **`ACME_ENABLED` must stay `false` until the Node edge owns port 80.** The CA
+> validates by fetching a plain-HTTP URL on the hostname being issued, so
+> whatever listens on port 80 has to answer it. While Caddy is the edge it
+> answers its own challenges and knows nothing of ours, so every order fails
+> validation — and failed validations spend a Let's Encrypt limit that is
+> separate from the issuance limit and blocks orders that would have succeeded.
+
+> **Losing `CERT_ENCRYPTION_KEY` is not immediately visible.** Nodes that
+> already hold a decrypted certificate keep serving with it. The failure appears
+> when a node restarts or a new one joins the pool — it can decrypt nothing, and
+> serves no TLS at all. Recovery is to set a new key and re-issue every
+> certificate, so treat this as a secret to back up rather than one to regenerate.
+
 ### Repo-level secrets (Terraform in CI — only for plan-on-PR)
 
 These are account-wide, so keep them at repo level (Settings -> Secrets -> Actions):

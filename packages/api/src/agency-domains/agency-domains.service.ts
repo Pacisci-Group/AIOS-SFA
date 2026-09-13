@@ -3,12 +3,16 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { HostTenantResolver } from '../common/tenancy/host-tenant.resolver';
+import { certificateRequested } from '../inngest/events';
+import { InngestService } from '../inngest/inngest.service';
+import { CertificateRegistrationService } from '../tls/certificate-registration.service';
 import {
   isValidHostname,
   normalizeHostname,
@@ -33,12 +37,16 @@ import type {
 
 @Injectable()
 export class AgencyDomainsService {
+  private readonly logger = new Logger(AgencyDomainsService.name);
+
   constructor(
     @InjectModel(AgencyDomain.name)
     private readonly domainModel: Model<AgencyDomainDocument>,
     private readonly hostResolver: HostTenantResolver,
     private readonly dns: DnsVerifier,
     private readonly config: ConfigService,
+    private readonly certificates: CertificateRegistrationService,
+    private readonly events: InngestService,
   ) {}
 
   async list(agencyId: string): Promise<AgencyDomainView[]> {
@@ -168,6 +176,31 @@ export class AgencyDomainsService {
 
     await domain.save();
     this.hostResolver.invalidate(domain.hostname);
+
+    // The domain may now serve, so it needs a certificate.
+    //
+    // Two steps, in this order, and the order is the whole design:
+    //
+    //  1. `register` writes the certificate row synchronously. That row is what
+    //     `RenewCertificatesFn` sweeps, so from here on the hostname *will* get
+    //     a certificate even if everything below fails.
+    //  2. The event asks for it to happen now rather than within one sweep
+    //     interval. It is an optimisation, which is why its failure is caught
+    //     and logged rather than surfaced — a tenant who verified their domain
+    //     should not see an error because an event bus was briefly unreachable,
+    //     when the outcome is "a few minutes later" rather than "never".
+    await this.certificates.register(domain.hostname);
+    try {
+      await this.events.send(certificateRequested, {
+        hostname: domain.hostname,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Could not request a certificate for ${domain.hostname} now; the ` +
+          `renewal sweep will pick it up. ${String(error)}`,
+      );
+    }
+
     return this.toView(domain.toObject());
   }
 

@@ -28,6 +28,7 @@ import {
 import { ActivitiesModule } from './activities/activities.module';
 import { AddressModule } from './address/address.module';
 import { AgencyDomainsModule } from './agency-domains/agency-domains.module';
+import { TlsModule } from './tls/tls.module';
 import { AgencyEmailModule } from './agency-email/agency-email.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
@@ -129,6 +130,9 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // `agency/branding`, `public/*`), so neither participates in the route
     // ordering hazards documented further down.
     AgencyDomainsModule,
+    // The ACME http-01 responder. Sits with the white-label modules because
+    // it is what makes a tenant's own domain able to serve HTTPS at all.
+    TlsModule,
     AgencyEmailModule,
     TenantBrandingModule,
     // The owner's first-run setup flag (PAC-69). Sits with the white-label
