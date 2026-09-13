@@ -297,7 +297,24 @@ jobs:
           #
           # Written as whole lines rather than as a flag the app interprets, so
           # the file reads as a description of what is actually running.
-          if [ "${{ steps.flags.outputs.node_edge_enabled }}" = "true" ]; then
+          if [ "${{ steps.flags.outputs.autoscale_enabled }}" = "true" ]; then
+            # WARNING: 0.0.0.0, NOT APP_PRIVATE_IP.
+            #
+            # On a pool, APP_PRIVATE_IP is the INTERNAL LOAD BALANCER's address
+            # - that is the point of it, since it survives scaling and an
+            # individual droplet's address does not. But a container can only
+            # bind an address that exists on its own host, and the balancer's
+            # does not. Binding it fails the entire `docker compose up`, so the
+            # droplet serves nothing at all.
+            #
+            # The balancer forwards to each droplet's own :4001, so the worker
+            # listens broadly and the firewall decides who may reach it: 4001 is
+            # admitted from that balancer alone.
+            TOPOLOGY_LINES="WORKER_INLINE=false
+          WORKER_INNGEST_BIND=0.0.0.0:4001"
+          elif [ "${{ steps.flags.outputs.node_edge_enabled }}" = "true" ]; then
+            # One droplet: bind its own private address, so nothing is reachable
+            # beyond the VPC even before the firewall is considered.
             TOPOLOGY_LINES="WORKER_INLINE=false
           WORKER_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4001"
           else
