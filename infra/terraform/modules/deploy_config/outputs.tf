@@ -3,8 +3,14 @@ output "bucket" {
 }
 
 output "endpoint" {
-  description = "Region endpoint, without the bucket. For tooling that takes --endpoint-url."
-  value       = digitalocean_spaces_bucket.config.endpoint
+  description = <<-EOT
+    Region endpoint URL, for tooling that takes --endpoint-url.
+
+    Built with the scheme rather than passed through from the provider, whose
+    `endpoint` attribute is a bare host — `aws s3 cp --endpoint-url` rejects
+    that. Matches how `modules/spaces` produces STORAGE_ENDPOINT.
+  EOT
+  value       = "https://${var.region}.digitaloceanspaces.com"
 }
 
 output "bucket_domain_name" {
