@@ -16,6 +16,10 @@ import {
 } from '../../common/crypto/at-rest-cipher';
 import { normalizeHostname } from '../../common/tenancy/hostname';
 import {
+  AgencyDomain,
+  AgencyDomainDocument,
+} from '../../platform/schemas/agency-domain.schema';
+import {
   AcmeChallenge,
   AcmeChallengeDocument,
 } from '../../tls/schemas/acme-challenge.schema';
@@ -49,6 +53,10 @@ export class CertificateIssuerService {
     private readonly certificates: Model<CertificateDocument>,
     @InjectModel(AcmeChallenge.name)
     private readonly challenges: Model<AcmeChallengeDocument>,
+    // A schema, which the worker boundary allows across. `WorkerModule` already
+    // registers it for `TenantUrlService`.
+    @InjectModel(AgencyDomain.name)
+    private readonly domains: Model<AgencyDomainDocument>,
     private readonly account: AcmeAccountService,
     private readonly config: ConfigService,
   ) {}
@@ -336,6 +344,51 @@ export class CertificateIssuerService {
     );
 
     return hostname;
+  }
+
+  /**
+   * Give every hostname that is already serveable a certificate row.
+   *
+   * ## Why the sweep reconciles instead of only renewing
+   * A sweep can only find rows that exist, so it can only ever fix hostnames
+   * something else remembered to register. That made registration a single
+   * point of failure spread across every code path that can make a hostname
+   * serveable — and it was immediately wrong twice: the platform host, which
+   * has no "someone added a domain" moment at all, and subdomains, which are
+   * created `active` and never pass through `verify`.
+   *
+   * Both had the same shape: the app routed the hostname happily while the edge
+   * refused the TLS handshake, so a browser reported a cancelled request and no
+   * log anywhere said why. Reconciling from `agencyDomains` — the actual source
+   * of truth for "which hostnames do we serve" — makes that class of bug
+   * self-correcting within one sweep instead of permanent.
+   *
+   * Cheap: an indexed read plus one `$setOnInsert` per hostname, and every
+   * upsert after the first is a no-op.
+   */
+  async reconcileActiveDomains(): Promise<number> {
+    if (!this.enabled()) return 0;
+
+    const active = await this.domains
+      .find({ status: 'active' })
+      .select('hostname')
+      .lean();
+
+    let registered = 0;
+    for (const domain of active) {
+      const known = await this.certificates
+        .exists({ hostname: domain.hostname })
+        .then((row) => row !== null);
+      if (known) continue;
+
+      await this.ensureRegistered(domain.hostname);
+      registered += 1;
+      this.logger.warn(
+        `${domain.hostname} is active but had no certificate row — registered it now.`,
+      );
+    }
+
+    return registered;
   }
 
   /**
