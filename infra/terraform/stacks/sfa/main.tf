@@ -60,18 +60,24 @@ module "firewall" {
   ssh_allowed_ips  = var.ssh_allowed_ips
   allow_http_https = true
 
-  # Inngest invokes our functions over HTTP, so it needs to reach the API's
-  # /api/inngest on port 4000. Deliberately NOT routed through nginx: the nginx
-  # config is baked into this droplet's cloud-init `user_data`, which cannot be
-  # changed in place, and putting the endpoint behind the public vhost would
-  # expose it to the internet for no reason.
+  # Inngest invokes our functions over HTTP, so it needs to reach
+  # /api/inngest on port 4001 — the WORKER's port, not the API's.
   #
-  # `docker-compose.prod.yml` binds the api container to the droplet's private
-  # IP (API_INNGEST_BIND), and this rule is what makes that address reachable —
-  # sharing a VPC is not enough, a DO firewall filters neighbours too.
+  # ⚠ 4001, not 4000. The worker was split into its own container because
+  # exactly one process may serve the Inngest functions, and an autoscaled API
+  # tier cannot satisfy that. The API serves none and is published on loopback
+  # only, so a rule for 4000 would open a port with nothing behind it while
+  # every function invocation was refused.
+  #
+  # Deliberately NOT routed through the public edge: putting the endpoint behind
+  # the public vhost would expose it to the internet for no reason.
+  #
+  # `docker-compose.prod.yml` binds the worker container to the droplet's private
+  # IP (WORKER_INNGEST_BIND), and this rule is what makes that address reachable
+  # — sharing a VPC is not enough, a DO firewall filters neighbours too.
   internal_rules = var.enable_inngest ? [
     {
-      port               = "4000"
+      port               = "4001"
       source_droplet_ids = [module.inngest_droplet[0].id]
     }
   ] : []

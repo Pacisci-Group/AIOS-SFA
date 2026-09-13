@@ -170,6 +170,16 @@ services:
       - .env
     environment:
       PORT: 4000
+      # Matches the deployed environments, which run the worker as its own
+      # container because exactly one process may serve the Inngest functions.
+      # Set here rather than in .env because `main.ts` reads it while the module
+      # graph is built, before ConfigModule has loaded any dotenv file.
+      #
+      # Note this makes `make up` differ from `make dev` on purpose: the host
+      # loop (`npm run api:dev`) keeps the worker inline, because one process is
+      # simpler to run and restart while writing code. `make up` is the path that
+      # mirrors production.
+      WORKER_INLINE: "false"
       # `directConnection=true` and NEVER `replicaSet=` — the driver derives its
       # topology from directConnection first and rejects the pair. Single
       # topology also stops SDAM swapping the host for the member's advertised
@@ -238,17 +248,18 @@ services:
     command: >
       sh -c "node packages/api/dist/seed/seed.js && node packages/api/dist/main.js"
 
-  # The worker as its own container — the shape it will take in production when
-  # traffic justifies scaling it separately. NOT started by `make up`.
+  # The worker as its own container — the same shape production runs, and
+  # started by `make up` alongside the api and web.
   #
-  # ⚠ Exactly one process may serve the functions. Before starting this, set
-  # WORKER_INLINE=false on the api service (a real env var, not a .env line —
-  # it is read while the module graph is built, before dotenv runs), otherwise
-  # both register under the same Inngest app id and whichever synced last wins.
+  # In the `app` profile rather than one of its own: exactly one process may
+  # serve the Inngest functions, so the worker and the `WORKER_INLINE=false` that
+  # silences the API's copy have to arrive together. A separate profile made it
+  # possible to start one without the other, and whichever synced last would win.
   #
-  #   docker compose --profile app --profile worker up -d
+  # `make dev` (no profile) still starts backing services only, and the host
+  # `npm run api:dev` keeps the worker inline.
   worker:
-    profiles: ["worker"]
+    profiles: ["app"]
     build:
       context: .
       dockerfile: packages/api/Dockerfile

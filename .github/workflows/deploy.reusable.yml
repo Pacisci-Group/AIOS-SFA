@@ -294,11 +294,22 @@ jobs:
             # Async work. Every outbound email and every scheduled job runs as
             # an Inngest function served from this container at /api/inngest.
             #
-            # Binds the api container to the droplet's PRIVATE IP so the Inngest
-            # droplet can invoke functions over the VPC. Never 0.0.0.0: that
-            # endpoint is raw Express middleware none of the eight global guards
+            # The worker runs as its own container and is the ONLY process
+            # serving them. Exactly one process may: with the worker inline, every
+            # API node registers under the same Inngest app id and whichever
+            # synced last wins. That is invisible at one node and breaks async
+            # work outright on a pool, so the split is a prerequisite for
+            # horizontal scaling rather than a tuning knob.
+            #
+            # Must be a real environment variable — env_file makes it exactly
+            # that. `main.ts` reads it while the module graph is built, before
+            # ConfigModule has loaded any dotenv file.
+            WORKER_INLINE=false
+            # Binds the WORKER container to the droplet's PRIVATE IP so the
+            # Inngest droplet can invoke functions over the VPC. Never 0.0.0.0:
+            # that endpoint is raw Express middleware none of the global guards
             # see, and its only authentication is the Inngest request signature.
-            API_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4000
+            WORKER_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4001
             INNGEST_BASE_URL=${{ secrets.INNGEST_BASE_URL }}
             INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
             INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
@@ -328,13 +339,41 @@ jobs:
             for i in $(seq 1 20); do
               if curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null; then
                 echo "Health check passed."
-                exit 0
+                break
+              fi
+              if [ "$i" -eq 20 ]; then
+                echo "Health check failed."
+                docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100
+                exit 1
               fi
               echo "Waiting for app... ($i)"
               sleep 5
             done
-            echo "Health check failed."
-            docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100
+
+            # The worker is a separate container now, and the API's health says
+            # nothing about it. Ask its serve endpoint, which answers a GET with
+            # its function count — that proves the registry resolved and the
+            # Inngest client is configured, not merely that a process is up.
+            #
+            # Worth its own check because the failure is silent: with the worker
+            # down, the site is perfectly healthy and not one email is sent.
+            #
+            # Addressed on the PRIVATE IP, not loopback: that is where the
+            # container publishes, and it is the address Inngest itself will
+            # use — so this check also proves the binding is right rather than
+            # just that a process exists. Checking loopback would fail against a
+            # perfectly healthy worker, which is the mirror image of the bug
+            # that made the API publish on loopback in the first place.
+            for i in $(seq 1 20); do
+              if curl -fsS http://${{ secrets.APP_PRIVATE_IP }}:4001/api/inngest >/dev/null; then
+                echo "Worker serve endpoint is up."
+                exit 0
+              fi
+              echo "Waiting for worker... ($i)"
+              sleep 5
+            done
+            echo "::error::The worker container is not serving /api/inngest. No async work will run."
+            docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100 worker
             exit 1
 
   # Self-hosted Inngest, on its own droplet. Nothing of ours is built for it —
@@ -507,8 +546,9 @@ jobs:
               echo "Waiting for function sync... ($i)"
               sleep 5
             done
-            echo "::error::Inngest is running but synced no functions from ${{ secrets.APP_PRIVATE_IP }}:4000/api/inngest."
-            echo "Check: the app droplet firewall admits port 4000 from this droplet;"
-            echo "INNGEST_SIGNING_KEY matches on both sides; the API has WORKER_INLINE unset or true."
+            echo "::error::Inngest is running but synced no functions from ${{ secrets.APP_PRIVATE_IP }}:4001/api/inngest."
+            echo "Check: the app droplet firewall admits port 4001 from this droplet;"
+            echo "INNGEST_SIGNING_KEY matches on both sides; the worker container is running"
+            echo "(it, not the API, serves the functions now — WORKER_INLINE must be false)."
             docker compose -f /opt/sfa-inngest/docker-compose.inngest.yml logs --tail=100
             exit 1

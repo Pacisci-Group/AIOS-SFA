@@ -15,7 +15,10 @@
 #   INNGEST_SIGNING_KEY  -> signs requests to our /api/inngest endpoint. Must be
 #                           hex with an even number of characters:
 #                           `openssl rand -hex 32`
-#   APP_PRIVATE_IP       -> the app droplet's VPC address; where the functions live
+#   APP_PRIVATE_IP       -> the app droplet's VPC address; where the functions
+#                           live. Port 4001, not 4000: the worker runs as its own
+#                           container and is the only process serving
+#                           /api/inngest. The API on 4000 serves none.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # ⚠ THE DASHBOARD HAS NO AUTHENTICATION.
@@ -39,7 +42,7 @@ services:
     # app — so every check passes while no async work exists. Verified
     # locally: with the env vars the GraphQL `apps` list stays empty; with
     # these flags the app appears with functionCount > 0.
-    command: "inngest start -u http://${APP_PRIVATE_IP}:4000/api/inngest --poll-interval 30"
+    command: "inngest start -u http://${APP_PRIVATE_IP}:4001/api/inngest --poll-interval 30"
     restart: unless-stopped
     environment:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}

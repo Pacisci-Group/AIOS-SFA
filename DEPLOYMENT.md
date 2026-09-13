@@ -104,11 +104,25 @@ Required **only in Environments where the variable `INNGEST_ENABLED` is `true`**
 `enable_inngest`, and the preflight, the `deploy-inngest` job and the
 infrastructure all read the same flag so they cannot disagree).
 
+> **The worker is its own container, and that is not optional.** Exactly one
+> process may serve the Inngest functions: with the worker inline, every API
+> process registers under the same Inngest app id and whichever synced last
+> wins. That is invisible while there is one node and breaks async work outright
+> on an autoscaled tier, so the deploy writes `WORKER_INLINE=false` and starts
+> the `worker` service unconditionally.
+>
+> The consequences to keep straight, because three places have to agree:
+> Inngest invokes functions at `<APP_PRIVATE_IP>:4001/api/inngest`, the DO
+> firewall admits **4001** (not 4000) from the Inngest droplet, and the API is
+> published on loopback only. Get one of the three wrong and Inngest reports
+> healthy while syncing zero functions — which the `deploy-inngest` job's
+> `functionCount > 0` assertion is there to catch.
+
 | Secret | Description |
 |--------|-------------|
 | `INNGEST_SSH_HOST` | Inngest droplet public IP (`terraform output -raw inngest_droplet_ip`). SSH only — nothing is served publicly. |
 | `INNGEST_BASE_URL` | `http://<terraform output -raw inngest_droplet_private_ip>:8288` — where the API sends events |
-| `APP_PRIVATE_IP` | App droplet VPC address (`terraform output -raw droplet_private_ip`). Inngest invokes functions at `<this>:4000/api/inngest`. |
+| `APP_PRIVATE_IP` | App droplet VPC address (`terraform output -raw droplet_private_ip`). Inngest invokes functions at `<this>:4001/api/inngest` — the **worker** container's port. The API serves no functions. |
 | `INNGEST_EVENT_KEY` | Authenticates events the API sends. `openssl rand -hex 32` |
 | `INNGEST_SIGNING_KEY` | Signs Inngest's requests to `/api/inngest`. **Must be hex with an even number of characters** — `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Resend API key for outbound email |
@@ -123,7 +137,7 @@ infrastructure all read the same flag so they cannot disagree).
 
 > **`INNGEST_SIGNING_KEY` is the only authentication on `/api/inngest`.** That
 > endpoint is mounted as raw Express middleware, so none of the seven global
-> guards see it. The droplet firewall (port 4000, Inngest droplet only) is the
+> guards see it. The droplet firewall (port 4001, Inngest droplet only) is the
 > second layer.
 
 > ⚠ **Never expose port 8288.** It serves Inngest's Event API, its REST/GraphQL
