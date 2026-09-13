@@ -135,3 +135,35 @@ variable "enable_node_edge" {
   type        = bool
   default     = false
 }
+
+variable "enable_autoscale" {
+  description = "Run the app tier as an autoscale pool behind a load balancer. Requires enable_node_edge. See stacks/sfa/variables.tf."
+  type        = bool
+  default     = false
+}
+
+variable "pool_min_instances" {
+  type    = number
+  default = 1
+}
+
+variable "pool_max_instances" {
+  type    = number
+  default = 3
+}
+
+variable "pool_target_cpu" {
+  type    = number
+  default = 0.6
+}
+
+variable "pool_cooldown_minutes" {
+  type    = number
+  default = 10
+}
+
+variable "pool_proxy_protocol" {
+  description = "Must match EDGE_PROXY_PROTOCOL on the app. Enabling one side alone breaks every connection."
+  type        = bool
+  default     = false
+}

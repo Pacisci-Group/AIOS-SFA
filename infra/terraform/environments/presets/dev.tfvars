@@ -37,6 +37,13 @@ enable_reserved_ip = true
 enable_inngest   = true
 enable_node_edge = true
 
+enable_autoscale      = true
+pool_min_instances    = 1
+pool_max_instances    = 3
+pool_target_cpu       = 0.6
+pool_cooldown_minutes = 10
+pool_proxy_protocol   = true
+
 # Object storage is required, not optional: the deal-audit and lead-intake flows
 # upload documents through presigned URLs. Applying this needs
 # SPACES_ACCESS_KEY_ID / SPACES_SECRET_ACCESS_KEY exported alongside

@@ -48,6 +48,21 @@ resource "digitalocean_database_firewall" "this" {
       value = rule.value
     }
   }
+
+  // Droplets admitted by TAG rather than by id.
+  //
+  // Required once the app tier is an autoscale pool: a droplet created ten
+  // minutes after the last apply has an id terraform has never seen, so an
+  // id-based rule would lock out exactly the droplets that scaling created —
+  // and the symptom is a node that serves every page as a 500 while its
+  // siblings are fine.
+  dynamic "rule" {
+    for_each = var.allowed_tags
+    content {
+      type  = "tag"
+      value = rule.value
+    }
+  }
 }
 
 # Note: backup policy for MongoDB on DO is typically tied to cluster tier/plan.

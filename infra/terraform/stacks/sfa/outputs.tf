@@ -7,16 +7,41 @@ output "region" {
 }
 
 output "droplet_id" {
-  value = module.droplet.id
+  description = "The single app droplet. Null when this environment runs an autoscale pool, whose members have no fixed id."
+  value       = local.pool ? null : module.droplet[0].id
+}
+
+output "pool_id" {
+  description = "The autoscale pool, when there is one."
+  value       = local.pool ? digitalocean_droplet_autoscale.app[0].id : null
 }
 
 output "droplet_ip" {
-  description = "Public IP for SSH and DNS"
-  value       = module.droplet.public_ip
+  description = <<-EOT
+    The address the world reaches this environment on: the load balancer's when
+    there is a pool, the droplet's reserved IP otherwise.
+
+    This is what DNS points at, what an agency puts in an A record, and what
+    PUBLIC_SERVER_IPS must carry. It is NOT an SSH target once a pool exists —
+    pool members are not deployed to, and `ssh_command` says so.
+  EOT
+  value       = local.public_ip
 }
 
 output "droplet_private_ip" {
-  value = module.droplet.ipv4_address_private
+  description = "VPC address of the single app droplet. Null with a pool — use `worker_endpoint`, which is stable across scaling."
+  value       = local.pool ? null : module.droplet[0].ipv4_address_private
+}
+
+output "worker_endpoint" {
+  description = <<-EOT
+    Where Inngest invokes our functions: the internal load balancer with a pool,
+    the single droplet's private address otherwise.
+
+    Goes into the APP_PRIVATE_IP Environment secret. With a pool this is stable
+    across scaling, which is the point — an individual droplet's address is not.
+  EOT
+  value       = local.worker_endpoint
 }
 
 output "firewall_id" {
@@ -73,12 +98,49 @@ output "spaces_cors_origins" {
 }
 
 output "ssh_command" {
-  value = "ssh deploy@${module.droplet.public_ip}"
+  description = "Empty for a pool: its members are not deployed to and are replaced by DigitalOcean at will."
+  value       = local.pool ? "" : "ssh deploy@${module.droplet[0].public_ip}"
+}
+
+# ─── Autoscale deploy config ──────────────────────────────────────────────────
+#
+# Where the deploy publishes, and what CI needs to publish there. Pool members
+# read this bucket at boot and every 30s; there is no SSH step for them.
+
+output "deploy_config_bucket" {
+  value = local.pool ? module.deploy_config[0].bucket : null
+}
+
+output "deploy_config_endpoint" {
+  value = local.pool ? module.deploy_config[0].endpoint : null
+}
+
+output "deploy_config_github_secrets" {
+  description = <<-EOT
+    The Environment secrets the deploy needs to publish config for the pool.
+
+    Assembled as one output because the two keys are easy to confuse with the
+    STORAGE_* pair and with each other: this is the READ/WRITE key, used only by
+    CI. The droplets hold a separate read-only key, baked into user_data by
+    terraform, which never passes through GitHub.
+  EOT
+  value = local.pool ? {
+    DEPLOY_CONFIG_BUCKET        = module.deploy_config[0].bucket
+    DEPLOY_CONFIG_ENDPOINT      = module.deploy_config[0].endpoint
+    DEPLOY_CONFIG_REGION        = module.deploy_config[0].region
+    DEPLOY_CONFIG_ACCESS_KEY_ID = module.deploy_config[0].publish_access_key_id
+  } : null
+}
+
+output "deploy_config_secret_key" {
+  description = "DEPLOY_CONFIG_SECRET_ACCESS_KEY. CI only."
+  value       = local.pool ? module.deploy_config[0].publish_secret_key : null
+  sensitive   = true
 }
 
 output "deploy_notes" {
   value = <<-EOT
-    1. SSH: ssh deploy@${module.droplet.public_ip}
+    1. Reach it at: ${local.public_ip}
     2. Copy app + docker-compose.prod.yml to /opt/sfa/
     3. The deploy workflow writes /opt/sfa/.env from GitHub Environment secrets on
        every run — set them there, not on the droplet, or they will be overwritten.
@@ -131,6 +193,8 @@ output "inngest_github_secrets" {
   value = var.enable_inngest ? {
     INNGEST_SSH_HOST = module.inngest_droplet[0].public_ip
     INNGEST_BASE_URL = "http://${module.inngest_droplet[0].ipv4_address_private}:8288"
-    APP_PRIVATE_IP   = module.droplet.ipv4_address_private
+    # With a pool this is the INTERNAL load balancer, not a droplet — stable
+    # across scaling, which an individual member's address is not.
+    APP_PRIVATE_IP = local.worker_endpoint
   } : null
 }

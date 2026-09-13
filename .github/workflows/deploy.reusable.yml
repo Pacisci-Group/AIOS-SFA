@@ -85,6 +85,7 @@ jobs:
       # comment on that job.
       inngest_enabled: ${{ steps.flags.outputs.inngest_enabled }}
       node_edge_enabled: ${{ steps.flags.outputs.node_edge_enabled }}
+      autoscale_enabled: ${{ steps.flags.outputs.autoscale_enabled }}
     steps:
       - uses: actions/checkout@v4
 
@@ -95,6 +96,15 @@ jobs:
         run: |
           enabled="${{ vars.INNGEST_ENABLED }}"
           echo "inngest_enabled=${enabled}" >> "$GITHUB_OUTPUT"
+          if [ "$autoscale" = "true" ] && [ "$node_edge" != "true" ]; then
+            # The pool assumes every node is interchangeable, which is only true
+            # once certificates come from MongoDB rather than a node's disk.
+            # With Caddy each droplet would run its own ACME client and race the
+            # others for the same tenant hostnames.
+            echo "::error::AUTOSCALE_ENABLED is true but NODE_EDGE_ENABLED is not. The pool requires the Node edge."
+            exit 1
+          fi
+
           if [ "$enabled" = "true" ]; then
             echo "Inngest is ENABLED for '${{ inputs.environment }}'."
           else
@@ -122,6 +132,13 @@ jobs:
           # droplet's cloud-init; this chooses what runs on it. Half of each is
           # an environment that passes every health check and runs no async
           # work, or one with no edge at all.
+          # The app tier is an autoscale pool rather than one droplet. Implies
+          # the Node edge, and changes how a deploy reaches the app: pool members
+          # are never SSHed to, because a droplet created during a traffic spike
+          # has nothing to SSH to it. Config is published instead.
+          autoscale="${{ vars.AUTOSCALE_ENABLED || 'false' }}"
+          echo "autoscale_enabled=${autoscale}" >> "$GITHUB_OUTPUT"
+
           node_edge="${{ vars.NODE_EDGE_ENABLED || 'false' }}"
           echo "node_edge_enabled=${node_edge}" >> "$GITHUB_OUTPUT"
           if [ "$node_edge" = "true" ]; then
@@ -192,6 +209,14 @@ jobs:
           # renewal silently stops — the certificates already cached on a node
           # keep serving, so nothing looks wrong until a node restarts.
           ACME_ENABLED: ${{ vars.ACME_ENABLED }}
+          # Where the pool reads its config. Without these the publish step has
+          # nowhere to write, and every droplet keeps serving the previous
+          # deploy indefinitely — with nothing failing to say so.
+          AUTOSCALE_ENABLED: ${{ vars.AUTOSCALE_ENABLED }}
+          DEPLOY_CONFIG_BUCKET: ${{ secrets.DEPLOY_CONFIG_BUCKET }}
+          DEPLOY_CONFIG_ENDPOINT: ${{ secrets.DEPLOY_CONFIG_ENDPOINT }}
+          DEPLOY_CONFIG_ACCESS_KEY_ID: ${{ secrets.DEPLOY_CONFIG_ACCESS_KEY_ID }}
+          DEPLOY_CONFIG_SECRET_ACCESS_KEY: ${{ secrets.DEPLOY_CONFIG_SECRET_ACCESS_KEY }}
           ACME_DIRECTORY_URL: ${{ secrets.ACME_DIRECTORY_URL }}
           CERT_ENCRYPTION_KEY: ${{ secrets.CERT_ENCRYPTION_KEY }}
         run: |
@@ -226,6 +251,14 @@ jobs:
             required="${required} ACME_DIRECTORY_URL CERT_ENCRYPTION_KEY"
           fi
 
+          # An autoscale environment is deployed to by publishing, so SSH_HOST
+          # stops being how the app is reached — but these become load-bearing.
+          if [ "${AUTOSCALE_ENABLED}" = "true" ]; then
+            required="${required}
+                      DEPLOY_CONFIG_BUCKET DEPLOY_CONFIG_ENDPOINT
+                      DEPLOY_CONFIG_ACCESS_KEY_ID DEPLOY_CONFIG_SECRET_ACCESS_KEY"
+          fi
+
           missing=""
           for name in $required; do
             if [ -z "${!name}" ]; then
@@ -240,171 +273,262 @@ jobs:
           fi
           echo "All required secrets are present."
 
-      - name: Copy compose file to droplet
+      # Rendered ONCE, here, and then merely delivered differently depending on
+      # the topology. The two delivery paths below must never grow their own
+      # copy of this: an environment file that differs between a pooled and a
+      # single-droplet environment is precisely the silent divergence this whole
+      # piece of work exists to remove.
+      #
+      # REWRITTEN IN FULL on every deploy — anything hand-edited on a droplet is
+      # lost. Every runtime variable the app needs is listed here and backed by
+      # an Environment secret.
+      - name: Render runtime env
+        env:
+          API_IMAGE: ${{ needs.build-and-push.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.build-and-push.outputs.web_image }}
+        run: |
+          set -euo pipefail
+
+          # Which process serves the Inngest functions, and therefore which port
+          # the firewall must admit. Exactly one process may serve them.
+          #
+          #   new topology: the worker, its own container on 4001
+          #   old topology: the API, in-process on 4000
+          #
+          # Written as whole lines rather than as a flag the app interprets, so
+          # the file reads as a description of what is actually running.
+          if [ "${{ steps.flags.outputs.node_edge_enabled }}" = "true" ]; then
+            TOPOLOGY_LINES="WORKER_INLINE=false
+          WORKER_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4001"
+          else
+            TOPOLOGY_LINES="API_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4000"
+          fi
+
+          # A pool member has no other way to authenticate to the registry: it is
+          # never SSHed to, so nothing runs `docker login` on it. Its converge
+          # script reads these from the published file instead.
+          umask 077
+          cat > app.env <<EOF
+          GHCR_PULL_USER=${{ secrets.GHCR_PULL_USER }}
+          GHCR_PULL_TOKEN=${{ secrets.GHCR_PULL_TOKEN }}
+          API_IMAGE=${API_IMAGE}
+          WEB_IMAGE=${WEB_IMAGE}
+          WEB_BIND=127.0.0.1:8080
+          NODE_ENV=production
+          PORT=4000
+          MONGODB_URI=${{ secrets.MONGODB_URI }}
+          # 'false' suppresses the startup migration run for this deploy - see
+          # "Resolve environment flags" above, and DEPLOYMENT.md.
+          DB_MIGRATE_ON_BOOT=${{ vars.DB_MIGRATE_ON_BOOT || 'true' }}
+          JWT_ACCESS_SECRET=${{ secrets.JWT_ACCESS_SECRET }}
+          JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
+          JWT_ACCESS_EXPIRES=15m
+          JWT_REFRESH_EXPIRES=7d
+          CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
+          # Base URL every invite / accept-invite link is built from
+          # (UsersService.buildInviteUrl). Unset, it falls back to
+          # http://localhost:5173 and every invite email ships a dead link
+          # while the API, the send and the delivery record all look healthy.
+          APP_BASE_URL=${{ secrets.APP_BASE_URL }}
+
+          # Object storage (DigitalOcean Spaces) — document uploads.
+          # Values come from the environment's terraform outputs:
+          #   spaces_endpoint / spaces_region / spaces_bucket /
+          #   spaces_access_key_id / spaces_secret_access_key
+          STORAGE_ENDPOINT=${{ secrets.STORAGE_ENDPOINT }}
+          STORAGE_REGION=${{ secrets.STORAGE_REGION }}
+          STORAGE_BUCKET=${{ secrets.STORAGE_BUCKET }}
+          STORAGE_ACCESS_KEY_ID=${{ secrets.STORAGE_ACCESS_KEY_ID }}
+          STORAGE_SECRET_ACCESS_KEY=${{ secrets.STORAGE_SECRET_ACCESS_KEY }}
+          # Spaces uses virtual-host addressing (bucket.region.digitaloceanspaces.com).
+          # Only MinIO needs path-style, so this is false everywhere but local dev.
+          STORAGE_FORCE_PATH_STYLE=false
+          # STORAGE_PUBLIC_URL is intentionally unset: the API and the browser
+          # reach Spaces at the same endpoint, unlike the local MinIO split.
+
+          # Base URL used to build shareable public intake links. Unset, the API
+          # falls back to http://localhost:5173 and every shared link is dead.
+          PUBLIC_FORM_BASE_URL=${{ secrets.PUBLIC_FORM_BASE_URL }}
+          PLATFORM_HOST=${{ secrets.PLATFORM_HOST }}
+          BASE_DOMAIN=${{ secrets.BASE_DOMAIN }}
+          PUBLIC_SERVER_IPS=${{ secrets.PUBLIC_SERVER_IPS }}
+
+          # Rate limits for the public (unauthenticated) intake routes. Optional —
+          # unset resolves to the defaults in config/rate-limit.config.ts, which
+          # parses an empty value back to the default. These must be real
+          # environment variables, and env_file makes them exactly that: the
+          # @Throttle decorators are evaluated at class-definition time, before
+          # ConfigModule has loaded any dotenv file.
+          RATE_LIMIT_SHORT=${{ secrets.RATE_LIMIT_SHORT }}
+          RATE_LIMIT_LONG=${{ secrets.RATE_LIMIT_LONG }}
+          PUBLIC_FORM_RATE_LIMIT=${{ secrets.PUBLIC_FORM_RATE_LIMIT }}
+          PUBLIC_INTAKE_RATE_LIMIT=${{ secrets.PUBLIC_INTAKE_RATE_LIMIT }}
+          PUBLIC_INTAKE_HOURLY_LIMIT=${{ secrets.PUBLIC_INTAKE_HOURLY_LIMIT }}
+
+          # Async work. Every outbound email and every scheduled job runs as
+          # an Inngest function served from this container at /api/inngest.
+          #
+          # Which process serves the Inngest functions, and on which private
+          # port — see the shell above. Never 0.0.0.0 in either case: that
+          # endpoint is raw Express middleware none of the global guards see,
+          # and its only authentication is the Inngest request signature.
+          #
+          # WORKER_INLINE must be a real environment variable, which env_file
+          # makes it: `main.ts` reads it while the module graph is built,
+          # before ConfigModule has loaded any dotenv file.
+          ${TOPOLOGY_LINES}
+          INNGEST_BASE_URL=${{ secrets.INNGEST_BASE_URL }}
+          INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
+          INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
+          # Must be "0". Left unset the SDK infers dev mode from NODE_ENV and
+          # stops verifying request signatures.
+          INNGEST_DEV=0
+
+          # Outbound email. RESEND_API_KEY unset means the worker silently
+          # falls back to a logging transport — see the preflight note.
+          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+          MAIL_DEFAULT_FROM=${{ secrets.MAIL_DEFAULT_FROM }}
+          MAIL_REPLY_TO=${{ secrets.MAIL_REPLY_TO }}
+
+          # TLS certificates. The platform issues its own, for the platform
+          # host and for every agency domain, and stores them in MongoDB so
+          # any app node can serve any hostname.
+          #
+          # Off unless the Environment variable is literally "true": issuance
+          # needs us to own port 80 to answer the CA's validation request, so
+          # this is turned on in the same change that puts the Node edge in
+          # front of the app.
+          ACME_ENABLED=${{ vars.ACME_ENABLED || 'false' }}
+          ACME_DIRECTORY_URL=${{ secrets.ACME_DIRECTORY_URL }}
+          ACME_CONTACT_EMAIL=${{ secrets.ACME_CONTACT_EMAIL }}
+          CERT_ENCRYPTION_KEY=${{ secrets.CERT_ENCRYPTION_KEY }}
+
+          # The edge. Only started when the `edge` compose profile is active.
+          #
+          # ⚠ EDGE_PROXY_PROTOCOL must be false until a load balancer sits in
+          # front AND is configured to send the header. A header is a claim
+          # about who the peer is: trusting it from a direct client lets
+          # anyone forge a source address and evade rate limiting. Enabling it
+          # on only one side is the mirror failure — the header is read as the
+          # first bytes of a TLS handshake and every connection breaks.
+          EDGE_PROXY_PROTOCOL=${{ vars.EDGE_PROXY_PROTOCOL || 'false' }}
+          EOF
+
+      # ── Autoscale pool: publish, do not deploy ──────────────────────────────
+      #
+      # There is nothing to SSH to. A droplet created during a traffic spike at
+      # 3am has to configure itself, so the deploy publishes and every droplet —
+      # running now or created later — converges on the same object within 30s.
+      - name: Publish config for the pool
+        if: steps.flags.outputs.autoscale_enabled == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DEPLOY_CONFIG_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DEPLOY_CONFIG_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.DEPLOY_CONFIG_REGION }}
+          BUCKET: ${{ secrets.DEPLOY_CONFIG_BUCKET }}
+          ENDPOINT: ${{ secrets.DEPLOY_CONFIG_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          # The compose file first, then the env. Droplets checksum BOTH
+          # together and only act when the pair changes, so ordering cannot
+          # leave one applied without the other.
+          aws s3 cp docker-compose.prod.yml "s3://$BUCKET/current/docker-compose.prod.yml" --endpoint-url "$ENDPOINT"
+          aws s3 cp app.env "s3://$BUCKET/current/app.env" --endpoint-url "$ENDPOINT"
+          echo "Published. Pool members converge within ~30s."
+
+      # ── Single droplet: the original path, unchanged in behaviour ───────────
+      - name: Copy compose file and env to droplet
+        if: steps.flags.outputs.autoscale_enabled != 'true'
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: deploy
           key: ${{ secrets.SSH_KEY }}
-          source: "docker-compose.prod.yml"
+          source: "docker-compose.prod.yml,app.env"
           target: "/opt/sfa"
 
       - name: Deploy on droplet
+        if: steps.flags.outputs.autoscale_enabled != 'true'
         uses: appleboy/ssh-action@v1.2.0
-        env:
-          API_IMAGE: ${{ needs.build-and-push.outputs.api_image }}
-          WEB_IMAGE: ${{ needs.build-and-push.outputs.web_image }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: deploy
           key: ${{ secrets.SSH_KEY }}
-          envs: API_IMAGE,WEB_IMAGE
           script: |
             set -euo pipefail
             cd /opt/sfa
 
-            NODE_EDGE="${{ steps.flags.outputs.node_edge_enabled }}"
-
-            # Which process serves the Inngest functions, and therefore which
-            # port the firewall must admit. Exactly one process may serve them.
-            #
-            #   new topology: the worker, its own container on 4001
-            #   old topology: the API, in-process on 4000
-            #
-            # Written as whole lines rather than as a flag the app interprets,
-            # so /opt/sfa/.env reads as a description of what is actually
-            # running on the box.
-            if [ "$NODE_EDGE" = "true" ]; then
-              TOPOLOGY_LINES="WORKER_INLINE=false
-            WORKER_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4001"
+            if [ "${{ steps.flags.outputs.node_edge_enabled }}" = "true" ]; then
               COMPOSE_PROFILE="--profile edge"
             else
-              TOPOLOGY_LINES="API_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4000"
               COMPOSE_PROFILE=""
             fi
 
-            # Registry login (GHCR PAT with read:packages)
+            # The rendered file, put in place. Same content the pool receives.
+            install -m 0600 app.env .env
+            rm -f app.env
+
             echo "${{ secrets.GHCR_PULL_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_PULL_USER }}" --password-stdin
 
-            # Write/refresh runtime env. App secrets come from the GitHub Environment.
-            #
-            # This file is REWRITTEN IN FULL on every deploy — anything hand-edited
-            # on the droplet is lost. Every runtime variable the app needs has to
-            # be listed here and backed by an Environment secret.
-            umask 077
-            cat > /opt/sfa/.env <<EOF
-            API_IMAGE=${API_IMAGE}
-            WEB_IMAGE=${WEB_IMAGE}
-            WEB_BIND=127.0.0.1:8080
-            NODE_ENV=production
-            PORT=4000
-            MONGODB_URI=${{ secrets.MONGODB_URI }}
-            # 'false' suppresses the startup migration run for this deploy - see
-            # "Resolve environment flags" above, and DEPLOYMENT.md.
-            DB_MIGRATE_ON_BOOT=${{ vars.DB_MIGRATE_ON_BOOT || 'true' }}
-            JWT_ACCESS_SECRET=${{ secrets.JWT_ACCESS_SECRET }}
-            JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
-            JWT_ACCESS_EXPIRES=15m
-            JWT_REFRESH_EXPIRES=7d
-            CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
-            # Base URL every invite / accept-invite link is built from
-            # (UsersService.buildInviteUrl). Unset, it falls back to
-            # http://localhost:5173 and every invite email ships a dead link
-            # while the API, the send and the delivery record all look healthy.
-            APP_BASE_URL=${{ secrets.APP_BASE_URL }}
-
-            # Object storage (DigitalOcean Spaces) — document uploads.
-            # Values come from the environment's terraform outputs:
-            #   spaces_endpoint / spaces_region / spaces_bucket /
-            #   spaces_access_key_id / spaces_secret_access_key
-            STORAGE_ENDPOINT=${{ secrets.STORAGE_ENDPOINT }}
-            STORAGE_REGION=${{ secrets.STORAGE_REGION }}
-            STORAGE_BUCKET=${{ secrets.STORAGE_BUCKET }}
-            STORAGE_ACCESS_KEY_ID=${{ secrets.STORAGE_ACCESS_KEY_ID }}
-            STORAGE_SECRET_ACCESS_KEY=${{ secrets.STORAGE_SECRET_ACCESS_KEY }}
-            # Spaces uses virtual-host addressing (bucket.region.digitaloceanspaces.com).
-            # Only MinIO needs path-style, so this is false everywhere but local dev.
-            STORAGE_FORCE_PATH_STYLE=false
-            # STORAGE_PUBLIC_URL is intentionally unset: the API and the browser
-            # reach Spaces at the same endpoint, unlike the local MinIO split.
-
-            # Base URL used to build shareable public intake links. Unset, the API
-            # falls back to http://localhost:5173 and every shared link is dead.
-            PUBLIC_FORM_BASE_URL=${{ secrets.PUBLIC_FORM_BASE_URL }}
-            PLATFORM_HOST=${{ secrets.PLATFORM_HOST }}
-            BASE_DOMAIN=${{ secrets.BASE_DOMAIN }}
-            PUBLIC_SERVER_IPS=${{ secrets.PUBLIC_SERVER_IPS }}
-
-            # Rate limits for the public (unauthenticated) intake routes. Optional —
-            # unset resolves to the defaults in config/rate-limit.config.ts, which
-            # parses an empty value back to the default. These must be real
-            # environment variables, and env_file makes them exactly that: the
-            # @Throttle decorators are evaluated at class-definition time, before
-            # ConfigModule has loaded any dotenv file.
-            RATE_LIMIT_SHORT=${{ secrets.RATE_LIMIT_SHORT }}
-            RATE_LIMIT_LONG=${{ secrets.RATE_LIMIT_LONG }}
-            PUBLIC_FORM_RATE_LIMIT=${{ secrets.PUBLIC_FORM_RATE_LIMIT }}
-            PUBLIC_INTAKE_RATE_LIMIT=${{ secrets.PUBLIC_INTAKE_RATE_LIMIT }}
-            PUBLIC_INTAKE_HOURLY_LIMIT=${{ secrets.PUBLIC_INTAKE_HOURLY_LIMIT }}
-
-            # Async work. Every outbound email and every scheduled job runs as
-            # an Inngest function served from this container at /api/inngest.
-            #
-            # Which process serves the Inngest functions, and on which private
-            # port — see the shell above. Never 0.0.0.0 in either case: that
-            # endpoint is raw Express middleware none of the global guards see,
-            # and its only authentication is the Inngest request signature.
-            #
-            # WORKER_INLINE must be a real environment variable, which env_file
-            # makes it: `main.ts` reads it while the module graph is built,
-            # before ConfigModule has loaded any dotenv file.
-            ${TOPOLOGY_LINES}
-            INNGEST_BASE_URL=${{ secrets.INNGEST_BASE_URL }}
-            INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
-            INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
-            # Must be "0". Left unset the SDK infers dev mode from NODE_ENV and
-            # stops verifying request signatures.
-            INNGEST_DEV=0
-
-            # Outbound email. RESEND_API_KEY unset means the worker silently
-            # falls back to a logging transport — see the preflight note.
-            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
-            MAIL_DEFAULT_FROM=${{ secrets.MAIL_DEFAULT_FROM }}
-            MAIL_REPLY_TO=${{ secrets.MAIL_REPLY_TO }}
-
-            # TLS certificates. The platform issues its own, for the platform
-            # host and for every agency domain, and stores them in MongoDB so
-            # any app node can serve any hostname.
-            #
-            # Off unless the Environment variable is literally "true": issuance
-            # needs us to own port 80 to answer the CA's validation request, so
-            # this is turned on in the same change that puts the Node edge in
-            # front of the app.
-            ACME_ENABLED=${{ vars.ACME_ENABLED || 'false' }}
-            ACME_DIRECTORY_URL=${{ secrets.ACME_DIRECTORY_URL }}
-            ACME_CONTACT_EMAIL=${{ secrets.ACME_CONTACT_EMAIL }}
-            CERT_ENCRYPTION_KEY=${{ secrets.CERT_ENCRYPTION_KEY }}
-
-            # The edge. Only started when the `edge` compose profile is active.
-            #
-            # ⚠ EDGE_PROXY_PROTOCOL must be false until a load balancer sits in
-            # front AND is configured to send the header. A header is a claim
-            # about who the peer is: trusting it from a direct client lets
-            # anyone forge a source address and evade rate limiting. Enabling it
-            # on only one side is the mirror failure — the header is read as the
-            # first bytes of a TLS handshake and every connection breaks.
-            EDGE_PROXY_PROTOCOL=${{ vars.EDGE_PROXY_PROTOCOL || 'false' }}
-            EOF
-
-            # shellcheck disable=SC2086 # COMPOSE_PROFILE is deliberately unquoted: empty must expand to nothing.
+            # shellcheck disable=SC2086 # deliberately unquoted: empty must expand to nothing.
             docker compose -f docker-compose.prod.yml $COMPOSE_PROFILE pull
-            # --remove-orphans is what retires the old topology's containers on
-            # the deploy that flips the flag: without it, a Caddy-era `web`
-            # published on 8080 would linger beside the new edge.
+            # --remove-orphans retires the previous topology's containers on the
+            # deploy that flips a flag.
             docker compose -f docker-compose.prod.yml $COMPOSE_PROFILE up -d --remove-orphans
             docker image prune -f
 
+      # ── Autoscale pool: check through the load balancer ─────────────────────
+      #
+      # From the runner, over the public path: DNS -> balancer -> a pool member
+      # -> the edge. That is the only check that proves the thing users actually
+      # touch, and it is the only one available — there is no droplet to SSH to.
+      - name: Health check (pool)
+        if: steps.flags.outputs.autoscale_enabled == 'true'
+        run: |
+          set -uo pipefail
+          HOST=$(echo "${{ secrets.APP_BASE_URL }}" | sed -E 's#^https?://##; s#/.*$##')
+          echo "Checking https://$HOST through the load balancer."
+
+          # Plain HTTP, and /healthz specifically: it is answered by the edge
+          # itself and is never redirected, so it works before DNS has settled,
+          # before any certificate exists, and on a first deploy. A pool member
+          # that fails this is one the balancer will not send traffic to either.
+          #
+          # Deliberately generous: a converge tick is up to 30s, and a droplet
+          # has to pull images before it can answer at all.
+          for i in $(seq 1 40); do
+            if curl -fsS --max-time 10 "http://$HOST/healthz" >/dev/null; then
+              echo "Edge is reachable through the load balancer."
+              break
+            fi
+            if [ "$i" -eq 40 ]; then
+              echo "::error::No pool member is answering /healthz through the load balancer."
+              echo "Check, in order:"
+              echo " 1. Does the pool have any droplet? (DigitalOcean console -> Droplets, tag sfa-<env>-pool)"
+              echo " 2. Did it converge?  ssh in and: journalctl -u sfa-converge -n 50"
+              echo " 3. Is the balancer health check passing? It probes :8081/healthz,"
+              echo "    which must NOT be behind PROXY protocol — see modules/loadbalancer."
+              echo " 4. Do AUTOSCALE/pool_proxy_protocol and EDGE_PROXY_PROTOCOL agree?"
+              echo "    Either alone breaks every connection through the balancer."
+              exit 1
+            fi
+            echo "Waiting for the pool... ($i)"
+            sleep 15
+          done
+
+          # The app behind the edge. A WARNING rather than a failure, because on
+          # the very first deploy of a new environment no certificate exists yet
+          # — the worker issues it moments later — and TLS genuinely cannot work
+          # until it does. Failing here would make the bootstrap deploy
+          # impossible to ever run successfully.
+          if curl -fsS --max-time 15 "https://$HOST/api/v1/health" >/dev/null; then
+            echo "App is healthy over HTTPS."
+          else
+            echo "::warning::HTTPS is not serving $HOST yet. Expected on a first deploy, while the worker obtains the certificate. Confirm with: docker compose logs worker | grep -i 'platform host'"
+          fi
+
       - name: Health check
+        if: steps.flags.outputs.autoscale_enabled != 'true'
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}

@@ -226,6 +226,90 @@ Once dev is proven, in this order:
 3. Add the ACME secrets and set `NODE_EDGE_ENABLED=true` / `ACME_ENABLED=true` for the production Environment.
 4. Apply terraform, then run the deploy.
 
+### Horizontal autoscaling (dev only)
+
+The app tier can run as an autoscale pool behind a load balancer instead of one
+directly-addressed droplet. Controlled by **two flags that must agree**, both
+defaulting to off:
+
+| Where | Flag |
+|---|---|
+| GitHub Environment *variable* | `AUTOSCALE_ENABLED` |
+| `terraform.tfvars` | `enable_autoscale` (+ `pool_min_instances`, `pool_max_instances`, `pool_target_cpu`) |
+
+`enable_autoscale` **requires** `enable_node_edge`. The pool depends on every
+node being interchangeable, and that is only true once certificates come from
+MongoDB rather than a node's disk — with Caddy each droplet would run its own
+ACME client and race the others for the same tenant hostnames. The deploy's
+preflight fails if the two disagree.
+
+#### Deploys change shape
+
+**Pool members are never deployed to.** A droplet created during a traffic spike
+has nothing to SSH to it, so the deploy *publishes* instead:
+
+```
+CI ──> s3://<env>-deploy-config/current/{docker-compose.prod.yml,app.env}
+                    ↑ every droplet fetches this at boot and every 30s
+```
+
+Each droplet runs `sfa-converge` on a systemd timer. It checksums both files
+together and does nothing unless they changed, so a droplet up for a month and
+one created a second ago reach the same state by the same path. Deploy latency
+is therefore ~30s rather than instant.
+
+> **Do not hand-edit `/opt/sfa/.env` on a pool member.** The next tick overwrites
+> it. Change the Environment secret and re-run the deploy.
+
+Debugging a member:
+
+```bash
+journalctl -u sfa-converge -n 50     # what it fetched and whether it applied
+/usr/local/bin/sfa-converge          # force a check now
+```
+
+#### Two load balancers
+
+- **Public** — TLS **passthrough**, so our own edge still terminates. Terminating
+  at the balancer would mean DigitalOcean holding a certificate per hostname,
+  and for an agency-owned domain that is a manual upload per domain — the
+  operator step white-labelling exists to remove.
+- **Internal** (`REGIONAL_NETWORK`/`INTERNAL`, no public address) — how Inngest
+  reaches the workers. `APP_PRIVATE_IP` becomes this balancer's address
+  (`terraform output worker_endpoint`), which is stable across scaling.
+
+> **The public balancer health-checks port 8081, not 80.** With PROXY protocol
+> on, the balancer's own check carries no PROXY header, so the edge would drop
+> it as malformed — every droplet marked unhealthy, the pool serving nothing,
+> each droplet in fact fine. 8081 is a plain listener the edge never wraps, and
+> the firewall admits it from the balancer alone.
+
+> **`pool_proxy_protocol` and `EDGE_PROXY_PROTOCOL` must match.** Either alone
+> breaks every connection: the header is read as the first bytes of a TLS
+> handshake, or it never arrives and the edge drops the connection. With it off,
+> every caller appears to come from the balancer and the public intake rate
+> limits collapse into one shared bucket.
+
+#### Everything is addressed by tag
+
+The pool's droplets do not exist at plan time and change as it scales, so the
+firewall, **the Managed MongoDB allow-list**, and both balancers all target the
+`sfa-<env>-pool` tag. An id-based rule would admit only the droplets that existed
+at the last apply and silently refuse every one created since — which presents
+as one node serving 500s while its siblings are fine.
+
+#### Extra Environment secrets
+
+| Secret | From |
+|---|---|
+| `DEPLOY_CONFIG_BUCKET` / `_ENDPOINT` / `_REGION` / `_ACCESS_KEY_ID` | `terraform output deploy_config_github_secrets` |
+| `DEPLOY_CONFIG_SECRET_ACCESS_KEY` | `terraform output -raw deploy_config_secret_key` |
+
+That key is **read/write and CI-only**. Droplets hold a separate read-only key
+that terraform bakes into `user_data` and which never passes through GitHub — so
+a compromised droplet cannot rewrite the config every other droplet is about to
+fetch.
+
 ### Repo-level secrets (Terraform in CI — only for plan-on-PR)
 
 These are account-wide, so keep them at repo level (Settings -> Secrets -> Actions):

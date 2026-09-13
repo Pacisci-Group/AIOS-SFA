@@ -78,6 +78,24 @@ async function bootstrap() {
   const httpsPort = Number(config.get<string>('EDGE_HTTPS_PORT') ?? 443);
 
   /**
+   * A plain listener that NEVER speaks PROXY protocol, for the load balancer's
+   * health check.
+   *
+   * ## Why this port has to exist
+   * A DigitalOcean load balancer health-checks a backend by opening its own
+   * connection, and that connection does not carry a PROXY header. With
+   * EDGE_PROXY_PROTOCOL on, the wrapper below would read the health check's
+   * first bytes, find no header, and drop the connection — so every droplet
+   * would be marked unhealthy and the pool would receive no traffic at all,
+   * while each droplet was in fact serving perfectly.
+   *
+   * The alternative is a bare TCP health check, which only proves something
+   * accepted a socket. This keeps a real HTTP check on a port the firewall
+   * admits from the load balancer alone.
+   */
+  const healthPort = Number(config.get<string>('EDGE_HEALTH_PORT') ?? 8081);
+
+  /**
    * ⚠ Only true behind a balancer that actually sends the header.
    *
    * A PROXY header is a claim about who the peer is. Trusting it from an
@@ -242,20 +260,44 @@ async function bootstrap() {
     });
   }
 
+  /**
+   * Health only, and deliberately nothing else — no proxying, no redirect, and
+   * never wrapped in the PROXY protocol listener.
+   *
+   * It answers the same `/healthz` the container health check uses, so "is this
+   * droplet fit to receive traffic" has one definition rather than two that can
+   * disagree. Anything else 404s: this port is reachable from the load balancer
+   * and should not become a second, unauthenticated way into the app.
+   */
+  const healthServer = createHttpServer(
+    (req: IncomingMessage, res: ServerResponse) => {
+      if (req.url === HEALTH_PATH) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('ok');
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+    },
+  );
+
   if (proxyProtocol) {
     listenWithProxyProtocol(httpServer, httpPort);
     listenWithProxyProtocol(httpsServer, httpsPort);
     logger.log(
-      'PROXY protocol is ENABLED: every connection must carry a header.',
+      'PROXY protocol is ENABLED: every connection on :80/:443 must carry a header.',
     );
   } else {
     httpServer.listen(httpPort, '0.0.0.0');
     httpsServer.listen(httpsPort, '0.0.0.0');
   }
 
+  // Never wrapped, in either mode. See the note on `healthPort`.
+  healthServer.listen(healthPort, '0.0.0.0');
+
   logger.log(
-    `Edge listening on :${httpPort} (http) and :${httpsPort} (https), ` +
-      `proxying to ${upstream.origin}`,
+    `Edge listening on :${httpPort} (http), :${httpsPort} (https) and ` +
+      `:${healthPort} (health), proxying to ${upstream.origin}`,
   );
 }
 
