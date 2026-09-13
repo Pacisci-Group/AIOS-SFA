@@ -347,7 +347,7 @@ resource "digitalocean_droplet_autoscale" "app" {
     user_data = templatefile("${path.module}/../../modules/droplet/templates/cloud-init-pool.yaml.tpl", {
       ssh_public_key       = var.ssh_public_key
       config_bucket        = module.deploy_config[0].bucket
-      config_endpoint      = module.deploy_config[0].endpoint
+      config_host          = module.deploy_config[0].bucket_domain_name
       config_region        = module.deploy_config[0].region
       config_access_key_id = module.deploy_config[0].bootstrap_access_key_id
       config_secret_key    = module.deploy_config[0].bootstrap_secret_key
