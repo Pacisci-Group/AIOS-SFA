@@ -437,6 +437,21 @@ jobs:
           echo "Published. Pool members converge within ~30s."
 
       # ── Single droplet: the original path, unchanged in behaviour ───────────
+
+      # `scp-action` runs drone-scp inside its own container, which is not the
+      # user that owns the workspace — so it cannot read the 0600 file the
+      # render step produced, and `tar` fails with "Permission denied" before
+      # anything is copied.
+      #
+      # Loosened here rather than in the render step, so the file is tight by
+      # default and only relaxed on the one path that cannot read it otherwise.
+      # A GitHub-hosted runner is a single-use VM dedicated to this job and the
+      # file exists for seconds; the copy that lands on the droplet is put in
+      # place with `install -m 0600` and the 0644 original deleted immediately.
+      - name: Make the rendered env readable by the copy action
+        if: steps.flags.outputs.autoscale_enabled != 'true'
+        run: chmod 0644 app.env
+
       - name: Copy compose file and env to droplet
         if: steps.flags.outputs.autoscale_enabled != 'true'
         uses: appleboy/scp-action@v0.1.7
