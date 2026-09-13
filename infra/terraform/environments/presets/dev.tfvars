@@ -31,6 +31,12 @@ enable_dns         = false
 create_domain_zone = false
 enable_reserved_ip = true
 
+# Kept in step with environments/dev/terraform.tfvars. These two had already
+# drifted once (the live dev env enables Inngest, the preset did not), which
+# would silently drop async work from any dev rebuilt off this preset.
+enable_inngest   = true
+enable_node_edge = true
+
 # Object storage is required, not optional: the deal-audit and lead-intake flows
 # upload documents through presigned URLs. Applying this needs
 # SPACES_ACCESS_KEY_ID / SPACES_SECRET_ACCESS_KEY exported alongside

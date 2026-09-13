@@ -104,11 +104,25 @@ Required **only in Environments where the variable `INNGEST_ENABLED` is `true`**
 `enable_inngest`, and the preflight, the `deploy-inngest` job and the
 infrastructure all read the same flag so they cannot disagree).
 
+> **The worker is its own container, and that is not optional.** Exactly one
+> process may serve the Inngest functions: with the worker inline, every API
+> process registers under the same Inngest app id and whichever synced last
+> wins. That is invisible while there is one node and breaks async work outright
+> on an autoscaled tier, so the deploy writes `WORKER_INLINE=false` and starts
+> the `worker` service unconditionally.
+>
+> The consequences to keep straight, because three places have to agree:
+> Inngest invokes functions at `<APP_PRIVATE_IP>:4001/api/inngest`, the DO
+> firewall admits **4001** (not 4000) from the Inngest droplet, and the API is
+> published on loopback only. Get one of the three wrong and Inngest reports
+> healthy while syncing zero functions — which the `deploy-inngest` job's
+> `functionCount > 0` assertion is there to catch.
+
 | Secret | Description |
 |--------|-------------|
 | `INNGEST_SSH_HOST` | Inngest droplet public IP (`terraform output -raw inngest_droplet_ip`). SSH only — nothing is served publicly. |
 | `INNGEST_BASE_URL` | `http://<terraform output -raw inngest_droplet_private_ip>:8288` — where the API sends events |
-| `APP_PRIVATE_IP` | App droplet VPC address (`terraform output -raw droplet_private_ip`). Inngest invokes functions at `<this>:4000/api/inngest`. |
+| `APP_PRIVATE_IP` | App droplet VPC address (`terraform output -raw droplet_private_ip`). Inngest invokes functions at `<this>:4001/api/inngest` — the **worker** container's port. The API serves no functions. |
 | `INNGEST_EVENT_KEY` | Authenticates events the API sends. `openssl rand -hex 32` |
 | `INNGEST_SIGNING_KEY` | Signs Inngest's requests to `/api/inngest`. **Must be hex with an even number of characters** — `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Resend API key for outbound email |
@@ -123,7 +137,7 @@ infrastructure all read the same flag so they cannot disagree).
 
 > **`INNGEST_SIGNING_KEY` is the only authentication on `/api/inngest`.** That
 > endpoint is mounted as raw Express middleware, so none of the seven global
-> guards see it. The droplet firewall (port 4000, Inngest droplet only) is the
+> guards see it. The droplet firewall (port 4001, Inngest droplet only) is the
 > second layer.
 
 > ⚠ **Never expose port 8288.** It serves Inngest's Event API, its REST/GraphQL
@@ -139,6 +153,78 @@ infrastructure all read the same flag so they cannot disagree).
 > volume; the documented upgrade is `INNGEST_POSTGRES_URI` + `INNGEST_REDIS_URI`,
 > which is two environment variables rather than a rewrite. **Back the volume
 > up** — losing it loses scheduled-function state and run history.
+
+### TLS certificates (application-managed ACME)
+
+Required **only in Environments where the variable `ACME_ENABLED` is `true`**
+(a GitHub Environment *variable*, same shape as `INNGEST_ENABLED`).
+
+The platform issues its own certificates — for the platform host, agency
+subdomains and agency-owned custom domains — and stores them in the
+`certificates` collection. That is what lets every app node serve every
+hostname, and therefore what lets the app tier scale horizontally.
+
+| Secret | Description |
+|--------|-------------|
+| `ACME_DIRECTORY_URL` | `production`, `staging`, or a full directory URL. **Required when enabled**, because the default is staging and staging certificates are not trusted by browsers. |
+| `CERT_ENCRYPTION_KEY` | Encrypts private keys at rest. `openssl rand -base64 32`, **different per environment**. |
+| `ACME_CONTACT_EMAIL` | Optional. Registered with the CA for expiry notices. |
+
+> **`ACME_ENABLED` must stay `false` until the Node edge owns port 80.** The CA
+> validates by fetching a plain-HTTP URL on the hostname being issued, so
+> whatever listens on port 80 has to answer it. While Caddy is the edge it
+> answers its own challenges and knows nothing of ours, so every order fails
+> validation — and failed validations spend a Let's Encrypt limit that is
+> separate from the issuance limit and blocks orders that would have succeeded.
+
+> **Losing `CERT_ENCRYPTION_KEY` is not immediately visible.** Nodes that
+> already hold a decrypted certificate keep serving with it. The failure appears
+> when a node restarts or a new one joins the pool — it can decrypt nothing, and
+> serves no TLS at all. Recovery is to set a new key and re-issue every
+> certificate, so treat this as a secret to back up rather than one to regenerate.
+
+### The edge: Caddy or our own
+
+Which edge an environment runs is decided by **two flags that must agree**:
+
+| Where | Flag | Effect |
+|---|---|---|
+| GitHub Environment *variable* | `NODE_EDGE_ENABLED` | Starts the `edge` + `worker` containers, sets `WORKER_INLINE=false`, points Inngest at 4001 |
+| `terraform.tfvars` | `enable_node_edge` | Opens firewall 4001 instead of 4000, and selects the cloud-init **without** Caddy |
+
+Both default to false, which is Caddy plus an inline worker — today's
+production. **Dev is the only environment with them on.**
+
+> **They are two flags because they are applied by two different things.** The
+> deploy runs from a git branch; terraform runs from someone's laptop. There is
+> no single place that could set both, so the failure mode is that one moves
+> without the other:
+>
+> - terraform on, deploy off → no Caddy, no edge container. Nothing serves
+>   port 443 at all.
+> - deploy on, terraform off → the edge runs, but the firewall admits 4000
+>   while the worker listens on 4001. Inngest reports healthy, syncs zero
+>   functions, and not one email is sent. The `deploy-inngest` job's
+>   `functionCount > 0` assertion is what catches this.
+>
+> This is the same shape as `INNGEST_ENABLED`/`enable_inngest`, and for the same
+> reason.
+
+> **Flipping `enable_node_edge` REPLACES the app droplet.** `user_data` cannot
+> be changed in place. The reserved IP re-attaches so the public address
+> survives, but the box is rebuilt — expect to re-run the seed. That is why the
+> two cloud-init templates are separate files chosen by the flag rather than one
+> template with a conditional: editing the file production uses would replace
+> production.
+
+#### Making production match dev, later
+
+Once dev is proven, in this order:
+
+1. Add `enable_node_edge = true` to `infra/terraform/environments/production/terraform.tfvars`, and `enable_node_edge = var.enable_node_edge` to its `main.tf` (plus the variable declaration).
+2. `make plan ENV=production` — confirm it replaces the droplet and moves the firewall to 4001, and nothing else.
+3. Add the ACME secrets and set `NODE_EDGE_ENABLED=true` / `ACME_ENABLED=true` for the production Environment.
+4. Apply terraform, then run the deploy.
 
 ### Repo-level secrets (Terraform in CI — only for plan-on-PR)
 

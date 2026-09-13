@@ -129,3 +129,9 @@ variable "mongo_allowed_ip_addresses" {
   type        = list(string)
   default     = []
 }
+
+variable "enable_node_edge" {
+  description = "Run the new scalable topology (Node TLS edge, split worker on 4001). Replaces the app droplet when flipped — see stacks/sfa/variables.tf."
+  type        = bool
+  default     = false
+}

@@ -84,6 +84,7 @@ jobs:
       # Republished for deploy-inngest, which cannot read it itself. See the
       # comment on that job.
       inngest_enabled: ${{ steps.flags.outputs.inngest_enabled }}
+      node_edge_enabled: ${{ steps.flags.outputs.node_edge_enabled }}
     steps:
       - uses: actions/checkout@v4
 
@@ -113,6 +114,22 @@ jobs:
           # hand-edited on the droplet, because the .env below is rewritten in
           # full on every deploy - a hand edit does not survive the very deploy
           # it was meant to control.
+          # The new topology: our own Node TLS edge instead of Caddy, the
+          # worker as its own container on 4001, certificates in MongoDB.
+          #
+          # ⚠ Must agree with terraform's `enable_node_edge` for the same
+          # environment. Terraform opens the firewall port and chooses the
+          # droplet's cloud-init; this chooses what runs on it. Half of each is
+          # an environment that passes every health check and runs no async
+          # work, or one with no edge at all.
+          node_edge="${{ vars.NODE_EDGE_ENABLED || 'false' }}"
+          echo "node_edge_enabled=${node_edge}" >> "$GITHUB_OUTPUT"
+          if [ "$node_edge" = "true" ]; then
+            echo "Node edge ENABLED for '${{ inputs.environment }}' - Caddy is not in use here."
+          else
+            echo "Node edge disabled for '${{ inputs.environment }}' - Caddy remains the edge, worker runs inline."
+          fi
+
           migrate_on_boot="${{ vars.DB_MIGRATE_ON_BOOT || 'true' }}"
           if [ "$migrate_on_boot" = "false" ]; then
             # Loud, and deliberately a warning rather than a note: left set, every
@@ -170,6 +187,13 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           MAIL_DEFAULT_FROM: ${{ secrets.MAIL_DEFAULT_FROM }}
           INNGEST_ENABLED: ${{ vars.INNGEST_ENABLED }}
+          # TLS. Required only where the platform issues its own certificates.
+          # CERT_ENCRYPTION_KEY unset means every issuance throws and every
+          # renewal silently stops — the certificates already cached on a node
+          # keep serving, so nothing looks wrong until a node restarts.
+          ACME_ENABLED: ${{ vars.ACME_ENABLED }}
+          ACME_DIRECTORY_URL: ${{ secrets.ACME_DIRECTORY_URL }}
+          CERT_ENCRYPTION_KEY: ${{ secrets.CERT_ENCRYPTION_KEY }}
         run: |
           set -uo pipefail
 
@@ -188,6 +212,18 @@ jobs:
             required="${required}
                       INNGEST_BASE_URL INNGEST_EVENT_KEY INNGEST_SIGNING_KEY
                       APP_PRIVATE_IP RESEND_API_KEY MAIL_DEFAULT_FROM"
+          fi
+
+          # Same shape, same reason: required only where the feature is switched
+          # on, so an environment that does not issue certificates keeps
+          # deploying unchanged.
+          #
+          # ACME_DIRECTORY_URL is named explicitly rather than left to its
+          # default, because the default is the STAGING CA and its certificates
+          # are not trusted by browsers. A deployed environment must say which
+          # CA it means.
+          if [ "${ACME_ENABLED}" = "true" ]; then
+            required="${required} ACME_DIRECTORY_URL CERT_ENCRYPTION_KEY"
           fi
 
           missing=""
@@ -226,6 +262,26 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/sfa
+
+            NODE_EDGE="${{ steps.flags.outputs.node_edge_enabled }}"
+
+            # Which process serves the Inngest functions, and therefore which
+            # port the firewall must admit. Exactly one process may serve them.
+            #
+            #   new topology: the worker, its own container on 4001
+            #   old topology: the API, in-process on 4000
+            #
+            # Written as whole lines rather than as a flag the app interprets,
+            # so /opt/sfa/.env reads as a description of what is actually
+            # running on the box.
+            if [ "$NODE_EDGE" = "true" ]; then
+              TOPOLOGY_LINES="WORKER_INLINE=false
+            WORKER_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4001"
+              COMPOSE_PROFILE="--profile edge"
+            else
+              TOPOLOGY_LINES="API_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4000"
+              COMPOSE_PROFILE=""
+            fi
 
             # Registry login (GHCR PAT with read:packages)
             echo "${{ secrets.GHCR_PULL_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_PULL_USER }}" --password-stdin
@@ -294,11 +350,15 @@ jobs:
             # Async work. Every outbound email and every scheduled job runs as
             # an Inngest function served from this container at /api/inngest.
             #
-            # Binds the api container to the droplet's PRIVATE IP so the Inngest
-            # droplet can invoke functions over the VPC. Never 0.0.0.0: that
-            # endpoint is raw Express middleware none of the eight global guards
-            # see, and its only authentication is the Inngest request signature.
-            API_INNGEST_BIND=${{ secrets.APP_PRIVATE_IP }}:4000
+            # Which process serves the Inngest functions, and on which private
+            # port — see the shell above. Never 0.0.0.0 in either case: that
+            # endpoint is raw Express middleware none of the global guards see,
+            # and its only authentication is the Inngest request signature.
+            #
+            # WORKER_INLINE must be a real environment variable, which env_file
+            # makes it: `main.ts` reads it while the module graph is built,
+            # before ConfigModule has loaded any dotenv file.
+            ${TOPOLOGY_LINES}
             INNGEST_BASE_URL=${{ secrets.INNGEST_BASE_URL }}
             INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
             INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
@@ -311,10 +371,37 @@ jobs:
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
             MAIL_DEFAULT_FROM=${{ secrets.MAIL_DEFAULT_FROM }}
             MAIL_REPLY_TO=${{ secrets.MAIL_REPLY_TO }}
+
+            # TLS certificates. The platform issues its own, for the platform
+            # host and for every agency domain, and stores them in MongoDB so
+            # any app node can serve any hostname.
+            #
+            # Off unless the Environment variable is literally "true": issuance
+            # needs us to own port 80 to answer the CA's validation request, so
+            # this is turned on in the same change that puts the Node edge in
+            # front of the app.
+            ACME_ENABLED=${{ vars.ACME_ENABLED || 'false' }}
+            ACME_DIRECTORY_URL=${{ secrets.ACME_DIRECTORY_URL }}
+            ACME_CONTACT_EMAIL=${{ secrets.ACME_CONTACT_EMAIL }}
+            CERT_ENCRYPTION_KEY=${{ secrets.CERT_ENCRYPTION_KEY }}
+
+            # The edge. Only started when the `edge` compose profile is active.
+            #
+            # ⚠ EDGE_PROXY_PROTOCOL must be false until a load balancer sits in
+            # front AND is configured to send the header. A header is a claim
+            # about who the peer is: trusting it from a direct client lets
+            # anyone forge a source address and evade rate limiting. Enabling it
+            # on only one side is the mirror failure — the header is read as the
+            # first bytes of a TLS handshake and every connection breaks.
+            EDGE_PROXY_PROTOCOL=${{ vars.EDGE_PROXY_PROTOCOL || 'false' }}
             EOF
 
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            # shellcheck disable=SC2086 # COMPOSE_PROFILE is deliberately unquoted: empty must expand to nothing.
+            docker compose -f docker-compose.prod.yml $COMPOSE_PROFILE pull
+            # --remove-orphans is what retires the old topology's containers on
+            # the deploy that flips the flag: without it, a Caddy-era `web`
+            # published on 8080 would linger beside the new edge.
+            docker compose -f docker-compose.prod.yml $COMPOSE_PROFILE up -d --remove-orphans
             docker image prune -f
 
       - name: Health check
@@ -328,13 +415,70 @@ jobs:
             for i in $(seq 1 20); do
               if curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null; then
                 echo "Health check passed."
-                exit 0
+                break
+              fi
+              if [ "$i" -eq 20 ]; then
+                echo "Health check failed."
+                docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100
+                exit 1
               fi
               echo "Waiting for app... ($i)"
               sleep 5
             done
-            echo "Health check failed."
-            docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100
+
+            NODE_EDGE="${{ steps.flags.outputs.node_edge_enabled }}"
+            if [ "$NODE_EDGE" != "true" ]; then
+              echo "Old topology: the API serves the Inngest functions in-process, and Caddy is the edge. Nothing further to check."
+              exit 0
+            fi
+
+            # The worker is a separate container on this topology, and the API's
+            # health says nothing about it. Ask its serve endpoint, which answers
+            # a GET with its function count — that proves the registry resolved
+            # and the Inngest client is configured, not merely that a process is
+            # up.
+            #
+            # Worth its own check because the failure is silent: with the worker
+            # down, the site is perfectly healthy and not one email is sent.
+            #
+            # Addressed on the PRIVATE IP, not loopback: that is where the
+            # container publishes, and it is the address Inngest itself will
+            # use — so this check also proves the binding is right rather than
+            # just that a process exists. Checking loopback would fail against a
+            # perfectly healthy worker, which is the mirror image of the bug
+            # that made the API publish on loopback in the first place.
+            for i in $(seq 1 20); do
+              if curl -fsS http://${{ secrets.APP_PRIVATE_IP }}:4001/api/inngest >/dev/null; then
+                echo "Worker serve endpoint is up."
+                break
+              fi
+              if [ "$i" -eq 20 ]; then
+                echo "::error::The worker container is not serving /api/inngest. No async work will run."
+                docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100 worker
+                exit 1
+              fi
+              echo "Waiting for worker... ($i)"
+              sleep 5
+            done
+
+            # The edge is the only thing bound to a public port, so if it is not
+            # up the site is down however healthy everything behind it looks.
+            #
+            # /healthz is answered by the edge itself rather than proxied: a
+            # check that went through to the app would report the web
+            # container's health and say nothing about the process terminating
+            # TLS. It is also plain HTTP on purpose — it has to work before DNS,
+            # before any certificate, and on the bare IP.
+            for i in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:80/healthz >/dev/null; then
+                echo "Edge is up."
+                exit 0
+              fi
+              echo "Waiting for edge... ($i)"
+              sleep 5
+            done
+            echo "::error::The TLS edge is not answering on port 80. The site is not being served."
+            docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100 edge
             exit 1
 
   # Self-hosted Inngest, on its own droplet. Nothing of ours is built for it —
@@ -465,11 +609,23 @@ jobs:
             # hand-edited on the droplet is lost. Every variable Inngest needs
             # has to be listed here and backed by an Environment secret.
             umask 077
+            # Which port on the app droplet serves the functions. Derived from
+            # the same flag as the firewall rule and the compose profile, so the
+            # three cannot disagree:
+            #   new topology -> 4001, the worker's own container
+            #   old topology -> 4000, the API in-process
+            if [ "${{ needs.deploy.outputs.node_edge_enabled }}" = "true" ]; then
+              APP_INNGEST_PORT=4001
+            else
+              APP_INNGEST_PORT=4000
+            fi
+
             cat > /opt/sfa-inngest/.env <<EOF
             INNGEST_EVENT_KEY=${{ secrets.INNGEST_EVENT_KEY }}
             INNGEST_SIGNING_KEY=${{ secrets.INNGEST_SIGNING_KEY }}
             # Where our functions are served: the app droplet's PRIVATE address.
             APP_PRIVATE_IP=${{ secrets.APP_PRIVATE_IP }}
+            APP_INNGEST_PORT=${APP_INNGEST_PORT}
             EOF
 
             docker compose -f docker-compose.inngest.yml pull
@@ -507,8 +663,14 @@ jobs:
               echo "Waiting for function sync... ($i)"
               sleep 5
             done
-            echo "::error::Inngest is running but synced no functions from ${{ secrets.APP_PRIVATE_IP }}:4000/api/inngest."
-            echo "Check: the app droplet firewall admits port 4000 from this droplet;"
-            echo "INNGEST_SIGNING_KEY matches on both sides; the API has WORKER_INLINE unset or true."
+            echo "::error::Inngest is running but synced no functions from the app droplet."
+            echo "Check, in order:"
+            echo " 1. The app droplet's firewall admits the port serving /api/inngest."
+            echo "    That is terraform's enable_node_edge: true opens 4001, false opens 4000."
+            echo "    It must match NODE_EDGE_ENABLED for this Environment - a mismatch"
+            echo "    opens a port with nothing behind it and refuses every invocation."
+            echo " 2. INNGEST_SIGNING_KEY matches on both sides."
+            echo " 3. The process that should serve them is running: the worker container"
+            echo "    on the new topology, or the API with WORKER_INLINE unset on the old."
             docker compose -f /opt/sfa-inngest/docker-compose.inngest.yml logs --tail=100
             exit 1

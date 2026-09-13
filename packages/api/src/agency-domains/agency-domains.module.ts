@@ -10,6 +10,7 @@ import {
 } from './agency-domains.controller';
 import { AgencyDomainsService } from './agency-domains.service';
 import { DnsVerifier } from './dns-verifier';
+import { TlsModule } from '../tls/tls.module';
 
 /**
  * `HostTenantResolver` and `TenantUrlService` are not imported here — they come
@@ -22,6 +23,9 @@ import { DnsVerifier } from './dns-verifier';
     MongooseModule.forFeature([
       { name: AgencyDomain.name, schema: AgencyDomainSchema },
     ]),
+    // For `CertificateRegistrationService`: verifying a domain is what makes it
+    // eligible to serve, so it is also what puts it in line for a certificate.
+    TlsModule,
   ],
   controllers: [AgencyDomainsController, PublicDomainsController],
   providers: [AgencyDomainsService, DnsVerifier],
