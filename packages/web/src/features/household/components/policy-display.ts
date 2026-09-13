@@ -9,7 +9,11 @@ import {
 } from "lucide-react";
 import type { PolicySummary } from "@sfa/shared";
 import { normalizePolicyStatus } from "@sfa/shared";
-import { premiumTermSuffix } from "@sfa/shared";
+import {
+  policyTermMonths,
+  premiumTermSuffix,
+  termExpirationDate,
+} from "@sfa/shared";
 
 /**
  * The shape the policy cards render. Kept separate from the API's
@@ -26,7 +30,45 @@ export interface DisplayPolicy {
   premiumValue: number;
   status: "Active" | "Pending" | "Lapsed";
   effective: string;
+  /**
+   * The last day the current term covers — **derived**, one day before the
+   * renewal (PAC-126).
+   *
+   * The stored `expirationDate` is blank on most migrated policies, which is
+   * literally the em dash David was looking at, and where it *is* set it
+   * describes whichever term was current when the import ran rather than the
+   * one the household is in now. Counting back from the maintained renewal
+   * anchor answers the question the card is actually asking: when does this
+   * coverage run out if nobody renews it.
+   *
+   * Falls back to the stored value only when there is no anchor to count from,
+   * and to `"—"` when there is neither.
+   */
   expiration: string;
+  /**
+   * When the current term runs out — the date the card leads with (PAC-126).
+   *
+   * `renewalDate` first, `expirationDate` only as a fallback. The anchor is
+   * derived from the effective date and maintained on every write and by the
+   * renewal scan's roll-forward, so it is the one that is actually populated and
+   * actually in the future; the stored expiration is blank on most migrated
+   * policies, which is the whole complaint this ticket came from. `"—"` when
+   * neither exists, which is genuinely unknown rather than merely underived.
+   */
+  renewal: string;
+  /**
+   * How long one term runs — "6 months" for the auto family, "12 months"
+   * otherwise.
+   *
+   * On the card because without it the dates read as a contradiction. An auto
+   * policy effective 2025-09-15 shows a renewal of 2026-09-15: correct, because
+   * the 2026-03-15 renewal has already gone by and this is the *next* one — but
+   * a 12-month gap beside a 6-month policy looks like the term is simply wrong,
+   * and that is exactly how it was read in review. The effective date is
+   * inception, not the start of the current term, and nothing on the card said
+   * so.
+   */
+  term: string;
   icon: LucideIcon;
   /** Foreground class for {@link DisplayPolicy.icon}. */
   iconTone: string;
@@ -130,7 +172,17 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
     premiumValue: policy.premium,
     status: toCardStatus(policy),
     effective: formatDate(policy.effectiveDate),
-    expiration: formatDate(policy.expirationDate),
+    // Derived from the anchor, so it tracks the term the household is in now;
+    // the stored date is the fallback for a policy with no anchor at all.
+    expiration: formatDate(
+      termExpirationDate(policy.renewalDate)?.toISOString() ??
+        policy.expirationDate,
+    ),
+    renewal: formatDate(policy.renewalDate ?? policy.expirationDate),
+    // `policyTermMonths` is the same authority the renewal derivation and the
+    // `/6 mo` premium suffix both use, so the card cannot describe a term the
+    // scheduler does not keep.
+    term: `${policyTermMonths(policy.policyType)} months`,
     carrier: policy.carrier ?? "—",
     deductible: undefined,
     ...style,

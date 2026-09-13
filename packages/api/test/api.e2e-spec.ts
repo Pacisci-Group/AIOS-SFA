@@ -15,6 +15,7 @@ import {
 } from '@sfa/shared';
 import type {
   HouseholdListResponse,
+  PolicySummary,
   UnlinkedCounts,
   UnlinkedRecordsResponse,
 } from '@sfa/shared';
@@ -3076,6 +3077,252 @@ describe('SFA API (e2e)', () => {
         const body = await page('contacts', '&page=9999');
         expect(body.items).toEqual([]);
       });
+    });
+  });
+
+  /*
+   * PAC-126 — the household page's policy edit.
+   *
+   * The point of the block is that this is **not** `PATCH /policies/:id` with a
+   * wider gate. That endpoint answers 403 to a CSR and 404 for a deal-less
+   * policy, which between them is exactly the people and exactly the records
+   * this route exists for; both are asserted here so a future "simplification"
+   * that merges the two fails loudly.
+   */
+  describe('Household policy edit (PAC-126)', () => {
+    let policyModel: Model<Policy>;
+    const cleanup: Array<() => Promise<unknown>> = [];
+
+    /** A fresh policy per test, so no test depends on another's mutation. */
+    const makePolicy = async (
+      overrides: Record<string, unknown> = {},
+    ): Promise<string> => {
+      const created = await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: `PAC126-${Math.random().toString(36).slice(2, 10)}`,
+        policyType: 'Auto',
+        carrier: 'Test Carrier',
+        active: true,
+        policyStatus: 'Active',
+        premium: 500,
+        items: 1,
+        ...overrides,
+      });
+      cleanup.push(() => policyModel.deleteOne({ _id: created._id }));
+      return created._id.toString();
+    };
+
+    const patch = (token: string, householdId: string, policyId: string) =>
+      request(app.getHttpServer())
+        .patch(`/api/v1/households/${householdId}/policies/${policyId}`)
+        .set(authHeader(token));
+
+    /** A successful edit, typed — `res.body` is `any` and the lint rules say so. */
+    const patchOk = async (
+      policyId: string,
+      body: Record<string, unknown>,
+      token = ownerToken,
+      householdId = seed.householdId,
+    ): Promise<PolicySummary> => {
+      const res = await patch(token, householdId, policyId)
+        .send(body)
+        .expect(200);
+      return res.body as PolicySummary;
+    };
+
+    beforeAll(() => {
+      policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+    });
+
+    afterAll(async () => {
+      for (const undo of cleanup.reverse()) await undo();
+    });
+
+    describe('permissions', () => {
+      /*
+       * The headline. A CSR holds `crm_service:*` and no `clients` or
+       * `deal_audits` permission at all, so this route's OR-gate is the only
+       * thing that lets the service team correct a policy.
+       */
+      it('lets a CSR correct a policy from the household page', async () => {
+        const policyId = await makePolicy();
+        const saved = await patchOk(policyId, { premium: 650 }, csrToken);
+        expect(saved.premium).toBe(650);
+      });
+
+      it('still refuses that CSR the Sold card endpoint', async () => {
+        const policyId = await makePolicy();
+        await request(app.getHttpServer())
+          .patch(`/api/v1/policies/${policyId}`)
+          .set(authHeader(csrToken))
+          .send({ premium: 650 })
+          .expect(403);
+      });
+
+      it('401s unauthenticated', async () => {
+        const policyId = await makePolicy();
+        await request(app.getHttpServer())
+          .patch(`/api/v1/households/${seed.householdId}/policies/${policyId}`)
+          .send({ premium: 650 })
+          .expect(401);
+      });
+    });
+
+    describe('the household in the path is the authorisation', () => {
+      it("404s for a policy that is not this household's", async () => {
+        const policyId = await makePolicy();
+        await patch(ownerToken, seed.secondHouseholdId, policyId)
+          .send({ premium: 650 })
+          .expect(404);
+      });
+
+      it('404s for a policy with no household at all', async () => {
+        const policyId = await makePolicy({ householdId: null });
+        await patch(ownerToken, seed.householdId, policyId)
+          .send({ premium: 650 })
+          .expect(404);
+      });
+
+      /*
+       * Out of scope is indistinguishable from does not exist — the blanket
+       * clamp every write path here uses, so record existence does not leak
+       * across tenants.
+       */
+      it("404s for another agency's policy rather than 403ing", async () => {
+        // Its branch comes off the household rather than being invented: the
+        // seed exposes the other agency's id but not its branch, and a policy
+        // must carry the branch of the household it belongs to.
+        const foreignHousehold = await app
+          .get<Model<Household>>(getModelToken(Household.name))
+          .findById(seed.otherAgencyHouseholdId)
+          .lean();
+
+        const foreign = await policyModel.create({
+          agencyId: seed.otherAgencyId,
+          branchId: foreignHousehold!.branchId,
+          householdId: new Types.ObjectId(seed.otherAgencyHouseholdId),
+          policyNumber: 'PAC126-FOREIGN',
+          policyType: 'Auto',
+          active: true,
+          premium: 500,
+          items: 1,
+        });
+        cleanup.push(() => policyModel.deleteOne({ _id: foreign._id }));
+
+        await patch(
+          ownerToken,
+          seed.otherAgencyHouseholdId,
+          foreign._id.toString(),
+        )
+          .send({ premium: 650 })
+          .expect(404);
+      });
+    });
+
+    describe('the renewal anchor', () => {
+      /*
+       * The whole mechanism of the ticket: the operator types the date on the
+       * declaration page, and the date nobody can compute by hand appears on
+       * the card.
+       */
+      it('is derived when the effective date is set', async () => {
+        const policyId = await makePolicy();
+        const before = await policyModel.findById(policyId).lean();
+        expect(before?.renewalDate ?? null).toBeNull();
+
+        const saved = await patchOk(policyId, { effectiveDate: '2026-03-01' });
+
+        expect(saved.renewalDate).not.toBeNull();
+        // Strictly ahead of today: an anchor in the past is the defect the
+        // 2026-09-08 backfill existed to repair.
+        expect(new Date(saved.renewalDate!).getTime()).toBeGreaterThan(
+          Date.now(),
+        );
+      });
+
+      it('is cleared when the effective date is cleared', async () => {
+        const policyId = await makePolicy({
+          effectiveDate: new Date('2026-03-01T00:00:00.000Z'),
+          renewalDate: new Date('2027-03-01T00:00:00.000Z'),
+        });
+        const saved = await patchOk(policyId, { effectiveDate: null });
+        expect(saved.renewalDate).toBeNull();
+      });
+
+      /*
+       * `PolicySchema`: "never accept it from a client — an anchor that
+       * disagrees with the effective date schedules real calls to real clients
+       * on the wrong day." The DTO has no such key, so zod strips it.
+       */
+      it('cannot be set directly by a client', async () => {
+        const policyId = await makePolicy();
+        await patch(ownerToken, seed.householdId, policyId)
+          .send({ renewalDate: '2030-01-01', premium: 650 })
+          .expect(200);
+        const stored = await policyModel.findById(policyId).lean();
+        expect(stored?.renewalDate ?? null).toBeNull();
+      });
+    });
+
+    describe('status vocabulary', () => {
+      it('accepts a canonical label', async () => {
+        const policyId = await makePolicy();
+        const saved = await patchOk(policyId, { status: 'Cancel Rewrite' });
+        expect(saved.policyStatus).toBe('Cancel Rewrite');
+      });
+
+      it('heals a raw SmartSuite code into its label', async () => {
+        const policyId = await makePolicy();
+        const saved = await patchOk(policyId, { status: 'QsrnM' });
+        expect(saved.policyStatus).toBe('Active');
+      });
+
+      /*
+       * The uncatalogued migrated codes must not be written *back*. This is why
+       * the edit dialog omits `status` unless the operator picked a new one.
+       */
+      it('400s on an uncatalogued code', async () => {
+        const policyId = await makePolicy();
+        await patch(ownerToken, seed.householdId, policyId)
+          .send({ status: '1943j' })
+          .expect(400);
+      });
+
+      it('400s on an empty patch', async () => {
+        const policyId = await makePolicy();
+        await patch(ownerToken, seed.householdId, policyId)
+          .send({})
+          .expect(400);
+      });
+    });
+
+    it('returns the PolicySummary the household card renders', async () => {
+      const policyId = await makePolicy();
+      const saved = await patchOk(policyId, { premium: 650 });
+
+      // `renewalDate` is the field `UpdatePolicyResult` has no room for, and
+      // the reason this route returns a different shape.
+      for (const key of [
+        'id',
+        'policyNumber',
+        'policyType',
+        'carrier',
+        'active',
+        'policyStatus',
+        'premium',
+        'items',
+        'effectiveDate',
+        'expirationDate',
+        'renewalDate',
+      ]) {
+        expect(saved).toHaveProperty(key);
+      }
+      const raw = saved as unknown as Record<string, unknown>;
+      for (const key of ['agencyId', 'branchId', 'isTestRecord']) {
+        expect(raw[key]).toBeUndefined();
+      }
     });
   });
 

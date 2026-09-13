@@ -110,11 +110,55 @@ docs {
   | items          | integer         | 0 – 100 — normalized; see below                    |
   | effectiveDate  | string \| null  | `YYYY-MM-DD` — a calendar date, not an instant     |
   | expirationDate | string \| null  | `YYYY-MM-DD`                                      |
-  | status         | string \| null  | free text; there is no canonical status vocabulary |
+  | status         | string \| null  | a canonical `POLICY_STATUSES` label; see below     |
 
   `null` **clears** an optional field; omitting it leaves the stored value
   alone. The two are different requests — a producer blanking a mistyped carrier
   is not one who only touched the premium.
+
+  ## `status` is a vocabulary, not free text (PAC-126)
+  Was free text on the argument that no canonical list existed. PAC-80 built one
+  and that note outlived it; David then asked for staff to **select** a status,
+  and a select whose endpoint accepts anything is how a book grows a sixth
+  spelling of "Cancelled".
+
+  The value is **normalized before it is validated**, so both forms a real client
+  sends are accepted and stored canonically: a label in any casing (`"active"` →
+  `"Active"`) and a raw SmartSuite code (`"QsrnM"` → `"Active"`).
+
+  `POLICY_STATUSES` is `Quoted · Active · Cancelled · Pending · Lapsed ·
+  Cancel Rewrite · Company Transfer`.
+
+  ### The status now moves `active` with it
+  This endpoint used to set the label and leave the flag alone, so a policy could
+  read "Cancelled" while still counting towards its household's active total and
+  being scheduled for renewal calls. Now:
+
+  | Status sent | `active` becomes |
+  |---|---|
+  | `Cancelled`, `Lapsed`, `Cancel Rewrite`, `Company Transfer` | `false` |
+  | `Active` | `true` (a real correction — reinstating a policy cancelled by mistake) |
+  | `Quoted`, `Pending`, any uncatalogued code | **unchanged** — neither is terminal, and a code nobody catalogued must not be guessed either way |
+
+  ### Two statuses are refused here — `400`
+  `Cancel Rewrite` and `Company Transfer` are **set by a flow, not by an edit**.
+  Each means "replaced by *that* policy", and the flow that sets it writes the
+  replacement in the same transaction:
+
+  * `Cancel Rewrite` → `POST /policies/:id/rewrite`
+  * `Company Transfer` → `POST /crm/service-tickets/:id/policy-transfer`
+
+  Accepting either here would produce a cancelled policy pointing at nothing and,
+  for a rewrite, no chargeback. They are filtered out of `POLICY_STATUS_OPTIONS`
+  for the same reason, so the select never offers an option that always 400s.
+  Plain `Cancelled` stays selectable — a client who simply cancels is the common
+  case and must not be pushed through the rewrite wizard to record it.
+
+  ⚠ The uncatalogued codes `1943j` / `4krtk`, which thousands of migrated
+  policies still hold, are **rejected with a 400**. That is the point — they must
+  not be written back — but it means a client must not round-trip a stored status
+  it did not change. The edit dialog sends `status` only when the operator picked
+  a new one, so an untouched migrated policy stays editable on its other fields.
 
   ## `items` is normalized against the policy type
   Only a vehicle policy has a countable item: `Auto`, `Auto - Special`,

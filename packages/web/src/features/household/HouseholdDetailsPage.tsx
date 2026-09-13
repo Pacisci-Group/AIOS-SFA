@@ -211,7 +211,13 @@ export default function HouseholdDetailsPage() {
 
             {/* Middle — Policy portfolio (50%) */}
             <div className="flex min-h-0 shrink-0 flex-col border-b border-border xl:flex-1 xl:shrink xl:overflow-hidden xl:border-b-0 xl:border-r">
-              <PolicyPortfolio policies={household.policies} isDemo={isDemo} />
+              <PolicyPortfolio
+                policies={household.policies}
+                // No record to write against on the demo household, so the
+                // cards stay read-only there (PAC-126).
+                householdId={isDemo ? null : household.id}
+                isDemo={isDemo}
+              />
             </div>
 
             {/* Right — Onboarding + activity feed (25%) */}

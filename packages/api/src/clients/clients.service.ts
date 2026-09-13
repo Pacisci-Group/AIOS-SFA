@@ -18,11 +18,8 @@ import {
   formatHouseholdRef,
   householdStatusQueryValues,
   nextRenewalDate,
-  normalizeCarrier,
   normalizeContactRole,
   normalizeHouseholdStatus,
-  normalizePolicyStatus,
-  normalizePolicyType,
   parseHouseholdRef,
   policyNumberKey,
 } from '@sfa/shared';
@@ -50,6 +47,9 @@ import {
   parseDateOfBirth,
   toDateKey,
 } from '../leads/intake/intake.normalize';
+import { UpdatePolicyDto } from '../policies/dto/update-policy.dto';
+import { PoliciesService } from '../policies/policies.service';
+import { toPolicySummary } from '../policies/policy-view';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import {
   clientAgencyId,
@@ -135,6 +135,9 @@ export class ClientsService {
     private readonly identity: ContactIdentityService,
     private readonly memberships: HouseholdMembersService,
     private readonly primaryContacts: PrimaryContactService,
+    // The Sold card's policy mutation, reused verbatim (PAC-126) — see
+    // `updateHouseholdPolicy`.
+    private readonly policies: PoliciesService,
   ) {}
 
   /**
@@ -1141,6 +1144,78 @@ export class ClientsService {
       household: summary,
     };
   }
+
+  /**
+   * Correct a policy **from the household page** —
+   * `PATCH /households/:id/policies/:policyId` (PAC-126).
+   *
+   * David, on production: *"we need to have an update of expiration date because
+   * I see it doesn't have expiration date here."* Most migrated policies came
+   * across with no effective date at all (11 of 2,500 had one before the
+   * 2026-09-08 renewal backfill), so the service team has to be able to type one
+   * in against the declaration page.
+   *
+   * ## Why this exists beside `PATCH /policies/:id` rather than replacing it
+   *
+   * That endpoint is the Lead Detail **Sold card's** quick edit. It gates on
+   * `deal_audits:write` and clamps `own` scope to *the producer who sold it*,
+   * which is right for a producer correcting their own sale — and wrong for
+   * every policy this one is about. Two consequences, both fatal here:
+   *
+   * - a CSR holds no `deal_audits` permission at all, so the service team gets a
+   *   403 on the endpoint they need most;
+   * - `own` scope resolves ownership through the policy's deal, and a migrated
+   *   policy has no deal, so `PoliciesService.isInScope` reports it as 404 —
+   *   "masking something unattributable is the safe direction", which it is, for
+   *   a sales record.
+   *
+   * A household policy is neither unattributable nor a sales record: it belongs
+   * to the household in the path. So scope comes from {@link scopeFilter}, where
+   * `own` collapses to branch because client records are shared, and the gate is
+   * `clients:write` OR `crm_service:write`. Only the *finding* differs — the
+   * mutation is `PoliciesService.applyUpdate`, one copy, so the renewal
+   * re-derivation and the edit log cannot drift between the two routes.
+   *
+   * ## The renewal date is not an input
+   *
+   * `renewalDate` is derived and stays derived (`PolicySchema`: "never accept it
+   * from a client — an anchor that disagrees with the effective date schedules
+   * real calls to real clients on the wrong day"). Correcting the effective date
+   * or the policy type re-derives it inside `applyUpdate`, and it comes back on
+   * the response, which is how the card shows a date the operator never typed.
+   *
+   * 404s for a policy outside the caller's scope, and for one that is not this
+   * household's — the household in the path is the authorisation, so a mismatch
+   * must not fall through to editing somebody else's record.
+   */
+  async updateHouseholdPolicy(
+    access: AccessContext,
+    householdId: string,
+    policyId: string,
+    dto: UpdatePolicyDto,
+  ): Promise<PolicySummary> {
+    const scope = this.scopeFilter(access);
+    if (
+      !Types.ObjectId.isValid(householdId) ||
+      !Types.ObjectId.isValid(policyId)
+    ) {
+      throw new NotFoundException('Policy not found');
+    }
+
+    // A Mongoose document, not `.lean()`: `applyUpdate` mutates and saves it.
+    const policy = await this.policyModel.findOne({
+      ...scope,
+      _id: new Types.ObjectId(policyId),
+      householdId: new Types.ObjectId(householdId),
+      isTestRecord: { $ne: true },
+    });
+    if (!policy) {
+      throw new NotFoundException('Policy not found');
+    }
+
+    await this.policies.applyUpdate(access, policy, dto);
+    return toPolicySummary(policy);
+  }
 }
 
 /**
@@ -1171,22 +1246,6 @@ function toHouseholdSummary(
     primaryContactDeceasedAt: primary?.deceasedAt ?? null,
     dataQuality: household.dataQuality ?? null,
     totalActivePolicies: household.totalActivePolicies ?? 0,
-  };
-}
-
-function toPolicySummary(policy: Policy & { _id: unknown }): PolicySummary {
-  return {
-    id: String(policy._id),
-    policyNumber: policy.policyNumber ?? null,
-    policyType: normalizePolicyType(policy.policyType) || null,
-    carrier: normalizeCarrier(policy.carrier) || null,
-    active: policy.active ?? false,
-    policyStatus: normalizePolicyStatus(policy.policyStatus) || null,
-    premium: policy.premium ?? 0,
-    items: policy.items ?? 0,
-    effectiveDate: toIso(policy.effectiveDate),
-    expirationDate: toIso(policy.expirationDate),
-    renewalDate: toIso(policy.renewalDate),
   };
 }
 

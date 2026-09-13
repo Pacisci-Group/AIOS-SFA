@@ -3,6 +3,7 @@ import {
   itemCountLabel,
   policyTypeHasItemCount,
   premiumTermSuffix,
+  termExpirationDate,
 } from '@sfa/shared';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -93,13 +94,24 @@ export function PolicyDrawer({
                   />
                 )}
                 <DrawerRow
-                  label="Effective"
+                  label="Coverage began"
                   value={shortDate(policy.effectiveDate)}
                 />
                 <DrawerRow label="Renews" value={shortDate(policy.renewalDate)} />
+                {/*
+                  Derived one day back from the renewal, matching the household
+                  policy card (PAC-126). The stored `expirationDate` is empty on
+                  most migrated policies and, where set, describes the term that
+                  was current when the import ran — so reading it here would
+                  show a CSR an em dash, or a stale date, for a policy whose
+                  card shows the real one.
+                */}
                 <DrawerRow
                   label="Expires"
-                  value={shortDate(policy.expirationDate)}
+                  value={shortDate(
+                    termExpirationDate(policy.renewalDate)?.toISOString() ??
+                      policy.expirationDate,
+                  )}
                 />
               </div>
 

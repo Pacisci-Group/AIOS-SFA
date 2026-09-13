@@ -4,6 +4,7 @@ export * from './domain/subdomain';
 export * from './domain/address';
 export * from './domain/bug-report';
 export * from './domain/business-type';
+export * from './domain/calendar';
 export * from './domain/carrier';
 export * from './domain/carrier-appointment';
 export * from './domain/contact';

@@ -46,6 +46,17 @@ import { Policy, PolicySchema } from './schemas/policy.schema';
   ],
   controllers: [PoliciesController],
   providers: [PoliciesService],
-  exports: [MongooseModule],
+  /*
+   * `PoliciesService` is exported for `ClientsModule` (PAC-126): the household
+   * page's policy edit runs the same mutation — renewal re-derivation, item-count
+   * normalization, `policyNumberKey`, deal totals, edit log — and only finds its
+   * target differently. See `PoliciesService.applyUpdate`.
+   *
+   * Safe against the route-ordering hazard documented in `app.module.ts`:
+   * `PoliciesModule` is already listed ahead of `CrmModule`, which is what first
+   * pulls `ClientsModule` in, so `/policies/check` still registers before
+   * `PolicyRecordsController`'s `/policies/:id`. This import cannot move it later.
+   */
+  exports: [MongooseModule, PoliciesService],
 })
 export class PoliciesModule {}

@@ -167,12 +167,30 @@ export default function PolicyDetailPage() {
                   }
                 />
               )}
+              {/*
+                Inception, not the start of the current term — see the card's
+                note. Without the term beside it, an auto policy effective a
+                year ago reads as annual when its March renewal has simply
+                already gone by.
+              */}
               <DataRow
-                label="Effective"
+                label="Coverage began"
                 value={shortDate(policy.effectiveDate)}
               />
-              <DataRow label="Renews" value={shortDate(policy.renewalDate)} />
-              <DataRow label="Expires" value={shortDate(policy.expirationDate)} />
+              <DataRow label="Term" value={display.term} />
+              {/*
+                The same value the card above leads with, not the raw
+                `renewalDate` (PAC-126). The card falls back to the expiration
+                when no anchor is stored, so reading the raw field here would
+                put two different dates under the word "Renews" on one screen.
+              */}
+              <DataRow label="Renews" value={display.renewal} />
+              {/*
+                Derived one day back from the renewal, not the stored
+                `expirationDate` — which is empty on most migrated policies and
+                describes a term that has since passed where it is set.
+              */}
+              <DataRow label="Expires" value={display.expiration} />
             </div>
           </DetailCard>
 
