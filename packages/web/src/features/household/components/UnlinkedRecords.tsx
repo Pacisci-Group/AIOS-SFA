@@ -10,6 +10,7 @@ import {
   getUnlinkedCounts,
   listUnlinked,
   UNLINKED_RECORD_KINDS,
+  type UnanchoredPolicyRow,
   type UnlinkedContactRow,
   type UnlinkedCounts,
   type UnlinkedHouseholdRow,
@@ -26,8 +27,11 @@ const PAGE_SIZE = 50;
  *
  * Spelled out on the page rather than left to the chip label, because "280
  * contacts" is a number nobody can act on without knowing which 280 — and
- * because two of the three have **no in-app fix yet**, which the view exists to
- * make visible rather than to paper over (PAC-91 §10).
+ * because two of the first three have **no in-app fix yet**, which the view
+ * exists to make visible rather than to paper over (PAC-91 §10).
+ *
+ * `unanchored` is the exception and says so: PAC-126 built the edit that clears
+ * it, so its blurb names the action instead of the gap.
  */
 const KIND_COPY: Record<
   UnlinkedRecordKind,
@@ -51,6 +55,12 @@ const KIND_COPY: Record<
       "Households with no primary contact. Open one and use Change on the primary-contact block — a household with no members needs one added first.",
     empty: "Every household has a primary contact.",
   },
+  unanchored: {
+    label: "No renewal date",
+    blurb:
+      "Active policies with no effective, expiration or renewal date, so renewal outreach can never schedule them. Open the household and edit the policy — entering the effective date derives the renewal and clears the row.",
+    empty: "Every active policy has a renewal date.",
+  },
 };
 
 interface UnlinkedRecordsProps {
@@ -61,14 +71,19 @@ interface UnlinkedRecordsProps {
 }
 
 /**
- * The **Unlinked records** work list (PAC-91 §10).
+ * The **Unlinked records** work list (PAC-91 §10, extended by PAC-126).
  *
  * David's answer to "what about the records the link backfill cannot repair"
  * was: leave them unlinked, but give the team a list. This is that list and
- * deliberately no more — three counts, three tables, and a row that opens the
- * record where the existing actions live. It builds **no new action of its
- * own**: where linking a record has no UI yet, the view's job is to make that
- * gap visible, which is why the blurbs above say so out loud.
+ * deliberately no more — a count and a table per kind, and a row that opens the
+ * record where the existing actions live. It builds **no action of its own**:
+ * where linking a record has no UI yet, the view's job is to make that gap
+ * visible, which is why the blurbs above say so out loud.
+ *
+ * The fourth chip is a missing *date* rather than a missing *link*, and it is
+ * the one kind whose fix now exists — the household policy card's edit. It is
+ * filed here because it is the same job for the same people; see the shared
+ * `unlinked-records.ts` for why the page keeps its narrower title.
  */
 export function UnlinkedRecords({
   kind,
@@ -76,8 +91,8 @@ export function UnlinkedRecords({
   page,
   onPageChange,
 }: UnlinkedRecordsProps) {
-  // Its own query: the three chips show all three counts whichever list is
-  // open, so they must not refetch every time the page changes.
+  // Its own query: every chip shows its count whichever list is open, so they
+  // must not refetch every time the page changes.
   const countsQuery = useQuery({
     queryKey: ["unlinked-counts"],
     queryFn: getUnlinkedCounts,
@@ -198,12 +213,16 @@ const GRID: Record<UnlinkedRecordKind, string> = {
   policies: "1.4fr 1fr 1fr 110px 110px 24px",
   contacts: "1.4fr 1.2fr 1fr 110px 24px",
   households: "1.6fr 100px 90px 110px 1fr 24px",
+  unanchored: "1.4fr 1fr 1.4fr 110px 24px",
 };
 
 const HEADERS: Record<UnlinkedRecordKind, string[]> = {
   policies: ["Policy", "Type", "Carrier", "Premium", "Added", ""],
   contacts: ["Name", "Email", "Phone", "Added", ""],
   households: ["Household", "Status", "Policies", "Members", "Location", ""],
+  // No date column: every date on one of these rows is null by definition.
+  // The household is the column that matters — it is where the fix is made.
+  unanchored: ["Policy", "Type", "Household", "Premium", ""],
 };
 
 /**
@@ -272,6 +291,10 @@ function renderRows(data: UnlinkedRecordsResponse) {
       return data.items.map((row, i) => (
         <HouseholdRow key={row.id} row={row} divider={i < last} />
       ));
+    case "unanchored":
+      return data.items.map((row, i) => (
+        <UnanchoredRow key={row.id} row={row} divider={i < last} />
+      ));
   }
 }
 
@@ -317,6 +340,62 @@ function PolicyRow({
       </span>
       <span className="text-sm text-muted-foreground tabular-nums">
         {formatUpdated(row.createdAt)}
+      </span>
+      <ChevronRight className="size-4 text-muted-foreground justify-self-end" />
+    </div>
+  );
+}
+
+/**
+ * An active policy with no renewal anchor (PAC-126).
+ *
+ * Links to the **household**, not the policy, because that is where the fix is:
+ * the policy card's edit derives the renewal date from the effective date the
+ * operator types in. A policy with no household has no such page, so it falls
+ * back to the policy record — and that row is in the `policies` list too, where
+ * attaching it to a household is the first job anyway.
+ */
+function UnanchoredRow({
+  row,
+  divider,
+}: {
+  row: UnanchoredPolicyRow;
+  divider: boolean;
+}) {
+  const household = row.householdName ?? row.householdRef;
+  return (
+    <div
+      className={cn(rowClass(divider), "hover:bg-muted/50")}
+      style={{ gridTemplateColumns: GRID.unanchored }}
+    >
+      <span className="min-w-0">
+        <Link
+          to={
+            row.householdId ? `/clients/${row.householdId}` : `/policies/${row.id}`
+          }
+          className="block text-base text-foreground font-medium truncate after:absolute after:inset-0 after:content-['']"
+        >
+          {row.policyNumber ?? "No policy number"}
+        </Link>
+        <span className="text-xs text-muted-foreground">
+          {row.policyStatus ?? "Unknown status"}
+        </span>
+      </span>
+      <span className="text-sm text-muted-foreground truncate">
+        {row.policyType ?? "—"}
+      </span>
+      {/* Not merely absent — a policy in no household cannot be fixed from a
+          household page at all, so the row says which problem it is. */}
+      <span
+        className={cn(
+          "text-sm truncate",
+          household ? "text-muted-foreground" : "text-destructive",
+        )}
+      >
+        {household ?? "No household"}
+      </span>
+      <span className="text-sm text-muted-foreground tabular-nums">
+        {row.premium ? `$${row.premium.toLocaleString("en-US")}` : "—"}
       </span>
       <ChevronRight className="size-4 text-muted-foreground justify-self-end" />
     </div>

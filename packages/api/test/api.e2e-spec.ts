@@ -2708,6 +2708,10 @@ describe('SFA API (e2e)', () => {
 
     let unlinkedPolicyId: string;
     let testPolicyId: string;
+    let unanchoredPolicyId: string;
+    let anchoredPolicyId: string;
+    let inactiveUnanchoredPolicyId: string;
+    let testUnanchoredPolicyId: string;
     let unlinkedContactId: string;
     let departedContactId: string;
     let testContactId: string;
@@ -2722,7 +2726,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(token));
 
     const page = async (
-      kind: 'policies' | 'contacts' | 'households',
+      kind: 'policies' | 'contacts' | 'households' | 'unanchored',
       extra = '',
     ): Promise<UnlinkedRecordsResponse> => {
       const res = await unlinked(ownerToken, `?kind=${kind}${extra}`).expect(
@@ -2788,6 +2792,76 @@ describe('SFA API (e2e)', () => {
       });
       testPolicyId = junkPolicy._id.toString();
       cleanup.push(() => policyModel.deleteOne({ _id: junkPolicy._id }));
+
+      /*
+       * PAC-126 — an active policy with no date of any kind, attached to a
+       * household. The renewal scan's chain (`renewalDate ?? effectiveDate ??
+       * expirationDate`) yields nothing, so it is skipped on every pass forever.
+       */
+      const unanchored = await policyModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: 'UNANCHORED-1',
+        policyType: 'Auto',
+        carrier: 'Test Carrier',
+        active: true,
+        policyStatus: 'Active',
+        premium: 700,
+        items: 1,
+      });
+      unanchoredPolicyId = unanchored._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: unanchored._id }));
+
+      // The control: same shape, but dated — so it must never be listed.
+      const anchored = await policyModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: 'ANCHORED-1',
+        policyType: 'Auto',
+        active: true,
+        policyStatus: 'Active',
+        premium: 800,
+        items: 1,
+        effectiveDate: new Date('2026-03-01T00:00:00.000Z'),
+      });
+      anchoredPolicyId = anchored._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: anchored._id }));
+
+      /*
+       * Active, undated, and declared a test row — so `isTestRecord` is the
+       * *only* thing that can keep it off the list. The `UNLINKED-TEST-1` policy
+       * above cannot prove that: it never sets `active`, which defaults to
+       * false, so the `active` leg would exclude it either way.
+       */
+      const junkUnanchored = await policyModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: 'UNANCHORED-TEST-1',
+        policyType: 'Auto',
+        active: true,
+        policyStatus: 'Active',
+        premium: 0,
+        items: 0,
+        isTestRecord: true,
+      });
+      testUnanchoredPolicyId = junkUnanchored._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: junkUnanchored._id }));
+
+      // Undated but **inactive** — no outreach is owed on it, so it is not work.
+      const inactiveUnanchored = await policyModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: 'UNANCHORED-INACTIVE-1',
+        policyType: 'Auto',
+        active: false,
+        policyStatus: 'Cancelled',
+        premium: 100,
+        items: 1,
+      });
+      inactiveUnanchoredPolicyId = inactiveUnanchored._id.toString();
+      cleanup.push(() =>
+        policyModel.deleteOne({ _id: inactiveUnanchored._id }),
+      );
 
       const orphanContact = await contactModel.create({
         ...tenant,
@@ -2910,7 +2984,7 @@ describe('SFA API (e2e)', () => {
     });
 
     describe('validation', () => {
-      it('400s without a kind — three row shapes, no default', async () => {
+      it('400s without a kind — a row shape per kind, no default', async () => {
         await unlinked(ownerToken, '').expect(400);
       });
 
@@ -3006,6 +3080,75 @@ describe('SFA API (e2e)', () => {
       });
     });
 
+    describe('kind=unanchored (PAC-126)', () => {
+      it('lists an active policy with no date of any kind', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        expect(body.kind).toBe('unanchored');
+        expect(idsIn(body)).toContain(unanchoredPolicyId);
+      });
+
+      it('never lists one that has an effective date to derive from', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(anchoredPolicyId);
+      });
+
+      /*
+       * The `active` leg. An inactive policy gets no renewal outreach, so a
+       * missing anchor on one is not work — and leaving it in would make the
+       * count useless as a queue.
+       */
+      it('never lists an inactive policy, however undated', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(inactiveUnanchoredPolicyId);
+      });
+
+      /*
+       * The two policy kinds ask different questions, and one record can answer
+       * both: `UNLINKED-1` is active, attached to nothing and dated with
+       * nothing. Listing it twice is correct — it is two jobs.
+       */
+      it('overlaps kind=policies rather than competing with it', async () => {
+        const [unanchoredPage, policiesPage] = await Promise.all([
+          page('unanchored', '&pageSize=100'),
+          page('policies', '&pageSize=100'),
+        ]);
+        expect(idsIn(unanchoredPage)).toContain(unlinkedPolicyId);
+        expect(idsIn(policiesPage)).toContain(unlinkedPolicyId);
+      });
+
+      it('carries the household, which is where the fix is made', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        const row = body.items.find((item) => item.id === unanchoredPolicyId);
+        expect(row).toMatchObject({
+          policyNumber: 'UNANCHORED-1',
+          policyType: 'Auto',
+          premium: 700,
+          householdId: seed.householdId,
+        });
+      });
+
+      /*
+       * Every date on one of these rows is null by definition — that *is* the
+       * predicate — so none is carried. Three empty columns would be worse than
+       * none, and the household is the field that makes the row actionable.
+       */
+      it('carries no date fields, and leaks no internals', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        const row = body.items.find((item) => item.id === unanchoredPolicyId);
+        const raw = row as unknown as Record<string, unknown>;
+        for (const key of [
+          'effectiveDate',
+          'expirationDate',
+          'renewalDate',
+          'agencyId',
+          'branchId',
+          'isTestRecord',
+        ]) {
+          expect(raw[key]).toBeUndefined();
+        }
+      });
+    });
+
     describe('test records are never work', () => {
       it('excludes a declared test policy, contact and household', async () => {
         const [policies, contacts, households] = await Promise.all([
@@ -3017,31 +3160,42 @@ describe('SFA API (e2e)', () => {
         expect(idsIn(contacts)).not.toContain(testContactId);
         expect(idsIn(households)).not.toContain(testHouseholdId);
       });
+
+      it('excludes an active, undated test policy from the renewal-anchor list', async () => {
+        // This fixture satisfies every leg of the predicate except the flag, so
+        // `isTestRecord` is the only thing that can be keeping it out.
+        const body = await page('unanchored', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(testUnanchoredPolicyId);
+      });
     });
 
     describe('counts', () => {
-      it('returns the three numbers the chips show', async () => {
+      it('returns the numbers the chips show', async () => {
         const body = await counts();
         expect(Object.keys(body).sort()).toEqual([
           'contacts',
           'households',
           'policies',
+          'unanchored',
         ]);
         expect(typeof body.policies).toBe('number');
         expect(typeof body.contacts).toBe('number');
         expect(typeof body.households).toBe('number');
+        expect(typeof body.unanchored).toBe('number');
       });
 
       it('agrees with the list it summarises', async () => {
         const summary = await counts();
-        const [policies, contacts, households] = await Promise.all([
+        const [policies, contacts, households, unanchored] = await Promise.all([
           page('policies', '&pageSize=100'),
           page('contacts', '&pageSize=100'),
           page('households', '&pageSize=100'),
+          page('unanchored', '&pageSize=100'),
         ]);
         expect(summary.policies).toBe(policies.total);
         expect(summary.contacts).toBe(contacts.total);
         expect(summary.households).toBe(households.total);
+        expect(summary.unanchored).toBe(unanchored.total);
       });
 
       it('403s for a CSR', async () => {

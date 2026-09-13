@@ -6,6 +6,7 @@ import type {
 import { apiFetch } from '@/lib/api-client';
 
 export type {
+  UnanchoredPolicyRow,
   UnlinkedContactRow,
   UnlinkedCounts,
   UnlinkedHouseholdRow,
@@ -45,10 +46,10 @@ export function listUnlinked({
 }
 
 /**
- * `GET /clients/unlinked/counts` — the three numbers on the filter chips.
+ * `GET /clients/unlinked/counts` — the numbers on the filter chips.
  *
- * Its own request because the page shows all three counts whichever list is
- * open, so they cache and refetch independently of the page being read.
+ * Its own request because the page shows every count whichever list is open, so
+ * they cache and refetch independently of the page being read.
  */
 export function getUnlinkedCounts() {
   return apiFetch<UnlinkedCounts>(`${BASE}/counts`);
