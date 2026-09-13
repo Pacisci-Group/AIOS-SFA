@@ -290,6 +290,41 @@ journalctl -u sfa-converge -n 50     # what it fetched and whether it applied
 > every caller appears to come from the balancer and the public intake rate
 > limits collapse into one shared bucket.
 
+#### The reserved IP goes away, and that is a DNS cutover
+
+A reserved IP attaches to a *droplet* (`digitalocean_reserved_ip_assignment`
+takes a `droplet_id` and nothing else), so it cannot front a pool. It lives
+inside the droplet module, which autoscaling removes — so **enabling the pool
+destroys the reserved IP**, DigitalOcean releases it, and the environment's
+public address becomes the load balancer's.
+
+The balancer's own address is stable for the life of the balancer, which is why
+`modules/loadbalancer` carries `create_before_destroy`: replacing one hands out
+a new address and breaks every tenant domain until DNS is updated everywhere.
+
+Get it with:
+
+```bash
+terraform -chdir=infra/terraform/environments/dev output -raw public_ip
+```
+
+Then update **three** things. Missing any one of them fails silently:
+
+| What | Where | If missed |
+|---|---|---|
+| `dev.smithfamily.agency` A | GoDaddy | The platform host stops resolving |
+| `*.dev.smithfamily.agency` A | GoDaddy | **Every agency subdomain stops resolving** |
+| `PUBLIC_SERVER_IPS` | Environment secret | Custom-domain owners are told to point an A record at a dead address |
+
+That last one is the quietest. TXT verification is independent of routing, so the
+domain still goes `active` — but Let's Encrypt cannot reach the host, the
+certificate never issues, and the owner sees a domain marked live that does not
+load. `pointsAtUs()` does record "Ownership verified, but …" in `lastError`,
+which is the only place it surfaces.
+
+Owners who used the **CNAME** rather than the A record self-correct, because the
+CNAME points at the platform host by name.
+
 #### Everything is addressed by tag
 
 The pool's droplets do not exist at plan time and change as it scales, so the

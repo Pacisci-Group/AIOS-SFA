@@ -16,6 +16,27 @@ output "pool_id" {
   value       = local.pool ? digitalocean_droplet_autoscale.app[0].id : null
 }
 
+# The address to point DNS at. Read this one.
+#
+# `droplet_ip` below is the same value under its historical name, kept because
+# DEPLOYMENT.md and existing runbooks say it — but the name is a lie once there
+# is a pool, where it returns the LOAD BALANCER's address and no droplet's.
+output "public_ip" {
+  description = <<-EOT
+    The address the world reaches this environment on.
+
+    With a pool: the load balancer's address. Without one: the droplet's
+    reserved IP.
+
+    Three things must carry it, and missing any is silent:
+      * the platform host's A record
+      * the WILDCARD A record, which every agency subdomain depends on
+      * PUBLIC_SERVER_IPS, which is what a custom-domain owner is told to put
+        in their own A record
+  EOT
+  value       = local.public_ip
+}
+
 output "droplet_ip" {
   description = <<-EOT
     The address the world reaches this environment on: the load balancer's when
