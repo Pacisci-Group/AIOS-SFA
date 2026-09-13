@@ -288,12 +288,16 @@ services:
       mongo-init:
         condition: service_completed_successfully
     healthcheck:
+      # 200 locally (INNGEST_DEV=1, no signing key, so unsigned GETs are
+      # allowed) and 401 in deployed environments, where the SDK refuses an
+      # unsigned request. Both accepted so this check means the same thing in
+      # both places — see the longer note in docker-compose.prod.yml.
       test:
         [
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:4001/api/inngest').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+          "fetch('http://127.0.0.1:4001/api/inngest').then((r) => process.exit([200, 401].includes(r.status) ? 0 : 1)).catch(() => process.exit(1))",
         ]
       interval: 5s
       timeout: 5s

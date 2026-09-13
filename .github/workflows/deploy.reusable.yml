@@ -432,53 +432,67 @@ jobs:
               exit 0
             fi
 
-            # The worker is a separate container on this topology, and the API's
-            # health says nothing about it. Ask its serve endpoint, which answers
-            # a GET with its function count — that proves the registry resolved
-            # and the Inngest client is configured, not merely that a process is
-            # up.
+            # The edge first: it is the only thing bound to a public port, so if
+            # it is down the site is down however healthy everything behind it
+            # looks.
             #
-            # Worth its own check because the failure is silent: with the worker
-            # down, the site is perfectly healthy and not one email is sent.
-            #
-            # Addressed on the PRIVATE IP, not loopback: that is where the
-            # container publishes, and it is the address Inngest itself will
-            # use — so this check also proves the binding is right rather than
-            # just that a process exists. Checking loopback would fail against a
-            # perfectly healthy worker, which is the mirror image of the bug
-            # that made the API publish on loopback in the first place.
-            for i in $(seq 1 20); do
-              if curl -fsS http://${{ secrets.APP_PRIVATE_IP }}:4001/api/inngest >/dev/null; then
-                echo "Worker serve endpoint is up."
-                break
-              fi
-              if [ "$i" -eq 20 ]; then
-                echo "::error::The worker container is not serving /api/inngest. No async work will run."
-                docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100 worker
-                exit 1
-              fi
-              echo "Waiting for worker... ($i)"
-              sleep 5
-            done
-
-            # The edge is the only thing bound to a public port, so if it is not
-            # up the site is down however healthy everything behind it looks.
-            #
-            # /healthz is answered by the edge itself rather than proxied: a
+            # /healthz is answered by the edge itself rather than proxied — a
             # check that went through to the app would report the web
             # container's health and say nothing about the process terminating
-            # TLS. It is also plain HTTP on purpose — it has to work before DNS,
-            # before any certificate, and on the bare IP.
+            # TLS. Plain HTTP on purpose: it has to work before DNS, before any
+            # certificate, and on the bare IP.
             for i in $(seq 1 20); do
               if curl -fsS http://127.0.0.1:80/healthz >/dev/null; then
                 echo "Edge is up."
-                exit 0
+                break
+              fi
+              if [ "$i" -eq 20 ]; then
+                echo "::error::The TLS edge is not answering on port 80. The site is not being served."
+                docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100 edge
+                exit 1
               fi
               echo "Waiting for edge... ($i)"
               sleep 5
             done
-            echo "::error::The TLS edge is not answering on port 80. The site is not being served."
-            docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100 edge
+
+            # The worker is a separate container on this topology, and the API's
+            # health says nothing about it.
+            #
+            # ⚠ 401 is the HEALTHY answer, and 200 would be the worrying one.
+            # With INNGEST_DEV=0 and a signing key set, the SDK refuses an
+            # unsigned GET outright ("No x-inngest-signature provided"). So a
+            # 401 proves the process is listening, the handler is mounted, and
+            # signature verification is on — and a 200 would mean the signing
+            # key is missing or INNGEST_DEV is wrong, which is the one state
+            # this endpoint must never be in.
+            #
+            # Addressed on the PRIVATE IP, not loopback: that is where the
+            # container publishes and the address Inngest itself uses, so this
+            # also proves the binding is right rather than just that a process
+            # exists.
+            #
+            # Whether the functions actually SYNCED is a different question, and
+            # not one that can be answered from this side. `deploy-inngest`
+            # asks Inngest itself (`functionCount > 0`), which is the real
+            # end-to-end check.
+            for i in $(seq 1 20); do
+              # `-w` already prints 000 when the connection fails, so `|| true`
+              # rather than a fallback echo — which would concatenate onto it.
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+                "http://${{ secrets.APP_PRIVATE_IP }}:4001/api/inngest" || true)
+              case "$code" in
+                401) echo "Worker is up, and is verifying Inngest signatures."; exit 0 ;;
+                200)
+                  echo "::error::The worker answered an UNSIGNED request with 200 at /api/inngest."
+                  echo "Its only authentication is the Inngest request signature, so this means"
+                  echo "INNGEST_SIGNING_KEY is unset or INNGEST_DEV is not '0'. Refusing to pass."
+                  exit 1 ;;
+              esac
+              echo "Waiting for worker... ($i) [last status: $code]"
+              sleep 5
+            done
+            echo "::error::The worker container is not serving /api/inngest. No async work will run."
+            docker compose -f /opt/sfa/docker-compose.prod.yml logs --tail=100 worker
             exit 1
 
   # Self-hosted Inngest, on its own droplet. Nothing of ours is built for it —
