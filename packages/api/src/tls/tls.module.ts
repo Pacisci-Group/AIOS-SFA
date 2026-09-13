@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AcmeChallengeController } from './acme-challenge.controller';
+import { AcmeChallengeService } from './acme-challenge.service';
 import { CertificateRegistrationService } from './certificate-registration.service';
 import {
   AcmeChallenge,
@@ -47,7 +48,7 @@ import { Certificate, CertificateSchema } from './schemas/certificate.schema';
     ]),
   ],
   controllers: [AcmeChallengeController],
-  providers: [CertificateRegistrationService],
+  providers: [AcmeChallengeService, CertificateRegistrationService],
   // Exported for `AgencyDomainsService`, which registers a hostname the
   // moment it decides the domain may serve. Nothing else should write to
   // the `certificates` collection from the API side.

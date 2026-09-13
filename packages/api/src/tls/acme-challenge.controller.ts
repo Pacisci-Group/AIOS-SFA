@@ -6,13 +6,8 @@ import {
   Param,
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
 import { Public } from '../common/decorators/access.decorators';
-import {
-  AcmeChallenge,
-  AcmeChallengeDocument,
-} from './schemas/acme-challenge.schema';
+import { AcmeChallengeService } from './acme-challenge.service';
 
 /**
  * Answers ACME `http-01` validation requests.
@@ -51,13 +46,20 @@ import {
  * 4. **Served over plain HTTP.** The whole point is to answer before a
  *    certificate exists, so this must never be behind an HTTPS redirect. The
  *    edge carves this path out ahead of its redirect for that reason.
+ *
+ * ## In deployed environments the edge answers this, not the API
+ * The edge's upstream is the `web` container, whose nginx has an SPA fallback —
+ * a challenge proxied through would come back as `index.html` with a 200, which
+ * the CA reads as the wrong key authorization while everything looks healthy.
+ * So the edge answers from the database directly, through the same
+ * {@link AcmeChallengeService} this controller uses.
+ *
+ * This route still matters: it is what serves the local dev loop, where
+ * requests arrive on port 4000 with no edge in front.
  */
 @Controller('.well-known/acme-challenge')
 export class AcmeChallengeController {
-  constructor(
-    @InjectModel(AcmeChallenge.name)
-    private readonly challenges: Model<AcmeChallengeDocument>,
-  ) {}
+  constructor(private readonly challenges: AcmeChallengeService) {}
 
   /**
    * ⚠ Do not add logging of the token or the response here. The key
@@ -70,18 +72,10 @@ export class AcmeChallengeController {
   @Get(':token')
   @Header('Content-Type', 'text/plain')
   async respond(@Param('token') token: string): Promise<string> {
-    const challenge = await this.challenges
-      .findOne({ token })
-      .select('keyAuthorization expiresAt')
-      .lean();
+    const keyAuthorization = await this.challenges.keyAuthorizationFor(token);
 
-    // The TTL index removes expired rows eventually, not punctually — Mongo's
-    // monitor runs about once a minute — so the expiry is checked here too
-    // rather than trusting the row's absence to mean "expired".
-    if (!challenge || challenge.expiresAt.getTime() <= Date.now()) {
-      throw new NotFoundException();
-    }
+    if (!keyAuthorization) throw new NotFoundException();
 
-    return challenge.keyAuthorization;
+    return keyAuthorization;
   }
 }

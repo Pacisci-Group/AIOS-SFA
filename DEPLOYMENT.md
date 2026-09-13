@@ -183,6 +183,49 @@ hostname, and therefore what lets the app tier scale horizontally.
 > serves no TLS at all. Recovery is to set a new key and re-issue every
 > certificate, so treat this as a secret to back up rather than one to regenerate.
 
+### The edge: Caddy or our own
+
+Which edge an environment runs is decided by **two flags that must agree**:
+
+| Where | Flag | Effect |
+|---|---|---|
+| GitHub Environment *variable* | `NODE_EDGE_ENABLED` | Starts the `edge` + `worker` containers, sets `WORKER_INLINE=false`, points Inngest at 4001 |
+| `terraform.tfvars` | `enable_node_edge` | Opens firewall 4001 instead of 4000, and selects the cloud-init **without** Caddy |
+
+Both default to false, which is Caddy plus an inline worker — today's
+production. **Dev is the only environment with them on.**
+
+> **They are two flags because they are applied by two different things.** The
+> deploy runs from a git branch; terraform runs from someone's laptop. There is
+> no single place that could set both, so the failure mode is that one moves
+> without the other:
+>
+> - terraform on, deploy off → no Caddy, no edge container. Nothing serves
+>   port 443 at all.
+> - deploy on, terraform off → the edge runs, but the firewall admits 4000
+>   while the worker listens on 4001. Inngest reports healthy, syncs zero
+>   functions, and not one email is sent. The `deploy-inngest` job's
+>   `functionCount > 0` assertion is what catches this.
+>
+> This is the same shape as `INNGEST_ENABLED`/`enable_inngest`, and for the same
+> reason.
+
+> **Flipping `enable_node_edge` REPLACES the app droplet.** `user_data` cannot
+> be changed in place. The reserved IP re-attaches so the public address
+> survives, but the box is rebuilt — expect to re-run the seed. That is why the
+> two cloud-init templates are separate files chosen by the flag rather than one
+> template with a conditional: editing the file production uses would replace
+> production.
+
+#### Making production match dev, later
+
+Once dev is proven, in this order:
+
+1. Add `enable_node_edge = true` to `infra/terraform/environments/production/terraform.tfvars`, and `enable_node_edge = var.enable_node_edge` to its `main.tf` (plus the variable declaration).
+2. `make plan ENV=production` — confirm it replaces the droplet and moves the firewall to 4001, and nothing else.
+3. Add the ACME secrets and set `NODE_EDGE_ENABLED=true` / `ACME_ENABLED=true` for the production Environment.
+4. Apply terraform, then run the deploy.
+
 ### Repo-level secrets (Terraform in CI — only for plan-on-PR)
 
 These are account-wide, so keep them at repo level (Settings -> Secrets -> Actions):

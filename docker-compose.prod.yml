@@ -84,6 +84,16 @@ services:
     # the platform host. The symptom is a site with no TLS at all.
     ports:
       - "127.0.0.1:4000:4000"
+      # The VPC binding, used ONLY by environments still on the old topology,
+      # where the API serves the Inngest functions in-process. There the deploy
+      # sets API_INNGEST_BIND to the droplet's private IP and the firewall admits
+      # 4000 from the Inngest droplet.
+      #
+      # On the new topology the deploy leaves it unset, this collapses onto the
+      # loopback mapping above (`:-` treats unset and empty alike, and Compose
+      # de-duplicates identical mappings), and the worker owns 4001 instead. It
+      # can therefore never degrade to 0.0.0.0 in either mode.
+      - "${API_INNGEST_BIND:-127.0.0.1:4000}:4000"
     networks:
       - sfa
     healthcheck:
@@ -125,6 +135,15 @@ services:
   # fanning out needs the worker behind its own internal load balancer, which is
   # the same phase that puts the API behind one.
   worker:
+    # Part of the new topology, with the `edge` service below. Started only when
+    # the deploy passes `--profile edge`, which it does when the environment's
+    # NODE_EDGE_ENABLED variable is true.
+    #
+    # In one profile with the edge rather than its own, because the pieces are
+    # not independently useful: the worker on 4001 needs the firewall rule that
+    # `enable_node_edge` opens, and WORKER_INLINE=false without a worker running
+    # means an environment that serves no Inngest functions at all.
+    profiles: ["edge"]
     image: ${API_IMAGE}
     command: ["node", "packages/api/dist/worker.js"]
     restart: unless-stopped
@@ -160,6 +179,71 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # The edge: TLS termination, on the same image as everything else.
+  #
+  # ## What replaced what
+  # Caddy used to do this on the host, holding certificates on local disk and
+  # obtaining them on demand. That disk is the one piece of genuinely node-local
+  # state in the white-label design, and it is what stopped the app tier from
+  # scaling — every node would run its own ACME client and race the others for
+  # the same hostnames.
+  #
+  # This reads certificates from MongoDB by SNI instead, so a node that joined
+  # the pool seconds ago serves a tenant domain added minutes ago without having
+  # issued anything. Issuance and renewal belong to the worker.
+  #
+  # ## Why it is in the app image
+  # Same image, different entrypoint — the `worker` pattern. It needs the
+  # certificate schema and the at-rest cipher, both of which live in
+  # packages/api, and one image is one thing to build, push, pin and roll back.
+  #
+  # ⚠ `dist/edge.js` must be an entry in packages/api/webpack.config.js. The
+  # runner stage copies `dist` and never `src`, so a non-entry simply does not
+  # exist here and the container exits with MODULE_NOT_FOUND.
+  edge:
+    profiles: ["edge"]
+    image: ${API_IMAGE}
+    command: ["node", "packages/api/dist/edge.js"]
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      # Where TLS-terminated traffic is sent. The compose network, so the web
+      # container needs no host publish for this to work.
+      EDGE_UPSTREAM: http://web:80
+    # The only service bound to public ports. 80 is NOT optional: ACME http-01
+    # validation is a plain-HTTP request to the hostname being issued, so
+    # closing it means no certificate is ever obtained.
+    ports:
+      - "${EDGE_HTTP_BIND:-0.0.0.0}:80:80"
+      - "${EDGE_HTTPS_BIND:-0.0.0.0}:443:443"
+    networks:
+      - sfa
+    healthcheck:
+      # Asks the edge's own plain-HTTP listener, which answers /healthz without
+      # proxying. A check through to the app would make this report the web
+      # container's health rather than the edge's.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:80/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     logging:
       driver: json-file
       options:

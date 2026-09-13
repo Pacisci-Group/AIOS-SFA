@@ -200,3 +200,33 @@ variable "mongo_allowed_ip_addresses" {
   type    = list(string)
   default = []
 }
+
+variable "enable_node_edge" {
+  description = <<-EOT
+    Run the new, horizontally-scalable topology on this environment.
+
+    Flips three things that must move together:
+      * the edge: Caddy is replaced by our own Node TLS terminator, which reads
+        certificates from MongoDB so every node can serve every hostname
+      * the app droplet's cloud-init, which therefore no longer installs Caddy
+      * the firewall rule Inngest reaches us through: port 4001 (the worker's own
+        container) rather than 4000 (the API)
+
+    ⚠ Defaults to false, which is exactly today's production behaviour, so an
+    environment that does not set it plans clean and is not touched. That default
+    is the whole point: this stack is shared, and without the flag a
+    `terraform apply` aimed at one environment would rewrite another's edge.
+
+    ⚠ Turning it on REPLACES the app droplet — `user_data` cannot be changed in
+    place. Expect the public IP to survive (the reserved IP is re-attached) and
+    everything on the box to be rebuilt. Do it on dev first.
+
+    ⚠ It must agree with the app side, which is deployed from a git branch
+    rather than from here. Terraform on 4001 with a deploy that still runs the
+    worker inline on 4000 means Inngest reports healthy and syncs zero
+    functions — the same failure shape `INNGEST_ENABLED`/`enable_inngest` exist
+    to prevent.
+  EOT
+  type        = bool
+  default     = false
+}

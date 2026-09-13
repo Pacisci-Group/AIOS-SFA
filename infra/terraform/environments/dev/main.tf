@@ -44,6 +44,7 @@ module "sfa" {
   spaces_cors_origins        = var.spaces_cors_origins
   create_spaces_access_key   = var.create_spaces_access_key
   enable_inngest             = var.enable_inngest
+  enable_node_edge           = var.enable_node_edge
   inngest_droplet_size       = var.inngest_droplet_size
   enable_backups             = var.enable_backups
   prevent_destroy            = var.prevent_destroy

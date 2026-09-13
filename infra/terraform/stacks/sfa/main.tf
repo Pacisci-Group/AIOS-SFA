@@ -41,11 +41,22 @@ module "droplet" {
   enable_reserved_ip   = var.enable_reserved_ip
   tags                 = local.all_tags
 
-  # `enable_tls` is deliberately NOT passed any more. The edge is Caddy, which
-  # obtains certificates on demand for every hostname the app says it serves —
-  # there is no boot-time issuance step left to switch on or off. The variable
-  # survives because `web_origin` above still needs to know the scheme.
-  user_data = templatefile("${path.module}/../../modules/droplet/templates/cloud-init.yaml.tpl", {
+  # `enable_tls` is deliberately NOT passed. Neither edge has a boot-time
+  # issuance step to switch on or off: Caddy obtained certificates on demand, and
+  # the Node edge obtains them from the worker via ACME. The variable survives
+  # because `web_origin` above still needs to know the scheme.
+  #
+  # Two SEPARATE template files selected by a flag, never one template with a
+  # conditional inside it. `user_data` cannot be changed in place, so an edit to
+  # the file an environment already uses replaces that environment's droplet —
+  # which is precisely what must not happen to production while dev is being
+  # rebuilt. Keeping `cloud-init.yaml.tpl` byte-for-byte untouched is what makes
+  # a production plan a no-op. Same reasoning as the Inngest droplet's template.
+  user_data = var.enable_node_edge ? templatefile("${path.module}/../../modules/droplet/templates/cloud-init-edge.yaml.tpl", {
+    ssh_public_key = var.ssh_public_key
+    domain         = var.domain
+    certbot_email  = var.certbot_email
+    }) : templatefile("${path.module}/../../modules/droplet/templates/cloud-init.yaml.tpl", {
     ssh_public_key = var.ssh_public_key
     domain         = var.domain
     certbot_email  = var.certbot_email
@@ -60,24 +71,30 @@ module "firewall" {
   ssh_allowed_ips  = var.ssh_allowed_ips
   allow_http_https = true
 
-  # Inngest invokes our functions over HTTP, so it needs to reach
-  # /api/inngest on port 4001 — the WORKER's port, not the API's.
+  # Inngest invokes our functions over HTTP, so it needs to reach /api/inngest.
   #
-  # ⚠ 4001, not 4000. The worker was split into its own container because
-  # exactly one process may serve the Inngest functions, and an autoscaled API
-  # tier cannot satisfy that. The API serves none and is published on loopback
-  # only, so a rule for 4000 would open a port with nothing behind it while
-  # every function invocation was refused.
+  # ⚠ Which port depends on `enable_node_edge`, and the two sides must agree.
+  #   * false (today's production): the API serves the functions in-process on
+  #     4000, because the worker runs inline.
+  #   * true: the worker is its own container on 4001 and is the only process
+  #     serving them — exactly one may, and an autoscaled API tier cannot
+  #     satisfy that. The API then serves none and binds loopback only.
+  #
+  # Open the wrong one and Inngest reports perfectly healthy while syncing zero
+  # functions: the port is open with nothing behind it, every invocation is
+  # refused, and no async work runs. The `deploy-inngest` job's
+  # `functionCount > 0` assertion is what catches it.
   #
   # Deliberately NOT routed through the public edge: putting the endpoint behind
   # the public vhost would expose it to the internet for no reason.
   #
-  # `docker-compose.prod.yml` binds the worker container to the droplet's private
-  # IP (WORKER_INNGEST_BIND), and this rule is what makes that address reachable
-  # — sharing a VPC is not enough, a DO firewall filters neighbours too.
+  # `docker-compose.prod.yml` binds the container to the droplet's private IP
+  # (WORKER_INNGEST_BIND / API_INNGEST_BIND), and this rule is what makes that
+  # address reachable — sharing a VPC is not enough, a DO firewall filters
+  # neighbours too.
   internal_rules = var.enable_inngest ? [
     {
-      port               = "4001"
+      port               = var.enable_node_edge ? "4001" : "4000"
       source_droplet_ids = [module.inngest_droplet[0].id]
     }
   ] : []
