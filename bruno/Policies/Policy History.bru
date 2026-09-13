@@ -1,0 +1,114 @@
+meta {
+  name: Policy History
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/policies/{{soldPolicyId}}/history
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("always returns a chain, even for a policy never replaced", function () {
+    const body = res.getBody();
+    expect(body.entries).to.be.an("array");
+    expect(body.entries.length).to.be.at.least(1);
+    expect(body).to.have.property("totalChargeback");
+  });
+
+  test("marks the policy that was asked about", function () {
+    const requested = res
+      .getBody()
+      .entries.filter(function (entry) {
+        return entry.isRequested;
+      });
+    // Exactly one, whichever link in the chain was opened.
+    expect(requested).to.have.lengthOf(1);
+    expect(requested[0].policyId).to.equal(bru.getVar("soldPolicyId"));
+  });
+
+  test("is ordered oldest first and linked end to end", function () {
+    const entries = res.getBody().entries;
+    // Only the last entry is still in force; every earlier one names how it
+    // ended.
+    entries.forEach(function (entry, index) {
+      if (index < entries.length - 1) {
+        expect(entry.reason).to.be.oneOf(["cancel_rewrite", "company_transfer"]);
+      } else {
+        expect(entry.reason).to.equal(null);
+      }
+    });
+  });
+}
+
+docs {
+  # GET /policies/:id/history — the policy's full replacement chain
+
+  Module `deal_audits` **or** `crm_service`, permission `deal_audits:read` or
+  `crm_service:read` (the controller's OR gate — a CSR looking at a transferred
+  policy has the same question as a producer looking at a rewritten one). Data
+  scope is enforced by `loadOwnedPolicy`; out of scope 404s.
+
+  Returns every policy in the chain the given policy belongs to — the ones that
+  led to it **and** the ones that came after — oldest first. Served from any link
+  in the chain and always returns the whole thing, because someone opening the
+  original policy from two rewrites ago is asking the same question as someone
+  opening the current one. The entry they asked about is flagged `isRequested`
+  rather than being made the start.
+
+  A policy that has never been replaced returns a **single-entry chain**, not a
+  404 or an empty array, so a caller can render it without a "has history?"
+  branch.
+
+  ## Response `200`
+
+  ```json
+  {
+    "entries": [
+      {
+        "policyId": "...",
+        "policyNumber": "123456789",
+        "policyType": "Auto",
+        "carrier": "Allstate",
+        "premium": 940,
+        "status": "Cancel Rewrite",
+        "active": false,
+        "effectiveDate": "2026-01-05T00:00:00.000Z",
+        "reason": "cancel_rewrite",
+        "chargebackAmount": 940,
+        "withinClawbackWindow": true,
+        "dealId": "...",
+        "isRequested": true
+      },
+      { "...": "the replacement, reason null, active true" }
+    ],
+    "totalChargeback": 940
+  }
+  ```
+
+  `reason` is how that policy was **left**, and is `null` on the last entry —
+  the one still in force. `chargebackAmount` / `withinClawbackWindow` are `null`
+  where no chargeback was raised, which is every Company Transfer (a transfer
+  moves a client within their own book; nothing is clawed back).
+
+  The chain is walked, not aggregated, and is capped at 50 links with a cycle
+  guard — the link fields are written as a pair inside one transaction and cannot
+  legitimately loop, but a bad migration or hand-edit should truncate the history
+  rather than hang the request.
+
+  ## Errors
+
+  | Code | When |
+  |---|---|
+  | `403` | Caller holds neither `deal_audits:read` nor `crm_service:read`, or both modules are disabled. |
+  | `404` | No such policy, or it is outside the caller's data scope. |
+}

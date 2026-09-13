@@ -1,0 +1,149 @@
+meta {
+  name: Rewrite Policy
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/policies/{{soldPolicyId}}/rewrite
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:pre-request {
+  // Allstate policy numbers are digits only, and a policy number is unique per
+  // agency — so a fixed literal here books once and then collides forever.
+  bru.setVar("rewritePolicyNumber", String(Date.now()).slice(-9));
+}
+
+body:json {
+  {
+    "cancelledAt": "2026-03-10",
+    "policies": [
+      {
+        "policyType": "Auto",
+        "effectiveDate": "2026-03-15",
+        "carrier": "Allstate",
+        "policyNumber": "{{rewritePolicyNumber}}",
+        "premium": 1050,
+        "itemCount": 1,
+        "newBusinessApplication": {
+          "key": "{{soldDocumentKey}}",
+          "filename": "application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        }
+      }
+    ],
+    "submissionToken": "{{$guid}}"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns the new deal and the cancelled policy", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("dealId");
+    expect(body.cancelledPolicyId).to.equal(bru.getVar("soldPolicyId"));
+    expect(body.retiredStatus).to.equal("Cancel Rewrite");
+  });
+
+  test("reports what the cancellation cost", function () {
+    const body = res.getBody();
+    // Always the cancelled policy's premium, in both branches.
+    expect(body.chargebackAmount).to.be.a("number");
+    expect(body.chargebackAmount).to.be.at.least(0);
+    expect(body).to.have.property("withinClawbackWindow");
+    // Signed: `-chargebackAmount` inside the window, 0 outside it. Never
+    // positive — a rewrite cannot *add* credit to the original sale.
+    expect(body.soldAdjustment).to.be.at.most(0);
+    if (body.withinClawbackWindow) {
+      expect(body.soldAdjustment).to.equal(-body.chargebackAmount);
+    } else {
+      expect(body.soldAdjustment).to.equal(0);
+    }
+  });
+
+  test("captures the replacement for the history request", function () {
+    bru.setVar("rewriteDealId", res.getBody().dealId);
+  });
+}
+
+docs {
+  # POST /policies/:id/rewrite — cancel a policy and book its replacement
+
+  Module `deal_audits`, permission **`deal_audits:write`**. Data scope is
+  enforced by `loadOwnedPolicy`, the same clamp `PATCH /policies/:id` uses: a
+  policy outside the caller's scope 404s rather than 403s, and under `own` scope
+  a policy with no deal is unattributable and therefore out of scope.
+
+  ## What it does, in one transaction
+
+  1. Retires the policy named in the URL — `active: false`, status
+     **`Cancel Rewrite`** — and points `transferredToPolicyId` at its
+     replacement.
+  2. Writes the replacement policies on a **new deal**, booked
+     `businessType: "new_business"`. A rewrite is a real sale, unlike a Company
+     Transfer.
+  3. Writes one row to the `chargebacks` ledger and, inside the clawback window,
+     `$inc`s the **original** deal's `chargebackAdjustment`.
+
+  This is the only way a policy's status becomes `Cancel Rewrite`.
+  `PATCH /policies/:id` rejects that status with a 400, because the product rule
+  is that a policy cannot be Cancel Rewrite without the policy that replaced it.
+
+  ## The money
+
+  | When the policy was cancelled | Chargeback | Producer's sold figure |
+  |---|---|---|
+  | Within 1 calendar month of the **original deal's sold date** | Full premium | Reduced by the premium |
+  | After that | Full premium | Unchanged |
+
+  The window is measured in whole calendar months at day granularity, and the
+  boundary day is inside it — a deal sold 10 March is within the window until and
+  including 10 April. The premium is used as the charged-back amount because the
+  system records no payment or down-payment figure.
+
+  ## Body
+
+  | Field | Type | Req | Notes |
+  |---|---|---|---|
+  | `cancelledAt` | `YYYY-MM-DD` | yes | The date the window is judged against, and the replacement deal's sold date. Clamped server-side to never be in the future nor before the original sale. |
+  | `policies[]` | array(1–10) | yes | Replacement policies. Validated by the same `policyBaseSchema` the Sold form and the transfer use — carrier, policy number format, premium, item count, signed application, discounts. **No `fromPolicyId`**: the cancelled policy is the URL. Prior insurance and cancellation are injected as "none" and must not be sent. |
+  | `submissionToken` | string | no | Makes a retry idempotent. Namespaced `RWRT\|…` server-side, so it cannot collide with a sold or transfer token. |
+
+  More than one replacement row is allowed: only the first is linked to the
+  cancelled policy, and the rest are ordinary new policies on the same deal — the
+  case where one Auto becomes an Auto plus a Motorcycle.
+
+  ## Response `201`
+
+  ```json
+  {
+    "dealId": "...",
+    "cancelledPolicyId": "...",
+    "chargebackAmount": 940,
+    "soldAdjustment": -940,
+    "withinClawbackWindow": true,
+    "cancelledAt": "2026-03-10T00:00:00.000Z",
+    "retiredStatus": "Cancel Rewrite"
+  }
+  ```
+
+  ## Errors
+
+  | Code | When |
+  |---|---|
+  | `400` | The policy has no household (the replacement has nowhere to live); or the body fails validation. |
+  | `403` | Caller lacks `deal_audits:write`, or the module is disabled for the agency. |
+  | `404` | No such policy, or it is outside the caller's data scope. |
+  | `409` | The policy is not active, or it has already been replaced — rewrite its replacement instead. |
+}

@@ -52,6 +52,9 @@ const EditQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/EditQuoteRecapPage'),
 );
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
+const PolicyRewritePage = lazy(
+  () => import('@/features/sold/PolicyRewritePage'),
+);
 const PolicyTransferPage = lazy(
   () => import('@/features/sold/PolicyTransferPage'),
 );
@@ -403,6 +406,32 @@ export function App() {
                   element={
                     <LazyPage>
                       <PolicyDetailPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* Cancel & rewrite. Gated on `deal_audits:write` rather than the
+                  clients/CRM read pair above, because it *writes a sale* —
+                  `POST /policies/:id/rewrite` books a deal, policies and audit
+                  items, exactly what the Sold form requires. Keeping the route
+                  and the API on the same permission is what stops a CSR who can
+                  open a policy from walking into a wizard that 403s on submit;
+                  it is the same reasoning as the transfer route one gate along,
+                  which needs `crm_service:write` for the opposite reason. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.DealAudits}:write`}
+                    redirectTo="/clients"
+                  />
+                }
+              >
+                <Route
+                  path="/policies/:policyId/rewrite"
+                  element={
+                    <LazyPage>
+                      <PolicyRewritePage />
                     </LazyPage>
                   }
                 />

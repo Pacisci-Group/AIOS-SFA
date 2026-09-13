@@ -448,10 +448,10 @@ export function emptyPolicy(
     discounts: emptyDiscounts(),
     fromPolicyId: "",
     priorInsurance: {
-      // A transfer never shows the prior-insurance card, so it defaults to the
-      // answer that card would have produced: the policy being replaced is
-      // already ours, so there is no prior coverage at another carrier.
-      none: variant === "transfer",
+      // Neither a transfer nor a rewrite shows the prior-insurance card, so it
+      // defaults to the answer that card would have produced: the policy being
+      // replaced is already ours, so there is no prior coverage elsewhere.
+      none: replacesOwnPolicy(variant),
       carrier: "",
       carrierOther: "",
       agentName: "",
@@ -596,26 +596,45 @@ export type WizardCard = (typeof WIZARD_CARDS)[number];
 /**
  * Which flow the wizard is running.
  *
- * A `transfer` is the same form recording the same information — a policy needs
- * the same fields to exist however it came about — with two differences:
- *   - it asks which policy each new one **replaces** (`transferFrom`);
- *   - it does **not** ask for prior insurance, because the policy being
- *     replaced is already in our own book. There is no other carrier to name
+ * All three record the same information, because a policy needs the same fields
+ * to exist however it came about. They differ only in which two cards appear:
+ *
+ *   - **`sale`** — the full form. Asks for prior insurance; replaces nothing.
+ *   - **`transfer`** — asks which policy each new one **replaces**
+ *     (`transferFrom`), and never asks for prior insurance: the policy being
+ *     replaced is already in our own book, so there is no other carrier to name
  *     and nothing to cancel.
+ *   - **`rewrite`** — Cancel Rewrite. Like a transfer in that prior insurance is
+ *     meaningless for the same reason, but it shows **no** `transferFrom` card:
+ *     the policy being cancelled is the one the user opened, named in the URL
+ *     rather than picked from a list. Letting them pick would make it possible
+ *     to cancel a different policy than the one the page says it is cancelling.
  */
-export type WizardVariant = "sale" | "transfer";
+export type WizardVariant = "sale" | "transfer" | "rewrite";
+
+/** Flows where the replaced policy is already ours, so prior insurance is moot. */
+export function replacesOwnPolicy(variant: WizardVariant): boolean {
+  return variant === "transfer" || variant === "rewrite";
+}
 
 /**
  * The ordered cards for a variant.
  *
  * The `WizardCard` **union stays whole** so `CARD_TITLES` and `CARD_FIELDS`
  * remain exhaustive — only the ordered array differs, which is what keeps a new
- * card from silently skipping validation in either flow.
+ * card from silently skipping validation in any flow.
  */
 export function cardsFor(variant: WizardVariant): readonly WizardCard[] {
-  return variant === "transfer"
-    ? WIZARD_CARDS.filter((card) => card !== "priorInsurance")
-    : WIZARD_CARDS.filter((card) => card !== "transferFrom");
+  if (variant === "transfer") {
+    return WIZARD_CARDS.filter((card) => card !== "priorInsurance");
+  }
+  if (variant === "rewrite") {
+    // Neither card: the cancelled policy is the URL, and it is already ours.
+    return WIZARD_CARDS.filter(
+      (card) => card !== "priorInsurance" && card !== "transferFrom",
+    );
+  }
+  return WIZARD_CARDS.filter((card) => card !== "transferFrom");
 }
 
 /** Where each variant's loop restarts. */

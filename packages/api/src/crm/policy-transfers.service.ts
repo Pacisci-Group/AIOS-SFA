@@ -155,6 +155,9 @@ export class PolicyTransfersService {
       producerId: new Types.ObjectId(access.userId),
       ticketId: ticket._id,
       businessType: 'company_transfer',
+      // What the retired policies are stamped with. Same value as the business
+      // type here by coincidence, not by construction — see `SoldIntakeContext`.
+      replacementReason: 'company_transfer',
       householdId: new Types.ObjectId(householdId),
       clientName: ticket.clientName,
       submissionToken: dto.submissionToken

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
@@ -9,10 +17,13 @@ import {
 import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { checkPolicySchema } from './dto/check-policy.dto';
+import { createPolicyRewriteSchema } from './dto/policy-rewrite.dto';
+import type { CreatePolicyRewriteDto } from './dto/policy-rewrite.dto';
 import type { CheckPolicyDto } from './dto/check-policy.dto';
 import { updatePolicySchema } from './dto/update-policy.dto';
 import type { UpdatePolicyDto } from './dto/update-policy.dto';
 import { PoliciesService } from './policies.service';
+import { PolicyRewritesService } from './policy-rewrites.service';
 
 /**
  * Policies — the Sold wizard's duplicate check (PAC-40) and the Lead Detail
@@ -56,7 +67,10 @@ import { PoliciesService } from './policies.service';
   modulePermission(ModuleKey.CrmService, 'read'),
 )
 export class PoliciesController {
-  constructor(private readonly policiesService: PoliciesService) {}
+  constructor(
+    private readonly policiesService: PoliciesService,
+    private readonly rewritesService: PolicyRewritesService,
+  ) {}
 
   // Static segment first: Nest matches in declaration order, so any future
   // `@Get(':id')` must come after this or it will swallow `/check`.
@@ -91,5 +105,50 @@ export class PoliciesController {
     @Body(new ZodValidationPipe(updatePolicySchema)) body: UpdatePolicyDto,
   ) {
     return this.policiesService.update(access, branchId, id, body);
+  }
+
+  /**
+   * Cancel this policy and book its replacement in one transaction.
+   *
+   * The **only** way a policy's status becomes `Cancel Rewrite` — `PATCH :id`
+   * rejects that status outright, because the product rule is that a rewrite
+   * cannot exist without the policy that replaces it. The replacement is booked
+   * as new business on a new deal; the cancelled policy's premium is charged
+   * back, and inside the first month it also comes off the original deal's
+   * credit. The response says which of those two happened.
+   *
+   * `deal_audits:write` rather than `crm_service:write`, matching `PATCH :id`
+   * and the Sold form: this *writes a sale*, audit items and all. A CSR who can
+   * record a transfer but not a sale gets a 403, which is the same line the rest
+   * of this controller already draws.
+   */
+  /**
+   * The policy's full replacement history — every policy that led to it and
+   * every one that came after, oldest first, with what each cancellation cost.
+   *
+   * Read-only, so it rides the controller's OR gate rather than the write one: a
+   * CSR looking at a transferred policy has the same question as a producer
+   * looking at a rewritten one. Returns a single-entry chain for a policy that
+   * has never been replaced, which is what lets the UI render it unconditionally.
+   */
+  @Get(':id/history')
+  history(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+  ) {
+    return this.rewritesService.replacementChain(access, branchId, id);
+  }
+
+  @Post(':id/rewrite')
+  @RequireWrite(ModuleKey.DealAudits)
+  rewrite(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(createPolicyRewriteSchema))
+    body: CreatePolicyRewriteDto,
+  ) {
+    return this.rewritesService.record(access, branchId, id, body);
   }
 }

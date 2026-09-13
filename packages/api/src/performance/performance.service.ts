@@ -115,7 +115,25 @@ export class PerformanceService {
       {
         $group: {
           _id: null,
-          premium: { $sum: { $ifNull: ['$premium', 0] } },
+          /*
+           * Sold premium net of anything clawed back.
+           *
+           * `chargebackAdjustment` is negative or zero and is absent on every
+           * deal written before Cancel Rewrite existed — hence `$ifNull`, which
+           * is doing real work here rather than being defensive: a missing field
+           * would make `$add` return null and zero the whole producer's figure.
+           *
+           * Only the `deals` passes carry the field; on the quote-recap pass it
+           * is always absent and this reduces to the premium sum.
+           */
+          premium: {
+            $sum: {
+              $add: [
+                { $ifNull: ['$premium', 0] },
+                { $ifNull: ['$chargebackAdjustment', 0] },
+              ],
+            },
+          },
           itemCount: { $sum: { $ifNull: ['$itemCount', 0] } },
           recordCount: { $sum: 1 },
           /*

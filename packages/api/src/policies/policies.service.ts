@@ -615,8 +615,15 @@ export class PoliciesService {
    *
    * Returns the deal's `leadId` alongside the policy — `null` when the policy
    * has no deal, or the deal no lead. See {@link recordFieldChanges}.
+   *
+   * **Public because it is the scope clamp for Cancel Rewrite too.**
+   * `PolicyRewritesService` is anchored on a policy rather than a CSR ticket, so
+   * this is the only thing standing between a caller and cancelling any policy
+   * in the agency by naming its id — exactly the job it already does for
+   * `PATCH :id`. Reuse it rather than writing a second clamp; the `own`-scope
+   * rule for a deal-less policy is subtle and must not exist twice.
    */
-  private async loadOwnedPolicy(
+  async loadOwnedPolicy(
     access: AccessContext,
     branchId: string | null,
     policyId: string,

@@ -14,8 +14,12 @@ import { AdvanceLeadStep } from './advance-lead.step';
 import { InterestedPartiesStep } from './interested-parties.step';
 import { PriorInsuranceStep } from './prior-insurance.step';
 import { ResolveDealStep } from './resolve-deal.step';
-import { SoldIntakeContext, SoldIntakeOutcome } from './sold-intake.types';
-import { UpsertPoliciesStep } from './upsert-policies.step';
+import {
+  SoldIntakeContext,
+  SoldIntakeOutcome,
+  SoldStepDeps,
+} from './sold-intake.types';
+import { UpsertPoliciesStep, UpsertedPolicy } from './upsert-policies.step';
 
 /** Mongo duplicate-key error. */
 const DUPLICATE_KEY = 11000;
@@ -75,6 +79,28 @@ export class SoldDealIntakeService {
     dto: SoldIntakeDto,
     access: AccessContext,
     leadSource: NormalizedLeadSource | undefined,
+    /**
+     * Extra work to commit **with** the deal, run after every step inside the
+     * same transaction.
+     *
+     * Exists for the Cancel Rewrite chargeback, which is money: a replacement
+     * written but a claw-back lost would take a producer's credit and never give
+     * it back, and nothing would ever notice. Every other post-submission side
+     * effect here (audit generation, the household recount, the ticket timeline)
+     * is deliberately best-effort post-commit, because re-running it is cheap
+     * and failing the request would tell a CSR their work did not happen when it
+     * did. A ledger row is the one thing that is neither.
+     *
+     * A callback rather than another step so the shared pipeline keeps knowing
+     * nothing about chargebacks — the two write paths that use it have no such
+     * concept, and a step that no-ops for both of them is a step in the wrong
+     * module.
+     */
+    afterSteps?: (
+      deps: SoldStepDeps,
+      policies: UpsertedPolicy[],
+      dealId: Types.ObjectId,
+    ) => Promise<void>,
   ): Promise<SoldIntakeOutcome> {
     // Probe BEFORE opening a transaction, the same reasoning as lead intake: a
     // replay should not re-run policy upserts or re-derive anything.
@@ -96,6 +122,8 @@ export class SoldDealIntakeService {
         await this.priorInsurance.run(dto, dealId, deps);
         // After the policies: an escrow row links to the policy it secures.
         await this.interestedParties.run(dto, policies, deps);
+        // Last, so a caller's extra write sees everything the steps produced.
+        await afterSteps?.(deps, policies, dealId);
 
         return {
           dealId,

@@ -1,8 +1,16 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, ChevronRight, Loader2, StickyNote, Users } from "lucide-react";
 import {
+  AlertCircle,
+  ChevronRight,
+  Loader2,
+  RefreshCw,
+  StickyNote,
+  Users,
+} from "lucide-react";
+import {
+  ModuleKey,
   isCanonicalPolicyType,
   itemCountLabel,
   policyTypeHasItemCount,
@@ -13,7 +21,9 @@ import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { usePermissions } from "@/hooks/usePermissions";
 import { getPolicy } from "@/lib/policies-api";
+import { PolicyHistoryCard } from "./components/PolicyHistoryCard";
 import { PolicyCard } from "@/features/household/components/PolicyPortfolio";
 import {
   statusColors,
@@ -49,6 +59,7 @@ function shortDate(iso: string | null | undefined) {
 export default function PolicyDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [expanded, setExpanded] = useState(true);
+  const { can } = usePermissions();
 
   const query = useQuery({
     queryKey: ["policy", id],
@@ -137,6 +148,31 @@ export default function PolicyDetailPage() {
             // no-op the reader has to try before they learn it.
             showOpenLink={false}
           />
+
+          {/*
+            Cancel & rewrite, offered only where it can actually be done: an
+            active policy, and a user who holds the permission the route and the
+            endpoint both require. Showing it otherwise would send someone into
+            a wizard that redirects or 409s — and an inactive policy has usually
+            already been rewritten, in which case the history card below names
+            the replacement to work on instead.
+          */}
+          {policy.active && can(`${ModuleKey.DealAudits}:write`) && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
+              <p className="text-sm text-muted-foreground">
+                Cancelling this policy? Write its replacement in the same step so
+                the two stay linked.
+              </p>
+              <Button asChild variant="outline" size="sm">
+                <Link to={`/policies/${policy.id}/rewrite`}>
+                  <RefreshCw aria-hidden className="size-4" />
+                  Cancel &amp; rewrite
+                </Link>
+              </Button>
+            </div>
+          )}
+
+          <PolicyHistoryCard policyId={policy.id} />
 
           <DetailCard title="Policy terms">
             <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
