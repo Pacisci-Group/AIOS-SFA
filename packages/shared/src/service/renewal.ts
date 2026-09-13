@@ -82,9 +82,12 @@ export function normalizeRenewalPolicyType(
  *
  * This used to match a hand-written `['auto']` against
  * {@link normalizeRenewalPolicyType}, which was wrong twice over: `Auto -
- * Special` and `Motorcycle` fell through to the annual T-90/T-45 track, and a
- * migrated row storing a raw SmartSuite code (`Zgsh3`) did too, because the
- * de-pluralizing key function does not resolve codes.
+ * Special` fell through to the annual T-90/T-45 track, and a migrated row
+ * storing a raw SmartSuite code (`Zgsh3`) did too, because the de-pluralizing
+ * key function does not resolve codes. Delegating is what keeps that fixed —
+ * and what made moving Motorcycle back to the annual track (2026-09-11) a
+ * one-line edit in `SEMIANNUAL_TERM_POLICY_TYPES` rather than a hunt for every
+ * place a term is decided.
  */
 export function renewalTrackFor(
   policyType: string | null | undefined,

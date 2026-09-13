@@ -299,22 +299,33 @@ export const ANNUAL_TERM_MONTHS = 12;
 export const SEMIANNUAL_TERM_MONTHS = 6;
 
 /**
- * Types quoted on a 6-month term.
+ * Types quoted on a 6-month term. **Auto and Auto - Special only.**
  *
- * Seeded from {@link AUTO_POLICY_TYPES} because David confirmed the rule
- * applies to "any auto vehicle" — so Motorcycle is in, alongside Auto and
- * Auto - Special.
+ * Motorcycle was seeded in here from {@link AUTO_POLICY_TYPES} when the
+ * 2026-08-19 rule was read as "any auto vehicle", and was taken back out on
+ * 2026-09-11: motorcycle is written on a 12-month term, which is the case this
+ * file's own note predicted ("carriers write motorcycle annually more often
+ * than not").
  *
- * **Kept as its own array rather than calling {@link isAutoPolicyType}.**
- * "Renews every 6 months" and "is a motor vehicle" are two different facts that
- * happen to coincide today; carriers write motorcycle annually more often than
- * not, and a 6-month non-vehicle line is perfectly possible. When the term rule
- * changes, change *this* array — editing `AUTO_POLICY_TYPES` would silently
- * move the Sold form's discount branch and the `Drivers Verified` audit item
- * with it.
+ * **Its own array rather than a call to {@link isAutoPolicyType}, and this is
+ * the divergence that vindicates that.** "Renews every 6 months" and "is a
+ * motor vehicle" are two different facts, and Motorcycle now sits in the second
+ * set but not the first: it keeps the Sold form's Drivewise / defensive-driver
+ * / student branch and the `Drivers Verified` audit item, because those follow
+ * the *vehicle*, while its premium is labelled and its renewal scheduled
+ * annually. Expressing the term change by editing `AUTO_POLICY_TYPES` would
+ * have silently moved that discount branch and audit item with it.
+ *
+ * ⚠ `policies.renewalDate` is **derived and stored**, so changing this array
+ * does not reach rows already written — only the next write of each policy
+ * would. Moving a type between tracks therefore needs a migration to re-derive
+ * the anchor; this one's is
+ * `migrations/20260911154500-motorcycle_annual_renewal_anchors.js`.
  */
-export const SEMIANNUAL_TERM_POLICY_TYPES: readonly PolicyType[] =
-  AUTO_POLICY_TYPES;
+export const SEMIANNUAL_TERM_POLICY_TYPES: readonly PolicyType[] = [
+  'Auto',
+  'Auto - Special',
+];
 
 const SEMIANNUAL_TERM_SET = new Set<string>(SEMIANNUAL_TERM_POLICY_TYPES);
 

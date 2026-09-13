@@ -169,12 +169,9 @@ describe('renewalTrackFor', () => {
     'auto',
     '  AUTO  ',
     'Autos',
-    // David, 2026-08-19 scrum: the 6-month term applies to "any auto vehicle",
-    // so the whole auto family is on this track — not just plain Auto. Both of
-    // these used to fall through to annual.
+    // `Auto - Special` used to fall through to annual, because the old
+    // hand-written list held only 'auto'.
     'Auto - Special',
-    'Motorcycle',
-    'motorcycles',
   ])('puts %p on the semiannual track', (policyType) => {
     expect(renewalTrackFor(policyType)).toBe('semiannual');
   });
@@ -185,6 +182,10 @@ describe('renewalTrackFor', () => {
     'Umbrella',
     'Renters',
     'Boat Owners',
+    // Motorcycle is a motor vehicle but a 12-month policy (2026-09-11) — it
+    // gets the full T-90 warm-up plus the T-45 review, not the merged call.
+    'Motorcycle',
+    'motorcycles',
     '',
     null,
     undefined,
@@ -202,7 +203,9 @@ describe('renewalTrackFor', () => {
       expect(renewalTrackFor(code)).toBe(expected);
     }
     expect(renewalTrackFor('Zgsh3')).toBe('semiannual');
-    expect(renewalTrackFor('gGKei')).toBe('semiannual');
+    // The Policies table's Motorcycle — annual since 2026-09-11, and the code
+    // has to answer the same as the label or migrated rows split across tracks.
+    expect(renewalTrackFor('gGKei')).toBe('annual');
   });
 
   it('tracks the shared term vocabulary rather than its own list', () => {
