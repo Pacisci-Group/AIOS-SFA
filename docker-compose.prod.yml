@@ -165,15 +165,27 @@ services:
     networks:
       - sfa
     healthcheck:
-      # The serve endpoint answers a GET with its function count, which is a
-      # better readiness signal than "the process is up": it proves the registry
-      # resolved and the client is configured.
+      # ⚠ 401 is the HEALTHY answer here, and 200 would be the worrying one.
+      #
+      # The serve endpoint used to answer an unsigned GET with its function
+      # count. It does not any more: with INNGEST_DEV=0 and a signing key set,
+      # the SDK refuses an unsigned request outright —
+      # "No x-inngest-signature provided" — and returns 401. So a 401 proves
+      # three things at once: the process is listening, the Inngest handler is
+      # mounted, and signature verification is switched on. A 200 would mean the
+      # signing key is missing or INNGEST_DEV is wrong, which is the one state
+      # this endpoint must never be in: it is raw Express middleware that none
+      # of the global guards see, and the signature is its only authentication.
+      #
+      # Whether the functions actually SYNCED is a different question, and one
+      # this container cannot answer. The `deploy-inngest` job asks Inngest
+      # itself (`functionCount > 0`), which is the real end-to-end check.
       test:
         [
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:4001/api/inngest').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+          "fetch('http://127.0.0.1:4001/api/inngest').then((r) => process.exit([200, 401].includes(r.status) ? 0 : 1)).catch(() => process.exit(1))",
         ]
       interval: 15s
       timeout: 5s
