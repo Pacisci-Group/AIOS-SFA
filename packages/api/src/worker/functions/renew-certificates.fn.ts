@@ -97,6 +97,19 @@ export class RenewCertificatesFn implements InngestFunctionProvider {
   }
 
   async handle(step: StepLike): Promise<{ attempted: number }> {
+    // First, make sure every hostname the platform actually serves has a
+    // certificate row. Only then is "what is due" a complete question — see
+    // `reconcileActiveDomains`.
+    const registered = (await step.run('reconcile', () =>
+      this.issuer.reconcileActiveDomains(),
+    )) as number;
+
+    if (registered > 0) {
+      this.logger.warn(
+        `${registered} active domain(s) had no certificate row and were registered.`,
+      );
+    }
+
     const due = (await step.run('find-due', () =>
       this.issuer.findDue(RENEW_BATCH_SIZE),
     )) as string[];
