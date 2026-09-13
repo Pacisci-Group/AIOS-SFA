@@ -302,6 +302,43 @@ export class CertificateIssuerService {
   }
 
   /**
+   * Ensure a certificate row exists for a hostname, without disturbing one that
+   * already holds a valid certificate.
+   *
+   * The worker's own version of `CertificateRegistrationService.register` — the
+   * API side cannot be reused here, because the worker boundary forbids
+   * importing a feature service across it. The duplication is two lines of
+   * `$setOnInsert` and the alternative is relaxing the rule that keeps the
+   * worker extractable.
+   *
+   * Everything is `$setOnInsert` for the same reason as the API side: calling
+   * this for a hostname that already has a valid certificate must do nothing.
+   * Touching `renewAfter` would drag a perfectly good certificate into the next
+   * sweep and re-order it, which is both wasted work and a charge against the
+   * CA's duplicate-certificate limit.
+   */
+  async ensureRegistered(rawHostname: string): Promise<string | null> {
+    const hostname = normalizeHostname(rawHostname);
+    if (!hostname) return null;
+
+    const now = new Date();
+    await this.certificates.updateOne(
+      { hostname },
+      {
+        $setOnInsert: {
+          hostname,
+          status: 'pending',
+          renewAfter: now,
+          failureCount: 0,
+        },
+      },
+      { upsert: true },
+    );
+
+    return hostname;
+  }
+
+  /**
    * Hostnames whose certificates are due for an issuance attempt.
    *
    * Covers first issuance and renewal with one query, because `renewAfter` is

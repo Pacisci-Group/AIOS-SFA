@@ -10,6 +10,7 @@ import { RenewCertificatesFn } from './functions/renew-certificates.fn';
 import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { AcmeAccountService } from './acme/acme-account.service';
 import { CertificateIssuerService } from './acme/certificate-issuer.service';
+import { PlatformCertificateBootstrap } from './acme/platform-certificate.bootstrap';
 import { MailDeliveryService } from './email/mail-delivery.service';
 import { SenderIdentityService } from './email/sender-identity.service';
 import { mailTransportProvider } from './email/mail-transport.provider';
@@ -131,6 +132,10 @@ import {
     // imports. Same trap as `src/mail/` vs `src/worker/email/`.
     AcmeAccountService,
     CertificateIssuerService,
+    // The platform host has no "someone added a domain" moment to hang
+    // registration off, so without this the admin app would come up with no
+    // certificate and nothing that would ever create one.
+    PlatformCertificateBootstrap,
     // Inngest functions. Each is an @Injectable so its handler can inject
     // services; InngestRegistry (in src/inngest/) collects them by decorator,
     // so listing it here is the only registration step.
