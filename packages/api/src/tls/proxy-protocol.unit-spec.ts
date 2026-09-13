@@ -1,4 +1,8 @@
-import { ProxyProtocolError, parseProxyProtocol } from './proxy-protocol';
+import {
+  ProxyProtocolError,
+  looksLikeProxyProtocol,
+  parseProxyProtocol,
+} from './proxy-protocol';
 
 const V2_SIGNATURE = Buffer.from([
   0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a,
@@ -181,5 +185,48 @@ describe('parseProxyProtocol', () => {
     expect(() => parseProxyProtocol(Buffer.from('GET / HTTP/1.1\r\n'))).toThrow(
       ProxyProtocolError,
     );
+  });
+});
+
+describe('looksLikeProxyProtocol', () => {
+  /**
+   * The health-port case. A balancer may or may not prefix its own health
+   * checks, and differs between vendors — so the listener has to accept both.
+   * Getting this wrong marks every droplet unhealthy while each one serves
+   * perfectly, which is close to undiagnosable from outside.
+   */
+  it('recognises a v1 header', () => {
+    expect(looksLikeProxyProtocol(Buffer.from('PROXY TCP4 1.2.3.4'))).toBe(
+      true,
+    );
+  });
+
+  it('recognises a v2 header', () => {
+    expect(looksLikeProxyProtocol(V2_SIGNATURE)).toBe(true);
+  });
+
+  it('rules out a plain HTTP health check', () => {
+    expect(looksLikeProxyProtocol(Buffer.from('GET /healthz HTTP/1.1'))).toBe(
+      false,
+    );
+  });
+
+  it('rules out a TLS handshake', () => {
+    expect(looksLikeProxyProtocol(Buffer.from([0x16, 0x03, 0x01]))).toBe(false);
+  });
+
+  /**
+   * "PUT" and "POST" share a first byte with "PROXY". Deciding on one byte
+   * would misread them as a header and hang the connection.
+   */
+  it('rules out other methods beginning with P', () => {
+    expect(looksLikeProxyProtocol(Buffer.from('PUT /x HTTP/1.1'))).toBe(false);
+    expect(looksLikeProxyProtocol(Buffer.from('POST /x HTTP/1.1'))).toBe(false);
+  });
+
+  it('waits when there is not yet enough to tell', () => {
+    expect(looksLikeProxyProtocol(Buffer.from('PRO'))).toBeNull();
+    expect(looksLikeProxyProtocol(Buffer.alloc(0))).toBeNull();
+    expect(looksLikeProxyProtocol(V2_SIGNATURE.subarray(0, 4))).toBeNull();
   });
 });

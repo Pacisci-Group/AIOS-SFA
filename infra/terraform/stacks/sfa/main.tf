@@ -45,6 +45,56 @@ locals {
   worker_endpoint = local.pool ? module.worker_lb[0].ip : (
     length(module.droplet) > 0 ? module.droplet[0].ipv4_address_private : ""
   )
+
+  # Operator notes, as locals because HCL will not accept a heredoc on either
+  # side of a ternary.
+  notes_pool = <<-EOT
+    This environment runs an AUTOSCALE POOL. Its droplets are NOT deployed to -
+    they fetch published config from the deploy bucket at boot and every 30s.
+
+    1. Point DNS at ${local.public_ip} - BOTH the platform host and the
+       WILDCARD. Missing the wildcard takes out every agency subdomain while the
+       platform host looks fine.
+    2. Set PUBLIC_SERVER_IPS to the same address: it is what a custom-domain
+       owner is told to put in their own A record.
+    3. Set APP_PRIVATE_IP to ${local.worker_endpoint} - the INTERNAL balancer,
+       not a droplet. It survives scaling; a member's address does not.
+    4. Add the DEPLOY_CONFIG_* Environment secrets:
+         terraform output deploy_config_github_secrets
+         terraform output -raw deploy_config_secret_key
+    5. Set AUTOSCALE_ENABLED=true and EDGE_PROXY_PROTOCOL=true as Environment
+       VARIABLES, then run the deploy. EDGE_PROXY_PROTOCOL must agree with
+       pool_proxy_protocol or every connection through the balancer breaks.
+    6. Confirm Mongo gives us transactions - the API logs
+       "MongoDB transactions available" at boot, and the lead-intake pipeline
+       needs it. A "NOT a replica set" warning means degraded atomicity.
+
+    TLS needs no step. The worker obtains certificates over ACME and stores them
+    in MongoDB; the edge reads them by SNI. No certificate is ever uploaded,
+    by us or by an agency.
+  EOT
+
+  notes_single_droplet = <<-EOT
+    1. SSH: ssh deploy@${local.public_ip}
+    2. Copy app + docker-compose.prod.yml to /opt/sfa/
+    3. The deploy workflow writes /opt/sfa/.env from GitHub Environment secrets
+       on every run - set them there, not on the droplet, or they are
+       overwritten. Values to copy out of these outputs:
+         MONGODB_URI                 terraform output -raw mongodb_uri
+         STORAGE_BUCKET              terraform output -raw spaces_bucket
+         STORAGE_ENDPOINT            terraform output -raw spaces_endpoint
+         STORAGE_REGION              terraform output -raw spaces_region
+         STORAGE_ACCESS_KEY_ID       terraform output -raw spaces_access_key_id
+         STORAGE_SECRET_ACCESS_KEY   terraform output -raw spaces_secret_access_key
+    4. Run: cd /opt/sfa && docker compose -f docker-compose.prod.yml up -d
+    5. TLS needs no step. On enable_node_edge the worker obtains certificates
+       over ACME and the edge reads them from MongoDB; before that, Caddy issued
+       them on demand. Certbot has not been used here for a long time, whatever
+       this note used to say.
+    6. Confirm Mongo gives us transactions - the API logs
+       "MongoDB transactions available" at boot, and the lead-intake pipeline
+       needs it. A "NOT a replica set" warning means degraded atomicity.
+  EOT
 }
 
 resource "digitalocean_ssh_key" "deploy" {

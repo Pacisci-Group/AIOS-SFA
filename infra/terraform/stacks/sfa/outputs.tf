@@ -160,24 +160,7 @@ output "deploy_config_secret_key" {
 }
 
 output "deploy_notes" {
-  value = <<-EOT
-    1. Reach it at: ${local.public_ip}
-    2. Copy app + docker-compose.prod.yml to /opt/sfa/
-    3. The deploy workflow writes /opt/sfa/.env from GitHub Environment secrets on
-       every run — set them there, not on the droplet, or they will be overwritten.
-       Values to copy out of these outputs:
-         MONGODB_URI                 terraform output -raw mongodb_uri
-         STORAGE_BUCKET              terraform output -raw spaces_bucket
-         STORAGE_ENDPOINT            terraform output -raw spaces_endpoint
-         STORAGE_REGION              terraform output -raw spaces_region
-         STORAGE_ACCESS_KEY_ID       terraform output -raw spaces_access_key_id
-         STORAGE_SECRET_ACCESS_KEY   terraform output -raw spaces_secret_access_key
-    4. Run: cd /opt/sfa && docker compose -f docker-compose.prod.yml up -d
-    5. TLS: sudo certbot --nginx -d ${var.domain}
-    6. Confirm Mongo gives us transactions — the API logs
-       "MongoDB transactions available" at boot, and the lead-intake pipeline
-       needs it. A "NOT a replica set" warning means degraded atomicity.
-  EOT
+  value = local.pool ? local.notes_pool : local.notes_single_droplet
 }
 
 # ─── Inngest ──────────────────────────────────────────────────────────────────
