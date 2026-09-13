@@ -15,6 +15,7 @@ import { EdgeRootModule } from './tls/edge-root.module';
 import {
   ProxyProtocolError,
   type ProxyProtocolResult,
+  looksLikeProxyProtocol,
   parseProxyProtocol,
 } from './tls/proxy-protocol';
 
@@ -292,8 +293,14 @@ async function bootstrap() {
     httpsServer.listen(httpsPort, '0.0.0.0');
   }
 
-  // Never wrapped, in either mode. See the note on `healthPort`.
-  healthServer.listen(healthPort, '0.0.0.0');
+  // Tolerant of a PROXY header rather than requiring or forbidding one.
+  //
+  // ⚠ This is the listener the load balancer decides droplet health from, so
+  // being wrong here takes the whole pool out of rotation while every droplet
+  // serves perfectly — and balancers differ on whether they prefix their own
+  // health checks. Accepting both is the only version that cannot be wrong, and
+  // it costs a few bytes of sniffing per check.
+  listenTolerantOfProxyProtocol(healthServer, healthPort);
 
   logger.log(
     `Edge listening on :${httpPort} (http), :${httpsPort} (https) and ` +
@@ -312,6 +319,54 @@ function clientIpOf(socket: Socket): string {
   const claimed = (socket as Socket & { proxyProtocolSource?: string })
     .proxyProtocolSource;
   return claimed ?? socket.remoteAddress ?? 'unknown';
+}
+
+/**
+ * Front a server with a listener that accepts connections with OR without a
+ * PROXY header.
+ *
+ * Used only for the health port. Everywhere else the protocol is a contract —
+ * either every connection carries a header or none does, and a mismatch is a
+ * misconfiguration worth failing loudly on. A health check is the one case where
+ * we genuinely do not control, or reliably know, what the other end sends.
+ */
+function listenTolerantOfProxyProtocol(
+  server: { emit: (event: string, socket: Socket) => boolean },
+  port: number,
+): void {
+  const listener = new NetServer((socket: Socket) => {
+    let buffered = Buffer.alloc(0);
+
+    const onData = (chunk: Buffer) => {
+      buffered = Buffer.concat([buffered, chunk]);
+
+      const verdict = looksLikeProxyProtocol(buffered);
+      if (verdict === null) return; // need more bytes to tell
+
+      let consumed = 0;
+      if (verdict) {
+        let parsed: ProxyProtocolResult | null;
+        try {
+          parsed = parseProxyProtocol(buffered);
+        } catch {
+          socket.destroy();
+          return;
+        }
+        if (!parsed) return; // header started but is not complete yet
+        consumed = parsed.consumed;
+      }
+
+      socket.removeListener('data', onData);
+      const remainder = buffered.subarray(consumed);
+      if (remainder.length > 0) socket.unshift(remainder);
+      server.emit('connection', socket);
+    };
+
+    socket.on('data', onData);
+    socket.on('error', () => socket.destroy());
+  });
+
+  listener.listen(port, '0.0.0.0');
 }
 
 /**

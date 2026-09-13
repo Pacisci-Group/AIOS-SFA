@@ -54,6 +54,46 @@ export interface ProxyProtocolResult {
 export class ProxyProtocolError extends Error {}
 
 /**
+ * Does this connection begin with a PROXY header?
+ *
+ * `true` it does, `false` it definitely does not, `null` not enough bytes yet.
+ *
+ * ## Why "definitely does not" is worth knowing
+ * A load balancer that prefixes forwarded traffic with a PROXY header does not
+ * necessarily prefix its own HEALTH CHECKS — and the behaviour differs between
+ * balancers. Guessing either way is a bad bet: assume a header and the health
+ * check is dropped as malformed, so every backend is marked unhealthy while
+ * serving perfectly; assume none and the header is read as the first line of an
+ * HTTP request, which fails just as silently.
+ *
+ * Sniffing first lets a listener accept both, which is the only version of this
+ * that cannot be wrong.
+ */
+export function looksLikeProxyProtocol(data: Buffer): boolean | null {
+  if (data.length === 0) return null;
+
+  // v2 is binary and starts with \r; v1 is the ASCII word PROXY. Neither can
+  // begin a TLS handshake (0x16) or any HTTP method.
+  if (data[0] === V2_SIGNATURE[0]) {
+    const known = Math.min(data.length, V2_SIGNATURE.length);
+    if (!data.subarray(0, known).equals(V2_SIGNATURE.subarray(0, known))) {
+      return false;
+    }
+    return data.length >= V2_SIGNATURE.length ? true : null;
+  }
+
+  if (data[0] === V1_PREFIX[0]) {
+    const known = Math.min(data.length, V1_PREFIX.length);
+    if (!data.subarray(0, known).equals(V1_PREFIX.subarray(0, known))) {
+      return false;
+    }
+    return data.length >= V1_PREFIX.length ? true : null;
+  }
+
+  return false;
+}
+
+/**
  * Parse a PROXY header from the front of `data`.
  *
  * Returns `null` when the buffer does not yet hold a complete header and the
