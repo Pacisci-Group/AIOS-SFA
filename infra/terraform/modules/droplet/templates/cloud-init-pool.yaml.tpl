@@ -50,8 +50,8 @@ write_files:
     content: |
       AWS_ACCESS_KEY_ID=${config_access_key_id}
       AWS_SECRET_ACCESS_KEY=${config_secret_key}
-      AWS_DEFAULT_REGION=${config_region}
-      SFA_CONFIG_ENDPOINT=${config_endpoint}
+      SFA_CONFIG_REGION=${config_region}
+      SFA_CONFIG_HOST=${config_host}
       SFA_CONFIG_BUCKET=${config_bucket}
 
   # The convergence script. Idempotent, and safe to run every 30 seconds: it
@@ -73,15 +73,36 @@ write_files:
       . /etc/sfa/bootstrap.env
       set +a
 
-      S3="aws s3 --endpoint-url $SFA_CONFIG_ENDPOINT"
       STAGE=$(mktemp -d)
       trap 'rm -rf "$STAGE"' EXIT
 
-      if ! $S3 cp "s3://$SFA_CONFIG_BUCKET/current/docker-compose.prod.yml" "$STAGE/docker-compose.prod.yml" >/dev/null 2>&1; then
+      # Fetched with curl's own SigV4 signing rather than the AWS CLI.
+      #
+      # awscli is NOT packaged for Ubuntu 24.04 - universe is enabled and there
+      # is still no candidate - so `apt-get install awscli` fails and every
+      # droplet in the pool would come up unable to fetch its configuration,
+      # serving nothing, with the reason buried in a journal nobody reads.
+      #
+      # curl 8.5 ships in the base image and signs S3 requests natively, so
+      # there is no package to install, no large download at boot, and nothing
+      # to go missing.
+      # Virtual-host addressing, using the bucket's own FQDN. That is how this
+      # platform reaches Spaces everywhere else (STORAGE_FORCE_PATH_STYLE=false),
+      # and taking the host from terraform rather than assembling one means
+      # there is no second addressing style to get wrong.
+      fetch() {
+        curl -fsS --max-time 30 \
+          --aws-sigv4 "aws:amz:$SFA_CONFIG_REGION:s3" \
+          --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+          -o "$2" \
+          "https://$SFA_CONFIG_HOST/current/$1"
+      }
+
+      if ! fetch docker-compose.prod.yml "$STAGE/docker-compose.prod.yml"; then
         echo "sfa-converge: no published compose file yet; nothing to do."
         exit 0
       fi
-      if ! $S3 cp "s3://$SFA_CONFIG_BUCKET/current/app.env" "$STAGE/.env" >/dev/null 2>&1; then
+      if ! fetch app.env "$STAGE/.env"; then
         echo "sfa-converge: no published env yet; nothing to do."
         exit 0
       fi
@@ -179,7 +200,11 @@ runcmd:
   - install -d -o deploy -g deploy /opt/sfa
   - install -d -o root -g root -m 0700 /etc/sfa
   - export DEBIAN_FRONTEND=noninteractive
-  - apt-get install -y ca-certificates curl gnupg ufw awscli
+  - apt-get install -y ca-certificates curl gnupg ufw
+  # The config fetch depends on curl being able to sign S3 requests itself
+  # (>= 7.75). Checked loudly, because without it every converge run fails and
+  # the droplet serves nothing while looking perfectly healthy from outside.
+  - ["bash", "-c", "curl --help all 2>/dev/null | grep -q aws-sigv4 || { echo 'FATAL: curl has no --aws-sigv4; this droplet cannot fetch its configuration'; exit 1; }"]
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   - chmod a+r /etc/apt/keyrings/docker.asc

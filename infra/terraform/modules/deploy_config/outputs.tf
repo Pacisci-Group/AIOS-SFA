@@ -3,7 +3,20 @@ output "bucket" {
 }
 
 output "endpoint" {
-  value = digitalocean_spaces_bucket.config.endpoint
+  description = "Region endpoint, without the bucket. For tooling that takes --endpoint-url."
+  value       = digitalocean_spaces_bucket.config.endpoint
+}
+
+output "bucket_domain_name" {
+  description = <<-EOT
+    The bucket's own FQDN — `<bucket>.<region>.digitaloceanspaces.com`.
+
+    Handed to droplets so the fetch URL needs no string assembly. It is also
+    virtual-host addressing, which is how this platform already reaches Spaces
+    everywhere else (`STORAGE_FORCE_PATH_STYLE=false`); building a path-style
+    URL by hand would be a second addressing style to be wrong about.
+  EOT
+  value       = digitalocean_spaces_bucket.config.bucket_domain_name
 }
 
 output "region" {
