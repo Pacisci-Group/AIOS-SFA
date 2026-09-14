@@ -138,15 +138,29 @@ export function backoffAfterFailure(failureCount: number, now: Date): Date {
 }
 
 /**
+ * Ceiling on one ACME order.
+ *
+ * The exchange takes seconds. This exists for the case where the CA accepts an
+ * order and never resolves it: without a bound, `issue()` awaits forever while
+ * holding the claim, and every later attempt reports "skipped" until the lock
+ * ages out. Two minutes is far beyond any healthy order and short enough that a
+ * stuck one becomes a recorded failure with a backoff rather than silence.
+ */
+export const ORDER_TIMEOUT_MS = 120_000;
+
+/**
  * How long a worker may hold an issuance claim before another may take it.
  *
- * Fifteen minutes, matching the reaping window `database/run-migrations.ts`
- * uses, and for the same reason: a process killed mid-order leaves the claim
- * set, and a row nobody can ever claim again is a certificate that silently
- * stops renewing. Long enough that a slow-but-live order is never stolen —
- * validation plus issuance is seconds, not minutes.
+ * This is the recovery path for a process KILLED mid-order — nothing else can
+ * release a claim whose owner no longer exists. A clean failure, including the
+ * timeout above, releases it immediately.
+ *
+ * Five minutes: comfortably more than twice `ORDER_TIMEOUT_MS`, so a live order
+ * can never have its claim stolen, and short enough that a killed worker does
+ * not block issuance for a quarter of an hour. It was fifteen, copied from the
+ * migration lock, where the work being guarded is unbounded and this one is not.
  */
-export const ISSUANCE_LOCK_TTL_MS = 15 * 60_000;
+export const ISSUANCE_LOCK_TTL_MS = 5 * 60_000;
 
 /**
  * How long an unanswered `http-01` challenge row survives.

@@ -85,6 +85,20 @@ export class PlatformCertificateBootstrap implements OnApplicationBootstrap {
       return;
     }
 
+    if (outcome.status === 'skipped') {
+      // ⚠ Log the REASON, not just the status.
+      //
+      // "skipped" alone is indistinguishable between "another worker is already
+      // doing it, all is well" and "a lock is held by a process that no longer
+      // exists and nothing will happen until it expires". Those need completely
+      // different responses, and the difference was being discarded one line
+      // before it was printed.
+      this.logger.warn(
+        `Platform host ${hostname}: skipped — ${outcome.reason}`,
+      );
+      return;
+    }
+
     this.logger.log(`Platform host ${hostname}: ${outcome.status}.`);
   }
 }
