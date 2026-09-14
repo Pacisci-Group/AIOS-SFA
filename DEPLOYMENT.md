@@ -290,6 +290,23 @@ journalctl -u sfa-converge -n 50     # what it fetched and whether it applied
 > every caller appears to come from the balancer and the public intake rate
 > limits collapse into one shared bucket.
 
+#### A droplet cannot reach its own load balancer
+
+DigitalOcean load balancers do not support hairpinning: a backend connecting to
+the public address of the balancer it sits behind **hangs** rather than being
+refused.
+
+This bit certificate issuance. `acme-client` verifies a challenge itself before
+notifying the CA, by fetching the challenge URL — which resolves to the
+balancer. On a single droplet that worked; behind one it hangs, so no
+certificate on the platform could be issued at all. It is disabled
+(`skipChallengeVerification: true`), since the CA reaches us from outside where
+the balancer works normally.
+
+Worth remembering for anything else that resolves a public hostname from inside
+the pool: it will not come back. Reach the app on `127.0.0.1` or a container
+name instead.
+
 #### The reserved IP goes away, and that is a DNS cutover
 
 A reserved IP attaches to a *droplet* (`digitalocean_reserved_ip_assignment`

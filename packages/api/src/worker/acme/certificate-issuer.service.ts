@@ -206,6 +206,28 @@ export class CertificateIssuerService {
        */
       challengePriority: ['http-01'],
 
+      /**
+       * ⚠ Do not verify the challenge ourselves before telling the CA.
+       *
+       * By default `auto()` first fetches the challenge URL from THIS process,
+       * as a sanity check, and only notifies the CA once it answers. On a single
+       * droplet that works: the worker connects to the droplet's own public
+       * address and reaches its own edge.
+       *
+       * Behind a load balancer it does not. The URL resolves to the balancer,
+       * and a backend connecting to the public address of the balancer it sits
+       * behind is a hairpin, which DigitalOcean load balancers do not support.
+       * It does not refuse — it hangs, so the order never completes and every
+       * certificate on the platform fails to issue. The two-minute ceiling turns
+       * that into a timeout rather than a silent stall, but the order still
+       * never succeeds.
+       *
+       * The CA reaches us from outside, where the balancer works normally, so
+       * skipping the self-check costs only an early-warning convenience. The
+       * authority on whether a challenge is answerable was always the CA.
+       */
+      skipChallengeVerification: true,
+
       challengeCreateFn: async (_authz, challenge, keyAuthorization) => {
         if (challenge.type !== 'http-01') {
           throw new Error(`Unexpected challenge type ${challenge.type}.`);
