@@ -88,6 +88,28 @@ export class CertificateIssuerService {
       };
     }
 
+    // ⚠ The backoff binds EVERY caller, not just the sweep.
+    //
+    // `findDue` filters on `renewAfter`, so the sweep already honours it — but
+    // `PlatformCertificateBootstrap` called `issue()` directly on every worker
+    // boot, which meant a restart placed a fresh order however recently the last
+    // one had failed. During a debugging session that is a restart every few
+    // minutes, and each one spent an order against Let's Encrypt's limits until
+    // the account was refused with a 429 and a Retry-After of sixteen hours.
+    //
+    // The backoff existed and was correct; it simply was not authoritative. It
+    // is checked here now, where every path must pass, rather than in the one
+    // caller that happened to look.
+    const due = await this.isDue(hostname);
+    if (!due) {
+      return {
+        status: 'skipped',
+        hostname,
+        reason:
+          'Not due yet — a recent attempt set a backoff, or the certificate is current.',
+      };
+    }
+
     const claimed = await this.claim(hostname);
     if (!claimed) {
       return {
@@ -159,6 +181,23 @@ export class CertificateIssuerService {
   /** Whether this environment issues certificates. See `acme.config.ts`. */
   enabled(): boolean {
     return acmeEnabled(this.config.get<string>('ACME_ENABLED'));
+  }
+
+  /**
+   * Whether this hostname may be attempted now.
+   *
+   * A row that does not exist yet is due — that is a first issuance. Otherwise
+   * `renewAfter` decides: set to now on creation, to the renewal point on
+   * success, and to an exponential backoff on failure.
+   */
+  private async isDue(hostname: string): Promise<boolean> {
+    const row = await this.certificates
+      .findOne({ hostname })
+      .select('renewAfter')
+      .lean();
+
+    if (!row) return true;
+    return row.renewAfter.getTime() <= Date.now();
   }
 
   /**
