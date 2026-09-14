@@ -261,15 +261,23 @@ services:
     networks:
       - sfa
     healthcheck:
-      # Asks the edge's own plain-HTTP listener, which answers /healthz without
-      # proxying. A check through to the app would make this report the web
-      # container's health rather than the edge's.
+      # ⚠ The HEALTH port, not :80.
+      #
+      # :80 is wrapped in the PROXY protocol listener when EDGE_PROXY_PROTOCOL is
+      # on, and this check runs on loopback INSIDE the container — it never
+      # passes through the load balancer, so it carries no header and the
+      # listener drops it. Every 15 seconds, forever: the container is marked
+      # unhealthy while it serves real traffic perfectly, and its log fills with
+      # warnings that read as a balancer misconfiguration and are not one.
+      #
+      # 8081 exists for exactly this. It tolerates a header rather than requiring
+      # one, so the identical check works from the balancer and from loopback.
       test:
         [
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:80/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+          "fetch('http://127.0.0.1:8081/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
         ]
       interval: 15s
       timeout: 5s
