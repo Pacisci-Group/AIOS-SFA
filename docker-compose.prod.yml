@@ -42,9 +42,14 @@
 #                            can tell an owner what to put in an A record. Only
 #                            an apex domain needs one — RFC 1034 forbids a CNAME
 #                            there.
-#   WORKER_INNGEST_BIND   -> "<droplet private IP>:4001". Inngest reaches the
-#                            serve handler here; the firewall admits only the
-#                            Inngest droplet.
+#   WORKER_INNGEST_BIND   -> where the worker publishes 4001 ON THE DROPLET.
+#                            Single droplet: "<its private IP>:4001".
+#                            Autoscale pool: "0.0.0.0:4001" — Inngest reaches the
+#                            worker through an INTERNAL load balancer, whose
+#                            address belongs to the balancer and not to any
+#                            droplet, so binding it here fails outright.
+#                            0.0.0.0 is safe there because the DO firewall
+#                            admits 4001 from that balancer alone.
 #   WORKER_INLINE=false   -> REQUIRED now that the worker is its own container.
 #                            Left true, both processes register under the same
 #                            Inngest app id and whichever synced last wins.
@@ -239,6 +244,20 @@ services:
     ports:
       - "${EDGE_HTTP_BIND:-0.0.0.0}:80:80"
       - "${EDGE_HTTPS_BIND:-0.0.0.0}:443:443"
+      # ⚠ The health port, and it is NOT optional.
+      #
+      # The load balancer decides whether a droplet may receive traffic by
+      # checking this port ON THE HOST. Listening inside the container is not
+      # enough: without this line nothing answers, every droplet is marked
+      # unhealthy forever, and the balancer resets every connection it receives
+      # — while the containers are all running and healthy, and the droplet's
+      # own logs say the stack applied cleanly. There is no symptom anywhere
+      # that points at a missing port mapping.
+      #
+      # Safe on 0.0.0.0 because the DO firewall admits 8081 from the load
+      # balancer alone (`load_balancer_rules` in stacks/sfa/main.tf), and ufw
+      # narrows it again on the host.
+      - "${EDGE_HEALTH_BIND:-0.0.0.0}:8081:8081"
     networks:
       - sfa
     healthcheck:
