@@ -226,6 +226,11 @@ export class CertificateIssuerService {
   }> {
     const client = await this.account.client();
 
+    // Bracketing the order at LOG level, not debug, so "how far did it get" is
+    // answerable even where debug is filtered out. Everything between these two
+    // lines is acme-client's own tracing.
+    this.logger.log(`Ordering a certificate for ${hostname}...`);
+
     const [keyBuffer, csr] = await acme.crypto.createCsr({
       altNames: [hostname],
     });
@@ -275,6 +280,8 @@ export class CertificateIssuerService {
           });
       },
     });
+
+    this.logger.log(`Order complete for ${hostname}; reading the certificate.`);
 
     const info = acme.crypto.readCertificateInfo(certPem);
 

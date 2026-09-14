@@ -34,6 +34,32 @@ const DUPLICATE_KEY = 11000;
  * So the account key is minted once, encrypted, and stored. Every worker in
  * every replica reads the same row.
  */
+/**
+ * Route acme-client's own tracing into ours.
+ *
+ * ## Why this is worth a global
+ * An ACME order is a dozen round trips - create order, fetch authorizations,
+ * publish a challenge, ask the CA to validate, poll until it does, finalise,
+ * poll again, download. `client.auto()` performs all of it behind one await, so
+ * a stall anywhere in that sequence looks identical from outside: one promise
+ * that does not settle.
+ *
+ * That is exactly the state the platform host was in - an order timing out at
+ * the two-minute ceiling with no way to tell which step never came back, and
+ * two wrong theories chased because the alternative was guessing. The library
+ * traces every step and simply had nowhere to send it.
+ *
+ * `setLogger` is process-global rather than per-client, which is why it is
+ * installed once here rather than in the issuer.
+ */
+let acmeTracingInstalled = false;
+
+function installAcmeTracing(logger: Logger): void {
+  if (acmeTracingInstalled) return;
+  acmeTracingInstalled = true;
+  acme.setLogger((message: string) => logger.debug(`acme: ${message}`));
+}
+
 @Injectable()
 export class AcmeAccountService {
   private readonly logger = new Logger(AcmeAccountService.name);
@@ -64,6 +90,8 @@ export class AcmeAccountService {
    * registering it on first use.
    */
   async client(): Promise<acme.Client> {
+    installAcmeTracing(this.logger);
+
     const directoryUrl = this.directoryUrl();
     if (this.cached?.directoryUrl === directoryUrl) return this.cached.client;
 
