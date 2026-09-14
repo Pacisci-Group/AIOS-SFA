@@ -42,6 +42,7 @@ import {
   userStatus,
   type AgencyUser,
   type ReleasedWork,
+  agencyUserOptionsKey,
 } from "@/lib/users-api";
 import { ChangeRoleDialog } from "./ChangeRoleDialog";
 
@@ -114,6 +115,9 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
   const invalidateUsers = () =>
     void queryClient.invalidateQueries({ queryKey: ["users"] });
+    // Deactivating or reactivating changes who is assignable, and the
+    // pickers key on `agency-users` rather than `users`.
+    void queryClient.invalidateQueries({ queryKey: agencyUserOptionsKey });
 
   const resend = useMutation({
     mutationFn: () => resendInvite(user._id),

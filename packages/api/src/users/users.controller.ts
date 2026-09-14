@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
@@ -27,7 +28,12 @@ import {
   MINUTE_MS,
   PASSWORD_RESET_ISSUE_RATE_LIMIT,
 } from '../config/rate-limit.config';
+import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { InviteUserDto } from './dto/invite-user.dto';
+import {
+  listAgencyUsersSchema,
+  type ListAgencyUsersDto,
+} from './dto/list-users.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -36,16 +42,39 @@ import { UsersService } from './users.service';
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
+  /**
+   * The agency directory — **paginated and searched server-side** since
+   * PAC-101, where it used to return the whole roster as a bare array.
+   *
+   * The three pickers that also read it were moved to `GET /users/options`
+   * first, so this shape change has one consumer.
+   */
   @Get()
   @RequirePermissions(AgencyPermission.UsersRead)
-  list(@AgencyId() agencyId: string) {
-    return this.usersService.findByAgency(agencyId);
+  list(
+    @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
+    @Query(new ZodValidationPipe(listAgencyUsersSchema))
+    query: ListAgencyUsersDto,
+  ) {
+    return this.usersService.findByAgency(agencyId, query, access);
   }
 
   @Get('assignable-permissions')
   @RequirePermissions(AgencyPermission.UsersPermissions)
   assignablePermissions(@AgencyId() agencyId: string) {
     return this.usersService.listAssignablePermissions(agencyId);
+  }
+
+  /**
+   * ⚠ Declared **before** `@Get(':userId')`. Nest matches in declaration order,
+   * so a literal path after a bare param is swallowed by it and `options`
+   * arrives as a user id — the same reason `assignable-permissions` sits above.
+   */
+  @Get('options')
+  @RequirePermissions(AgencyPermission.UsersRead)
+  options(@AgencyId() agencyId: string) {
+    return this.usersService.listOptions(agencyId);
   }
 
   @Get(':userId')

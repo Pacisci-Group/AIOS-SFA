@@ -6,6 +6,7 @@ import { MailersButton } from "@/components/leads/MailersButton";
 import { ShareLinkButton } from "@/components/leads/ShareLinkButton";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { TablePagination } from "@/components/common/TablePagination";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -103,6 +104,7 @@ export default function LeadsPage() {
         <LeadsFilters
           search={search}
           onSearchChange={setSearch}
+          busy={isFetching}
           filters={filters}
           onChange={patchFilters}
           onOpenAdvanced={() => setAdvancedOpen(true)}
@@ -123,7 +125,14 @@ export default function LeadsPage() {
           </div>
         ) : !isPending && items.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center rounded-xl bg-card border border-border">
-            <p className="text-sm text-muted-foreground">No leads found.</p>
+            <p className="text-sm text-muted-foreground">
+              {/* Search-aware, and keyed off the **debounced** value: keying
+                  off what is still being typed flips the copy before the
+                  request that would justify it has fired. */}
+              {debouncedSearch.trim()
+                ? `No leads match “${debouncedSearch.trim()}”.`
+                : "No leads found."}
+            </p>
           </div>
         ) : (
           <>
@@ -143,33 +152,16 @@ export default function LeadsPage() {
               ))}
             </div>
 
-            {!isPending && (
-              <div className="flex items-center justify-between gap-3 mt-4">
-                <span className="text-sm text-muted-foreground">
-                  Showing {firstRow} to {lastRow} of {total}
-                </span>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page <= 1 || isFetching}
-                      onClick={() => setPage(Math.max(1, page - 1))}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page >= totalPages || isFetching}
-                      onClick={() => setPage(Math.min(totalPages, page + 1))}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
+            <TablePagination
+              page={page}
+              pageSize={PAGE_SIZE}
+              total={total}
+              totalPages={totalPages}
+              onPageChange={setPage}
+              busy={isFetching}
+              noun="leads"
+              className="mt-4"
+            />
           </>
         )}
       </main>

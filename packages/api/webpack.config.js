@@ -21,6 +21,12 @@ const path = require('path');
  *                      container. Built unconditionally so the split path is
  *                      always compiled and type-checked, never bit-rotting
  *                      until the day it is needed.
+ *   dist/edge.js       the TLS edge — terminates HTTPS for every hostname the
+ *                      platform serves, looking certificates up in MongoDB by
+ *                      SNI, and proxies to the `web` container. Replaces Caddy
+ *                      on environments with `enable_node_edge = true`; shared
+ *                      certificate storage is what lets the app tier scale
+ *                      horizontally at all.
  *
  * One-shot scripts (`docker compose run --rm api node dist/<x>.js`):
  *   dist/seed/seed.js                              core seed — super admin,
@@ -122,6 +128,7 @@ module.exports = (options) => ({
   entry: {
     main: options.entry,
     worker: path.resolve(__dirname, 'src/worker.ts'),
+    edge: path.resolve(__dirname, 'src/edge.ts'),
     ...Object.fromEntries(
       Object.entries(ONE_SHOT_ENTRIES).map(([name, source]) => [
         name,

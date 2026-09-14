@@ -14,9 +14,12 @@ describe('routeSearchTerm', () => {
       },
     );
 
-    it('does not also search a reference as a name', () => {
-      // `1985` would otherwise regex-scan every household name for nothing.
-      expect(routeSearchTerm('HH-2614').name).toBeUndefined();
+    it('routes nothing but the indivisible values', () => {
+      // PAC-101: there is no `name` route any more. A reference used to
+      // *suppress* the name branch, so a household actually named "2614
+      // Trust" was unreachable by its own name. Names are tokenized now, and
+      // the tokenizer never suppresses anything.
+      expect(routeSearchTerm('HH-2614')).not.toHaveProperty('name');
     });
   });
 
@@ -44,8 +47,8 @@ describe('routeSearchTerm', () => {
       expect(routeSearchTerm('2025-02-30').dateOfBirth).toBeUndefined();
     });
 
-    it('does not also search a date as a name', () => {
-      expect(routeSearchTerm('1985-03-12').name).toBeUndefined();
+    it('routes nothing but the indivisible values', () => {
+      expect(routeSearchTerm('1985-03-12')).not.toHaveProperty('name');
     });
   });
 
@@ -60,23 +63,20 @@ describe('routeSearchTerm', () => {
     });
   });
 
-  describe('names', () => {
-    it('routes an ordinary word to names', () => {
-      expect(routeSearchTerm('mcdonald').name).toBe('mcdonald');
+  describe('additive routing', () => {
+    it('leaves an ordinary word to the tokenizer', () => {
+      // Only the policy-key route claims it — a word long enough to be a
+      // policy number is searched as one *as well as* being tokenized as a
+      // name by the caller.
+      expect(routeSearchTerm('mcdonald')).toEqual({ policyKey: 'MCDONALD' });
     });
 
     it('trims before routing', () => {
-      expect(routeSearchTerm('  mcdonald  ').name).toBe('mcdonald');
-    });
-
-    it('is additive — a name long enough to be a policy key searches both', () => {
-      // Neither dimension excludes the other; whichever matches wins.
-      const routes = routeSearchTerm('mcdonald');
-      expect(routes.name).toBe('mcdonald');
-      expect(routes.policyKey).toBe('MCDONALD');
+      expect(routeSearchTerm('  HH-2614  ').householdRef).toBe('HH-2614');
     });
 
     it('searches a reference as a policy number too', () => {
+      // Neither dimension excludes the other; whichever matches wins.
       const routes = routeSearchTerm('HH-2614');
       expect(routes.householdRef).toBe('HH-2614');
       expect(routes.policyKey).toBe('HH2614');

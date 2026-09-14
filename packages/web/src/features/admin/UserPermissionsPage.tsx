@@ -5,6 +5,7 @@ import {
   getUser,
   updateUserPermissions,
   type AgencyUserDetail,
+  agencyUserOptionsKey,
 } from '@/lib/users-api';
 import { PermissionCatalogEditor } from './PermissionCatalogEditor';
 
@@ -29,6 +30,7 @@ export default function UserPermissionsPage() {
     onSuccess: (updated) => {
       queryClient.setQueryData(['user', userId], updated);
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: agencyUserOptionsKey });
     },
   });
 

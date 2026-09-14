@@ -5,7 +5,12 @@ import { MailerCampaignOutputEmailFn } from './functions/mailer-campaign-output-
 import { MailerCampaignPreviewFn } from './functions/mailer-campaign-preview.fn';
 import { SendInviteEmailFn } from './functions/send-invite-email.fn';
 import { SendPasswordResetEmailFn } from './functions/send-password-reset-email.fn';
+import { IssueCertificateFn } from './functions/issue-certificate.fn';
+import { RenewCertificatesFn } from './functions/renew-certificates.fn';
 import { SweepEventLogFn } from './functions/sweep-event-log.fn';
+import { AcmeAccountService } from './acme/acme-account.service';
+import { CertificateIssuerService } from './acme/certificate-issuer.service';
+import { PlatformCertificateBootstrap } from './acme/platform-certificate.bootstrap';
 import { MailDeliveryService } from './email/mail-delivery.service';
 import { SenderIdentityService } from './email/sender-identity.service';
 import { mailTransportProvider } from './email/mail-transport.provider';
@@ -32,6 +37,18 @@ import {
 } from '../platform/schemas/agency-domain.schema';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { StorageModule } from '../storage/storage.module';
+import {
+  AcmeAccount,
+  AcmeAccountSchema,
+} from '../tls/schemas/acme-account.schema';
+import {
+  AcmeChallenge,
+  AcmeChallengeSchema,
+} from '../tls/schemas/acme-challenge.schema';
+import {
+  Certificate,
+  CertificateSchema,
+} from '../tls/schemas/certificate.schema';
 
 /**
  * All asynchronous work: Inngest function bodies, and every outbound email.
@@ -78,6 +95,12 @@ import { StorageModule } from '../storage/storage.module';
       { name: Mailer.name, schema: MailerSchema },
       { name: Carrier.name, schema: CarrierSchema },
       { name: Lead.name, schema: LeadSchema },
+      // TLS certificate lifecycle. Owned by `src/tls/`, registered here
+      // because the worker is what runs ACME — schemas are the one thing
+      // the worker boundary lets across, and the issuer needs all three.
+      { name: Certificate.name, schema: CertificateSchema },
+      { name: AcmeChallenge.name, schema: AcmeChallengeSchema },
+      { name: AcmeAccount.name, schema: AcmeAccountSchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports
@@ -102,6 +125,17 @@ import { StorageModule } from '../storage/storage.module';
     // `common/` helper whose only dependencies are `ConfigService` and the
     // `AgencyDomain` schema, so the worker boundary is intact.
     TenantUrlService,
+    // Certificate issuance. Lives in `src/worker/acme/` rather than
+    // `src/worker/tls/`: these patterns match the import *string*, and
+    // `tls` is a feature directory, so a worker subdirectory sharing that
+    // name would make the boundary rule fire on the worker's own relative
+    // imports. Same trap as `src/mail/` vs `src/worker/email/`.
+    AcmeAccountService,
+    CertificateIssuerService,
+    // The platform host has no "someone added a domain" moment to hang
+    // registration off, so without this the admin app would come up with no
+    // certificate and nothing that would ever create one.
+    PlatformCertificateBootstrap,
     // Inngest functions. Each is an @Injectable so its handler can inject
     // services; InngestRegistry (in src/inngest/) collects them by decorator,
     // so listing it here is the only registration step.
@@ -111,6 +145,8 @@ import { StorageModule } from '../storage/storage.module';
     MailerCampaignPreviewFn,
     MailerCampaignCommitFn,
     MailerCampaignOutputEmailFn,
+    IssueCertificateFn,
+    RenewCertificatesFn,
   ],
 })
 export class WorkerModule {}

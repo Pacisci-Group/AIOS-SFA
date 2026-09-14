@@ -84,9 +84,87 @@ export interface InviteResponse {
   inviteToken?: string;
 }
 
-export function listUsers() {
-  return apiFetch<AgencyUser[]>('/users');
+/** The three states the Status column shows. */
+export const AGENCY_USER_STATUSES = [
+  'active',
+  'invited',
+  'deactivated',
+] as const;
+
+export interface ListUsersParams {
+  page?: number;
+  pageSize?: number;
+  /** Name, email, role name — and branch name, for a caller who can see it. */
+  q?: string;
+  status?: UserStatus[];
 }
+
+export interface AgencyUserListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: AgencyUser[];
+}
+
+/**
+ * One page of the agency directory.
+ *
+ * ⚠ Paginated since PAC-101, where it returned the whole roster as a bare
+ * array. A caller that wants **everybody** — a picker — wants
+ * {@link listUserOptions} instead; this one is the table.
+ */
+export function listUsers(
+  params: ListUsersParams = {},
+): Promise<AgencyUserListResponse> {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === '') continue;
+    // Repeated params, not comma-joined: Express parses `?status=a&status=b`
+    // into an array, which is one of the three forms `multiValue` accepts.
+    if (Array.isArray(value)) {
+      for (const item of value) search.append(key, String(item));
+    } else {
+      search.set(key, String(value));
+    }
+  }
+  const qs = search.toString();
+  return apiFetch<AgencyUserListResponse>(`/users${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * One assignable person, for a picker.
+ *
+ * Not a row of {@link AgencyUser}: a picker renders a name and needs the whole
+ * list at once, where the directory renders eleven fields and is about to grow
+ * pagination (PAC-101). The server does the filtering all three call sites used
+ * to do in the browser — active people only, platform admins excluded — so
+ * there is nothing left here to filter.
+ */
+export interface AgencyUserOption {
+  _id: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+/**
+ * Everyone who can be assigned work. **Unpaginated on purpose** — see
+ * `AgencyUserOption`; a picker showing page 1 of 3 is a bug.
+ */
+export function listUserOptions() {
+  return apiFetch<AgencyUserOption[]>('/users/options');
+}
+
+/**
+ * The cache key every picker shares.
+ *
+ * ⚠ Invalidate this **alongside** `['users']` on anything that changes the
+ * roster — inviting, deactivating, reactivating. They were already two keys
+ * before PAC-101 and only `['users']` was ever invalidated, so the Lead Owner
+ * and Audit Assignee pickers went stale until remount.
+ */
+export const agencyUserOptionsKey = ['agency-users'] as const;
 
 export function inviteUser(input: InviteUserInput) {
   return apiFetch<InviteResponse>('/users/invite', {

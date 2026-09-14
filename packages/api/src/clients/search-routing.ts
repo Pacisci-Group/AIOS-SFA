@@ -6,10 +6,22 @@ import {
 import { parseDateOfBirth } from '../leads/intake/intake.normalize';
 
 /**
- * What a free-text Clients search could plausibly be.
+ * The things a Clients search term can be that **must not be tokenized**.
+ *
+ * Each of these is one indivisible value: splitting `HH-2614` into `hh` + `2614`
+ * or `03/12/1985` into three numbers loses the thing the user typed. They are
+ * resolved from the whole term and ORed *around* the token clause — see
+ * `TermBranchResolver` in `common/mongo/search-filter.ts`.
  *
  * Every hit is queried and ORed — none excludes another — so a term that is
  * ambiguous between two dimensions is simply searched as both.
+ *
+ * ⚠ There is deliberately **no `name` route any more** (PAC-101). It used to be
+ * suppressed whenever the term parsed as a reference or a date, which is the
+ * bug: a household literally named "Ann Smith 1985" was unreachable, and more
+ * to the point the suppression is what stopped `HH-2614` also matching a
+ * household whose *name* contains 2614. Names are the tokenizer's job now, and
+ * the tokenizer never suppresses anything.
  */
 export interface SearchRoutes {
   /** Canonical `HH-2614`, ready to match the stored (uppercased) value. */
@@ -18,22 +30,15 @@ export interface SearchRoutes {
   dateOfBirth?: Date;
   /** Normalized policy-number key, for `policies.policyNumberKey`. */
   policyKey?: string;
-  /** The term as a name, for households and contacts. */
-  name?: string;
 }
 
 /**
- * Interpret an omni-search term by shape, the way `GET /leads` reads its own
- * `search` param.
+ * Interpret an omni-search term by shape.
  *
  * Routing is **additive, not exclusive**: `HH-2614` normalizes to a usable
  * policy key as well as a reference, so both are queried and whichever matches
  * wins. Being strict there would mean a household number that happens to look
  * like a policy number silently finds nothing.
- *
- * The one thing shape genuinely decides is `name`. A term that parses as a
- * reference or a date is not somebody's name, and searching it as one only adds
- * noise — `1985-03-12` would otherwise regex-scan every household name.
  */
 export function routeSearchTerm(raw: string): SearchRoutes {
   const term = raw.trim();
@@ -51,8 +56,6 @@ export function routeSearchTerm(raw: string): SearchRoutes {
   // drag the whole policy collection into the query.
   const key = normalizePolicyNumber(term);
   if (key) routes.policyKey = key;
-
-  if (!routes.householdRef && !routes.dateOfBirth) routes.name = term;
 
   return routes;
 }

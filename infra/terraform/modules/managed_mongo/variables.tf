@@ -70,3 +70,15 @@ variable "enable_backups" {
   type        = bool
   default     = false
 }
+
+variable "allowed_tags" {
+  description = <<-EOT
+    Droplet tags allowed to reach the cluster.
+
+    The autoscale pool is admitted this way: its members' ids are not knowable
+    at plan time and change as the pool scales, so only a tag can name "whatever
+    is currently in the pool".
+  EOT
+  type        = list(string)
+  default     = []
+}

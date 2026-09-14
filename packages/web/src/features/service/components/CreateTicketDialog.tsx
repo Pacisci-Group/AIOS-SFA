@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { SEARCH_DEBOUNCE_MS } from "@/components/common/TableSearchInput";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronsUpDown, Loader2 } from "lucide-react";
 import {
@@ -94,15 +96,6 @@ interface Option {
   hint?: string;
 }
 
-/** Wait for the user to stop typing before hitting the search endpoints. */
-function useDebounced<T>(value: T, delay = 250): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-  return debounced;
-}
 
 /**
  * Combobox over a remote list. `onSearch` receives the typed term so the caller
@@ -261,8 +254,8 @@ export function CreateTicketDialog({
   const [policyTerm, setPolicyTerm] = useState("");
   const [householdTerm, setHouseholdTerm] = useState("");
   const [crmTerm, setCrmTerm] = useState("");
-  const policyQ = useDebounced(policyTerm);
-  const householdQ = useDebounced(householdTerm);
+  const policyQ = useDebouncedValue(policyTerm, SEARCH_DEBOUNCE_MS);
+  const householdQ = useDebouncedValue(householdTerm, SEARCH_DEBOUNCE_MS);
 
   // `null` outside restricted mode, so the query key and the request are
   // byte-identical to what every other caller has always sent.

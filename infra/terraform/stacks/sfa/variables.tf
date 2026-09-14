@@ -200,3 +200,104 @@ variable "mongo_allowed_ip_addresses" {
   type    = list(string)
   default = []
 }
+
+variable "enable_node_edge" {
+  description = <<-EOT
+    Run the new, horizontally-scalable topology on this environment.
+
+    Flips three things that must move together:
+      * the edge: Caddy is replaced by our own Node TLS terminator, which reads
+        certificates from MongoDB so every node can serve every hostname
+      * the app droplet's cloud-init, which therefore no longer installs Caddy
+      * the firewall rule Inngest reaches us through: port 4001 (the worker's own
+        container) rather than 4000 (the API)
+
+    ⚠ Defaults to false, which is exactly today's production behaviour, so an
+    environment that does not set it plans clean and is not touched. That default
+    is the whole point: this stack is shared, and without the flag a
+    `terraform apply` aimed at one environment would rewrite another's edge.
+
+    ⚠ Turning it on REPLACES the app droplet — `user_data` cannot be changed in
+    place. Expect the public IP to survive (the reserved IP is re-attached) and
+    everything on the box to be rebuilt. Do it on dev first.
+
+    ⚠ It must agree with the app side, which is deployed from a git branch
+    rather than from here. Terraform on 4001 with a deploy that still runs the
+    worker inline on 4000 means Inngest reports healthy and syncs zero
+    functions — the same failure shape `INNGEST_ENABLED`/`enable_inngest` exist
+    to prevent.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "enable_autoscale" {
+  description = <<-EOT
+    Run the app tier as an autoscale pool behind a load balancer, instead of one
+    directly-addressed droplet.
+
+    ⚠ Requires `enable_node_edge`. The pool depends on every node being
+    interchangeable, and that is only true once TLS certificates come from
+    MongoDB rather than a node's local disk — with Caddy, each droplet would run
+    its own ACME client and race the others for the same tenant hostnames.
+
+    ⚠ Changes how deploys work. Pool members are not deployed to: they fetch
+    published config from a Spaces bucket at boot and every 30s. A droplet
+    created during a traffic spike has nothing to SSH to it.
+
+    Defaults to false, which is exactly today's production shape, so an
+    environment that does not set it plans clean.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "pool_min_instances" {
+  description = "Floor for the pool. 1 keeps a single node until load justifies more; 2 is the first value that survives losing one."
+  type        = number
+  default     = 1
+}
+
+variable "pool_max_instances" {
+  description = "Ceiling for the pool. A ceiling, not a target — it is the bound on both the blast radius of a runaway scale-up and the monthly bill."
+  type        = number
+  default     = 3
+}
+
+variable "pool_target_cpu" {
+  description = <<-EOT
+    Average CPU the pool aims to hold, 0-1.
+
+    Not higher: this is an average across the pool, so individual droplets sit
+    well above it, and scaling only begins once the average is already breached.
+  EOT
+  type        = number
+  default     = 0.6
+}
+
+variable "pool_cooldown_minutes" {
+  description = <<-EOT
+    Quiet period between scaling events.
+
+    Long enough to cover a deploy: every droplet restarts its containers then,
+    which burns CPU and would otherwise read as load and trigger a scale-up
+    chasing its own tail.
+  EOT
+  type        = number
+  default     = 10
+}
+
+variable "pool_proxy_protocol" {
+  description = <<-EOT
+    Have the load balancer prefix each connection with the client's real address.
+
+    ⚠ Must match EDGE_PROXY_PROTOCOL on the app. Enabling one side alone breaks
+    every connection: the header is read as the first bytes of a TLS handshake,
+    or it never arrives and the edge drops the connection.
+
+    Off means every caller appears to come from the balancer, which collapses
+    the public intake rate limits into a single shared bucket.
+  EOT
+  type        = bool
+  default     = false
+}

@@ -2,11 +2,15 @@ import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { PlatformPermission } from "@sfa/shared";
-import { AlertCircle, ArrowLeft, Search } from "lucide-react";
+import { AlertCircle, ArrowLeft } from "lucide-react";
+import { TablePagination } from "@/components/common/TablePagination";
+import {
+  SEARCH_DEBOUNCE_MS,
+  TableSearchInput,
+} from "@/components/common/TableSearchInput";
 import { toast } from "sonner";
 import { MultiSelect } from "@/components/common/MultiSelect";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { usePermissions } from "@/hooks/usePermissions";
 import { ApiError } from "@/lib/api-client";
@@ -52,7 +56,7 @@ export default function PlatformUsersPage() {
   const { can } = usePermissions();
   const { q, agencyIds, roleSlugs, page, setQ, setAgencyIds, setRoleSlugs, setPage } =
     usePlatformUsersUrlState();
-  const debouncedQ = useDebouncedValue(q, 300);
+  const debouncedQ = useDebouncedValue(q, SEARCH_DEBOUNCE_MS);
 
   const agenciesQuery = useQuery({
     queryKey: ["platform", "agencies"],
@@ -146,13 +150,12 @@ export default function PlatformUsersPage() {
 
       <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center">
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
+          <TableSearchInput
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search by name, email, agency or role…"
-            className="border-border bg-card pl-9"
-            aria-label="Search users"
+            onValueChange={setQ}
+            placeholder="Search by name, email, agency, slug, branch or role…"
+            label="Search users"
+            busy={isFetching}
           />
         </div>
         <div className="flex items-center gap-2">
@@ -186,7 +189,9 @@ export default function PlatformUsersPage() {
       ) : !isPending && items.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-center">
           <p className="text-sm text-muted-foreground">
-            No users match this search.
+            {debouncedQ.trim()
+              ? `No users match “${debouncedQ.trim()}”.`
+              : "No users yet."}
           </p>
         </div>
       ) : (
@@ -200,33 +205,16 @@ export default function PlatformUsersPage() {
             onImpersonate={(user) => impersonate.mutate(user)}
           />
 
-          {!isPending && (
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <span className="text-sm text-muted-foreground tabular-nums">
-                Showing {firstRow} to {lastRow} of {total}
-              </span>
-              {totalPages > 1 && (
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page <= 1 || isFetching}
-                    onClick={() => setPage(Math.max(1, page - 1))}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page >= totalPages || isFetching}
-                    onClick={() => setPage(Math.min(totalPages, page + 1))}
-                  >
-                    Next
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
+          <TablePagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            totalPages={totalPages}
+            onPageChange={setPage}
+            busy={isFetching}
+            noun="users"
+            className="mt-4"
+          />
         </>
       )}
     </SuperAdminLayout>

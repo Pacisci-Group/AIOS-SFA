@@ -42,6 +42,7 @@ export * from './domain/prior-policy';
 export * from './domain/quote-recap';
 export * from './domain/quote-recap-edit';
 export * from './domain/record-reference';
+export * from './domain/search-terms';
 export * from './domain/sold-deal';
 export * from './domain/time-off';
 export * from './enums/module-key.enum';

@@ -44,6 +44,13 @@ module "sfa" {
   spaces_cors_origins        = var.spaces_cors_origins
   create_spaces_access_key   = var.create_spaces_access_key
   enable_inngest             = var.enable_inngest
+  enable_node_edge           = var.enable_node_edge
+  enable_autoscale           = var.enable_autoscale
+  pool_min_instances         = var.pool_min_instances
+  pool_max_instances         = var.pool_max_instances
+  pool_target_cpu            = var.pool_target_cpu
+  pool_cooldown_minutes      = var.pool_cooldown_minutes
+  pool_proxy_protocol        = var.pool_proxy_protocol
   inngest_droplet_size       = var.inngest_droplet_size
   enable_backups             = var.enable_backups
   prevent_destroy            = var.prevent_destroy
