@@ -2,6 +2,7 @@ import type { LeadDetailDeal } from "@sfa/shared";
 import { CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
+import { EditSaleAction } from "@/components/leads/EditSaleAction";
 import { formatCurrency, formatDate } from "./lead-display";
 import { EditPolicyDialog } from "./EditPolicyDialog";
 import { PolicyRow } from "./PolicyRow";
@@ -20,10 +21,11 @@ interface SoldCardProps {
  * quoted → sold, so the card that says what was actually bound belongs directly
  * under what was proposed.
  *
- * Each policy carries its own edit dialog rather than one "edit this sale"
- * button, because that is what "quick edits to sold policies" describes — and
- * because a per-policy patch is a correction, whereas an edit of the deal would
- * have to decide what happens to the audit items the sale generated.
+ * Each policy keeps its own quick edit, because that is what "quick edits to
+ * sold policies" describes. The sale itself — its sold date, and adding a
+ * policy to it — is edited on its own page (PAC-104), reached from **Edit
+ * sale** in the header: those are the edits that move reported figures and
+ * generate audit items, so they get a page that can say so.
  *
  * ## The totals are the deal's own, and are now kept in step (PAC-56 #25)
  *
@@ -62,6 +64,7 @@ export function SoldCard({ deal, leadId }: SoldCardProps) {
           <span className="text-sm text-muted-foreground">
             {deal.dealType} · Sold {formatDate(deal.soldDate)}
           </span>
+          <EditSaleAction dealId={deal.id} />
         </>
       }
     >

@@ -52,6 +52,9 @@ const EditQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/EditQuoteRecapPage'),
 );
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
+const EditSoldDealPage = lazy(
+  () => import('@/features/sold/EditSoldDealPage'),
+);
 const PolicyTransferPage = lazy(
   () => import('@/features/sold/PolicyTransferPage'),
 );
@@ -464,6 +467,17 @@ export function App() {
                   element={
                     <LazyPage>
                       <SoldDealPage />
+                    </LazyPage>
+                  }
+                />
+                {/* Editing a booked sale (PAC-104). Same gate: PATCH
+                    /sold-deals/:id and POST /sold-deals/:id/policies both
+                    require `deal_audits:write`. */}
+                <Route
+                  path="/sold/:id/edit"
+                  element={
+                    <LazyPage>
+                      <EditSoldDealPage />
                     </LazyPage>
                   }
                 />
