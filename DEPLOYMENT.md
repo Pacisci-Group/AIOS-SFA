@@ -284,6 +284,19 @@ journalctl -u sfa-converge -n 50     # what it fetched and whether it applied
 > each droplet in fact fine. 8081 is a plain listener the edge never wraps, and
 > the firewall admits it from the balancer alone.
 
+> **A balancer does not prefix every forwarding rule.** This pool's `:443` is an
+> `https` rule with TLS passthrough and its `:80` is a `tcp` rule, and they do
+> not behave identically. The edge therefore *tolerates* a PROXY header rather
+> than requiring one: it accepts a connection with or without. Requiring one
+> meant `:80` connections were accepted and then dropped, which reads to a
+> client as `Empty reply from server` and says nothing about the cause.
+>
+> Reachability, not strictness, is what stops a client spoofing its address:
+> on a pool the firewall admits `:80` and `:443` from the balancer alone
+> (`allow_http_https = false`), so there is no direct client to lie. On a single
+> droplet those ports are public — and there `EDGE_PROXY_PROTOCOL` is false, so
+> nothing is wrapped at all.
+
 > **`pool_proxy_protocol` and `EDGE_PROXY_PROTOCOL` must match.** Either alone
 > breaks every connection: the header is read as the first bytes of a TLS
 > handshake, or it never arrives and the edge drops the connection. With it off,

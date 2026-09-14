@@ -13,7 +13,6 @@ import { AcmeChallengeService } from './tls/acme-challenge.service';
 import { CertificateStoreService } from './tls/certificate-store.service';
 import { EdgeRootModule } from './tls/edge-root.module';
 import {
-  ProxyProtocolError,
   type ProxyProtocolResult,
   looksLikeProxyProtocol,
   parseProxyProtocol,
@@ -283,10 +282,26 @@ async function bootstrap() {
   );
 
   if (proxyProtocol) {
-    listenWithProxyProtocol(httpServer, httpPort);
-    listenWithProxyProtocol(httpsServer, httpsPort);
+    // Tolerant, not strict — accepting a connection with OR without a header.
+    //
+    // ⚠ A load balancer does not necessarily prefix every forwarding rule. This
+    // pool's :443 is an `https` rule with TLS passthrough and its :80 is a `tcp`
+    // rule, and they do not behave the same: requiring a header on both meant
+    // :80 connections were accepted and then dropped, which reads to a client as
+    // "Empty reply from server" and says nothing about why.
+    //
+    // Tolerance means the edge does not have to know, and cannot be wrong if the
+    // balancer's behaviour changes.
+    //
+    // Safe because reachability, not strictness, is what stops a client
+    // spoofing its address here: on a pool the firewall admits :80 and :443 from
+    // the balancer alone (`allow_http_https = false`), so there is no direct
+    // client to lie. On a single droplet those ports ARE public — and there
+    // EDGE_PROXY_PROTOCOL is false, so nothing is wrapped at all.
+    listenTolerantOfProxyProtocol(httpServer, httpPort);
+    listenTolerantOfProxyProtocol(httpsServer, httpsPort);
     logger.log(
-      'PROXY protocol is ENABLED: every connection on :80/:443 must carry a header.',
+      'PROXY protocol is ENABLED: :80/:443 accept a header if the balancer sends one.',
     );
   } else {
     httpServer.listen(httpPort, '0.0.0.0');
@@ -359,64 +374,6 @@ function listenTolerantOfProxyProtocol(
       socket.removeListener('data', onData);
       const remainder = buffered.subarray(consumed);
       if (remainder.length > 0) socket.unshift(remainder);
-      server.emit('connection', socket);
-    };
-
-    socket.on('data', onData);
-    socket.on('error', () => socket.destroy());
-  });
-
-  listener.listen(port, '0.0.0.0');
-}
-
-/**
- * Front a server with a raw TCP listener that strips the PROXY header first.
- *
- * The header arrives before the TLS handshake, so it cannot be read by the
- * HTTPS server itself. The wrapper consumes it, records the claimed source on
- * the socket, pushes the remaining bytes back, and hands the connection over as
- * if nothing had happened.
- */
-function listenWithProxyProtocol(
-  server: { emit: (event: string, socket: Socket) => boolean },
-  port: number,
-): void {
-  const logger = new Logger('EdgeProxyProtocol');
-
-  const listener = new NetServer((socket: Socket) => {
-    let buffered = Buffer.alloc(0);
-
-    const onData = (chunk: Buffer) => {
-      buffered = Buffer.concat([buffered, chunk]);
-
-      let parsed: ProxyProtocolResult | null;
-      try {
-        parsed = parseProxyProtocol(buffered);
-      } catch (error) {
-        // A connection that does not speak the protocol we were told every
-        // connection speaks is not one to guess about.
-        logger.warn(
-          error instanceof ProxyProtocolError ? error.message : String(error),
-        );
-        socket.destroy();
-        return;
-      }
-
-      // Header not complete yet; wait for more bytes.
-      if (!parsed) return;
-
-      socket.removeListener('data', onData);
-      if (parsed.sourceAddress) {
-        (
-          socket as Socket & { proxyProtocolSource?: string }
-        ).proxyProtocolSource = parsed.sourceAddress;
-      }
-
-      // Push back everything after the header so the TLS/HTTP server sees a
-      // stream that begins exactly where it expects to.
-      const remainder = buffered.subarray(parsed.consumed);
-      if (remainder.length > 0) socket.unshift(remainder);
-
       server.emit('connection', socket);
     };
 
