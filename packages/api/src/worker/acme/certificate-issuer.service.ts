@@ -6,6 +6,7 @@ import * as acme from 'acme-client';
 import {
   CHALLENGE_TTL_MS,
   ISSUANCE_LOCK_TTL_MS,
+  ORDER_TIMEOUT_MS,
   acmeEnabled,
   backoffAfterFailure,
   renewalPoint,
@@ -97,7 +98,11 @@ export class CertificateIssuerService {
     }
 
     try {
-      const result = await this.order(hostname);
+      const result = await this.withTimeout(
+        this.order(hostname),
+        ORDER_TIMEOUT_MS,
+        `ACME order for ${hostname}`,
+      );
       await this.recordSuccess(hostname, result);
       this.logger.log(
         `Issued certificate for ${hostname}, valid until ${result.notAfter.toISOString()}.`,
@@ -114,6 +119,40 @@ export class CertificateIssuerService {
       return { status: 'failed', hostname, error: message };
     } finally {
       await this.release(hostname);
+    }
+  }
+
+  /**
+   * Bound an await on the certificate authority.
+   *
+   * ⚠ Without this, a CA that accepts an order and never resolves it leaves
+   * `issue()` awaiting forever. The claim is held the whole time, so every later
+   * attempt reports "skipped" until the lock ages out — which is how the
+   * platform host went seventy-five minutes with no certificate and not one line
+   * of log explaining it.
+   *
+   * A timeout turns that into a recorded failure with a backoff, which the sweep
+   * then retries. The order itself takes seconds; this is a ceiling, not a
+   * target.
+   */
+  private async withTimeout<T>(
+    work: Promise<T>,
+    ms: number,
+    what: string,
+  ): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${what} timed out after ${ms}ms.`)),
+            ms,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
