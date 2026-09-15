@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ModuleKey, modulePermission } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import {
@@ -16,6 +24,14 @@ import type {
   CreateSoldDealDto,
   SoldDealContextDto,
 } from './dto/create-sold-deal.dto';
+import {
+  addSoldDealPoliciesSchema,
+  updateSoldDealSchema,
+} from './dto/edit-sold-deal.dto';
+import type {
+  AddSoldDealPoliciesDto,
+  UpdateSoldDealDto,
+} from './dto/edit-sold-deal.dto';
 import { presignSoldDocumentSchema } from './dto/presign-sold-document.dto';
 import type { PresignSoldDocumentDto } from './dto/presign-sold-document.dto';
 import { SoldDealsService } from './sold-deals.service';
@@ -51,7 +67,8 @@ export class SoldDealsController {
   constructor(private readonly soldDealsService: SoldDealsService) {}
 
   // Static segments are declared first: Nest matches in declaration order, so
-  // any future `@Get(':id')` must come after these or it will swallow them.
+  // the `:id` routes at the bottom must stay below these or they will swallow
+  // them.
 
   /** Lead + household header and the driver picker's contact list. */
   @Get('context')
@@ -110,5 +127,51 @@ export class SoldDealsController {
     @Body(new ZodValidationPipe(createSoldDealSchema)) body: CreateSoldDealDto,
   ) {
     return this.soldDealsService.create(access, branchId, body);
+  }
+
+  /**
+   * The Edit sale page (PAC-104): a booked deal, its policies, and whether it
+   * can take another. Scope is clamped in the service — a producer gets a 404
+   * for anyone else's deal, as on create.
+   */
+  @Get(':id')
+  getDeal(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+  ) {
+    return this.soldDealsService.getEditView(access, branchId, id);
+  }
+
+  /**
+   * Correct a booked deal's sold date (PAC-104). The only deal-level field that
+   * is editable; each policy is corrected on `PATCH /policies/:id`.
+   */
+  @Patch(':id')
+  @RequireWrite(ModuleKey.DealAudits)
+  updateDeal(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(updateSoldDealSchema)) body: UpdateSoldDealDto,
+  ) {
+    return this.soldDealsService.updateSoldDate(access, branchId, id, body);
+  }
+
+  /**
+   * Add policies to a booked deal (PAC-104) — the Sold form's own policy rows,
+   * rules and uploads. There is deliberately no way to remove one: a booked sale
+   * only grows.
+   */
+  @Post(':id/policies')
+  @RequireWrite(ModuleKey.DealAudits)
+  addPolicies(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(addSoldDealPoliciesSchema))
+    body: AddSoldDealPoliciesDto,
+  ) {
+    return this.soldDealsService.addPolicies(access, branchId, id, body);
   }
 }

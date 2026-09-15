@@ -213,9 +213,9 @@ docs {
 
   ## Every edit is logged (PAC-65 #9)
 
-  This is the only way to correct a booked sale — `POST /sold-deals` is
-  create-only and there is no deal PATCH — so it is the "sold" half of the
-  quote/sold edit log. A patch that changes at least one of the eight fields
+  This is the per-policy half of the sold edit log. The deal-level half — the
+  sold date, and policies added after booking — is `PATCH /sold-deals/:id` and
+  `POST /sold-deals/:id/policies` (PAC-104). A patch that changes at least one of the eight fields
   writes a `field_changed` activity carrying `{ field, label, kind, from, to }`
   per change, with `policyId` recording **which** policy of the deal was touched.
 

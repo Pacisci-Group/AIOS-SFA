@@ -1,5 +1,6 @@
 import type { SoldPolicyInput } from '@sfa/shared';
 import {
+  buildSoldAdditionToken,
   buildSoldSubmissionToken,
   deriveAuditTriggers,
   deriveDealAggregates,
@@ -8,6 +9,8 @@ import {
   derivePriorCarriers,
   collectAttachments,
   findCrossBranchDiscounts,
+  mergeAuditTriggers,
+  mergePriorInsuranceSummary,
   parseFormDate,
   soldDateYmd,
   yesNo,
@@ -598,5 +601,128 @@ describe('collectAttachments (the upload ownership boundary)', () => {
     expect(found).toEqual([
       { attachment: expect.anything(), kind: 'discount_proof' },
     ]);
+  });
+});
+
+describe('buildSoldAdditionToken (PAC-104)', () => {
+  it('namespaces an addition apart from the create token it could be confused with', () => {
+    expect(buildSoldAdditionToken(' abc-12345 ')).toBe('SOLDADD|ABC-12345');
+    expect(buildSoldAdditionToken('abc-12345')).not.toBe(
+      buildSoldSubmissionToken('abc-12345'),
+    );
+  });
+});
+
+describe('mergeAuditTriggers (PAC-104)', () => {
+  const none = () => deriveAuditTriggers([policy()]);
+
+  it('ORs every flag and unions driver names, one per trimmed name', () => {
+    const merged = mergeAuditTriggers(
+      {
+        ...none(),
+        fireSubscription: true,
+        defensiveDriver: true,
+        defensiveDriverNames: ['Susan Walker'],
+      },
+      {
+        ...none(),
+        goodStudent: true,
+        defensiveDriver: true,
+        defensiveDriverNames: [' Susan Walker ', 'Tom Walker'],
+      },
+    );
+
+    expect(merged).toMatchObject({
+      fireSubscription: true,
+      goodStudent: true,
+      defensiveDriver: true,
+      drivewise: false,
+    });
+    expect(merged.defensiveDriverNames).toEqual(['Susan Walker', 'Tom Walker']);
+  });
+
+  it('reads a flag missing from an older deal as unset, not as undefined', () => {
+    const merged = mergeAuditTriggers({ fireSubscription: true }, none());
+
+    expect(merged.fireSubscription).toBe(true);
+    expect(merged.priorPolicyDeclared).toBe(false);
+    expect(merged.defensiveDriverNames).toEqual([]);
+  });
+
+  it('never narrows what the deal already required', () => {
+    const merged = mergeAuditTriggers(
+      { ...none(), priorPolicyDeclared: true },
+      none(),
+    );
+    expect(merged.priorPolicyDeclared).toBe(true);
+  });
+});
+
+describe('mergePriorInsuranceSummary (PAC-104)', () => {
+  it('fills only what the deal left blank, and recomputes same-carrier from the pair', () => {
+    const merged = mergePriorInsuranceSummary(
+      {
+        previousCarrierAuto: 'State Farm',
+        previousAgentName: '  ',
+        cancelledPreviousInsurance: 'No',
+        autoHomeSameCarrier: 'No',
+      },
+      {
+        previousCarrierAuto: 'Progressive',
+        previousCarrierHome: 'state farm',
+        previousAgentName: 'Jane Agent',
+        cancelledPreviousInsurance: 'No',
+        autoHomeSameCarrier: 'No',
+      },
+    );
+
+    expect(merged).toMatchObject({
+      previousCarrierAuto: 'State Farm',
+      previousCarrierHome: 'state farm',
+      previousAgentName: 'Jane Agent',
+      cancelledPreviousInsurance: 'No',
+      autoHomeSameCarrier: 'Yes',
+    });
+  });
+
+  it('keeps the earlier cancellation, and moves who cancelled as one answer', () => {
+    const merged = mergePriorInsuranceSummary(
+      {
+        cancelledPreviousInsurance: 'Yes',
+        cancellationDate: parseFormDate('2026-03-01'),
+        cancellationResponsibility: 'Customer',
+      },
+      {
+        cancelledPreviousInsurance: 'Yes',
+        cancellationDate: parseFormDate('2026-02-01'),
+        cancellationResponsibility: 'SFA staff',
+        cancellationHandledByName: 'Asad Ullah Aziz',
+      },
+    );
+
+    expect(merged.cancellationDate?.toISOString()).toBe(
+      '2026-02-01T00:00:00.000Z',
+    );
+    expect(merged.cancellationResponsibility).toBe('Customer');
+    // Never a staff name paired with the other answer's "Customer".
+    expect(merged.cancellationHandledByName).toBeUndefined();
+  });
+
+  it("takes the addition's answers when the deal had none", () => {
+    const merged = mergePriorInsuranceSummary(
+      {},
+      {
+        cancelledPreviousInsurance: 'Yes',
+        cancellationResponsibility: 'SFA staff',
+        cancellationHandledByName: 'Asad Ullah Aziz',
+      },
+    );
+
+    expect(merged).toMatchObject({
+      cancelledPreviousInsurance: 'Yes',
+      cancellationResponsibility: 'SFA staff',
+      cancellationHandledByName: 'Asad Ullah Aziz',
+      autoHomeSameCarrier: 'No',
+    });
   });
 });
