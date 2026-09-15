@@ -405,7 +405,8 @@ resource "digitalocean_droplet_autoscale" "app" {
   }
 }
 
-# The public edge. TLS passes straight through to our own terminator, which is
+# The public edge. TLS passes straight through to our own terminator - as a raw
+# `tcp` forward, for the reason spelled out on the 443 rule below - which is
 # what keeps white-labelling working: terminating here would mean DigitalOcean
 # holding a certificate per hostname, and for an agency-owned domain that is a
 # manual upload per domain - the operator step the whole design removes.
@@ -430,12 +431,31 @@ module "public_lb" {
       target_port     = 80
       target_protocol = "tcp"
     },
+    # ⚠ `tcp`, NOT `https` + `tls_passthrough`, and that is load-bearing.
+    #
+    # Both shapes pass TLS through untouched - the balancer holds no certificate
+    # either way, which is what white-labelling requires. The difference is the
+    # PROXY protocol header, and it cost a production outage.
+    #
+    # With `enable_proxy_protocol` the edge REQUIRES a header on every
+    # connection to :80 and :443. DigitalOcean delivers one reliably on a plain
+    # `tcp` rule - proven by the :80 rule above, which never failed once - but
+    # not on an `https` + `tls_passthrough` rule. The edge then sits in
+    # `listenWithProxyProtocol` waiting for a header that never completes, and
+    # because that wait has no timeout the connection hangs FOREVER while
+    # logging nothing at all. It presents as TCP connecting, the ClientHello
+    # going out, and no reply ever arriving - never as an error, on either side.
+    #
+    # Measured before the change, on both dev and production: :80 answered 8/8
+    # while :443 answered roughly 1-in-8, for exactly this reason.
+    #
+    # A `tcp` rule is passthrough by definition, so `tls_passthrough` is not
+    # merely unnecessary here - it is only valid on an `https` entry protocol.
     {
       entry_port      = 443
-      entry_protocol  = "https"
+      entry_protocol  = "tcp"
       target_port     = 443
-      target_protocol = "https"
-      tls_passthrough = true
+      target_protocol = "tcp"
     },
   ]
 
