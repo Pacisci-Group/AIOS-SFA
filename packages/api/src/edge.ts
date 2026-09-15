@@ -58,6 +58,14 @@ import {
 const ACME_PREFIX = '/.well-known/acme-challenge/';
 const HEALTH_PATH = '/healthz';
 
+/**
+ * How long a connection may take to produce a complete PROXY header.
+ *
+ * Generous, because it only has to cover one balancer-to-node write; the point
+ * is that "never" stops being an option, not to be tight.
+ */
+const PROXY_HEADER_TIMEOUT_MS = 10_000;
+
 async function bootstrap() {
   const logger = new Logger('Edge');
 
@@ -356,10 +364,7 @@ function listenTolerantOfProxyProtocol(
         consumed = parsed.consumed;
       }
 
-      socket.removeListener('data', onData);
-      const remainder = buffered.subarray(consumed);
-      if (remainder.length > 0) socket.unshift(remainder);
-      server.emit('connection', socket);
+      handOver(socket, server, buffered.subarray(consumed), onData);
     };
 
     socket.on('data', onData);
@@ -367,6 +372,42 @@ function listenTolerantOfProxyProtocol(
   });
 
   listener.listen(port, '0.0.0.0');
+}
+
+/**
+ * Hand a socket to the real server, with the bytes after the PROXY header.
+ *
+ * ⚠ `socket.pause()` and the `resume()` on the next tick are the whole point.
+ *
+ * `socket.on('data', …)` above put the socket in FLOWING mode, and `unshift()`
+ * on a flowing stream does not reliably reach the next consumer. When the
+ * client's first payload arrived in the SAME TCP segment as the PROXY header —
+ * which is the normal case for a TLS ClientHello behind DigitalOcean's balancer
+ * — those bytes were pushed back and then lost. `tls.Server` sat waiting for a
+ * ClientHello that never came, and because nothing in this path has a timeout,
+ * the connection hung forever without logging anything.
+ *
+ * It presented as: TCP connects, the ClientHello goes out, and no reply ever
+ * arrives. Measured on production, :443 completed roughly 1 connection in 11 —
+ * the ones where the header happened to arrive in a segment of its own, so
+ * `remainder` was empty and `unshift` was skipped. :80 was unaffected only
+ * because an HTTP request usually lands in a later segment.
+ *
+ * Pausing first, then resuming once the consumer has attached, is the only
+ * variant that works for both arrival patterns; `emit`-then-re-emit and
+ * `unshift`-then-emit-on-next-tick were both measured and both still hang.
+ */
+function handOver(
+  socket: Socket,
+  server: { emit: (event: string, socket: Socket) => boolean },
+  remainder: Buffer,
+  onData: (chunk: Buffer) => void,
+): void {
+  socket.removeListener('data', onData);
+  socket.pause();
+  if (remainder.length > 0) socket.unshift(remainder);
+  server.emit('connection', socket);
+  process.nextTick(() => socket.resume());
 }
 
 /**
@@ -386,6 +427,24 @@ function listenWithProxyProtocol(
   const listener = new NetServer((socket: Socket) => {
     let buffered = Buffer.alloc(0);
 
+    /**
+     * ⚠ A connection that never completes a header must not be held forever.
+     *
+     * Without this, `onData` simply returns while the header is incomplete, so
+     * a peer that sends a partial header — or none at all — keeps a socket open
+     * indefinitely with nothing logged anywhere. That is not hypothetical: it is
+     * how a balancer misconfiguration presented as "TLS hangs" for hours, with
+     * no error on either side to point at.
+     */
+    const headerTimer = setTimeout(() => {
+      logger.warn(
+        `No complete PROXY header within ${PROXY_HEADER_TIMEOUT_MS}ms from ` +
+          `${socket.remoteAddress ?? 'unknown'}; dropping the connection.`,
+      );
+      socket.destroy();
+    }, PROXY_HEADER_TIMEOUT_MS);
+    headerTimer.unref();
+
     const onData = (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk]);
 
@@ -398,6 +457,7 @@ function listenWithProxyProtocol(
         logger.warn(
           error instanceof ProxyProtocolError ? error.message : String(error),
         );
+        clearTimeout(headerTimer);
         socket.destroy();
         return;
       }
@@ -405,23 +465,23 @@ function listenWithProxyProtocol(
       // Header not complete yet; wait for more bytes.
       if (!parsed) return;
 
-      socket.removeListener('data', onData);
+      clearTimeout(headerTimer);
       if (parsed.sourceAddress) {
         (
           socket as Socket & { proxyProtocolSource?: string }
         ).proxyProtocolSource = parsed.sourceAddress;
       }
 
-      // Push back everything after the header so the TLS/HTTP server sees a
-      // stream that begins exactly where it expects to.
-      const remainder = buffered.subarray(parsed.consumed);
-      if (remainder.length > 0) socket.unshift(remainder);
-
-      server.emit('connection', socket);
+      // Everything after the header goes back on the stream, so the TLS/HTTP
+      // server sees one that begins exactly where it expects to.
+      handOver(socket, server, buffered.subarray(parsed.consumed), onData);
     };
 
     socket.on('data', onData);
-    socket.on('error', () => socket.destroy());
+    socket.on('error', () => {
+      clearTimeout(headerTimer);
+      socket.destroy();
+    });
   });
 
   listener.listen(port, '0.0.0.0');
