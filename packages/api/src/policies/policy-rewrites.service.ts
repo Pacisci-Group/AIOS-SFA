@@ -16,6 +16,7 @@ import type {
   PolicyReplacementChainEntry,
   PolicyReplacementReason,
   PolicyRewriteResult,
+  SoldDocumentPresignResponse,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { AuditGenerationService } from '../audit-generation/audit-generation.service';
@@ -34,7 +35,9 @@ import type { SoldIntakeDto } from '../sold-deals/dto/create-sold-deal.dto';
 import { SoldDealIntakeService } from '../sold-deals/intake/sold-deal-intake.service';
 import { SoldSubmissionValidator } from '../sold-deals/intake/sold-submission.validator';
 import type { SoldIntakeContext } from '../sold-deals/intake/sold-intake.types';
-import { soldDocumentPurpose } from '../sold-deals/dto/presign-sold-document.dto';
+import { rewriteDocumentPurpose } from '../sold-deals/dto/presign-sold-document.dto';
+import type { PresignRewriteDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
+import { StorageService } from '../storage/storage.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import type { CreatePolicyRewriteDto } from './dto/policy-rewrite.dto';
 import { PoliciesService } from './policies.service';
@@ -93,7 +96,59 @@ export class PolicyRewritesService {
     private readonly intake: SoldDealIntakeService,
     private readonly submissions: SoldSubmissionValidator,
     private readonly auditGeneration: AuditGenerationService,
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * A presigned PUT for a document on an in-progress rewrite.
+   *
+   * Household-anchored, like the transfer's (`POST /sold-deals/documents` is the
+   * lead-anchored sibling): a rewrite has no lead, and the key prefix *is* the
+   * ownership check that {@link record} re-asserts through `verifyAttachments`.
+   *
+   * The household is read off the policy rather than named by the caller, and
+   * the policy goes through `loadOwnedPolicy` first — so a presign cannot be
+   * obtained for a household the caller could not otherwise reach.
+   *
+   * Without this the wizard had no endpoint to upload against and fell back to
+   * the lead presign with an empty `leadId`, which fails validation — and since
+   * the New Business Application is required and PDF-only, the rewrite could not
+   * be submitted at all.
+   */
+  async presign(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+    dto: PresignRewriteDocumentDto,
+  ): Promise<SoldDocumentPresignResponse> {
+    const { policy } = await this.policies.loadOwnedPolicy(
+      access,
+      branchId,
+      policyId,
+    );
+
+    if (!policy.householdId) {
+      throw new BadRequestException(
+        'This policy is not linked to a household, so a replacement cannot be written for it. Link it first.',
+      );
+    }
+
+    const key = this.storage.buildObjectKey({
+      agencyId: String(policy.agencyId),
+      purpose: rewriteDocumentPurpose(String(policy.householdId), dto.kind),
+      filename: dto.filename,
+    });
+    const presigned = await this.storage.createPresignedUpload(
+      key,
+      dto.contentType,
+    );
+    return {
+      key: presigned.key,
+      uploadUrl: presigned.uploadUrl,
+      requiredHeaders: presigned.requiredHeaders,
+      expiresIn: presigned.expiresIn,
+    };
+  }
 
   /**
    * Cancel `policyId` and book its replacement.
@@ -189,7 +244,7 @@ export class PolicyRewritesService {
 
     await this.submissions.assertPolicyNumberFormats(intakeDto, agencyId);
     await this.submissions.verifyAttachments(intakeDto, agencyId, (kind) =>
-      soldDocumentPurpose(String(householdId), kind),
+      rewriteDocumentPurpose(String(householdId), kind),
     );
 
     /*

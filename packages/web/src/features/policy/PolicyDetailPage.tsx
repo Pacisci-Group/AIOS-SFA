@@ -164,7 +164,7 @@ export default function PolicyDetailPage() {
                 the two stay linked.
               </p>
               <Button asChild variant="outline" size="sm">
-                <Link to={`/policies/${policy.id}/rewrite`}>
+                <Link to={`/sold/new?rewritePolicyId=${policy.id}`}>
                   <RefreshCw aria-hidden className="size-4" />
                   Cancel &amp; rewrite
                 </Link>

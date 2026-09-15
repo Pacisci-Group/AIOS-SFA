@@ -14,7 +14,7 @@ import { SectionLabel } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { EditHouseholdPolicyDialog } from "./EditHouseholdPolicyDialog";
+import { HouseholdPolicyActions } from "./HouseholdPolicyActions";
 import {
   statusColors,
   toDisplayPolicy,
@@ -348,7 +348,7 @@ export function PolicyPortfolio({
                   }
                   action={
                     householdId ? (
-                      <EditHouseholdPolicyDialog
+                      <HouseholdPolicyActions
                         householdId={householdId}
                         policy={source}
                       />

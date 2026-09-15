@@ -51,12 +51,13 @@ const NewQuoteRecapPage = lazy(
 const EditQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/EditQuoteRecapPage'),
 );
+/**
+ * One page, three modes — a sale, a cancel rewrite and a CSR's package change.
+ * See its docblock for why the transfer still needs a route of its own.
+ */
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
-const PolicyRewritePage = lazy(
-  () => import('@/features/sold/PolicyRewritePage'),
-);
-const PolicyTransferPage = lazy(
-  () => import('@/features/sold/PolicyTransferPage'),
+const RewriteRouteRedirect = lazy(
+  () => import('@/features/sold/RewriteRouteRedirect'),
 );
 const PublicLeadFormPage = lazy(
   () => import('@/features/lead/PublicLeadFormPage'),
@@ -411,14 +412,17 @@ export function App() {
                 />
               </Route>
 
-              {/* Cancel & rewrite. Gated on `deal_audits:write` rather than the
-                  clients/CRM read pair above, because it *writes a sale* —
-                  `POST /policies/:id/rewrite` books a deal, policies and audit
-                  items, exactly what the Sold form requires. Keeping the route
-                  and the API on the same permission is what stops a CSR who can
-                  open a policy from walking into a wizard that 403s on submit;
-                  it is the same reasoning as the transfer route one gate along,
-                  which needs `crm_service:write` for the opposite reason. */}
+              {/* Cancel & rewrite used to live here as a page of its own. It is
+                  now a mode of the Sold form (`/sold/new?rewritePolicyId=`),
+                  because a rewrite writes a sale and asks for exactly what the
+                  Sold form asks for. The old URL stays as a redirect — it was
+                  linked from the policy page and the household, so it is in
+                  history and in bookmarks.
+
+                  The gate is kept rather than left to `/sold/new`: both are
+                  `deal_audits:write` (what `POST /policies/:id/rewrite` itself
+                  requires), and gating here means an unauthorized caller lands
+                  back on /clients instead of bouncing through the redirect. */}
               <Route
                 element={
                   <RequirePermission
@@ -431,7 +435,7 @@ export function App() {
                   path="/policies/:policyId/rewrite"
                   element={
                     <LazyPage>
-                      <PolicyRewritePage />
+                      <RewriteRouteRedirect />
                     </LazyPage>
                   }
                 />
@@ -471,8 +475,10 @@ export function App() {
                 />
               </Route>
 
-              {/* Sold form (PAC-40). Gated on `deal_audits:write` because that
-                  is what POST /sold-deals itself requires, so the route and the
+              {/* Sold form (PAC-40), in its sale and rewrite modes —
+                  `?leadId=` and `?rewritePolicyId=`. Gated on
+                  `deal_audits:write` because that is what POST /sold-deals and
+                  POST /policies/:id/rewrite both require, so the route and the
                   API agree.
 
                   Note PAC-38 has since added `clients:write` to the Producer
@@ -498,16 +504,17 @@ export function App() {
                 />
               </Route>
 
-              {/* Policy transfer — the same wizard, recorded from a CRM ticket
-                  rather than a lead, and booked as company transfer so it never
-                  counts as new business.
+              {/* Policy transfer — the **same page** as the Sold form above, in
+                  its transfer mode: recorded from a CRM ticket rather than a
+                  lead, and booked as company transfer so it never counts as new
+                  business.
 
-                  Gated on `crm_service:write` for the same reason the Sold form
-                  is gated on `deal_audits:write`: it is what
-                  POST /crm/service-tickets/:id/policy-transfer itself requires,
-                  so the route and the API agree. A producer never reaches this;
-                  a CSR — who holds no `deal_audits` at all — is exactly who
-                  does. */}
+                  It keeps a route of its own purely for the gate. Transfers
+                  need `crm_service:write` — what
+                  POST /crm/service-tickets/:id/policy-transfer itself requires —
+                  and a CSR holds no `deal_audits` at all, so serving this from
+                  `/sold/new` would lock out exactly the person it is for. A
+                  producer never reaches this one; a CSR is exactly who does. */}
               <Route
                 element={
                   <RequirePermission
@@ -520,7 +527,7 @@ export function App() {
                   path="/policy-transfers/new"
                   element={
                     <LazyPage>
-                      <PolicyTransferPage />
+                      <SoldDealPage />
                     </LazyPage>
                   }
                 />

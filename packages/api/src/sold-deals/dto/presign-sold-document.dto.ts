@@ -146,3 +146,39 @@ export const presignTransferDocumentSchema = z
 export type PresignTransferDocumentDto = z.infer<
   typeof presignTransferDocumentSchema
 >;
+
+/**
+ * The same again, for a **cancel rewrite** — also household-anchored, because a
+ * rewrite has no lead either.
+ *
+ * ⚠ **Its own namespace, not `soldDocumentPurpose`.** PAC-126 first verified
+ * rewrite attachments with `soldDocumentPurpose(householdId, kind)`, which put
+ * household ids under the *lead* prefix — precisely the id-space collision
+ * {@link transferDocumentPurpose} exists to avoid: `assertKeyOwnership` checks
+ * the prefix, so a key minted against household `X` would replay against lead
+ * `X` and pass. Nothing was stranded by correcting it, because the rewrite had
+ * no presign endpoint at all until now and therefore no keys under the old
+ * prefix — a document could not be uploaded, which is why the required New
+ * Business Application made the flow unsubmittable.
+ *
+ * Disjoint from the transfer's prefix too, for the smaller version of the same
+ * reason: the two flows are gated on different permissions
+ * (`deal_audits:write` against `crm_service:write`), so a key minted by one
+ * should not be presentable to the other.
+ */
+export function rewriteDocumentPurpose(
+  householdId: string,
+  kind: SoldUploadKind = 'discount_proof',
+): string {
+  const base = `policy-rewrites/${householdId}`;
+  return kind === 'new_business_application' ? `${base}/nba` : base;
+}
+
+/** The presign body for a rewrite — anchor is the policy in the path. */
+export const presignRewriteDocumentSchema = z
+  .object(presignFields)
+  .superRefine(refineUploadKind);
+
+export type PresignRewriteDocumentDto = z.infer<
+  typeof presignRewriteDocumentSchema
+>;

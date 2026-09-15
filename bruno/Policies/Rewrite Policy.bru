@@ -1,7 +1,7 @@
 meta {
   name: Rewrite Policy
   type: http
-  seq: 3
+  seq: 5
 }
 
 post {
@@ -33,8 +33,8 @@ body:json {
         "premium": 1050,
         "itemCount": 1,
         "newBusinessApplication": {
-          "key": "{{soldDocumentKey}}",
-          "filename": "application.pdf",
+          "key": "{{rewriteDocumentKey}}",
+          "filename": "rewrite-application.pdf",
           "contentType": "application/pdf",
           "size": 2048
         }
@@ -119,6 +119,11 @@ docs {
   | `cancelledAt` | `YYYY-MM-DD` | yes | The date the window is judged against, and the replacement deal's sold date. Clamped server-side to never be in the future nor before the original sale. |
   | `policies[]` | array(1–10) | yes | Replacement policies. Validated by the same `policyBaseSchema` the Sold form and the transfer use — carrier, policy number format, premium, item count, signed application, discounts. **No `fromPolicyId`**: the cancelled policy is the URL. Prior insurance and cancellation are injected as "none" and must not be sent. |
   | `submissionToken` | string | no | Makes a retry idempotent. Namespaced `RWRT\|…` server-side, so it cannot collide with a sold or transfer token. |
+
+  ⚠ **Document keys must come from `POST :id/rewrite/presign`** (seq 3), not from
+  the sold or transfer presign. Rewrite attachments are verified against the
+  `policy-rewrites/<householdId>` purpose, so a key minted under another flow's
+  prefix fails `assertKeyOwnership` with a 400.
 
   More than one replacement row is allowed: only the first is linked to the
   cancelled policy, and the rest are ordinary new policies on the same deal — the

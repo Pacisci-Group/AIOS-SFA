@@ -3684,9 +3684,32 @@ describe('SFA API (e2e)', () => {
     describe('status vocabulary', () => {
       it('accepts a canonical label', async () => {
         const policyId = await makePolicy();
-        const saved = await patchOk(policyId, { status: 'Cancel Rewrite' });
-        expect(saved.policyStatus).toBe('Cancel Rewrite');
+        const saved = await patchOk(policyId, { status: 'Lapsed' });
+        expect(saved.policyStatus).toBe('Lapsed');
       });
+
+      /*
+       * `Cancel Rewrite` and `Company Transfer` are refused here (PAC-126).
+       * Neither is a status an operator can choose: each means "replaced by
+       * *that* policy", and the flow that sets it writes the replacement in the
+       * same transaction. Allowing it on a field patch would produce a cancelled
+       * policy pointing at nothing and, for a rewrite, no chargeback.
+       *
+       * This case previously asserted the opposite — it was written when the two
+       * labels carried no semantics and `PATCH` took any canonical value.
+       */
+      it.each(['Cancel Rewrite', 'Company Transfer', 'cancel rewrite'])(
+        'refuses %s, which only a flow may write',
+        async (status) => {
+          const policyId = await makePolicy();
+          await patch(ownerToken, seed.householdId, policyId)
+            .send({ status })
+            .expect(400);
+          const stored = await policyModel.findById(policyId).lean();
+          expect(stored?.policyStatus).not.toBe('Cancel Rewrite');
+          expect(stored?.policyStatus).not.toBe('Company Transfer');
+        },
+      );
 
       it('heals a raw SmartSuite code into its label', async () => {
         const policyId = await makePolicy();

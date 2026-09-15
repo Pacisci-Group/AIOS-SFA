@@ -74,8 +74,22 @@ interface SoldDealWizardProps {
    * the transfer variant and unused by the sale.
    */
   householdId?: string | null;
-  /** The ticket a transfer is recorded from; also its upload anchor. */
-  ticketId?: string;
+  /**
+   * Where in-progress documents are uploaded.
+   *
+   * The three flows anchor keys differently on the server — a sale on its lead,
+   * a transfer on the ticket's household, a rewrite on the replaced policy's —
+   * and that prefix is the ownership check, so the scope travels with the upload
+   * rather than being inferred.
+   *
+   * ⚠ **Passed in, not derived here.** This used to be computed from
+   * `variant === "transfer" && ticketId`, which meant the rewrite variant fell
+   * through to `{ kind: "lead", leadId: "" }` and every upload on it failed the
+   * presign — and because the New Business Application is required, that made
+   * the whole flow unsubmittable. The flow that owns the anchor is the only
+   * thing that reliably knows it.
+   */
+  uploadScope: UploadScope;
 }
 
 export function SoldDealWizard({
@@ -87,7 +101,7 @@ export function SoldDealWizard({
   onSubmit,
   variant = "sale",
   householdId,
-  ticketId,
+  uploadScope,
 }: SoldDealWizardProps) {
   const nav = useWizardNavigation(variant);
   const [soldDate, setSoldDate] = useState("");
@@ -132,20 +146,6 @@ export function SoldDealWizard({
    * the policy-number rule off it). `useForm` re-applies its options on every
    * render, so the new validator is live on the next validation run.
    */
-  /**
-   * Where in-progress documents are uploaded.
-   *
-   * The two flows anchor keys differently on the server — a sale on its lead, a
-   * transfer on the ticket's household — and that prefix is the ownership
-   * check, so the scope travels with the upload rather than being inferred.
-   */
-  const uploadScope: UploadScope = useMemo(
-    () =>
-      variant === "transfer" && ticketId
-        ? { kind: "ticket", ticketId }
-        : { kind: "lead", leadId: context.leadId },
-    [variant, ticketId, context.leadId],
-  );
   const cards = useMemo(() => cardsFor(variant), [variant]);
   const schema = useMemo(
     () => buildSoldPolicySchema(carriers, variant),

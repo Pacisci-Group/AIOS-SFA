@@ -19,6 +19,8 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { checkPolicySchema } from './dto/check-policy.dto';
 import { createPolicyRewriteSchema } from './dto/policy-rewrite.dto';
 import type { CreatePolicyRewriteDto } from './dto/policy-rewrite.dto';
+import { presignRewriteDocumentSchema } from '../sold-deals/dto/presign-sold-document.dto';
+import type { PresignRewriteDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
 import type { CheckPolicyDto } from './dto/check-policy.dto';
 import { updatePolicySchema } from './dto/update-policy.dto';
 import type { UpdatePolicyDto } from './dto/update-policy.dto';
@@ -108,21 +110,6 @@ export class PoliciesController {
   }
 
   /**
-   * Cancel this policy and book its replacement in one transaction.
-   *
-   * The **only** way a policy's status becomes `Cancel Rewrite` — `PATCH :id`
-   * rejects that status outright, because the product rule is that a rewrite
-   * cannot exist without the policy that replaces it. The replacement is booked
-   * as new business on a new deal; the cancelled policy's premium is charged
-   * back, and inside the first month it also comes off the original deal's
-   * credit. The response says which of those two happened.
-   *
-   * `deal_audits:write` rather than `crm_service:write`, matching `PATCH :id`
-   * and the Sold form: this *writes a sale*, audit items and all. A CSR who can
-   * record a transfer but not a sale gets a 403, which is the same line the rest
-   * of this controller already draws.
-   */
-  /**
    * The policy's full replacement history — every policy that led to it and
    * every one that came after, oldest first, with what each cancellation cost.
    *
@@ -140,6 +127,40 @@ export class PoliciesController {
     return this.rewritesService.replacementChain(access, branchId, id);
   }
 
+  /**
+   * A presigned PUT for a document on an in-progress rewrite.
+   *
+   * The household-anchored counterpart of `POST /sold-deals/documents/presign`,
+   * which takes a lead a rewrite does not have. Same gate as the rewrite itself:
+   * whoever may book one may upload its paperwork.
+   */
+  @Post(':id/rewrite/presign')
+  @RequireWrite(ModuleKey.DealAudits)
+  presignRewriteDocument(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(presignRewriteDocumentSchema))
+    body: PresignRewriteDocumentDto,
+  ) {
+    return this.rewritesService.presign(access, branchId, id, body);
+  }
+
+  /**
+   * Cancel this policy and book its replacement in one transaction.
+   *
+   * The **only** way a policy's status becomes `Cancel Rewrite` — `PATCH :id`
+   * rejects that status outright, because the product rule is that a rewrite
+   * cannot exist without the policy that replaces it. The replacement is booked
+   * as new business on a new deal; the cancelled policy's premium is charged
+   * back, and inside the first month it also comes off the original deal's
+   * credit. The response says which of those two happened.
+   *
+   * `deal_audits:write` rather than `crm_service:write`, matching `PATCH :id`
+   * and the Sold form: this *writes a sale*, audit items and all. A CSR who can
+   * record a transfer but not a sale gets a 403, which is the same line the rest
+   * of this controller already draws.
+   */
   @Post(':id/rewrite')
   @RequireWrite(ModuleKey.DealAudits)
   rewrite(
