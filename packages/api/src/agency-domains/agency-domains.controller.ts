@@ -97,8 +97,15 @@ export class AgencyDomainsController {
     return this.domains.setPrimary(agencyId, domainId);
   }
 
+  /**
+   * ⚠ The decorator is load-bearing. `PermissionsGuard` admits a route that
+   * declares no permission, and `@SkipModule` leaves nothing behind it — this
+   * shipped without one and was callable by every user in the agency (PAC-133).
+   * `white-label-controllers.unit-spec.ts` now pins every route here.
+   */
   @Delete(':domainId')
   @HttpCode(204)
+  @RequirePermissions(AgencyPermission.DomainsWrite)
   async remove(
     @AgencyId() agencyId: string,
     @Param('domainId') domainId: string,
