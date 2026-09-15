@@ -100,20 +100,11 @@ export function toDateKey(value?: Date | string | null): string | null {
 }
 
 /**
- * `"<street>|<zip>"`, both lowercased and trimmed. Null unless **both** parts are
- * present — a key built from half an address would collapse unrelated leads.
- *
- * (Legacy lowercased the street but only trimmed the zip, so `90210 ` and
- * `90210` produced different keys.)
+ * Re-exported from `common/address/address-key.ts`, where it moved when
+ * `HouseholdSchema` became a second caller (PAC-101). Kept here so the intake
+ * pipeline's imports do not all have to move with it.
  */
-export function buildAddressKey(
-  street?: string | null,
-  zip?: string | null,
-): string | null {
-  const s = street?.trim().toLowerCase();
-  const z = zip?.trim().toLowerCase();
-  return s && z ? `${s}|${z}` : null;
-}
+export { buildAddressKey } from '../../common/address/address-key';
 
 /**
  * Prefix for every channel whose namespace is a constant.

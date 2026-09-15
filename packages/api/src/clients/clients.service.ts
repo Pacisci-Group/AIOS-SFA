@@ -25,9 +25,19 @@ import {
   normalizePolicyType,
   parseHouseholdRef,
   policyNumberKey,
+  isPhoneLike,
+  searchDigits,
+  searchTokens,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { resolveHouseholdAddress } from '../common/address/household-address';
+import { escapeRegex } from '../common/mongo/escape-regex';
+import {
+  MATCHES_NOTHING,
+  addressPaths,
+  buildSearchFilter,
+  phoneDigitsRegex,
+} from '../common/mongo/search-filter';
 import {
   loadContactDetails,
   toContactDetails,
@@ -104,12 +114,36 @@ const CHILD_MATCH_CAP = 500;
  * ⚠ Must match the collation on `ContactSchema`'s
  * `{agencyId, lastName, firstName}` index exactly, or the index is not used.
  */
+/**
+ * Every household field the omni box searches.
+ *
+ * A superset of the rendered columns, which is PAC-101's rule. `Household` and
+ * `Location` are here; `Contact` (the primary's email and phone) is **not**,
+ * because since PAC-91 the household stores no copy of either — it is resolved
+ * through `contacts`, as a token branch. `Status` has its own facet, `Policies`
+ * is a count and `Updated` is a date, so all three stay out.
+ *
+ * `householdRef` is matched as a *contains*, which is what makes `147` reach
+ * `HH-2147`; the canonical `HH-2614` form is resolved separately from the whole
+ * term. Both address roots are searched because the Location column falls back
+ * from property to mailing, so searching only the first would fail to find a
+ * row the table is displaying.
+ *
+ * ⚠ These paths only exist because the address became a typed sub-schema in the
+ * previous commit. Before that they matched exactly the subset of rows whose
+ * writer happened to use these key names.
+ */
+const HOUSEHOLD_SEARCH_FIELDS = [
+  'name',
+  'householdRef',
+  ...addressPaths('propertyAddress'),
+  'propertyAddress.street2',
+  ...addressPaths('mailingAddress'),
+  'mailingAddress.street2',
+] as const;
+
 const CONTACT_NAME_COLLATION = { locale: 'en', strength: 2 } as const;
 
-/** A clause no household satisfies — an explicit empty result. */
-const MATCHES_NOTHING = { _id: { $in: [] as Types.ObjectId[] } };
-
-/** `_id` is the tiebreaker everywhere, so pages don't shuffle between requests. */
 /**
  * `_id` is the tiebreaker everywhere, so pages don't shuffle between requests.
  *
@@ -171,7 +205,7 @@ export class ClientsService {
       // name term reaches the primary contact the same way the Clients list
       // does — by resolving contacts first and matching on the household ids
       // they name.
-      const rx = new RegExp(escapeRegExp(q), 'i');
+      const rx = new RegExp(escapeRegex(q), 'i');
       const ids = await this.matchHouseholdsByContactName(scope, rx);
       filter.$or = [
         { name: rx },
@@ -212,6 +246,11 @@ export class ClientsService {
     const and: FilterQuery<HouseholdDocument>[] = [];
     /** householdId -> why it matched, for the row's `matchedOn`. */
     const matches = new Map<string, HouseholdMatch>();
+    /** Rows whose own first column already answers the query need no label. */
+    let explains: (household: {
+      name?: string;
+      householdRef?: string;
+    }) => boolean = () => false;
 
     if (query.status?.length) {
       // Each label expands to itself plus any raw SmartSuite code mapping to it,
@@ -278,53 +317,102 @@ export class ClientsService {
     // --- Omni box: shape-routed, ORed --------------------------------------
 
     if (query.q) {
+      const agencyId = this.agencyIdOf(access);
       const routes = routeSearchTerm(query.q);
-      const or: FilterQuery<HouseholdDocument>[] = [];
 
-      if (routes.name) {
-        const rx = new RegExp(escapeRegExp(routes.name), 'i');
-        // No `primaryContactName` clause any more (PAC-91 §4) — and none is
-        // needed: `matchByContact` below already searches every member's name,
-        // the primary included, and returns a `matchedOn` label the stored copy
-        // never could.
-        or.push({ name: rx });
-        const byName = await this.matchByContact(
-          this.agencyIdOf(access),
-          scope,
-          {
-            anyName: routes.name,
-          },
+      /** Records a child match's `matchedOn` label and returns its clause. */
+      const clauseFor = (
+        found: Map<string, HouseholdMatch>,
+      ): FilterQuery<HouseholdDocument> | null => {
+        mergeMatches(matches, found);
+        return found.size ? householdIdClause(found) : null;
+      };
+
+      const search = await buildSearchFilter<HouseholdDocument>(query.q, {
+        fields: HOUSEHOLD_SEARCH_FIELDS,
+        tokenBranches: [
+          // One contact query per token, ORing name/email/phone inside it,
+          // rather than one per field — a four-token query then costs four
+          // capped lookups instead of twelve.
+          async (token) =>
+            clauseFor(
+              await this.matchByContact(agencyId, scope, { anyText: token }),
+            ),
+        ],
+        termBranches: [
+          // The canonical reference. `147` already reaches `HH-2147` through
+          // the `householdRef` token field; this is what makes `#HH2614` and
+          // `hh2614` resolve to the stored `HH-2614`. No `matchedOn` — the
+          // reference is printed in the row's first column.
+          () =>
+            Promise.resolve(
+              routes.householdRef
+                ? { householdRef: routes.householdRef }
+                : null,
+            ),
+          async () =>
+            routes.dateOfBirth
+              ? clauseFor(
+                  await this.matchByContact(agencyId, scope, {
+                    dateOfBirth: routes.dateOfBirth,
+                  }),
+                )
+              : null,
+          async () =>
+            routes.policyKey
+              ? clauseFor(await this.matchByPolicy(scope, routes.policyKey))
+              : null,
+          // Phone has to be a whole-term branch: normalization splits
+          // `(918) 555-0134` into three tokens, none of them phone-shaped.
+          async (term) =>
+            isPhoneLike(term)
+              ? clauseFor(
+                  await this.matchByContact(agencyId, scope, {
+                    phoneDigits: searchDigits(term),
+                  }),
+                )
+              : null,
+        ],
+      });
+
+      // `null` only for a term with nothing searchable in it, which the DTO
+      // already turns into `undefined` — but if one gets here it is "no
+      // filter", never an impossible one.
+      if (search) and.push(search);
+
+      /*
+       * Whether the row's own first column already explains why it is here.
+       *
+       * `matchedOn` is a "why is this row in my results" label, so restating
+       * something the row already prints is noise. That used to fall out of the
+       * routing — a reference suppressed the name branch, so a reference search
+       * produced no child matches to label. Tokenizing removed that accident:
+       * searching `HH-1` now also asks `contacts` for a token `1`, which
+       * matches somebody's phone number and would label the row "member Test
+       * Client" for no reason a reader could follow.
+       *
+       * So the suppression is stated rather than inherited: if the household's
+       * own name or reference answers the query, there is nothing to explain.
+       */
+      const tokenPatterns = searchTokens(query.q).map(
+        (token) => new RegExp(escapeRegex(token), 'i'),
+      );
+      explains = (household) => {
+        const own = [household.name, household.householdRef]
+          .filter(Boolean)
+          .join(' ');
+        if (!own) return false;
+        if (
+          routes.householdRef &&
+          household.householdRef === routes.householdRef
+        ) {
+          return true;
+        }
+        return (
+          tokenPatterns.length > 0 &&
+          tokenPatterns.every((pattern) => pattern.test(own))
         );
-        mergeMatches(matches, byName);
-        if (byName.size) or.push(householdIdClause(byName));
-      }
-
-      if (routes.householdRef) {
-        // No `matchedOn`: the reference is printed in the row's first column.
-        or.push({ householdRef: routes.householdRef });
-      }
-
-      if (routes.dateOfBirth) {
-        const byDob = await this.matchByContact(
-          this.agencyIdOf(access),
-          scope,
-          {
-            dateOfBirth: routes.dateOfBirth,
-          },
-        );
-        mergeMatches(matches, byDob);
-        if (byDob.size) or.push(householdIdClause(byDob));
-      }
-
-      if (routes.policyKey) {
-        const byPolicy = await this.matchByPolicy(scope, routes.policyKey);
-        mergeMatches(matches, byPolicy);
-        if (byPolicy.size) or.push(householdIdClause(byPolicy));
-      }
-
-      // Every route came back empty — the term matches nothing, which is not
-      // the same as no term at all.
-      and.push(or.length ? { $or: or } : MATCHES_NOTHING);
+      };
     }
 
     const filter: FilterQuery<HouseholdDocument> = {
@@ -363,7 +451,9 @@ export class ClientsService {
       items: await this.withPrimaryContacts(households, (household, primary) =>
         toHouseholdListRow(
           household,
-          matches.get(String(household._id)) ?? null,
+          explains(household)
+            ? null
+            : (matches.get(String(household._id)) ?? null),
           primary,
         ),
       ),
@@ -390,6 +480,10 @@ export class ClientsService {
       firstName?: string;
       lastName?: string;
       anyName?: string;
+      /** One search token, matched against name **and** email and phone. */
+      anyText?: string;
+      /** A whole-term phone query, digits only. */
+      phoneDigits?: string;
       dateOfBirth?: Date | null;
     },
   ): Promise<Map<string, HouseholdMatch>> {
@@ -397,17 +491,40 @@ export class ClientsService {
     let byName = false;
 
     if (criteria.firstName) {
-      filter.firstName = new RegExp(escapeRegExp(criteria.firstName), 'i');
+      filter.firstName = new RegExp(escapeRegex(criteria.firstName), 'i');
       byName = true;
     }
     if (criteria.lastName) {
-      filter.lastName = new RegExp(escapeRegExp(criteria.lastName), 'i');
+      filter.lastName = new RegExp(escapeRegex(criteria.lastName), 'i');
       byName = true;
     }
     if (criteria.anyName) {
-      const rx = new RegExp(escapeRegExp(criteria.anyName), 'i');
+      const rx = new RegExp(escapeRegex(criteria.anyName), 'i');
       filter.$or = [{ firstName: rx }, { lastName: rx }];
       byName = true;
+    }
+    if (criteria.anyText) {
+      // The Contact column renders the primary's email and phone, so both have
+      // to be searchable — and since PAC-91 removed the denormalised copies
+      // from `Household`, the only place they exist is here.
+      //
+      // ⚠ No collation on this branch, deliberately. The regex carries `i`, so
+      // case-insensitivity does not depend on it, and a collated query cannot
+      // use an index for a regex at all — the `{agencyId,lastName,firstName}`
+      // index this repeats collation for elsewhere could not serve an `$or`
+      // across four fields regardless.
+      const rx = new RegExp(escapeRegex(criteria.anyText), 'i');
+      filter.$or = [
+        { firstName: rx },
+        { lastName: rx },
+        { email: rx },
+        { phone: rx },
+      ];
+    }
+    if (criteria.phoneDigits) {
+      // Digit-tolerant: matches a stored number in whatever format the source
+      // system used, so `(918) 555-0134` and `9185550134` are one query.
+      filter.phone = { $regex: phoneDigitsRegex(criteria.phoneDigits) };
     }
     if (criteria.dateOfBirth) {
       // A day range, never equality on a parsed string: `dateOfBirth` is stored
@@ -474,7 +591,7 @@ export class ClientsService {
     const policies = await this.policyModel
       .find({
         ...scope,
-        policyNumberKey: new RegExp(`^${escapeRegExp(key)}`),
+        policyNumberKey: new RegExp(`^${escapeRegex(key)}`),
         householdId: { $ne: null },
       })
       .select('policyNumber policyNumberKey householdId')
@@ -521,7 +638,7 @@ export class ClientsService {
     const filter: FilterQuery<PolicyDocument> = { ...scope };
     const q = term.trim();
     if (q) {
-      const rx = new RegExp(escapeRegExp(q), 'i');
+      const rx = new RegExp(escapeRegex(q), 'i');
       const or: FilterQuery<PolicyDocument>[] = [
         { policyNumber: rx },
         { policyType: rx },
@@ -902,9 +1019,10 @@ export class ClientsService {
 
     return {
       ...toHouseholdSummary(household, toContactDetails(primary)),
-      // Coerced once, on the way out: the three writers' key sets are an API
-      // concern, and every client that re-implemented the lookup table got at
-      // least one of them wrong. No lead in scope here, hence the leading null.
+      // Resolved once, on the way out: which of property/mailing to show is
+      // an API concern, not the client's. No lead in scope here, hence the
+      // leading null. (Until PAC-101 this also reconciled three different key
+      // shapes; the stored address is typed now.)
       address: resolveHouseholdAddress(
         null,
         household.propertyAddress,
@@ -1236,9 +1354,10 @@ function toHouseholdListRow(
   matchedOn: HouseholdMatch | null,
   primary?: ContactDetails,
 ): HouseholdListRow {
-  // Coerced here rather than in the client: the three writers of
-  // `propertyAddress` each use their own key names, and every consumer that
-  // re-implemented that lookup table got at least one of them wrong.
+  // Resolved here rather than in the client, so the Location column and the
+  // query that searches it read the same fields. Before PAC-101 this coerced
+  // three writers' key shapes *after* the fetch, which is precisely why the
+  // column could not be searched.
   const address = resolveHouseholdAddress(
     null,
     household.propertyAddress,
@@ -1294,11 +1413,6 @@ function householdIdClause(
   return {
     _id: { $in: [...found.keys()].map((id) => new Types.ObjectId(id)) },
   };
-}
-
-/** Search terms are user input — never let them compile as a pattern. */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function clampLimit(limit: number): number {

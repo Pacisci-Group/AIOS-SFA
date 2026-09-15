@@ -55,6 +55,41 @@ export interface AgencyUserListItem {
   updatedAt?: Date;
 }
 
+/**
+ * One assignable person, for a picker (PAC-101).
+ *
+ * Deliberately **not** a page of `AgencyUserListItem`. `GET /users` is the
+ * agency directory — paginated, searchable, and showing everybody including
+ * pending invites and de-provisioned accounts. A picker wants the opposite: the
+ * whole list at once, and only people it makes sense to assign work to. A
+ * picker that paginates is worse UX than the unpaginated roster it replaced,
+ * and one showing page 1 of 3 is a bug.
+ *
+ * So this carries only what a `<Select>` renders, and the filtering that every
+ * caller was doing in the browser — active only, platform admins excluded —
+ * happens server-side where it belongs.
+ *
+ * ⚠ "Active" excludes a **pending invite** as well as a removed employee:
+ * `isActive` is false for both, and `deactivatedAt` is what separates them.
+ * That is the existing behaviour of all three pickers, kept deliberately —
+ * nobody should be assigned work before they have accepted their invitation.
+ */
+export interface AgencyUserOption {
+  _id: unknown;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+/** One page of the agency directory (PAC-101). */
+export interface AgencyUserListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: AgencyUserListItem[];
+}
+
 export interface UserDetailResponse {
   _id: unknown;
   agencyId?: unknown;

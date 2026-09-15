@@ -1,17 +1,14 @@
 import { Link } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import {
-  AlertCircle,
-  ArrowLeft,
-  FileUp,
-  Map as MapIcon,
-  Play,
-  Search,
-} from "lucide-react";
+import { AlertCircle, ArrowLeft, FileUp, Map as MapIcon, Play } from "lucide-react";
 import type { MailerCampaignListItem, MailerCampaignStatus } from "@sfa/shared";
+import { TablePagination } from "@/components/common/TablePagination";
+import {
+  SEARCH_DEBOUNCE_MS,
+  TableSearchInput,
+} from "@/components/common/TableSearchInput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -57,7 +54,7 @@ const ANY = "__any__";
 export default function MailerCampaignsPage() {
   const { q, status, agencyId, page, setQ, setStatus, setAgencyId, setPage } =
     useCampaignsUrlState();
-  const debouncedQ = useDebouncedValue(q);
+  const debouncedQ = useDebouncedValue(q, SEARCH_DEBOUNCE_MS);
 
   const agenciesQuery = useQuery({
     queryKey: ["platform", "agencies"],
@@ -132,13 +129,12 @@ export default function MailerCampaignsPage() {
 
       <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center">
         <div className="relative flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
+          <TableSearchInput
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search by campaign name or week…"
-            className="border-border bg-card pl-9"
-            aria-label="Search campaigns"
+            onValueChange={setQ}
+            placeholder="Search by name, number, audience or requester…"
+            label="Search campaigns"
+            busy={isFetching}
           />
         </div>
         <div className="flex items-center gap-2">
@@ -207,7 +203,9 @@ export default function MailerCampaignsPage() {
       ) : items.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border bg-card py-16 text-center">
           <p className="text-sm text-muted-foreground">
-            {q || status || agencyId
+            {/* `debouncedQ`, not `q`: keying off the raw input flips the copy
+                before the request that would justify it has fired. */}
+            {debouncedQ || status || agencyId
               ? "No campaigns match these filters."
               : "No campaigns have been run yet."}
           </p>
@@ -225,31 +223,16 @@ export default function MailerCampaignsPage() {
             ))}
           </div>
 
-          <div className="mt-4 flex items-center justify-between gap-3">
-            <span className="text-sm tabular-nums text-muted-foreground">
-              Showing {firstRow} to {lastRow} of {total}
-            </span>
-            {totalPages > 1 && (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page <= 1 || isFetching}
-                  onClick={() => setPage(Math.max(1, page - 1))}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page >= totalPages || isFetching}
-                  onClick={() => setPage(Math.min(totalPages, page + 1))}
-                >
-                  Next
-                </Button>
-              </div>
-            )}
-          </div>
+          <TablePagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            totalPages={totalPages}
+            onPageChange={setPage}
+            busy={isFetching}
+            noun="campaigns"
+            className="mt-4"
+          />
         </>
       )}
     </SuperAdminLayout>

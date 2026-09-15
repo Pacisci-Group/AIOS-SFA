@@ -1,9 +1,14 @@
 import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Search } from "lucide-react";
+import { AlertCircle } from "lucide-react";
+import { TablePagination } from "@/components/common/TablePagination";
+import {
+  SEARCH_DEBOUNCE_MS,
+  TableSearchInput,
+} from "@/components/common/TableSearchInput";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -35,7 +40,7 @@ const PAGE_SIZE = 25;
 export function CampaignRecordsTable({ campaignId }: { campaignId: string }) {
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
-  const debouncedQ = useDebouncedValue(q);
+  const debouncedQ = useDebouncedValue(q, SEARCH_DEBOUNCE_MS);
 
   const params = {
     page,
@@ -43,7 +48,7 @@ export function CampaignRecordsTable({ campaignId }: { campaignId: string }) {
     q: debouncedQ || undefined,
   };
 
-  const { data, isPending, isFetching } = useQuery({
+  const { data, isPending, isFetching, isError, error, refetch } = useQuery({
     queryKey: campaignRecordsKey(campaignId, params),
     queryFn: () => listCampaignRecords(campaignId, params),
     placeholderData: keepPreviousData,
@@ -55,23 +60,33 @@ export function CampaignRecordsTable({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="space-y-3">
-      <div className="relative">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            // A narrower result must never strand the operator on a page that
-            // no longer exists.
-            setPage(1);
-          }}
-          placeholder="Search by control number or name…"
-          className="border-border bg-card pl-9"
-          aria-label="Search campaign records"
-        />
-      </div>
+      <TableSearchInput
+        value={q}
+        onValueChange={(next) => {
+          setQ(next);
+          // A narrower result must never strand the operator on a page that
+          // no longer exists.
+          setPage(1);
+        }}
+        placeholder="Search any column — name, control number, town, market, code…"
+        label="Search campaign records"
+        busy={isFetching}
+      />
 
-      {isPending ? (
+      {isError ? (
+        /* This table used to destructure no `isError` at all, so a failed
+           search rendered as an indistinguishable empty table — the one state
+           where "no records match that search" is actively wrong. */
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertDescription className="flex items-center justify-between gap-3">
+            <span>{(error as Error).message}</span>
+            <Button variant="outline" size="sm" onClick={() => void refetch()}>
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : isPending ? (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, index) => (
             <Skeleton key={index} className="h-9 w-full" />
@@ -143,31 +158,15 @@ export function CampaignRecordsTable({ campaignId }: { campaignId: string }) {
         </div>
       )}
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-sm tabular-nums text-muted-foreground">
-            {formatCount(total)} records
-          </span>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1 || isFetching}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= totalPages || isFetching}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-      )}
+      <TablePagination
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={total}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        busy={isFetching}
+        noun="records"
+      />
     </div>
   );
 }

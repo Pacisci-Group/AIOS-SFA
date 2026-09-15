@@ -292,7 +292,7 @@ export class UnlinkedRecordsService {
       ...envelope(page, pageSize, total),
       items: households.map((household): UnlinkedHouseholdRow => {
         // Coerced here rather than in the client, for the reason
-        // `toHouseholdListRow` spells out: three writers, three key shapes.
+        // `toHouseholdListRow` spells out: property first, then mailing.
         const address = resolveHouseholdAddress(
           null,
           household.propertyAddress,

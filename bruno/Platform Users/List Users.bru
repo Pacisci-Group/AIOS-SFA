@@ -95,12 +95,38 @@ docs {
   |-----------|--------|---------|--------------------------------------------------------------|
   | page      | int    | 1       | min 1 (1-based)                                              |
   | pageSize  | int    | 25      | min 1, max 100                                               |
-  | q         | string | —       | max 120; first name, last name, `first last`, email, **agency name**, **role name** — case-insensitive *contains* |
+  | q         | string | —       | max 120; tokenized — see below                                |
   | agencyIds | multi  | —       | ObjectIds, ORed; max 50; a malformed id is `400`             |
   | roleSlugs | multi  | —       | role **slugs** (`producer`, `csr`, …), ORed; max 20          |
 
   Multi-value params accept the same three forms as `Leads › List Leads`
   (repeated, comma-separated, single). An empty value is *no filter*.
+
+  ### How `q` is interpreted (PAC-101)
+
+  Lower-cased, accent-stripped and split on whitespace/punctuation into at most
+  4 tokens. **Every token must match something, but not all in the same field**,
+  so `producer other` finds the producer at Other Agency and `John Smith`
+  matches a name split across two columns in either order.
+
+  Each token is a case-insensitive **substring** against:
+
+  | Matched | Where |
+  |---|---|
+  | `firstName`, `lastName`, `email` | on `users` directly |
+  | agency **name** and **slug** | `agencies`, resolved to ids first |
+  | branch **name** | `branches`, resolved to ids first |
+  | role **name** | `agencyRoles` → `userRoles`, resolved to ids first |
+
+  Agency `slug` and branch `name` are new here: both are rendered by the
+  directory and neither was searchable. The `first last` concatenation branch is
+  gone — tokenizing covers it without a per-document `$expr` stage.
+
+  Every lookup is narrowed by `agencyIds` when the caller supplied it, which is
+  what keeps `userRoles` on its `{agencyId, roleId}` index. A lookup that
+  matches nothing contributes no branch — the token can still match a name or an
+  email — but a *filter* that resolves to nothing still yields an empty page,
+  never "no filter".
 
   ### Why role **slugs**, not ids
   Roles are per agency: `producer` has a different `_id` in every tenant but

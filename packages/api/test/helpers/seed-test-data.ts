@@ -266,7 +266,15 @@ export async function seedTestData(
     householdRef: 'HH-1',
     name: 'Test Household',
     status: 'Active',
-    propertyAddress: { line1: '1 Test St', city: 'Austin', state: 'TX' },
+    // `street`, and with a `zip`, so the fixture exercises `addressKey`
+    // stamping too. It wrote `line1` and no zip until PAC-101, which under the
+    // typed sub-schema would be silently dropped rather than rejected.
+    propertyAddress: {
+      street: '1 Test St',
+      city: 'Austin',
+      state: 'TX',
+      zip: '73301',
+    },
     totalActivePolicies: 1,
   });
 

@@ -8,6 +8,7 @@ import {
   normalizeDealAuditStatus,
   normalizeInsuranceMonth,
   parseHouseholdRef,
+  type StoredAddress,
 } from '@sfa/shared';
 import { reconcileDealAudits } from '../deal-audits/audit-reconcile';
 import { Agency } from '../platform/schemas/agency.schema';
@@ -1051,8 +1052,17 @@ export class MigrationService {
           status: normalizeHouseholdStatus(
             selectCode(rec[HOUSEHOLD_FIELDS.status]),
           ),
-          propertyAddress: this.asObject(rec[HOUSEHOLD_FIELDS.propertyAddress]),
-          mailingAddress: this.asObject(rec[HOUSEHOLD_FIELDS.mailingAddress]),
+          // ⚠ Mapped, not passed through. SmartSuite's address object is keyed
+          // `location_address` / `location_city` / …, and since PAC-101 the
+          // household stores a typed sub-schema — an un-mapped object is not
+          // rejected, it is **silently reduced to `{}`**, which would erase the
+          // address of every household this import touches.
+          propertyAddress: this.toHouseholdAddress(
+            rec[HOUSEHOLD_FIELDS.propertyAddress],
+          ),
+          mailingAddress: this.toHouseholdAddress(
+            rec[HOUSEHOLD_FIELDS.mailingAddress],
+          ),
           /*
            * No `primaryContactName` / `primaryEmails` / `primaryPhones`
            * (PAC-91 §4). SmartSuite's household row does carry a lookup of its
@@ -3082,6 +3092,39 @@ export class MigrationService {
   // ---------------------------------------------------------------------------
   // Small extraction helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * A SmartSuite address object as the household stores it (PAC-101).
+   *
+   * The vendor keys every part `location_*`, and `location_address2` carries
+   * the apartment / unit line — which the old read-time coercion dropped
+   * entirely, so it was invisible to every consumer. It is kept as `street2`.
+   *
+   * Returns `undefined` when nothing usable survives, so an empty SmartSuite
+   * object does not become an empty sub-document.
+   */
+  private toHouseholdAddress(value: unknown): StoredAddress | undefined {
+    const raw = this.asObject(value);
+    if (!raw) return undefined;
+
+    const text = (key: string): string | undefined => {
+      const found = raw[key];
+      if (typeof found !== 'string') return undefined;
+      const trimmed = found.trim();
+      return trimmed === '' ? undefined : trimmed;
+    };
+
+    const address: StoredAddress = {
+      street: text('location_address'),
+      street2: text('location_address2'),
+      city: text('location_city'),
+      state: text('location_state'),
+      zip: text('location_zip'),
+    };
+    return Object.values(address).some((part) => part !== undefined)
+      ? address
+      : undefined;
+  }
 
   private asObject(value: unknown): Record<string, unknown> | undefined {
     if (value && typeof value === 'object' && !Array.isArray(value)) {

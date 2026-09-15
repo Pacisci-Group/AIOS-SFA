@@ -1,5 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import type { StoredAddress } from '@sfa/shared';
+import { householdAddressKey } from '../../common/address/address-key';
 import { ObjectIdType } from '../../common/mongo/object-id';
 import {
   LEGACY_DEDUPE_INDEX_OPTIONS,
@@ -12,6 +14,62 @@ export type HouseholdDocument = HydratedDocument<Household>;
  * Migrated from SmartSuite "The Households Table" (6941fa11964c58f31380427c).
  * Provides the household context for scorecards (avg premium / HH) and hot leads.
  */
+/**
+ * A stored household address (PAC-101).
+ *
+ * ## Why this is a sub-schema now
+ *
+ * `propertyAddress` and `mailingAddress` were `@Prop({ type: Object })`, and
+ * **three writers each used their own key names** — lead intake wrote
+ * `street/city/state/zip`, the demo seed `line1/…`, and the SmartSuite
+ * migration passed the vendor's `location_address/location_city/…` through
+ * verbatim. So `{"propertyAddress.city": …}` matched only some rows, and the
+ * city the Clients list shows had to be resolved in application code *after*
+ * the fetch — which a Mongo query cannot do, and which is why the Location
+ * column was unsearchable.
+ *
+ * This is what `AGENTS.md` §11 asks for: model the domain, not the shape the
+ * source system happened to use. `BranchAddress` was already doing it.
+ *
+ * ⚠ **Every field is optional** and every reader must treat it that way. A
+ * household with a city and no street is a real record — migrated rows are
+ * half-filled all the time. That is why this mirrors `StoredAddress` rather
+ * than `StructuredAddress`, whose fields are all required because it is the
+ * post-coercion display shape.
+ *
+ * ⚠ **`strict` bites on write, not on read.** A legacy-keyed document still
+ * *reads* back intact (`.lean()` skips hydration, and `$init` keeps paths with
+ * no schema entry), but an update carrying `location_city` is silently reduced
+ * to `$set: {propertyAddress: {}}` — a 200 that erases the address. That is why
+ * the migration and every writer land in the same commit as this class.
+ */
+@Schema({ _id: false })
+export class HouseholdAddress implements StoredAddress {
+  @Prop({ trim: true })
+  street?: string;
+
+  /**
+   * Apartment / unit line, from the SmartSuite `location_address2` column.
+   *
+   * Recovered rather than dropped: the coercion that read these records
+   * ignored it, so it was invisible to every consumer. It stays **out** of
+   * `addressKey` — see `householdAddressKey`.
+   */
+  @Prop({ trim: true })
+  street2?: string;
+
+  @Prop({ trim: true })
+  city?: string;
+
+  @Prop({ trim: true })
+  state?: string;
+
+  @Prop({ trim: true })
+  zip?: string;
+}
+export const HouseholdAddressSchema =
+  SchemaFactory.createForClass(HouseholdAddress);
+
 @Schema({ timestamps: true, collection: 'households' })
 export class Household extends TenantRecord {
   /**
@@ -37,11 +95,15 @@ export class Household extends TenantRecord {
   @Prop({ index: true })
   status?: string;
 
-  @Prop({ type: Object })
-  propertyAddress?: Record<string, unknown>;
+  /**
+   * The household's **living** address. An insured property address is a
+   * different thing entirely and is captured on the quote.
+   */
+  @Prop({ type: HouseholdAddressSchema })
+  propertyAddress?: StoredAddress;
 
-  @Prop({ type: Object })
-  mailingAddress?: Record<string, unknown>;
+  @Prop({ type: HouseholdAddressSchema })
+  mailingAddress?: StoredAddress;
 
   /*
    * ⚠ No `primaryContactName` / `primaryEmails` / `primaryPhones`, deliberately
@@ -133,11 +195,17 @@ export class Household extends TenantRecord {
   /**
    * `"<street>|<zip>"`, both lowercased + trimmed.
    *
-   * Stored for future use, **not** read by intake: households are derived from
-   * the resolved contact, never looked up by address. Address-based household
-   * merging is unsafe (apartment buildings without unit numbers, roommates,
-   * prior owners), and legacy agrees in practice — it writes `address_key` and
-   * never queries it. The lead-side `addressKey` is the dedupe signal.
+   * **Not a dedupe key.** Households are derived from the resolved contact,
+   * never looked up by address: address-based merging is unsafe (apartment
+   * buildings without unit numbers, roommates, prior owners), and legacy agrees
+   * in practice — it writes `address_key` and never queries it. The lead-side
+   * `addressKey` is the dedupe signal, and the index here is deliberately
+   * non-unique.
+   *
+   * Until PAC-101 only lead intake wrote it, so it was null on every migrated
+   * and every demo-seeded household and its index covered a small minority of
+   * rows. It is stamped by a hook now (see the bottom of this file) and
+   * backfilled by `…-household-address-subschema.js`.
    */
   @Prop({ trim: true, lowercase: true })
   addressKey?: string;
@@ -188,5 +256,64 @@ HouseholdSchema.index(
   {
     unique: true,
     partialFilterExpression: { primaryContactId: { $type: 'objectId' } },
+  },
+);
+
+/**
+ * Keep `addressKey` in step with the address it is derived from.
+ *
+ * On every write path Mongoose offers a hook for, rather than at each call
+ * site, for the reason `ContactSchema` gives for `nameKey`/`dobKey`: one
+ * forgotten writer leaves the row out of the partial index silently. Before
+ * PAC-101 that was not hypothetical — intake stamped it and the other two
+ * writers did not, so the index covered a minority of the collection.
+ *
+ * ⚠ **`Model.bulkWrite()` bypasses all of this** (`AGENTS.md` §11). The one
+ * bulk writer on this collection is `households/household-ref.ts`, whose `$set`
+ * carries `householdRef` and nothing else — there is no address in the payload
+ * for a hook to read, so it is a hole in name only. Do **not** add manual
+ * stamping there; add it if that call ever starts writing addresses.
+ *
+ * ⚠ Both update shapes are handled. A `$set` may carry the whole address
+ * (`propertyAddress: {...}`) or a single path (`'propertyAddress.street'`), and
+ * only the first form can be re-derived in full — a dotted update that changes
+ * the street without the zip is merged against nothing, so the key is left
+ * alone rather than rebuilt from half the address.
+ */
+function stampAddressKey(doc: {
+  propertyAddress?: StoredAddress;
+  addressKey?: string | null;
+}): void {
+  const key = householdAddressKey(doc.propertyAddress);
+  if (key) doc.addressKey = key;
+}
+
+HouseholdSchema.pre('save', function stampOnSave(next) {
+  stampAddressKey(this);
+  next();
+});
+
+for (const hook of ['updateOne', 'findOneAndUpdate', 'updateMany'] as const) {
+  HouseholdSchema.pre(hook, function stampOnUpdate(next) {
+    const update = this.getUpdate() as Record<string, unknown> | null;
+    if (!update || Array.isArray(update)) return next();
+
+    const set = (update.$set ?? update) as Record<string, unknown>;
+    const address = set.propertyAddress as StoredAddress | undefined;
+    if (address && typeof address === 'object') {
+      const key = householdAddressKey(address);
+      if (key) set.addressKey = key;
+    }
+    next();
+  });
+}
+
+HouseholdSchema.pre(
+  'insertMany',
+  function stampOnInsertMany(next, docs: unknown[]) {
+    for (const doc of docs) {
+      stampAddressKey(doc as Parameters<typeof stampAddressKey>[0]);
+    }
+    next();
   },
 );

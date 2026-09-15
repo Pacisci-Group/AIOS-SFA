@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2, Lock } from "lucide-react";
 import {
+  SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_PICKER_STATUSES,
   isTerminalTicketStatus,
   type ServiceTicketStatus,
 } from "@sfa/shared";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { TICKET_STATUS_CONFIG } from "@/features/tickets/components/ticket-data";
 import type { ServiceTicketView } from "@/lib/service-tickets-api";
 import { sortByUrgency } from "@/lib/ticket-urgency";
@@ -19,6 +27,14 @@ type SlaStatus = "critical" | "warning" | "normal";
  */
 const FILTER_TABS = ["all", "overdue", "waiting"] as const;
 type FilterTab = (typeof FILTER_TABS)[number];
+
+/**
+ * "No type filter" as the `Select` sees it. Radix reserves the empty string for
+ * "nothing selected", which would render the trigger as a blank box rather than
+ * "All types" — so the unfiltered state carries a sentinel here and stays `''`
+ * in the URL, where absence is what means unfiltered.
+ */
+const ALL_TYPES = "__all__";
 
 interface PriorityTicketQueueProps {
   tickets: ServiceTicketView[];
@@ -70,11 +86,22 @@ const PAGE_SIZE = 8;
 const URL_DEFAULTS = {
   tab: "all" as string,
   page: "",
+  type: "",
 };
 
 const URL_ALLOWED = {
   tab: FILTER_TABS,
   page: (value: string) => /^[1-9]\d*$/.test(value),
+  /*
+   * Bounded rather than pinned to `SERVICE_TICKET_CATEGORIES`.
+   *
+   * This filter is applied to tickets already in memory and never reaches the
+   * API, so a value outside the vocabulary costs nothing worse than an empty
+   * list — while pinning it means any category the data carries but the enum
+   * has since renamed is unselectable, because the guard resets it to '' on
+   * the way back out of the URL. Length is all that needs guarding.
+   */
+  type: (value: string) => value.length <= 60,
 } as const;
 
 /** Every flavour of "blocked on someone else" feeds the Waiting filter. */
@@ -125,6 +152,7 @@ export function PriorityTicketQueue({
     allowed: URL_ALLOWED,
   });
   const activeFilter = urlState.tab as FilterTab;
+  const activeType = urlState.type;
   const page = Number(urlState.page) || 1;
 
   const [actionMenu, setActionMenu] = useState<string | null>(null);
@@ -142,7 +170,46 @@ export function PriorityTicketQueue({
     [tickets],
   );
 
-  const filtered = queueTickets.filter((t) => {
+  /**
+   * The filter's options: the whole shared vocabulary, plus anything the
+   * tickets carry that isn't in it.
+   *
+   * Deriving the list from the loaded tickets instead — offering only the
+   * categories with an open ticket — reads well and fails badly. A queue that
+   * is all one category offers a single row, and a stored category the enum
+   * doesn't recognise (a legacy label, a rename) drops out of both sides at
+   * once: no option to pick, and no way to reach those tickets. Listing the
+   * vocabulary means the control is the same control on every queue, and the
+   * union keeps an off-vocabulary category selectable. An option with nothing
+   * behind it lands on "No tickets in this view", which is an honest answer.
+   */
+  const typeOptions = useMemo(() => {
+    const canonical = new Set<string>(SERVICE_TICKET_CATEGORIES);
+    const extras = [
+      ...new Set(
+        queueTickets
+          .map((t) => t.ticketType)
+          .filter((type) => type && !canonical.has(type)),
+      ),
+    ].sort();
+    return [...SERVICE_TICKET_CATEGORIES, ...extras];
+  }, [queueTickets]);
+
+  /*
+   * Type narrows the queue *before* the tabs, so the three tab counts describe
+   * the set the rows are drawn from. Counting them over every assigned ticket
+   * while the list showed one category would put a "577 Overdue" chip above
+   * eleven rows.
+   */
+  const typeFiltered = useMemo(
+    () =>
+      activeType
+        ? queueTickets.filter((t) => t.ticketType === activeType)
+        : queueTickets,
+    [queueTickets, activeType],
+  );
+
+  const filtered = typeFiltered.filter((t) => {
     if (activeFilter === "all") return true;
     if (activeFilter === "overdue") return t.slaStatus === "critical";
     if (activeFilter === "waiting") return t.isWaiting;
@@ -176,6 +243,12 @@ export function PriorityTicketQueue({
     resetView();
   };
 
+  /** Same one-write rule as `changeFilter` — a new type is a new page 1. */
+  const changeType = (next: string) => {
+    setUrlState({ type: next === ALL_TYPES ? "" : next, page: "" });
+    resetView();
+  };
+
   const changeFilter = (next: FilterTab) => {
     // One write, not two. `setUrlState` navigates rather than setting state, so
     // a separate `goToPage(1)` in the same tick would compute from a location
@@ -199,18 +272,37 @@ export function PriorityTicketQueue({
   }, [page, currentPage, setUrlState]);
 
   const tabs: { key: FilterTab; label: string; count: number }[] = [
-    { key: "all", label: "All Assigned", count: queueTickets.length },
-    { key: "overdue", label: "Overdue", count: queueTickets.filter((t) => t.slaStatus === "critical").length },
-    { key: "waiting", label: "Waiting on Others", count: queueTickets.filter((t) => t.isWaiting).length },
+    { key: "all", label: "All Assigned", count: typeFiltered.length },
+    { key: "overdue", label: "Overdue", count: typeFiltered.filter((t) => t.slaStatus === "critical").length },
+    { key: "waiting", label: "Waiting on Others", count: typeFiltered.filter((t) => t.isWaiting).length },
   ];
 
   return (
     <div className="flex flex-col rounded-xl border border-white/8 bg-card overflow-hidden h-full">
       {/* Header */}
       <div className="px-5 pt-5 pb-4 border-b border-white/8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-semibold text-foreground tracking-tight">My Priority Tickets</h2>
-          <span className="text-xs text-muted-foreground">{filtered.length} tickets</span>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="min-w-0 truncate text-base font-semibold text-foreground tracking-tight">My Priority Tickets</h2>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <span className="text-xs text-muted-foreground tabular-nums">{filtered.length} tickets</span>
+            <Select value={activeType || ALL_TYPES} onValueChange={changeType}>
+              <SelectTrigger
+                size="sm"
+                aria-label="Filter by ticket type"
+                className="h-7 max-w-[11rem] gap-1.5 rounded-lg border-white/8 bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value={ALL_TYPES} className="text-xs">All types</SelectItem>
+                {typeOptions.map((type) => (
+                  <SelectItem key={type} value={type} className="text-xs">
+                    {type}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <div className="flex gap-1 p-1 rounded-lg bg-secondary/60">
           {tabs.map((tab) => (

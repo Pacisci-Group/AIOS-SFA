@@ -3,8 +3,10 @@ import { AlertCircle } from "lucide-react";
 import { useMemo } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { TablePagination } from "@/components/common/TablePagination";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SEARCH_DEBOUNCE_MS } from "@/components/common/TableSearchInput";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { listHouseholds, type ListHouseholdsParams } from "@/lib/households-api";
 import { HouseholdCard } from "./components/HouseholdCard";
@@ -48,7 +50,18 @@ export default function HouseholdsListPage() {
     setKind,
   } = useHouseholdsUrlState();
 
-  const debouncedSearch = useDebouncedValue(search, 300);
+  const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
+
+  /*
+   * The advanced panel's five identifier fields are debounced too (PAC-101).
+   *
+   * They wrote straight to the URL, and the URL is the query key — so typing a
+   * policy number fired one request per keystroke while the omni box beside
+   * them, doing the same job, fired one per pause. Debouncing the whole
+   * `filters` object rather than each input keeps the inputs controlled and
+   * the URL immediate, which is what makes the panel shareable as a link.
+   */
+  const debouncedFilters = useDebouncedValue(filters, SEARCH_DEBOUNCE_MS);
 
   const params = useMemo<ListHouseholdsParams>(
     () => ({
@@ -56,14 +69,16 @@ export default function HouseholdsListPage() {
       pageSize: PAGE_SIZE,
       sort,
       q: debouncedSearch.trim() || undefined,
-      firstName: filters.firstName.trim() || undefined,
-      lastName: filters.lastName.trim() || undefined,
-      dateOfBirth: filters.dateOfBirth || undefined,
-      householdRef: filters.householdRef.trim() || undefined,
-      policyNumber: filters.policyNumber.trim() || undefined,
+      firstName: debouncedFilters.firstName.trim() || undefined,
+      lastName: debouncedFilters.lastName.trim() || undefined,
+      dateOfBirth: debouncedFilters.dateOfBirth || undefined,
+      householdRef: debouncedFilters.householdRef.trim() || undefined,
+      policyNumber: debouncedFilters.policyNumber.trim() || undefined,
+      // Not debounced: the status facet is a click, not typing, and delaying
+      // it would make the chips feel broken.
       status: filters.status.length ? filters.status : undefined,
     }),
-    [page, sort, debouncedSearch, filters],
+    [page, sort, debouncedSearch, debouncedFilters, filters.status],
   );
 
   const { data, isPending, isError, isFetching, refetch } = useQuery({
@@ -125,6 +140,7 @@ export default function HouseholdsListPage() {
             <HouseholdsSearch
               search={search}
               onSearchChange={setSearch}
+              busy={isFetching}
               filters={filters}
               onChange={patchFilters}
               onClear={clearFilters}
@@ -170,33 +186,16 @@ export default function HouseholdsListPage() {
                   ))}
                 </div>
 
-                {!isPending && (
-                  <div className="flex items-center justify-between gap-3 mt-4">
-                    <span className="text-sm text-muted-foreground">
-                      Showing {firstRow} to {lastRow} of {total}
-                    </span>
-                    {totalPages > 1 && (
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={page <= 1 || isFetching}
-                          onClick={() => setPage(Math.max(1, page - 1))}
-                        >
-                          Previous
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={page >= totalPages || isFetching}
-                          onClick={() => setPage(Math.min(totalPages, page + 1))}
-                        >
-                          Next
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <TablePagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  total={total}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  busy={isFetching}
+                  noun="households"
+                  className="mt-4"
+                />
               </>
             )}
           </>
