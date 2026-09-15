@@ -225,7 +225,7 @@ export function mapMailerRow(
 
   const campaign = compact({
     campaignNumber,
-    weekNumber: parseInteger(row.weeknumber) ?? parseWeekNumber(campaignNumber),
+    weekNumber: mailerWeekNumber(row),
     fileName: parseText(row.filename),
     policyType: parseText(row.type),
     product: parseText(row.product),
@@ -384,13 +384,30 @@ export function detectFromRow(row: RawMailerRow): {
     carrierAgencyId: parseText(row.agencyid)?.toUpperCase() ?? null,
     agencyName: parseText(row.agencyname) ?? null,
     campaignNumber,
-    weekNumber:
-      parseInteger(row.weeknumber) ?? parseWeekNumber(campaignNumber) ?? null,
+    weekNumber: mailerWeekNumber(row) ?? null,
     fileName: parseText(row.filename) ?? null,
     quoteDate: quoteDate ? quoteDate.toISOString() : null,
     policyType: parseText(row.type) ?? null,
     product: parseText(row.product) ?? null,
   };
+}
+
+/**
+ * The week a source row belongs to: the `week_number` column when the source
+ * carries one (BigQuery does), else the digits that end `Campaign_Number`.
+ *
+ * Exported because the BigQuery backfill keys its implicit campaigns on this
+ * same value. Two copies of the expression could file a mailer under one
+ * week's campaign while its `campaign.weekNumber` names another.
+ *
+ * ⚠ The precedence is deliberate. In eight legacy BigQuery files the two
+ * columns disagree by one to three weeks, and in the files checked it is the
+ * column that matches the quote date. Which one is the campaign's real week is
+ * an open question for the pipeline owner, and reversing the order would move
+ * about 160,000 stored mailers to a different week.
+ */
+export function mailerWeekNumber(row: RawMailerRow): number | undefined {
+  return parseInteger(row.weeknumber) ?? parseWeekNumber(row.campaignnumber);
 }
 
 export { displayControlNumber };

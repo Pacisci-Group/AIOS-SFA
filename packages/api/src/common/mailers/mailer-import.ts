@@ -67,6 +67,8 @@ interface MailerUpsertOperation {
     filter: Record<string, unknown>;
     update: Record<string, unknown>;
     upsert: boolean;
+    /** Mongoose's per-operation switch for `createdAt`/`updatedAt`. */
+    timestamps?: boolean;
   };
 }
 
@@ -95,6 +97,54 @@ export interface MailerImportOptions {
    * file says about itself, and the rejections **before** anything is written.
    */
   dryRun?: boolean;
+  /**
+   * What happens when a row's control number already belongs to a stored
+   * mailer.
+   *
+   * - `'update'` (the default): `$set` the row over it, which also moves it to
+   *   this campaign. Right for every campaign commit, where the file being
+   *   committed is the newer truth.
+   * - `'skip'`: leave the stored mailer exactly as it is and insert only the
+   *   ones that do not exist yet. For a catch-up import into a collection that
+   *   leads already point at, where moving a mailer to another campaign would
+   *   leave `Lead.mailer.campaignId` naming the wrong one.
+   *
+   * Under `'skip'` a match is not counted anywhere; `counts.updated` stays 0.
+   */
+  onExisting?: 'update' | 'skip';
+}
+
+/**
+ * An upsert that can only ever insert, for `onExisting: 'skip'`.
+ *
+ * Every field goes in `$setOnInsert`, so a match writes nothing. ⚠
+ * `timestamps: false` is what makes "nothing" literal: Mongoose otherwise adds
+ * `$set: { updatedAt }` to every `updateOne` in a `bulkWrite`, which would
+ * touch each stored mailer the run only looked at and report it as modified.
+ * The two timestamps are stamped here instead.
+ *
+ * The filter is the update path's, for the reasons given there.
+ */
+function insertOnlyOperation(
+  keys: string[],
+  doc: Record<string, unknown>,
+): MailerUpsertOperation {
+  const now = new Date();
+  return {
+    updateOne: {
+      filter: { controlNumberKeys: { $in: keys, $type: 'string' } },
+      update: {
+        $setOnInsert: {
+          ...doc,
+          controlNumberKeys: keys,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      upsert: true,
+      timestamps: false,
+    },
+  };
 }
 
 export interface MailerImportResult {
@@ -200,6 +250,13 @@ export async function importMailerRows(
 
     counts.mapped += 1;
     const { keys, doc } = result.mapped;
+    if (options.onExisting === 'skip') {
+      batch.push(insertOnlyOperation(keys, doc));
+      if (batch.length >= batchSize) {
+        await flush();
+      }
+      continue;
+    }
     batch.push({
       updateOne: {
         // `$in` over **every** key, not equality on the first one.

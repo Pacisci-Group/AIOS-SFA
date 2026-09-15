@@ -166,6 +166,69 @@ describe('importMailerRows upsert filter', () => {
     expect(filters).toHaveLength(1);
   });
 
+  it('upserts with $set and Mongoose timestamps by default', async () => {
+    const operations: Parameters<MailerUpsertTarget['bulkWrite']>[0] = [];
+    const model: MailerUpsertTarget = {
+      bulkWrite: (batch) => {
+        operations.push(...batch);
+        return Promise.resolve({ upsertedCount: batch.length });
+      },
+    };
+
+    await importMailerRows([rows[0]], ctx, { model });
+
+    expect(Object.keys(operations[0].updateOne.update)).toEqual([
+      '$set',
+      '$setOnInsert',
+    ]);
+    expect(operations[0].updateOne.timestamps).toBeUndefined();
+  });
+
+  it("can only insert under onExisting: 'skip'", async () => {
+    const operations: Parameters<MailerUpsertTarget['bulkWrite']>[0] = [];
+    const model: MailerUpsertTarget = {
+      bulkWrite: (batch) => {
+        operations.push(...batch);
+        return Promise.resolve({ upsertedCount: batch.length });
+      },
+    };
+
+    const result = await importMailerRows(
+      rows,
+      ctx,
+      { model },
+      { onExisting: 'skip' },
+    );
+
+    expect(result.counts).toMatchObject({ mapped: 2, created: 2, updated: 0 });
+    const [{ updateOne }] = operations;
+    // Everything in `$setOnInsert`: a stored mailer the filter matches is left
+    // exactly as it was, campaign and all.
+    expect(Object.keys(updateOne.update)).toEqual(['$setOnInsert']);
+    expect(updateOne.update.$setOnInsert).toMatchObject({
+      campaignId: 'campaign-1',
+      visibleAgencyIds: ['agency-1'],
+      controlNumberKeys: ['D3D00000AAAAAAAAF00D0000BBBBBBBB', '0000BBBBBBBB'],
+    });
+    // ⚠ Without this, Mongoose adds `$set: { updatedAt }` to the operation and
+    // touches every stored mailer the run merely matched.
+    expect(updateOne.timestamps).toBe(false);
+    const inserted = updateOne.update.$setOnInsert as {
+      createdAt?: unknown;
+      updatedAt?: unknown;
+    };
+    expect(inserted.createdAt).toBeInstanceOf(Date);
+    expect(inserted.updatedAt).toEqual(inserted.createdAt);
+    // The same index-usable filter as the update path.
+    expect(updateOne.upsert).toBe(true);
+    expect(updateOne.filter).toEqual({
+      controlNumberKeys: {
+        $in: ['D3D00000AAAAAAAAF00D0000BBBBBBBB', '0000BBBBBBBB'],
+        $type: 'string',
+      },
+    });
+  });
+
   it('names a blank carrier agency code in the rejection', async () => {
     const { model } = recordingModel();
 
