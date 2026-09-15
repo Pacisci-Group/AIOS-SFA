@@ -82,6 +82,20 @@ describe('permission catalog parity', () => {
     }
   });
 
+  /**
+   * `adminDefinitions` falls back to a generated label and an empty
+   * description, so an `AgencyPermission` added without an `ADMIN_COPY` entry
+   * type-checks, seeds and renders — as a colon-separated string with nothing
+   * under it. The six white-label permissions shipped that way (PAC-133).
+   */
+  it('gives every agency permission written copy', () => {
+    const missing = PERMISSION_CATALOG.filter(
+      (definition) =>
+        definition.kind === 'agency' && definition.description.length === 0,
+    ).map((definition) => definition.key);
+    expect(missing).toEqual([]);
+  });
+
   it('orders module permissions before admin ones', () => {
     const lastModule = Math.max(
       ...PERMISSION_CATALOG.filter((d) => d.kind === 'module').map(

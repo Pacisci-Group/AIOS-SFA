@@ -105,6 +105,11 @@ export const AgencyPermission = {
    * read as a *module* key by `resolvePermissionSet`'s enabled-module filter
    * and dropped, and `RolesService.updateLevels` would discard it the first
    * time an owner touched the role matrix.
+   *
+   * ⚠ Also like {@link ChangeLogsRead}, these reach the Agency Owner only
+   * through `DEFAULT_ROLE_TEMPLATES`, so an already-seeded agency has none of
+   * them until someone runs `npm run api:sync:roles`. They shipped without that
+   * and every existing owner was locked out of the settings pages (PAC-133).
    */
   BrandingRead: 'agency:branding:read',
   BrandingWrite: 'agency:branding:write',
