@@ -778,3 +778,161 @@ Verified: `build -w @sfa/api` + `tsc -p packages/api` clean, **855** unit
 (5 new), **854** e2e in 26 suites. `lint -w @sfa/api` on its exact baseline
 (same 7 files, 140 problems). Bruno not re-run — this commit changes no API
 surface, the same reason Phase 1 gave.
+
+---
+
+## 14. Horizontal autoscaling + application-managed TLS (handoff, 2026-09-14)
+
+**Start here for the infrastructure work.** Everything below is **dev only**;
+production is untouched and its `terraform plan` should come back empty. If it
+does not, stop and find out why before applying.
+
+### What this replaced, and why
+
+The edge was **Caddy**, holding certificates on local disk. That disk is the only
+genuinely node-local state in the white-label design, and it is what made a
+second node impossible: each would run its own ACME client and race the others
+for the same tenant hostnames, which Let's Encrypt counts against a
+duplicate-certificate limit.
+
+Certificates now live in MongoDB, so a droplet created thirty seconds ago serves
+a tenant domain added minutes ago having issued nothing. That is the whole basis
+of the autoscaling design; everything else follows from it.
+
+**No agency owner ever handles a certificate.** A subdomain owner types a name
+and nothing else (we own the parent zone, so `create()` marks it `active`
+immediately). A custom-domain owner adds a TXT record plus a CNAME or A record,
+clicks Verify, and the worker issues. There is no upload path anywhere in the
+codebase or the UI — confirmed by grep, keep it that way.
+
+### Shipped, in four phases (PRs #85-#99, all merged except #94/#97)
+
+1. **Worker split out** (#85). Exactly one process may serve the Inngest
+   functions; with the worker inline, every API node registers under the same
+   app id and whichever synced last wins. Prerequisite for any scaling.
+2. **Application-managed ACME** (#85, #87, #96, #98, #99). Ordering, renewal,
+   locking and backoff as Inngest functions. Certificates and challenge tokens in
+   Mongo, private keys AES-256-GCM encrypted with `CERT_ENCRYPTION_KEY`.
+3. **Node TLS edge** (#85, #91, #93, #95). `packages/api/src/edge.ts`, a Nest
+   *application context* (no HTTP stack) driving raw `tls`/`http` servers.
+   SNI -> Mongo -> `SecureContext`.
+4. **Autoscale pool + two load balancers** (#88, #90, #92, #93). Public balancer
+   in TLS passthrough; internal `REGIONAL_NETWORK` balancer carrying Inngest to
+   the workers.
+
+### Current dev state (verified 2026-09-14)
+
+| | |
+|---|---|
+| Pool | `sfa-dev-pool`, min 1 / max 3, CPU target 0.6 |
+| Public LB | `134.199.247.33` — DNS `dev` and `*.dev` both point here |
+| Internal LB | `10.10.0.2` — this is `APP_PRIVATE_IP` |
+| `http://dev.smithfamily.agency/healthz` | **200** |
+| `http://texasholdings.dev.smithfamily.agency/healthz` | **200** |
+| HTTPS | **not serving — no certificate. This is the open blocker.** |
+
+The reserved IP `174.138.117.56` is **gone**: a reserved IP attaches to a droplet
+and cannot front a pool, so enabling autoscaling destroyed it. The balancer's
+address is the platform's address now.
+
+### THE OPEN BLOCKER — read this first
+
+Let's Encrypt is rate-limiting the account:
+
+```
+acme: Caught HTTP 429, retry attempt 1/5 to URL .../acme/new-order
+acme: Found retry-after response header with value: 59717, waiting 59717 seconds
+```
+
+16.6 hours, from roughly **05:59 on 2026-09-14**. We caused it: the platform-host
+bootstrap called `issue()` on every worker boot and ignored `renewAfter`, so each
+restart placed a fresh order. #99 fixed that — the backoff is now checked inside
+`issue()`, where every caller must pass.
+
+**To continue:**
+
+1. `ACME_DIRECTORY_URL=staging` was set on the dev Environment to work around it.
+   Staging has far higher limits and proves the pipeline end to end; its
+   certificates are deliberately untrusted, so verify with `curl -k` and expect
+   `(STAGING)` in the issuer.
+2. **#99 will now skip the retry**, because the row carries a backoff from
+   today's failures. Clear it from a pool droplet (the DB firewall admits the
+   pool by tag):
+
+   ```bash
+   cd /opt/sfa && set -a && . ./.env && set +a
+   docker run --rm mongo:7 mongosh "$MONGODB_URI" --quiet --eval '
+     db.certificates.updateOne(
+       { hostname: "dev.smithfamily.agency" },
+       { $set: { renewAfter: new Date(), failureCount: 0, lockedAt: null, lastError: null } })'
+   ```
+
+3. Restart the worker and watch:
+   `docker compose -f /opt/sfa/docker-compose.prod.yml logs -f worker | grep -iE "acme account ready|ordering|order complete|issued certificate|skipped"`
+4. Once staging works, switch `ACME_DIRECTORY_URL` back to `production`, clear
+   the row again, redeploy. The 429 should have cleared by then.
+
+**Also unresolved:** a production certificate for this host was issued at ~12:46
+on 2026-09-13 and should still be in Mongo. HTTPS failing suggests the edge
+cannot use it — most likely `CERT_ENCRYPTION_KEY` differs from the one that
+encrypted it. Check with
+`docker compose -f /opt/sfa/docker-compose.prod.yml logs edge | grep -i "could not load a certificate"`
+and inspect the row with the mongosh command above (project away `certPem` and
+`keyPemEncrypted`).
+
+### Traps found the hard way — do not re-learn these
+
+- **`awscli` is not packaged for Ubuntu 24.04.** Universe is enabled and there is
+  still no candidate. The pool bootstrap uses `curl --aws-sigv4` instead, which
+  ships in the base image (#90).
+- **A `moved` block guards `module.droplet`'s `count`.** Adding `count` renames
+  every resource inside a module, and terraform matches state by address —
+  without it, every environment *not* autoscaling plans to destroy and recreate
+  its app droplet. Which is production. Keep it for as long as any state
+  predates the count.
+- **Everything addresses the pool by TAG** — firewalls, both balancers, the
+  Managed MongoDB allow-list. Pool droplets do not exist at plan time, so an
+  id-based rule admits only what existed at the last apply and silently refuses
+  every droplet scaling creates.
+- **The balancer health-checks port 8081, not 80.** `:80` is wrapped in the PROXY
+  listener; the balancer's own check carries no header. 8081 is a plain listener
+  the edge never wraps, firewalled to the balancer alone. The container health
+  check must use it too (#95) — pointing it at `:80` fails every 15s on loopback
+  and marks the container unhealthy while it serves perfectly.
+- **A container can only bind an address on its own host.** `APP_PRIVATE_IP` is
+  the *internal balancer*, so `WORKER_INNGEST_BIND` is `0.0.0.0:4001` on a pool
+  and the droplet's private address on a single droplet (#93).
+- **Pool members are never deployed to.** They fetch published config from the
+  deploy bucket at boot and every 30s (`sfa-converge`). Hand-editing
+  `/opt/sfa/.env` is pointless; the next tick overwrites it.
+- **DigitalOcean balancers DO hairpin.** A droplet reaches its own balancer's
+  public address fine, from the host and from inside a container. Two theories
+  were built on the opposite assumption and both were wrong (#94, #97, both
+  closed). Test before theorising.
+- **`-raw` output has no trailing newline**, so zsh prints a `%`. It is not part
+  of the value.
+
+### Not started — Phase 5
+
+Scaling the app tier points more load at the parts that still cannot scale:
+
+- Production Mongo is `node_count = 1` with `enable_backups = false`
+- Production has **no Redis**, so every request resolves permissions from Mongo
+- Inngest is a single droplet with SQLite and an in-memory queue
+- Rate limits are per-node once the pool grows (in-memory throttler storage)
+
+### Making production match dev, later
+
+Both flags default to false, so production is unaffected until deliberately
+switched. Order: add `enable_autoscale`/`enable_node_edge` to
+`environments/production/`, plan and read it carefully, add the ACME +
+`DEPLOY_CONFIG_*` secrets and the `AUTOSCALE_ENABLED` / `NODE_EDGE_ENABLED` /
+`ACME_ENABLED` / `EDGE_PROXY_PROTOCOL` variables, apply, then deploy. Full
+detail in `DEPLOYMENT.md` under "The edge: Caddy or our own" and "Horizontal
+autoscaling (dev only)".
+
+⚠ Production's DNS cutover has the same shape as dev's: the reserved IP is
+destroyed, and **three** things carry the new address — the platform host, the
+wildcard, and `PUBLIC_SERVER_IPS`. Missing the wildcard takes out every agency
+subdomain while the platform host looks fine.
+
