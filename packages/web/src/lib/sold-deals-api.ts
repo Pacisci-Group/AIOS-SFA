@@ -1,15 +1,11 @@
 import type {
-  AddSoldDealPoliciesInput,
-  AddSoldDealPoliciesResponse,
   CreateSoldDealInput,
   CreateSoldDealResponse,
   PolicyCheckResponse,
-  SoldDealEditView,
   SoldDealLeadContext,
   SoldDocumentMeta,
   SoldDocumentPresignResponse,
   SoldStaffOption,
-  UpdateSoldDealInput,
 } from "@sfa/shared";
 import { apiFetch } from "./api-client";
 import { uploadToPresignedUrl } from "./quote-recaps-api";
@@ -146,43 +142,4 @@ export const soldStaffKey = ["sold-deals", "staff"] as const;
  */
 export function getSoldStaff() {
   return apiFetch<SoldStaffOption[]>("/sold-deals/staff");
-}
-
-/**
- * The Edit sale page's query key (PAC-104).
- *
- * The `["sold-deal"]` prefix is what a per-policy quick edit invalidates, so
- * the page's totals follow a correction made in the edit dialog.
- */
-export function soldDealKey(dealId: string) {
-  return ["sold-deal", dealId] as const;
-}
-
-/** `GET /sold-deals/:id` — a booked deal, its policies, and whether it can take another. */
-export function getSoldDeal(dealId: string): Promise<SoldDealEditView> {
-  return apiFetch<SoldDealEditView>(
-    `/sold-deals/${encodeURIComponent(dealId)}`,
-  );
-}
-
-/** `PATCH /sold-deals/:id` — correct the sold date. */
-export function updateSoldDeal(
-  dealId: string,
-  input: UpdateSoldDealInput,
-): Promise<SoldDealEditView> {
-  return apiFetch<SoldDealEditView>(
-    `/sold-deals/${encodeURIComponent(dealId)}`,
-    { method: "PATCH", body: JSON.stringify(input) },
-  );
-}
-
-/** `POST /sold-deals/:id/policies` — add policies to the booked deal. */
-export function addSoldDealPolicies(
-  dealId: string,
-  input: AddSoldDealPoliciesInput,
-): Promise<AddSoldDealPoliciesResponse> {
-  return apiFetch<AddSoldDealPoliciesResponse>(
-    `/sold-deals/${encodeURIComponent(dealId)}/policies`,
-    { method: "POST", body: JSON.stringify(input) },
-  );
 }

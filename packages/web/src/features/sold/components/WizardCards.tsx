@@ -44,10 +44,6 @@ import { clearInapplicableDiscounts, emptyPolicy } from "./sold-deal-schema";
 /**
  * The sold date — one for the whole deal.
  *
- * Rendered in the panel above the policy steps rather than as a step (PAC-104):
- * it belongs to the sale, so it is asked once, defaulted to today, and stays
- * editable whichever policy is being entered.
- *
  * Deliberately **outside** the form library: it is deal-level, not policy-level,
  * so it cannot live in the draft form (which is reset per policy), and a second
  * form instance for one date buys nothing. It borrows {@link FieldShell} — the
@@ -61,11 +57,9 @@ import { clearInapplicableDiscounts, emptyPolicy } from "./sold-deal-schema";
 export function SoldDateCard({
   value,
   onChange,
-  disabled,
 }: {
   value: string;
   onChange: (value: string) => void;
-  disabled?: boolean;
 }) {
   return (
     <FieldShell
@@ -78,7 +72,6 @@ export function SoldDateCard({
           type="date"
           aria-describedby={describedBy}
           aria-invalid={invalid}
-          disabled={disabled}
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
@@ -197,15 +190,7 @@ export const PolicyDetailsCard = withForm({
 
     // Clear a stale warning as soon as the number changes — the old match is
     // about a number the producer is no longer entering.
-    //
-    // Compared against the last number seen rather than run unconditionally:
-    // an effect also runs on **mount**, and this card mounts again whenever the
-    // producer steps back to it or edits the policy from the review — which
-    // silently dropped a duplicate link they had already confirmed (PAC-104).
-    const lastPolicyNumber = useRef(policyNumber);
     useEffect(() => {
-      if (lastPolicyNumber.current === policyNumber) return;
-      lastPolicyNumber.current = policyNumber;
       setMatch(null);
       if (existingPolicyId) form.setFieldValue("existingPolicyId", undefined);
       // Keyed on the number alone: re-running on the link itself would clear it

@@ -251,11 +251,10 @@ export class AuditGenerationService {
       auditGeneratedAt: new Date(),
       auditGenerationStatus: 'generated',
       auditItemCount: itemCount,
-      // The display mirror of `DealAudit.auditStatus`, which is authoritative —
-      // so copied **from** it. Stamping the default reset the mirror to "Not
-      // Submitted" on every re-run (a create replay, or PAC-104 adding a policy)
-      // while the audit itself stayed Pending / Pass / Fail.
-      dealAuditStatus: parent?.auditStatus ?? DEFAULT_DEAL_AUDIT_STATUS,
+      // The display mirror of `DealAudit.auditStatus`, which is authoritative.
+      // Already the right value before PAC-72 — it is the constant now so the
+      // vocabulary has exactly one definition.
+      dealAuditStatus: DEFAULT_DEAL_AUDIT_STATUS,
     });
 
     return { status: 'generated', itemCount, unresolved };

@@ -9,17 +9,8 @@ import {
   PriorPolicy,
   PriorPolicyDocument,
 } from '../../prior-policies/schemas/prior-policy.schema';
-import type {
-  SoldIntakeDto,
-  SoldIntakePolicy,
-} from '../dto/create-sold-deal.dto';
-import {
-  derivePriorCarriers,
-  mergePriorInsuranceSummary,
-  parseFormDate,
-  yesNo,
-  type PriorInsuranceSummary,
-} from './sold.normalize';
+import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
+import { derivePriorCarriers, parseFormDate, yesNo } from './sold.normalize';
 import { SoldStepDeps, sessionOptions } from './sold-intake.types';
 
 /**
@@ -51,82 +42,14 @@ export class PriorInsuranceStep {
     dealId: Types.ObjectId,
     deps: SoldStepDeps,
   ): Promise<void> {
-    const declared = declaredPolicies(dto);
+    const { ctx } = deps;
+
+    const declared = dto.policies.filter((p) => !p.priorInsurance.none);
     // Every line said "no prior insurance" — a genuinely new-to-market client.
     // Writing an empty summary row would tell the service team there is prior
     // coverage to chase when there is none.
     if (!declared.length) return;
 
-    await this.createSummary(
-      this.deriveSummary(dto, declared, deps),
-      dealId,
-      deps,
-    );
-    await this.createPriorPolicies(declared, dealId, deps);
-  }
-
-  /**
-   * The same records, for policies added to a deal that is already booked
-   * (PAC-104).
-   *
-   * **Merges into the deal's existing summary row rather than writing a
-   * second.** The summary is one row per deal, and Lead Detail reads it with an
-   * unsorted `findOne({ agencyId, dealId })` — a second row would make which one
-   * the page shows an accident of storage order. The merge only fills what the
-   * deal does not already say (see `mergePriorInsuranceSummary`). A deal whose
-   * original policies all said "no prior insurance" has no row yet, and gets
-   * one exactly as on create. The per-line `priorPolicies` rows are appended
-   * either way.
-   */
-  async runForExistingDeal(
-    dto: SoldIntakeDto,
-    dealId: Types.ObjectId,
-    deps: SoldStepDeps,
-  ): Promise<void> {
-    const declared = declaredPolicies(dto);
-    if (!declared.length) return;
-
-    const { ctx } = deps;
-    const incoming = this.deriveSummary(dto, declared, deps);
-
-    const existing = await this.priorInsuranceModel
-      .findOne({ agencyId: ctx.agencyId, dealId })
-      .sort({ _id: 1 })
-      .session(deps.session);
-
-    if (existing) {
-      const merged = mergePriorInsuranceSummary(
-        {
-          previousCarrierAuto: existing.previousCarrierAuto,
-          previousCarrierHome: existing.previousCarrierHome,
-          previousAgentName: existing.previousAgentName,
-          cancelledPreviousInsurance: existing.cancelledPreviousInsurance,
-          cancellationDate: existing.cancellationDate,
-          cancellationResponsibility: existing.cancellationResponsibility,
-          cancellationHandledByUserId: existing.cancellationHandledByUserId,
-          cancellationHandledByName: existing.cancellationHandledByName,
-          autoHomeSameCarrier: existing.autoHomeSameCarrier,
-        },
-        incoming,
-      );
-      await this.priorInsuranceModel.updateOne(
-        { _id: existing._id, agencyId: ctx.agencyId },
-        { $set: definedFields(merged) },
-        sessionOptions(deps.session),
-      );
-    } else {
-      await this.createSummary(incoming, dealId, deps);
-    }
-
-    await this.createPriorPolicies(declared, dealId, deps);
-  }
-
-  /** The deal-level summary of the declared policies in one submission. */
-  private deriveSummary(
-    dto: SoldIntakeDto,
-    declared: SoldIntakePolicy[],
-    deps: SoldStepDeps,
-  ): PriorInsuranceSummary {
     const carriers = derivePriorCarriers(dto.policies);
     const cancellations = declared
       .filter((p) => p.cancellation.cancelled && p.cancellation.effectiveDate)
@@ -143,37 +66,7 @@ export class PriorInsuranceStep {
       (p) => p.cancellation?.cancelled && p.cancellation.cancelledBy,
     )?.cancellation;
 
-    return {
-      previousCarrierAuto: carriers.auto,
-      previousCarrierHome: carriers.home,
-      previousAgentName: declared.find((p) =>
-        p.priorInsurance.agentName?.trim(),
-      )?.priorInsurance.agentName,
-      // Legacy stores these yes/no answers as strings, not booleans.
-      cancelledPreviousInsurance: yesNo(cancellations.length > 0),
-      cancellationDate: earliestCancellation,
-      // Who cancelled it (PAC-65 #11). Taken from the first declared policy
-      // that answered, exactly as `previousAgentName` above is — this summary
-      // row is per deal, and the wizard asks per policy.
-      cancellationResponsibility: cancelledBy?.cancelledBy,
-      cancellationHandledByUserId: cancelledBy?.cancelledByUserId
-        ? new Types.ObjectId(cancelledBy.cancelledByUserId)
-        : undefined,
-      cancellationHandledByName: cancelledBy?.cancelledByUserId
-        ? deps.ctx.staffNameById?.get(cancelledBy.cancelledByUserId)
-        : undefined,
-      autoHomeSameCarrier: yesNo(carriers.sameCarrier),
-    };
-  }
-
-  private async createSummary(
-    summary: PriorInsuranceSummary,
-    dealId: Types.ObjectId,
-    deps: SoldStepDeps,
-  ): Promise<void> {
-    const { ctx } = deps;
-
-    const [row] = await this.priorInsuranceModel.create(
+    const [summary] = await this.priorInsuranceModel.create(
       [
         {
           agencyId: ctx.agencyId,
@@ -181,7 +74,25 @@ export class PriorInsuranceStep {
           title: ctx.clientName
             ? `${ctx.clientName} — Prior Insurance`
             : undefined,
-          ...summary,
+          previousCarrierAuto: carriers.auto,
+          previousCarrierHome: carriers.home,
+          previousAgentName: declared.find((p) =>
+            p.priorInsurance.agentName?.trim(),
+          )?.priorInsurance.agentName,
+          // Legacy stores these yes/no answers as strings, not booleans.
+          cancelledPreviousInsurance: yesNo(cancellations.length > 0),
+          cancellationDate: earliestCancellation,
+          // Who cancelled it (PAC-65 #11). Taken from the first declared policy
+          // that answered, exactly as `previousAgentName` above is — this
+          // summary row is per deal, and the wizard asks per policy.
+          cancellationResponsibility: cancelledBy?.cancelledBy,
+          cancellationHandledByUserId: cancelledBy?.cancelledByUserId
+            ? new Types.ObjectId(cancelledBy.cancelledByUserId)
+            : undefined,
+          cancellationHandledByName: cancelledBy?.cancelledByUserId
+            ? ctx.staffNameById?.get(cancelledBy.cancelledByUserId)
+            : undefined,
+          autoHomeSameCarrier: yesNo(carriers.sameCarrier),
           dealId,
           householdId: ctx.householdId,
           producerId: ctx.producerId,
@@ -190,15 +101,7 @@ export class PriorInsuranceStep {
       ],
       sessionOptions(deps.session),
     );
-    deps.created.track(this.priorInsuranceModel, row._id);
-  }
-
-  private async createPriorPolicies(
-    declared: SoldIntakePolicy[],
-    dealId: Types.ObjectId,
-    deps: SoldStepDeps,
-  ): Promise<void> {
-    const { ctx } = deps;
+    deps.created.track(this.priorInsuranceModel, summary._id);
 
     for (const policy of declared) {
       const [row] = await this.priorPolicyModel.create(
@@ -228,19 +131,4 @@ export class PriorInsuranceStep {
       deps.created.track(this.priorPolicyModel, row._id);
     }
   }
-}
-
-/** The policy lines that declared prior coverage. */
-function declaredPolicies(dto: SoldIntakeDto): SoldIntakePolicy[] {
-  return dto.policies.filter((p) => !p.priorInsurance.none);
-}
-
-/**
- * Drop `undefined` keys before a `$set`, so a field the merge left empty is
- * left alone in storage rather than written as an explicit absence.
- */
-function definedFields<T extends object>(value: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, field]) => field !== undefined),
-  ) as Partial<T>;
 }

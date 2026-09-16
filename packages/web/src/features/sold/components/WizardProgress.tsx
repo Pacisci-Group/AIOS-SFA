@@ -4,33 +4,31 @@ import { CARD_TITLES, type WizardCard } from "./sold-deal-schema";
 interface WizardProgressProps {
   card: WizardCard;
   /**
-   * This variant's ordered steps. Passed in rather than read off the module
-   * constant, so "Step 4 of 7" counts the steps the user will actually see —
+   * This variant's ordered cards. Passed in rather than read off the module
+   * constant, so "Step 4 of 9" counts the steps the user will actually see —
    * a transfer's sequence is not the sale's.
    */
   cards: readonly WizardCard[];
-  /** 1-based position of this policy on the sale. */
-  position: number;
-  /** Replacing a policy already on the sale rather than adding one. */
-  editing?: boolean;
+  /** How many policies are already committed to the submission. */
+  policyCount: number;
 }
 
 /**
- * Step indicator for one policy.
+ * Step indicator.
  *
- * Built from the existing `Progress` primitive rather than a stepper component:
- * shadcn has none. Counts the policy's own steps only (PAC-104). It used to
- * count the sale's cards too, so the loop sent a producer from "Step 9 of 9"
- * back to "Step 2 of 9" with nothing saying a second policy had begun — naming
- * the policy is what says it now.
+ * Built from the existing `Progress` primitive rather than adding a stepper
+ * component: shadcn has none, and a linear stepper would misrepresent this
+ * wizard anyway — the loop means a producer can pass "step 4 of 7" several
+ * times in one session. The policy count is what actually tells them where they
+ * are, so it is shown alongside.
  */
 export function WizardProgress({
   card,
   cards,
-  position,
-  editing = false,
+  policyCount,
 }: WizardProgressProps) {
-  const step = cards.indexOf(card) + 1;
+  const index = cards.indexOf(card);
+  const step = index + 1;
   const total = cards.length;
 
   return (
@@ -40,11 +38,16 @@ export function WizardProgress({
           {CARD_TITLES[card]}
         </h2>
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {editing ? "Editing policy" : "Policy"} {position} · Step {step} of{" "}
-          {total}
+          Step {step} of {total}
+          {policyCount > 0 && (
+            <>
+              {" · "}
+              {policyCount} {policyCount === 1 ? "policy" : "policies"} added
+            </>
+          )}
         </p>
       </div>
-      <Progress value={(step / total) * 100} aria-label="Policy progress" />
+      <Progress value={(step / total) * 100} aria-label="Wizard progress" />
     </div>
   );
 }

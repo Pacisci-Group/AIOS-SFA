@@ -206,25 +206,3 @@ describe('auditAttachmentsByItem (PAC-56 #21b)', () => {
     expect(map.size).toBe(0);
   });
 });
-
-describe('auditAttachmentsByItem — policies added to a booked deal (PAC-104)', () => {
-  it("resolves variant titles against the whole deal's types, not only the added rows", () => {
-    // A Landlord policy added to a deal that already holds a Home policy. The
-    // generator reads the deal's types, so it requires both variants — and the
-    // proof has to reach both, or the Home item opens with nothing attached.
-    const added = policy({
-      policyType: 'Landlord',
-      discounts: {
-        ...structuredClone(EMPTY_DISCOUNTS),
-        fireSubscription: { selected: true, attachment: proof('fire') },
-      },
-    });
-
-    const onlyAdded = auditAttachmentsByItem([added]);
-    const wholeDeal = auditAttachmentsByItem([added], ['Home', 'Landlord']);
-
-    expect(onlyAdded.has(keyFor('Home Fire Subscription'))).toBe(false);
-    expect(wholeDeal.has(keyFor('Home Fire Subscription'))).toBe(true);
-    expect(wholeDeal.has(keyFor('Landlord Fire Subscription'))).toBe(true);
-  });
-});

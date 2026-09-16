@@ -212,7 +212,7 @@ export default function SoldDealPage() {
             isSoldLeadStatus(contextQuery.data.leadStatus) && (
               <SoldBlocked
                 title="This lead is already sold."
-                detail="Its deal is on the lead page, where the sale can be edited."
+                detail="Its deal is on the lead page, where individual policies can still be corrected."
                 leadId={leadId}
               />
             )}

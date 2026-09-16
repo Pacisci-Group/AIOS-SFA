@@ -46,19 +46,9 @@ import type { DealAuditAttachment } from '../../deal-audit-items/schemas/deal-au
  */
 export function auditAttachmentsByItem(
   policies: SoldPolicyInput[],
-  /**
-   * Every policy type on the **deal**, when it holds more than `policies` —
-   * PAC-104 adds policies to a booked sale. The generator resolves the Home /
-   * Landlord variant titles against the whole deal's types, so resolving them
-   * against only the added rows would miss an item it does generate. Omitted on
-   * create, where the two are the same list.
-   */
-  dealPolicyTypes?: string[],
 ): Map<string, DealAuditAttachment[]> {
   const byItem = new Map<string, DealAuditAttachment[]>();
-  const policyTypes = (
-    dealPolicyTypes ?? policies.map((p) => p.policyType)
-  ).map((type) => normalizePolicyType(type));
+  const policyTypes = policies.map((p) => normalizePolicyType(p.policyType));
 
   const add = (
     title: string,

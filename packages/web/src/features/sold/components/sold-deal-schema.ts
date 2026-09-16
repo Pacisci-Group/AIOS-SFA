@@ -560,23 +560,20 @@ export function emptyDiscounts(): SoldPolicyFormValues["discounts"] {
 }
 
 /**
- * The steps of **one policy**, in order (PAC-104).
+ * The wizard's cards, in order.
  *
- * The sale around them is no longer a step: the sold date sits in a panel above
- * the steps (one per deal, defaulting to today), and the review of every policy
- * on the sale is the hub the steps return to — rendered by `SoldDealWizard`,
- * not reached by pressing Continue. That is what lets a producer who pressed
- * "Add another policy" back out again: leaving the steps is always "return to
- * the review", never "finish a whole policy first".
+ * The **sold date** is outside the loop (one per deal); everything from
+ * `policyType` to `priorInsurance` is the loop body; `loop` decides whether to
+ * run it again.
  *
  * ⚠ Referred to by **name**, never by ordinal. PAC-56 merged cancellation into
- * prior insurance (#24) and PAC-104 took the sold-date, loop and review cards
- * out, so every "Card 5" style comment this codebase used to carry is wrong.
- * Say "the Discounts card".
+ * prior insurance (#24) and added a review card (#25), so every "Card 5" style
+ * comment this codebase used to carry is now wrong. Say "the Discounts card".
  */
 export const WIZARD_CARDS = [
-  // Transfer variant only, and first: you say which policy is being replaced
-  // before describing its replacement.
+  "soldDate",
+  // Transfer variant only, and first in the loop: you say which policy is being
+  // replaced before describing its replacement.
   "transferFrom",
   "policyType",
   "policyDetails",
@@ -588,6 +585,10 @@ export const WIZARD_CARDS = [
   // question about the prior policy, not a peer step, and asking it of someone
   // who just said "no prior insurance" was a dead end.
   "priorInsurance",
+  "loop",
+  // Last, after the loop decides it is done (PAC-56 #25). `nextCard` is a
+  // linear index bump, so `loop → review → null` falls out for free.
+  "review",
 ] as const;
 
 export type WizardCard = (typeof WIZARD_CARDS)[number];
@@ -617,7 +618,13 @@ export function cardsFor(variant: WizardVariant): readonly WizardCard[] {
     : WIZARD_CARDS.filter((card) => card !== "transferFrom");
 }
 
+/** Where each variant's loop restarts. */
+export function firstLoopCard(variant: WizardVariant): WizardCard {
+  return variant === "transfer" ? "transferFrom" : "policyType";
+}
+
 export const CARD_TITLES: Record<WizardCard, string> = {
+  soldDate: "Sold date",
   transferFrom: "Policy being replaced",
   policyType: "Policy type",
   policyDetails: "Policy details",
@@ -625,6 +632,8 @@ export const CARD_TITLES: Record<WizardCard, string> = {
   application: "New business application",
   discounts: "Discounts & documentation",
   priorInsurance: "Prior insurance",
+  loop: "Add another policy?",
+  review: "Review the sale",
 };
 
 /**
@@ -647,6 +656,7 @@ export const CARD_FIELDS: Record<
   WizardCard,
   Array<DeepKeys<SoldPolicyFormValues>>
 > = {
+  soldDate: [],
   transferFrom: ["fromPolicyId"],
   policyType: ["policyType"],
   // `carrierOther` must be listed explicitly: `owns()` matches a root exactly or
@@ -659,6 +669,10 @@ export const CARD_FIELDS: Record<
   // Both roots, since PAC-56 #24 merged the cancellation question into this
   // card. `"cancellation"` owns `cancellation.effectiveDate` via the `.` branch.
   priorInsurance: ["priorInsurance", "cancellation"],
+  loop: [],
+  // The review card edits nothing itself — every value on it was validated by
+  // the card that owns it.
+  review: [],
 };
 
 /** One reason the current card will not let the producer move on. */
@@ -687,20 +701,19 @@ export interface CardIssue {
  * traps in `docs/tanstack-form-spike-findings.md` stop applying: nothing is
  * read back out of meta, and nothing depends on what is mounted.
  *
- * Pass `"all"` for the **last** step, whose button commits the whole policy: a
- * rule failing on an earlier step (a cross-field refinement, say) would
- * otherwise leave the commit silently refusing — the same dead-button failure
- * one step further on.
+ * The `loop` card owns no fields of its own and is checked against **all** of
+ * them, because its buttons commit the whole draft — `commitDraft` returning
+ * `null` was the same dead-button failure one step further on.
  *
  * One issue per path: zod raises `min` and `regex` together on an empty date,
  * and the first is the one that says what to do.
  */
 export function blockingIssues(
   schema: SoldPolicySchema,
-  card: WizardCard | "all",
+  card: WizardCard,
   values: SoldPolicyFormValues,
 ): CardIssue[] {
-  const roots = card === "all" ? ALL_CARD_FIELDS : CARD_FIELDS[card];
+  const roots = card === "loop" ? ALL_CARD_FIELDS : CARD_FIELDS[card];
   if (roots.length === 0) return [];
 
   const result = schema.safeParse(values);
@@ -717,7 +730,7 @@ export function blockingIssues(
   return issues;
 }
 
-/** Every root any step owns — what the last step is checked against. */
+/** Every root any card owns — see {@link blockingIssues} on the `loop` card. */
 const ALL_CARD_FIELDS = Object.values(CARD_FIELDS).flat();
 
 /**
