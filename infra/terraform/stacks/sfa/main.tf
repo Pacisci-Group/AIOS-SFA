@@ -394,6 +394,13 @@ resource "digitalocean_droplet_autoscale" "app" {
 
     # ⚠ Changing this replaces every droplet in the pool. Nothing that varies
     # per deploy belongs here - that is what the config bucket is for.
+    # ⚠ worker_lb_ip couples the pool template to the internal balancer's
+    # address. A REGIONAL_NETWORK balancer forwards by direct server return, so
+    # each member must hold a `local` route for the balancer's IP or it drops
+    # every forwarded packet (see the template). That means recreating the
+    # worker LB — which hands out a new IP — changes this user_data and replaces
+    # every pool member. Acyclic: the worker LB targets the pool TAG, never the
+    # autoscale resource, so it is built first and its IP is known here.
     user_data = templatefile("${path.module}/../../modules/droplet/templates/cloud-init-pool.yaml.tpl", {
       ssh_public_key       = var.ssh_public_key
       config_bucket        = module.deploy_config[0].bucket
@@ -401,6 +408,7 @@ resource "digitalocean_droplet_autoscale" "app" {
       config_region        = module.deploy_config[0].region
       config_access_key_id = module.deploy_config[0].bootstrap_access_key_id
       config_secret_key    = module.deploy_config[0].bootstrap_secret_key
+      worker_lb_ip         = module.worker_lb[0].ip
     })
   }
 }
