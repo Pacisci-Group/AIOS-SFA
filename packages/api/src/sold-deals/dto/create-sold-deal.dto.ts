@@ -33,7 +33,7 @@ const objectId = z
   .regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
 
 /** `YYYY-MM-DD`, the shape an `<input type="date">` submits. */
-const ymd = z
+export const ymd = z
   .string()
   .trim()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
@@ -228,7 +228,7 @@ function refineEscrow(
 export { refineEscrow };
 
 /** One iteration of the Sold wizard's per-policy loop. */
-const soldPolicySchema = policyBaseSchema
+export const soldPolicySchema = policyBaseSchema
   .extend({
     priorInsurance: z
       .object({

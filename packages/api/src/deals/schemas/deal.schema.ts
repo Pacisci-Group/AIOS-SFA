@@ -205,6 +205,19 @@ export class Deal extends TenantRecord {
   submissionToken?: string;
 
   /**
+   * Idempotency keys for policies added after the deal was booked (PAC-104),
+   * each `SOLDADD|…`.
+   *
+   * An array on the deal rather than a second partial-unique index: a deal takes
+   * any number of additions, and the guard is a conditional `$push` on this one
+   * document, which a concurrent duplicate cannot also pass — its transaction
+   * write-conflicts, retries, and finds the key already here. Unindexed: it is
+   * only ever read off a deal already loaded by `_id`.
+   */
+  @Prop({ type: [String], default: undefined })
+  policyAdditionTokens?: string[];
+
+  /**
    * Set when any policy claimed escrow. Legacy tracked this as a separate
    * "Escrow Payment" flag on the deal and gated the `Home/Landlord Mortgagee`
    * audit items on it.

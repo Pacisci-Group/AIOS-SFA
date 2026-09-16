@@ -25,7 +25,9 @@ import { RoleAssignmentsService } from '../src/permissions/role-assignments.serv
 import type {
   ContactDetail,
   CreateActivityResponse,
+  AddSoldDealPoliciesResponse,
   CreateSoldDealResponse,
+  SoldDealEditView,
   HotLeadListResponse,
   LeaderboardResponse,
   LeadDetail,
@@ -41,6 +43,7 @@ import { Contact } from '../src/contacts/schemas/contact.schema';
 import { AuditTemplate } from '../src/audit-templates/schemas/audit-template.schema';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
 import { ServiceTicketsService } from '../src/crm/service-tickets.service';
+import { AuditGenerationService } from '../src/audit-generation/audit-generation.service';
 import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
 import { DealAuditItem } from '../src/deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
@@ -10582,6 +10585,73 @@ describe('SFA API (e2e)', () => {
       genStatSpy.mockRestore();
     });
 
+    it('adds the items a policy added after booking requires, and leaves resolved ones resolved (PAC-104)', async () => {
+      const { lead } = await seedLead();
+      const leadId = lead._id.toString();
+      const deal = await sell(leadId, [autoPolicy(leadId)]);
+      const dealId = new Types.ObjectId(deal.id);
+
+      // The service team has already cleared one item on the Auto sale.
+      await genItemModel.updateOne(
+        { dealId, itemName: 'Drivers Verified' },
+        { $set: { isResolved: true, isFailed: false } },
+      );
+
+      const res = await request(app.getHttpServer())
+        .post(`${SOLD}/${deal.id}/policies`)
+        .set(authHeader(producerToken))
+        .send({
+          policies: [autoPolicy(leadId, { policyType: 'Home' })],
+          submissionToken: `gen-add-${nextNum()}`,
+        })
+        .expect(201);
+      const added = res.body as AddSoldDealPoliciesResponse;
+
+      const items = await genItemModel.find({ dealId });
+      const names = items.map((item) => item.itemName);
+      // Required now the deal holds a Home policy.
+      expect(names).toContain('Home Inspection');
+      // Upserted by dedupe key, so the baseline is not duplicated…
+      expect(names.filter((name) => name === 'Correct Sold Date')).toHaveLength(
+        1,
+      );
+      // …and nothing already worked is reopened.
+      expect(
+        items.find((item) => item.itemName === 'Drivers Verified')!.isResolved,
+      ).toBe(true);
+
+      expect(added.auditItemCount).toBe(items.length);
+    });
+
+    it("keeps a submitted audit's status on the deal when generation re-runs (PAC-104)", async () => {
+      const { lead } = await seedLead();
+      const leadId = lead._id.toString();
+      const deal = await sell(leadId, [autoPolicy(leadId)]);
+      const dealId = new Types.ObjectId(deal.id);
+
+      // The producer submitted the audit; the deal mirrors that status.
+      await genAuditModel.updateOne(
+        { agencyId: seed.agencyId, dealId },
+        { $set: { auditStatus: 'Pending' } },
+      );
+      await genDealModel.updateOne(
+        { _id: dealId },
+        { $set: { dealAuditStatus: 'Pending' } },
+      );
+
+      // A create replay, or a policy added to the deal, re-runs generation.
+      await app.get(AuditGenerationService).generateForDeal({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        dealId,
+      });
+
+      // It used to stamp the default here, telling the board "Not Submitted".
+      expect((await genDealModel.findById(dealId))!.dealAuditStatus).toBe(
+        'Pending',
+      );
+    });
+
     it('generates the baseline plus policy-type items for a simple sale', async () => {
       const { lead } = await seedLead();
       const deal = await sell(lead._id.toString(), [
@@ -12586,6 +12656,481 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       expect((res.body as SoldDealLeadContext).householdId).toBeNull();
+    });
+
+    /**
+     * Editing a booked sale (PAC-104): correcting the sold date, and adding
+     * policies after booking. Nested here to reuse this block's fixtures and
+     * its storage stub.
+     */
+    describe('sold deal edit (PAC-104)', () => {
+      const editUrl = (dealId: string) => `${SOLD}/${dealId}`;
+
+      const getDeal = async (token: string, dealId: string, expected = 200) => {
+        const res = await request(app.getHttpServer())
+          .get(editUrl(dealId))
+          .set(authHeader(token))
+          .expect(expected);
+        return res.body as SoldDealEditView;
+      };
+
+      const patchSoldDate = (
+        token: string,
+        dealId: string,
+        soldDate: string,
+        expected = 200,
+      ) =>
+        request(app.getHttpServer())
+          .patch(editUrl(dealId))
+          .set(authHeader(token))
+          .send({ soldDate })
+          .expect(expected);
+
+      const addPolicies = async (
+        token: string,
+        dealId: string,
+        leadId: string,
+        policies: Array<Record<string, unknown>>,
+        options: { submissionToken?: string; expected?: number } = {},
+      ) => {
+        const res = await request(app.getHttpServer())
+          .post(`${editUrl(dealId)}/policies`)
+          .set(authHeader(token))
+          .send({
+            policies: withApplications(leadId, policies),
+            submissionToken: options.submissionToken ?? `add-${nextNumber()}`,
+          })
+          .expect(options.expected ?? 201);
+        return res.body as AddSoldDealPoliciesResponse;
+      };
+
+      /** An app-booked Auto sale: 1000.10, two vehicles, sold 2026-02-15. */
+      const bookAuto = async (overrides: Record<string, unknown> = {}) => {
+        const { lead, household } = await seedSoldLead(producerId);
+        const created = await createAs(
+          producerToken,
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({ premium: 1000.1, itemCount: 2, ...overrides }),
+            ],
+          }),
+        );
+        return { lead, household, leadId: lead._id.toString(), created };
+      };
+
+      const changeRows = (dealId: string) =>
+        soldActivityModel
+          .find({ dealId: dealRef(dealId), type: 'field_changed' })
+          .lean();
+
+      describe('GET /sold-deals/:id', () => {
+        it('returns the booked deal in the shape the Edit sale page renders', async () => {
+          const { leadId, created } = await bookAuto();
+          const view = await getDeal(producerToken, created.id);
+
+          expect(view.id).toBe(created.id);
+          expect(view.leadId).toBe(leadId);
+          // A calendar date — the value a date input holds.
+          expect(view.soldDate).toBe('2026-02-15');
+          expect(view.clientName).toBe('Sam Sold');
+          expect(view.premium).toBe(1000.1);
+          expect(view.policies).toHaveLength(1);
+          expect(view.policies[0]).toMatchObject({
+            policyType: 'Auto',
+            premium: 1000.1,
+            effectiveDate: '2026-02-01',
+          });
+          expect(view.isMigrated).toBe(false);
+          expect(view.canAddPolicies).toBe(true);
+          expect(view.addPoliciesBlockedBy).toBeNull();
+          expect(view).not.toHaveProperty('policyAdditionTokens');
+        });
+
+        it("404s for another producer's deal, a transfer, and a malformed id", async () => {
+          const soldDate = new Date('2026-02-15T00:00:00.000Z');
+          const foreign = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId: new Types.ObjectId(),
+            soldDate,
+            premiumSource: 'snapshot',
+          });
+          await getDeal(producerToken, foreign._id.toString(), 404);
+
+          // Corrected from its CRM ticket, not from a lead's Edit sale page.
+          const transfer = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            businessType: 'company_transfer',
+            soldDate,
+          });
+          await getDeal(producerToken, transfer._id.toString(), 404);
+
+          await getDeal(producerToken, 'not-a-deal', 404);
+        });
+
+        it('says why a deal with no lead cannot take another policy', async () => {
+          const orphan = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            soldDate: new Date('2026-02-15T00:00:00.000Z'),
+            premiumSource: 'snapshot',
+          });
+
+          const view = await getDeal(producerToken, orphan._id.toString());
+          expect(view.canAddPolicies).toBe(false);
+          expect(view.addPoliciesBlockedBy).toBe('no_lead');
+        });
+      });
+
+      describe('PATCH /sold-deals/:id', () => {
+        it('moves soldDate and soldDateYmd together, and the sold timeline entry with them', async () => {
+          const { created } = await bookAuto();
+
+          const res = await patchSoldDate(producerToken, created.id, '2026-01-20');
+          const view = res.body as SoldDealEditView;
+          expect(view.soldDate).toBe('2026-01-20');
+          // Nothing but the date moved.
+          expect(view.premium).toBe(1000.1);
+          expect(view.policyCount).toBe(1);
+
+          const deal = await soldDealModel.findById(created.id);
+          // The Sold scorecard's bucket key — the deal now reports in January.
+          expect(deal!.soldDateYmd).toBe(20260120);
+          expect(deal!.soldDate?.toISOString()).toBe('2026-01-20T00:00:00.000Z');
+
+          const sold = await soldActivityModel.findOne({
+            dealId: dealRef(created.id),
+            type: 'sold',
+          });
+          expect(sold!.occurredAt?.toISOString()).toBe(
+            '2026-01-20T00:00:00.000Z',
+          );
+        });
+
+        it('logs the correction, and writes nothing when the date did not change', async () => {
+          const { created } = await bookAuto();
+
+          await patchSoldDate(producerToken, created.id, '2026-02-15');
+          expect(await changeRows(created.id)).toHaveLength(0);
+
+          await patchSoldDate(producerToken, created.id, '2026-02-10');
+          const rows = await changeRows(created.id);
+          expect(rows).toHaveLength(1);
+          expect(rows[0].summary).toBe('Sold deal edited');
+          expect(rows[0].changes).toEqual([
+            expect.objectContaining({
+              field: 'soldDate',
+              kind: 'date',
+              from: '2026-02-15',
+              to: '2026-02-10',
+            }),
+          ]);
+        });
+
+        it('corrects a migrated deal too, without touching its imported total', async () => {
+          const migrated = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            soldDate: new Date('2025-11-03T00:00:00.000Z'),
+            soldDateYmd: 20251103,
+            premium: 9999,
+            premiumSource: 'rollup',
+            legacySmartSuiteId: 'legacy-deal-pac104-date',
+          });
+
+          await patchSoldDate(producerToken, migrated._id.toString(), '2025-11-04');
+
+          const after = await soldDealModel.findById(migrated._id);
+          expect(after!.soldDateYmd).toBe(20251104);
+          expect(after!.premium).toBe(9999);
+        });
+
+        it('rejects a malformed date, and a caller without deal_audits:write', async () => {
+          const { created } = await bookAuto();
+          await patchSoldDate(producerToken, created.id, '02/15/2026', 400);
+          await patchSoldDate(readOnlyToken, created.id, '2026-02-10', 403);
+        });
+      });
+
+      describe('POST /sold-deals/:id/policies', () => {
+        it('adds a policy and recomputes the deal from its stored rows', async () => {
+          const { household, leadId, created } = await bookAuto();
+
+          const body = await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({ policyType: 'Home', premium: 899.95, itemCount: 3 }),
+          ]);
+
+          expect(body.replayed).toBe(false);
+          expect(body.addedPolicyIds).toHaveLength(1);
+          // 1000.10 + 899.95 to the cent, and the Home row's implied single item.
+          expect(body.deal).toMatchObject({
+            premium: 1900.05,
+            itemCount: 3,
+            policyCount: 2,
+            dealType: 'Bundle',
+            isBundle: true,
+            soldDate: '2026-02-15',
+          });
+          expect(body.deal.policies).toHaveLength(2);
+
+          const deal = await soldDealModel.findById(created.id);
+          // Adding a policy never re-dates the sale.
+          expect(deal!.soldDateYmd).toBe(20260215);
+          expect(deal!.premiumSource).toBe('snapshot');
+
+          const added = await soldPolicyModel.findById(body.addedPolicyIds[0]);
+          expect(added!.dealId?.toString()).toBe(created.id);
+          expect(added!.householdId?.toString()).toBe(household._id.toString());
+          expect(added!.renewalDate).toBeTruthy();
+
+          const rows = await changeRows(created.id);
+          expect(rows).toHaveLength(1);
+          expect(rows[0].summary).toBe('Policy added to sold deal');
+          expect(rows[0].changes!.map((change) => change.field)).toEqual([
+            'policies',
+            'premium',
+            'itemCount',
+            'dealType',
+          ]);
+
+          expect(
+            (await soldHouseholdModel.findById(household._id))!
+              .totalActivePolicies,
+          ).toBe(2);
+        });
+
+        it('adds the policies once, however many times the same token arrives', async () => {
+          const { leadId, created } = await bookAuto();
+
+          const submissionToken = `add-replay-${nextNumber()}`;
+          const home = soldPolicy({ policyType: 'Home', premium: 500 });
+          await addPolicies(producerToken, created.id, leadId, [home], {
+            submissionToken,
+          });
+          const replay = await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [home],
+            { submissionToken },
+          );
+          expect(replay.replayed).toBe(true);
+          expect(replay.deal.policyCount).toBe(2);
+
+          // And concurrently: the guard is a conditional write, not a read.
+          const renters = soldPolicy({ policyType: 'Renters', premium: 200 });
+          const racing = `add-race-${nextNumber()}`;
+          const results = await Promise.all([
+            addPolicies(producerToken, created.id, leadId, [renters], {
+              submissionToken: racing,
+            }),
+            addPolicies(producerToken, created.id, leadId, [renters], {
+              submissionToken: racing,
+            }),
+          ]);
+          expect(results.filter((result) => !result.replayed)).toHaveLength(1);
+
+          expect(
+            await soldPolicyModel.countDocuments({ dealId: dealRef(created.id) }),
+          ).toBe(3);
+          expect(await changeRows(created.id)).toHaveLength(2);
+        });
+
+        it('refuses a policy already on the sale, and one that belongs to another sale', async () => {
+          const { leadId, created } = await bookAuto();
+          const ours = await soldPolicyModel.findOne({
+            dealId: dealRef(created.id),
+          });
+
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [soldPolicy({ policyNumber: ours!.policyNumber })],
+            { expected: 400 },
+          );
+
+          // Re-pointing another sale's policy would silently remove it from
+          // that sale — which a booked sale does not allow.
+          const other = await bookAuto();
+          const theirs = await soldPolicyModel.findOne({
+            dealId: dealRef(other.created.id),
+          });
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [
+              soldPolicy({
+                policyNumber: theirs!.policyNumber,
+                existingPolicyId: theirs!._id.toString(),
+              }),
+            ],
+            { expected: 409 },
+          );
+
+          expect(
+            await soldPolicyModel.countDocuments({ dealId: dealRef(created.id) }),
+          ).toBe(1);
+          expect(
+            (await soldPolicyModel.findById(theirs!._id))!.dealId?.toString(),
+          ).toBe(other.created.id);
+        });
+
+        it('409s once the audit has been submitted', async () => {
+          const { leadId, created } = await bookAuto();
+          await app
+            .get<Model<DealAudit>>(getModelToken(DealAudit.name))
+            .updateOne(
+              { agencyId: seed.agencyId, dealId: dealRef(created.id) },
+              {
+                $set: { auditStatus: 'Pending' },
+                $setOnInsert: {
+                  branchId: seed.branchId,
+                  title: 'Submitted audit',
+                  auditDate: new Date(),
+                  isTestRecord: false,
+                },
+              },
+              { upsert: true },
+            );
+
+          const view = await getDeal(producerToken, created.id);
+          expect(view.auditStatus).toBe('Pending');
+          expect(view.canAddPolicies).toBe(false);
+          expect(view.addPoliciesBlockedBy).toBe('audit_submitted');
+
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [soldPolicy({ policyType: 'Home' })],
+            { expected: 409 },
+          );
+        });
+
+        it('merges into the prior-insurance summary rather than writing a second one', async () => {
+          const { leadId, created } = await bookAuto({
+            priorInsurance: {
+              none: false,
+              carrier: 'Geico',
+              agentName: 'A. Agent',
+            },
+          });
+
+          await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({
+              policyType: 'Home',
+              priorInsurance: {
+                none: false,
+                carrier: 'State Farm',
+                agentName: 'H. Agent',
+              },
+            }),
+          ]);
+
+          // Lead Detail reads the summary with an unsorted `findOne`, so a
+          // second row would make which one it shows an accident of storage.
+          const summaries = await priorInsuranceModel
+            .find({ dealId: dealRef(created.id) })
+            .lean();
+          expect(summaries).toHaveLength(1);
+          expect(summaries[0]).toMatchObject({
+            previousCarrierAuto: 'Geico',
+            previousCarrierHome: 'State Farm',
+            previousAgentName: 'A. Agent',
+            autoHomeSameCarrier: 'No',
+          });
+          expect(
+            await priorPolicyModel.countDocuments({ dealId: dealRef(created.id) }),
+          ).toBe(2);
+        });
+
+        it('adds to a migrated deal and recomputes its imported total', async () => {
+          const { lead, household } = await seedSoldLead(producerId);
+          const migrated = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            leadId: lead._id,
+            householdId: household._id,
+            soldDate: new Date('2025-10-01T00:00:00.000Z'),
+            soldDateYmd: 20251001,
+            premium: 9999,
+            itemCount: 42,
+            policyCount: 7,
+            premiumSource: 'rollup',
+            legacySmartSuiteId: 'legacy-deal-pac104-add',
+          });
+          const dealId = migrated._id.toString();
+
+          expect((await getDeal(producerToken, dealId)).isMigrated).toBe(true);
+
+          const body = await addPolicies(
+            producerToken,
+            dealId,
+            lead._id.toString(),
+            [soldPolicy({ premium: 500, itemCount: 1 })],
+          );
+
+          // Recomputed from the policies linked to it — the product owner's call.
+          expect(body.deal).toMatchObject({
+            premium: 500,
+            itemCount: 1,
+            policyCount: 1,
+            isMigrated: true,
+          });
+          const after = await soldDealModel.findById(migrated._id);
+          // So later per-policy corrections keep the new total in step.
+          expect(after!.premiumSource).toBe('snapshot');
+          expect(after!.soldDateYmd).toBe(20251001);
+        });
+
+        it("keeps a manager's addition in the producer's book", async () => {
+          const { leadId, created } = await bookAuto();
+
+          await addPolicies(ownerToken, created.id, leadId, [
+            soldPolicy({
+              policyType: 'Home',
+              priorInsurance: {
+                none: false,
+                carrier: 'State Farm',
+                agentName: 'H. Agent',
+              },
+            }),
+          ]);
+
+          // `own` visibility on the hand-off board follows the deal's producer,
+          // not whoever added the policy.
+          const summary = await priorInsuranceModel.findOne({
+            dealId: dealRef(created.id),
+          });
+          expect(summary!.producerId?.toString()).toBe(producerId.toString());
+        });
+
+        it('leaves the lead and its sold timeline entry alone', async () => {
+          const { lead, leadId, created } = await bookAuto();
+          const statusBefore = (await soldLeadModel.findById(lead._id))!.status;
+
+          await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({ policyType: 'Home' }),
+          ]);
+
+          expect(
+            await soldActivityModel.countDocuments({
+              dealId: dealRef(created.id),
+              type: 'sold',
+            }),
+          ).toBe(1);
+          expect((await soldLeadModel.findById(lead._id))!.status).toBe(
+            statusBefore,
+          );
+        });
+      });
     });
 
     describe('deal roll-up recompute on PATCH /policies/:id (PAC-56 #25)', () => {

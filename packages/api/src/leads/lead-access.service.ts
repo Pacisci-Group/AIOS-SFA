@@ -70,19 +70,21 @@ export class LeadAccessService {
     record: { producerId?: Types.ObjectId; branchId?: string },
     access: AccessContext,
     branchId: string | null,
+    // The 404 names what was looked for — a deal, on the Edit sale page (PAC-104).
+    notFoundMessage = 'Lead not found.',
   ): void {
     if (
       access.dataScope === DataScope.Own &&
       record.producerId?.toString() !== access.userId
     ) {
-      throw new NotFoundException('Lead not found.');
+      throw new NotFoundException(notFoundMessage);
     }
     if (
       access.dataScope === DataScope.Branch &&
       branchId &&
       record.branchId !== branchId
     ) {
-      throw new NotFoundException('Lead not found.');
+      throw new NotFoundException(notFoundMessage);
     }
   }
 
