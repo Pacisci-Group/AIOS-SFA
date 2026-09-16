@@ -20,6 +20,7 @@ import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver
 import { IntakeContext, IntakePerson } from '../leads/intake/intake.types';
 import { LeadIntakeService } from '../leads/intake/lead-intake.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
+import { LogMailerLeadDto } from './dto/log-mailer-lead.dto';
 import { Mailer, MailerDocument } from './schemas/mailer.schema';
 
 /** The recipient name a lead is created under. */
@@ -104,8 +105,9 @@ export class MailersService {
   /**
    * `POST /mailers/log-lead` — save the mailer's recipient as a lead.
    *
-   * Everything written comes from the stored mailer or from the authenticated
-   * user; the request contributes only which mailer. Legacy resolved the
+   * Who the lead is — name, address, source, producer — comes from the stored
+   * mailer or from the authenticated user; the request contributes which mailer
+   * and the three contact details the producer collected (PAC-103). Legacy resolved the
    * producer through ~170 lines of Clerk lookup with an email fallback and a
    * self-healing `PATCH`, all of which existed because it had no first-class
    * user identity. Here the caller *is* the producer.
@@ -113,12 +115,12 @@ export class MailersService {
   async logLead(
     access: AccessContext,
     branchId: string | null,
-    rawControlNumber: string,
+    body: LogMailerLeadDto,
   ): Promise<LogMailerLeadResponse> {
     const tenant = await this.tenancy.resolve(access, branchId);
     const mailer = await this.findByControlNumber(
       tenant.agencyId,
-      rawControlNumber,
+      body.controlNumber,
     );
 
     const name = deriveMailerName(mailer);
@@ -163,15 +165,15 @@ export class MailersService {
 
     const primaryContact: IntakePerson = {
       ...name,
-      // All three are absent on the overwhelming majority of real mailers, and
-      // `IntakePerson` has them optional for exactly that reason. Passing a
-      // blank string instead of omitting would write empty contact details that
-      // read as captured answers.
-      phone: mailer.phone?.trim() || undefined,
-      email: mailer.email?.trim() || undefined,
-      dateOfBirth: mailer.dateOfBirth
-        ? mailer.dateOfBirth.toISOString().slice(0, 10)
-        : undefined,
+      // From the producer, never the mailer row (PAC-103). The drawer pre-fills
+      // them from the mailer where it has a value, so a mailer that carried one
+      // still contributes it — but only once a person has confirmed it. With
+      // all three present the contact has a complete PAC-91 §9 identity, which
+      // is what lets `ResolveContactStep` match a returning recipient to their
+      // existing contact instead of creating a second one.
+      dateOfBirth: body.dateOfBirth,
+      phone: body.phone,
+      email: body.email,
     };
 
     const outcome = await this.intake.process(ctx, {
@@ -214,6 +216,7 @@ export class MailersService {
     return {
       leadId: outcome.leadId.toString(),
       alreadyExisted: !outcome.leadIsNew,
+      contactMatched: !outcome.contactIsNew,
     };
   }
 

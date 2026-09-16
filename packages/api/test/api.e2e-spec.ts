@@ -3523,7 +3523,12 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/mailers/log-lead')
         .set(authHeader(csrToken))
-        .send({ controlNumber: 'NOSUCHQCN123' })
+        .send({
+          controlNumber: 'NOSUCHQCN123',
+          dateOfBirth: '1971-04-12',
+          phone: '9185550142',
+          email: 'probe@example.com',
+        })
         .expect(404);
     });
 
@@ -3696,7 +3701,12 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/mailers/log-lead')
         .set(authHeader(readOnlyToken))
-        .send({ controlNumber: 'NOSUCHQCN123' })
+        .send({
+          controlNumber: 'NOSUCHQCN123',
+          dateOfBirth: '1971-04-12',
+          phone: '9185550142',
+          email: 'probe@example.com',
+        })
         .expect(403);
     });
 
