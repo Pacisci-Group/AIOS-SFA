@@ -20,7 +20,10 @@ headers {
 
 body:json {
   {
-    "controlNumber": "9c41b2d7ee01"
+    "controlNumber": "9c41b2d7ee01",
+    "dateOfBirth": "1971-04-12",
+    "phone": "(918) 555-0142",
+    "email": "mailer.recipient@example.com"
   }
 }
 
@@ -70,11 +73,15 @@ docs {
 
   ## Response `200`
   ```json
-  { "leadId": "…", "alreadyExisted": false }
+  { "leadId": "…", "alreadyExisted": false, "contactMatched": true }
   ```
 
   `alreadyExisted` is deliberately not asserted to a fixed value: it is `false`
   on a database seeded fresh and `true` on every re-run, and both are correct.
   What matters for the next two requests is only that *some* lead in the demo
   agency now owns this mailer.
+
+  The body carries the three contact details the drawer collects (PAC-103) —
+  see **Mailers › Log Mailer Lead**. They match the ones that request sends, so
+  `contactMatched` is normally `true` here; it is not asserted either.
 }

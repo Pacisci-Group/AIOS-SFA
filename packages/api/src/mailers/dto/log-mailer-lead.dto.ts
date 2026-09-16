@@ -1,21 +1,25 @@
 import { z } from 'zod';
+import { primaryContactDetailsFields } from '../../leads/dto/create-lead.dto';
 
 /**
- * `POST /mailers/log-lead` (PAC-61).
+ * `POST /mailers/log-lead` (PAC-61, PAC-103).
  *
- * ## Why this is not `create-lead.dto.ts`
+ * ## Where each field comes from
  *
- * That DTO's `person` schema requires a date of birth, a 10-character phone
- * number and a valid email address. A mailer has **none** of the three:
- * `emailaddre` and `birthdate` are empty on 100% of the reference file's 20,405
- * rows and `phone` is populated on 4.4%. Reusing it would 400 roughly 96% of
- * real requests. The service-layer `IntakePerson` has all three optional, which
- * is what makes this path work at all.
+ * The **recipient name, address, lead source and producer** are read from the
+ * stored mailer or from the authenticated user, never from the request — there
+ * is nothing here for a caller to influence about *who* the mail went to.
  *
- * The body is a control number and nothing else. Everything written to the lead
- * — the recipient, the address, the lead source, the producer — is read from
- * the stored mailer or from the authenticated user, never from the request, so
- * there is nothing here for a caller to influence.
+ * The **date of birth, phone and email** come from the producer. A mailer
+ * almost never has them (`emailaddre` and `birthdate` are empty on 100% of the
+ * reference file's 20,405 rows, `phone` populated on 4.4%), and without them
+ * the contact cannot pass the PAC-91 §9 duplicate check, so a returning mailer
+ * recipient would become a second contact. The drawer asks for them before the
+ * lead is created (PAC-103), pre-filled from whatever the mailer does carry.
+ * They use the same rules as `POST /leads` so the two paths cannot drift.
+ *
+ * Still not `create-lead.dto.ts` itself: that one takes a name, an address and
+ * a lead source, all of which this route deliberately refuses to accept.
  */
 export const logMailerLeadSchema = z.object({
   /**
@@ -28,6 +32,7 @@ export const logMailerLeadSchema = z.object({
     .trim()
     .min(1, 'Enter a Quote Control Number.')
     .max(80),
+  ...primaryContactDetailsFields,
 });
 
 export type LogMailerLeadDto = z.infer<typeof logMailerLeadSchema>;

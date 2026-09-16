@@ -20,12 +20,23 @@ const dateOfBirth = z
   .trim()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be YYYY-MM-DD');
 
-const person = z.object({
-  firstName: name,
-  lastName: name,
+/**
+ * The three contact details every *captured* primary contact must carry — the
+ * identity legs of the PAC-91 §9 duplicate rule, alongside the name.
+ *
+ * Exported so `POST /mailers/log-lead` (PAC-103) validates them exactly as a
+ * hand-typed lead does; the mailer supplies the name, the producer these.
+ */
+export const primaryContactDetailsFields = {
   dateOfBirth,
   phone: z.string().trim().min(10).max(20),
   email: z.string().trim().email().max(160),
+};
+
+const person = z.object({
+  firstName: name,
+  lastName: name,
+  ...primaryContactDetailsFields,
 });
 
 const member = z.object({

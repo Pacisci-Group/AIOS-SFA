@@ -39,6 +39,16 @@ const NAMELESS_LONG = '#11112222-3333-4444-5555-666677778888';
  */
 const CAMPAIGN_ID = '6a86ef5140258c85a093cc4e';
 
+/**
+ * What the producer types into the drawer's contact step (PAC-103). A mailer
+ * carries none of these, so every log-lead call has to supply them.
+ */
+const CONTACT_DETAILS = {
+  dateOfBirth: '1971-04-12',
+  phone: '(918) 555-0142',
+  email: 'Dana.Whitfield@example.com',
+};
+
 interface MailerSeed {
   controlNumber?: string;
   newControlNumber?: string;
@@ -143,11 +153,15 @@ describe('Mailer lookup + log lead (e2e)', () => {
       .set(authHeader(token));
   }
 
-  function logLead(controlNumber: string, token = producerToken) {
+  function logLead(
+    controlNumber: string,
+    token = producerToken,
+    details: Record<string, string> = CONTACT_DETAILS,
+  ) {
     return request(app.getHttpServer())
       .post('/api/v1/mailers/log-lead')
       .set(authHeader(token))
-      .send({ controlNumber });
+      .send({ controlNumber, ...details });
   }
 
   beforeAll(async () => {
@@ -342,14 +356,29 @@ describe('Mailer lookup + log lead (e2e)', () => {
       await logLead(SHORT, readOnlyToken).expect(403);
     });
 
+    it.each(['dateOfBirth', 'phone', 'email'] as const)(
+      '400s when %s is missing, and creates nothing',
+      async (field) => {
+        const details: Record<string, string> = { ...CONTACT_DETAILS };
+        delete details[field];
+
+        await logLead(LONG, producerToken, details).expect(400);
+        expect(
+          await leadModel.countDocuments({ quoteControlNumber: LONG }),
+        ).toBe(0);
+      },
+    );
+
     it('creates the lead, household and contact', async () => {
       const res = await logLead(LONG).expect(200);
-      const { leadId, alreadyExisted } = res.body as {
+      const { leadId, alreadyExisted, contactMatched } = res.body as {
         leadId: string;
         alreadyExisted: boolean;
+        contactMatched: boolean;
       };
 
       expect(alreadyExisted).toBe(false);
+      expect(contactMatched).toBe(false);
 
       const lead = await leadModel.findById(leadId).lean();
       expect(lead).toBeTruthy();
@@ -381,9 +410,45 @@ describe('Mailer lookup + log lead (e2e)', () => {
       expect(
         await householdModel.findById(lead!.householdId).lean(),
       ).toBeTruthy();
-      expect(
-        await contactModel.findById(lead!.primaryContactId).lean(),
-      ).toBeTruthy();
+      const contact = await contactModel
+        .findById(lead!.primaryContactId)
+        .lean();
+      expect(contact).toBeTruthy();
+      // The producer's values, on the contact as scalars (PAC-91 §1), in the
+      // normalized form the §9 duplicate rule compares.
+      expect(contact!.dateOfBirth?.toISOString().slice(0, 10)).toBe(
+        CONTACT_DETAILS.dateOfBirth,
+      );
+      expect(contact!.phone).toBe('9185550142');
+      expect(contact!.email).toBe('dana.whitfield@example.com');
+    });
+
+    it('links a returning recipient to their existing contact', async () => {
+      // A second mail piece to the same person, at a different address so no
+      // lead-level dedupe merges it — this is the contact rule on its own.
+      const qcn = '#aaaa1111-bbbb-2222-cccc-3333dddd4444';
+      await insertMailer(seed.agencyId, {
+        controlNumber: qcn,
+        newControlNumber: '3333dddd4444',
+        street: '7 Returning Ct',
+      });
+      const first = await leadModel
+        .findOne({ quoteControlNumber: LONG })
+        .lean();
+
+      const res = await logLead(qcn).expect(200);
+      const body = res.body as {
+        leadId: string;
+        alreadyExisted: boolean;
+        contactMatched: boolean;
+      };
+
+      expect(body.alreadyExisted).toBe(false);
+      expect(body.contactMatched).toBe(true);
+      const lead = await leadModel.findById(body.leadId).lean();
+      expect(lead!.primaryContactId?.toString()).toBe(
+        first!.primaryContactId?.toString(),
+      );
     });
 
     it('assigns the caller as producer', async () => {

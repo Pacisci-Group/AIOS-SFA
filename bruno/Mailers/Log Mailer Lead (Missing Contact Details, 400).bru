@@ -1,0 +1,46 @@
+meta {
+  name: Log Mailer Lead (Missing Contact Details, 400)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/mailers/log-lead
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "controlNumber": "{{mailerLongForm}}"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /mailers/log-lead — without the contact details (PAC-103)
+
+  Same endpoint as **Log Mailer Lead**; see that request's docs for the full
+  contract.
+
+  A control number alone is no longer a valid body. `dateOfBirth`, `phone` and
+  `email` are all required, because a mailer almost never carries them and a
+  contact without them cannot pass the PAC-91 §9 duplicate check. The drawer
+  collects them in its *Confirm contact details* step before calling this.
+
+  Validation runs before the mailer is looked up, so this 400s — and writes
+  nothing — whether or not the mailer exists or has already been logged.
+
+  ## Response `400`
+
+  The standard validation body, naming each missing field.
+}
