@@ -175,6 +175,64 @@ write_files:
       [Install]
       WantedBy=timers.target
 
+  # A DigitalOcean REGIONAL_NETWORK (layer-4) load balancer forwards with the
+  # client IP preserved and the DESTINATION still set to the balancer's own
+  # address - direct server return. So a packet the worker LB forwards to us
+  # arrives addressed to ${worker_lb_ip}, not to this droplet. Without a `local`
+  # route for that address the kernel drops it as a martian: the balancer
+  # forwards, we discard, nothing logs, the client times out after a full
+  # timeout. This is the "configure backend Droplets for network load balancers"
+  # step in DigitalOcean's docs, and it is what the whole worker/Inngest path
+  # depends on. Missing it presents as async work silently not running while
+  # every health check stays green.
+  #
+  # arp_announce=2 is the matching half: the kernel must answer ARP for the
+  # balancer address on the VPC interface.
+  - path: /etc/sysctl.d/99-sfa-nlb.conf
+    permissions: "0644"
+    content: |
+      net.ipv4.conf.eth1.arp_announce = 2
+
+  - path: /usr/local/bin/sfa-nlb-route
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Claim the internal load balancer address for direct server return.
+      #
+      # `replace` not `add`, and driven by a timer, because a systemd-networkd
+      # restart - which happens during routine package updates - wipes the local
+      # routing table. `replace` is idempotent, so re-asserting every 30s is
+      # free when nothing changed and self-heals within one interval when it was.
+      set -euo pipefail
+      ip route replace to local ${worker_lb_ip} dev eth1
+      sysctl -q -w net.ipv4.conf.eth1.arp_announce=2
+
+  - path: /etc/systemd/system/sfa-nlb-route.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Claim the internal load balancer address (network LB direct server return)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/sfa-nlb-route
+
+  - path: /etc/systemd/system/sfa-nlb-route.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Re-assert the internal load balancer route (survives networkd restarts)
+
+      [Timer]
+      OnBootSec=5s
+      OnUnitActiveSec=30s
+      AccuracySec=5s
+
+      [Install]
+      WantedBy=timers.target
+
   - path: /opt/sfa/README.txt
     permissions: "0644"
     content: |
@@ -227,6 +285,10 @@ runcmd:
   - systemctl enable docker
   - systemctl start docker
   - systemctl daemon-reload
+  # Claim the load balancer address BEFORE converge, so the droplet can answer
+  # forwarded traffic the moment the balancer's health check marks it healthy.
+  - systemctl enable --now sfa-nlb-route.timer
+  - ["bash", "-c", "/usr/local/bin/sfa-nlb-route || echo 'WARN: nlb route setup failed; the timer will retry'"]
   - systemctl enable --now sfa-converge.timer
   # Converge once synchronously, so the droplet is serving before it is ever
   # marked healthy - rather than waiting up to a timer interval while the load
