@@ -57,6 +57,40 @@ export function emptyPolicyOfInterest(): LeadPolicyFormValues {
   };
 }
 
+const dateOfBirth = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+  // A birth date in the future is always a typo, and it would poison contact
+  // matching — DOB is the strongest signal the server has.
+  .refine((value) => value <= new Date().toISOString().slice(0, 10), {
+    message: "Date of birth can't be in the future",
+  });
+
+/**
+ * The three contact details a captured primary contact must carry — the
+ * identity legs, with the name, of the PAC-91 §9 duplicate rule.
+ *
+ * One definition for both places a producer types them: the New Lead form's
+ * primary contact, and the Mailers drawer's contact step (PAC-103), where the
+ * mailer supplies the name and the producer these.
+ */
+const contactDetailsShape = {
+  dateOfBirth,
+  phone: z
+    .string()
+    .trim()
+    .refine((value) => {
+      const digits = value.replace(/\D/g, "");
+      return digits.length >= 10 && digits.length <= 11;
+    }, "Enter a 10-digit phone number"),
+  email: z.email("Enter a valid email").max(160, "Too long"),
+};
+
+export const contactDetailsSchema = z.object(contactDetailsShape);
+
+export type ContactDetailsFormValues = z.infer<typeof contactDetailsSchema>;
+
 /**
  * Who is filling the form in. Both differences between the two entry points —
  * lead source, and policies of interest — track this one axis, so they hang off
@@ -81,16 +115,6 @@ export function makeLeadIntakeSchema(variant: LeadIntakeVariant) {
   const isPublic = variant === "public";
   const name = z.string().trim().min(1, "Required").max(60, "Too long");
 
-  const dateOfBirth = z
-    .string()
-    .trim()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
-    // A birth date in the future is always a typo, and it would poison contact
-    // matching — DOB is the strongest signal the server has.
-    .refine((value) => value <= new Date().toISOString().slice(0, 10), {
-      message: "Date of birth can't be in the future",
-    });
-
   return (
     z
       // No `.superRefine` here any more: the property-address rule moved onto
@@ -99,15 +123,7 @@ export function makeLeadIntakeSchema(variant: LeadIntakeVariant) {
         primaryContact: z.object({
           firstName: name,
           lastName: name,
-          dateOfBirth,
-          phone: z
-            .string()
-            .trim()
-            .refine((value) => {
-              const digits = value.replace(/\D/g, "");
-              return digits.length >= 10 && digits.length <= 11;
-            }, "Enter a 10-digit phone number"),
-          email: z.email("Enter a valid email").max(160, "Too long"),
+          ...contactDetailsShape,
         }),
         // Required in the UI even though the API accepts a partial address: the
         // address powers a dedupe signal, and a producer filling this in has it.

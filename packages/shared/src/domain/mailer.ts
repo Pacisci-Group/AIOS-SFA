@@ -203,6 +203,9 @@ export interface MailerLookupView {
    * file and `phone` on 95.6%. The drawer omits these rows when absent rather
    * than dashing them — a dash reads as data we failed to load, when in fact
    * it is data that will never arrive.
+   *
+   * Where present they only **pre-fill** the drawer's contact step (PAC-103);
+   * what lands on the contact is what the producer confirms there.
    */
   email: string | null;
   phone: string | null;
@@ -242,6 +245,22 @@ export interface MailerLookupView {
   linkedLeadId: string | null;
 }
 
+/**
+ * `POST /mailers/log-lead` body.
+ *
+ * The mailer names the recipient; the producer supplies the three contact
+ * details a mailer almost never carries (PAC-103). All three are required, with
+ * the same rules as the primary contact on `POST /leads`.
+ */
+export interface LogMailerLeadRequest {
+  /** Either printed form of the Quote Control Number. */
+  controlNumber: string;
+  /** `YYYY-MM-DD`. */
+  dateOfBirth: string;
+  phone: string;
+  email: string;
+}
+
 /** `POST /mailers/log-lead`. */
 export interface LogMailerLeadResponse {
   leadId: string;
@@ -253,4 +272,11 @@ export interface LogMailerLeadResponse {
    * dedupe against a recent lead at the same street.
    */
   alreadyExisted: boolean;
+  /**
+   * True when the details matched a contact the agency already had (PAC-91 §9)
+   * and the lead was linked to it rather than to a new contact — a returning
+   * mailer recipient. Blank details on that contact are filled in; values that
+   * differ are left alone and recorded as conflicts on the lead's timeline.
+   */
+  contactMatched: boolean;
 }

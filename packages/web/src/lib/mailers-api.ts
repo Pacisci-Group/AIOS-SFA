@@ -1,4 +1,8 @@
-import type { LogMailerLeadResponse, MailerLookupView } from "@sfa/shared";
+import type {
+  LogMailerLeadRequest,
+  LogMailerLeadResponse,
+  MailerLookupView,
+} from "@sfa/shared";
 import { ApiError, apiFetch } from "@/lib/api-client";
 
 /**
@@ -9,7 +13,7 @@ import { ApiError, apiFetch } from "@/lib/api-client";
  * and nothing else: one imports mail files, the other reads one mailer a
  * producer typed the control number of.
  */
-export type { LogMailerLeadResponse, MailerLookupView };
+export type { LogMailerLeadRequest, LogMailerLeadResponse, MailerLookupView };
 
 /**
  * Look a mailer up by either printed form of its Quote Control Number.
@@ -40,17 +44,18 @@ export async function lookupMailer(
 }
 
 /**
- * Save the mailer's recipient as a lead.
+ * Save the mailer's recipient as a lead, with the date of birth, phone and email
+ * the producer confirmed in the drawer (PAC-103).
  *
  * Idempotent per mailer: logging the same one twice — in either control-number
  * form — returns the first lead with `alreadyExisted: true` and creates
  * nothing.
  */
 export function logMailerLead(
-  controlNumber: string,
+  payload: LogMailerLeadRequest,
 ): Promise<LogMailerLeadResponse> {
   return apiFetch<LogMailerLeadResponse>("/mailers/log-lead", {
     method: "POST",
-    body: JSON.stringify({ controlNumber }),
+    body: JSON.stringify(payload),
   });
 }
