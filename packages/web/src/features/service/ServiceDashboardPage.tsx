@@ -70,7 +70,9 @@ export default function App() {
 
   return (
     <AppShell>
-      <div className="flex-1 flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
+      {/* No `flex-1` beside `h-screen` — see `TicketWorkspacePage` for why
+          the two cannot coexist inside `AppShell`. */}
+      <div className="flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}

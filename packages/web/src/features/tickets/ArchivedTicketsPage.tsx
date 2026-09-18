@@ -104,9 +104,11 @@ export default function ArchivedTicketsPage() {
   return (
     // Asserts the viewport height itself, matching TicketWorkspacePage — same
     // two-column split, same internal scrolling, and `AppShell` is
-    // `min-h-screen` rather than a pinned parent to measure against.
+    // `min-h-screen` rather than a pinned parent to measure against. No
+    // `flex-1`, for the reason written up there: its `flex-basis: 0%` would
+    // override `h-screen` and let the page grow to the full list.
     <AppShell>
-      <div className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:gap-4 md:px-6">
           <div className="flex min-w-0 items-center gap-2 md:gap-3">
             <MobileNav className="-ml-1" />

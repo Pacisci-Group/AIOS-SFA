@@ -195,8 +195,15 @@ export default function TicketWorkspacePage() {
     // rather than pinning the viewport. This page is a two-pane layout that
     // scrolls each pane internally, so it has to assert the viewport height
     // itself — `h-full` would collapse against a parent with no set height.
+    //
+    // **No `flex-1` here.** The shell's column is a flex container with no
+    // height of its own, and `flex-1` sets `flex-basis: 0%` — which resolves
+    // to *content* against an indefinite parent and takes precedence over
+    // `height`. The container then sized itself to every ticket row, the item
+    // grew to match, and `h-screen` never applied: the whole page scrolled and
+    // neither pane did. With the basis left at `auto`, the height is the basis.
     <AppShell>
-      <div className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:gap-4 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <MobileNav className="-ml-1" />
