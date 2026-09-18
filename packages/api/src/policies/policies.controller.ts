@@ -107,11 +107,9 @@ export class PoliciesController {
    * has never been replaced, which is what lets the UI render it unconditionally.
    */
   @Get(':id/history')
-  history(
-    @Access() access: AccessContext,
-    @BranchId() branchId: string | null,
-    @Param('id') id: string,
-  ) {
-    return this.rewritesService.replacementChain(access, branchId, id);
+  history(@Access() access: AccessContext, @Param('id') id: string) {
+    // Household-scoped (`loadHouseholdPolicy`), so the branch header plays no
+    // part: the clamp reads the caller's own branch off their access context.
+    return this.rewritesService.replacementChain(access, id);
   }
 }

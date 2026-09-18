@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -152,9 +153,23 @@ export class UpsertPoliciesStep {
    * survive the move. `active: false` is also what keeps the household's
    * premium total and active-policy count honest once the replacement lands.
    *
-   * The household check is the real gate. `fromPolicyId` comes straight from the
-   * client, and the transfer's only scope clamp is the *ticket*; without this a
-   * CSR could retire any policy in the agency by naming its id.
+   * The household check is the real gate: `fromPolicyId` is injected from the
+   * lead's stored intent (PAC-126), and the intent was written against the
+   * policy's own household, so a disagreement here means the lead has been
+   * moved — not something to retire across.
+   *
+   * ## Re-checked at the moment of retirement, not only at lead creation
+   *
+   * `LeadsService.resolveReplacement` refuses an inactive or already-replaced
+   * policy when the lead is created, and the lookup reports the same before the
+   * chain starts. Neither is enough on its own: the intent is stored, the rep
+   * can leave for a week, and the policy can change underneath it — cancelled
+   * from the household edit, or replaced by the *other* reason's lead (a
+   * rewrite and a transfer may each be open for one policy, because the
+   * resume lookup is keyed on reason). Without this check the second submit
+   * would re-stamp the policy, re-point `transferredToPolicyId` at a second
+   * replacement, and for a rewrite charge the producer back a second time.
+   * Inside the transaction, so a refusal costs nothing.
    *
    * ## The status it stamps
    *
@@ -185,6 +200,21 @@ export class UpsertPoliciesStep {
     if (String(existing.householdId ?? '') !== ctx.householdId.toString()) {
       throw new BadRequestException(
         'That policy belongs to a different household and cannot be transferred here.',
+      );
+    }
+
+    // Same two guards, same wording and same order, as
+    // `LeadsService.resolveReplacement`. Replaced first: a replaced policy is
+    // also inactive, and "already replaced" is the answer that tells the rep
+    // what to do next.
+    if (existing.transferredToPolicyId) {
+      throw new ConflictException(
+        'This policy has already been replaced. Replace its replacement instead.',
+      );
+    }
+    if (!existing.active) {
+      throw new ConflictException(
+        'This policy is not active, so it cannot be replaced.',
       );
     }
 

@@ -177,9 +177,18 @@ export class SoldDealIntakeService {
    *
    * The household recount runs first and for **every** deal, lead or not. The
    * other two are lead-scoped: there is no lead to advance on a leadless
-   * booking, and `ACTIVITY_TYPES` has no member meaning "transferred" —
-   * `Activity.leadId` is required by every reader of the feed, and writing a
-   * `sold` row for something that was not sold would be worse than nothing.
+   * booking.
+   *
+   * **A Company Transfer writes no `sold` activity.** It runs through a lead
+   * now (PAC-126), but it is not a sale — a package change within the client's
+   * own book, kept off the leaderboard for that reason — and `ACTIVITY_TYPES`
+   * has no member meaning "transferred". Writing a `sold` row for it would be
+   * worse than nothing: the feed and every "sold" activity count would read a
+   * transfer as new business. The deal itself, `businessType: company_transfer`,
+   * is on the lead page regardless. The lead *is* still advanced: it was
+   * created for this one action, `Sold` is the pipeline's "done, with a deal"
+   * state, and leaving it open would list a finished lead as workable forever.
+   * A rewrite keeps the row — it books genuine new business.
    */
   async recordSideEffects(
     ctx: SoldIntakeContext,
@@ -193,7 +202,7 @@ export class SoldDealIntakeService {
     const leadId = ctx.leadId;
     const leadStatus = await this.leads.run(leadId, ctx.agencyId);
 
-    if (outcome.dealIsNew) {
+    if (outcome.dealIsNew && ctx.replacementReason !== 'company_transfer') {
       try {
         await this.activityModel.create({
           agencyId: ctx.agencyId,

@@ -81,16 +81,16 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     // household from it, and the Lead Detail roster reads it.
     HouseholdMembersModule,
     /*
-     * `PoliciesService.loadOwnedPolicy` — the scope clamp on a replacement lead
-     * (PAC-126). A Cancel Rewrite or Company Transfer creates its lead from a
-     * policy, and that policy has to be one the caller may actually reach.
+     * `PoliciesService.loadHouseholdPolicy` — the scope clamp on a replacement
+     * lead (PAC-126). A Cancel Rewrite or Company Transfer creates its lead
+     * from a policy, and that policy has to be one the caller may actually
+     * reach under the household rule.
      *
      * One way only, and it stays that way: `PoliciesModule` imports
      * `SoldIntakeModule`, `AuditGenerationModule` and `CarriersModule`, none of
      * which reach back here — so this needs no `forwardRef`. Registering the
      * `Policy` schema instead (the house pattern for a cycle) would not do: the
-     * `own`-scope rule for a deal-less policy lives in that service and must not
-     * be reimplemented here.
+     * scope rule lives in that service and must not be reimplemented here.
      */
     PoliciesModule,
   ],

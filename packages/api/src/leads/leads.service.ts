@@ -126,10 +126,9 @@ export class LeadsService {
     private readonly leadTickets: LeadTicketsService,
     /*
      * Cancel Rewrite and Company Transfer create their lead from a policy, and
-     * `loadOwnedPolicy` is the authority on whether the caller may reach it —
-     * the same clamp `PATCH /policies/:id` uses. Injected rather than
-     * reimplemented: the `own`-scope rule for a deal-less policy is subtle and
-     * must not exist twice.
+     * `loadHouseholdPolicy` is the authority on whether the caller may reach it
+     * — the household rule, the same clamp the household policy edit uses.
+     * Injected rather than reimplemented so the rule exists once.
      */
     private readonly policies: PoliciesService,
   ) {}
@@ -156,7 +155,7 @@ export class LeadsService {
      * convenience and this is the enforcement.
      */
     const replacement = dto.replacementIntent
-      ? await this.resolveReplacement(access, branchId, dto)
+      ? await this.resolveReplacement(access, dto)
       : null;
 
     const outcome = await this.intake.process(ctx, {
@@ -184,12 +183,13 @@ export class LeadsService {
    * that it cannot be retired would strand a rep who has just filled in two
    * forms. Failing at lead creation is the cheapest honest place.
    *
-   * Scope comes from `loadOwnedPolicy` — the same clamp `PATCH /policies/:id`
-   * uses — so a policy outside the caller's scope 404s rather than 403s.
+   * Scope is the **household** rule (`loadHouseholdPolicy`), the same one the
+   * household policy edit uses: a replacement is an action on the client's
+   * book, and the sales-record clamp would 404 every migrated policy for an
+   * `own`-scope producer. Out of scope 404s rather than 403s either way.
    */
   private async resolveReplacement(
     access: AccessContext,
-    branchId: string | null,
     dto: CreateLeadDto,
   ): Promise<{
     householdId: string;
@@ -200,9 +200,8 @@ export class LeadsService {
       throw new BadRequestException('No replacement was requested.');
     }
 
-    const { policy } = await this.policies.loadOwnedPolicy(
+    const policy = await this.policies.loadHouseholdPolicy(
       access,
-      branchId,
       requested.policyId,
     );
 
@@ -211,14 +210,16 @@ export class LeadsService {
         'This policy is not linked to a household, so a replacement cannot be written for it. Link it first.',
       );
     }
-    if (!policy.active) {
-      throw new ConflictException(
-        'This policy is not active, so it cannot be replaced.',
-      );
-    }
+    // Replaced before inactive: a replaced policy is also inactive, and
+    // "already replaced" is the message that tells the rep what to do next.
     if (policy.transferredToPolicyId) {
       throw new ConflictException(
         'This policy has already been replaced. Replace its replacement instead.',
+      );
+    }
+    if (!policy.active) {
+      throw new ConflictException(
+        'This policy is not active, so it cannot be replaced.',
       );
     }
 
@@ -261,7 +262,7 @@ export class LeadsService {
    *
    * ## Why this lives on the leads side
    *
-   * It needs both `loadOwnedPolicy` (is this policy reachable and replaceable?)
+   * It needs both `loadHouseholdPolicy` (is this policy reachable and replaceable?)
    * and the lead scope rule (is there an open lead I am allowed to resume?).
    * `LeadsModule` imports `PoliciesModule`, so both are available here; putting
    * it on the policies controller would have needed the reverse import too, and
@@ -273,20 +274,17 @@ export class LeadsService {
     policyId: string,
     reason: PolicyReplacementReason,
   ): Promise<ReplacementLeadLookup> {
-    const { policy } = await this.policies.loadOwnedPolicy(
-      access,
-      branchId,
-      policyId,
-    );
+    const policy = await this.policies.loadHouseholdPolicy(access, policyId);
 
     const householdId = policy.householdId ? String(policy.householdId) : null;
 
+    // Same order as `resolveReplacement`: replaced before inactive.
     const blockedReason = !policy.householdId
       ? 'This policy is not linked to a household, so a replacement cannot be written for it. Link it first.'
-      : !policy.active
-        ? 'This policy is not active, so it cannot be replaced.'
-        : policy.transferredToPolicyId
-          ? 'This policy has already been replaced. Replace its replacement instead.'
+      : policy.transferredToPolicyId
+        ? 'This policy has already been replaced. Replace its replacement instead.'
+        : !policy.active
+          ? 'This policy is not active, so it cannot be replaced.'
           : null;
 
     if (blockedReason) {
@@ -349,16 +347,18 @@ export class LeadsService {
      * Scope is applied *after* the query rather than inside it: `own` scope on a
      * lead is `producerId`, and a rep who abandoned a replacement someone else
      * started should get a fresh lead of their own rather than a 404 on a record
-     * they cannot see. `loadOwnedLead` is the authority on that rule, so this
-     * asks it rather than reimplementing the filter.
+     * they cannot see. `assertOwned` is the authority on that rule and works on
+     * the document already in hand — this used to call `loadOwnedLead`, which
+     * re-fetched each candidate by id for nothing.
      */
     for (const lead of leads) {
       try {
-        return await this.leadAccess.loadOwnedLead(
+        this.leadAccess.assertOwned(
+          { producerId: lead.producerId, branchId: lead.branchId },
           access,
           branchId,
-          String(lead._id),
         );
+        return lead;
       } catch {
         continue;
       }

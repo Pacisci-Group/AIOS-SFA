@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/policies/{{soldPolicyId}}/history
+  url: {{baseUrl}}/policies/{{policyEditPolicyId}}/history
   auth: inherit
 }
 
@@ -33,7 +33,7 @@ tests {
       });
     // Exactly one, whichever link in the chain was opened.
     expect(requested).to.have.lengthOf(1);
-    expect(requested[0].policyId).to.equal(bru.getVar("soldPolicyId"));
+    expect(requested[0].policyId).to.equal(bru.getVar("policyEditPolicyId"));
   });
 
   test("is ordered oldest first and linked end to end", function () {
@@ -56,7 +56,10 @@ docs {
   Module `deal_audits` **or** `crm_service`, permission `deal_audits:read` or
   `crm_service:read` (the controller's OR gate — a CSR looking at a transferred
   policy has the same question as a producer looking at a rewritten one). Data
-  scope is enforced by `loadOwnedPolicy`; out of scope 404s.
+  scope is the **household** rule (`loadHouseholdPolicy`: `own` collapses to
+  branch, because client records are shared), matching the replacement buttons
+  beside this card — a migrated policy has no deal, so the sales-record clamp
+  would 404 it for a producer who can see the policy. Out of scope 404s.
 
   Returns every policy in the chain the given policy belongs to — the ones that
   led to it **and** the ones that came after — oldest first. Served from any link
@@ -111,4 +114,11 @@ docs {
   |---|---|
   | `403` | Caller holds neither `deal_audits:read` nor `crm_service:read`, or both modules are disabled. |
   | `404` | No such policy, or it is outside the caller's data scope. |
+
+  ## Run order
+
+  Reads `policyEditPolicyId`, captured by **Households › Find A Policy To Edit**.
+  The CLI walks folders alphabetically, so `Households` has run by the time
+  `Policies` does; the Sold folder's `soldPolicyId` has **not**, which is why
+  this does not use it.
 }

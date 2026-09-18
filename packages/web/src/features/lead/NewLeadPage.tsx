@@ -133,11 +133,27 @@ export default function NewLeadPage() {
   });
 
   const backTo = replacement ? `/policies/${replacement.policyId}` : "/leads";
+  /*
+   * The household query is *disabled* until the policy names a household, and
+   * a disabled query reports `isPending` forever. So it only counts as loading
+   * once there is a household to load — otherwise a policy that comes back
+   * with `household: null` (unlinked, or linked to a household outside the
+   * caller's scope) would leave the page on "Loading the client…" with no
+   * error and no form.
+   */
   const loadingContext = Boolean(
-    replacement && (policyQuery.isPending || householdQuery.isPending),
+    replacement &&
+      (policyQuery.isPending || (householdId && householdQuery.isPending)),
+  );
+  const policyHasNoHousehold = Boolean(
+    replacement && policyQuery.data && !policyQuery.data.household,
   );
   const contextError = replacement
-    ? (policyQuery.error?.message ?? householdQuery.error?.message ?? null)
+    ? (policyQuery.error?.message ??
+      householdQuery.error?.message ??
+      (policyHasNoHousehold
+        ? "This policy is not linked to a household, so a replacement cannot be written for it. Link it to a household first."
+        : null))
     : null;
 
   return (

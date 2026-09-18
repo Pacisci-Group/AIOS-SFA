@@ -5,12 +5,12 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/leads/for-replacement?policyId={{soldPolicyId}}&reason=cancel_rewrite
+  url: {{baseUrl}}/leads/for-replacement?policyId={{policyEditPolicyId}}&reason=cancel_rewrite
   auth: inherit
 }
 
 params:query {
-  policyId: {{soldPolicyId}}
+  policyId: {{policyEditPolicyId}}
   reason: cancel_rewrite
 }
 
@@ -30,12 +30,12 @@ tests {
     expect(body).to.have.property("blockedReason");
   });
 
-  test("a replaceable policy names its household and is not blocked", function () {
-    const body = res.getBody();
-    // `soldPolicyId` comes from a policy just written by the Sold form, so it is
-    // active, linked to a household and unreplaced.
-    expect(body.blockedReason).to.equal(null);
-    expect(body.householdId).to.be.a("string");
+  test("names the policy's household", function () {
+    // `policyEditPolicyId` is a policy that has a household (that is what
+    // `Find A Policy To Edit` selects for), so the household is always named.
+    // Whether it is *blocked* depends on the seed — the policy may be inactive
+    // or already replaced by an earlier run — so that is not asserted here.
+    expect(res.getBody().householdId).to.be.a("string");
   });
 
   test("captures the resume target, if the chain was already started", function () {
@@ -51,8 +51,11 @@ docs {
   permission is the *flow's*, not `leads:read`: this is a read, but the only
   thing it is for is deciding a write, and it is the same permission
   `POST /sold-deals` requires — so a caller who passes this can finish the
-  chain. Scope comes from `loadOwnedPolicy`, the clamp `PATCH /policies/:id`
-  uses, so a policy outside the caller's scope 404s rather than 403s.
+  chain. Scope is the **household** rule (`loadHouseholdPolicy`, the one
+  `PATCH /households/:id/policies/:policyId` uses): `own` collapses to branch,
+  because a replacement is an action on the client's book and the sales-record
+  clamp would 404 every migrated (deal-less) policy for a producer. Out of
+  scope 404s rather than 403s.
 
   ## Why it exists
 
@@ -103,7 +106,10 @@ docs {
 
   ## Run order
 
-  Needs `soldPolicyId` (any active policy linked to a household). Feeds the
+  Reads `policyEditPolicyId`, captured by **Households › Find A Policy To Edit**
+  — a policy that has a household. The CLI walks folders alphabetically, so
+  `Households` has run by the time `Leads` does; the Sold folder's
+  `soldPolicyId` has **not**, which is why this does not use it. Feeds the
   replacement chain: `Create Lead` with a `replacementIntent`, then
   `Create Sold Deal` on the lead it returns.
 }

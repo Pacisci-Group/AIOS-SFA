@@ -218,14 +218,12 @@ export class PolicyRewritesService {
    */
   async replacementChain(
     access: AccessContext,
-    branchId: string | null,
     policyId: string,
   ): Promise<PolicyReplacementChain> {
-    const { policy } = await this.policies.loadOwnedPolicy(
-      access,
-      branchId,
-      policyId,
-    );
+    // Household scope, like the replacement buttons that sit beside this card:
+    // the sales-record clamp would hide a migrated policy's history from an
+    // `own`-scope producer who can see the policy itself.
+    const policy = await this.policies.loadHouseholdPolicy(access, policyId);
     const agencyId = String(policy.agencyId);
 
     // Back to the root. `seen` guards a cycle; `MAX_CHAIN` guards a chain so
@@ -357,7 +355,11 @@ export class PolicyRewritesService {
       [
         {
           agencyId: String(cancelled.agencyId),
-          branchId: String(cancelled.branchId ?? ''),
+          // `TenantRecord.branchId` is required and Mongoose rejects an empty
+          // string, so a policy row with no branch (migrated ones can lack it)
+          // takes the branch the sale is being booked in — the same value the
+          // replacement policy's own insert used a moment earlier.
+          branchId: cancelled.branchId ?? deps.ctx.branchId,
           policyId: cancelled._id,
           policyNumber: cancelled.policyNumber,
           policyType: cancelled.policyType,

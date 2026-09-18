@@ -143,16 +143,17 @@ docs {
   ### Two statuses are refused here — `400`
   `Cancel Rewrite` and `Company Transfer` are **set by a flow, not by an edit**.
   Each means "replaced by *that* policy", and the flow that sets it writes the
-  replacement in the same transaction:
-
-  * `Cancel Rewrite` → `POST /policies/:id/rewrite`
-  * `Company Transfer` → `POST /crm/service-tickets/:id/policy-transfer`
+  replacement in the same transaction. Both run the same chain (PAC-126):
+  `GET /leads/for-replacement` to find where to start, `POST /leads` with a
+  `replacementIntent`, then `POST /sold-deals` on that lead — see
+  **Leads › Lead For Replacement**, **Leads › Create Lead** and
+  **Sold Deals › Create Sold Deal › Replacements**.
 
   Accepting either here would produce a cancelled policy pointing at nothing and,
   for a rewrite, no chargeback. They are filtered out of `POLICY_STATUS_OPTIONS`
   for the same reason, so the select never offers an option that always 400s.
   Plain `Cancelled` stays selectable — a client who simply cancels is the common
-  case and must not be pushed through the rewrite wizard to record it.
+  case and must not be pushed through the replacement chain to record it.
 
   ⚠ The uncatalogued codes `1943j` / `4krtk`, which thousands of migrated
   policies still hold, are **rejected with a 400**. That is the point — they must

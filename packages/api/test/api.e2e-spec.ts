@@ -13364,15 +13364,32 @@ describe('SFA API (e2e)', () => {
         })
         .expect(expected);
 
-    /** The whole chain, for the tests that assert what it produced. */
+    /**
+     * The whole chain, for the tests that assert what it produced.
+     *
+     * Two deals come out of this: `originalDealId` is the fixture's sale the
+     * policy came from (only with `withDeal`), `dealId` is the replacement
+     * booked by the chain. Named apart on purpose — a spread that let the new
+     * id shadow the old one had the chargeback test reading the wrong deal.
+     */
     const replace = async (
       reason: 'cancel_rewrite' | 'company_transfer',
       options: { premium?: number; withDeal?: boolean } = {},
     ) => {
-      const fixture = await makeHousehold(options);
-      const lead = await createLead(String(fixture.policy._id), reason);
+      const {
+        household,
+        policy,
+        dealId: originalDealId,
+      } = await makeHousehold(options);
+      const lead = await createLead(String(policy._id), reason);
       const res = await sell(lead.id);
-      return { ...fixture, leadId: lead.id, dealId: res.body.id as string };
+      return {
+        household,
+        policy,
+        originalDealId,
+        leadId: lead.id,
+        dealId: res.body.id as string,
+      };
     };
 
     beforeAll(async () => {
@@ -13463,6 +13480,55 @@ describe('SFA API (e2e)', () => {
       await createLead(String(policy._id), 'cancel_rewrite', {}, 409);
     });
 
+    /*
+     * The guards are re-run at the moment of retirement, inside the Sold
+     * transaction — not only when the lead is created. The intent is stored
+     * and the rep can leave for a week; the policy can change underneath it.
+     */
+    it('refuses the Sold submit if the policy was cancelled after the lead was created', async () => {
+      const { policy } = await makeHousehold();
+      const lead = await createLead(String(policy._id), 'cancel_rewrite');
+
+      // The household edit, between step 1 and step 2.
+      await rplPolicyModel.updateOne(
+        { _id: policy._id },
+        { $set: { active: false, policyStatus: 'Cancelled' } },
+      );
+
+      const res = await sell(lead.id, 900, 409);
+      expect(res.body.message).toMatch(/not active/);
+
+      // Nothing written: no replacement policy, intent still open.
+      const stored = await rplLeadModel.findById(lead.id);
+      expect(stored!.replacementIntent!.consumedAt).toBeNull();
+      const after = await rplPolicyModel.findById(policy._id);
+      expect(after!.transferredToPolicyId).toBeFalsy();
+    });
+
+    it('refuses to replace a policy twice, even from the other reason’s lead', async () => {
+      const { policy, dealId } = await makeHousehold({ withDeal: true });
+      // Both leads may be open at once: the resume lookup is keyed on reason.
+      const transfer = await createLead(String(policy._id), 'company_transfer');
+      const rewrite = await createLead(String(policy._id), 'cancel_rewrite');
+
+      await sell(transfer.id);
+      const first = await rplPolicyModel.findById(policy._id);
+      const replacementId = String(first!.transferredToPolicyId);
+
+      const res = await sell(rewrite.id, 900, 409);
+      expect(res.body.message).toMatch(/already been replaced/);
+
+      // The first replacement stands, and the rewrite charged nothing back.
+      const after = await rplPolicyModel.findById(policy._id);
+      expect(String(after!.transferredToPolicyId)).toBe(replacementId);
+      expect(after!.policyStatus).toBe('Company Transfer');
+      expect(
+        await rplChargebackModel.countDocuments({ policyId: policy._id }),
+      ).toBe(0);
+      const deal = await rplDealModel.findById(dealId);
+      expect(deal!.chargebackAdjustment ?? 0).toBe(0);
+    });
+
     /* ─── What the sale does ────────────────────────────────────────────── */
 
     it('a rewrite retires the old policy, links both ways, and books new business', async () => {
@@ -13497,10 +13563,9 @@ describe('SFA API (e2e)', () => {
     });
 
     it('a rewrite inside the window charges the premium back and reverses the credit', async () => {
-      const { policy, dealId: originalDealId } = await replace(
-        'cancel_rewrite',
-        { withDeal: true },
-      );
+      const { policy, originalDealId } = await replace('cancel_rewrite', {
+        withDeal: true,
+      });
 
       const row = await rplChargebackModel.findOne({ policyId: policy._id });
       expect(row).not.toBeNull();

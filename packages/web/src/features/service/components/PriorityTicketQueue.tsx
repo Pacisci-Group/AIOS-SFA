@@ -338,7 +338,7 @@ export function PriorityTicketQueue({
               <SelectTrigger
                 size="sm"
                 aria-label="Sort tickets"
-                className="h-7 gap-1.5 rounded-lg border-white/8 bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
+                className="h-7 gap-1.5 rounded-lg border-border bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
               >
                 <ArrowDownUp size={11} className="flex-shrink-0 opacity-70" />
                 <SelectValue />
@@ -355,7 +355,7 @@ export function PriorityTicketQueue({
               <SelectTrigger
                 size="sm"
                 aria-label="Filter by ticket type"
-                className="h-7 max-w-[11rem] gap-1.5 rounded-lg border-white/8 bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
+                className="h-7 max-w-[11rem] gap-1.5 rounded-lg border-border bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
               >
                 <SelectValue />
               </SelectTrigger>

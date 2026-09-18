@@ -52,8 +52,9 @@ const EditQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/EditQuoteRecapPage'),
 );
 /**
- * One page, three modes — a sale, a cancel rewrite and a CSR's package change.
- * See its docblock for why the transfer still needs a route of its own.
+ * One page, one mode: a sale on a lead. A Cancel Rewrite or Company Transfer
+ * is the same sale on a lead stamped with what it replaces (PAC-126) — the
+ * server reads that from the lead, so the page has no mode switch to make.
  */
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
 const RewriteRouteRedirect = lazy(
@@ -412,17 +413,17 @@ export function App() {
                 />
               </Route>
 
-              {/* Cancel & rewrite used to live here as a page of its own. It is
-                  now a mode of the Sold form (`/sold/new?rewritePolicyId=`),
-                  because a rewrite writes a sale and asks for exactly what the
-                  Sold form asks for. The old URL stays as a redirect — it was
-                  linked from the policy page and the household, so it is in
-                  history and in bookmarks.
+              {/* Cancel & rewrite used to live here as a page of its own, then
+                  briefly as a mode of the Sold form. It is now a two-form chain
+                  — New Lead, then Sold — started from a button on the policy or
+                  household page, so no URL can express "start a rewrite" and
+                  this only redirects to the policy. Kept because the old URL
+                  was linked from both pages, so it is in history and bookmarks.
 
-                  The gate is kept rather than left to `/sold/new`: both are
-                  `deal_audits:write` (what `POST /policies/:id/rewrite` itself
-                  requires), and gating here means an unauthorized caller lands
-                  back on /clients instead of bouncing through the redirect. */}
+                  The gate is kept rather than left to the policy page: it is
+                  the chain's permission (`deal_audits:write`), and gating here
+                  means an unauthorized caller lands back on /clients instead of
+                  bouncing through the redirect. */}
               <Route
                 element={
                   <RequirePermission
@@ -475,10 +476,10 @@ export function App() {
                 />
               </Route>
 
-              {/* Sold form (PAC-40), in its sale and rewrite modes —
-                  `?leadId=` and `?rewritePolicyId=`. Gated on
-                  `deal_audits:write` because that is what POST /sold-deals and
-                  POST /policies/:id/rewrite both require, so the route and the
+              {/* Sold form (PAC-40), always on a lead — `?leadId=`. A
+                  replacement (PAC-126) is the same form on a lead stamped with
+                  the policy it replaces. Gated on `deal_audits:write` because
+                  that is what POST /sold-deals requires, so the route and the
                   API agree.
 
                   Note PAC-38 has since added `clients:write` to the Producer

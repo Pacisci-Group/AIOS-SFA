@@ -74,6 +74,16 @@ export function useSaleMode({
     enabled: usable,
   });
 
+  const context = contextQuery.data;
+
+  /*
+   * A replacement runs this same mode — it is an ordinary sale as far as the
+   * wizard is concerned, and the server applies the retirement, the linking and
+   * the chargeback from the lead's intent. Only the wording changes, because
+   * "Mark as sold" is not what a rep cancelling a policy thinks they are doing.
+   */
+  const replacementReason = context?.replacementReason ?? null;
+
   const mutation = useMutation({
     mutationFn: (values: Parameters<SoldFlow["onSubmit"]>[0]) =>
       createSoldDeal({
@@ -84,29 +94,76 @@ export function useSaleMode({
         submissionToken: submissionToken.current,
       }),
     onSuccess: (deal) => {
-      void queryClient.invalidateQueries({ queryKey: ["leads"] });
-      void queryClient.invalidateQueries({ queryKey: ["deal-audits"] });
-      toast.success(
-        `Sale booked — ${deal.policyCount} ${
-          deal.policyCount === 1 ? "policy" : "policies"
-        }`,
-      );
       /*
-       * PAC-65 #12. The scrum notes said "on lead review completion", but there
-       * is no such thing in this product — the moment meant is this one, which
-       * is also where the Aug-4 sold-notification precedent points.
-       *
-       * Fired before the navigate on purpose: `canvas-confetti` renders into its
-       * own canvas on `document.body`, outside React's tree, so the burst
-       * outlives the route change instead of being unmounted mid-animation.
+       * Everything a booking changes, not only the lead. The household's
+       * policy list and count, the policy and its history (a replacement
+       * retires one and links it), the performance and leaderboard widgets, the
+       * pending audits, and the ticket queue (a transfer resolves the ticket's
+       * question). `staleTime` is 30s app-wide, so a Back to the household page
+       * inside that window would otherwise show the retired policy still
+       * Active.
        */
-      celebrate();
+      for (const key of [
+        "leads",
+        "deal-audits",
+        "household",
+        "households",
+        "policy",
+        "policy-history",
+        "performance",
+        "leaderboard",
+        "service-tickets",
+      ]) {
+        void queryClient.invalidateQueries({ queryKey: [key] });
+      }
+
+      const count = `${deal.policyCount} ${
+        deal.policyCount === 1 ? "policy" : "policies"
+      }`;
+
+      if (replacementReason === "company_transfer") {
+        // Not a sale: no "Sale booked", no confetti. The client moved within
+        // their own book, and the deal is kept off the leaderboard for the same
+        // reason.
+        toast.success(
+          `Transfer recorded — ${count}. The old policy is retired and linked.`,
+        );
+      } else if (replacementReason === "cancel_rewrite") {
+        toast.success(
+          `Policy rewritten — ${count}. The old policy is retired and any chargeback recorded.`,
+        );
+      } else {
+        toast.success(`Sale booked — ${count}`);
+        /*
+         * PAC-65 #12. The scrum notes said "on lead review completion", but
+         * there is no such thing in this product — the moment meant is this
+         * one, which is also where the Aug-4 sold-notification precedent
+         * points. A rewrite books new business too, but the rep is cancelling
+         * a client's policy, and a confetti burst over that reads wrong.
+         *
+         * Fired before the navigate on purpose: `canvas-confetti` renders into
+         * its own canvas on `document.body`, outside React's tree, so the burst
+         * outlives the route change instead of being unmounted mid-animation.
+         */
+        celebrate();
+      }
+
+      /*
+       * A replacement returns to the household it was done for — that is where
+       * the rep started (the policy card or the policy page) and where the
+       * result is visible: the old policy retired, the new one beside it. The
+       * lead was a means, not a destination. An ordinary sale lands on the
+       * lead, whose page now shows the deal.
+       */
+      if (replacementReason && context?.householdId) {
+        navigate(`/clients/${context.householdId}`, { replace: true });
+        return;
+      }
       navigate(`/leads/${leadId}`, { replace: true });
     },
     onError: (err: Error) => setError(err.message),
   });
 
-  const context = contextQuery.data;
   const backTo = `/leads/${leadId}`;
 
   /*
@@ -156,14 +213,6 @@ export function useSaleMode({
         "Record the quote first, so the sale has the proposal it came from.",
     };
   }
-
-  /*
-   * A replacement runs this same mode — it is an ordinary sale as far as the
-   * wizard is concerned, and the server applies the retirement, the linking and
-   * the chargeback from the lead's intent. Only the wording changes, because
-   * "Mark as sold" is not what a rep cancelling a policy thinks they are doing.
-   */
-  const replacementReason = context?.replacementReason ?? null;
 
   return {
     /*

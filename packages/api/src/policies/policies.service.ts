@@ -38,6 +38,7 @@ import {
   snapshot,
 } from '../activities/change-log';
 import { CarriersService } from '../carriers/carriers.service';
+import { clientScopeFilter } from '../clients/client-scope';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { loadPrimaryContacts } from '../households/primary-contact';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
@@ -384,8 +385,9 @@ export class PoliciesService {
      *    is a status an operator can simply choose: each means "replaced by
      *    *that* policy", and the replacement is written by the flow that sets
      *    it. Allowing it on a field patch would produce a cancelled policy
-     *    pointing at nothing — and, for a rewrite, no chargeback. `POST
-     *    /policies/:id/rewrite` is the way in.
+     *    pointing at nothing — and, for a rewrite, no chargeback. The way in
+     *    is the replacement chain: a lead stamped with `replacementIntent`,
+     *    then `POST /sold-deals` on it (PAC-126).
      *
      * 2. **A terminal status deactivates the policy, and `Active` reinstates
      *    it.** `Policy.active` is what every count, total and renewal scan
@@ -616,12 +618,10 @@ export class PoliciesService {
    * Returns the deal's `leadId` alongside the policy — `null` when the policy
    * has no deal, or the deal no lead. See {@link recordFieldChanges}.
    *
-   * **Public because it is the scope clamp for Cancel Rewrite too.**
-   * `PolicyRewritesService` is anchored on a policy rather than a CSR ticket, so
-   * this is the only thing standing between a caller and cancelling any policy
-   * in the agency by naming its id — exactly the job it already does for
-   * `PATCH :id`. Reuse it rather than writing a second clamp; the `own`-scope
-   * rule for a deal-less policy is subtle and must not exist twice.
+   * **This is the *sales-record* clamp.** A replacement (Cancel Rewrite,
+   * Company Transfer) and the policy history read are household actions and
+   * use {@link loadHouseholdPolicy} instead — see there for why the `own` rule
+   * above is the wrong one for them.
    */
   async loadOwnedPolicy(
     access: AccessContext,
@@ -653,6 +653,39 @@ export class PoliciesService {
     // #9) needs it, this is the only read of the deal on the path, and it is
     // already loaded for the scope check.
     return { policy, leadId: deal?.leadId ?? null };
+  }
+
+  /**
+   * Load a policy as a **household record**, clamped to the caller's client
+   * scope — the rule `PATCH /households/:id/policies/:policyId` uses.
+   *
+   * {@link loadOwnedPolicy} resolves `own` scope through the policy's deal,
+   * which is right for a producer correcting their own sale and wrong for a
+   * replacement: a migrated policy has no deal, so under `own` scope every one
+   * of them is a 404 — and the household card was offering Cancel & rewrite on
+   * exactly those, to a Producer who then got "Policy not found" on the click
+   * while the Edit button beside it worked. A replacement is an action on the
+   * household's book, not on somebody's sale, so it takes the household rule:
+   * `own` collapses to branch, because client records are shared and have no
+   * assigned user to key on (`clientScopeFilter`).
+   *
+   * The sale that *finishes* the chain is still `own`-scoped — it is anchored
+   * on a lead the caller created, and `POST /sold-deals` clamps on that.
+   */
+  async loadHouseholdPolicy(
+    access: AccessContext,
+    policyId: string,
+  ): Promise<PolicyDocument> {
+    if (!Types.ObjectId.isValid(policyId)) {
+      throw new NotFoundException('Policy not found.');
+    }
+    const policy = await this.policyModel.findOne({
+      ...clientScopeFilter(access),
+      _id: new Types.ObjectId(policyId),
+      isTestRecord: { $ne: true },
+    });
+    if (!policy) throw new NotFoundException('Policy not found.');
+    return policy;
   }
 
   /**

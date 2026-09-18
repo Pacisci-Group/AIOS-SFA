@@ -48,13 +48,14 @@ export type PolicyStatus = (typeof POLICY_STATUSES)[number];
  *
  * `'Cancel Rewrite'` means "cancelled, and here is the policy that replaced it".
  * A policy cannot hold it without that replacement existing, so the only thing
- * allowed to write it is the rewrite transaction itself
- * (`UpsertPoliciesStep.retireTransferred`, driven by `POST /policies/:id/rewrite`).
- * Offering it in a dropdown would let an operator produce a cancelled policy
- * pointing at nothing, with a chargeback nobody raised.
+ * allowed to write it is the Sold transaction itself
+ * (`UpsertPoliciesStep.retireTransferred`), driven by `POST /sold-deals` on a
+ * lead carrying a `replacementIntent` (PAC-126). Offering it in a dropdown
+ * would let an operator produce a cancelled policy pointing at nothing, with a
+ * chargeback nobody raised.
  *
- * `'Company Transfer'` is the same shape one flow along — written by the CSR's
- * Policy Transfer, which also writes the replacement and the ticket record.
+ * `'Company Transfer'` is the same shape with the other reason — same chain,
+ * same transaction, no chargeback.
  */
 export const FLOW_ONLY_POLICY_STATUSES: readonly PolicyStatus[] = [
   'Cancel Rewrite',

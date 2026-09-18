@@ -80,7 +80,7 @@ export function isResumable(
 /**
  * What the entry point needs to know before it routes anywhere.
  *
- * Served by `GET /policies/:id/replacement-lead`. Three answers, and the caller
+ * Served by `GET /leads/for-replacement?policyId&reason`. Three answers, and the caller
  * routes on which one it got:
  *
  *   - `leadId` set — resume at the Sold form.
