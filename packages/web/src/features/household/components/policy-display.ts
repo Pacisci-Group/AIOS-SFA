@@ -28,7 +28,7 @@ export interface DisplayPolicy {
   premiumFreq: string;
   /** Numeric premium, for totals. */
   premiumValue: number;
-  status: "Active" | "Pending" | "Lapsed";
+  status: "Active" | "Pending" | "Cancelled" | "Lapsed";
   effective: string;
   /**
    * The last day the current term covers — **derived**, one day before the
@@ -90,6 +90,10 @@ export interface DisplayPolicy {
 export const statusColors: Record<DisplayPolicy["status"], string> = {
   Active: "bg-success/12 text-success",
   Pending: "bg-amber-500/15 text-amber-700 dark:text-amber-500",
+  // Cancelled and Lapsed share a treatment on purpose: both mean the policy is
+  // off the books, which is the thing the pill's colour is there to say. The
+  // word carries the difference between them.
+  Cancelled: "bg-red-500/12 text-red-600 dark:text-red-400",
   Lapsed: "bg-red-500/12 text-red-600 dark:text-red-400",
 };
 
@@ -133,7 +137,7 @@ const DEFAULT_STYLE = {
 
 /**
  * Normalize the free-text `policyStatus` from the migrated records into the
- * three buckets the cards can render. Unknown values fall back to the policy's
+ * four buckets the cards can render. Unknown values fall back to the policy's
  * `active` flag.
  *
  * Runs `normalizePolicyStatus` first (PAC-80): the substring tests below were
@@ -141,12 +145,28 @@ const DEFAULT_STYLE = {
  * every one of them fell straight through to the `active` flag. `Quoted` still
  * falls through, deliberately — the cards have no bucket for it and the flag is
  * the better answer than inventing one.
+ *
+ * **Cancelled is its own bucket, and the ordering of the tests is what puts
+ * things in it.** There used to be three buckets, so `'Cancelled'`,
+ * `'Cancel Rewrite'` and `'Company Transfer'` all reached a CSR as *Lapsed* —
+ * the first two on the `cancel` substring, the third by falling through to the
+ * `active` flag. That is the wrong word for all three: a lapse is the client
+ * letting coverage drop, while these are cancellations, and the two flow-only
+ * statuses are cancellations *with a replacement policy behind them* (see
+ * `FLOW_ONLY_POLICY_STATUSES` — neither can exist without one). Calling a
+ * rewrite or a carrier transfer a lapse reads as lost business on a household
+ * that never left. The `transfer` test is what catches `'Company Transfer'`,
+ * and it has to sit above the `active`-flag fallback rather than beside it.
  */
 function toCardStatus(policy: PolicySummary): DisplayPolicy["status"] {
   const raw = normalizePolicyStatus(policy.policyStatus).toLowerCase();
   if (raw.includes("pending")) return "Pending";
-  if (raw.includes("laps") || raw.includes("cancel")) return "Lapsed";
+  if (raw.includes("cancel") || raw.includes("transfer")) return "Cancelled";
+  if (raw.includes("laps")) return "Lapsed";
   if (raw.includes("active")) return "Active";
+  // An inactive policy whose status nobody catalogued: it is off the books, but
+  // nothing says *how*, so it keeps the weaker claim rather than being called a
+  // cancellation on no evidence.
   return policy.active ? "Active" : "Lapsed";
 }
 

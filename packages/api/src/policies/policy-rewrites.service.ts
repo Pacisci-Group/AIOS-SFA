@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
   RETIRED_POLICY_STATUS,
@@ -15,11 +10,8 @@ import type {
   PolicyReplacementChain,
   PolicyReplacementChainEntry,
   PolicyReplacementReason,
-  PolicyRewriteResult,
-  SoldDocumentPresignResponse,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
-import { AuditGenerationService } from '../audit-generation/audit-generation.service';
 import {
   Chargeback,
   ChargebackDocument,
@@ -28,300 +20,182 @@ import { authorshipForInsert } from '../common/context/request-context';
 import { sessionOptions } from '../sold-deals/intake/sold-intake.types';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
-  Household,
-  HouseholdDocument,
-} from '../households/schemas/household.schema';
-import type { SoldIntakeDto } from '../sold-deals/dto/create-sold-deal.dto';
-import { SoldDealIntakeService } from '../sold-deals/intake/sold-deal-intake.service';
-import { SoldSubmissionValidator } from '../sold-deals/intake/sold-submission.validator';
-import type { SoldIntakeContext } from '../sold-deals/intake/sold-intake.types';
-import { rewriteDocumentPurpose } from '../sold-deals/dto/presign-sold-document.dto';
-import type { PresignRewriteDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
-import { StorageService } from '../storage/storage.service';
+  Lead,
+  LeadDocument,
+  type LeadReplacementIntentDoc,
+} from '../leads/schemas/lead.schema';
+import type { SoldDealIntakeService } from '../sold-deals/intake/sold-deal-intake.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import type { CreatePolicyRewriteDto } from './dto/policy-rewrite.dto';
 import { PoliciesService } from './policies.service';
 import { Policy, PolicyDocument } from './schemas/policy.schema';
 
 /**
- * Cancel Rewrite — a policy is cancelled and immediately replaced.
+ * What a replacement costs, and what it did — the half of Cancel Rewrite and
+ * Company Transfer that is **not** writing the policy.
  *
- * Mechanically this is the Policy Transfer (PAC-63) with different money. Both
- * retire one policy, write another, and link the pair through
- * `transferredFromPolicyId` / `transferredToPolicyId`; both reuse the Sold
- * pipeline, because the information a policy needs to exist does not change
- * because of why it was written. Three things differ, and all three are the
- * point:
+ * Writing the policy is the Sold form's job. Both replacements run through it
+ * on a lead created for them (PAC-126), and `UpsertPoliciesStep` retires the
+ * old policy and links the pair from the `fromPolicyId` the sold path injects.
+ * What remains here is everything the ordinary sale does *not* do:
  *
- *   1. **Anchored on the policy, not a ticket.** A rewrite starts from the
- *      policy a service rep is looking at. There is no CSR ticket to clamp
- *      scope with, so `PoliciesService.loadOwnedPolicy` does that job instead.
- *   2. **The replacement is new business.** A transfer is booked
- *      `company_transfer` and kept off the producer scorecard; a rewrite is a
- *      real sale and counts. See `rewriteFinancialOutcome` for what the
- *      cancelled half does to the same scorecard.
- *   3. **It charges money back.** Always the cancelled policy's premium, and
- *      inside the first month it also reverses the credit on the original deal.
+ *   - {@link recordForLead} — inside the sale's own transaction, the chargeback
+ *     on a rewrite and the stamp that marks the lead's intent consumed.
+ *   - {@link replacementChain} — the read: every policy that led to this one
+ *     and every one that came after, with what each cancellation cost.
+ *
+ * ## The money
+ *
+ * `rewriteFinancialOutcome` is the one authority. A rewrite always charges the
+ * cancelled policy's premium back; inside a calendar month of the original sale
+ * it also reverses the producer's credit. A transfer charges nothing — the
+ * client moved within our own book, and nothing was sold.
+ *
+ * ## What used to be here
+ *
+ * `POST /policies/:id/rewrite` and its presign, which wrote the replacement
+ * from a bespoke endpoint anchored on the policy. Retired along with the
+ * ticket-anchored transfer: two more ways to write a policy, each with its own
+ * upload prefix, its own guards and its own drift. A policy needs the same
+ * information to exist however it came about, and the Sold form is where that
+ * information is collected.
  *
  * ## The invariant
  *
- * **A policy cannot be `Cancel Rewrite` without a replacement.** That is the
- * product rule, and it is enforced structurally rather than by validation: the
- * only code that ever writes the status is `UpsertPoliciesStep.retireTransferred`,
- * which runs in the same transaction as the replacement it is being retired for,
- * and `PATCH /policies/:id` rejects the status outright. There is no request
- * shape anywhere that cancels without writing a replacement.
- *
- * ## Rewriting a rewrite
- *
- * Nothing special. The replacement is an ordinary active policy, so rewriting it
- * again retires it the same way and links it to a third — the chain is
- * `A → B → C`, walkable in both directions, and `PoliciesService.replacementChain`
- * is what renders the whole history rather than one hop.
+ * **A policy cannot be `Cancel Rewrite` or `Company Transfer` without a
+ * replacement.** The only code that writes either status is
+ * `UpsertPoliciesStep.retireTransferred`, in the same transaction as the
+ * replacement it retires for, and `PATCH /policies/:id` rejects both outright.
  */
 @Injectable()
 export class PolicyRewritesService {
-  private readonly logger = new Logger(PolicyRewritesService.name);
-
   constructor(
     @InjectModel(Policy.name)
     private readonly policyModel: Model<PolicyDocument>,
     @InjectModel(Deal.name) private readonly dealModel: Model<DealDocument>,
     @InjectModel(Chargeback.name)
     private readonly chargebackModel: Model<ChargebackDocument>,
-    @InjectModel(Household.name)
-    private readonly householdModel: Model<HouseholdDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    /*
+     * The replacement lead, to stamp its intent consumed in the same transaction
+     * as the deal. A *schema* registration in `PoliciesModule`, not a
+     * `LeadsModule` import — that module already imports this one for
+     * `loadOwnedPolicy`, so importing it back would be a cycle needing
+     * `forwardRef`. Registering another module's schema is the house pattern.
+     */
+    @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
     private readonly policies: PoliciesService,
-    private readonly intake: SoldDealIntakeService,
-    private readonly submissions: SoldSubmissionValidator,
-    private readonly auditGeneration: AuditGenerationService,
-    private readonly storage: StorageService,
   ) {}
 
   /**
-   * A presigned PUT for a document on an in-progress rewrite.
+   * Finish a replacement booked through the Sold form (PAC-126).
    *
-   * Household-anchored, like the transfer's (`POST /sold-deals/documents` is the
-   * lead-anchored sibling): a rewrite has no lead, and the key prefix *is* the
-   * ownership check that {@link record} re-asserts through `verifyAttachments`.
+   * Called from inside `SoldDealIntakeService.process`'s transaction, after the
+   * policies are written and before the commit. Two writes, both of which must
+   * be in that transaction:
    *
-   * The household is read off the policy rather than named by the caller, and
-   * the policy goes through `loadOwnedPolicy` first — so a presign cannot be
-   * obtained for a household the caller could not otherwise reach.
+   *   1. **The chargeback**, for a Cancel Rewrite only. A Company Transfer moves
+   *      a client within their own book — nothing was sold and nothing is clawed
+   *      back, which is the whole difference between the two reasons.
+   *   2. **Stamping the intent consumed**, which is what stops the resume path
+   *      offering this lead again and what makes a second submit fall through as
+   *      an ordinary sale. A replacement booked without it could be booked
+   *      twice; a chargeback lost without it would take a producer's credit and
+   *      never give it back. Neither would ever be noticed.
    *
-   * Without this the wizard had no endpoint to upload against and fell back to
-   * the lead presign with an empty `leadId`, which fails validation — and since
-   * the New Business Application is required and PDF-only, the rewrite could not
-   * be submitted at all.
+   * The retire and the link are not here — `UpsertPoliciesStep` does both from
+   * the `fromPolicyId` the caller injected, exactly as it does for a transfer.
    */
-  async presign(
-    access: AccessContext,
-    branchId: string | null,
-    policyId: string,
-    dto: PresignRewriteDocumentDto,
-  ): Promise<SoldDocumentPresignResponse> {
-    const { policy } = await this.policies.loadOwnedPolicy(
-      access,
-      branchId,
-      policyId,
-    );
-
-    if (!policy.householdId) {
-      throw new BadRequestException(
-        'This policy is not linked to a household, so a replacement cannot be written for it. Link it first.',
-      );
-    }
-
-    const key = this.storage.buildObjectKey({
-      agencyId: String(policy.agencyId),
-      purpose: rewriteDocumentPurpose(String(policy.householdId), dto.kind),
-      filename: dto.filename,
-    });
-    const presigned = await this.storage.createPresignedUpload(
-      key,
-      dto.contentType,
-    );
-    return {
-      key: presigned.key,
-      uploadUrl: presigned.uploadUrl,
-      requiredHeaders: presigned.requiredHeaders,
-      expiresIn: presigned.expiresIn,
-    };
-  }
-
-  /**
-   * Cancel `policyId` and book its replacement.
-   *
-   * Returns the new deal and what the cancellation cost, so the caller can show
-   * the producer the chargeback rather than leaving them to find it at month end.
-   */
-  async record(
-    access: AccessContext,
-    branchId: string | null,
-    policyId: string,
-    dto: CreatePolicyRewriteDto,
-  ): Promise<PolicyRewriteResult> {
-    const { policy: cancelled } = await this.policies.loadOwnedPolicy(
-      access,
-      branchId,
-      policyId,
-    );
-
-    if (!cancelled.householdId) {
-      // The replacement has to land somewhere, and the household is what every
-      // downstream step keys off. A migrated policy with no household cannot be
-      // rewritten until someone links it — which the unlinked-records view exists
-      // to make possible.
-      throw new BadRequestException(
-        'This policy is not linked to a household, so a replacement cannot be written for it. Link it first.',
-      );
-    }
-
-    if (!cancelled.active) {
-      // Already retired — by an earlier rewrite, a transfer, or a plain
-      // cancellation. Rewriting it again would write a second replacement for
-      // coverage that already has one and charge the producer twice.
-      throw new ConflictException(
-        'This policy is not active, so it cannot be cancelled and rewritten.',
-      );
-    }
-
-    if (cancelled.transferredToPolicyId) {
-      throw new ConflictException(
-        'This policy has already been replaced. Rewrite its replacement instead.',
-      );
-    }
-
-    const agencyId = String(cancelled.agencyId);
-    const householdId = cancelled.householdId;
-
-    /*
-     * The original deal is where the producer's credit lives, and therefore what
-     * the clawback is measured against and applied to.
+  async recordForLead(args: {
+    deps: Parameters<
+      NonNullable<Parameters<SoldDealIntakeService['process']>[4]>
+    >[0];
+    lead: LeadDocument;
+    intent: LeadReplacementIntentDoc;
+    replacementPolicyId: Types.ObjectId | null;
+    dealId: Types.ObjectId;
+    /**
+     * The sold date from the form's first card, `YYYY-MM-DD`.
      *
-     * Null for a migrated or household-only policy. That is not an error: the
-     * chargeback is still recorded (the money came back either way), the window
-     * evaluates false with no sold date, and there is simply no deal to reduce.
+     * Passed in rather than read off the context because the context does not
+     * carry it, and deriving it a second time here is how the cancellation date
+     * and the deal's sold date would come to disagree. On this flow they are the
+     * same value by construction — there is no separate cancellation field the
+     * way `POST /policies/:id/rewrite` had.
      */
-    const originalDeal = cancelled.dealId
-      ? await this.dealModel
-          .findOne({ _id: cancelled.dealId, agencyId })
-          .select('soldDate producerId premium chargebackAdjustment')
-      : null;
+    soldDate: string;
+  }): Promise<void> {
+    const { deps, lead, intent, replacementPolicyId, dealId, soldDate } = args;
+    const agencyId = deps.ctx.agencyId;
 
-    const cancelledAt = this.resolveCancelledAt(dto.cancelledAt, originalDeal);
-    const outcome = rewriteFinancialOutcome(
-      cancelled.premium,
-      originalDeal?.soldDate ?? null,
-      cancelledAt,
-    );
+    const cancelled = await this.policyModel
+      .findOne({ _id: intent.policyId, agencyId })
+      .session(deps.session);
+    if (!cancelled) {
+      // `UpsertPoliciesStep.retireTransferred` has already run against this id
+      // and would have thrown, so reaching here means the policy vanished
+      // mid-transaction. Fail rather than book a replacement for nothing.
+      throw new NotFoundException('That policy could not be found.');
+    }
 
-    /*
-     * `fromPolicyId` goes on the **first** row only.
-     *
-     * One policy is being cancelled, so exactly one replacement row may claim to
-     * replace it — putting it on every row would retire the same policy N times
-     * and, worse, leave `transferredToPolicyId` pointing at whichever row
-     * happened to be written last. A rewrite that splits one policy into two
-     * (an Auto becoming Auto + Motorcycle, say) is a real case, and the extra
-     * rows are simply new policies on the same new deal.
-     *
-     * Prior insurance and cancellation are injected as "none", exactly as the
-     * transfer does: the policy being replaced is already in our own book, so
-     * there is no other carrier to name.
-     */
-    const intakeDto: SoldIntakeDto = {
-      soldDate: dto.cancelledAt,
-      submissionToken: dto.submissionToken,
-      policies: dto.policies.map((row, index) => ({
-        ...row,
-        ...(index === 0 ? { fromPolicyId: String(cancelled._id) } : {}),
-        priorInsurance: { none: true },
-        cancellation: { cancelled: false },
-      })),
-    };
+    if (intent.reason === 'cancel_rewrite') {
+      /*
+       * The original deal is where the producer's credit lives, and therefore
+       * what the clawback window is measured against and applied to. Null for a
+       * migrated or household-only policy, which is not an error: the chargeback
+       * is still recorded (the money came back either way), the window evaluates
+       * false with no sold date, and there is simply no deal to reduce.
+       */
+      const originalDeal = cancelled.dealId
+        ? await this.dealModel
+            .findOne({ _id: cancelled.dealId, agencyId })
+            .select('soldDate producerId premium chargebackAdjustment')
+            .session(deps.session)
+        : null;
 
-    await this.submissions.assertPolicyNumberFormats(intakeDto, agencyId);
-    await this.submissions.verifyAttachments(intakeDto, agencyId, (kind) =>
-      rewriteDocumentPurpose(String(householdId), kind),
-    );
+      /*
+       * The cancellation date is the deal's sold date — the one the rep entered
+       * on the Sold form's first card. The two cannot disagree, because there is
+       * only one value: this flow no longer has a separate `cancelledAt` field
+       * the way `POST /policies/:id/rewrite` did.
+       */
+      const cancelledAt = this.resolveCancelledAt(soldDate, originalDeal);
+      const outcome = rewriteFinancialOutcome(
+        cancelled.premium,
+        originalDeal?.soldDate ?? null,
+        cancelledAt,
+      );
 
-    /*
-     * The producer credited on the original deal carries the chargeback — not
-     * the person processing the rewrite. A CSR clicking the button must not be
-     * charged for a sale they never made.
-     *
-     * The *replacement* is credited to the caller, matching the transfer path
-     * and for the same reason: they did the work of writing it.
-     */
-    const chargedProducerId = originalDeal?.producerId ?? null;
+      /*
+       * The producer credited on the **original** deal carries the chargeback —
+       * not whoever is processing the replacement. A CSR or a colleague writing
+       * the rewrite must not be charged for a sale they never made.
+       */
+      const chargedProducerId = originalDeal?.producerId ?? null;
 
-    const ctx: SoldIntakeContext = {
-      agencyId,
-      branchId: String(cancelled.branchId ?? ''),
-      producerId: new Types.ObjectId(access.userId),
-      businessType: 'new_business',
-      replacementReason: 'cancel_rewrite',
-      householdId,
-      submissionToken: dto.submissionToken
-        ? `RWRT|${dto.submissionToken.toUpperCase()}`
-        : null,
-    };
+      await this.writeChargeback({
+        deps,
+        cancelled,
+        replacementPolicyId,
+        originalDeal,
+        outcome,
+        cancelledAt,
+        producerId: chargedProducerId,
+        producerName: chargedProducerId
+          ? await this.actorName(String(chargedProducerId))
+          : '',
+      });
+    }
 
-    const producerName = chargedProducerId
-      ? await this.actorName(String(chargedProducerId))
-      : '';
-
-    const result = await this.intake.process(
-      ctx,
-      intakeDto,
-      access,
-      undefined,
-      // Inside the transaction: see the docblock on `process`. A replacement
-      // written without its chargeback silently keeps credit that was clawed
-      // back, and nothing downstream would ever detect it.
-      async (deps, policies) => {
-        await this.writeChargeback({
-          deps,
-          cancelled,
-          replacementPolicyId: policies[0]?.policyId ?? null,
-          originalDeal,
-          outcome,
-          cancelledAt,
-          producerId: chargedProducerId,
-          producerName,
-        });
+    await this.leadModel.updateOne(
+      { _id: lead._id, agencyId },
+      {
+        $set: {
+          'replacementIntent.consumedAt': new Date(),
+          'replacementIntent.consumedByDealId': dealId,
+        },
       },
+      sessionOptions(deps.session),
     );
-
-    /*
-     * Post-commit and best-effort from here, exactly as on the sold and transfer
-     * paths — the rewrite is booked either way, and failing the request now
-     * would report that it did not happen when it did.
-     */
-    await this.auditGeneration.generateForDeal({
-      agencyId,
-      branchId: ctx.branchId,
-      dealId: result.dealId,
-      producerId: ctx.producerId,
-      producerName: await this.actorName(access.userId),
-      clientName: ctx.clientName,
-      submissionToken: ctx.submissionToken,
-      attachmentsByItem: undefined,
-    });
-
-    await this.recountHouseholdPolicies(householdId);
-
-    return {
-      dealId: String(result.dealId),
-      cancelledPolicyId: String(cancelled._id),
-      chargebackAmount: outcome.chargebackAmount,
-      soldAdjustment: outcome.soldAdjustment,
-      withinClawbackWindow: outcome.withinClawbackWindow,
-      cancelledAt: cancelledAt.toISOString(),
-      retiredStatus: RETIRED_POLICY_STATUS.cancel_rewrite,
-    };
   }
 
   /**
@@ -552,35 +426,6 @@ export class PolicyRewritesService {
     if (soldDate && resolved < soldDate) resolved = soldDate;
 
     return resolved;
-  }
-
-  /**
-   * Bring `Household.totalActivePolicies` back in line with reality.
-   *
-   * The same recount the transfer runs, and for the same reason: a rewrite
-   * deactivates one policy and activates another, so a stale count is visibly
-   * wrong on the page the user is looking at. Recounted rather than incremented
-   * so a re-run is still correct.
-   */
-  private async recountHouseholdPolicies(
-    householdId: Types.ObjectId,
-  ): Promise<void> {
-    try {
-      const active = await this.policyModel.countDocuments({
-        householdId,
-        active: true,
-      });
-      await this.householdModel.updateOne(
-        { _id: householdId },
-        { $set: { totalActivePolicies: active } },
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Household policy recount failed for ${householdId.toString()}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
   }
 
   /** A user's display name, or '' — never a throw on a deactivated account. */

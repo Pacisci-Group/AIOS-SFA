@@ -204,27 +204,6 @@ export interface PolicyReplacementChain {
 }
 
 /**
- * What `POST /policies/:id/rewrite` answers with.
- *
- * The money is returned rather than left for the producer to discover at month
- * end: a chargeback that first appears on a payslip is the complaint this whole
- * feature is meant to prevent.
- */
-export interface PolicyRewriteResult {
-  /** The new deal the replacement policies were booked on. */
-  dealId: string;
-  cancelledPolicyId: string;
-  /** Positive: what was charged back. */
-  chargebackAmount: number;
-  /** `-chargebackAmount` inside the window, `0` outside it. */
-  soldAdjustment: number;
-  withinClawbackWindow: boolean;
-  cancelledAt: string;
-  /** What the cancelled policy's status now reads. */
-  retiredStatus: PolicyStatus;
-}
-
-/**
  * Money to two decimals.
  *
  * Premiums are summed into deal roll-ups and scorecards, and a float sum of

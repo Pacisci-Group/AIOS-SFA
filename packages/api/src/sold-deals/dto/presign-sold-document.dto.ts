@@ -116,69 +116,13 @@ export function soldDocumentPurpose(
   return kind === 'new_business_application' ? `${base}/nba` : base;
 }
 
-/**
- * The same, for a **policy transfer** — anchored on the household instead of a
- * lead, because a transfer has no lead.
- *
- * A separate namespace rather than a widened `soldDocumentPurpose`: the two id
- * spaces are different collections, and sharing one prefix would let a key
- * presigned against a household be replayed against a lead of the same id (or
- * vice versa) with `assertKeyOwnership` none the wiser. Keeping them disjoint
- * means the prefix check keeps meaning what it says.
+/*
+ * ⚠ There used to be two more purposes here — `policy-transfers/<householdId>`
+ * for the ticket-anchored transfer and `policy-rewrites/<householdId>` for the
+ * policy-anchored rewrite, each with a presign of its own. Both flows are
+ * retired (PAC-126): a Cancel Rewrite or Company Transfer now runs through the
+ * Sold form on a lead created for it, so its documents presign and verify under
+ * the lead prefix above like any other sale. Objects already stored under the
+ * old prefixes are untouched and still served — nothing reads a purpose back
+ * off a stored key.
  */
-export function transferDocumentPurpose(
-  householdId: string,
-  kind: SoldUploadKind = 'discount_proof',
-): string {
-  const base = `policy-transfers/${householdId}`;
-  return kind === 'new_business_application' ? `${base}/nba` : base;
-}
-
-/**
- * The presign body for a transfer — the same fields with no anchor in the body
- * at all: the ticket is a path parameter, and the household is read off it
- * server-side so a caller cannot name one.
- */
-export const presignTransferDocumentSchema = z
-  .object(presignFields)
-  .superRefine(refineUploadKind);
-
-export type PresignTransferDocumentDto = z.infer<
-  typeof presignTransferDocumentSchema
->;
-
-/**
- * The same again, for a **cancel rewrite** — also household-anchored, because a
- * rewrite has no lead either.
- *
- * ⚠ **Its own namespace, not `soldDocumentPurpose`.** PAC-126 first verified
- * rewrite attachments with `soldDocumentPurpose(householdId, kind)`, which put
- * household ids under the *lead* prefix — precisely the id-space collision
- * {@link transferDocumentPurpose} exists to avoid: `assertKeyOwnership` checks
- * the prefix, so a key minted against household `X` would replay against lead
- * `X` and pass. Nothing was stranded by correcting it, because the rewrite had
- * no presign endpoint at all until now and therefore no keys under the old
- * prefix — a document could not be uploaded, which is why the required New
- * Business Application made the flow unsubmittable.
- *
- * Disjoint from the transfer's prefix too, for the smaller version of the same
- * reason: the two flows are gated on different permissions
- * (`deal_audits:write` against `crm_service:write`), so a key minted by one
- * should not be presentable to the other.
- */
-export function rewriteDocumentPurpose(
-  householdId: string,
-  kind: SoldUploadKind = 'discount_proof',
-): string {
-  const base = `policy-rewrites/${householdId}`;
-  return kind === 'new_business_application' ? `${base}/nba` : base;
-}
-
-/** The presign body for a rewrite — anchor is the policy in the path. */
-export const presignRewriteDocumentSchema = z
-  .object(presignFields)
-  .superRefine(refineUploadKind);
-
-export type PresignRewriteDocumentDto = z.infer<
-  typeof presignRewriteDocumentSchema
->;

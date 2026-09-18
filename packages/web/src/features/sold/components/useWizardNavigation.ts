@@ -1,7 +1,6 @@
 import { useCallback, useState } from "react";
 import {
   cardsFor,
-  firstLoopCard,
   type WizardCard,
   type WizardVariant,
 } from "./sold-deal-schema";
@@ -19,8 +18,8 @@ import {
  * The card after `card`, or `null` at the end of the wizard.
  *
  * Takes the ordered list rather than reading the module constant, because the
- * two variants run different sequences — a transfer has no prior-insurance card
- * and a sale has no from-policy card. Deliberately linear within a list; the
+ * two variants run different sequences — a replacement has no prior-insurance
+ * card. Deliberately linear within a list; the
  * loop's non-linearity lives in the history stack below.
  */
 export function nextCard(
@@ -46,7 +45,9 @@ export function useWizardNavigation(
   variant: WizardVariant = "sale",
 ): WizardNavigation {
   const cards = cardsFor(variant);
-  const loopStart = firstLoopCard(variant);
+  // Every variant loops back to the policy type: the from-policy picker that
+  // once started a transfer's loop went with the ticket-anchored flow.
+  const loopStart: WizardCard = "policyType";
 
   // A history *stack*, not an index.
   //

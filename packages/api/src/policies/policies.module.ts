@@ -16,6 +16,7 @@ import {
   Household,
   HouseholdSchema,
 } from '../households/schemas/household.schema';
+import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { SoldIntakeModule } from '../sold-deals/intake/sold-intake.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { PoliciesController } from './policies.controller';
@@ -51,6 +52,17 @@ import { Policy, PolicySchema } from './schemas/policy.schema';
       // cancellation, and resolves the charged producer's name for it.
       { name: Chargeback.name, schema: ChargebackSchema },
       { name: User.name, schema: UserSchema },
+      /*
+       * A replacement now runs through the Sold form on a lead created for it,
+       * and `PolicyRewritesService.recordForLead` stamps that lead's intent
+       * consumed in the same transaction as the deal (PAC-126).
+       *
+       * A *schema* registration rather than a `LeadsModule` import: that module
+       * imports this one for `loadOwnedPolicy`, so importing it back would be a
+       * cycle needing `forwardRef`. Registering another module's schema is the
+       * house pattern — see the note in `crm.module.ts`.
+       */
+      { name: Lead.name, schema: LeadSchema },
     ]),
     // Supplies the carrier's policy-number rule when a correction changes the
     // number (PAC-56 #20).
@@ -78,6 +90,6 @@ import { Policy, PolicySchema } from './schemas/policy.schema';
    * pulls `ClientsModule` in, so `/policies/check` still registers before
    * `PolicyRecordsController`'s `/policies/:id`. This import cannot move it later.
    */
-  exports: [MongooseModule, PoliciesService],
+  exports: [MongooseModule, PoliciesService, PolicyRewritesService],
 })
 export class PoliciesModule {}

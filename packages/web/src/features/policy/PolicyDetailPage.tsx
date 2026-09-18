@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { getPolicy } from "@/lib/policies-api";
 import { PolicyHistoryCard } from "./components/PolicyHistoryCard";
+import { PolicyReplacementActions } from "./components/PolicyReplacementActions";
 import { PolicyCard } from "@/features/household/components/PolicyPortfolio";
 import {
   statusColors,
@@ -150,25 +151,20 @@ export default function PolicyDetailPage() {
           />
 
           {/*
-            Cancel & rewrite, offered only where it can actually be done: an
-            active policy, and a user who holds the permission the route and the
-            endpoint both require. Showing it otherwise would send someone into
-            a wizard that redirects or 409s — and an inactive policy has usually
-            already been rewritten, in which case the history card below names
-            the replacement to work on instead.
+            The two replacements, offered only where they can actually be done:
+            an active policy, and a user holding the permission the whole chain
+            needs. Showing them otherwise would send someone into a flow that
+            refuses at its first step — and an inactive policy has usually
+            already been replaced, in which case the history card below names the
+            replacement to work on instead.
           */}
           {policy.active && can(`${ModuleKey.DealAudits}:write`) && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
               <p className="text-sm text-muted-foreground">
-                Cancelling this policy? Write its replacement in the same step so
-                the two stay linked.
+                Replacing this policy? The old one is retired and the new one
+                written together, so the two stay linked.
               </p>
-              <Button asChild variant="outline" size="sm">
-                <Link to={`/sold/new?rewritePolicyId=${policy.id}`}>
-                  <RefreshCw aria-hidden className="size-4" />
-                  Cancel &amp; rewrite
-                </Link>
-              </Button>
+              <PolicyReplacementActions policyId={policy.id} />
             </div>
           )}
 

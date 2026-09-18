@@ -28,6 +28,7 @@ import {
   buildSoldPolicySchema,
   cardsFor,
   emptyPolicy,
+  replacesOwnPolicy,
   type CardIssue,
   type SoldDealFormValues,
   type SoldPolicyFormValues,
@@ -42,7 +43,6 @@ import {
   PriorInsuranceCard,
   SoldDateCard,
 } from "./WizardCards";
-import { TransferFromCard } from "./TransferFromCard";
 import { WizardProgress } from "./WizardProgress";
 
 interface SoldDealWizardProps {
@@ -52,9 +52,9 @@ interface SoldDealWizardProps {
   /**
    * Agency staff for the "Cancelled by" picker (PAC-65 #11).
    *
-   * Optional because `cardsFor` drops the prior-insurance card on the transfer
-   * variant entirely — a transfer replaces a policy already in our own book, so
-   * there is no prior carrier to cancel and no picker to fill.
+   * Optional because `cardsFor` drops the prior-insurance card on the
+   * replacement variant entirely — it replaces a policy already in our own
+   * book, so there is no prior carrier to cancel and no picker to fill.
    */
   staff?: SoldStaffOption[];
   submitting: boolean;
@@ -64,30 +64,23 @@ interface SoldDealWizardProps {
    * Which flow this is. Defaults to `sale`, so every existing caller is
    * unchanged.
    *
-   * A `transfer` records the same information against a household and a CRM
-   * ticket instead of a lead: it asks which policy each new one replaces, and
-   * skips prior insurance entirely.
+   * A `replacement` records the same information for a policy that replaces
+   * one already in our book, so it skips prior insurance entirely; the policy
+   * being replaced is stamped on the lead and injected server-side.
    */
   variant?: WizardVariant;
   /**
-   * The household whose policies the from-policy picker searches. Required by
-   * the transfer variant and unused by the sale.
-   */
-  householdId?: string | null;
-  /**
    * Where in-progress documents are uploaded.
    *
-   * The three flows anchor keys differently on the server — a sale on its lead,
-   * a transfer on the ticket's household, a rewrite on the replaced policy's —
-   * and that prefix is the ownership check, so the scope travels with the upload
-   * rather than being inferred.
+   * Anchored on the lead, whose key prefix is the server's ownership check, so
+   * the scope travels with the upload rather than being inferred.
    *
-   * ⚠ **Passed in, not derived here.** This used to be computed from
-   * `variant === "transfer" && ticketId`, which meant the rewrite variant fell
-   * through to `{ kind: "lead", leadId: "" }` and every upload on it failed the
-   * presign — and because the New Business Application is required, that made
-   * the whole flow unsubmittable. The flow that owns the anchor is the only
-   * thing that reliably knows it.
+   * ⚠ **Passed in, not derived here.** It used to be computed from the variant,
+   * and when a third variant arrived it fell through to
+   * `{ kind: "lead", leadId: "" }` — every upload failed the presign, and
+   * because the New Business Application is required, the whole flow was
+   * unsubmittable. The flow that owns the anchor is the only thing that
+   * reliably knows it.
    */
   uploadScope: UploadScope;
 }
@@ -100,7 +93,6 @@ export function SoldDealWizard({
   errorMessage,
   onSubmit,
   variant = "sale",
-  householdId,
   uploadScope,
 }: SoldDealWizardProps) {
   const nav = useWizardNavigation(variant);
@@ -340,9 +332,6 @@ export function SoldDealWizard({
             {nav.card === "soldDate" && (
               <SoldDateCard value={soldDate} onChange={setSoldDate} />
             )}
-            {nav.card === "transferFrom" && (
-              <TransferFromCard form={draft} householdId={householdId ?? null} />
-            )}
             {nav.card === "policyType" && <PolicyTypeCard form={draft} />}
             {nav.card === "policyDetails" && (
               <PolicyDetailsCard form={draft} carriers={carriers} />
@@ -359,6 +348,7 @@ export function SoldDealWizard({
                 form={draft}
                 uploadScope={uploadScope}
                 contacts={context.contacts}
+                replacesOwnPolicy={replacesOwnPolicy(variant)}
               />
             )}
             {nav.card === "priorInsurance" && (

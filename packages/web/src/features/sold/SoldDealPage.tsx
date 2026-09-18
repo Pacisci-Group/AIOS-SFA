@@ -1,94 +1,38 @@
 import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
-import { Link, Navigate, useLocation, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { SoldDealWizard } from "./components/SoldDealWizard";
-import type { FlowError, SoldFlow } from "./modes/sold-flow";
-import { useRewriteMode } from "./modes/useRewriteMode";
+import type { FlowError } from "./modes/sold-flow";
 import { useSaleMode } from "./modes/useSaleMode";
-import { useTransferMode } from "./modes/useTransferMode";
 
 /**
- * The one page that writes policies, in whichever of its three modes the URL
- * asks for.
+ * `/sold/new?leadId={id}` — the one page that writes policies.
  *
- *   - `/sold/new?leadId={id}` — a **sale** (PAC-40).
- *   - `/sold/new?rewritePolicyId={id}` — a **cancel rewrite** (PAC-126).
- *   - `/policy-transfers/new?ticketId={id}` — a CSR's **package change**
- *     (PAC-63).
+ * A **sale** (PAC-40), and also the second step of a **replacement**: a Cancel
+ * Rewrite or a Company Transfer runs on a lead created for it, so it is an
+ * ordinary sale as far as this page is concerned. The lead carries the intent,
+ * the wizard drops the cards that make no sense for a policy already ours, and
+ * the server applies the retirement, the linking and the chargeback on submit
+ * (PAC-126).
  *
- * All three ask for the same information, because a policy needs the same
- * information to exist however it came about: same wizard, same cards, same
- * validation, same documents. They differ in the record they anchor on, the
- * endpoint they post to and where they return to — and each of those lives in
- * its mode hook, not here.
- *
- * ## Why the transfer keeps a route of its own
- *
- * The routes carry different permission gates, and that is the only reason there
- * is more than one. `/sold/new` is gated on `deal_audits:write`, which is what
- * `POST /sold-deals` and `POST /policies/:id/rewrite` both require; the transfer
- * endpoint requires `crm_service:write` instead, and a CSR holds no
- * `deal_audits` permission at all. Serving the transfer from `/sold/new` would
- * lock out exactly the person it exists for. So: one page, three modes, two
- * routes — and a gate that matches its endpoint in both cases.
- *
- * Each mode ran as its own page component until PAC-126, and the three had
- * already drifted apart in their loading, retry and blocked-state handling
- * despite doing the same job. `SoldFlow` is what stopped that.
+ * Until PAC-126 there were three pages for this — a transfer anchored on a CRM
+ * ticket, a rewrite anchored on the policy, and the sale — each with its own
+ * endpoint, its own upload prefix and its own guards, and they had drifted apart
+ * while doing the same job. `SoldFlow` is the shape they were reduced to, and
+ * the mode hook is where the anchor, the endpoint and the return route live.
  */
 export default function SoldDealPage() {
   const [searchParams] = useSearchParams();
-  const { pathname } = useLocation();
 
-  const leadId = searchParams.get("leadId") ?? "";
-  const quoteRecapId = searchParams.get("quoteRecapId") ?? "";
-  const rewritePolicyId = searchParams.get("rewritePolicyId") ?? "";
-  const ticketId = searchParams.get("ticketId") ?? "";
-
-  /*
-   * Which flow this is, decided by which anchor the URL names. Checked
-   * most-specific first so a stray leftover param cannot change the mode of a
-   * flow that already has its own anchor.
-   *
-   * The path is consulted as well as the params, and only for the transfer:
-   * `/policy-transfers/new` with no `ticketId` is still a transfer that is
-   * missing its anchor, and it should redirect to the ticket queue rather than
-   * being read as a sale with no lead and redirecting to /leads.
-   */
-  const mode =
-    ticketId || pathname.startsWith("/policy-transfers")
-      ? "transfer"
-      : rewritePolicyId
-        ? "rewrite"
-        : "sale";
-
-  /*
-   * All three hooks run every render, and the two that are not this URL's mode
-   * sit idle — their queries are disabled and their mutations never fire. That
-   * is deliberate: the mode comes from search params, which change *without*
-   * remounting this component, so calling one hook conditionally would break the
-   * rules of hooks the first time someone navigated between two modes.
-   */
-  const sale = useSaleMode({
-    leadId,
-    quoteRecapId,
-    enabled: mode === "sale",
-  });
-  const rewrite = useRewriteMode({
-    policyId: rewritePolicyId,
-    enabled: mode === "rewrite",
-  });
-  const transfer = useTransferMode({
-    ticketId,
-    enabled: mode === "transfer",
+  const flow = useSaleMode({
+    leadId: searchParams.get("leadId") ?? "",
+    quoteRecapId: searchParams.get("quoteRecapId") ?? "",
+    enabled: true,
   });
 
-  const flow: SoldFlow =
-    mode === "transfer" ? transfer : mode === "rewrite" ? rewrite : sale;
-
-  // A missing or malformed anchor id is only ever a typed or stale URL, so send
+  // A missing or malformed lead id is only ever a typed or stale URL, so send
   // them somewhere useful rather than explaining.
   if (flow.redirect) {
     return <Navigate to={flow.redirect} replace />;
@@ -156,7 +100,6 @@ export default function SoldDealPage() {
                 context={flow.ready.context}
                 carriers={flow.ready.carriers}
                 staff={flow.ready.staff}
-                householdId={flow.ready.householdId}
                 uploadScope={flow.ready.uploadScope}
                 submitting={flow.submitting}
                 errorMessage={flow.errorMessage}

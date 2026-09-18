@@ -21,12 +21,14 @@ import { choiceVocabulary } from './choice-vocabulary';
  * the ⚠ on {@link normalizePolicyStatus} for why that is an open question
  * rather than a gap to fill in by guessing.
  *
- * ⚠ **These two carry no semantics yet.** Nothing treats them as terminal: they
- * do not flip `Policy.active`, and the household card's three-bucket pill
- * (`policy-display.ts`) renders `'Cancel Rewrite'` as *Lapsed* on its
- * `includes('cancel')` test and `'Company Transfer'` from the `active` flag.
- * Deliberate — what they mean for the lifecycle is still with David (PAC-126).
- * Resolve that before anything starts reading them.
+ * ⚠ **These two still carry no *lifecycle* semantics.** What they mean for the
+ * renewal scan and the chargeback path is still with David (PAC-126); resolve
+ * that before anything starts reading them for more than display.
+ *
+ * Display is settled, though: the household card's status pill
+ * (`policy-display.ts`) renders both as **Cancelled**, not *Lapsed*. Both are
+ * cancellations with a replacement behind them, and calling either one a lapse
+ * read as lost business on a household that never left.
  */
 export const POLICY_STATUSES = [
   'Quoted',

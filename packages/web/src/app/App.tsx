@@ -504,35 +504,6 @@ export function App() {
                 />
               </Route>
 
-              {/* Policy transfer — the **same page** as the Sold form above, in
-                  its transfer mode: recorded from a CRM ticket rather than a
-                  lead, and booked as company transfer so it never counts as new
-                  business.
-
-                  It keeps a route of its own purely for the gate. Transfers
-                  need `crm_service:write` — what
-                  POST /crm/service-tickets/:id/policy-transfer itself requires —
-                  and a CSR holds no `deal_audits` at all, so serving this from
-                  `/sold/new` would lock out exactly the person it is for. A
-                  producer never reaches this one; a CSR is exactly who does. */}
-              <Route
-                element={
-                  <RequirePermission
-                    permission={`${ModuleKey.CrmService}:write`}
-                    redirectTo="/crm/tickets"
-                  />
-                }
-              >
-                <Route
-                  path="/policy-transfers/new"
-                  element={
-                    <LazyPage>
-                      <SoldDealPage />
-                    </LazyPage>
-                  }
-                />
-              </Route>
-
               {/*
                 The workspace-settings hub — the single sidebar entry that
                 replaced the five-row Administration section.

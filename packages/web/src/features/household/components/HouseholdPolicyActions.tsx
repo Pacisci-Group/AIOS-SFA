@@ -1,11 +1,8 @@
 import type { PolicySummary } from "@sfa/shared";
 import { ModuleKey } from "@sfa/shared";
-import { RefreshCw } from "lucide-react";
-import { Link } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+import { PolicyReplacementActions } from "@/features/policy/components/PolicyReplacementActions";
 import { usePermissions } from "@/hooks/usePermissions";
 import { EditHouseholdPolicyDialog } from "./EditHouseholdPolicyDialog";
-import { StartCompanyTransferDialog } from "./StartCompanyTransferDialog";
 
 interface HouseholdPolicyActionsProps {
   householdId: string;
@@ -16,24 +13,24 @@ interface HouseholdPolicyActionsProps {
  * Everything a service rep can do to one policy from the household page
  * (PAC-126).
  *
- * Three actions, and which of them appear says a lot about who is looking:
+ * Three actions: **Edit** (corrections to what is on file), **Cancel &
+ * rewrite**, and **Company transfer**. The two replacements differ only in what
+ * happens to the money — a rewrite charges the premium back, a transfer moves a
+ * client within their own book and charges nothing — and both take the same
+ * route from here: New Lead → Sold form, with the policy retired, linked and
+ * charged back when that second form is submitted.
  *
- *   - **Edit** — always, for anyone who can write the household. Corrections to
- *     what is on file.
- *   - **Cancel & rewrite** — `deal_audits:write`, because the replacement is a
- *     real sale and the flow books a deal, its policies and the audit hand-off.
- *   - **Company transfer** — `crm_service:write`, because it is booked on a
- *     service ticket and counts as no production at all.
+ * ## One permission for both, now
  *
- * The two write flows are **complementary, not alternatives**: a CSR holds
- * `crm_service` and no `deal_audits`, a producer the other way round, so most
- * people see exactly one of them. That is the point — the two differ in what
- * happens to the money, and the person whose money it is should be the one who
- * can record it.
+ * `deal_audits:write`, because that is what the chain actually needs end to end:
+ * the Sold form requires it, and the CRM role holds it. Until PAC-126 a transfer
+ * was gated on `crm_service:write` instead because it was recorded on a ticket —
+ * it is not any more, and gating it on a permission the flow no longer touches
+ * would hide the button from people who can use it and show it to people who
+ * cannot.
  *
- * Both are offered only on an **active** policy, matching the server: a rewrite
- * of an inactive policy 409s, and a transfer from one has nothing to retire. An
- * inactive policy has usually already been replaced, in which case the policy
+ * Both are offered only on an **active** policy, matching the server: an
+ * inactive one has usually already been replaced, in which case the policy
  * page's history card names the replacement to work on instead.
  */
 export function HouseholdPolicyActions({
@@ -41,28 +38,11 @@ export function HouseholdPolicyActions({
   policy,
 }: HouseholdPolicyActionsProps) {
   const { canWrite } = usePermissions();
+  const canReplace = policy.active && canWrite(ModuleKey.DealAudits);
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
-      {policy.active && (
-        <StartCompanyTransferDialog
-          householdId={householdId}
-          policy={policy}
-          canTransfer={canWrite(ModuleKey.CrmService)}
-        />
-      )}
-
-      {policy.active && canWrite(ModuleKey.DealAudits) && (
-        <Button asChild variant="outline" size="sm">
-          <Link
-            to={`/sold/new?rewritePolicyId=${policy.id}`}
-            aria-label={`Cancel and rewrite ${policy.policyNumber ?? policy.policyType ?? "policy"}`}
-          >
-            <RefreshCw aria-hidden className="size-4" />
-            Cancel &amp; rewrite
-          </Link>
-        </Button>
-      )}
+      {canReplace && <PolicyReplacementActions policyId={policy.id} />}
 
       <EditHouseholdPolicyDialog householdId={householdId} policy={policy} />
     </div>

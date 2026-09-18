@@ -46,6 +46,7 @@ import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
 import { DealAuditItem } from '../src/deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
 import { HouseholdMember } from '../src/households/schemas/household-member.schema';
+import { Chargeback } from '../src/chargebacks/schemas/chargeback.schema';
 import { Household } from '../src/households/schemas/household.schema';
 import { InterestedParty } from '../src/interested-parties/schemas/interested-party.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
@@ -278,9 +279,18 @@ describe('SFA API (e2e)', () => {
       expect(body.user.permissions).not.toContain('platform:users:impersonate');
       expect(body.user.permissions).not.toContain('platform:agencies:read');
       expect(body.user.impersonatedBy).toBe(superAdminUserId);
-      // The test agency has no domain, so the session is used on the platform
-      // host — `APP_BASE_URL` as pinned by `setup-env.ts`.
-      expect(body.appBaseUrl).toBe('http://localhost:5173');
+      /*
+       * The test agency has no domain, so the session is used on the platform
+       * host: `PLATFORM_HOST` with `APP_BASE_URL`'s scheme and port, both
+       * pinned by `setup-env.ts`.
+       *
+       * This suite's own env is the worked example of why that is the host and
+       * not `APP_BASE_URL`'s: supertest talks to `127.0.0.1`, which is why
+       * `PLATFORM_HOST` is pinned to it, while `APP_BASE_URL` stays
+       * `localhost`. `localhost` resolves to no tenant here, so the old answer
+       * handed the panel an origin whose every request would 404.
+       */
+      expect(body.appBaseUrl).toBe('http://127.0.0.1:5173');
     });
 
     it('points the client at the target agency’s own host', async () => {
@@ -1178,7 +1188,9 @@ describe('SFA API (e2e)', () => {
       // Absolute, because the link is opened from an email client that has no
       // origin to resolve a relative path against. This is the regression that
       // motivated the change — it used to return `/auth/accept-invite?token=…`.
-      expect(body.inviteUrl.startsWith('http://localhost:5173/')).toBe(true);
+      // Origin is the platform host (`PLATFORM_HOST`) with `APP_BASE_URL`'s
+      // scheme and port — see the impersonation case above.
+      expect(body.inviteUrl.startsWith('http://127.0.0.1:5173/')).toBe(true);
       expect(body.inviteUrl).toContain('/auth/accept-invite?token=');
       expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
 
@@ -1540,7 +1552,7 @@ describe('SFA API (e2e)', () => {
 
       // Absolute, for the same reason the invite URL is: an email client has no
       // origin to resolve a relative path against.
-      expect(resetUrl.startsWith('http://localhost:5173/')).toBe(true);
+      expect(resetUrl.startsWith('http://127.0.0.1:5173/')).toBe(true);
       expect(resetUrl).toContain('/auth/reset-password?token=');
       expect(new Date(expiresAt).getTime()).toBeGreaterThan(Date.now());
     });
@@ -13187,112 +13199,200 @@ describe('SFA API (e2e)', () => {
   });
 
   /**
-   * Policy Transfer — the Sold pipeline, minus the lead, booked as company
-   * transfer.
+   * Replacements — Cancel Rewrite and Company Transfer through the Sold form
+   * (PAC-126).
    *
-   * Two things are load-bearing enough to be worth stating: the from-policy is
-   * *retired* rather than edited (both rows survive, linked), and the premium
-   * must land on the Transfers scorecard **without** moving Sold. The
-   * absent-`businessType` case below is the guard for the one mistake that
-   * would silently zero every historic sale.
+   * Neither has an endpoint of its own any more. Both run the ordinary
+   * `POST /leads` → `POST /sold-deals` chain on a lead stamped with a
+   * `replacementIntent`, and the sold submit reads that stamp and applies it:
+   * the from-policy on the first row, the business type, the retired status,
+   * the chargeback on a rewrite, and the consumed mark that stops the chain
+   * being resumed into a second booking. `GET /leads/for-replacement` is what
+   * makes the two-form chain survivable when the rep closes the tab between
+   * them.
+   *
+   * Three things are load-bearing enough to pin: the from-policy is *retired*
+   * rather than edited (both rows survive, linked); a transfer's premium must
+   * land on the Transfers scorecard **without** moving Sold; and a rewrite's
+   * chargeback must be carried by the producer credited on the *original* deal,
+   * not by whoever recorded the replacement.
    */
-  describe('Policy transfers (company transfer)', () => {
-    const TICKETS = '/api/v1/crm/service-tickets';
+  describe('Policy replacements (rewrite and company transfer)', () => {
+    const LEADS = '/api/v1/leads';
+    const SOLD = '/api/v1/sold-deals';
 
-    let xferDealModel: Model<Deal>;
-    let xferPolicyModel: Model<Policy>;
-    let xferHouseholdModel: Model<Household>;
+    let rplDealModel: Model<Deal>;
+    let rplPolicyModel: Model<Policy>;
+    let rplHouseholdModel: Model<Household>;
+    let rplLeadModel: Model<Lead>;
+    let rplChargebackModel: Model<Chargeback>;
+    let originalProducerId: Types.ObjectId;
     let statSpy: jest.SpyInstance;
 
     const uploaded = new Map<string, { size: number; contentType: string }>();
     let counter = 0;
-    const nextNumber = () =>
-      `XFER-${(counter += 1).toString().padStart(6, '0')}`;
+    const next = () => (counter += 1).toString().padStart(6, '0');
 
-    /** A key under the transfer's own `/nba/` prefix, which the server enforces. */
-    const nba = (householdId: string) => {
-      const key = `agencies/${seed.agencyId}/policy-transfers/${householdId}/nba/app.pdf`;
+    /** A key under the **lead's** NBA prefix — the only prefix a sale verifies. */
+    const nba = (leadId: string) => {
+      const key = `agencies/${seed.agencyId}/sold-deals/${leadId}/nba/2026/application.pdf`;
       uploaded.set(key, { size: 2048, contentType: 'application/pdf' });
       return {
         key,
-        filename: 'app.pdf',
+        filename: 'application.pdf',
         contentType: 'application/pdf',
         size: 2048,
       };
     };
 
-    /** A household with one active policy — the thing a transfer moves within. */
-    const makeHousehold = async (premium = 1400) => {
-      const household = await xferHouseholdModel.create({
+    /**
+     * A household with one active policy — the thing a replacement replaces.
+     *
+     * `withDeal` also books the original sale the policy came from, dated 1
+     * March and credited to the seeded producer: the clawback window is
+     * measured from that deal's sold date and the chargeback lands on that
+     * deal's producer, and both of those are what the money tests assert.
+     * Inserted through the driver so no Mongoose default is applied.
+     */
+    const makeHousehold = async (
+      options: { premium?: number; withDeal?: boolean } = {},
+    ) => {
+      const premium = options.premium ?? 1400;
+      const n = next();
+      const household = await rplHouseholdModel.create({
         agencyId: seed.agencyId,
         branchId: seed.branchId,
-        name: `Transfer HH ${counter}`,
+        name: `Replacement HH ${n}`,
         totalActivePolicies: 1,
       });
-      const policy = await xferPolicyModel.create({
+
+      let dealId: Types.ObjectId | undefined;
+      if (options.withDeal) {
+        const inserted = await rplDealModel.collection.insertOne({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          householdId: household._id,
+          producerId: originalProducerId,
+          clientName: `Replacement HH ${n}`,
+          premium,
+          itemCount: 1,
+          policyCount: 1,
+          soldDateYmd: 20260301,
+          soldDate: new Date('2026-03-01T00:00:00.000Z'),
+          businessType: 'new_business',
+          isTestRecord: false,
+        });
+        dealId = inserted.insertedId;
+      }
+
+      const policy = await rplPolicyModel.create({
         agencyId: seed.agencyId,
         branchId: seed.branchId,
         householdId: household._id,
-        policyNumber: nextNumber(),
+        dealId,
+        policyNumber: `RPL${n}`,
         policyType: 'Auto',
         premium,
         items: 1,
         active: true,
         policyStatus: 'Active',
       });
-      return { household, policy };
+      return { household, policy, dealId };
     };
 
-    const makeTicket = async (
-      householdId: string,
-      category = 'Policy Change',
+    const lookup = (policyId: string, reason: string, expected = 200) =>
+      request(app.getHttpServer())
+        .get(`${LEADS}/for-replacement?policyId=${policyId}&reason=${reason}`)
+        .set(authHeader(ownerToken))
+        .expect(expected);
+
+    /** Step 1 of the chain — the lead, stamped with what it is for. */
+    const createLead = async (
+      policyId: string,
+      reason: 'cancel_rewrite' | 'company_transfer',
+      overrides: Record<string, unknown> = {},
+      expected = 201,
     ) => {
+      const n = next();
       const res = await request(app.getHttpServer())
-        .post(TICKETS)
-        .set(authHeader(csrToken))
-        .send({ clientName: 'Transfer Client', category, householdId })
-        .expect(201);
+        .post(LEADS)
+        .set(authHeader(ownerToken))
+        .send({
+          primaryContact: {
+            firstName: 'Replace',
+            lastName: `Ment${n}`,
+            dateOfBirth: '1985-06-15',
+            phone: '(555) 300-0001',
+            email: `replace.ment.${n}@example.com`,
+          },
+          address: {
+            street: `${n} Replacement Way`,
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74101',
+          },
+          members: [],
+          leadSourceCode: 'WCO7l',
+          replacementIntent: { policyId, reason },
+          ...overrides,
+        })
+        .expect(expected);
       return res.body as { id: string };
     };
 
-    const transferBody = (
-      householdId: string,
-      fromPolicyId: string,
-      overrides: Record<string, unknown> = {},
-    ) => ({
-      transferDate: '2026-03-10',
-      policies: [
-        {
-          fromPolicyId,
-          policyType: 'Auto',
-          effectiveDate: '2026-03-15',
-          carrier: 'Allstate',
-          policyNumber: nextNumber(),
-          premium: 900,
-          itemCount: 1,
-          newBusinessApplication: nba(householdId),
-        },
-      ],
-      ...overrides,
-    });
-
-    const record = (ticketId: string, body: unknown, expected = 201) =>
+    /** Step 2 — the Sold form. No `fromPolicyId`: the server injects it. */
+    const sell = (leadId: string, premium = 900, expected = 201) =>
       request(app.getHttpServer())
-        .post(`${TICKETS}/${ticketId}/policy-transfer`)
-        .set(authHeader(csrToken))
-        .send(body)
+        .post(SOLD)
+        .set(authHeader(ownerToken))
+        .send({
+          leadId,
+          soldDate: '2026-03-10',
+          policies: [
+            {
+              policyType: 'Auto',
+              effectiveDate: '2026-03-15',
+              carrier: 'Allstate',
+              policyNumber: `RPL${next()}`,
+              premium,
+              itemCount: 1,
+              newBusinessApplication: nba(leadId),
+              priorInsurance: { none: true },
+              cancellation: { cancelled: false },
+            },
+          ],
+        })
         .expect(expected);
 
-    beforeAll(() => {
-      xferDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
-      xferPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
-      xferHouseholdModel = app.get<Model<Household>>(
+    /** The whole chain, for the tests that assert what it produced. */
+    const replace = async (
+      reason: 'cancel_rewrite' | 'company_transfer',
+      options: { premium?: number; withDeal?: boolean } = {},
+    ) => {
+      const fixture = await makeHousehold(options);
+      const lead = await createLead(String(fixture.policy._id), reason);
+      const res = await sell(lead.id);
+      return { ...fixture, leadId: lead.id, dealId: res.body.id as string };
+    };
+
+    beforeAll(async () => {
+      rplDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      rplPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      rplHouseholdModel = app.get<Model<Household>>(
         getModelToken(Household.name),
       );
+      rplLeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      rplChargebackModel = app.get<Model<Chargeback>>(
+        getModelToken(Chargeback.name),
+      );
+
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      originalProducerId = producer!._id;
+
       // Storage isn't running under test; report only what this block declared.
-      const storage = app.get(StorageService);
       statSpy = jest
-        .spyOn(storage, 'statObject')
+        .spyOn(app.get(StorageService), 'statObject')
         .mockImplementation((key: string) =>
           Promise.resolve(uploaded.get(key) ?? null),
         );
@@ -13300,144 +13400,145 @@ describe('SFA API (e2e)', () => {
 
     afterAll(() => statSpy?.mockRestore());
 
-    it.each(['Renewal Review', 'Policy Change', 'Payment', 'Company Transfer'])(
-      'records a transfer from a %s ticket',
-      async (category) => {
-        const { household, policy } = await makeHousehold();
-        const ticket = await makeTicket(String(household._id), category);
+    /* ─── Where to start ────────────────────────────────────────────────── */
 
-        const res = await record(
-          ticket.id,
-          transferBody(String(household._id), String(policy._id)),
-        );
-
-        expect(res.body.policyTransfer).not.toBeNull();
-        expect(res.body.policyTransfer.pairs).toHaveLength(1);
-        expect(res.body.policyTransfer.pairs[0].fromPolicyId).toBe(
-          String(policy._id),
-        );
-        expect(res.body.allowsPolicyTransfer).toBe(true);
-      },
-    );
-
-    it('is refused from a category that does not allow it', async () => {
+    it('says "start fresh" for an active, unreplaced policy', async () => {
       const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id), 'Billing');
+      const res = await lookup(String(policy._id), 'cancel_rewrite');
+      expect(res.body).toEqual({
+        leadId: null,
+        householdId: String(household._id),
+        blockedReason: null,
+      });
+    });
 
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
+    it("creates the lead on the policy's household, stamped with the intent", async () => {
+      const { household, policy } = await makeHousehold();
+      const lead = await createLead(String(policy._id), 'cancel_rewrite');
+
+      const stored = await rplLeadModel.findById(lead.id);
+      expect(String(stored!.householdId)).toBe(String(household._id));
+      expect(String(stored!.replacementIntent!.policyId)).toBe(
+        String(policy._id),
+      );
+      expect(stored!.replacementIntent!.reason).toBe('cancel_rewrite');
+      expect(stored!.replacementIntent!.consumedAt).toBeNull();
+    });
+
+    it('resumes the abandoned lead rather than opening a second one', async () => {
+      const { policy } = await makeHousehold();
+      const lead = await createLead(String(policy._id), 'cancel_rewrite');
+
+      const res = await lookup(String(policy._id), 'cancel_rewrite');
+      expect(res.body.leadId).toBe(lead.id);
+
+      // The reason is part of the key: a rewrite lead must not resume into a
+      // transfer, which applies different money rules.
+      const other = await lookup(String(policy._id), 'company_transfer');
+      expect(other.body.leadId).toBeNull();
+    });
+
+    it('refuses a household that disagrees with the policy', async () => {
+      const { policy } = await makeHousehold();
+      const other = await makeHousehold();
+      await createLead(
+        String(policy._id),
+        'cancel_rewrite',
+        { householdId: String(other.household._id) },
         400,
       );
-      expect(
-        await xferDealModel.countDocuments({
-          ticketId: new Types.ObjectId(ticket.id),
-        }),
-      ).toBe(0);
     });
 
-    it('retires the old policy and links both ways', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      const res = await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
+    it('refuses a policy that is no longer active, at both steps', async () => {
+      const { policy } = await makeHousehold();
+      await rplPolicyModel.updateOne(
+        { _id: policy._id },
+        { $set: { active: false, policyStatus: 'Cancelled' } },
       );
 
-      const from = await xferPolicyModel.findById(policy._id);
+      const res = await lookup(String(policy._id), 'cancel_rewrite');
+      expect(res.body.leadId).toBeNull();
+      expect(res.body.blockedReason).toMatch(/not active/);
+
+      await createLead(String(policy._id), 'cancel_rewrite', {}, 409);
+    });
+
+    /* ─── What the sale does ────────────────────────────────────────────── */
+
+    it('a rewrite retires the old policy, links both ways, and books new business', async () => {
+      const { policy, leadId, dealId } = await replace('cancel_rewrite');
+
+      const from = await rplPolicyModel.findById(policy._id);
       expect(from!.active).toBe(false);
-      expect(from!.policyStatus).toBe('Cancelled');
+      expect(from!.policyStatus).toBe('Cancel Rewrite');
+      expect(from!.transferredToPolicyId).toBeDefined();
 
-      const toId = res.body.policyTransfer.pairs[0].toPolicyId;
-      expect(String(from!.transferredToPolicyId)).toBe(toId);
-
-      const to = await xferPolicyModel.findById(toId);
+      const to = await rplPolicyModel.findById(from!.transferredToPolicyId);
       expect(to!.active).toBe(true);
       expect(String(to!.transferredFromPolicyId)).toBe(String(policy._id));
+      expect(String(to!.dealId)).toBe(dealId);
+
+      const deal = await rplDealModel.findById(dealId);
+      expect(deal!.businessType).toBe('new_business');
+      expect(String(deal!.leadId)).toBe(leadId);
     });
 
-    it('books a company-transfer deal with no lead', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
+    it('consumes the intent in the same transaction, so the chain cannot resume', async () => {
+      const { policy, leadId, dealId } = await replace('cancel_rewrite');
 
-      const res = await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
+      const lead = await rplLeadModel.findById(leadId);
+      expect(lead!.replacementIntent!.consumedAt).not.toBeNull();
+      expect(String(lead!.replacementIntent!.consumedByDealId)).toBe(dealId);
+
+      // Replaced now, so the entry point blocks rather than offering the lead.
+      const res = await lookup(String(policy._id), 'cancel_rewrite');
+      expect(res.body.leadId).toBeNull();
+      expect(res.body.blockedReason).not.toBeNull();
+    });
+
+    it('a rewrite inside the window charges the premium back and reverses the credit', async () => {
+      const { policy, dealId: originalDealId } = await replace(
+        'cancel_rewrite',
+        { withDeal: true },
       );
 
-      const deal = await xferDealModel.findById(
-        res.body.policyTransfer.dealId as string,
-      );
+      const row = await rplChargebackModel.findOne({ policyId: policy._id });
+      expect(row).not.toBeNull();
+      expect(row!.reason).toBe('cancel_rewrite');
+      expect(row!.amount).toBe(1400);
+      expect(row!.withinClawbackWindow).toBe(true);
+      expect(row!.soldAdjustment).toBe(-1400);
+      // Carried by the producer credited on the ORIGINAL deal — not by the
+      // owner who recorded the replacement.
+      expect(String(row!.producerId)).toBe(String(originalProducerId));
+
+      const original = await rplDealModel.findById(originalDealId);
+      expect(original!.chargebackAdjustment).toBe(-1400);
+    });
+
+    it('a company transfer books company_transfer, retires as such, and charges nothing', async () => {
+      const { policy, dealId } = await replace('company_transfer', {
+        withDeal: true,
+      });
+
+      const from = await rplPolicyModel.findById(policy._id);
+      expect(from!.active).toBe(false);
+      expect(from!.policyStatus).toBe('Company Transfer');
+
+      const deal = await rplDealModel.findById(dealId);
       expect(deal!.businessType).toBe('company_transfer');
-      expect(deal!.leadId ?? null).toBeNull();
-      expect(String(deal!.ticketId)).toBe(ticket.id);
+
+      expect(
+        await rplChargebackModel.countDocuments({ policyId: policy._id }),
+      ).toBe(0);
     });
 
     it('recomputes the household active-policy count', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
-
+      const { household } = await replace('cancel_rewrite');
       // One retired, one activated — still one, but recounted rather than
       // assumed, which is what makes a re-run correct too.
-      const after = await xferHouseholdModel.findById(household._id);
+      const after = await rplHouseholdModel.findById(household._id);
       expect(after!.totalActivePolicies).toBe(1);
-    });
-
-    it('allows only one transfer per ticket', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-        409,
-      );
-    });
-
-    it('refuses a from-policy on another household, and writes nothing', async () => {
-      const { household } = await makeHousehold();
-      const other = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(other.policy._id)),
-        400,
-      );
-
-      const untouched = await xferPolicyModel.findById(other.policy._id);
-      expect(untouched!.active).toBe(true);
-      expect(
-        await xferDealModel.countDocuments({
-          ticketId: new Types.ObjectId(ticket.id),
-        }),
-      ).toBe(0);
-    });
-
-    it('logs the transfer on the ticket timeline', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      const res = await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
-
-      expect(
-        (res.body.timeline as { type: string; content: string }[]).some(
-          (e) => e.type === 'system' && e.content.includes('Policy transfer'),
-        ),
-      ).toBe(true);
     });
 
     /* ─── The reporting split ─────────────────────────────────────────────── */
@@ -13456,22 +13557,28 @@ describe('SFA API (e2e)', () => {
         };
       };
 
-      it('counts the transfer under transfers, never under sold', async () => {
+      it('counts a transfer under transfers, never under sold', async () => {
         const before = await performance(ownerToken);
-
-        const { household, policy } = await makeHousehold();
-        const ticket = await makeTicket(String(household._id));
-        await record(
-          ticket.id,
-          transferBody(String(household._id), String(policy._id)),
-        );
-
+        await replace('company_transfer');
         const after = await performance(ownerToken);
+
         expect(after.transfers.premium).toBeCloseTo(
           before.transfers.premium + 900,
           2,
         );
         expect(after.sold.premium).toBeCloseTo(before.sold.premium, 2);
+      });
+
+      it('counts a rewrite under sold', async () => {
+        const before = await performance(ownerToken);
+        await replace('cancel_rewrite');
+        const after = await performance(ownerToken);
+
+        expect(after.sold.premium).toBeCloseTo(before.sold.premium + 900, 2);
+        expect(after.transfers.premium).toBeCloseTo(
+          before.transfers.premium,
+          2,
+        );
       });
 
       /**
@@ -13489,7 +13596,7 @@ describe('SFA API (e2e)', () => {
 
         // Inserted through the driver so no Mongoose default is applied — this
         // is exactly the shape of every pre-existing row.
-        await xferDealModel.collection.insertOne({
+        await rplDealModel.collection.insertOne({
           agencyId: seed.agencyId,
           branchId: seed.branchId,
           premium: 777,
@@ -13509,7 +13616,7 @@ describe('SFA API (e2e)', () => {
       });
     });
 
-    it('keeps transfers off the producer leaderboard', async () => {
+    it('keeps a transfer off the producer leaderboard', async () => {
       const month = '2026-03';
       const read = async () => {
         const res = await request(app.getHttpServer())
@@ -13520,14 +13627,7 @@ describe('SFA API (e2e)', () => {
       };
 
       const before = await read();
-
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
-
+      await replace('company_transfer');
       expect((await read()).officeTotalPremium).toBeCloseTo(
         before.officeTotalPremium,
         2,

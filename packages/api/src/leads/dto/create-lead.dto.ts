@@ -1,5 +1,6 @@
 import {
   HOUSEHOLD_MEMBER_ROLES,
+  POLICY_REPLACEMENT_REASONS,
   POLICY_TYPES,
   SELECTABLE_LEAD_SOURCE_OPTIONS,
 } from '@sfa/shared';
@@ -119,6 +120,35 @@ export const createLeadSchema = leadIntakeBaseSchema.extend({
     .string()
     .trim()
     .regex(/^[a-f0-9]{24}$/i, 'householdId must be a record id')
+    .optional(),
+  /**
+   * Create this lead **to replace a policy** (PAC-126).
+   *
+   * A Cancel Rewrite and a Company Transfer run through the ordinary Sold
+   * pipeline, which is anchored on a lead — so one is created for the
+   * replacement and stamped with why. `POST /sold-deals` then reads the stamp
+   * and applies it: the business type, the replacement reason, the
+   * `fromPolicyId` on the first policy row, and the chargeback on a rewrite.
+   *
+   * The **policy** is named here, not the household: the household is derived
+   * from the policy server-side, so a caller cannot point a replacement at a
+   * book it does not own. `LeadIntakeService` re-checks scope, that the policy is
+   * still active and unreplaced, and that any `householdId` sent alongside
+   * agrees with the policy's — the same guards the flow's own entry point
+   * applies, because a typed request must not walk around them.
+   *
+   * Deliberately absent from `publicCreateLeadSchema`, like `householdId` and
+   * for a stronger version of the same reason: an outside submitter naming a
+   * policy would be queueing a cancellation on someone else's coverage.
+   */
+  replacementIntent: z
+    .object({
+      policyId: z
+        .string()
+        .trim()
+        .regex(/^[a-f0-9]{24}$/i, 'policyId must be a record id'),
+      reason: z.enum(POLICY_REPLACEMENT_REASONS),
+    })
     .optional(),
 });
 

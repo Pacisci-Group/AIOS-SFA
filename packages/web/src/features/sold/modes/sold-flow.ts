@@ -38,7 +38,6 @@ export interface FlowReady {
   context: SoldDealLeadContext;
   carriers: CarrierOption[];
   staff: SoldStaffOption[];
-  householdId?: string | null;
   /**
    * Where in-progress documents upload to. Each mode names its own anchor — the
    * wizard used to infer it and got the rewrite wrong, so it is data now.
@@ -51,18 +50,14 @@ export interface FlowReady {
 /**
  * One of the three ways a policy gets written, reduced to what the page renders.
  *
- * The three flows — a sale, a CSR's package change, a cancel rewrite — differ in
- * the record they anchor on, the endpoint they post to and where they return to,
- * and in nothing else: they ask for the same information through the same
- * wizard, block for the same *kinds* of reason, and fail the same way. That
- * shared shape is this interface, and `SoldDealPage` is the single page that
- * renders it.
+ * A sale and a replacement (a Cancel Rewrite or Company Transfer on a lead
+ * created for it) ask for the same information through the same wizard, block
+ * for the same *kinds* of reason, and fail the same way. That shared shape is
+ * this interface, and `SoldDealPage` is the single page that renders it.
  *
- * Before PAC-126 each flow had its own page, and the three had already drifted —
- * the sale retried a failed context load, the other two only offered a link
- * back; the rewrite mirrored its server guards as cards, the transfer mirrored a
- * different three. A mode returns data now, so a change to the shell reaches all
- * three at once.
+ * Before PAC-126 the transfer and the rewrite each had a page and an endpoint
+ * of their own, and the three had drifted apart while doing the same job. A
+ * mode returns data now, so a change to the shell reaches every flow at once.
  */
 export interface SoldFlow {
   variant: WizardVariant;

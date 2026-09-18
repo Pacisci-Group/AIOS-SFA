@@ -8,6 +8,11 @@ import {
 } from '../../activities/schemas/activity.schema';
 import { TransactionRunner } from '../../common/mongo/transaction.runner';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
+import {
+  Household,
+  HouseholdDocument,
+} from '../../households/schemas/household.schema';
+import { Policy, PolicyDocument } from '../../policies/schemas/policy.schema';
 import type { NormalizedLeadSource } from '@sfa/shared';
 import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import { AdvanceLeadStep } from './advance-lead.step';
@@ -60,6 +65,10 @@ export class SoldDealIntakeService {
     @InjectModel(Deal.name) private readonly dealModel: Model<DealDocument>,
     @InjectModel(Activity.name)
     private readonly activityModel: Model<ActivityDocument>,
+    @InjectModel(Household.name)
+    private readonly householdModel: Model<HouseholdDocument>,
+    @InjectModel(Policy.name)
+    private readonly policyModel: Model<PolicyDocument>,
     private readonly transactions: TransactionRunner,
     private readonly deals: ResolveDealStep,
     private readonly policies: UpsertPoliciesStep,
@@ -166,16 +175,18 @@ export class SoldDealIntakeService {
    * row failed would fail in the wrong direction. Same precedent as
    * `LeadIntakeService.recordCreatedActivity`.
    *
-   * **Both effects are lead-scoped, so a policy transfer skips both.** There is
-   * no lead to advance, and `ACTIVITY_TYPES` has no member meaning
-   * "transferred" — `Activity.leadId` is required by every reader of the feed,
-   * and writing a `sold` row for something that was not sold would be worse
-   * than writing nothing. The transfer's ticket timeline carries it instead.
+   * The household recount runs first and for **every** deal, lead or not. The
+   * other two are lead-scoped: there is no lead to advance on a leadless
+   * booking, and `ACTIVITY_TYPES` has no member meaning "transferred" —
+   * `Activity.leadId` is required by every reader of the feed, and writing a
+   * `sold` row for something that was not sold would be worse than nothing.
    */
   async recordSideEffects(
     ctx: SoldIntakeContext,
     outcome: SoldIntakeOutcome,
   ): Promise<{ leadStatus: string | null }> {
+    await this.recountHouseholdPolicies(ctx.householdId);
+
     if (!ctx.leadId) {
       return { leadStatus: null };
     }
@@ -208,6 +219,41 @@ export class SoldDealIntakeService {
     }
 
     return { leadStatus };
+  }
+
+  /**
+   * Bring `Household.totalActivePolicies` back in line with reality.
+   *
+   * Lived on the ticket-anchored transfer until PAC-126 retired it, which
+   * meant the **sold path never recounted at all** — every ordinary sale left
+   * the stored count where the migration put it. The household card computes
+   * its headline from the live policy list so nobody saw it there, but the
+   * Clients list sorts on the stored field, and a replacement that splits one
+   * policy into two moves it. It belongs here, where every booking passes.
+   *
+   * Recounted rather than incremented so a re-run is still correct, and
+   * best-effort like the activity row: the deal is committed by now, and a
+   * stale count is a worse reason to fail a request than no reason.
+   */
+  private async recountHouseholdPolicies(
+    householdId: Types.ObjectId,
+  ): Promise<void> {
+    try {
+      const active = await this.policyModel.countDocuments({
+        householdId,
+        active: true,
+      });
+      await this.householdModel.updateOne(
+        { _id: householdId },
+        { $set: { totalActivePolicies: active } },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Household policy recount failed for ${householdId.toString()}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private async findByToken(

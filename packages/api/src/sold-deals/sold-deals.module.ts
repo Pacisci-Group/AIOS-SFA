@@ -11,6 +11,7 @@ import {
   QuoteRecapSchema,
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import { PoliciesModule } from '../policies/policies.module';
 import { SoldIntakeModule } from './intake/sold-intake.module';
 import { SoldDealsController } from './sold-deals.controller';
 import { SoldDealsService } from './sold-deals.service';
@@ -45,6 +46,15 @@ import { SoldDealsService } from './sold-deals.service';
     // The defensive-driver picker's roster and its per-household roles
     // (PAC-91 §5).
     HouseholdMembersModule,
+    /*
+     * `PolicyRewritesService.recordForLead` — the chargeback and the intent
+     * stamp that finish a replacement booked through this form (PAC-126).
+     *
+     * Acyclic: `PoliciesModule` imports `SoldIntakeModule` (the steps) and
+     * deliberately **not** this module, precisely so the pipeline can be shared
+     * without a cycle. See its own note.
+     */
+    PoliciesModule,
   ],
   controllers: [SoldDealsController],
   providers: [SoldDealsService],

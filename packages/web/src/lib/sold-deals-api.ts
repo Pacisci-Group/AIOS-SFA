@@ -33,23 +33,18 @@ export type SoldUploadKind = "discount_proof" | "new_business_application";
  * What an in-progress upload hangs off.
  *
  * The wizard uploads while it is still being filled in, so there is no deal yet
- * to scope a document to — it is anchored on whatever the flow *does* have. A
- * sale has a lead; a policy transfer has a ticket (and, through it, a
- * household); a cancel rewrite has the policy being replaced (and, through it,
- * the same household). Each uses a different key prefix on the server, and that
- * prefix is the ownership check, so this has to be explicit rather than a bare
- * id whose meaning depends on the caller.
+ * to scope a document to — it is anchored on the lead, and the key prefix the
+ * server derives from it is the ownership check.
  *
- * ⚠ **The flow that owns the wizard passes this in.** It used to be inferred
- * inside `SoldDealWizard` from `variant === "transfer" && ticketId`, which meant
- * the rewrite — added later — silently fell through to the lead branch with an
- * empty `leadId`, and every upload on it failed validation. An anchor that is
- * given cannot be forgotten by the next variant.
+ * Still a discriminated union with one member, and still passed in by the flow
+ * rather than derived inside the wizard, on purpose. It had three members until
+ * PAC-126 — a ticket-anchored transfer and a policy-anchored rewrite each had a
+ * presign of their own — and the wizard inferred which from its variant, which
+ * is how the rewrite fell through to the lead branch with an empty `leadId` and
+ * could never upload. Both flows run on a lead now. The shape stays so the next
+ * anchor, if there is one, is a compile error here rather than a fallback.
  */
-export type UploadScope =
-  | { kind: "lead"; leadId: string }
-  | { kind: "ticket"; ticketId: string }
-  | { kind: "policy-rewrite"; policyId: string };
+export type UploadScope = { kind: "lead"; leadId: string };
 
 /** `GET /sold-deals/context?leadId=` — the header and driver picker source. */
 export function getSoldDealContext(
@@ -89,17 +84,13 @@ export function checkPolicyNumber(
  * business application at verification time rather than trusting the presign.
  */
 /**
- * Where each anchor presigns. Exhaustive over {@link UploadScope}, so adding a
- * fourth flow is a compile error here rather than a silent fallback.
+ * Where each anchor presigns. Exhaustive over {@link UploadScope}, so a new
+ * anchor is a compile error here rather than a silent fallback.
  */
 function presignEndpoint(scope: UploadScope): string {
   switch (scope.kind) {
     case "lead":
       return "/sold-deals/documents/presign";
-    case "ticket":
-      return `/crm/service-tickets/${encodeURIComponent(scope.ticketId)}/policy-transfer/presign`;
-    case "policy-rewrite":
-      return `/policies/${encodeURIComponent(scope.policyId)}/rewrite/presign`;
   }
 }
 
@@ -113,10 +104,7 @@ export async function uploadSoldDocument(
     {
       method: "POST",
       body: JSON.stringify({
-        // The lead endpoint takes its anchor in the body; the other two take it
-        // in the path and read the household off it server-side, so a caller
-        // cannot name a household it does not own.
-        ...(scope.kind === "lead" ? { leadId: scope.leadId } : {}),
+        leadId: scope.leadId,
         kind,
         filename: file.name,
         contentType: file.type,

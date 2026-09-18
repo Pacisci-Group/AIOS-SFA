@@ -1,3 +1,4 @@
+import type { PolicyReplacementReason } from './policy-replacement';
 /**
  * Sold Deal wire contracts (PAC-40) — shared by the NestJS write path and the
  * `/sold/new` wizard.
@@ -407,6 +408,21 @@ export interface SoldDealLeadContext {
    * every migrated lead.
    */
   hasQuoteRecap: boolean;
+  /**
+   * Why this lead exists, when it exists only to replace a policy (PAC-126) —
+   * null for an ordinary sale.
+   *
+   * The wizard reads it for two things: the heading (a rewrite is not "Mark as
+   * sold"), and **skipping the quote-recap block**. A replacement is not a
+   * proposal being shopped — the carrier or the client forced a change to
+   * coverage that is already sold — so there is no quote to have recorded, and
+   * requiring one would dead-end the flow on a form with nothing to put in it.
+   *
+   * `hasQuoteRecap` still reports the truth beside this rather than being
+   * forced to `true`: the gate is the caller's decision, and a field that lies
+   * about what exists would mislead the next reader of it.
+   */
+  replacementReason: PolicyReplacementReason | null;
 }
 
 export interface SoldHouseholdContact {

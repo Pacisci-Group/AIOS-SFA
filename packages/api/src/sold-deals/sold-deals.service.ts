@@ -28,7 +28,11 @@ import {
   rolesByContact,
 } from '../households/household-members.service';
 import type { HouseholdDocument } from '../households/schemas/household.schema';
-import type { LeadDocument } from '../leads/schemas/lead.schema';
+import {
+  replacementIntentOf,
+  type LeadDocument,
+} from '../leads/schemas/lead.schema';
+import { PolicyRewritesService } from '../policies/policy-rewrites.service';
 import type {
   CreateSoldDealDto,
   SoldDealContextDto,
@@ -61,6 +65,12 @@ export class SoldDealsService {
     private readonly crmAssignment: CrmAssignmentService,
     private readonly leadTickets: LeadTicketsService,
     private readonly memberships: HouseholdMembersService,
+    /*
+     * Finishes a replacement booked through this form — the chargeback on a
+     * Cancel Rewrite, and stamping the lead's intent consumed — both inside the
+     * deal's own transaction (PAC-126).
+     */
+    private readonly replacements: PolicyRewritesService,
   ) {}
 
   /**
@@ -133,6 +143,7 @@ export class SoldDealsService {
       contacts: household ? await this.householdContacts(household) : [],
       leadStatus: normalizeLeadStatus(lead.status),
       hasQuoteRecap: await this.hasQuoteRecap(lead),
+      replacementReason: replacementIntentOf(lead)?.reason ?? null,
     };
   }
 
@@ -262,14 +273,45 @@ export class SoldDealsService {
       soldDocumentPurpose(lead._id.toString(), kind),
     );
 
+    /*
+     * Is this lead a replacement? (PAC-126)
+     *
+     * A Cancel Rewrite and a Company Transfer run through this very path, so the
+     * lead carries the answer and the submit applies it. Read here rather than
+     * taken from the request: the client sends the same body either way, and
+     * letting it declare "this is a rewrite" would let anyone retire any policy
+     * their scope can reach, chargeback and all.
+     *
+     * Because this is read on **every** submit for the lead, there is no way to
+     * book an ordinary sale on a replacement lead and quietly skip the
+     * retirement — which is the failure the whole design has to avoid.
+     */
+    const replacement = replacementIntentOf(lead);
+
     const ctx: SoldIntakeContext = {
       agencyId: tenant.agencyId,
       branchId: tenant.branchId,
       producerId: new Types.ObjectId(access.userId),
       leadId: lead._id,
-      // The Sold form is, by definition, the new-business path. A company
-      // transfer reaches the same pipeline through the CRM ticket instead.
-      businessType: 'new_business',
+      /*
+       * The Sold form is the new-business path — except when the lead exists to
+       * move a client within their own book.
+       *
+       * A **Company Transfer is not production**: nothing was sold, so it is
+       * booked `company_transfer` and `PerformanceService` never counts it. A
+       * **Cancel Rewrite is** a real sale and stays `new_business`; what it does
+       * to the producer's figures is the chargeback's business, not this field's.
+       * `RETIRED_POLICY_STATUS` and `rewriteFinancialOutcome` are where that
+       * split is actually defined.
+       */
+      businessType:
+        replacement?.reason === 'company_transfer'
+          ? 'company_transfer'
+          : 'new_business',
+      // Why the *original* is going away — distinct from `businessType`, which
+      // describes the replacement. `UpsertPoliciesStep.retireTransferred` reads
+      // this to decide the retired policy's status.
+      replacementReason: replacement?.reason,
       householdId: household._id,
       // Resolved and agency-checked above; the prior-insurance step reads it
       // rather than querying users inside the transaction.
@@ -282,11 +324,49 @@ export class SoldDealsService {
       submissionToken: token,
     };
 
+    /*
+     * `fromPolicyId` goes on the **first** policy row only, injected here rather
+     * than accepted from the client for the same reason as `replacementReason`.
+     *
+     * One policy is being replaced, so exactly one row may claim to replace it:
+     * on every row it would retire the same policy N times and leave
+     * `transferredToPolicyId` pointing at whichever was written last. A
+     * replacement that splits one policy into two (an Auto becoming Auto +
+     * Motorcycle) is a real case — the extra rows are simply new policies on the
+     * same new deal.
+     */
+    const intakeDto: CreateSoldDealDto = replacement
+      ? {
+          ...dto,
+          policies: dto.policies.map((row, index) =>
+            index === 0
+              ? { ...row, fromPolicyId: String(replacement.policyId) }
+              : row,
+          ),
+        }
+      : dto;
+
     const outcome = await this.intake.process(
       ctx,
-      dto,
+      intakeDto,
       access,
       lead.leadSource,
+      replacement
+        ? // Inside the transaction. A replacement written without its chargeback
+          // keeps credit that was clawed back, and a replacement written without
+          // the intent stamped consumed can be booked a second time from the
+          // resume path — neither would ever be detected.
+          async (deps, policies, dealId) => {
+            await this.replacements.recordForLead({
+              deps,
+              lead,
+              intent: replacement,
+              replacementPolicyId: policies[0]?.policyId ?? null,
+              dealId,
+              soldDate: dto.soldDate,
+            });
+          }
+        : undefined,
     );
     const { leadStatus } = await this.intake.recordSideEffects(ctx, outcome);
 

@@ -3,8 +3,6 @@ import type {
   PolicySearchResult,
   PolicySummary,
   PolicyView,
-  PolicyRewriteResult,
-  SoldPolicyInput,
   UpdatePolicyInput,
   UpdatePolicyResult,
 } from '@sfa/shared';
@@ -15,7 +13,6 @@ export type {
   PolicySearchResult,
   PolicySummary,
   PolicyView,
-  PolicyRewriteResult,
   UpdatePolicyInput,
   UpdatePolicyResult,
 };
@@ -97,27 +94,4 @@ export function updateHouseholdPolicy(
  */
 export function getPolicyHistory(policyId: string) {
   return apiFetch<PolicyReplacementChain>(`${BASE}/${policyId}/history`);
-}
-
-/**
- * Cancel a policy and book its replacement in one request.
- *
- * `cancelledAt` is both the date the one-month clawback window is judged
- * against and the replacement deal's sold date — the server clamps it to
- * neither-future-nor-before-the-sale. The result carries what was charged back,
- * so the caller can tell the producer rather than leaving them to find it at
- * month end.
- */
-export function rewritePolicy(
-  policyId: string,
-  input: {
-    cancelledAt: string;
-    policies: SoldPolicyInput[];
-    submissionToken?: string;
-  },
-) {
-  return apiFetch<PolicyRewriteResult>(`${BASE}/${policyId}/rewrite`, {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
 }

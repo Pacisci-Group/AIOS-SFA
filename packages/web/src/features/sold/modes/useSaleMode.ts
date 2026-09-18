@@ -1,4 +1,7 @@
-import { isSoldLeadStatus } from "@sfa/shared";
+import {
+  isSoldLeadStatus,
+  POLICY_REPLACEMENT_REASON_LABELS,
+} from "@sfa/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -131,7 +134,22 @@ export function useSaleMode({
       detail:
         "Its deal is on the lead page, where individual policies can still be corrected.",
     };
-  } else if (context?.householdId && !context.hasQuoteRecap) {
+  } else if (
+    context?.householdId &&
+    !context.hasQuoteRecap &&
+    !context.replacementReason
+  ) {
+    /*
+     * **Waived for a replacement** (PAC-126). A Cancel Rewrite or Company
+     * Transfer is not a proposal being shopped — the carrier or the client
+     * forced a change to coverage that is already sold — so there is no quote to
+     * have recorded, and requiring one would dead-end the chain on a form with
+     * nothing to put in it.
+     *
+     * Only the *gate* is waived. `hasQuoteRecap` still reports the truth beside
+     * `replacementReason` rather than being forced true server-side, because a
+     * field that lies about what exists misleads the next reader of it.
+     */
     blocked = {
       title: "No quote has been recorded for this lead.",
       detail:
@@ -139,10 +157,31 @@ export function useSaleMode({
     };
   }
 
+  /*
+   * A replacement runs this same mode — it is an ordinary sale as far as the
+   * wizard is concerned, and the server applies the retirement, the linking and
+   * the chargeback from the lead's intent. Only the wording changes, because
+   * "Mark as sold" is not what a rep cancelling a policy thinks they are doing.
+   */
+  const replacementReason = context?.replacementReason ?? null;
+
   return {
-    variant: "sale",
-    title: "Mark as sold",
-    subtitle: "Record the closed sale",
+    /*
+     * The `replacement` variant drops two cards the sale asks for. Prior
+     * insurance, because the policy being replaced is already ours — there is
+     * no other carrier to name, and the discounts card's "Prior insurance"
+     * checkbox would otherwise make a card the variant never shows mandatory.
+     * And the from-policy picker, because the policy being replaced is stamped
+     * on the lead and the server injects it. Known at mount: the wizard only
+     * renders once the context has loaded.
+     */
+    variant: replacementReason ? "replacement" : "sale",
+    title: replacementReason
+      ? `${POLICY_REPLACEMENT_REASON_LABELS[replacementReason]} — step 2 of 2`
+      : "Mark as sold",
+    subtitle: replacementReason
+      ? "The replacement policy"
+      : "Record the closed sale",
     backTo,
     backLabel: "Back to lead",
     redirect: OBJECT_ID.test(leadId) ? null : "/leads",
@@ -167,6 +206,9 @@ export function useSaleMode({
             carriers: carriersQuery.data,
             staff: staffQuery.data ?? [],
             uploadScope: { kind: "lead", leadId },
+            notice: replacementReason
+              ? "Nothing is cancelled until you submit. The old policy is retired, the replacement is written and any chargeback is recorded together."
+              : undefined,
           }
         : null,
     submitting: mutation.isPending,

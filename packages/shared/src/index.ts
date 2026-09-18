@@ -22,6 +22,7 @@ export * from './domain/leaderboard';
 export * from './domain/legacy-service-ticket';
 export * from './domain/lead-detail';
 export * from './domain/lead-intake';
+export * from './domain/lead-replacement-intent';
 export * from './domain/lead-source';
 export * from './domain/lead-status';
 export * from './domain/lead-temperature';
