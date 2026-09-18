@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2, Lock } from "lucide-react";
+import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2, Lock, ArrowDownUp } from "lucide-react";
 import {
-  SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_PICKER_STATUSES,
   isTerminalTicketStatus,
   type ServiceTicketStatus,
@@ -15,26 +14,46 @@ import {
 } from "@/components/ui/select";
 import { TICKET_STATUS_CONFIG } from "@/features/tickets/components/ticket-data";
 import type { ServiceTicketView } from "@/lib/service-tickets-api";
-import { sortByUrgency } from "@/lib/ticket-urgency";
+import {
+  ALL_TICKET_TYPES,
+  DEFAULT_TICKET_QUEUE_SORT,
+  TICKET_QUEUE_SORTS,
+  TICKET_QUEUE_URL_ALLOWED,
+  TICKET_QUEUE_URL_DEFAULTS,
+  matchesTicketQueueTab,
+  sortTicketQueue,
+  ticketQueueCategoryOptions,
+  type TicketQueueSort,
+  type TicketQueueTab,
+} from "@/lib/ticket-queue";
+import { ticketUrgencyBand } from "@/lib/ticket-urgency";
 import { useUrlState } from "@/hooks/useUrlState";
 
 type SlaStatus = "critical" | "warning" | "normal";
 
 /**
- * One list, two jobs: the tab strip's vocabulary and the URL guard below. A new
- * tab that the URL would reject is a compile error rather than a filter that
- * silently falls back to "all" when someone shares the link.
+ * The tabs this queue offers — a subset of the shared vocabulary in
+ * `@/lib/ticket-queue`, which the ticket workspace's feed reads from the same
+ * URL params. `open` and `resolved` are left out here: this card is the day's
+ * work, and finished tickets live on the Archived Tickets page.
+ *
+ * One list, two jobs: the tab strip below and the URL guard. A new tab that the
+ * URL would reject is a compile error rather than a filter that silently falls
+ * back to "all" when someone shares the link.
  */
-const FILTER_TABS = ["all", "overdue", "waiting"] as const;
+const FILTER_TABS = [
+  "all",
+  "overdue",
+  "waiting",
+] as const satisfies readonly TicketQueueTab[];
 type FilterTab = (typeof FILTER_TABS)[number];
 
-/**
- * "No type filter" as the `Select` sees it. Radix reserves the empty string for
- * "nothing selected", which would render the trigger as a blank box rather than
- * "All types" — so the unfiltered state carries a sentinel here and stays `''`
- * in the URL, where absence is what means unfiltered.
- */
-const ALL_TYPES = "__all__";
+/** Worded for the service-rep persona; the values are the shared vocabulary. */
+const TAB_LABELS: Record<FilterTab, string> = {
+  all: "All Assigned",
+  overdue: "Overdue",
+  waiting: "Waiting on Others",
+};
 
 interface PriorityTicketQueueProps {
   tickets: ServiceTicketView[];
@@ -72,7 +91,7 @@ interface QueueTicket {
 const PAGE_SIZE = 8;
 
 /**
- * The queue's tab and page live in the URL, not in `useState`.
+ * The queue's tab, type, sort and page live in the URL, not in `useState`.
  *
  * Same reasoning as the Leads list (`useLeadsUrlState`): opening a ticket and
  * hitting back restores the view the rep left, a refresh keeps it, and page 3
@@ -80,40 +99,30 @@ const PAGE_SIZE = 8;
  * ride along or the page number means nothing — `?page=3` against a different
  * tab is a different set of tickets.
  *
+ * The first three names are shared with the ticket workspace's feed
+ * (`TICKET_QUEUE_URL_DEFAULTS`), which is what lets `ServiceDashboardPage`
+ * carry this view across when a row is opened. `page` is ours alone: this card
+ * paginates and the feed scrolls.
+ *
  * Frozen at module scope so `useUrlState`'s memo dependencies stay stable
  * across renders. `page: ''` is the default, so `?page=1` never appears.
  */
 const URL_DEFAULTS = {
-  tab: "all" as string,
+  ...TICKET_QUEUE_URL_DEFAULTS,
   page: "",
-  type: "",
 };
 
 const URL_ALLOWED = {
+  ...TICKET_QUEUE_URL_ALLOWED,
   tab: FILTER_TABS,
   page: (value: string) => /^[1-9]\d*$/.test(value),
-  /*
-   * Bounded rather than pinned to `SERVICE_TICKET_CATEGORIES`.
-   *
-   * This filter is applied to tickets already in memory and never reaches the
-   * API, so a value outside the vocabulary costs nothing worse than an empty
-   * list — while pinning it means any category the data carries but the enum
-   * has since renamed is unselectable, because the guard resets it to '' on
-   * the way back out of the URL. Length is all that needs guarding.
-   */
-  type: (value: string) => value.length <= 60,
 } as const;
-
-/** Every flavour of "blocked on someone else" feeds the Waiting filter. */
-const WAITING_STATUSES: ServiceTicketStatus[] = [
-  "waiting",
-  "waiting_on_client",
-  "waiting_on_carrier",
-];
 
 function toQueueTicket(t: ServiceTicketView): QueueTicket {
   const lastEntry = t.timeline[t.timeline.length - 1];
-  const isWaiting = WAITING_STATUSES.includes(t.status);
+  // Every flavour of "blocked on someone else" — `waiting`,
+  // `waiting_on_client`, `waiting_on_carrier` — feeds the Waiting filter.
+  const isWaiting = ticketUrgencyBand(t.status) === "blocked";
   const slaStatus: SlaStatus =
     t.status === "overdue"
       ? "critical"
@@ -135,9 +144,18 @@ function toQueueTicket(t: ServiceTicketView): QueueTicket {
   };
 }
 
+/**
+ * The SLA strip and badge.
+ *
+ * `bg`/`text` are the same classes the status pill uses for the same claim
+ * (`TICKET_STATUS_CONFIG.overdue`, `--destructive` for "due soon"), so the two
+ * badges on one row no longer say "late" in two different colours — the strip
+ * was red while the pill beside it was amber. `color` stays a literal because
+ * the 4px strip is an inline `backgroundColor`, and it is the same red.
+ */
 const slaConfig: Record<SlaStatus, { color: string; label: string; bg: string; text: string }> = {
-  critical: { color: "#EF4444", label: "Overdue", bg: "bg-[#EF4444]/10", text: "text-[#EF4444]" },
-  warning: { color: "#F59E0B", label: "Due Soon", bg: "bg-[#F59E0B]/10", text: "text-[#F59E0B]" },
+  critical: { color: "#EF4444", label: "Overdue", bg: "bg-red-500/12", text: "text-red-600 dark:text-red-400" },
+  warning: { color: "#F59E0B", label: "Due Soon", bg: "bg-destructive/12", text: "text-destructive" },
   normal: { color: "#4B5D71", label: "On Track", bg: "bg-white/5", text: "text-muted-foreground" },
 };
 
@@ -153,6 +171,8 @@ export function PriorityTicketQueue({
   });
   const activeFilter = urlState.tab as FilterTab;
   const activeType = urlState.type;
+  const activeSort = (urlState.sort ||
+    DEFAULT_TICKET_QUEUE_SORT) as TicketQueueSort;
   const page = Number(urlState.page) || 1;
 
   const [actionMenu, setActionMenu] = useState<string | null>(null);
@@ -160,40 +180,20 @@ export function PriorityTicketQueue({
   const [noteDraft, setNoteDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Most urgent first: overdue leads, and within overdue the ticket that has
-  // been late the longest is at the top. Sorted before mapping so the ranking
-  // can use the due date, which the flattened row shape drops.
-  const queueTickets = useMemo(
-    () =>
-      sortByUrgency(tickets.filter((t) => !isTerminalTicketStatus(t.status)))
-        .map(toQueueTicket),
-    [tickets],
-  );
+  // Overdue leads under both sorts; the option only decides the order inside
+  // each band — late the longest first, or touched most recently first. Sorted
+  // before mapping so the ranking can use the due date and `lastActivityAt`,
+  // both of which the flattened row shape drops.
+  const queueTickets = useMemo(() => {
+    const active = tickets.filter((t) => !isTerminalTicketStatus(t.status));
+    return sortTicketQueue(active, activeSort).map(toQueueTicket);
+  }, [tickets, activeSort]);
 
-  /**
-   * The filter's options: the whole shared vocabulary, plus anything the
-   * tickets carry that isn't in it.
-   *
-   * Deriving the list from the loaded tickets instead — offering only the
-   * categories with an open ticket — reads well and fails badly. A queue that
-   * is all one category offers a single row, and a stored category the enum
-   * doesn't recognise (a legacy label, a rename) drops out of both sides at
-   * once: no option to pick, and no way to reach those tickets. Listing the
-   * vocabulary means the control is the same control on every queue, and the
-   * union keeps an off-vocabulary category selectable. An option with nothing
-   * behind it lands on "No tickets in this view", which is an honest answer.
-   */
-  const typeOptions = useMemo(() => {
-    const canonical = new Set<string>(SERVICE_TICKET_CATEGORIES);
-    const extras = [
-      ...new Set(
-        queueTickets
-          .map((t) => t.ticketType)
-          .filter((type) => type && !canonical.has(type)),
-      ),
-    ].sort();
-    return [...SERVICE_TICKET_CATEGORIES, ...extras];
-  }, [queueTickets]);
+  /** Same control as the workspace feed's — see `ticketQueueCategoryOptions`. */
+  const typeOptions = useMemo(
+    () => ticketQueueCategoryOptions(tickets, activeType),
+    [tickets, activeType],
+  );
 
   /*
    * Type narrows the queue *before* the tabs, so the three tab counts describe
@@ -209,12 +209,14 @@ export function PriorityTicketQueue({
     [queueTickets, activeType],
   );
 
-  const filtered = typeFiltered.filter((t) => {
-    if (activeFilter === "all") return true;
-    if (activeFilter === "overdue") return t.slaStatus === "critical";
-    if (activeFilter === "waiting") return t.isWaiting;
-    return true;
-  });
+  /*
+   * The tab predicate is the shared one, so "Overdue" and "Waiting on Others"
+   * here select exactly what the workspace feed's "Overdue" and "Waiting"
+   * select when this queue's `?tab=` travels with an opened ticket.
+   */
+  const filtered = typeFiltered.filter((t) =>
+    matchesTicketQueueTab(t.status, activeFilter),
+  );
 
   /*
    * Clamped while rendering, so the list never paints a frame of "No tickets in
@@ -245,7 +247,20 @@ export function PriorityTicketQueue({
 
   /** Same one-write rule as `changeFilter` — a new type is a new page 1. */
   const changeType = (next: string) => {
-    setUrlState({ type: next === ALL_TYPES ? "" : next, page: "" });
+    setUrlState({ type: next === ALL_TICKET_TYPES ? "" : next, page: "" });
+    resetView();
+  };
+
+  /**
+   * Same one-write rule again — and page 1 matters more here than anywhere
+   * else: re-ranking moves every row, so page 3 of the old order is a set of
+   * tickets that no longer sits together.
+   */
+  const changeSort = (next: TicketQueueSort) => {
+    setUrlState({
+      sort: next === DEFAULT_TICKET_QUEUE_SORT ? "" : next,
+      page: "",
+    });
     resetView();
   };
 
@@ -271,11 +286,12 @@ export function PriorityTicketQueue({
     }
   }, [page, currentPage, setUrlState]);
 
-  const tabs: { key: FilterTab; label: string; count: number }[] = [
-    { key: "all", label: "All Assigned", count: typeFiltered.length },
-    { key: "overdue", label: "Overdue", count: typeFiltered.filter((t) => t.slaStatus === "critical").length },
-    { key: "waiting", label: "Waiting on Others", count: typeFiltered.filter((t) => t.isWaiting).length },
-  ];
+  const tabs = FILTER_TABS.map((key) => ({
+    key,
+    label: TAB_LABELS[key],
+    count: typeFiltered.filter((t) => matchesTicketQueueTab(t.status, key))
+      .length,
+  }));
 
   return (
     <div className="flex flex-col rounded-xl border border-white/8 bg-card overflow-hidden h-full">
@@ -285,16 +301,45 @@ export function PriorityTicketQueue({
           <h2 className="min-w-0 truncate text-base font-semibold text-foreground tracking-tight">My Priority Tickets</h2>
           <div className="flex flex-shrink-0 items-center gap-2">
             <span className="text-xs text-muted-foreground tabular-nums">{filtered.length} tickets</span>
-            <Select value={activeType || ALL_TYPES} onValueChange={changeType}>
+            {/*
+              Sort sits before the type filter because it is the weaker control:
+              the type filter changes *which* tickets are listed, and reading
+              "33 tickets · sorted by · of this type" left to right keeps the
+              count next to the thing that produced it.
+            */}
+            <Select
+              value={activeSort}
+              onValueChange={(v) => changeSort(v as TicketQueueSort)}
+            >
+              <SelectTrigger
+                size="sm"
+                aria-label="Sort tickets"
+                className="h-7 gap-1.5 rounded-lg border-border bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
+              >
+                <ArrowDownUp size={11} className="flex-shrink-0 opacity-70" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {TICKET_QUEUE_SORTS.map((option) => (
+                  <SelectItem key={option.value} value={option.value} className="text-xs">
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={activeType || ALL_TICKET_TYPES}
+              onValueChange={changeType}
+            >
               <SelectTrigger
                 size="sm"
                 aria-label="Filter by ticket type"
-                className="h-7 max-w-[11rem] gap-1.5 rounded-lg border-white/8 bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
+                className="h-7 max-w-[11rem] gap-1.5 rounded-lg border-border bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">
-                <SelectItem value={ALL_TYPES} className="text-xs">All types</SelectItem>
+                <SelectItem value={ALL_TICKET_TYPES} className="text-xs">All types</SelectItem>
                 {typeOptions.map((type) => (
                   <SelectItem key={type} value={type} className="text-xs">
                     {type}

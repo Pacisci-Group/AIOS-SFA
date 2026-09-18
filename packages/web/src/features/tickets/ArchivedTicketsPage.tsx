@@ -10,6 +10,8 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
+import { useTicketQueue } from "./useTicketQueue";
+import type { TicketQueueTab } from "@/lib/ticket-queue";
 import type { TicketStatus } from "./components/ticket-data";
 import {
   addServiceTicketNote,
@@ -19,6 +21,13 @@ import {
 } from "@/lib/service-tickets-api";
 
 const ARCHIVED_KEY = ["service-tickets", "archived"];
+
+/**
+ * No status strip here: every ticket on this page is resolved or closed, so
+ * four tabs of which one matches is noise. Frozen at module scope — the queue
+ * hook guards the URL against this list. Search, category and sort still work.
+ */
+const NO_STATUS_TABS: readonly TicketQueueTab[] = [];
 
 /**
  * Archived Tickets — tickets that were resolved more than
@@ -47,6 +56,15 @@ export default function ArchivedTicketsPage() {
 
   const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
 
+  const queue = useTicketQueue({
+    tickets,
+    tabs: NO_STATUS_TABS,
+    selectedId: selectedTicketId,
+  });
+
+  // Same rule as the live workspace: a `?ticket=` deep link wins, otherwise
+  // open the first row the list actually shows.
+  const { firstMatchId } = queue;
   useEffect(() => {
     if (!tickets.length) {
       setSelectedTicketId(null);
@@ -58,11 +76,9 @@ export default function ArchivedTicketsPage() {
       return;
     }
     setSelectedTicketId((current) =>
-      current && tickets.some((t) => t.id === current)
-        ? current
-        : tickets[0].id,
+      current && tickets.some((t) => t.id === current) ? current : firstMatchId,
     );
-  }, [tickets, searchParams]);
+  }, [tickets, searchParams, firstMatchId]);
 
   const selectedTicket = tickets.find((t) => t.id === selectedTicketId) ?? null;
 
@@ -104,9 +120,11 @@ export default function ArchivedTicketsPage() {
   return (
     // Asserts the viewport height itself, matching TicketWorkspacePage — same
     // two-column split, same internal scrolling, and `AppShell` is
-    // `min-h-screen` rather than a pinned parent to measure against.
+    // `min-h-screen` rather than a pinned parent to measure against. No
+    // `flex-1`, for the reason written up there: its `flex-basis: 0%` would
+    // override `h-screen` and let the page grow to the full list.
     <AppShell>
-      <div className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:gap-4 md:px-6">
           <div className="flex min-w-0 items-center gap-2 md:gap-3">
             <MobileNav className="-ml-1" />
@@ -158,10 +176,9 @@ export default function ArchivedTicketsPage() {
               )}
             >
               <TicketFeed
-                tickets={tickets}
+                queue={queue}
                 selectedId={selectedTicketId}
                 onSelect={handleSelect}
-                showStatusTabs={false}
                 emptyLabel={`Nothing archived yet. Tickets land here ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days after they are resolved.`}
               />
             </div>

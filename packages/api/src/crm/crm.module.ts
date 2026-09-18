@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { AuditGenerationModule } from '../audit-generation/audit-generation.module';
 import { ClientsModule } from '../clients/clients.module';
 import {
   DealAudit,
@@ -13,8 +12,6 @@ import {
 } from '../households/schemas/household.schema';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
-import { SoldIntakeModule } from '../sold-deals/intake/sold-intake.module';
-import { PolicyTransfersService } from './policy-transfers.service';
 import {
   AgencyRole,
   AgencyRoleSchema,
@@ -50,15 +47,6 @@ import {
     // Ticket creation resolves the picked household/policy through the same
     // scoped reads the Clients pages use.
     ClientsModule,
-    /*
-     * Policy Transfer drives the *same* pipeline as the Sold form. Importing
-     * `SoldIntakeModule` — which deliberately imports no feature module — rather
-     * than `SoldDealsModule` is what keeps this acyclic: `SoldDealsModule`
-     * imports this one back, for `LeadTicketsService`.
-     */
-    SoldIntakeModule,
-    // A transfer generates its hand-off checklist exactly as a sale does.
-    AuditGenerationModule,
     MongooseModule.forFeature([
       { name: ServiceTicket.name, schema: ServiceTicketSchema },
       { name: User.name, schema: UserSchema },
@@ -84,11 +72,7 @@ import {
     ]),
   ],
   controllers: [ServiceTicketsController],
-  providers: [
-    ServiceTicketsService,
-    LeadTicketsService,
-    PolicyTransfersService,
-  ],
+  providers: [ServiceTicketsService, LeadTicketsService],
   // `LeadTicketsService` is consumed by `LeadsModule` (open the ticket, resolve
   // it on a manual status edit) and `SoldDealsModule` (resolve it when a sale
   // advances the lead to Sold).

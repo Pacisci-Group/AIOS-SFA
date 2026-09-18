@@ -14,7 +14,6 @@ import type {
   ServiceTicketStats,
   ServiceTicketStatus,
   ServiceTicketView,
-  SoldPolicyInput,
 } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
 
@@ -108,27 +107,6 @@ export function listServiceTicketsForHousehold(householdId: string) {
 
 export function getServiceTicket(id: string) {
   return apiFetch<ServiceTicketView>(`${BASE}/${id}`);
-}
-
-/**
- * `POST /crm/service-tickets/:id/policy-transfer` — book the client's move from
- * one package to another.
- *
- * Returns the refreshed ticket, like every other action on this controller, so
- * the caller renders the recorded transfer without a second read.
- */
-export function recordPolicyTransfer(
-  ticketId: string,
-  input: {
-    transferDate: string;
-    policies: SoldPolicyInput[];
-    submissionToken?: string;
-  },
-) {
-  return apiFetch<ServiceTicketView>(
-    `${BASE}/${encodeURIComponent(ticketId)}/policy-transfer`,
-    { method: 'POST', body: JSON.stringify(input) },
-  );
 }
 
 export function updateServiceTicketStatus(

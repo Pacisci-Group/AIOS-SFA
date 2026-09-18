@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { KpiStrip } from "./components/KpiStrip";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
+import { useTicketQueue } from "./useTicketQueue";
 import type { TicketStatus } from "./components/ticket-data";
 import {
   addServiceTicketNote,
@@ -68,8 +69,17 @@ export default function TicketWorkspacePage() {
 
   const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
 
-  // Preselect from ?ticket=<id> (deep link from the Service Dashboard "Open"),
-  // otherwise fall back to the first ticket in the list.
+  /**
+   * The queue's filters, search and ranking — read from the URL, which is what
+   * carries them here from the Service Dashboard's Priority Ticket Queue.
+   */
+  const queue = useTicketQueue({ tickets, selectedId: selectedTicketId });
+
+  // Preselect from ?ticket=<id> (deep link from the Service Dashboard "Open",
+  // the household activity feed, an onboarding chain row), otherwise fall back
+  // to the first row of the queue as filtered — not `tickets[0]`, which is the
+  // API's own order and routinely sits somewhere down the rendered list.
+  const { firstMatchId } = queue;
   useEffect(() => {
     if (!tickets.length) return;
     const requested = searchParams.get("ticket");
@@ -78,11 +88,9 @@ export default function TicketWorkspacePage() {
       return;
     }
     setSelectedTicketId((current) =>
-      current && tickets.some((t) => t.id === current)
-        ? current
-        : tickets[0].id,
+      current && tickets.some((t) => t.id === current) ? current : firstMatchId,
     );
-  }, [tickets, searchParams]);
+  }, [tickets, searchParams, firstMatchId]);
 
   const selectedTicket = tickets.find((t) => t.id === selectedTicketId) ?? null;
 
@@ -195,8 +203,15 @@ export default function TicketWorkspacePage() {
     // rather than pinning the viewport. This page is a two-pane layout that
     // scrolls each pane internally, so it has to assert the viewport height
     // itself — `h-full` would collapse against a parent with no set height.
+    //
+    // **No `flex-1` here.** The shell's column is a flex container with no
+    // height of its own, and `flex-1` sets `flex-basis: 0%` — which resolves
+    // to *content* against an indefinite parent and takes precedence over
+    // `height`. The container then sized itself to every ticket row, the item
+    // grew to match, and `h-screen` never applied: the whole page scrolled and
+    // neither pane did. With the basis left at `auto`, the height is the basis.
     <AppShell>
-      <div className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:gap-4 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <MobileNav className="-ml-1" />
@@ -204,10 +219,15 @@ export default function TicketWorkspacePage() {
               <h1 className="text-lg font-semibold tracking-tight">
                 Service tickets
               </h1>
+              {/* "3 of 41" while a filter is on, rather than a queue-wide 41
+                  above a list of 3 — the two disagreeing is what made the
+                  workspace look like a different queue from the dashboard. */}
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 {ticketsQuery.isLoading || ticketsQuery.isError
                   ? " "
-                  : `${tickets.length} ticket${tickets.length !== 1 ? "s" : ""} in your queue`}
+                  : queue.isFiltered
+                    ? `${queue.rows.length} of ${tickets.length} tickets in your queue`
+                    : `${tickets.length} ticket${tickets.length !== 1 ? "s" : ""} in your queue`}
               </p>
             </div>
           </div>
@@ -248,7 +268,7 @@ export default function TicketWorkspacePage() {
                 )}
               >
                 <TicketFeed
-                  tickets={tickets}
+                  queue={queue}
                   selectedId={selectedTicketId}
                   onSelect={handleSelect}
                 />

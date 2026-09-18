@@ -51,12 +51,17 @@ const NewQuoteRecapPage = lazy(
 const EditQuoteRecapPage = lazy(
   () => import('@/features/quote-recap/EditQuoteRecapPage'),
 );
+/**
+ * One page, one mode: a sale on a lead. A Cancel Rewrite or Company Transfer
+ * is the same sale on a lead stamped with what it replaces (PAC-126) — the
+ * server reads that from the lead, so the page has no mode switch to make.
+ */
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
 const EditSoldDealPage = lazy(
   () => import('@/features/sold/EditSoldDealPage'),
 );
-const PolicyTransferPage = lazy(
-  () => import('@/features/sold/PolicyTransferPage'),
+const RewriteRouteRedirect = lazy(
+  () => import('@/features/sold/RewriteRouteRedirect'),
 );
 const PublicLeadFormPage = lazy(
   () => import('@/features/lead/PublicLeadFormPage'),
@@ -411,6 +416,35 @@ export function App() {
                 />
               </Route>
 
+              {/* Cancel & rewrite used to live here as a page of its own, then
+                  briefly as a mode of the Sold form. It is now a two-form chain
+                  — New Lead, then Sold — started from a button on the policy or
+                  household page, so no URL can express "start a rewrite" and
+                  this only redirects to the policy. Kept because the old URL
+                  was linked from both pages, so it is in history and bookmarks.
+
+                  The gate is kept rather than left to the policy page: it is
+                  the chain's permission (`deal_audits:write`), and gating here
+                  means an unauthorized caller lands back on /clients instead of
+                  bouncing through the redirect. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.DealAudits}:write`}
+                    redirectTo="/clients"
+                  />
+                }
+              >
+                <Route
+                  path="/policies/:policyId/rewrite"
+                  element={
+                    <LazyPage>
+                      <RewriteRouteRedirect />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               {/* Quote Recap form (PAC-39). Deliberately NOT nested under the
                   `leads:read` gate: every endpoint this page calls (context,
                   presign, create) sits behind `quote_recaps`, so one gate covers
@@ -445,8 +479,10 @@ export function App() {
                 />
               </Route>
 
-              {/* Sold form (PAC-40). Gated on `deal_audits:write` because that
-                  is what POST /sold-deals itself requires, so the route and the
+              {/* Sold form (PAC-40), always on a lead — `?leadId=`. A
+                  replacement (PAC-126) is the same form on a lead stamped with
+                  the policy it replaces. Gated on `deal_audits:write` because
+                  that is what POST /sold-deals requires, so the route and the
                   API agree.
 
                   Note PAC-38 has since added `clients:write` to the Producer
@@ -478,34 +514,6 @@ export function App() {
                   element={
                     <LazyPage>
                       <EditSoldDealPage />
-                    </LazyPage>
-                  }
-                />
-              </Route>
-
-              {/* Policy transfer — the same wizard, recorded from a CRM ticket
-                  rather than a lead, and booked as company transfer so it never
-                  counts as new business.
-
-                  Gated on `crm_service:write` for the same reason the Sold form
-                  is gated on `deal_audits:write`: it is what
-                  POST /crm/service-tickets/:id/policy-transfer itself requires,
-                  so the route and the API agree. A producer never reaches this;
-                  a CSR — who holds no `deal_audits` at all — is exactly who
-                  does. */}
-              <Route
-                element={
-                  <RequirePermission
-                    permission={`${ModuleKey.CrmService}:write`}
-                    redirectTo="/crm/tickets"
-                  />
-                }
-              >
-                <Route
-                  path="/policy-transfers/new"
-                  element={
-                    <LazyPage>
-                      <PolicyTransferPage />
                     </LazyPage>
                   }
                 />

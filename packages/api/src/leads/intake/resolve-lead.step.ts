@@ -182,7 +182,33 @@ export class ResolveLeadStep {
       input.address?.street,
       input.address?.zip,
     );
-    if (addressKey) {
+    /*
+     * ⚠ **Address dedupe is skipped for a replacement** (PAC-126).
+     *
+     * A Cancel Rewrite or Company Transfer creates its lead against a household
+     * that already exists, at an address that already exists — so this signal
+     * matches an unrelated open lead on that household almost every time there
+     * is one (a cross-sell being worked, or an earlier abandoned replacement for
+     * a *different* policy). Both of those are within 90 days and neither is
+     * terminal.
+     *
+     * Returning one of those here would be silent and expensive. The intent is
+     * written by `create` only, so a deduped lead comes back **without** it, and
+     * `SoldDealsService` then reads an ordinary sale: the rep fills in the Sold
+     * form believing they are rewriting a policy, and the original is never
+     * retired, never linked and never charged back. Nothing downstream would
+     * detect it.
+     *
+     * A replacement is also not the same enquiry as whatever else is open on the
+     * household — it is a forced change to one named policy. Conflating the two
+     * would put a cancellation onto a record that was about something else.
+     *
+     * The duplicate this does give up guarding against is handled where it
+     * actually matters: `LeadsService.findReplacementLead` keys the resume on
+     * the **intent**, not the address, so asking twice for the same policy
+     * resumes the first lead rather than opening a second.
+     */
+    if (addressKey && !input.replacementIntent) {
       const cutoff = new Date(
         Date.now() - ADDRESS_DEDUPE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
       );
@@ -281,6 +307,27 @@ export class ResolveLeadStep {
             shareLinkId: deps.ctx.shareLinkId,
             submittedAt: now,
           },
+          /*
+           * Why this lead exists, when it exists only to replace a policy
+           * (PAC-126). Already validated by `LeadsService` — the policy was
+           * resolved through the caller's scope and checked replaceable, and
+           * `refs.householdId` was derived from it.
+           *
+           * Written **only here**, on create, and never merged onto an existing
+           * lead: stamping an intent onto a lead a producer has been working all
+           * week would turn their next sale on it into a cancellation. That is
+           * also why signal 3 is skipped for a replacement — see the note there.
+           * The two rules together are what guarantee that a lead carrying an
+           * intent was created for it and nothing else.
+           */
+          replacementIntent: input.replacementIntent
+            ? {
+                policyId: input.replacementIntent.policyId,
+                reason: input.replacementIntent.reason,
+                consumedAt: null,
+                consumedByDealId: null,
+              }
+            : undefined,
           // Always false — never computed from the shared `isTestRecord()`
           // helper, which flags any name containing "test"/"sample"/"demo" and
           // would make a real prospect named Demopoulos invisible on every read

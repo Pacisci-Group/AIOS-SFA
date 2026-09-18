@@ -200,9 +200,8 @@ describe('policy-type vocabulary', () => {
  * because getting it wrong misstates a producer's commission basis on screen.
  */
 describe('premium term', () => {
-  it('puts the whole auto family on a 6-month term', () => {
-    // "And it applies for any auto vehicle, right?" — "Correct."
-    for (const policyType of ['Auto', 'Auto - Special', 'Motorcycle']) {
+  it('puts the auto lines on a 6-month term', () => {
+    for (const policyType of ['Auto', 'Auto - Special']) {
       expect(isSemiannualPolicyType(policyType)).toBe(true);
       expect(policyTermMonths(policyType)).toBe(SEMIANNUAL_TERM_MONTHS);
       expect(premiumTermSuffix(policyType)).toBe('/6 mo');
@@ -226,11 +225,24 @@ describe('premium term', () => {
     }
   });
 
+  it('writes motorcycle on a 12-month term', () => {
+    // 2026-09-11: motorcycle had been on the 6-month track since the term rule
+    // was first read as "any auto vehicle". The carrier writes it annually.
+    // Pinned by label, by both SmartSuite code sets, and by the plural spelling,
+    // because each of those is a distinct path through `isSemiannualPolicyType`.
+    for (const policyType of ['Motorcycle', 'motorcycles', 'OMJjl', 'gGKei']) {
+      expect(isSemiannualPolicyType(policyType)).toBe(false);
+      expect(policyTermMonths(policyType)).toBe(ANNUAL_TERM_MONTHS);
+      expect(premiumTermSuffix(policyType)).toBe('/yr');
+      expect(premiumTermLabel(policyType)).toBe('Annual premium');
+    }
+  });
+
   it('resolves a raw SmartSuite code and an alias spelling too', () => {
-    // `PYgez` is Quote Recaps' Auto; `OMJjl` is Motorcycle. A migrated recap
-    // stores the code, and it must label the same as the canonical spelling.
+    // `PYgez` is Quote Recaps' Auto. A migrated recap stores the code, and it
+    // must label the same as the canonical spelling.
     expect(isSemiannualPolicyType('PYgez')).toBe(true);
-    expect(isSemiannualPolicyType('OMJjl')).toBe(true);
+    expect(isSemiannualPolicyType('Zgsh3')).toBe(true);
     expect(isSemiannualPolicyType('auto - special')).toBe(true);
     expect(isSemiannualPolicyType('sNMRK')).toBe(false);
   });
@@ -245,9 +257,17 @@ describe('premium term', () => {
   });
 
   it('keeps the term set separate from the auto-discount set', () => {
-    // They coincide today. The test exists so that changing one to fix a
-    // carrier rule does not silently move the Sold form's discount branch or
-    // the `Drivers Verified` audit item with it.
-    expect([...SEMIANNUAL_TERM_POLICY_TYPES]).toEqual([...AUTO_POLICY_TYPES]);
+    // These used to be the same array. Motorcycle moving to the annual term on
+    // 2026-09-11 is exactly why they are not: it is still a motor vehicle, so
+    // it keeps the Sold form's discount branch and the `Drivers Verified` audit
+    // item, while being quoted and renewed annually.
+    expect(isAutoPolicyType('Motorcycle')).toBe(true);
+    expect(isSemiannualPolicyType('Motorcycle')).toBe(false);
+
+    // Every 6-month type is still an auto line; the containment runs one way.
+    const autos = new Set<string>(AUTO_POLICY_TYPES);
+    for (const policyType of SEMIANNUAL_TERM_POLICY_TYPES) {
+      expect(autos.has(policyType)).toBe(true);
+    }
   });
 });

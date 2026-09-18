@@ -53,9 +53,6 @@ import {
 } from '../deal-audits/schemas/deal-audit.schema';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
-import { PolicyTransfersService } from './policy-transfers.service';
-import type { PresignTransferDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
-import type { CreatePolicyTransferDto } from './dto/policy-transfer.dto';
 import {
   AgencyRole,
   AgencyRoleDocument,
@@ -148,7 +145,6 @@ export class ServiceTicketsService {
     @InjectModel(DealAudit.name)
     private dealAuditModel: Model<DealAuditDocument>,
     private readonly clientsService: ClientsService,
-    private readonly policyTransfers: PolicyTransfersService,
   ) {}
 
   /**
@@ -345,35 +341,6 @@ export class ServiceTicketsService {
       await this.leadStatus(ticket),
       await this.policyTransfer(ticket),
     );
-  }
-
-  /**
-   * A presigned PUT for a policy-transfer document.
-   *
-   * The scope clamp lives here, not in `PolicyTransfersService`: the ticket is
-   * the transfer's only anchor, so `getScopedOrThrow` — which 404s an
-   * out-of-scope ticket — is what stands in for the sold path's
-   * `loadOwnedLead`. Everything downstream reads the household off the ticket
-   * it has already been handed, so nothing the client sends can widen it.
-   */
-  async presignPolicyTransferDocument(
-    access: AccessContext,
-    id: string,
-    dto: PresignTransferDocumentDto,
-  ) {
-    const ticket = await this.getScopedOrThrow(access, id);
-    return this.policyTransfers.presign(ticket, dto);
-  }
-
-  /** Record a policy transfer and return the refreshed ticket. */
-  async recordPolicyTransfer(
-    access: AccessContext,
-    id: string,
-    dto: CreatePolicyTransferDto,
-  ): Promise<ServiceTicketView> {
-    const ticket = await this.getScopedOrThrow(access, id);
-    await this.policyTransfers.record(access, ticket, dto);
-    return this.findOne(access, id);
   }
 
   /**

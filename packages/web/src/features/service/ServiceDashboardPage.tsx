@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Search, ChevronDown, Archive, Plus } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
@@ -16,6 +16,7 @@ import {
   type ServiceTicketStats,
   type ServiceTicketStatus,
 } from "@/lib/service-tickets-api";
+import { ticketQueueLink } from "@/lib/ticket-queue";
 
 const FALLBACK_STATS: ServiceTicketStats = {
   openTickets: 0,
@@ -32,6 +33,7 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
   const ticketsQuery = useQuery({
@@ -66,11 +68,27 @@ export default function App() {
   const tickets = ticketsQuery.data ?? [];
   const scorecardStats = statsQuery.data ?? FALLBACK_STATS;
 
-  const openTicket = (id: string) => navigate(`/crm/tickets?ticket=${id}`);
+  /**
+   * Opening a ticket takes the queue's view with it.
+   *
+   * The Priority Ticket Queue keeps its tab, type filter and sort in the URL,
+   * and the workspace's feed reads the same param names
+   * (`lib/ticket-queue.ts`), so forwarding them means the list beside the
+   * opened ticket is the list the rep clicked in. Without this the workspace
+   * loaded its own unfiltered, differently-tabbed queue and the tickets beside
+   * the one they opened looked like somebody else's.
+   *
+   * Read off the location rather than passed up from the queue: the renewal
+   * desk opens tickets too, and one filter context per page is the point.
+   */
+  const openTicket = (id: string) =>
+    navigate(ticketQueueLink("/crm/tickets", id, searchParams));
 
   return (
     <AppShell>
-      <div className="flex-1 flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
+      {/* No `flex-1` beside `h-screen` — see `TicketWorkspacePage` for why
+          the two cannot coexist inside `AppShell`. */}
+      <div className="flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
