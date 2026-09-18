@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2, Lock } from "lucide-react";
+import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2, Lock, ArrowDownUp } from "lucide-react";
 import {
   SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_PICKER_STATUSES,
@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { TICKET_STATUS_CONFIG } from "@/features/tickets/components/ticket-data";
 import type { ServiceTicketView } from "@/lib/service-tickets-api";
-import { sortByUrgency } from "@/lib/ticket-urgency";
+import { sortByLatestActivity, sortByUrgency } from "@/lib/ticket-urgency";
 import { useUrlState } from "@/hooks/useUrlState";
 
 type SlaStatus = "critical" | "warning" | "normal";
@@ -35,6 +35,28 @@ type FilterTab = (typeof FILTER_TABS)[number];
  * in the URL, where absence is what means unfiltered.
  */
 const ALL_TYPES = "__all__";
+
+/**
+ * How the rows are ranked.
+ *
+ * Urgency is the queue's job and is never switched off: overdue leads, then
+ * workable, then blocked, under either option. "Urgency" orders each of those
+ * bands by how long the ticket has been demanding attention; "Latest activity"
+ * orders the same bands by what has *moved* since the rep last looked — a
+ * status change, a new note, a step completing. It is a refinement of the
+ * ranking, not an alternative to it: a note typed a minute ago never lifts a
+ * ticket above one that blew its SLA a week back. Both are one comparator each
+ * in `@/lib/ticket-urgency`.
+ */
+const SORT_OPTIONS = [
+  { value: "urgency", label: "Urgency" },
+  { value: "activity", label: "Latest activity" },
+] as const;
+
+type SortKey = (typeof SORT_OPTIONS)[number]["value"];
+
+/** Stays out of the URL: the default view carries no `?sort=`. */
+const DEFAULT_SORT: SortKey = "urgency";
 
 interface PriorityTicketQueueProps {
   tickets: ServiceTicketView[];
@@ -87,6 +109,7 @@ const URL_DEFAULTS = {
   tab: "all" as string,
   page: "",
   type: "",
+  sort: "",
 };
 
 const URL_ALLOWED = {
@@ -102,6 +125,12 @@ const URL_ALLOWED = {
    * the way back out of the URL. Length is all that needs guarding.
    */
   type: (value: string) => value.length <= 60,
+  /*
+   * Pinned to the vocabulary, unlike `type` above: a sort key is ours, not the
+   * data's, so anything outside the list is a stale or hand-edited link and
+   * falling back to the default ranking is the right answer.
+   */
+  sort: SORT_OPTIONS.map((o) => o.value),
 } as const;
 
 /** Every flavour of "blocked on someone else" feeds the Waiting filter. */
@@ -153,6 +182,7 @@ export function PriorityTicketQueue({
   });
   const activeFilter = urlState.tab as FilterTab;
   const activeType = urlState.type;
+  const activeSort = (urlState.sort || DEFAULT_SORT) as SortKey;
   const page = Number(urlState.page) || 1;
 
   const [actionMenu, setActionMenu] = useState<string | null>(null);
@@ -160,15 +190,18 @@ export function PriorityTicketQueue({
   const [noteDraft, setNoteDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Most urgent first: overdue leads, and within overdue the ticket that has
-  // been late the longest is at the top. Sorted before mapping so the ranking
-  // can use the due date, which the flattened row shape drops.
-  const queueTickets = useMemo(
-    () =>
-      sortByUrgency(tickets.filter((t) => !isTerminalTicketStatus(t.status)))
-        .map(toQueueTicket),
-    [tickets],
-  );
+  // Overdue leads under both sorts; the option only decides the order inside
+  // each band — late the longest first, or touched most recently first. Sorted
+  // before mapping so the ranking can use the due date and `lastActivityAt`,
+  // both of which the flattened row shape drops.
+  const queueTickets = useMemo(() => {
+    const active = tickets.filter((t) => !isTerminalTicketStatus(t.status));
+    const ordered =
+      activeSort === "activity"
+        ? sortByLatestActivity(active)
+        : sortByUrgency(active);
+    return ordered.map(toQueueTicket);
+  }, [tickets, activeSort]);
 
   /**
    * The filter's options: the whole shared vocabulary, plus anything the
@@ -249,6 +282,16 @@ export function PriorityTicketQueue({
     resetView();
   };
 
+  /**
+   * Same one-write rule again — and page 1 matters more here than anywhere
+   * else: re-ranking moves every row, so page 3 of the old order is a set of
+   * tickets that no longer sits together.
+   */
+  const changeSort = (next: SortKey) => {
+    setUrlState({ sort: next === DEFAULT_SORT ? "" : next, page: "" });
+    resetView();
+  };
+
   const changeFilter = (next: FilterTab) => {
     // One write, not two. `setUrlState` navigates rather than setting state, so
     // a separate `goToPage(1)` in the same tick would compute from a location
@@ -285,6 +328,29 @@ export function PriorityTicketQueue({
           <h2 className="min-w-0 truncate text-base font-semibold text-foreground tracking-tight">My Priority Tickets</h2>
           <div className="flex flex-shrink-0 items-center gap-2">
             <span className="text-xs text-muted-foreground tabular-nums">{filtered.length} tickets</span>
+            {/*
+              Sort sits before the type filter because it is the weaker control:
+              the type filter changes *which* tickets are listed, and reading
+              "33 tickets · sorted by · of this type" left to right keeps the
+              count next to the thing that produced it.
+            */}
+            <Select value={activeSort} onValueChange={(v) => changeSort(v as SortKey)}>
+              <SelectTrigger
+                size="sm"
+                aria-label="Sort tickets"
+                className="h-7 gap-1.5 rounded-lg border-white/8 bg-secondary/60 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-secondary/60 dark:hover:bg-secondary"
+              >
+                <ArrowDownUp size={11} className="flex-shrink-0 opacity-70" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {SORT_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value} className="text-xs">
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Select value={activeType || ALL_TYPES} onValueChange={changeType}>
               <SelectTrigger
                 size="sm"

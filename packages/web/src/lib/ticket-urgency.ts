@@ -82,3 +82,53 @@ export function sortByUrgency(
 ): ServiceTicketView[] {
   return [...tickets].sort(compareTicketUrgency);
 }
+
+/**
+ * The other question a queue gets asked: *what moved?*
+ *
+ * Urgency answers "what should I work on next" and deliberately ignores
+ * recency (see the note at the top of this file). But a CSR coming back to a
+ * shared queue also needs "what changed since I last looked" — a carrier
+ * replied, a colleague left a note, somebody moved a ticket to Waiting — and
+ * urgency buries all of that: a note on a five-day-old ticket leaves it exactly
+ * where it was.
+ *
+ * **Recency is applied within urgency, not instead of it.** The status bands
+ * are kept — overdue still leads, then workable, then blocked — and only the
+ * order inside each band changes to most-recently-touched first. This used to
+ * be a plain recency sort, which put a ticket someone had just typed a note
+ * into above every overdue one; the queue's job is to keep the late tickets on
+ * top whichever way it is sorted, so this is *urgency, then activity*, and the
+ * age-based order the default uses inside a band is what recency replaces.
+ *
+ * `lastActivityAt` is the server's own answer to "what moved", and it is bumped
+ * by every write that touches the ticket — a status change
+ * (`applyManualStatus`), a note (`addNote`), an onboarding or renewal step. It
+ * is *not* recomputed from the timeline here: an onboarding ticket's schedule
+ * moves its activity instant without appending a timeline entry, so the last
+ * entry's `at` would quietly disagree with the "2 hours ago" label the row
+ * already renders.
+ */
+export function compareLatestActivity(
+  a: ServiceTicketView,
+  b: ServiceTicketView,
+): number {
+  const byStatus = URGENCY_RANK[a.status] - URGENCY_RANK[b.status];
+  if (byStatus !== 0) return byStatus;
+
+  const byActivity =
+    Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt);
+  if (byActivity !== 0) return byActivity;
+
+  // Two tickets in one band touched in the same millisecond (a seeded queue, a
+  // bulk write) fall back to the band's default ranking — age, then priority —
+  // rather than to arrival order.
+  return compareTicketUrgency(a, b);
+}
+
+/** Sorted copy: urgency bands kept, most recently touched first within each. */
+export function sortByLatestActivity(
+  tickets: ServiceTicketView[],
+): ServiceTicketView[] {
+  return [...tickets].sort(compareLatestActivity);
+}
