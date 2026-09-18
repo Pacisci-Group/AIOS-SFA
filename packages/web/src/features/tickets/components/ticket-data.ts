@@ -15,7 +15,6 @@ import {
 import type {
   ServiceTicketActivity,
   ServiceTicketCategory,
-  ServiceTicketPriority,
   ServiceTicketStatus,
   ServiceTicketView,
 } from "@sfa/shared";
@@ -29,7 +28,6 @@ export type Ticket = ServiceTicketView;
 export type TimelineEntry = ServiceTicketActivity;
 export type TicketStatus = ServiceTicketStatus;
 export type TicketCategory = ServiceTicketCategory;
-export type Priority = ServiceTicketPriority;
 
 /**
  * Shared display vocabulary for the CRM Service surfaces — the ticket feed, the
@@ -50,8 +48,9 @@ export type Priority = ServiceTicketPriority;
  *
  * - Prefer a **token** where one carries the meaning. `--primary` is the app's
  *   accent, `--success` the brand emerald, and `--destructive` is amber in this
- *   app — which is precisely the "needs attention" hue the mockup used for
- *   overdue, so overdue is `destructive` rather than a raw amber.
+ *   app — which is the "due soon" hue: 10+ days open, or waiting on someone.
+ *   Overdue is *red*, which no token carries; the note on that entry below
+ *   explains why the two had to be pulled apart.
  * - Where no token exists, use a `X-600 dark:X-400` **pair**. The mockup's
  *   values were chosen against navy and fail on `#F8FAFC` (`red-400` is ~2.5:1
  *   on white, `slate-300` ~1.4:1). The `dark:` half pins the navy rendering to
@@ -105,11 +104,29 @@ export const TICKET_STATUS_CONFIG: Record<
     text: "text-success",
     dot: "bg-success",
   },
+  /*
+   * Red, not `--destructive`.
+   *
+   * `--destructive` is amber in this app, and the mockup did use amber for
+   * overdue — but the Service Dashboard's SLA badge has always drawn overdue in
+   * red (`slaConfig.critical`), so the queue row's own status pill sat next to a
+   * red "Overdue" badge saying the same thing in orange, and the status
+   * dropdown on the ticket workspace was orange again. One hue per claim, and
+   * this is the one the rest of the app already used:
+   *
+   *   red   — late (this status, and an onboarding step past its `dueAt`)
+   *   amber — aging or due soon (10+ days open, waiting on someone)
+   *
+   * That leaves `--destructive` meaning only "due soon", which is what the
+   * dashboard's `warning` badge and the feed's `{daysOpen}d open` pill use it
+   * for. A pair rather than a token because there is no red token — see the
+   * rules at the top of this file.
+   */
   overdue: {
     label: "Overdue",
-    bg: "bg-destructive/12 dark:bg-destructive/12",
-    text: "text-destructive",
-    dot: "bg-destructive",
+    bg: "bg-red-500/12 dark:bg-red-500/12",
+    text: "text-red-600 dark:text-red-400",
+    dot: "bg-red-500 dark:bg-red-400",
   },
   // Statuses a ticket can be opened with from the create form. They render
   // wherever a ticket is shown even though the status pickers don't offer them.
@@ -139,18 +156,21 @@ export const TICKET_STATUS_CONFIG: Record<
   },
 };
 
-/**
- * Priority pill tint.
+/*
+ * There is deliberately no priority pill here any more.
  *
- * Red rather than `--destructive` (which is amber here): high priority and
- * overdue are different claims, and a CSR scanning the feed has to be able to
- * tell "this is urgent by nature" from "this has been sitting too long".
+ * `ServiceTicket.priority` is still stored and still carries real values on
+ * tickets migrated from SmartSuite, but nothing in this app can set or change
+ * it: the create dialog does not offer the field, the onboarding and renewal
+ * chains hardcode `medium`, and there is no endpoint for it. So every ticket
+ * opened here reads "medium" forever, which put a meaningless badge next to the
+ * status badge that actually answers "what state is this ticket in". Both
+ * places that rendered it — the workspace feed row and the ticket detail card —
+ * show the status instead.
+ *
+ * Bring the pill back (with its red/amber/slate tints) when priority becomes
+ * editable; until then it is decoration that contradicts the row beside it.
  */
-export const TICKET_PRIORITY_CLASS: Record<Priority, string> = {
-  high: "bg-red-500/12 text-red-600 dark:text-red-400",
-  medium: "bg-amber-500/15 text-amber-700 dark:text-amber-500",
-  low: "bg-slate-500/12 text-slate-600 dark:text-slate-400",
-};
 
 /**
  * Icon and accent per ticket category, carried over from the mockup's activity

@@ -12,22 +12,51 @@ import type { ServiceTicketStatus, ServiceTicketView } from '@sfa/shared';
  */
 
 /**
- * How loudly a status demands attention. Lower sorts first.
+ * The four states a queue actually reasons about: something is late, something
+ * is workable now, something is blocked on someone else, or it is finished.
  *
- * The finer create-form statuses collapse onto the four states the queue
- * actually reasons about: something is late, something is workable now,
- * something is blocked on someone else, or it is finished.
+ * The eight stored statuses (`SERVICE_TICKET_STATUSES`) collapse onto these,
+ * and the collapse is shared rather than re-derived per surface — the ranking
+ * below and the queue's status filters (`lib/ticket-queue.ts`) are then two
+ * readings of one taxonomy, so a tab can never disagree with the band a ticket
+ * was sorted into. The finer create-form statuses (`in_progress`,
+ * `waiting_on_client`, `waiting_on_carrier`) are exactly what made them
+ * disagree before: a `waiting_on_carrier` ticket sorted as blocked but failed
+ * the workspace feed's "Waiting" filter, which tested `status === 'waiting'`.
+ *
+ * Declared most-urgent-first, so the array index is the rank.
  */
-const URGENCY_RANK: Record<ServiceTicketStatus, number> = {
-  overdue: 0,
-  open: 1,
-  in_progress: 1,
-  waiting: 2,
-  waiting_on_client: 2,
-  waiting_on_carrier: 2,
-  resolved: 3,
-  closed: 3,
+export const TICKET_URGENCY_BANDS = [
+  'overdue',
+  'workable',
+  'blocked',
+  'done',
+] as const;
+
+export type TicketUrgencyBand = (typeof TICKET_URGENCY_BANDS)[number];
+
+const STATUS_BAND: Record<ServiceTicketStatus, TicketUrgencyBand> = {
+  overdue: 'overdue',
+  open: 'workable',
+  in_progress: 'workable',
+  waiting: 'blocked',
+  waiting_on_client: 'blocked',
+  waiting_on_carrier: 'blocked',
+  resolved: 'done',
+  closed: 'done',
 };
+
+/** Which of the four states a stored status means. */
+export function ticketUrgencyBand(
+  status: ServiceTicketStatus,
+): TicketUrgencyBand {
+  return STATUS_BAND[status];
+}
+
+/** How loudly a status demands attention. Lower sorts first. */
+function urgencyRank(status: ServiceTicketStatus): number {
+  return TICKET_URGENCY_BANDS.indexOf(STATUS_BAND[status]);
+}
 
 const PRIORITY_RANK: Record<ServiceTicketView['priority'], number> = {
   high: 0,
@@ -63,7 +92,7 @@ export function compareTicketUrgency(
   a: ServiceTicketView,
   b: ServiceTicketView,
 ): number {
-  const byStatus = URGENCY_RANK[a.status] - URGENCY_RANK[b.status];
+  const byStatus = urgencyRank(a.status) - urgencyRank(b.status);
   if (byStatus !== 0) return byStatus;
 
   const byAge = urgencyInstant(a) - urgencyInstant(b);
@@ -113,7 +142,7 @@ export function compareLatestActivity(
   a: ServiceTicketView,
   b: ServiceTicketView,
 ): number {
-  const byStatus = URGENCY_RANK[a.status] - URGENCY_RANK[b.status];
+  const byStatus = urgencyRank(a.status) - urgencyRank(b.status);
   if (byStatus !== 0) return byStatus;
 
   const byActivity =

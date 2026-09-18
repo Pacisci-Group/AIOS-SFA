@@ -44,7 +44,6 @@ import { PolicyTransferPanel } from "./PolicyTransferPanel";
 import { RenewalPanel } from "./RenewalPanel";
 import { TicketStatusSelect } from "./TicketStatusSelect";
 import {
-  TICKET_PRIORITY_CLASS,
   TICKET_STATUS_CONFIG,
   type Ticket,
   type TicketStatus,
@@ -372,18 +371,24 @@ export function WorkspacePanel({
                 )
               }
             />
+            {/*
+              Status, where "Priority" used to be. Priority is stored but
+              unreachable — nothing in the app can set it, so it read "medium"
+              on every ticket opened here (see the note in `ticket-data.ts`).
+              The picker in the header is the control; this row states the
+              stored value, which matters for the finer statuses the picker
+              cannot offer (`in_progress`, `waiting_on_carrier`, …).
+            */}
             <DataRow
-              label="Priority"
+              label="Status"
               value={
                 <Badge
                   size="sm"
                   variant="ghost"
-                  className={cn(
-                    "capitalize",
-                    TICKET_PRIORITY_CLASS[ticket.priority],
-                  )}
+                  className={cn("gap-1", status.bg, status.text)}
                 >
-                  {ticket.priority}
+                  <span className={cn("size-2 rounded-full", status.dot)} />
+                  {status.label}
                 </Badge>
               }
             />
