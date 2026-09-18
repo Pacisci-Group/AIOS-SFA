@@ -188,8 +188,7 @@ export function useSaleMode({
      */
     blocked = {
       title: "This lead is already sold.",
-      detail:
-        "Its deal is on the lead page, where individual policies can still be corrected.",
+      detail: "Its deal is on the lead page, where the sale can be edited.",
     };
   } else if (
     context?.householdId &&

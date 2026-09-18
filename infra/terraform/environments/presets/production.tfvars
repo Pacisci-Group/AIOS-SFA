@@ -11,9 +11,14 @@ spaces_region = "nyc3"
 #   Managed MongoDB attached to it go with it.
 vpc_ip_range = "10.20.0.0/16"
 
-# Same sizing as dev, deliberately. Horizontal autoscaling of the API/web tier
-# is a separate phase; until it lands the scale path is a vertical resize
-# (droplet resize = short reboot, Mongo tier bump = maintenance window).
+# With `enable_autoscale` below, this is no longer one droplet's size — it is the
+# POOL MEMBER TEMPLATE's size, and the scale path is horizontal instead of a
+# vertical resize.
+#
+# ⚠ Changing it REPLACES EVERY DROPLET IN THE POOL. It lives in
+#   `droplet_template`, which DigitalOcean cannot alter in place, so a resize is
+#   a rolling rebuild of the whole tier — not the short single reboot it used to
+#   be. Mongo is still a vertical bump behind a maintenance window.
 droplet_size     = "s-1vcpu-2gb"
 mongo_size       = "db-s-1vcpu-1gb"
 mongo_node_count = 1
@@ -30,21 +35,24 @@ mongo_node_count = 1
 mongo_allowed_ip_addresses = []
 
 # DNS zone lives at GoDaddy, so terraform does not manage the record
-# (enable_dns = false). `domain` is still used to bake nginx's server_name and
-# to drive Certbot on the droplet.
+# (enable_dns = false). `domain` is still what the platform host is called: it
+# names the certificate the worker orders over ACME, and it is the origin the
+# Spaces CORS rule is derived from.
 domain_root   = "smithfamily.agency"
 dns_subdomain = "app"
 domain        = "app.smithfamily.agency"
 
-# TLS: nginx server_name is baked from `domain` on every build. Paired with the
-# reserved IP below (stable across rebuilds) + DNS pointing at it, first-boot
-# Certbot auto-issues on rebuilds.
+# TLS is no longer issued on the box. Under `enable_node_edge` the worker obtains
+# certificates over ACME and stores them in MongoDB, and the edge reads them by
+# SNI — there is no Certbot, no nginx server_name, and nothing to run by hand
+# after DNS resolves.
 #
-# ⚠ Set this correctly on the FIRST apply. `user_data` cannot be changed in
-#   place, so flipping this flag later REPLACES the droplet. On the very first
-#   build Certbot will fail (DNS does not point here yet) — that is expected and
-#   non-fatal, cloud-init wraps it. Finish with `sudo /opt/sfa/enable-tls.sh`
-#   once the GoDaddy A record resolves.
+# Both of these survive only because the stack still reads them: `enable_tls`
+# picks the scheme for `web_origin` (and therefore the Spaces CORS rule), and
+# `certbot_email` is interpolated into the single-droplet cloud-init, which this
+# environment no longer builds. Leave them as they are — `enable_tls = false`
+# would silently rewrite the CORS origin to http:// and break every upload
+# preflight.
 enable_tls    = true
 certbot_email = "awaris@paciscigroup.com"
 
@@ -60,6 +68,21 @@ ssh_allowed_ips = ["0.0.0.0/0"]
 
 enable_dns         = false # zone at GoDaddy, record added by hand
 create_domain_zone = false
+
+# ⚠ Inert once `enable_autoscale` is true, and NOT a safety net.
+#
+# A reserved IP attaches to a droplet — `digitalocean_reserved_ip_assignment`
+# takes a droplet_id and nothing else — so it cannot front a pool. It lives
+# inside the droplet module, which autoscaling removes, so enabling the pool
+# DESTROYS this reserved IP and production's public address becomes the load
+# balancer's instead.
+#
+# ⚠ On production that is a LIVE CUTOVER, not dev's rehearsal of one. The
+#   address GoDaddy currently points `app.smithfamily.agency` and
+#   `*.app.smithfamily.agency` at stops answering the moment the apply
+#   completes, and DigitalOcean releases it — there is no getting it back. Have
+#   the balancer's address in hand and the GoDaddy records open BEFORE applying.
+#   See DEPLOYMENT.md, "Cutting production over".
 enable_reserved_ip = true
 
 # Provisions the Inngest droplet — the event bus, scheduler and executor for
@@ -70,6 +93,64 @@ enable_reserved_ip = true
 #   and not one email delivered — while every health check stays green.
 #   It must agree with the `INNGEST_ENABLED` GitHub Environment variable.
 enable_inngest = true
+
+# The horizontally-scalable topology: our own Node TLS terminator instead of
+# Caddy, certificates read from MongoDB, and the worker as its own container on
+# 4001. Proven on dev since 2026-09-14 (handoff §14) before being set here.
+#
+# ⚠ Flipping this REPLACES the app droplet — `user_data` cannot be changed in
+#   place. Moot here only because `enable_autoscale` below removes that droplet
+#   outright; it is the pool's members that serve production afterwards.
+#
+# ⚠ It must agree with the app side, which is deployed from `main` rather than
+#   from here. Terraform opens 4001 and drops Caddy; the deploy writes
+#   WORKER_INLINE=false and starts the edge. Half of that is an environment that
+#   looks healthy and runs no async work — no email leaves the platform.
+#   Set NODE_EDGE_ENABLED=true and ACME_ENABLED=true on the production
+#   GitHub Environment in the same change.
+enable_node_edge = true
+
+# Horizontal autoscaling. The app tier becomes a pool behind a load balancer
+# instead of one directly-addressed droplet.
+#
+# ⚠ Pool members are NOT deployed to. They fetch published config from the
+#   deploy bucket at boot and every 30s, so a droplet created during a spike has
+#   nothing to SSH to it. Editing /opt/sfa/.env on a member is pointless; the
+#   next tick overwrites it. Change the Environment secret and re-run the deploy.
+#
+# ⚠ pool_proxy_protocol must agree with EDGE_PROXY_PROTOCOL in the production
+#   Environment. Either alone breaks every connection through the balancer: the
+#   header is read as the first bytes of a TLS handshake, or it never arrives
+#   and the edge drops the connection.
+enable_autoscale = true
+
+# One, same as dev: start at a single droplet and let CPU pull more in. The pool
+# is here for the topology and the headroom, not to pre-buy capacity nobody is
+# using yet.
+#
+# ⚠ A floor of one is not redundancy. Between a member dying and its
+#   replacement answering there is nothing serving, and the same is true for the
+#   whole of any change that rebuilds members (`droplet_size`, `user_data`).
+#   Raising this to 2 is the fix, and it is a one-line change — nothing else in
+#   this file depends on the value.
+pool_min_instances = 1
+
+# A ceiling, not a target: the bound on both a runaway scale-up and the bill.
+pool_max_instances = 3
+
+# Average CPU across the pool. Not higher: individual droplets sit well above
+# the average, and scaling only begins once the average is already breached.
+pool_target_cpu = 0.6
+
+# Long enough to cover a deploy, during which every member restarts its
+# containers and briefly burns CPU — otherwise that reads as load and triggers a
+# scale-up chasing its own tail.
+pool_cooldown_minutes = 10
+
+# Recovers the real client address, which the public intake rate limits key on.
+# Off, every caller appears to come from the balancer and those limits collapse
+# into one shared bucket.
+pool_proxy_protocol = true
 
 # Object storage for document uploads (deal-audit attachments, lead intake).
 # Applying this needs SPACES_ACCESS_KEY_ID / SPACES_SECRET_ACCESS_KEY exported

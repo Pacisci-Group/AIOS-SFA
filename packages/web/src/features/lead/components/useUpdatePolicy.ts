@@ -84,6 +84,8 @@ export function useUpdatePolicy(leadId: string, policyId: string) {
        */
       void queryClient.invalidateQueries({ queryKey: ["performance"] });
       void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
+      // The Edit sale page (PAC-104) renders the same deal's totals.
+      void queryClient.invalidateQueries({ queryKey: ["sold-deal"] });
       toast.success("Policy updated");
     },
 

@@ -323,11 +323,27 @@ export class ClientsService {
       const agencyId = this.agencyIdOf(access);
       const routes = routeSearchTerm(query.q);
 
+      /*
+       * Child matches, held back and merged into `matches` only once every
+       * branch has resolved. The branches run concurrently, and `mergeMatches`
+       * keeps the first label per household — so merging as each query
+       * returned let the faster query name the match. `TEST-000-1` found the
+       * household through both its policy (whole term) and the member "Test
+       * Client" (token `TEST`), and which label came back depended on timing.
+       * Each branch writes to a fixed slot, so the order is the order below and
+       * never the order the queries finished in. Term matches rank first: a
+       * hit on everything typed explains the row better than a hit on one word
+       * of it.
+       */
+      const termMatches: Map<string, HouseholdMatch>[] = [];
+      const tokenMatches = new Map<string, Map<string, HouseholdMatch>>();
+
       /** Records a child match's `matchedOn` label and returns its clause. */
       const clauseFor = (
         found: Map<string, HouseholdMatch>,
+        record: (found: Map<string, HouseholdMatch>) => void,
       ): FilterQuery<HouseholdDocument> | null => {
-        mergeMatches(matches, found);
+        record(found);
         return found.size ? householdIdClause(found) : null;
       };
 
@@ -340,6 +356,7 @@ export class ClientsService {
           async (token) =>
             clauseFor(
               await this.matchByContact(agencyId, scope, { anyText: token }),
+              (found) => tokenMatches.set(token, found),
             ),
         ],
         termBranches: [
@@ -359,11 +376,15 @@ export class ClientsService {
                   await this.matchByContact(agencyId, scope, {
                     dateOfBirth: routes.dateOfBirth,
                   }),
+                  (found) => (termMatches[0] = found),
                 )
               : null,
           async () =>
             routes.policyKey
-              ? clauseFor(await this.matchByPolicy(scope, routes.policyKey))
+              ? clauseFor(
+                  await this.matchByPolicy(scope, routes.policyKey),
+                  (found) => (termMatches[1] = found),
+                )
               : null,
           // Phone has to be a whole-term branch: normalization splits
           // `(918) 555-0134` into three tokens, none of them phone-shaped.
@@ -373,10 +394,20 @@ export class ClientsService {
                   await this.matchByContact(agencyId, scope, {
                     phoneDigits: searchDigits(term),
                   }),
+                  (found) => (termMatches[2] = found),
                 )
               : null,
         ],
       });
+
+      const ranked = [
+        ...termMatches,
+        // In the order the tokens were typed.
+        ...searchTokens(query.q).map((token) => tokenMatches.get(token)),
+      ];
+      for (const found of ranked) {
+        if (found) mergeMatches(matches, found);
+      }
 
       // `null` only for a term with nothing searchable in it, which the DTO
       // already turns into `undefined` — but if one gets here it is "no

@@ -57,6 +57,9 @@ const EditQuoteRecapPage = lazy(
  * server reads that from the lead, so the page has no mode switch to make.
  */
 const SoldDealPage = lazy(() => import('@/features/sold/SoldDealPage'));
+const EditSoldDealPage = lazy(
+  () => import('@/features/sold/EditSoldDealPage'),
+);
 const RewriteRouteRedirect = lazy(
   () => import('@/features/sold/RewriteRouteRedirect'),
 );
@@ -500,6 +503,17 @@ export function App() {
                   element={
                     <LazyPage>
                       <SoldDealPage />
+                    </LazyPage>
+                  }
+                />
+                {/* Editing a booked sale (PAC-104). Same gate: PATCH
+                    /sold-deals/:id and POST /sold-deals/:id/policies both
+                    require `deal_audits:write`. */}
+                <Route
+                  path="/sold/:id/edit"
+                  element={
+                    <LazyPage>
+                      <EditSoldDealPage />
                     </LazyPage>
                   }
                 />

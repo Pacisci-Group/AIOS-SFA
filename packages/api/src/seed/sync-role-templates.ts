@@ -4,7 +4,9 @@ import { Model } from 'mongoose';
 import { AppModule } from '../app.module';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
+import { Permission } from '../permissions/schemas/permission.schema';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
+import { seedPermissions } from './permissions.seed';
 
 /**
  * Reconcile every agency's system roles against `DEFAULT_ROLE_TEMPLATES`, then
@@ -29,6 +31,14 @@ import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
  * `PermissionsModule` and need `forwardRef`. Keeping the pairing in the script
  * costs one line and no indirection.
  *
+ * **Why it seeds the permission catalog first.** `setRolePermissions` resolves
+ * every key to a row in `permissions` and refuses one it cannot find, and only
+ * the core and demo seeds write that collection. A permission added to the
+ * constants after a database was seeded — the six white-label ones, PAC-133 —
+ * would otherwise fail this sync for every agency, which is exactly the
+ * database this script exists for. `seedPermissions` is the same idempotent
+ * upsert the core seed runs, without the core seed's super admin and carriers.
+ *
  * Idempotent — safe to re-run. Note the merge is a **union**: a template change
  * that *removes* a permission is not propagated, by design, so an agency owner's
  * customizations are never silently reverted.
@@ -43,8 +53,16 @@ async function syncRoleTemplates() {
   const agencyModel = app.get<Model<AgencyDocument>>(
     getModelToken(Agency.name),
   );
+  const permissionModel = app.get<Model<Permission>>(
+    getModelToken(Permission.name),
+  );
   const roleAssignments = app.get(RoleAssignmentsService);
   const accessResolver = app.get(AccessResolverService);
+
+  const catalog = await seedPermissions(permissionModel);
+  console.log(
+    `Permission catalog: ${catalog.created} created, ${catalog.updated} updated, ${catalog.deprecated} deprecated.`,
+  );
 
   const agencies = await agencyModel.find().select('slug name').lean();
   if (!agencies.length) {

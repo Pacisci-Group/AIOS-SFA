@@ -1,4 +1,7 @@
+import type { DealAuditStatus } from './deal-audit';
+import type { LeadDetailPolicy } from './lead-detail';
 import type { PolicyReplacementReason } from './policy-replacement';
+
 /**
  * Sold Deal wire contracts (PAC-40) — shared by the NestJS write path and the
  * `/sold/new` wizard.
@@ -438,4 +441,80 @@ export interface SoldDocumentPresignResponse {
   uploadUrl: string;
   requiredHeaders: Record<string, string>;
   expiresIn: number;
+}
+
+// ---------------------------------------------------------------------------
+// Editing a booked sale (PAC-104)
+// ---------------------------------------------------------------------------
+
+/** `PATCH /sold-deals/:id`. */
+export interface UpdateSoldDealInput {
+  /**
+   * `YYYY-MM-DD`, with the Sold form's own rule. Moves the deal into that
+   * period's Sold scorecard and leaderboard figures.
+   */
+  soldDate: string;
+}
+
+/** `POST /sold-deals/:id/policies` — the Sold form's policy rows, added to a booked deal. */
+export interface AddSoldDealPoliciesInput {
+  policies: SoldPolicyInput[];
+  /**
+   * **Required**, unlike on create: an addition has no natural key, so without
+   * one a double-click adds the same policy twice.
+   */
+  submissionToken: string;
+}
+
+/** Why a booked deal cannot take another policy right now. */
+export type SoldDealAddPoliciesBlock =
+  /** The audit is `Pending` / `Pass` / `Fail` — a reviewer already has it. */
+  | 'audit_submitted'
+  /** Uploads are keyed on the lead, so a deal without one cannot take files. */
+  | 'no_lead'
+  /** Every policy row is written against the household. */
+  | 'no_household';
+
+/** `GET /sold-deals/:id` — the Edit sale page. */
+export interface SoldDealEditView {
+  id: string;
+  leadId: string | null;
+  householdId: string | null;
+  householdName: string | null;
+  clientName: string;
+  producerName: string | null;
+  /** `YYYY-MM-DD` — the value a date input holds. */
+  soldDate: string | null;
+  premium: number;
+  itemCount: number;
+  policyCount: number;
+  /** Canonical labels. */
+  policyTypes: string[];
+  dealType: string;
+  isBundle: boolean;
+  /** The same shape the Sold card renders, so its edit dialog works unchanged. */
+  policies: LeadDetailPolicy[];
+  /** The defensive-driver picker's roster, for adding a policy. */
+  contacts: SoldHouseholdContact[];
+  /** The furthest the deal's audit has got; `null` when none was generated. */
+  auditStatus: DealAuditStatus | null;
+  /**
+   * Imported from SmartSuite. Adding a policy recomputes its totals from the
+   * policies linked here, which may be fewer than the rollup it was imported
+   * with — the page warns before that happens.
+   */
+  isMigrated: boolean;
+  canAddPolicies: boolean;
+  addPoliciesBlockedBy: SoldDealAddPoliciesBlock | null;
+}
+
+/** `POST /sold-deals/:id/policies`. */
+export interface AddSoldDealPoliciesResponse {
+  deal: SoldDealEditView;
+  /** Empty on a replay. */
+  addedPolicyIds: string[];
+  /** The deal's whole audit checklist after generation. */
+  auditItemCount: number;
+  /** True when this token had already been applied, and nothing was written. */
+  replayed: boolean;
 }

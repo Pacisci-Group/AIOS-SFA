@@ -28,6 +28,7 @@ import { AdvanceLeadStep } from './advance-lead.step';
 import { InterestedPartiesStep } from './interested-parties.step';
 import { PriorInsuranceStep } from './prior-insurance.step';
 import { ResolveDealStep } from './resolve-deal.step';
+import { SoldDealAmendmentService } from './sold-deal-amendment.service';
 import { SoldDealIntakeService } from './sold-deal-intake.service';
 import { SoldSubmissionValidator } from './sold-submission.validator';
 import { UpsertPoliciesStep } from './upsert-policies.step';
@@ -63,6 +64,9 @@ import { UpsertPoliciesStep } from './upsert-policies.step';
   ],
   providers: [
     SoldDealIntakeService,
+    // Policies added to a booked deal (PAC-104) — the same steps, run against
+    // a deal that already exists.
+    SoldDealAmendmentService,
     SoldSubmissionValidator,
     ResolveDealStep,
     UpsertPoliciesStep,
@@ -70,6 +74,10 @@ import { UpsertPoliciesStep } from './upsert-policies.step';
     InterestedPartiesStep,
     AdvanceLeadStep,
   ],
-  exports: [SoldDealIntakeService, SoldSubmissionValidator],
+  exports: [
+    SoldDealIntakeService,
+    SoldDealAmendmentService,
+    SoldSubmissionValidator,
+  ],
 })
 export class SoldIntakeModule {}
