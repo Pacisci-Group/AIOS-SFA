@@ -67,7 +67,7 @@ Dev "Screen Navigator" at `/` (`src/pages/DevNavPage.tsx`) links all 7. Routes i
 |---|---|---|---|---|
 | 1 | **Producer Dashboard** | `/dashboard/producer` | Sales producer | Sidebar+header (⌘K search, Add Lead, time filters), 3 scorecards (Sold/Quoted/Leaderboard), 60/40: Deals Pending Service Hand-off + Hot Leads. **← current focus** |
 | 2 | **Lead Details** | `/leads/:id` | Producer | **Built (PAC-38.)** Lead+contact with inline status/temperature/source edits, Prior Insurance (only when sold), Quote Summary, Household card + Activity timeline. Embodies Lead→Quote→Sold. Two documented divergences from the mockup: no current-vs-proposed coverage table and no per-member policy icons — neither is derivable from what the system stores. `/leads/demo` was removed; the page uses real data now. |
-| 3 | **Management v1** | `/dashboard/management` | Owner + Manager toggle | Owner Strategy Hub (KPIs, leaderboard, Lead Source ROI) / Manager Action Hub (alerts, Team Activity Monitor + drawer). Global filter bar. |
+| 3 | **Management v1** | `/dashboard/management` | Owner + Manager tabs | **Owner view built (PAC-135)** — `features/owner-dashboard`, live API, behind `owner_dashboard:read`; see §14. The **Manager** Action Hub (alerts, Team Activity Monitor + drawer) is still the Figma prototype, quarantined in `ManagerPrototype`; PAC-106 replaces it. |
 | 4 | **Management v2** | `/dashboard/management-alt` | ⚠ mislabeled | Actually an **"Agency Command Center" / lead-distribution board** (Unclaimed Leads Pool, claim via call/text, Mailer QCN sidecar). Not analytics. Clarify intent. |
 | 5 | **Service Dashboard** | `/crm/service` | Service rep | 4 scorecards (Active Load, Retention Window, Daily Velocity, Book Health), 60/40: Priority Ticket Queue + Proactive Renewal Outreach. |
 | 6 | **Ticket Workspace** | `/crm/tickets` | CRM/service | KPI strip + 40/60 ticket feed + workspace panel w/ timeline. Rich Ticket model in `features/tickets/components/ticket-data.ts`. |
@@ -778,3 +778,60 @@ Verified: `build -w @sfa/api` + `tsc -p packages/api` clean, **855** unit
 (5 new), **854** e2e in 26 suites. `lint -w @sfa/api` on its exact baseline
 (same 7 files, 140 problems). Bruno not re-run — this commit changes no API
 surface, the same reason Phase 1 gave.
+
+---
+
+## 14. PAC-135 — Owner View dashboard (handoff, 2026-09-21)
+
+Three stacked PRs against `dev`, **merge in order**: **#114** lead sources → **#115** owner
+dashboard API → **#116** web. CI green on all three. Fixes go on the lowest branch that owns them
+and are carried up with merge commits, never force-pushes.
+
+### What exists now
+- **`leadSources` collection** (`src/lead-sources/`, the `Carrier` pattern: `agencyId: null` =
+  platform row, a string = that agency's own; archive, never delete). Leads and deals hold
+  `leadSourceId`. Find a source in code by **`slug`** (`MAILER_LEAD_SOURCE_SLUG`), never by name.
+  `GET /lead-sources` is gated on `leads:read` **or** `owner_dashboard:read`. No curation UI —
+  seeded only; super-admin and agency-settings CRUD are future work. Migration
+  `20260921133113-lead_sources_backfill` (rehearsed on the prod dump: 1,123/1,130 leads and
+  573/1,707 deals linked, 0 mismatches).
+- **`GET /owner-dashboard/{summary,producers,lead-sources}`** (`src/owner-dashboard/`), one query
+  schema and one pipeline prefix (`linesPrefix`) for all three, so
+  **leaderboard total = lead-source total = Total Bound Premium** under any filter (e2e asserts it
+  under seven combinations). Live, no rollup: 30–140 ms for all three on the prod dump.
+- **`features/owner-dashboard`** on the web. Filters live in the URL; one query per unit that must
+  agree internally. Shared with the Producer dashboard: `components/common/DateRangePicker`,
+  `components/common/RangeChips`, `lib/date-range`.
+
+### Decisions that override the ticket text — do not re-litigate
+- **LOB = policy type, summed from `policies` rows by `dealId`, not the deal total.** Auto $1,200 +
+  Home $1,800 filtered to Auto is $1,200. A record with no lines (10 migrated deals, every migrated
+  quote recap) counts in full with no LOB filter and, under one, when its own type list *contains*
+  a selected type — so LOB-filtered **quoted** premium is approximate on historic data.
+- **Trend windows** (`resolveComparison`): presets compare the same elapsed part of the previous
+  calendar unit (Sep 1–21 → Aug 1–21); only `custom` uses the preceding equal span.
+- **The lead owns the lead source.** Sales and quotes resolve it through their lead; a deal's own
+  `leadSourceId` is the fallback (no lead, or a lead with no source).
+- **No prior data is a state, never a number**, and a closing ratio needs ≥ 1 quote recap per 10
+  sales (`MIN_QUOTES_PER_SALE`, David confirmed) — the prod dump otherwise gives 5,978% for 2025.
+- "Last 3 Months" = three complete calendar months (David confirmed).
+
+### Policy types
+92 policies showed a raw SmartSuite code. Not a PAC-80 regression: the records API sends a choice's
+*code*, never its label, and the alias map was built from a table doc listing 6 of 13 choices.
+All seven decoded by joining to `temp/Policies 9_4_2026.csv` on `Record ID`. Three became new
+`POLICY_TYPES`: **Manufactured Home** (a dwelling), **RV** and **ATV / ORV** (countable vehicles,
+deliberately *not* in `AUTO_POLICY_TYPES` and *not* semiannual). **`docs/smartsuite-tables/*.md`
+choice lists are stale snapshots — never treat them as exhaustive.** The import now prints
+`unmappedChoices` per collection.
+
+### Still open
+- ⚠ **Not yet checked in a browser** (needs a signed-in session): light + dark, each period, each
+  filter. Bruno (`Lead Sources`, `Owner Dashboard` folders) not run.
+- **For David:** confirm the three new types' behaviour; `AP0VA` on 6 quote recaps needs a Quote
+  Recaps CSV export to decode; ticket Q4, Q5, Q7–Q11 (built on the stated assumptions).
+- **Data gap, not a bug:** 1,131 of 1,679 historic deals have no source and no lead link → the
+  "No source" row. A repair with the Smith Family Agency team.
+- **After #114 has been live one release:** migration dropping the embedded `leadSource` on leads +
+  deals. Not before — it is what makes #114's migration reversible.
+- `recharts` is unused in `packages/web` since the mock was deleted.
