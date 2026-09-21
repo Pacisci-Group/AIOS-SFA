@@ -21,6 +21,7 @@ import {
   shortDate,
 } from './drawer-primitives';
 import { formatPhone } from '@/lib/leads-api';
+import { NOT_AVAILABLE } from '@/lib/not-available';
 
 interface HouseholdDrawerProps {
   householdId: string | null;
@@ -51,7 +52,7 @@ export function HouseholdDrawer({
   /*
    * All three are resolved by `GET /households/:id` from the household's
    * `primaryContactId` (see `pickPrimaryContact`), which is what makes them
-   * usable for a migrated household — this drawer used to render "—" for a
+   * usable for a migrated household — this drawer used to render "N/A" for a
    * client whose details it had already fetched.
    *
    * The PAC-86 fallback to `contacts.find(isPrimary)` is gone with PAC-91 §4:
@@ -59,8 +60,8 @@ export function HouseholdDrawer({
    * *are* the primary contact's, and a second lookup here could only disagree
    * with the API about who the primary is.
    */
-  const contactName = household?.primaryContactName ?? '—';
-  const email = household?.primaryEmail ?? '—';
+  const contactName = household?.primaryContactName ?? NOT_AVAILABLE;
+  const email = household?.primaryEmail ?? NOT_AVAILABLE;
   // Formatted on read: phones are stored normalised to digits (PAC-91 §1).
   const phone = formatPhone(household?.primaryPhone ?? null);
 
@@ -81,13 +82,13 @@ export function HouseholdDrawer({
           {household && (
             <>
               <div>
-                <DrawerRow label="Status" value={household.status ?? '—'} />
+                <DrawerRow label="Status" value={household.status ?? NOT_AVAILABLE} />
                 <DrawerRow label="Primary contact" value={contactName} />
                 <DrawerRow label="Email" value={email} />
                 <DrawerRow label="Phone" value={phone} />
                 <DrawerRow
                   label="Address"
-                  value={formatAddress(household.address) ?? '—'}
+                  value={formatAddress(household.address) ?? NOT_AVAILABLE}
                 />
                 <DrawerRow
                   label="Active policies"
@@ -113,7 +114,7 @@ export function HouseholdDrawer({
                             .join(' ') || 'Unnamed'}
                         </span>
                         <span className="text-xs text-muted-foreground">
-                          {contact.roleInHousehold ?? '—'}
+                          {contact.roleInHousehold ?? NOT_AVAILABLE}
                         </span>
                       </li>
                     ))}
@@ -138,7 +139,7 @@ export function HouseholdDrawer({
                           {policy.policyType} — {policy.policyNumber}
                         </button>
                         <span className="block text-xs text-muted-foreground">
-                          {policy.carrier ?? '—'} · {money(policy.premium)} ·
+                          {policy.carrier ?? NOT_AVAILABLE} · {money(policy.premium)} ·
                           renews {shortDate(policy.renewalDate)}
                         </span>
                       </li>

@@ -89,7 +89,7 @@ export function ScoreCards({ range }: ScoreCardsProps) {
 }
 
 /**
- * The two footer stats. Both render `—` rather than `$0` when there are no
+ * The two footer stats. Both render `N/A` rather than `$0` when there are no
  * households: the API sends `null` precisely so the UI does not have to guess
  * whether a zero means "nothing sold" or "nothing to divide by".
  */

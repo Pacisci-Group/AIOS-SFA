@@ -1,5 +1,6 @@
 import type { OwnerDashboardPeriod } from "@/lib/owner-dashboard-api";
 import { formatRangeLabel } from "@/lib/date-range";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * Formatting for the Owner dashboard (PAC-135).
@@ -25,21 +26,21 @@ const COMPACT = new Intl.NumberFormat("en-US", {
 
 /** `$185,834`. Whole dollars — nobody reads cents off a dashboard. */
 export function formatMoney(value: number | null): string {
-  return value === null ? "—" : CURRENCY.format(value);
+  return value === null ? NOT_AVAILABLE : CURRENCY.format(value);
 }
 
 /** `$1.9M` — for a sub line, where the full figure would crowd the card. */
 export function formatMoneyCompact(value: number | null): string {
-  return value === null ? "—" : COMPACT.format(value);
+  return value === null ? NOT_AVAILABLE : COMPACT.format(value);
 }
 
 export function formatCount(value: number | null): string {
-  return value === null ? "—" : value.toLocaleString("en-US");
+  return value === null ? NOT_AVAILABLE : value.toLocaleString("en-US");
 }
 
-/** `66.7%`, or `—`. */
+/** `66.7%`, or `N/A`. */
 export function formatPct(value: number | null): string {
-  return value === null ? "—" : `${value.toLocaleString("en-US")}%`;
+  return value === null ? NOT_AVAILABLE : `${value.toLocaleString("en-US")}%`;
 }
 
 function spanDays(from: string, to: string): number {

@@ -22,6 +22,7 @@ import {
   TICKET_STATUS_CONFIG,
   type Ticket,
 } from "./ticket-data";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 type FilterTab = "all" | "open" | "waiting" | "resolved";
 
@@ -310,7 +311,7 @@ function CategoryOption({
 }
 
 function shortDate(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   return new Date(iso).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",

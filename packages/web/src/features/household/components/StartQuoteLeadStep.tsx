@@ -16,6 +16,7 @@ import { formatPhone, listLeads, type LeadRow } from "@/lib/leads-api";
 import { newSubmissionToken } from "@/lib/submission-token";
 import { cn } from "@/lib/utils";
 import { leadIntakeFromHousehold } from "./start-quote-prefill";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** Query key for this household's leads, shared with the invalidation below. */
 export function householdLeadsKey(householdId: string) {
@@ -236,7 +237,7 @@ export function StartQuoteLeadStep({
  */
 function LeadOption({ lead, selected }: { lead: LeadRow; selected: boolean }) {
   const contact = [formatPhone(lead.phone), lead.email]
-    .filter((part) => part && part !== "—")
+    .filter((part) => part && part !== NOT_AVAILABLE)
     .join(" · ");
 
   return (

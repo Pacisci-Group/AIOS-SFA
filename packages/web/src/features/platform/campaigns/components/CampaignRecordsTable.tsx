@@ -24,6 +24,7 @@ import {
   listCampaignRecords,
 } from "@/lib/platform-campaigns-api";
 import { formatCount, formatMoney } from "../campaign-format";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 const PAGE_SIZE = 25;
 
@@ -115,11 +116,11 @@ export function CampaignRecordsTable({ campaignId }: { campaignId: string }) {
               {items.map((record) => (
                 <TableRow key={record.id}>
                   <TableCell className="font-medium">
-                    {record.name ?? "—"}
+                    {record.name ?? NOT_AVAILABLE}
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col">
-                      <span>{record.newControlNumber ?? "—"}</span>
+                      <span>{record.newControlNumber ?? NOT_AVAILABLE}</span>
                       {/* Both printed forms are stored and both are searchable;
                           the long one is what the vendor prints on some pieces. */}
                       {record.controlNumber &&
@@ -132,17 +133,17 @@ export function CampaignRecordsTable({ campaignId }: { campaignId: string }) {
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {[record.city, record.state].filter(Boolean).join(", ") ||
-                      "—"}
+                      NOT_AVAILABLE}
                     {record.zip ? ` ${record.zip}` : ""}
                   </TableCell>
-                  <TableCell>{record.market ?? "—"}</TableCell>
+                  <TableCell>{record.market ?? NOT_AVAILABLE}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatMoney(record.premiumYearly)}
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1.5">
                       <span className="text-muted-foreground">
-                        {record.carrierAgencyId ?? "—"}
+                        {record.carrierAgencyId ?? NOT_AVAILABLE}
                       </span>
                       {record.visibleAgencyIds === null && (
                         <Badge size="sm" variant="outline">

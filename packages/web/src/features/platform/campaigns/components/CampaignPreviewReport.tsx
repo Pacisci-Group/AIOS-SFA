@@ -41,6 +41,7 @@ import { CampaignStatusBadge } from "../CampaignStatusBadge";
 import { RejectionsTable } from "./RejectionsTable";
 import { StatTile } from "./StatTile";
 import { UnmatchedZipsResolver } from "./UnmatchedZipsResolver";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * What the file contains, before anything is written (PAC-71).
@@ -170,7 +171,7 @@ export function CampaignPreviewReport({
                 value={
                   stats.premium
                     ? `${formatMoney(stats.premium.min)} · ${formatMoney(stats.premium.avg)} · ${formatMoney(stats.premium.max)}`
-                    : "—"
+                    : NOT_AVAILABLE
                 }
               />
             </div>

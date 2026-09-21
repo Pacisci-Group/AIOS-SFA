@@ -1,6 +1,7 @@
 import { HOUSEHOLD_STATUSES } from "@sfa/shared";
 import type { MultiSelectOption } from "@/components/common/MultiSelect";
 import type { HouseholdMatch } from "@/lib/households-api";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * Every server-side filter the Clients list can apply, beside the omni box.
@@ -82,9 +83,9 @@ export function householdStatusClass(status: string | null): string {
  * and repeating it in every cell is noise.
  */
 export function formatUpdated(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return NOT_AVAILABLE;
   return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
