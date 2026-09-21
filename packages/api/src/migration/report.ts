@@ -68,6 +68,21 @@ export interface CollectionStat {
    */
   multiValued?: { emails: number; phones: number };
   /**
+   * SmartSuite choice codes the import had no label for, as `field:code` →
+   * how many rows carried it.
+   *
+   * SmartSuite's records API sends a select's **code**, never its label, so the
+   * import depends on a code → label table in our code — and that table is only
+   * as complete as the table doc it was built from. The Policies doc listed six
+   * of thirteen Policy Type choices, so seven codes passed through raw onto 92
+   * policies and nobody knew until they surfaced on a dashboard (PAC-135). An
+   * unmapped code is still stored as itself, deliberately; this is what makes
+   * that visible on the run that introduces it.
+   *
+   * Absent when every code resolved, which is the expected reading.
+   */
+  unmappedChoices?: Record<string, number>;
+  /**
    * How this collection's contact↔household links resolved — the §6
    * reconciliation count PAC-91 asks for. Filled by two passes that see the
    * link from opposite sides, so the two `via*` counters are contact-side only
@@ -159,6 +174,17 @@ export function recordRejection(
   }
 }
 
+/** Count one occurrence of a choice code the import could not label. */
+export function recordUnmappedChoice(
+  stat: CollectionStat,
+  field: string,
+  code: string,
+): void {
+  const key = `${field}:${code}`;
+  stat.unmappedChoices ??= {};
+  stat.unmappedChoices[key] = (stat.unmappedChoices[key] ?? 0) + 1;
+}
+
 export function createReport(dryRun: boolean): MigrationReport {
   return {
     startedAt: new Date().toISOString(),
@@ -239,6 +265,25 @@ export function printReport(report: MigrationReport): void {
         console.log(
           `  ${name.padEnd(16)} … and ${s.rejectedValues - s.rejections.length} more`,
         );
+      }
+    }
+    console.log(line);
+  }
+  /*
+   * Printed with the fix in the message. The remedy is never in the data — it
+   * is one line in a code → label map — and an operator reading "12 unmapped"
+   * with no pointer has nothing to act on.
+   */
+  const unmapped = Object.entries(report.collections).filter(
+    ([, s]) => s.unmappedChoices,
+  );
+  if (unmapped.length) {
+    console.log(
+      'Unmapped SmartSuite choice codes (stored as the raw code — add them to the alias map):',
+    );
+    for (const [name, s] of unmapped) {
+      for (const [key, count] of Object.entries(s.unmappedChoices ?? {})) {
+        console.log(`  ${name.padEnd(16)} ${key.padEnd(28)} ${count} row(s)`);
       }
     }
     console.log(line);

@@ -189,7 +189,7 @@ describe('toLobMix', () => {
     const mix = toLobMix([
       { policyType: 'Auto', count: 6 },
       // A SmartSuite code nobody has been able to identify.
-      { policyType: 'sTSOE', count: 4 },
+      { policyType: 'AP0VA', count: 4 },
     ]);
 
     expect(mix.policyCount).toBe(10);
