@@ -43,6 +43,7 @@ import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { MailersModule } from './mailers/mailers.module';
 import { LeadsModule } from './leads/leads.module';
 import { PerformanceModule } from './performance/performance.module';
+import { OwnerDashboardModule } from './owner-dashboard/owner-dashboard.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -193,6 +194,8 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     LeadSourcesModule,
     SoldDealsModule,
     PerformanceModule,
+    // The Owner View dashboard (PAC-135) — replaces the `owner-dashboard` stub.
+    OwnerDashboardModule,
     LeaderboardModule,
     ActivitiesModule,
     // Super Admin mailer imports (PAC-73). Registers the `mailers` and

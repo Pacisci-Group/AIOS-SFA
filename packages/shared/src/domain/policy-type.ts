@@ -71,6 +71,23 @@ export const POLICY_TYPE_CODE_ALIASES: Record<string, PolicyType> = {
   F3oxm: 'Renters',
   le1BC: 'Umbrella',
   gGKei: 'Motorcycle',
+  // The rest of the Policies set (PAC-135), from legacy's own lookup table in
+  // `SFA/app/api/admin/deal-audit-detail/route.ts`. These reach `deals.policyTypes`
+  // too, via the migration's rollup of a deal's policies.
+  BK08B: 'Boat Owners', // legacy: "Boat"
+  ayKjZ: 'Valuable Item Protection', // legacy: "Item Protection"
+  UrNOp: 'Condominium', // legacy: "Condo"
+  HicyK: 'Life',
+  /*
+   * Deliberately NOT mapped — do not guess these:
+   *   - `Tz3ny` is legacy's "Mobilehome", which has no counterpart in
+   *     `POLICY_TYPES` (the Sold form's dropdown). Folding it into Home would
+   *     misstate the book; it needs a product decision.
+   *   - `sTSOE`, `cgoHC` (Policies/Deals) and `AP0VA` (Quote Recaps) appear in
+   *     no table, doc or legacy source. ~18 records in total.
+   * They pass through `normalizePolicyType` unchanged and are never offered as
+   * a filter choice; the Owner dashboard counts them under "Other".
+   */
 };
 
 /**
@@ -119,11 +136,14 @@ export function policyTypeQueryValues(label: string): string[] {
   const codes = Object.entries(POLICY_TYPE_CODE_ALIASES)
     .filter(([, mapped]) => mapped === canonical)
     .map(([code]) => code);
+  // The alias table is keyed in lowercase for the case-insensitive *read* path,
+  // but `$in` is case-sensitive and a stored label is capitalized — so the key
+  // alone (`landlords`) would never match the value it exists for (`Landlords`).
   const labels = Object.entries(POLICY_TYPE_LABEL_ALIASES)
     .filter(([, mapped]) => mapped === canonical)
-    .map(([alias]) => alias);
+    .flatMap(([alias]) => [alias, alias[0].toUpperCase() + alias.slice(1)]);
 
-  return [canonical, ...codes, ...labels];
+  return [...new Set([canonical, ...codes, ...labels])];
 }
 
 /**

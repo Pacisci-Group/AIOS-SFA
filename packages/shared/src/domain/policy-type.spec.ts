@@ -78,6 +78,9 @@ describe('policy-type vocabulary', () => {
     expect(values).toContain('mCt4m');
     expect(values).toContain('AiFB5');
     expect(values).toContain('landlords');
+    // `$in` is case-sensitive, and a stored label is capitalized.
+    expect(values).toContain('Landlords');
+    expect(new Set(values).size).toBe(values.length);
 
     const auto = policyTypeQueryValues('Auto');
     expect(auto).toContain('Auto');

@@ -415,6 +415,19 @@ export const POLICY_TYPE_SETS: string[][] = [
   ['Landlord'],
 ];
 
+/**
+ * Split a whole-dollar amount into `parts` whole-dollar shares that add back up
+ * to it exactly — the remainder goes on the last share. `splitAmount(1001, 2)`
+ * is `[500, 501]`, where a rounded equal share gives `501 + 501`.
+ */
+export function splitAmount(amount: number, parts: number): number[] {
+  const count = Math.max(parts, 1);
+  const share = Math.floor(amount / count);
+  return Array.from({ length: count }, (_, index) =>
+    index === count - 1 ? amount - share * (count - 1) : share,
+  );
+}
+
 export type AuditTemplateSpec = CoreAuditTemplateSpec;
 
 /**

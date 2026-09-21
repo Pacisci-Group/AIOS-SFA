@@ -4,6 +4,7 @@ import { COMPANY_TRANSFER_MATCH, NEW_BUSINESS_MATCH } from '@sfa/shared';
 import type { AccessContext, PerformanceResponse } from '@sfa/shared';
 import { FilterQuery, Model, PipelineStage } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
+import { HOUSEHOLD_KEY_EXPR } from '../common/sales-metrics/household-key';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   QuoteRecap,
@@ -118,33 +119,8 @@ export class PerformanceService {
           premium: { $sum: { $ifNull: ['$premium', 0] } },
           itemCount: { $sum: { $ifNull: ['$itemCount', 0] } },
           recordCount: { $sum: 1 },
-          /*
-           * Distinct household identity, with a fallback ladder.
-           *
-           * `$toString` of a missing field is null and `$concat` with a null
-           * operand is null, so the three-arm `$ifNull` reads as: the real ref
-           * if present, else the legacy string id, else the row's own id.
-           *
-           * That last arm means an unattributed row counts as *its own*
-           * household. The alternatives are both worse: collapsing every
-           * null-household row into one bucket inflates the average without
-           * bound on migrated data, and dropping them counts their premium in
-           * the numerator while omitting them from the denominator. Counting
-           * each separately can only understate the average, and rows the
-           * migration did resolve a household for are counted correctly.
-           *
-           * The `h:`/`l:`/`r:` prefixes stop a legacy string id from ever
-           * colliding with a stringified ObjectId.
-           */
-          households: {
-            $addToSet: {
-              $ifNull: [
-                { $concat: ['h:', { $toString: '$householdId' }] },
-                { $concat: ['l:', '$legacyHouseholdId'] },
-                { $concat: ['r:', { $toString: '$_id' }] },
-              ],
-            },
-          },
+          // The three-rung identity ladder — see `HOUSEHOLD_KEY_EXPR`.
+          households: { $addToSet: HOUSEHOLD_KEY_EXPR },
         },
       },
       {

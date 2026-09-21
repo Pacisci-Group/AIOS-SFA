@@ -1,0 +1,26 @@
+meta {
+  name: Get Summary (Forbidden for Producer)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/owner-dashboard/summary
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("a producer is refused", function () {
+    // `auth: inherit` is the collection token — the producer's.
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /owner-dashboard/summary — without `owner_dashboard:read`
+
+  The Producer template does not hold `owner_dashboard:read`, so every
+  `/owner-dashboard/*` read is a `403` for them — this is the dashboard that
+  shows each colleague's dollars, which `GET /leaderboard` deliberately does not.
+}
