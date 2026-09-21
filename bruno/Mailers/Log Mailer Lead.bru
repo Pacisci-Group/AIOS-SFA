@@ -82,8 +82,8 @@ docs {
   or create lead → link → assign producer. A Lead, a Household and a Contact
   come out of a first call.
 
-  - **Lead source is always `WCO7l` (Mailer)**, set server-side and never read
-    from the request. Legacy branched to JYA on
+  - **Lead source is always Mailer**, found by its stable slug (`mailer`) in
+    `leadSources`, set server-side and never read from the request. Legacy branched to JYA on
     `Campaign_Number.startsWith('JYA')`; no campaign number in this data can
     match — every value is `Week_Number-NN` — so that branch is not ported.
   - **The producer is the caller.** Legacy resolved this through ~170 lines of

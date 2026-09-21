@@ -357,7 +357,7 @@ export class SoldDealsService {
       ctx,
       dto,
       access,
-      lead.leadSource,
+      lead.leadSourceId,
     );
     const { leadStatus } = await this.intake.recordSideEffects(ctx, outcome);
 

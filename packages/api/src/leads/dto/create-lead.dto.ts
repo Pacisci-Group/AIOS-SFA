@@ -1,18 +1,19 @@
-import {
-  HOUSEHOLD_MEMBER_ROLES,
-  POLICY_TYPES,
-  SELECTABLE_LEAD_SOURCE_OPTIONS,
-} from '@sfa/shared';
+import { HOUSEHOLD_MEMBER_ROLES, POLICY_TYPES } from '@sfa/shared';
 import { z } from 'zod';
 import {
   policyAddressFields,
   requirePolicyPropertyAddress,
 } from '../../common/address/policy-property-address';
 
-/** `Test` (ENEJP) is excluded — it must never be selectable at intake. */
-const SELECTABLE_LEAD_SOURCE_CODES = SELECTABLE_LEAD_SOURCE_OPTIONS.map(
-  (option) => option.code,
-) as [string, ...string[]];
+/**
+ * A `leadSources` row id. Only the *shape* is checked here — whether the row
+ * exists, is active and belongs to this agency needs the database, so
+ * `LeadSourcesService.assertSelectable` answers that in the service.
+ */
+export const leadSourceIdField = z
+  .string()
+  .trim()
+  .regex(/^[a-f0-9]{24}$/i, 'Select a lead source from the list.');
 
 const name = z.string().trim().min(1).max(60);
 const dateOfBirth = z
@@ -115,7 +116,7 @@ export const leadIntakeBaseSchema = z.object({
  * `.superRefine` of its own — which also means `.extend` still works here.
  */
 export const createLeadSchema = leadIntakeBaseSchema.extend({
-  leadSourceCode: z.enum(SELECTABLE_LEAD_SOURCE_CODES),
+  leadSourceId: leadSourceIdField,
   /**
    * Pin the lead to a household the caller already has on screen — the
    * Household page's "Start Quote" flow, where the household is a fact rather
@@ -136,11 +137,11 @@ export const createLeadSchema = leadIntakeBaseSchema.extend({
 export type CreateLeadDto = z.infer<typeof createLeadSchema>;
 
 /**
- * `POST /public/leads/:token` — the same fields **minus** `leadSourceCode`.
+ * `POST /public/leads/:token` — the same fields **minus** `leadSourceId`.
  *
  * Lead source is internal vocabulary (Quotewizard, Soleo, Data Lot, JYA) and is
  * never shown to an outside submitter; a producer sets it afterwards. Because
- * zod strips unknown keys, an injected `leadSourceCode` — or `agencyId`,
+ * zod strips unknown keys, an injected `leadSourceId` — or `agencyId`,
  * `producerId`, `branchId` — is silently discarded here, and `LeadIntakeService`
  * reads none of them anyway. Two independent layers.
  */

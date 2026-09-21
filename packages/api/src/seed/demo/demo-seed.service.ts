@@ -46,13 +46,11 @@ import { Permission } from '../../permissions/schemas/permission.schema';
 import { Carrier } from '../../carriers/schemas/carrier.schema';
 import { seedPermissions } from '../permissions.seed';
 import { seedCarriers } from '../carriers.seed';
+import { seedLeadSources } from '../lead-sources.seed';
+import { LeadSourcesService } from '../../lead-sources/lead-sources.service';
+import { LeadSource } from '../../lead-sources/schemas/lead-source.schema';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
-import {
-  INSURANCE_MONTHS,
-  normalizeLeadSource,
-  POLICY_TYPES,
-  resolveItemCount,
-} from '@sfa/shared';
+import { INSURANCE_MONTHS, POLICY_TYPES, resolveItemCount } from '@sfa/shared';
 import { AUDIT_ITEM_DUE_DAYS } from '../../audit-generation/audit-generation.service';
 import { seedAuditTemplates } from '../audit-templates.seed';
 import {
@@ -65,7 +63,7 @@ import {
   DEMO_CONFIG,
   FIRST_NAMES,
   LAST_NAMES,
-  LEAD_SOURCE_CODES,
+  DEMO_LEAD_SOURCE_NAMES,
   MAILER_CITIES,
   DEMO_LEAD_UNQUOTED_STATUSES,
   POLICY_TYPE_SETS,
@@ -168,6 +166,8 @@ interface LeadRef {
   temperature: string;
   /** Drives the pipeline: `Sold` leads get a deal, `Quoted`/`Requote` a recap. */
   status: string;
+  /** Carried onto the lead's deal — a sale is attributed to its lead's source. */
+  leadSourceId?: Types.ObjectId;
 }
 
 interface QuoteRef {
@@ -262,6 +262,9 @@ export class DemoSeedService {
     @InjectModel(Permission.name)
     private readonly permissionModel: Model<Permission>,
     @InjectModel(Carrier.name) private readonly carrierModel: Model<Carrier>,
+    @InjectModel(LeadSource.name)
+    private readonly leadSourceModel: Model<LeadSource>,
+    private readonly leadSources: LeadSourcesService,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
@@ -367,6 +370,9 @@ export class DemoSeedService {
 
     const carriers = await seedCarriers(this.carrierModel);
     this.inc('carriers', carriers.created);
+
+    const leadSources = await seedLeadSources(this.leadSourceModel);
+    this.inc('leadSources', leadSources.created);
   }
 
   // ---------------------------------------------------------------------------
@@ -770,7 +776,12 @@ export class DemoSeedService {
       const lastActivityAt = this.daysAgo(
         rng.int(0, Math.min(6, this.daysBetween(createdDate, this.now))),
       );
-      const source = normalizeLeadSource(rng.pick(LEAD_SOURCE_CODES));
+      // Platform row, or created here as the demo agency's own (PAC-135).
+      const leadSourceId =
+        (await this.leadSources.findOrCreateByName(
+          ctx.agencyId,
+          rng.pick<string>([...DEMO_LEAD_SOURCE_NAMES]),
+        )) ?? undefined;
       const first = hh ? hh.clientFirst : rng.pick(FIRST_NAMES);
       const last = hh ? hh.clientLast : rng.pick(LAST_NAMES);
       const legacyId = `demo:lead:${i}`;
@@ -788,7 +799,7 @@ export class DemoSeedService {
           // `primaryContactId`, which is set below.
           status,
           temperature,
-          leadSource: { code: source.code, label: source.label },
+          leadSourceId,
           agingDays: daysSince(createdDate),
           createdDate,
           lastActivityAt,
@@ -823,6 +834,7 @@ export class DemoSeedService {
         occurredAt: createdDate,
         temperature,
         status,
+        leadSourceId,
       });
     }
     return refs;
@@ -983,7 +995,6 @@ export class DemoSeedService {
       );
       const premium = rng.int(900, 4800);
       const clientName = `${hh.clientFirst} ${hh.clientLast}`;
-      const source = normalizeLeadSource(rng.pick(LEAD_SOURCE_CODES));
       const legacyId = `demo:deal:${i}`;
 
       const id = await this.upsert(
@@ -1009,7 +1020,7 @@ export class DemoSeedService {
           dealType,
           isBundle,
           policyTypes,
-          leadSource: { code: source.code, label: source.label },
+          leadSourceId: lead.leadSourceId,
           clientName,
           producerId: producer.userId,
           leadId: lead.id,

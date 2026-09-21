@@ -228,7 +228,7 @@ docs {
   ## Derived server-side — never trusted from the client
   `premium` (summed and rounded to cents), `itemCount`, `policyCount`,
   `policyTypes`, `isBundle`, `dealType`, `soldDateYmd`, `clientName` and
-  `leadSource`. Legacy received these pre-aggregated from Fillout because
+  `leadSourceId` (stamped from the lead). Legacy received these pre-aggregated from Fillout because
   SmartSuite maintained them as rollups; Mongo has none, so they are computed
   here — and a client-supplied total would corrupt the Sold scorecard (PAC-11).
 

@@ -325,18 +325,25 @@ export const CARRIERS = [
   'Farmers',
 ] as const;
 
-/** Canonical lead-source choice codes (see `CANONICAL_LEAD_SOURCES` in @sfa/shared). */
-export const LEAD_SOURCE_CODES = [
-  'WCO7l', // Mailer
-  'GVCgc', // Book of Business
-  'UqEUq', // Allstate Lead Marketplace
-  'Eos2j', // Customer Referral
-  'oayGb', // Data Lot
-  'X2Wrh', // Facebook
-  '30sDe', // Google
-  'DmjDy', // Mail Referral
-  'xjtnZ', // Quotewizard
-  'ymZHL', // JYA
+/**
+ * Lead sources the demo agency's leads come from (PAC-135).
+ *
+ * Both kinds on purpose: the first six are platform rows
+ * (`PLATFORM_LEAD_SOURCES`), the last three are not, so the seed creates them as
+ * the demo agency's own — which is what exercises the "platform ∪ agency" read.
+ * `Mailer` is repeated to keep it the largest source, as it is in real data.
+ */
+export const DEMO_LEAD_SOURCE_NAMES = [
+  'Mailer',
+  'Mailer',
+  'Book of Business',
+  'Customer Referral',
+  'Facebook',
+  'Google',
+  'Web',
+  'Quotewizard',
+  'Data Lot',
+  'Allstate Lead Marketplace',
 ] as const;
 
 /**

@@ -8,7 +8,6 @@ import {
 } from '../../activities/schemas/activity.schema';
 import { TransactionRunner } from '../../common/mongo/transaction.runner';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
-import type { NormalizedLeadSource } from '@sfa/shared';
 import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import { AdvanceLeadStep } from './advance-lead.step';
 import { InterestedPartiesStep } from './interested-parties.step';
@@ -65,16 +64,16 @@ export class SoldDealIntakeService {
   ) {}
 
   /**
-   * `leadSource` rather than the lead document: it is the only field of the
+   * `leadSourceId` rather than the lead document: it is the only field of the
    * lead this pipeline ever read, and taking the narrower input is what lets a
    * leadless policy transfer run the identical steps. A transfer passes
-   * `undefined`, which `resolveLeadSource` already renders as the empty source.
+   * `undefined`, and the deal simply carries no source.
    */
   async process(
     ctx: SoldIntakeContext,
     dto: SoldIntakeDto,
     access: AccessContext,
-    leadSource: NormalizedLeadSource | undefined,
+    leadSourceId: Types.ObjectId | undefined,
   ): Promise<SoldIntakeOutcome> {
     // Probe BEFORE opening a transaction, the same reasoning as lead intake: a
     // replay should not re-run policy upserts or re-derive anything.
@@ -89,7 +88,7 @@ export class SoldDealIntakeService {
 
         const { dealId, aggregates } = await this.deals.run(
           dto,
-          leadSource,
+          leadSourceId,
           deps,
         );
         const policies = await this.policies.run(dto, dealId, access, deps);

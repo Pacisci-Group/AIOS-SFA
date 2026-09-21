@@ -3,7 +3,6 @@ import type {
   IntakeChannel,
   LeadMailerMatchedBy,
   LeadPolicyOfInterestInput,
-  NormalizedLeadSource,
 } from '@sfa/shared';
 import { ClientSession, Types } from 'mongoose';
 import type { CreatedRegistry } from '../../common/mongo/transaction.runner';
@@ -33,11 +32,11 @@ export interface IntakeContext {
   /** Provenance — present only for `share_link`. */
   shareLinkId?: Types.ObjectId;
   /**
-   * Already normalised. **Null on the public path**: a share-link lead records
-   * no source, because guessing one would write an assumption down as fact and
-   * nothing afterwards could distinguish it from a real answer.
+   * A validated `leadSources` row. **Null on the public path**: a share-link
+   * lead records no source, because guessing one would write an assumption down
+   * as fact and nothing afterwards could distinguish it from a real answer.
    */
-  leadSource: NormalizedLeadSource | null;
+  leadSourceId: Types.ObjectId | null;
   /** Activity attribution. Null on the public path — there is no actor. */
   actorUserId: Types.ObjectId | null;
 }
