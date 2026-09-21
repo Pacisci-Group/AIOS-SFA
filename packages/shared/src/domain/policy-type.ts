@@ -96,10 +96,12 @@ export const POLICY_TYPE_CODE_ALIASES: Record<string, PolicyType> = {
   sTSOE: 'RV',
   cgoHC: 'ATV / ORV', // SmartSuite: "ATVs / ORVs"
   /*
-   * Still unmapped, deliberately: `AP0VA`, on six quote recaps. Quote Recaps is
-   * a separate code set and there is no labelled export of it to decode against.
-   * It passes through `normalizePolicyType` unchanged — do not guess.
+   * A Quote Recaps `products_quoted` choice the table doc does not list, on six
+   * migrated recaps. Confirmed from SmartSuite's own choice list (2026-09-21);
+   * the data agreed beforehand — five of the six leads went on to an `sTSOE`
+   * (RV) deal, four at the quoted premium to the dollar.
    */
+  AP0VA: 'RV',
 };
 
 /**
