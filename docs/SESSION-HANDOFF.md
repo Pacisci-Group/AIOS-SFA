@@ -817,9 +817,12 @@ and are carried up with merge commits, never force-pushes.
 - "Last 3 Months" = three complete calendar months (David confirmed).
 
 ### Policy types
-92 policies showed a raw SmartSuite code. Not a PAC-80 regression: the records API sends a choice's
-*code*, never its label, and the alias map was built from a table doc listing 6 of 13 choices.
-All seven decoded by joining to `temp/Policies 9_4_2026.csv` on `Record ID`. Three became new
+92 policies showed a raw SmartSuite code. Not a PAC-80 regression: the alias map was built from a
+table doc listing 6 of 13 choices, **and the import read a choice's code while discarding the label
+beside it** — `SmartSuiteClient` asks for `hydrated: true`, so every select arrives as
+`{ value, label }`. (An earlier note here claimed the API never sends labels. That was wrong.)
+`resolvePolicyType` now falls back to the hydrated label, so an unknown choice is stored by name.
+The seven already stored were decoded by joining to `temp/Policies 9_4_2026.csv` on `Record ID`. Three became new
 `POLICY_TYPES`: **Manufactured Home** (a dwelling), **RV** and **ATV / ORV** (countable vehicles,
 deliberately *not* in `AUTO_POLICY_TYPES` and *not* semiannual). **`docs/smartsuite-tables/*.md`
 choice lists are stale snapshots — never treat them as exhaustive.** The import now prints

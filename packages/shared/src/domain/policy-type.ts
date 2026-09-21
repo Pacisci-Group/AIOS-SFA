@@ -79,8 +79,10 @@ export const POLICY_TYPE_CODE_ALIASES: Record<string, PolicyType> = {
   gGKei: 'Motorcycle',
   /*
    * The rest of the Policies set (PAC-135). `docs/smartsuite-tables/The Policies
-   * Table.md` lists six choices; SmartSuite has thirteen, so these seven passed
-   * through the import as raw codes on 92 policies. Decoded by joining those
+   * Table.md` lists six choices; SmartSuite has thirteen, and the import read a
+   * choice's code while ignoring the hydrated label beside it — so these seven
+   * were stored as raw codes on 92 policies. (The import now falls back to the
+   * label; this map is what repairs the rows already stored.) Decoded by joining those
    * policies to the labelled 2026-09-04 Policies export — every row agreed — and
    * four of them independently confirmed by legacy's own lookup table in
    * `SFA/app/api/admin/deal-audit-detail/route.ts`. They reach
