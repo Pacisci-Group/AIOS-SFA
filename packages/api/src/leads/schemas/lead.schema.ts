@@ -3,7 +3,6 @@ import type {
   IntakeChannel,
   LeadMailerMatchedBy,
   LeadTemperature,
-  NormalizedLeadSource,
 } from '@sfa/shared';
 import { HydratedDocument, IndexOptions, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
@@ -185,14 +184,6 @@ export class Lead extends TenantRecord {
   @Prop({ type: ObjectIdType, ref: 'LeadSource' })
   leadSourceId?: Types.ObjectId;
 
-  /**
-   * @deprecated The pre-PAC-135 embedded `{ code, label }`. No longer written or
-   * read; kept for one release as the `lead_sources_backfill` migration's safety
-   * net, then dropped by a follow-up migration.
-   */
-  @Prop({ type: Object })
-  leadSource?: NormalizedLeadSource;
-
   /** Days since created_date; derived at migration time (recompute in API for live aging). */
   @Prop({ default: 0 })
   agingDays: number;
@@ -272,9 +263,8 @@ export class Lead extends TenantRecord {
   @Prop({ trim: true })
   submissionToken?: string;
 
-  // `type: Object` is explicit for the same reason `leadSource` needs it: an
-  // interface type emits as `Object` under `emitDecoratorMetadata`, so Mongoose
-  // can't infer a schema from it.
+  // `type: Object` is explicit: an interface type emits as `Object` under
+  // `emitDecoratorMetadata`, so Mongoose can't infer a schema from it.
   @Prop({ type: Object })
   address?: LeadAddress;
 

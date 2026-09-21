@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE } from '@sfa/shared';
-import type { BusinessType, NormalizedLeadSource } from '@sfa/shared';
+import type { BusinessType } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
 import {
@@ -162,13 +162,6 @@ export class Deal extends TenantRecord {
    */
   @Prop({ type: ObjectIdType, ref: 'LeadSource' })
   leadSourceId?: Types.ObjectId;
-
-  /**
-   * @deprecated The pre-PAC-135 embedded `{ code, label }`. No longer written or
-   * read; kept for one release, then dropped by a follow-up migration.
-   */
-  @Prop({ type: Object })
-  leadSource?: NormalizedLeadSource;
 
   @Prop({ trim: true })
   clientName?: string;
