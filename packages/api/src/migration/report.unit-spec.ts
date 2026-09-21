@@ -10,19 +10,19 @@ describe('recordUnmappedChoice', () => {
     // nothing said so. The count per code is what tells an operator whether
     // they are looking at one stray row or a missing line of business.
     const stat = emptyStat();
-    recordUnmappedChoice(stat, 'policyType', 'AP0VA');
-    recordUnmappedChoice(stat, 'policyType', 'AP0VA');
+    recordUnmappedChoice(stat, 'policyType', 'Zz9Qx');
+    recordUnmappedChoice(stat, 'policyType', 'Zz9Qx');
     recordUnmappedChoice(stat, 'policyType', 'zzzzz');
 
     expect(stat.unmappedChoices).toEqual({
-      'policyType:AP0VA': 2,
+      'policyType:Zz9Qx': 2,
       'policyType:zzzzz': 1,
     });
   });
 
   it('does not count as a rejection — the value is kept, not replaced', () => {
     const stat = emptyStat();
-    recordUnmappedChoice(stat, 'policyType', 'AP0VA');
+    recordUnmappedChoice(stat, 'policyType', 'Zz9Qx');
 
     expect(stat.rejectedValues).toBe(0);
   });
