@@ -77,6 +77,7 @@ import {
   allLinkedIds,
   firstLinkedId,
   selectCode,
+  selectLabel,
   toBool,
   toDate,
   toRichText,
@@ -99,7 +100,6 @@ import {
   normalizeLeadSource,
   normalizePolicyStatus,
   isCanonicalPolicyType,
-  normalizePolicyType,
   normalizePriorPolicyCancellationStatus,
   normalizePriorPolicyType,
   normalizeTimeOffDecision,
@@ -112,6 +112,7 @@ import {
   deriveDealType,
   normalizeTemperature,
   policyTypeLabels,
+  resolvePolicyType,
   resolveContactHousehold,
   resolvePremium,
 } from './helpers/derive';
@@ -1714,9 +1715,9 @@ export class MigrationService {
        * Hoisted out of the document literal because `itemCount` is bounded by
        * its length (PAC-80).
        */
-      const productsQuoted = this.selectCodes(
+      const productsQuoted = policyTypeLabels(
         rec[QUOTE_RECAP_FIELDS.productsQuoted],
-      ).map(normalizePolicyType);
+      );
       this.flagUnmappedPolicyTypes(stat, productsQuoted);
 
       const id = await this.persist(
@@ -2091,9 +2092,9 @@ export class MigrationService {
       if (test) stat.excludedTest++;
 
       const policyNumber = toText(rec[POLICY_FIELDS.policyNumber]);
-      const policyType = normalizePolicyType(
-        selectCode(rec[POLICY_FIELDS.policyType]),
-      );
+      // Code first, then the hydrated label SmartSuite sent beside it — so a
+      // choice our map has never seen is stored by name, not as `Tz3ny`.
+      const policyType = resolvePolicyType(rec[POLICY_FIELDS.policyType]);
       this.flagUnmappedPolicyTypes(stat, [policyType]);
 
       const id = await this.persist(
@@ -3196,10 +3197,7 @@ export class MigrationService {
   }
 
   private selectLabel(value: unknown): string | undefined {
-    const o = this.asObject(value);
-    if (!o) return undefined;
-    const label = o.label ?? o.display_value;
-    return typeof label === 'string' ? label : undefined;
+    return selectLabel(value);
   }
 
   private selectCodes(value: unknown): string[] {

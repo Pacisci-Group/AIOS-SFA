@@ -8,6 +8,7 @@ import {
   deriveDealType,
   normalizeTemperature,
   policyTypeLabels,
+  resolvePolicyType,
   resolveContactHousehold,
   resolvePremium,
 } from './derive';
@@ -15,6 +16,7 @@ import { CONTACT_FIELDS } from '../smartsuite/field-ids';
 import {
   firstLinkedId,
   selectCode,
+  selectLabel,
   toDate,
   toNumber,
   toPhoneArray,
@@ -122,6 +124,48 @@ describe('deal type derivation', () => {
     // here means a landlord deal generates no landlord audit items at all.
     expect(policyTypeLabels([['mCt4m']])).toEqual(['Landlord']);
     expect(policyTypeLabels([['AiFB5']])).toEqual(['Landlord']);
+  });
+
+  // PAC-135. The client asks SmartSuite for *hydrated* records, so a select
+  // arrives as `{ value, label }` — and the import used to read `value` alone.
+  describe('a choice our map has never seen', () => {
+    it('is stored by the label SmartSuite sent, not as an opaque code', () => {
+      // A line of business someone adds to SmartSuite next year.
+      expect(resolvePolicyType({ value: 'zzNEW', label: 'Pet Insurance' })).toBe(
+        'Pet Insurance',
+      );
+    });
+
+    it("maps SmartSuite's wording onto ours when the label is one we know", () => {
+      // The code is unknown, but "Manufactured Homes" is our "Manufactured Home".
+      expect(
+        resolvePolicyType({ value: 'zzNEW', label: 'Manufactured Homes' }),
+      ).toBe('Manufactured Home');
+    });
+
+    it('still prefers the code — a relabelled choice keeps its meaning', () => {
+      expect(resolvePolicyType({ value: 'PYgez', label: 'Car' })).toBe('Auto');
+    });
+
+    it('falls back to the raw code only when there is no label at all', () => {
+      // An un-hydrated value: a bare string is all SmartSuite sent.
+      expect(resolvePolicyType('zzNEW')).toBe('zzNEW');
+      expect(resolvePolicyType({ value: 'zzNEW' })).toBe('zzNEW');
+    });
+
+    it('resolves each element of a multi-select the same way', () => {
+      expect(
+        policyTypeLabels([
+          { value: 'PYgez', label: 'Auto' },
+          { value: 'zzNEW', label: 'Pet Insurance' },
+        ]),
+      ).toEqual(['Auto', 'Pet Insurance']);
+    });
+
+    it('reads a hydrated label, and nothing from a bare code', () => {
+      expect(selectLabel({ value: 'PYgez', label: 'Auto' })).toBe('Auto');
+      expect(selectLabel('PYgez')).toBeUndefined();
+    });
   });
 
   it('collapses the two Landlord code sets to one label', () => {

@@ -68,16 +68,17 @@ export interface CollectionStat {
    */
   multiValued?: { emails: number; phones: number };
   /**
-   * SmartSuite choice codes the import had no label for, as `field:code` →
+   * SmartSuite choices our alias map did not know, as `field:stored value` →
    * how many rows carried it.
    *
-   * SmartSuite's records API sends a select's **code**, never its label, so the
-   * import depends on a code → label table in our code — and that table is only
-   * as complete as the table doc it was built from. The Policies doc listed six
-   * of thirteen Policy Type choices, so seven codes passed through raw onto 92
-   * policies and nobody knew until they surfaced on a dashboard (PAC-135). An
-   * unmapped code is still stored as itself, deliberately; this is what makes
-   * that visible on the run that introduces it.
+   * The map is only as complete as the table doc it was built from: the Policies
+   * doc listed six of thirteen Policy Type choices, and the import read a
+   * choice's **code** alone — discarding the label SmartSuite sends beside it in
+   * a hydrated record — so seven codes were stored raw on 92 policies and nobody
+   * knew until they surfaced on a dashboard (PAC-135). `resolvePolicyType` now
+   * falls back to that label, so what lands here is normally a readable name
+   * ("Pet Insurance") rather than a code: a line of business to add to
+   * `POLICY_TYPES`. A bare code here means SmartSuite sent no label at all.
    *
    * Absent when every code resolved, which is the expected reading.
    */
@@ -279,7 +280,7 @@ export function printReport(report: MigrationReport): void {
   );
   if (unmapped.length) {
     console.log(
-      'Unmapped SmartSuite choice codes (stored as the raw code — add them to the alias map):',
+      'SmartSuite choices missing from our vocabulary (stored as shown — add them to the alias map):',
     );
     for (const [name, s] of unmapped) {
       for (const [key, count] of Object.entries(s.unmappedChoices ?? {})) {
