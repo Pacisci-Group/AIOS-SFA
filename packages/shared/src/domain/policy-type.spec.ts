@@ -114,9 +114,16 @@ describe('policy-type vocabulary', () => {
     expect(policyTypeQueryValues('ATV / ORV')).toContain('ATVs / ORVs');
   });
 
+  it('resolves the Quote Recaps code for an RV', () => {
+    // On six migrated recaps; the table doc does not list the choice.
+    expect(normalizePolicyType('AP0VA')).toBe('RV');
+    expect(policyTypeQueryValues('RV')).toEqual(
+      expect.arrayContaining(['RV', 'sTSOE', 'AP0VA']),
+    );
+  });
+
   it('leaves a code nobody has identified alone', () => {
-    // `AP0VA` sits on six quote recaps and appears in no table, doc or export.
-    expect(normalizePolicyType('AP0VA')).toBe('AP0VA');
+    expect(normalizePolicyType('Zz9Qx')).toBe('Zz9Qx');
   });
 
   it('treats a manufactured home as a dwelling', () => {

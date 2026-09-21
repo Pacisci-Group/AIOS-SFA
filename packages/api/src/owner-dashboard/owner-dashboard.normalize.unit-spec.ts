@@ -188,8 +188,8 @@ describe('toLobMix', () => {
   it('counts an uncatalogued code as a policy, but never names it', () => {
     const mix = toLobMix([
       { policyType: 'Auto', count: 6 },
-      // A SmartSuite code nobody has been able to identify.
-      { policyType: 'AP0VA', count: 4 },
+      // A SmartSuite code the alias map has no entry for.
+      { policyType: 'Zz9Qx', count: 4 },
     ]);
 
     expect(mix.policyCount).toBe(10);
