@@ -53,6 +53,7 @@ import { InterestedParty } from '../src/interested-parties/schemas/interested-pa
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
 import { LeadSource } from '../src/lead-sources/schemas/lead-source.schema';
+import { seedLeadSources } from '../src/seed/lead-sources.seed';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { Policy } from '../src/policies/schemas/policy.schema';
 import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
@@ -5671,6 +5672,31 @@ describe('SFA API (e2e)', () => {
       expect(await leadModel.countDocuments({ lastName: 'Sourceless' })).toBe(
         0,
       );
+    });
+
+    it('re-seeding creates nothing, and never undoes a curated row', async () => {
+      // A redeploy re-runs the core seed. Once a curation surface exists, a
+      // super admin renaming or archiving a platform source has made a decision,
+      // and the seed quietly reverting it would be the bug — hence
+      // `$setOnInsert` only.
+      const walkIn = { agencyId: null, slug: 'walk-in' };
+      await leadSourceModel.updateOne(walkIn, {
+        $set: { name: 'Walk-in (office)', active: false },
+      });
+
+      try {
+        const result = await seedLeadSources(leadSourceModel);
+        const row = await leadSourceModel.findOne(walkIn).lean();
+
+        expect(result.created).toBe(0);
+        expect(row!.name).toBe('Walk-in (office)');
+        expect(row!.active).toBe(false);
+      } finally {
+        // Every later block reads these rows.
+        await leadSourceModel.updateOne(walkIn, {
+          $set: { name: 'Walk-In', active: true },
+        });
+      }
     });
 
     it('is read-only — there is no curation surface yet', async () => {
