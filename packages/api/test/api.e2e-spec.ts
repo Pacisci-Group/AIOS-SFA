@@ -4575,7 +4575,7 @@ describe('SFA API (e2e)', () => {
       });
     });
 
-    it('own-scope: CSR only sees their own tickets', async () => {
+    it('branch floor: CSR sees their own tickets, not another branch', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/v1/crm/service-tickets')
         .set(authHeader(csrToken))
@@ -4590,11 +4590,224 @@ describe('SFA API (e2e)', () => {
 
       const ids = ticketList(res).items.map((t: { id: string }) => t.id);
       expect(ids).toContain(csrTicketId);
-      // The owner's ticket is assigned to the owner — out of the CSR's own scope.
+      /*
+       * The owner has no `branchId`, so the ticket they opened has none
+       * either — it sits outside the CSR's branch floor (PAC-109) rather than
+       * merely outside their own assignments. The colleague case, which is
+       * what the ticket is actually about, is the next test.
+       */
       expect(ids).not.toContain(ownerTicketId);
     });
 
-    it('own-scope: CSR cannot read a ticket outside their scope', async () => {
+    /*
+     * PAC-109 — the behaviour David asked for: *"all service people be able to
+     * see another person's service tickets just in case they need to pick up
+     * where somebody left off."*
+     *
+     * `readOnlyUser` shares the CSR's branch and is used purely as an
+     * assignee here; the ticket is created by the CSR so it inherits their
+     * branch, then assigned away.
+     */
+    describe("PAC-109 — a colleague's ticket in the same branch", () => {
+      let colleagueTicketId: string;
+      /** The CSR's own row, so "Mine" has something to return in isolation. */
+      let mineTicketId: string;
+
+      beforeAll(async () => {
+        const colleague = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(csrToken))
+          .send({
+            clientName: 'Colleague Client',
+            category: 'Billing',
+            assignedUserId: seed.readOnlyUserId,
+          })
+          .expect(201);
+        colleagueTicketId = (colleague.body as { id: string }).id;
+
+        const mine = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(csrToken))
+          .send({ clientName: 'My Own Client', category: 'Billing' })
+          .expect(201);
+        mineTicketId = (mine.body as { id: string }).id;
+      });
+
+      /*
+       * The Service Dashboard's two parent tabs are a partition: a ticket
+       * belongs to exactly one, so the counts add up and nothing is listed
+       * twice.
+       */
+      it('is the only one of the two under ?scope=others', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?scope=others')
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        const items = ticketList(res).items;
+        const ids = items.map((t: { id: string }) => t.id);
+        expect(ids).toContain(colleagueTicketId);
+        expect(ids).not.toContain(mineTicketId);
+        // Not one row on this tab is the caller's.
+        for (const ticket of items) {
+          expect(ticket.assignedUserId).not.toBe(seed.csrUserId);
+        }
+      });
+
+      it('is visible in the default (Everyone) list', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets')
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        const ids = ticketList(res).items.map((t: { id: string }) => t.id);
+        expect(ids).toContain(colleagueTicketId);
+      });
+
+      it('drops out under ?scope=own — the Mine toggle', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?scope=own')
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        const items = ticketList(res).items;
+        const ids = items.map((t: { id: string }) => t.id);
+        expect(ids).not.toContain(colleagueTicketId);
+        expect(ids).toContain(mineTicketId);
+        // Stronger than "the one row is gone": every row that came back is
+        // the caller's, which is what "Mine" has to mean.
+        for (const ticket of items) {
+          expect(ticket.assignedUserId).toBe(seed.csrUserId);
+        }
+      });
+
+      it('can be opened', async () => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/crm/service-tickets/${colleagueTicketId}`)
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        expect((res.body as { id: string }).id).toBe(colleagueTicketId);
+      });
+
+      /*
+       * The regression that matters most. Widening the list without widening
+       * the writes would give a rep a ticket they can read and not act on —
+       * which is not "picking up where somebody left off".
+       */
+      it('can be worked: status and notes both land', async () => {
+        await request(app.getHttpServer())
+          .patch(`/api/v1/crm/service-tickets/${colleagueTicketId}/status`)
+          .set(authHeader(csrToken))
+          .send({ status: 'waiting' })
+          .expect(200);
+
+        const res = await request(app.getHttpServer())
+          .post(`/api/v1/crm/service-tickets/${colleagueTicketId}/notes`)
+          .set(authHeader(csrToken))
+          .send({ content: 'Picked this up while Casey is out.' })
+          .expect(201);
+
+        // PAC-109 stamps the author's id, not just their name, so "who worked
+        // a ticket they were not assigned to" is answerable after the fact.
+        const timeline = (res.body as { timeline: { userId: string | null }[] })
+          .timeline;
+        const entry = timeline.at(-1);
+        expect(entry?.userId).toBe(seed.csrUserId);
+        expect(entry?.userId).not.toBe(seed.readOnlyUserId);
+      });
+
+      /*
+       * The KPI strip is the one ticket read PAC-109 deliberately did not
+       * widen — the cards say "Assigned to Me" and "Needs Action Today".
+       */
+      it('is not counted by the personal KPI strip', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets/stats')
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        const mine = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?scope=own')
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        /*
+         * Compared against `total`, not `items.length` — `items` is one page
+         * of at most 8 rows, so a fixture that grew past a page would have
+         * made this pass or fail for reasons having nothing to do with scope.
+         *
+         * The two now agree exactly, which is the point: the All Assigned tab
+         * excludes terminal tickets, and the card counts non-terminal ones.
+         * They sit on the same screen and used to disagree by however many
+         * tickets the rep had resolved in the last seven days.
+         */
+        expect((res.body as { openTickets: number }).openTickets).toBe(
+          ticketList(mine).total,
+        );
+      });
+    });
+
+    /*
+     * PAC-109 — the active queue is work still to do.
+     *
+     * Two guards make this safe, and each has a page behind it that would
+     * break without it: the Archived Tickets list, and the workspace feed's
+     * Resolved tab.
+     */
+    describe('PAC-109 — resolved tickets leave the active queue', () => {
+      let resolvedTicketId: string;
+
+      beforeAll(async () => {
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(csrToken))
+          .send({ clientName: 'Just Resolved', category: 'Billing' })
+          .expect(201);
+        resolvedTicketId = (created.body as { id: string }).id;
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/crm/service-tickets/${resolvedTicketId}/status`)
+          .set(authHeader(csrToken))
+          .send({ status: 'resolved' })
+          .expect(200);
+      });
+
+      it('drops out of the default list, before the archive window', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?scope=own')
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        // Resolved seconds ago, so nowhere near the 7-day archive cutoff —
+        // it is excluded for being finished, not for being old.
+        expect(
+          ticketList(res).items.map((t: { id: string }) => t.id),
+        ).not.toContain(resolvedTicketId);
+      });
+
+      it('is still reachable by an explicit ?status=resolved', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?scope=own&status=resolved')
+          .set(authHeader(csrToken))
+          .expect(200);
+
+        // The workspace feed's Resolved tab. An explicit status is the caller
+        // naming what they want, and it beats the active-queue default.
+        expect(
+          ticketList(res).items.map((t: { id: string }) => t.id),
+        ).toContain(resolvedTicketId);
+      });
+
+      it('is still openable by id', async () => {
+        await request(app.getHttpServer())
+          .get(`/api/v1/crm/service-tickets/${resolvedTicketId}`)
+          .set(authHeader(csrToken))
+          .expect(200);
+      });
+    });
+
+    it('branch floor: CSR cannot read a ticket outside their branch', async () => {
       await request(app.getHttpServer())
         .get(`/api/v1/crm/service-tickets/${ownerTicketId}`)
         .set(authHeader(csrToken))
@@ -4767,14 +4980,35 @@ describe('SFA API (e2e)', () => {
       expect(resolved.body.resolvedAt).toBeTruthy();
       expect(resolved.body.isArchived).toBe(false);
 
-      // Freshly resolved: still in the active queue, not yet archived.
+      /*
+       * Freshly resolved: out of the active queue immediately (PAC-109 — the
+       * queue is work still to do), but *not* archived. Inside the window it
+       * lives on the Resolved tab.
+       *
+       * This step used to assert the opposite: that a just-resolved ticket
+       * stayed in the default list until it aged past the window. That is the
+       * behaviour the ticket changed — "All Assigned" was carrying a week of
+       * finished work — so what the window governs now is which of the two
+       * views holds a resolved ticket, not whether it clutters the queue.
+       */
       const active = await request(app.getHttpServer())
         .get('/api/v1/crm/service-tickets')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
         ticketList(active).items.map((t: { id: string }) => t.id),
-      ).toContain(ticketId);
+      ).not.toContain(ticketId);
+
+      const resolvedTab = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets?status=resolved')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const onResolvedTab = ticketList(resolvedTab).items.find(
+        (t: { id: string }) => t.id === ticketId,
+      );
+      expect(onResolvedTab).toBeDefined();
+      // Still inside the window — reachable, and not yet the archive's problem.
+      expect(onResolvedTab.isArchived).toBe(false);
 
       const archivedBefore = await request(app.getHttpServer())
         .get('/api/v1/crm/service-tickets?archived=true')

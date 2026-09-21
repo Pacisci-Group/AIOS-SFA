@@ -7,7 +7,8 @@ import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { KpiStrip } from "./components/KpiStrip";
-import type { ServiceTicketStatus } from "@sfa/shared";
+import type { ServiceTicketScope, ServiceTicketStatus } from "@sfa/shared";
+import { SERVICE_TICKET_SCOPES } from "@sfa/shared";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { PaginationFooter } from "@/components/common/PaginationFooter";
 import type { TicketFeedFilters } from "./components/TicketFeed";
@@ -100,11 +101,26 @@ export default function TicketWorkspacePage() {
    * of the *request* now — see `TicketFeedFilters`. Changing one resets to page
    * 1: page 3 of an unfiltered list is not page 3 of a filtered one.
    */
-  const [filters, setFilters] = useState<TicketFeedFilters>({
+  const [filters, setFilters] = useState<TicketFeedFilters>(() => ({
     query: "",
     filter: "all",
     category: "all",
-  });
+    /*
+     * Mine by default (PAC-109) — a rep opens the workspace to work their own
+     * plate. The opposite default to the Leads list, which opens agency-wide.
+     *
+     * Read back off the URL so a reload, a bookmark or a link to "everyone's
+     * queue" survives; validated against the vocabulary rather than trusted,
+     * so a hand-edited `?scope=` renders the default view instead of reaching
+     * the API. The other feed controls are deliberately *not* in the URL —
+     * only the one a rep would share or come back to.
+     */
+    scope: SERVICE_TICKET_SCOPES.includes(
+      searchParams.get("scope") as ServiceTicketScope,
+    )
+      ? (searchParams.get("scope") as ServiceTicketScope)
+      : "own",
+  }));
   // Typing should not fire a request per keystroke.
   const debouncedQuery = useDebouncedValue(filters.query, 300);
 
@@ -113,8 +129,9 @@ export default function TicketWorkspacePage() {
       search: debouncedQuery.trim() || undefined,
       category: filters.category === "all" ? undefined : filters.category,
       status: FEED_TAB_STATUS[filters.filter],
+      scope: filters.scope,
     }),
-    [debouncedQuery, filters.category, filters.filter],
+    [debouncedQuery, filters.category, filters.filter, filters.scope],
   );
 
   const changeFilters = (next: TicketFeedFilters) => {
@@ -122,6 +139,10 @@ export default function TicketWorkspacePage() {
     const params = new URLSearchParams(searchParams);
     params.delete("page");
     params.delete("ticket");
+    // `own` is the default, so writing it would put `?scope=own` on every
+    // first visit — the same reason `page: ''` is the default elsewhere.
+    if (next.scope === "own") params.delete("scope");
+    else params.set("scope", next.scope);
     setSearchParams(params, { replace: true });
   };
 
@@ -282,9 +303,16 @@ export default function TicketWorkspacePage() {
                 Service tickets
               </h1>
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {/* "your queue" stops being true under the Everyone toggle
+                    (PAC-109). Counts the whole filtered set rather than the
+                    rows on screen — since PAC-98 that is one page, so
+                    `tickets.length` read as "8 tickets" against a queue of
+                    two hundred. */}
                 {ticketsQuery.isLoading || ticketsQuery.isError
                   ? " "
-                  : `${tickets.length} ticket${tickets.length !== 1 ? "s" : ""} in your queue`}
+                  : `${ticketPage?.total ?? 0} ticket${
+                      ticketPage?.total === 1 ? "" : "s"
+                    } ${filters.scope === "own" ? "in your queue" : "in your branch"}`}
               </p>
             </div>
           </div>

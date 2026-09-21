@@ -19,6 +19,7 @@ import {
   SERVICE_TICKET_NOTE_TYPES,
   SERVICE_TICKET_PRIORITIES,
   SERVICE_TICKET_QUEUE_TABS,
+  SERVICE_TICKET_SCOPES,
   SERVICE_TICKET_STATUSES,
 } from '@sfa/shared';
 import type {
@@ -28,6 +29,7 @@ import type {
   ServiceTicketNoteType,
   ServiceTicketPriority,
   ServiceTicketQueueTab,
+  ServiceTicketScope,
   ServiceTicketStatus,
 } from '@sfa/shared';
 
@@ -234,6 +236,22 @@ export class ListTicketsQueryDto {
   @IsOptional()
   @IsIn(SERVICE_TICKET_QUEUE_TABS)
   tab?: ServiceTicketQueueTab;
+
+  /**
+   * The Mine / Everyone toggle (PAC-109).
+   *
+   * `own` pins the list to tickets assigned to the caller. Omitted — or
+   * `agency` — means "everything I may see", which for a service role is
+   * their branch: a ticket is shared work, so `own` data scope collapses to
+   * the branch floor here. See `ServiceTicketsService.scopeFilter`.
+   *
+   * This is a *request*, not an authorization. It can only narrow, exactly as
+   * `?scope=` does on the leads list — a stale tab or a hand-edited query
+   * cannot reach a ticket the caller's `DataScope` does not already cover.
+   */
+  @IsOptional()
+  @IsIn(SERVICE_TICKET_SCOPES)
+  scope?: ServiceTicketScope;
 
   /**
    * Free text across the fields the ticket feed searches: client name, ticket

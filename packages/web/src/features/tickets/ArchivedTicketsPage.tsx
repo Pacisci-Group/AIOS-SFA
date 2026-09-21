@@ -2,13 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, ChevronRight } from "lucide-react";
-import { ModuleKey, SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from "@sfa/shared";
+import {
+  ModuleKey,
+  SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
+  SERVICE_TICKET_SCOPES,
+} from "@sfa/shared";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
-import type { ServiceTicketStatus } from "@sfa/shared";
+import type { ServiceTicketScope, ServiceTicketStatus } from "@sfa/shared";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { PaginationFooter } from "@/components/common/PaginationFooter";
 import type { TicketFeedFilters } from "./components/TicketFeed";
@@ -80,11 +84,22 @@ export default function ArchivedTicketsPage() {
    * of the *request* now — see `TicketFeedFilters`. Changing one resets to page
    * 1: page 3 of an unfiltered list is not page 3 of a filtered one.
    */
-  const [filters, setFilters] = useState<TicketFeedFilters>({
+  const [filters, setFilters] = useState<TicketFeedFilters>(() => ({
     query: "",
     filter: "all",
     category: "all",
-  });
+    /*
+     * Carries the same Mine / Everyone toggle as the active queue (PAC-109).
+     * Leaving the archive pinned to the viewer while the live queue showed
+     * the branch would read as a bug: "I can see Casey's open ticket but not
+     * the one they closed last week."
+     */
+    scope: SERVICE_TICKET_SCOPES.includes(
+      searchParams.get("scope") as ServiceTicketScope,
+    )
+      ? (searchParams.get("scope") as ServiceTicketScope)
+      : "own",
+  }));
   // Typing should not fire a request per keystroke.
   const debouncedQuery = useDebouncedValue(filters.query, 300);
 
@@ -93,8 +108,9 @@ export default function ArchivedTicketsPage() {
       search: debouncedQuery.trim() || undefined,
       category: filters.category === "all" ? undefined : filters.category,
       status: FEED_TAB_STATUS[filters.filter],
+      scope: filters.scope,
     }),
-    [debouncedQuery, filters.category, filters.filter],
+    [debouncedQuery, filters.category, filters.filter, filters.scope],
   );
 
   const changeFilters = (next: TicketFeedFilters) => {
@@ -102,6 +118,8 @@ export default function ArchivedTicketsPage() {
     const params = new URLSearchParams(searchParams);
     params.delete("page");
     params.delete("ticket");
+    if (next.scope === "own") params.delete("scope");
+    else params.set("scope", next.scope);
     setSearchParams(params, { replace: true });
   };
 

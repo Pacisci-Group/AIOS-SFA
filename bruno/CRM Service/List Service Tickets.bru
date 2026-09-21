@@ -18,6 +18,7 @@ params:query {
   ~status: open
   ~search: smith
   ~archived: true
+  ~scope: own
 }
 
 auth:bearer {
@@ -98,6 +99,15 @@ tests {
       expect(ticket.leadStatus).to.equal(null);
     }
   });
+
+  test("every row names its assignee, for the Everyone view", function () {
+    // PAC-109: the queue shows the branch's tickets, so a row that cannot say
+    // whose it is leaves the reader no way to pick one up.
+    for (const ticket of res.getBody().items) {
+      expect(ticket).to.have.property("assignedRep");
+      expect(ticket).to.have.property("assignedUserId");
+    }
+  });
 }
 
 docs {
@@ -109,8 +119,17 @@ docs {
 
   - **Module:** `crm_service`
   - **Permission:** `crm_service:read`
-  - **Data scope:** `own` sees tickets assigned to the caller, `branch` the
-    caller's branch, `agency` the whole agency.
+  - **Data scope:** `branch` sees the caller's branch and `agency` the whole
+    agency — and since **PAC-109**, so does `own`. A service ticket is shared
+    work, so an `own`-scoped CSR reads their whole branch rather than only the
+    rows assigned to them, and the `?scope=` param is how they narrow back.
+    This is the opposite of `GET /leads`, where `own` stays pinned.
+
+    The widening lives in `ServiceTicketsService.scopeFilter`
+    (`src/crm/ticket-scope.ts`) rather than on the CSR role template on
+    purpose: `DataScope` is one value per user, read by every module, so
+    moving the CSR to `agency` would open leads, deals and households at the
+    same time.
 
   ## ⚠ Paginated since PAC-98 — this used to return `ServiceTicketView[]`
 
@@ -127,9 +146,10 @@ docs {
   | `pageSize` | query | Default 8, **capped at 100**. Past the cap is a 400, not a clamp — a silent clamp is how "pagination" becomes a suggestion. |
   | `tab` | query | `all` (default) · `overdue` · `waiting`. The queue's three tabs, as a server-side predicate. |
   | `category` | query | One of `SERVICE_TICKET_CATEGORIES`. |
-  | `status` | query | One stored status. |
+  | `status` | query | One stored status. **Also switches off the active-queue default below**, so this is how the workspace's Resolved tab reaches resolved tickets. |
   | `search` | query | Free text over client name, ticket number, category, policy number and phone. Max 120 chars. |
   | `archived` | query | `true` returns only tickets past the archive window; omitted returns the active queue. |
+  | `scope` | query | `own` \| `others` \| `agency`; clamped to the caller's scope (PAC-109). `own` = assigned to me. `others` = everyone else's, **unassigned included** — `own` and `others` partition the scope, which is what the dashboard's My Tickets / Agency Tickets parent tabs need. `agency` (the default) = everything my data scope reaches, mine included. None of them widen: a hand-edited value reaches no further than the caller's `DataScope` already did. |
 
   ## Response — `ServiceTicketListResponse`
 
@@ -164,6 +184,23 @@ docs {
 
   See `migrations/20260910123159-queue-sort-indexes.js` for the two indexes that
   serve it (one per data scope) and the measurements behind them.
+
+  ## The active queue excludes finished work (PAC-109)
+
+  With no `status` and no `archived`, the list drops `resolved` and `closed`
+  tickets — the queue is work still to do. It used to carry everything resolved
+  inside the 7-day archive window, which is why the All tab read 277 beside an
+  "Active Load" card of 254 on the same screen.
+
+  Two escapes, each with a page behind it:
+
+  - `?status=resolved` — the workspace feed's **Resolved** tab. An explicit
+    status is the caller naming what they want, and it wins.
+  - `?archived=true` — the **Archived Tickets** page, which asks for exactly
+    the terminal side of the window.
+
+  So the archive window no longer decides whether a resolved ticket clutters
+  the queue; it decides which of those two views holds it.
 
   ## Statuses are stored, not derived
 

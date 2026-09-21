@@ -526,6 +526,20 @@ export interface ServiceTicketActivity {
   id: string;
   type: ServiceTicketActivityType;
   author?: string;
+  /**
+   * Who wrote the entry, as an id rather than a display name (PAC-109).
+   *
+   * `author` has always carried a name, which is enough to render a timeline
+   * and useless for answering "who has been working tickets they were not
+   * assigned to" — the question that arrives the moment the queue is shared.
+   * Compare it against the ticket's `assignedUserId` to mark a cross-assignee
+   * entry.
+   *
+   * Null on every entry written before PAC-109, and on anything the worker or
+   * a seed writes. Deliberately not backfilled: a name is not an identity, and
+   * guessing one would put a wrong id behind a right-looking label.
+   */
+  userId?: string | null;
   content: string;
   /** ISO timestamp of when the activity was recorded. */
   at: string;
@@ -548,6 +562,31 @@ export interface ServiceTicketActivity {
 export const SERVICE_TICKET_QUEUE_TABS = ['all', 'overdue', 'waiting'] as const;
 export type ServiceTicketQueueTab =
   (typeof SERVICE_TICKET_QUEUE_TABS)[number];
+
+/**
+ * The vocabulary the API accepts for `?scope=` on the ticket queue (PAC-109).
+ *
+ * | Value | Means |
+ * |---|---|
+ * | `own` | Assigned to the caller. |
+ * | `others` | **Everyone else's** — the caller's scope *minus* their own rows. Includes unassigned tickets, which are nobody's and therefore not the caller's. |
+ * | `agency` | Everything the caller's `DataScope` reaches, their own included. |
+ *
+ * `own` and `others` are a **partition**, which is what the Service
+ * Dashboard's two parent tabs need: "My Tickets" and "Agency Tickets" sitting
+ * side by side, with nothing counted twice. `agency` is the undivided view,
+ * used by the Ticket Workspace's Mine / Everyone toggle.
+ *
+ * Where the caller's scope *stops* is the branch: PAC-109 gives service
+ * tickets a **branch floor**, so an `own`-scoped CSR reads their whole branch.
+ * Tickets are shared work; leads are owned, which is why `?scope=` on the
+ * leads list has no `others` and never widens past the assignee.
+ *
+ * None of these can widen — see `buildTicketScopeFilter`. `own` is honoured at
+ * every data scope, because narrowing is always safe.
+ */
+export const SERVICE_TICKET_SCOPES = ['own', 'others', 'agency'] as const;
+export type ServiceTicketScope = (typeof SERVICE_TICKET_SCOPES)[number];
 
 /**
  * Paginated envelope for `GET /crm/service-tickets`, mirroring

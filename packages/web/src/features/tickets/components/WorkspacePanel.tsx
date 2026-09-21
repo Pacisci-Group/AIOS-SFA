@@ -516,6 +516,23 @@ export function WorkspacePanel({
                             · {entry.author}
                           </span>
                         )}
+                        {/* Someone other than the assignee worked this ticket
+                            (PAC-109). Marked rather than merely named, so the
+                            hand-off is legible at a glance — a shared queue
+                            makes "who else has been in here" a real question.
+                            A null `userId` means "written before the id was
+                            recorded", which is not a claim either way. */}
+                        {entry.userId &&
+                          ticket.assignedUserId &&
+                          entry.userId !== ticket.assignedUserId && (
+                            <Badge
+                              size="sm"
+                              variant="ghost"
+                              className="bg-muted text-muted-foreground"
+                            >
+                              not assignee
+                            </Badge>
+                          )}
                       </div>
                       <p className="mt-0.5 text-base leading-relaxed text-card-foreground">
                         {entry.content}

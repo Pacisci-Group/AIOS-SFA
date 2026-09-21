@@ -13,6 +13,7 @@ import type {
   ServiceTicketPriority,
   ServiceTicketListResponse,
   ServiceTicketQueueTab,
+  ServiceTicketScope,
   ServiceTicketStats,
   ServiceTicketStatus,
   ServiceTicketView,
@@ -42,6 +43,7 @@ export type {
   ServiceTicketStatus,
   ServiceTicketListResponse,
   ServiceTicketQueueTab,
+  ServiceTicketScope,
   ServiceTicketView,
 } from '@sfa/shared';
 
@@ -57,6 +59,15 @@ export interface ListServiceTicketsOptions {
   archived?: boolean;
   /** Which queue tab to return. Omitted means all. */
   tab?: ServiceTicketQueueTab;
+  /**
+   * Mine / Everyone (PAC-109). `own` pins the list to the caller's own
+   * tickets; `agency` asks for everything their data scope reaches, which for
+   * a service role is their branch.
+   *
+   * The API clamps this down to what the caller may see, so it is a
+   * convenience, never a grant.
+   */
+  scope?: ServiceTicketScope;
   /** 1-based. */
   page?: number;
   /** Capped server-side at 100; the API defaults to 8 if omitted. */
@@ -88,6 +99,11 @@ export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   }
   if (options.tab && options.tab !== 'all') {
     params.set('tab', options.tab);
+  }
+  // Sent only when narrowing. `agency` is the API's default, so spelling it
+  // out would put a redundant param in the URL and in the query key.
+  if (options.scope === 'own') {
+    params.set('scope', 'own');
   }
   if (options.page && options.page > 1) {
     params.set('page', String(options.page));

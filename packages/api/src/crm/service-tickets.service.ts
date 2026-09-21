@@ -28,6 +28,7 @@ import {
 import type {
   ServiceTicketListResponse,
   ServiceTicketQueueTab,
+  ServiceTicketScope,
   OnboardingStepDefinition,
   OnboardingStepKey,
   OnboardingView,
@@ -46,6 +47,7 @@ import {
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import { PolicyTransfersService } from './policy-transfers.service';
+import { buildTicketScopeFilter } from './ticket-scope';
 import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import type { PresignTransferDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
@@ -208,33 +210,21 @@ export class ServiceTicketsService {
   }
 
   /**
-   * Build the tenant + data-scope filter for the requesting user. `own` sees
-   * only tickets assigned to them, `branch` sees their branch, `agency` sees
-   * the whole agency.
+   * The tenant + data-scope clamp every ticket read starts from.
+   *
+   * Extracted to `ticket-scope.ts` (PAC-109) so the rule — and the reasons it
+   * differs from the leads clamp — can be unit-tested and read without
+   * scrolling through this service. Thin wrapper kept because five call sites
+   * name it.
    */
   private scopeFilter(
     access: AccessContext,
+    requestedScope?: ServiceTicketScope,
   ): FilterQuery<ServiceTicketDocument> {
-    if (!access.agencyId) {
-      // No agency context => nothing to see (defensive; guards prevent this).
-      throw new ForbiddenException('Agency context required');
-    }
-    const filter: FilterQuery<ServiceTicketDocument> = {
-      agencyId: new Types.ObjectId(access.agencyId),
-    };
-
-    if (access.dataScope === DataScope.Agency) {
-      return filter;
-    }
-    if (access.dataScope === DataScope.Branch) {
-      if (access.branchId) {
-        filter.branchId = new Types.ObjectId(access.branchId);
-      }
-      return filter;
-    }
-    // own
-    filter.assignedUserId = new Types.ObjectId(access.userId);
-    return filter;
+    return buildTicketScopeFilter<ServiceTicketDocument>(
+      access,
+      requestedScope,
+    );
   }
 
   async list(
@@ -245,7 +235,11 @@ export class ServiceTicketsService {
     const pageSize = query.pageSize ?? DEFAULT_TICKET_PAGE_SIZE;
     const tab: ServiceTicketQueueTab = query.tab ?? 'all';
 
-    const filter = this.scopeFilter(access);
+    // The Mine / Everyone toggle. Omitted means "everyone I may see", which
+    // for an `own`-scoped CSR is their branch — see `scopeFilter`. The web
+    // app sends `own` by default; the API does not assume it, because Bruno
+    // and every future consumer read the wider list as the natural default.
+    const filter = this.scopeFilter(access, query.scope);
     if (query.category) {
       filter.category = query.category;
     }
@@ -304,6 +298,31 @@ export class ServiceTicketsService {
     // it stays out of every list. `findOne` still returns it, so the chain
     // view and deep links keep working.
     filter.$nor = [...(filter.$nor ?? []), ...scheduledStepMatches(new Date())];
+
+    /*
+     * The active queue is work still to do, so a resolved or closed ticket
+     * drops out of it — not only once it ages past the archive window.
+     *
+     * Without this the All tab carried everything resolved in the last seven
+     * days, which is why it read 277 beside an "Active Load" card of 254 on
+     * the same screen. The tab is a to-do list; a ticket you finished this
+     * morning is not on it.
+     *
+     * **Both guards are load-bearing**, and each protects a live surface:
+     *
+     * - `query.archived` — the Archived Tickets page asks for exactly the
+     *   terminal side of the window. Excluding terminal statuses there would
+     *   empty the page.
+     * - `query.status` — the workspace feed has a **Resolved** tab that sends
+     *   `?status=resolved`. An explicit status is the caller naming what they
+     *   want, and it wins over this default.
+     *
+     * `overdue` and `waiting` are non-terminal by definition, so this narrows
+     * the All tab and its count while leaving the other two untouched.
+     */
+    if (!query.archived && !query.status) {
+      filter.status = { $nin: [...SERVICE_TICKET_TERMINAL_STATUSES] };
+    }
 
     /*
      * Tab counts, over the filters but before the tab narrows them.
@@ -367,8 +386,10 @@ export class ServiceTicketsService {
    * they are not work yet, and the household page shows the upcoming
    * onboarding calls in its own block above this one.
    *
-   * The caller's data scope still applies, so an `own`-scoped user sees the
-   * client's tickets that are assigned to them, not the branch's.
+   * The caller's data scope still applies — which since PAC-109 means the
+   * branch floor, so this feed shows the household's service history rather
+   * than the reader's slice of it. A client's 360° view that hid the calls a
+   * colleague made was the same bug the shared queue exists to fix.
    */
   async listForHousehold(
     access: AccessContext,
@@ -747,7 +768,7 @@ export class ServiceTicketsService {
     }
     ticket.timeline.push({
       type: 'status',
-      author: await this.resolveUserName(access.userId),
+      ...(await this.authoredBy(access)),
       content: `Status changed: ${statusLabel(previous)} → ${statusLabel(next)}`,
       at: now,
     });
@@ -763,7 +784,7 @@ export class ServiceTicketsService {
     const now = new Date();
     ticket.timeline.push({
       type: dto.type ?? 'note',
-      author: await this.resolveUserName(access.userId),
+      ...(await this.authoredBy(access)),
       content: dto.content.trim(),
       at: now,
     });
@@ -772,8 +793,18 @@ export class ServiceTicketsService {
     return serializeTicket(ticket.toObject());
   }
 
+  /**
+   * The Service Dashboard's KPI strip.
+   *
+   * **Pinned to the caller, always** — the one ticket read PAC-109 deliberately
+   * did not widen. The cards are titled "Open Tickets Assigned to Me" and
+   * "Needs Action Today"; a number that silently started counting the branch
+   * would make the scorecard mean something else without changing a word on
+   * screen. Per the ticket: *"My Priority Tickets and Needs Action Today keep
+   * counting the viewer's own assignments."*
+   */
   async stats(access: AccessContext): Promise<ServiceTicketStats> {
-    const filter = this.scopeFilter(access);
+    const filter = this.scopeFilter(access, 'own');
     // Scheduled onboarding calls are not work yet — keep them out of the KPIs
     // for the same reason they are kept out of the queue.
     filter.$nor = scheduledStepMatches(new Date());
@@ -984,6 +1015,9 @@ export class ServiceTicketsService {
     ticket.timeline.push({
       type: 'system',
       author: completedByName,
+      // Same person the step records as `completedBy`; reusing it keeps the
+      // two from disagreeing about who closed the call.
+      userId: step.completedBy,
       content: `${ONBOARDING_STEP_LABELS[step.stepKey] ?? step.stepKey} completed.`,
       at: now,
     });
@@ -1340,6 +1374,20 @@ export class ServiceTicketsService {
     }));
   }
 
+  /**
+   * Load one ticket, or 404 — the gate in front of the detail view and of
+   * every ticket mutation (status, notes, onboarding steps, renewal calls,
+   * policy transfers all funnel through here).
+   *
+   * Since PAC-109 that means **opening and working a colleague's ticket is
+   * allowed**, within the branch. That is the point of the ticket rather than
+   * a side effect of widening the list: picking up where somebody left off is
+   * a write, not a read. It is also the opposite of the leads rule, where
+   * `LeadAccessService` refuses an unassigned lead outright.
+   *
+   * Still a 404 and never a 403 for a ticket outside the caller's branch,
+   * matching `LeadAccessService`: whether it exists is not their business.
+   */
   private async getScopedOrThrow(
     access: AccessContext,
     id: string,
@@ -1366,6 +1414,26 @@ export class ServiceTicketsService {
       .select('firstName lastName email')
       .lean();
     return userDisplayName(user);
+  }
+
+  /**
+   * The authorship pair every user-written timeline entry carries: the name to
+   * render, and the id to query (PAC-109).
+   *
+   * One helper rather than six call sites resolving a name and then
+   * remembering to stamp the id beside it — the id is the half that has no
+   * visible consequence when it is missing, which is exactly the half that
+   * rots. Spread it into the entry: `{ ...(await this.authoredBy(access)), … }`.
+   */
+  private async authoredBy(
+    access: AccessContext,
+  ): Promise<{ author: string; userId: Types.ObjectId | null }> {
+    return {
+      author: await this.resolveUserName(access.userId),
+      userId: Types.ObjectId.isValid(access.userId)
+        ? new Types.ObjectId(access.userId)
+        : null,
+    };
   }
 
   /**
@@ -1561,13 +1629,11 @@ export class ServiceTicketsService {
     }
 
     const now = new Date();
-    const userName = await this.resolveUserName(access.userId);
+    const { author: userName, userId: authorId } =
+      await this.authoredBy(access);
 
     step.completedAt = now;
-    step.completedBy =
-      access.userId && Types.ObjectId.isValid(access.userId)
-        ? new Types.ObjectId(access.userId)
-        : null;
+    step.completedBy = authorId;
     step.completedByName = userName;
     if (dto.outcome) {
       step.outcome = dto.outcome;
@@ -1582,6 +1648,7 @@ export class ServiceTicketsService {
     ticket.timeline.push({
       type: 'system',
       author: userName,
+      userId: authorId,
       content: dto.outcome
         ? `${RENEWAL_STEP_LABELS[step.stepKey]} completed — ${RENEWAL_OUTCOME_LABELS[dto.outcome].toLowerCase()}.`
         : `${RENEWAL_STEP_LABELS[step.stepKey]} completed.`,
@@ -1591,6 +1658,7 @@ export class ServiceTicketsService {
       ticket.timeline.push({
         type: 'note',
         author: userName,
+        userId: authorId,
         content: dto.note.trim(),
         at: now,
       });
@@ -1634,13 +1702,15 @@ export class ServiceTicketsService {
     }
 
     const now = new Date();
-    const userName = await this.resolveUserName(access.userId);
+    const { author: userName, userId: authorId } =
+      await this.authoredBy(access);
     step.outcome = dto.outcome;
     step.outcomeAt = now;
     ticket.lastActivityAt = now;
     ticket.timeline.push({
       type: 'status',
       author: userName,
+      userId: authorId,
       content: previous
         ? `Renewal outcome changed: ${RENEWAL_OUTCOME_LABELS[previous]} → ${RENEWAL_OUTCOME_LABELS[dto.outcome]}`
         : `Renewal outcome recorded: ${RENEWAL_OUTCOME_LABELS[dto.outcome]}`,
@@ -1746,12 +1816,18 @@ export class ServiceTicketsService {
 
     const definitions =
       await this.renewalMaterialization.resolveRenewalDefinitions();
-    // Scoped like every other ticket read: an `own`-scoped CSR sees the calls
-    // assigned to them, not the whole agency's book. A cycle whose call is not
-    // visible simply produces no row.
+    /*
+     * Pinned to the caller, explicitly — the desk is "my calls to make today",
+     * not a branch roster, and PAC-109 does not mention it. Passing `'own'`
+     * rather than relying on the default keeps it that way now that the
+     * default has moved to the branch floor: the desk's behaviour is a
+     * decision, not a leftover. Widening it is PAC-46's call to make.
+     *
+     * A cycle whose call is not visible simply produces no row.
+     */
     const tickets = await this.ticketModel
       .find({
-        ...this.scopeFilter(access),
+        ...this.scopeFilter(access, 'own'),
         'renewal.renewalCycleId': { $in: cycles.map((c) => c._id) },
         'renewal.completedAt': null,
         // Open, or opening within the preview window.
@@ -1951,6 +2027,10 @@ function serializeActivity(
     id: String((entry as { _id?: unknown })._id ?? ''),
     type: entry.type,
     author: entry.author,
+    // Null on pre-PAC-109 entries and on anything the worker wrote; the client
+    // compares it against the ticket's `assignedUserId` to mark a colleague's
+    // touch, and treats "no id" as "cannot tell", not as "the assignee".
+    userId: entry.userId ? String(entry.userId) : null,
     content: entry.content,
     at: at.toISOString(),
     timestamp: formatTimestamp(at),

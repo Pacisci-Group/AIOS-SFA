@@ -1,8 +1,9 @@
-import { Check, ListFilter, Search } from "lucide-react";
+import { Check, ListFilter, Search, User } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   SERVICE_TICKET_CATEGORIES,
   type ServiceTicketCategory,
+  type ServiceTicketScope,
 } from "@sfa/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,7 +38,22 @@ export interface TicketFeedFilters {
   query: string;
   filter: FilterTab;
   category: ServiceTicketCategory | 'all';
+  /**
+   * Mine / Everyone (PAC-109). `own` pins the queue to the viewer; `agency`
+   * asks for everything they may see, which for a service role is their
+   * branch — a ticket is shared work, so a colleague's queue is reachable.
+   *
+   * Defaults to `own` on the page, deliberately the opposite of the Leads
+   * list: a rep opens the workspace to work their own plate, and picking up
+   * someone else's is the exception they go looking for.
+   */
+  scope: ServiceTicketScope;
 }
+
+const SCOPE_TABS: readonly { label: string; value: ServiceTicketScope }[] = [
+  { label: "Mine", value: "own" },
+  { label: "Everyone", value: "agency" },
+];
 
 interface TicketFeedProps {
   tickets: Ticket[];
@@ -82,12 +98,14 @@ export function TicketFeed({
   onFiltersChange,
   categoryOptions,
 }: TicketFeedProps) {
-  const { query, filter, category } = filters;
+  const { query, filter, category, scope } = filters;
   const setQuery = (next: string) => onFiltersChange({ ...filters, query: next });
   const setFilter = (next: FilterTab) =>
     onFiltersChange({ ...filters, filter: next });
   const setCategory = (next: ServiceTicketCategory | "all") =>
     onFiltersChange({ ...filters, category: next });
+  const setScope = (next: ServiceTicketScope) =>
+    onFiltersChange({ ...filters, scope: next });
 
   /*
    * The picker offers the whole vocabulary unless the page supplies a list.
@@ -136,6 +154,15 @@ export function TicketFeed({
             onChange={setFilter}
           />
         )}
+
+        {/* Mine / Everyone (PAC-109). Offered at every data scope: a CSR uses
+            it to reach a colleague's queue, an owner to get back to their own. */}
+        <FilterToggles
+          label="Show my tickets or everyone's"
+          options={SCOPE_TABS}
+          value={scope}
+          onChange={setScope}
+        />
       </div>
 
       <div className="flex items-center justify-between gap-2 px-4 py-2">
@@ -189,6 +216,10 @@ export function TicketFeed({
             ticket={ticket}
             selected={selectedId === ticket.id}
             onSelect={() => onSelect(ticket.id)}
+            /* Only where it tells you something. Every row in "Mine" is
+               assigned to the reader, so the chip would be the same name
+               repeated down the list. */
+            showAssignee={scope === "agency"}
           />
         ))}
       </div>
@@ -200,10 +231,13 @@ function TicketRow({
   ticket,
   selected,
   onSelect,
+  showAssignee = false,
 }: {
   ticket: Ticket;
   selected: boolean;
   onSelect: () => void;
+  /** Name the assigned rep — only meaningful in the everyone view. */
+  showAssignee?: boolean;
 }) {
   const status = TICKET_STATUS_CONFIG[ticket.status];
   const isOverdue = ticket.daysOpen > 10 && ticket.status !== "resolved";
@@ -289,8 +323,22 @@ function TicketRow({
         >
           {ticket.priority}
         </Badge>
-        <span className="truncate text-xs text-muted-foreground">
-          {ticket.lastActivity}
+        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          {/* Whose ticket this is, so the queue is scannable by owner without
+              opening every row. Same chip as the workspace panel's
+              "Assigned rep". */}
+          {showAssignee && ticket.assignedRep && (
+            <>
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/12">
+                  <User aria-hidden className="size-2.5 text-primary" />
+                </span>
+                <span className="truncate">{ticket.assignedRep}</span>
+              </span>
+              <span aria-hidden>·</span>
+            </>
+          )}
+          <span className="truncate">{ticket.lastActivity}</span>
         </span>
       </span>
     </button>
