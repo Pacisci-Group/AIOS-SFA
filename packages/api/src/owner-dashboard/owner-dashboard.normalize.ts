@@ -117,7 +117,7 @@ export function toClosingRatio(
  *
  * A value that is not one of `POLICY_TYPES` — an uncatalogued SmartSuite code —
  * still counts as a policy sold, but can never be a *named* slice: an owner
- * should not be shown "sTSOE 4%". It lands in `otherPct`.
+ * should not be shown "AP0VA 4%". It lands in `otherPct`.
  */
 export function toLobMix(
   rows: readonly { policyType: string | null; count: number }[],

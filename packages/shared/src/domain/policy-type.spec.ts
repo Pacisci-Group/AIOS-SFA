@@ -90,6 +90,51 @@ describe('policy-type vocabulary', () => {
     expect(auto).not.toContain('UAOk8');
   });
 
+  // PAC-135. The Policies table doc listed six of SmartSuite's thirteen choices,
+  // so these passed through the import raw. Decoded against the labelled
+  // 2026-09-04 Policies export, where every one of the 92 rows agreed.
+  it.each([
+    ['BK08B', 'Boat Owners'],
+    ['ayKjZ', 'Valuable Item Protection'],
+    ['UrNOp', 'Condominium'],
+    ['HicyK', 'Life'],
+    ['Tz3ny', 'Manufactured Home'],
+    ['sTSOE', 'RV'],
+    ['cgoHC', 'ATV / ORV'],
+  ])('resolves the Policies code %s to %s', (code, label) => {
+    expect(normalizePolicyType(code)).toBe(label);
+    expect(policyTypeQueryValues(label)).toContain(code);
+  });
+
+  it("resolves SmartSuite's own wording, and can query for it exactly", () => {
+    expect(normalizePolicyType('Manufactured Homes')).toBe('Manufactured Home');
+    expect(normalizePolicyType('atvs / orvs')).toBe('ATV / ORV');
+    expect(normalizePolicyType('Boat')).toBe('Boat Owners');
+    // Exact case: a Mongo `$in` would not match a re-capitalized guess.
+    expect(policyTypeQueryValues('ATV / ORV')).toContain('ATVs / ORVs');
+  });
+
+  it('leaves a code nobody has identified alone', () => {
+    // `AP0VA` sits on six quote recaps and appears in no table, doc or export.
+    expect(normalizePolicyType('AP0VA')).toBe('AP0VA');
+  });
+
+  it('treats a manufactured home as a dwelling', () => {
+    expect(isPropertyPolicyType('Manufactured Home')).toBe(true);
+    expect(isPropertyPolicyType('Tz3ny')).toBe(true);
+  });
+
+  it('counts RVs and ATVs as vehicles without making them auto', () => {
+    for (const type of ['RV', 'ATV / ORV']) {
+      expect(policyTypeHasItemCount(type)).toBe(true);
+      expect(itemCountLabel(type)).toBe('Number of Vehicles');
+      // Not auto: no Drivewise / Student discounts, no `Drivers Verified`.
+      expect(isAutoPolicyType(type)).toBe(false);
+      // And annual — David's six-month rule was about auto.
+      expect(isSemiannualPolicyType(type)).toBe(false);
+    }
+  });
+
   it('answers the property question for codes as well as labels', () => {
     for (const label of PROPERTY_POLICY_TYPES) {
       expect(isPropertyPolicyType(label)).toBe(true);

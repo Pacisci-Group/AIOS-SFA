@@ -98,6 +98,7 @@ import {
   normalizeHouseholdStatus,
   normalizeLeadSource,
   normalizePolicyStatus,
+  isCanonicalPolicyType,
   normalizePolicyType,
   normalizePriorPolicyCancellationStatus,
   normalizePriorPolicyType,
@@ -128,6 +129,7 @@ import {
   emptyStat,
   MigrationRunError,
   recordRejection,
+  recordUnmappedChoice,
 } from './report';
 
 /**
@@ -1715,6 +1717,7 @@ export class MigrationService {
       const productsQuoted = this.selectCodes(
         rec[QUOTE_RECAP_FIELDS.productsQuoted],
       ).map(normalizePolicyType);
+      this.flagUnmappedPolicyTypes(stat, productsQuoted);
 
       const id = await this.persist(
         this.quoteRecapModel,
@@ -1842,6 +1845,7 @@ export class MigrationService {
       );
       const soldDate = toDate(rec[DEAL_FIELDS.soldDate]);
       const policyLabels = policyTypeLabels(rec[DEAL_FIELDS.policyTypes]);
+      this.flagUnmappedPolicyTypes(stat, policyLabels);
       const isBundle = toBool(rec[DEAL_FIELDS.bundle]);
 
       const legacyLeadId = firstLinkedId(rec[DEAL_FIELDS.lead]);
@@ -2087,6 +2091,10 @@ export class MigrationService {
       if (test) stat.excludedTest++;
 
       const policyNumber = toText(rec[POLICY_FIELDS.policyNumber]);
+      const policyType = normalizePolicyType(
+        selectCode(rec[POLICY_FIELDS.policyType]),
+      );
+      this.flagUnmappedPolicyTypes(stat, [policyType]);
 
       const id = await this.persist(
         this.policyModel,
@@ -2102,9 +2110,7 @@ export class MigrationService {
           // MIN_POLICY_NUMBER_KEY_LENGTH usable characters, because a match on
           // two or three digits carries no information.
           policyNumberKey: normalizePolicyNumber(policyNumber),
-          policyType: normalizePolicyType(
-            selectCode(rec[POLICY_FIELDS.policyType]),
-          ),
+          policyType,
           // Mapped at write as well as normalized on read (PAC-56 #19): the raw
           // `B4tEH` was being rendered to users, and mapping only on read would
           // leave the stored value un-matchable against the carrier catalog.
@@ -3052,6 +3058,22 @@ export class MigrationService {
   }
 
   /** {@link plausibleItemCount}'s counterpart for the policy count itself. */
+  /**
+   * Report any policy type that came through as something other than one of our
+   * canonical labels — i.e. a SmartSuite code the alias map does not know
+   * (PAC-135). The value is still stored as-is; see `unmappedChoices`.
+   */
+  private flagUnmappedPolicyTypes(
+    stat: CollectionStat,
+    values: readonly (string | undefined)[],
+  ): void {
+    for (const value of values) {
+      if (value && !isCanonicalPolicyType(value)) {
+        recordUnmappedChoice(stat, 'policyType', value);
+      }
+    }
+  }
+
   private rejectPolicyCount(
     value: number,
     legacyId: string,
