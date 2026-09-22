@@ -1,4 +1,5 @@
 import type { BugReportStatus, BugSeverity } from "@sfa/shared";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * Display mapping for the bug queue.
@@ -62,9 +63,9 @@ export const BUG_SEVERITY_SHORT: Record<BugSeverity, string> = {
  * reworked. If a third copy appears, promote it to `lib/`.
  */
 export function relativeTime(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
+  if (Number.isNaN(then)) return NOT_AVAILABLE;
 
   const minutes = Math.max(0, Math.round((Date.now() - then) / 60_000));
   if (minutes < 1) return "just now";

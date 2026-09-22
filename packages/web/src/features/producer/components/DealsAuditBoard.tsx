@@ -16,6 +16,7 @@ import {
   type DealAuditType,
 } from "@/lib/deal-audits-api";
 import { ResolvePanel } from "./ResolvePanel";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 const PAGE_SIZE = 8;
 
@@ -184,7 +185,7 @@ function DealCard({
             Review
           </Button>
         ) : (
-          <span className="text-xs text-muted-foreground">—</span>
+          <span className="text-xs text-muted-foreground">{NOT_AVAILABLE}</span>
         )}
       </div>
     </div>

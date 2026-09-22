@@ -24,6 +24,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { formatCount, formatMoney, formatPct } from "../owner-format";
 import { OwnerPanel } from "./OwnerPanel";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 const SKELETON_ROWS = 6;
 
@@ -43,7 +44,7 @@ function ConversionCell({ convPct, convGap }: Conversion) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="cursor-help text-muted-foreground">—</span>
+        <span className="cursor-help text-muted-foreground">{NOT_AVAILABLE}</span>
       </TooltipTrigger>
       <TooltipContent>{GAP_COPY[convGap]}</TooltipContent>
     </Tooltip>

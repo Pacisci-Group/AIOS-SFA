@@ -21,9 +21,11 @@ import type {
   OwnerDashboardParams,
   OwnerProducerRow,
 } from "@/lib/owner-dashboard-api";
+import { UserX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCount, formatMoney } from "../owner-format";
 import { OwnerPanel } from "./OwnerPanel";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** Pinned so the loading state is the height of a typical board. */
 const SKELETON_ROWS = 6;
@@ -36,8 +38,8 @@ const SKELETON_ROWS = 6;
  * rank and deliberately **never a colleague's dollars**; this is the view that
  * does, which is what `owner_dashboard:read` is for.
  *
- * Two things the mockup had that this does not. **Goal Progress** is a static
- * placeholder: goals are not set anywhere yet (PAC-116), and a progress bar fed
+ * Two things the mockup had that this does not. **Goal Progress** reads `N/A`
+ * on every row: goals are not set anywhere yet (PAC-116), and a progress bar fed
  * by nothing would read as "everyone is at 0%". **On track / Lagging** is gone
  * for the same reason — it was a judgement against a goal that does not exist.
  *
@@ -116,7 +118,7 @@ function LeaderboardRow({ row }: { row: OwnerProducerRow }) {
     <TableRow>
       <TableCell className="pl-5 text-muted-foreground tabular-nums">
         {/* Not a competitor, so it carries no rank. */}
-        {unassigned ? "—" : row.rank}
+        {unassigned ? NOT_AVAILABLE : row.rank}
       </TableCell>
       <TableCell>
         <div className="flex items-center gap-2.5">
@@ -129,7 +131,9 @@ function LeaderboardRow({ row }: { row: OwnerProducerRow }) {
                 : "bg-primary/12 text-primary",
             )}
           >
-            {row.initials}
+            {/* Nobody to take initials from — an icon, not a glyph standing in
+                for a name. */}
+            {unassigned ? <UserX className="size-4" /> : row.initials}
           </span>
           <span
             className={cn(
@@ -153,7 +157,7 @@ function LeaderboardRow({ row }: { row: OwnerProducerRow }) {
       <TableCell className="pr-5 text-right text-muted-foreground">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span aria-label="Goals are not set up yet">X</span>
+            <span aria-label="Goals are not set up yet">{NOT_AVAILABLE}</span>
           </TooltipTrigger>
           <TooltipContent>Goals aren&rsquo;t set up yet.</TooltipContent>
         </Tooltip>

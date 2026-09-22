@@ -9,6 +9,7 @@ import type {
   UpdateLeadResult,
 } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
+import { NOT_AVAILABLE } from '@/lib/not-available';
 
 export type { HotLeadListResponse, HotLeadRow };
 
@@ -183,7 +184,7 @@ export function listHotLeads(params: ListHotLeadsParams = {}) {
  * anything else is shown as-is rather than mangled.
  */
 export function formatPhone(raw: string | null): string {
-  if (!raw) return '—';
+  if (!raw) return NOT_AVAILABLE;
   const digits = raw.replace(/\D/g, '');
   if (digits.length === 10) {
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;

@@ -194,7 +194,9 @@ export class OwnerDashboardService {
       return {
         producerId: id || null,
         name,
-        initials: id ? initialsFrom(name) : '—',
+        // `initialsFrom('')` is `?` — the app-wide "nobody to name" value. The
+        // web draws an icon for this row rather than rendering it.
+        initials: initialsFrom(id ? name : ''),
         quotes: quotedByKey.get(id)?.count ?? 0,
         bound: soldByKey.get(id)?.items ?? 0,
         premium: roundCents(soldByKey.get(id)?.premium ?? 0),

@@ -23,7 +23,7 @@ import { LobMixBar } from "./LobMixBar";
 import { OwnerKpiCard } from "./OwnerKpiCard";
 import { TrendBadge } from "./TrendBadge";
 
-/** Why a closing ratio is "—", in words an owner can act on. */
+/** Why a closing ratio is "N/A", in words an owner can act on. */
 function closingCaption(ratio: OwnerClosingRatio): string {
   if (ratio.reason === "no_quotes") return "No quotes recorded in this period";
   if (ratio.reason === "too_few_quotes") {
