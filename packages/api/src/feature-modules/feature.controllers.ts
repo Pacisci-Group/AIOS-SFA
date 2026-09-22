@@ -105,10 +105,8 @@ export const ManagementController = createFeatureController(
   'management',
   ModuleKey.Management,
 );
-export const OwnerDashboardController = createFeatureController(
-  'owner-dashboard',
-  ModuleKey.OwnerDashboard,
-);
+// `owner-dashboard` is served by `OwnerDashboardModule` (PAC-135) — de-registered
+// here in the same change, for the first-wins reason spelled out above.
 export const CommandCenterController = createFeatureController(
   'command-center',
   ModuleKey.CommandCenter,

@@ -67,6 +67,7 @@ import {
   MAILER_CITIES,
   DEMO_LEAD_UNQUOTED_STATUSES,
   POLICY_TYPE_SETS,
+  splitAmount,
   SERVICE_CATEGORIES,
   SERVICE_PRIORITIES,
   SERVICE_STATUSES,
@@ -191,6 +192,8 @@ interface DealRef {
   policyTypes: string[];
   isBundle: boolean;
   premium: number;
+  /** Items per policy, parallel to `policyTypes`; sums to the deal's `itemCount`. */
+  itemsByPolicy: number[];
 }
 
 interface PolicyRef {
@@ -770,7 +773,10 @@ export class DemoSeedService {
           : i < quotedCount
             ? rng.pick<string>(['Quoted', 'Quoted', 'Requote'])
             : rng.pick<string>([...DEMO_LEAD_UNQUOTED_STATUSES]);
-      const createdDate = this.daysAgo(rng.int(0, 45));
+      // 80 days, not 45: the Owner dashboard (PAC-135) compares a period with
+      // the one before it, so sales have to reach back two full months for
+      // "Last Month" to have anything to trend against.
+      const createdDate = this.daysAgo(rng.int(0, 80));
       // Never before the lead existed — a lead created 2 days ago cannot have
       // last been touched 6 days ago.
       const lastActivityAt = this.daysAgo(
@@ -884,11 +890,14 @@ export class DemoSeedService {
     for (const { lead, count } of plan) {
       const producer = lead.producer;
       const hh = lead.household;
-      // Every recap lands between the lead's creation and now; oldest first, so
-      // the last one written is the current proposal.
+      // Every recap lands within ten days of the lead's creation; oldest first,
+      // so the last one written is the current proposal. Not "anywhere up to
+      // now": that drew most quotes — and so most sales — into the current
+      // month, whatever the lead's age (PAC-135).
       const leadAgeDays = this.daysBetween(lead.occurredAt, this.now);
-      const offsets = Array.from({ length: count }, () =>
-        rng.int(0, leadAgeDays),
+      const offsets = Array.from(
+        { length: count },
+        () => leadAgeDays - rng.int(0, Math.min(10, leadAgeDays)),
       ).sort((a, b) => b - a);
 
       for (let n = 0; n < count; n++) {
@@ -896,6 +905,15 @@ export class DemoSeedService {
         const quoteDate = this.daysAgo(offsets[n]);
         const products = rng.pick(POLICY_TYPE_SETS);
         const premium = rng.int(700, 5200);
+        // One line per product, as the Quote form writes them (PAC-135): the
+        // Owner dashboard's line-of-business filter splits a quote by these.
+        // Item counts drawn in the same order the summed figure used to draw
+        // them, so the seeded sequence — and every record after this — is
+        // unchanged.
+        const lineItems = products.map((product) =>
+          resolveItemCount(product, rng.int(1, 3)),
+        );
+        const linePremiums = splitAmount(premium, products.length);
         const legacyId = `demo:quote:${i++}`;
 
         const id = await this.upsert(
@@ -914,12 +932,14 @@ export class DemoSeedService {
             premium,
             // Summed the way a real recap's rows sum: a vehicle line can
             // carry several, every other line carries exactly one.
-            itemCount: products.reduce(
-              (total, product) =>
-                total + resolveItemCount(product, rng.int(1, 3)),
-              0,
-            ),
+            itemCount: lineItems.reduce((total, items) => total + items, 0),
             productsQuoted: products,
+            policies: products.map((policyType, index) => ({
+              policyType,
+              premium: linePremiums[index],
+              itemCount: lineItems[index],
+              sameAsHousehold: true,
+            })),
             // PAC-56 #16 — seeded so the Quote Summary card and the edit form
             // have something to render locally.
             insuranceRenewalMonth: rng.pick([...INSURANCE_MONTHS]),
@@ -990,10 +1010,21 @@ export class DemoSeedService {
       const quote = winningQuote.get(lead.legacyId);
       // A sale cannot predate the quote it closed on, nor the lead itself.
       const earliest = quote?.occurredAt ?? lead.occurredAt;
+      //
+      // Within a fortnight *of the quote*, not anywhere between the quote and
+      // today: a uniform draw up to now piled 20 of 24 sales into the current
+      // month, leaving the Owner dashboard's "Last Month" with nothing to trend
+      // against (PAC-135). Deals really do close soon after they are quoted.
+      const sinceEarliest = this.daysBetween(earliest, this.now);
       const soldDate = this.daysAgo(
-        rng.int(0, this.daysBetween(earliest, this.now)),
+        sinceEarliest - rng.int(0, Math.min(14, sinceEarliest)),
       );
       const premium = rng.int(900, 4800);
+      // Drawn here, in the order the summed figure used to draw them, and kept
+      // per policy: the policy rows below must add up to the deal (PAC-135).
+      const itemsByPolicy = policyTypes.map((policyType) =>
+        resolveItemCount(policyType, rng.int(1, 3)),
+      );
       const clientName = `${hh.clientFirst} ${hh.clientLast}`;
       const legacyId = `demo:deal:${i}`;
 
@@ -1011,11 +1042,7 @@ export class DemoSeedService {
           premium,
           premiumSource: 'rollup',
           // Summed the way `deriveDealAggregates` sums the real thing.
-          itemCount: policyTypes.reduce(
-            (total, policyType) =>
-              total + resolveItemCount(policyType, rng.int(1, 3)),
-            0,
-          ),
+          itemCount: itemsByPolicy.reduce((total, items) => total + items, 0),
           policyCount: policyTypes.length,
           dealType,
           isBundle,
@@ -1055,6 +1082,7 @@ export class DemoSeedService {
         policyTypes,
         isBundle,
         premium,
+        itemsByPolicy,
       });
     }
     return refs;
@@ -1072,8 +1100,11 @@ export class DemoSeedService {
     const refs: PolicyRef[] = [];
     let n = 0;
     for (const deal of deals) {
-      const share = deal.premium / Math.max(deal.policyTypes.length, 1);
-      for (const policyType of deal.policyTypes) {
+      // The rows add up to the deal exactly — premium and items both. The Owner
+      // dashboard sums policies while the Producer scorecard sums deals
+      // (PAC-135), and a rounded equal share left the two a dollar apart.
+      const premiums = splitAmount(deal.premium, deal.policyTypes.length);
+      for (const [index, policyType] of deal.policyTypes.entries()) {
         const effectiveDate = deal.occurredAt;
         const expirationDate = new Date(effectiveDate);
         expirationDate.setMonth(expirationDate.getMonth() + 6);
@@ -1099,8 +1130,11 @@ export class DemoSeedService {
             effectiveDate,
             expirationDate,
             renewalDate,
-            premium: Math.round(share),
-            items: 1 + rng.int(0, 2),
+            premium: premiums[index],
+            // Still drawn, then unused: the policy's items now come from the
+            // deal, and skipping the draw would shift the seeded sequence for
+            // every record written after this one.
+            items: (rng.int(0, 2), deal.itemsByPolicy[index] ?? 1),
             policyStatus: 'Active',
             householdId: deal.household.id,
             legacyHouseholdId: deal.household.legacyId,

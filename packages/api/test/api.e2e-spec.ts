@@ -3365,9 +3365,11 @@ describe('SFA API (e2e)', () => {
       // covered by its own describe block below. That also removed the bare
       // `PATCH /households`, which only ever echoed `{status:'updated'}`; the
       // real household write is `POST /households/:id/members`.
+      // `owner-dashboard` left with PAC-135, which replaced its stub with the
+      // real `OwnerDashboardModule` — `GET /owner-dashboard/{summary,producers,
+      // lead-sources}`, covered by its own describe block below.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
-      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 
@@ -3596,7 +3598,8 @@ describe('SFA API (e2e)', () => {
       'deal-audits',
       'leaderboard',
       'management',
-      'owner-dashboard',
+      // No bare route since PAC-135 — the summary is what the page loads first.
+      'owner-dashboard/summary',
       'command-center',
     ];
     it.each(csrDeniedFeatureRoutes)(
@@ -3649,9 +3652,9 @@ describe('SFA API (e2e)', () => {
       // with PAC-89: its stub is de-registered, so there is no bare
       // `PATCH /households` to probe — the write is
       // `POST /households/:id/members`, covered by the Client records block.
+      // `owner-dashboard` left with PAC-135: read-only, no mutating handler.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
-      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 

@@ -393,7 +393,8 @@ describe('nextRenewalDate', () => {
   it('falls back to an annual term for an uncatalogued type', () => {
     // ~91 active policies carry codes in no catalogue. Annual is the safe
     // guess, and it must not throw or return null.
-    expect(iso(nextRenewalDate(new Date('2025-09-08'), 'BK08B', NOW))).toBe(
+    // `Zz9Qx` is made up: PAC-135 decoded every code the real data holds.
+    expect(iso(nextRenewalDate(new Date('2025-09-08'), 'Zz9Qx', NOW))).toBe(
       '2026-09-08',
     );
   });

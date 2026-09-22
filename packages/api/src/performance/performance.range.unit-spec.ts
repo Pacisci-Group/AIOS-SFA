@@ -3,6 +3,7 @@ import {
   chicagoParts,
   currentChicagoMonth,
   isValidIsoDate,
+  resolveComparison,
   resolveRange,
   spanDays,
   toIsoDate,
@@ -248,6 +249,147 @@ describe('resolveRange', () => {
   it('custom throws without both bounds — the DTO rejects this first', () => {
     expect(() => resolveRange('custom', { from: '2026-01-01' }, now)).toThrow();
     expect(() => resolveRange('custom', {}, now)).toThrow();
+  });
+});
+
+// PAC-135: the Owner dashboard's longer presets.
+describe('resolveRange — owner presets', () => {
+  // Noon Chicago on Mon 21 Sep 2026.
+  const now = new Date('2026-09-21T17:00:00.000Z');
+  const window = (key: Parameters<typeof resolveRange>[0], at = now) => {
+    const { from, to } = resolveRange(key, {}, at);
+    return { from, to };
+  };
+
+  it('last3Months is the three complete months before this one', () => {
+    expect(window('last3Months')).toEqual({
+      from: '2026-06-01',
+      to: '2026-08-31',
+    });
+  });
+
+  it('last3Months crosses a year boundary', () => {
+    expect(window('last3Months', new Date('2026-02-10T17:00:00.000Z'))).toEqual(
+      { from: '2025-11-01', to: '2026-01-31' },
+    );
+  });
+
+  it('ytd runs from Jan 1 to today, not to year end', () => {
+    expect(window('ytd')).toEqual({ from: '2026-01-01', to: '2026-09-21' });
+  });
+
+  it('lastYear is the whole previous calendar year', () => {
+    expect(window('lastYear')).toEqual({
+      from: '2025-01-01',
+      to: '2025-12-31',
+    });
+  });
+
+  it('is half-open like every other window', () => {
+    const range = resolveRange('lastYear', {}, now);
+    expect(range.startYmd).toBe(20250101);
+    expect(range.endYmd).toBe(20260101);
+  });
+});
+
+describe('resolveComparison', () => {
+  const now = new Date('2026-09-21T17:00:00.000Z');
+  const compare = (
+    key: Parameters<typeof resolveComparison>[0],
+    custom: { from?: string; to?: string } = {},
+    at = now,
+  ) => {
+    const { from, to } = resolveComparison(key, custom, at);
+    return { from, to };
+  };
+
+  it('mtd compares the same elapsed days of last month — not all of it', () => {
+    // Sep 1–21 against Aug 1–21. Against *all* of August the badge would read
+    // red until the 30th; against "the preceding 21 days" it would be Aug 11–31.
+    expect(compare('mtd')).toEqual({ from: '2026-08-01', to: '2026-08-21' });
+  });
+
+  it('mtd clamps to a shorter previous month', () => {
+    // Mar 31 has no Feb 31: the whole of February is the honest comparison.
+    expect(compare('mtd', {}, new Date('2026-03-31T17:00:00.000Z'))).toEqual({
+      from: '2026-02-01',
+      to: '2026-02-28',
+    });
+  });
+
+  it('mtd in January reaches back into December of the year before', () => {
+    expect(compare('mtd', {}, new Date('2026-01-15T17:00:00.000Z'))).toEqual({
+      from: '2025-12-01',
+      to: '2025-12-15',
+    });
+  });
+
+  it('lastMonth compares with the month before it, whatever their lengths', () => {
+    // August (31 days) against July (31) here; in March it is Feb against Jan.
+    expect(compare('lastMonth')).toEqual({
+      from: '2026-07-01',
+      to: '2026-07-31',
+    });
+    expect(
+      compare('lastMonth', {}, new Date('2026-03-10T17:00:00.000Z')),
+    ).toEqual({ from: '2026-01-01', to: '2026-01-31' });
+  });
+
+  it('last3Months compares with the three months before those', () => {
+    expect(compare('last3Months')).toEqual({
+      from: '2026-03-01',
+      to: '2026-05-31',
+    });
+  });
+
+  it('ytd compares with the same dates last year, not the 264 days before Jan 1', () => {
+    expect(compare('ytd')).toEqual({ from: '2025-01-01', to: '2025-09-21' });
+  });
+
+  it('ytd on a leap day clamps to Feb 28', () => {
+    expect(compare('ytd', {}, new Date('2028-02-29T17:00:00.000Z'))).toEqual({
+      from: '2027-01-01',
+      to: '2027-02-28',
+    });
+  });
+
+  it('lastYear compares with the year before it', () => {
+    expect(compare('lastYear')).toEqual({
+      from: '2024-01-01',
+      to: '2024-12-31',
+    });
+  });
+
+  it('custom compares with the preceding span of equal length', () => {
+    // 13 days, Sep 1–13 → the 13 days before: Aug 19–31.
+    const custom = { from: '2026-09-01', to: '2026-09-13' };
+    expect(compare('custom', custom)).toEqual({
+      from: '2026-08-19',
+      to: '2026-08-31',
+    });
+    expect(spanDays('2026-08-19', '2026-08-31')).toBe(
+      spanDays(custom.from, custom.to),
+    );
+  });
+
+  it('a one-day custom window compares with the day before', () => {
+    expect(compare('custom', { from: '2026-09-21', to: '2026-09-21' })).toEqual(
+      { from: '2026-09-20', to: '2026-09-20' },
+    );
+  });
+
+  it('never overlaps the window it is compared with', () => {
+    for (const key of [
+      'mtd',
+      'lastMonth',
+      'last3Months',
+      'ytd',
+      'lastYear',
+    ] as const) {
+      const current = resolveRange(key, {}, now);
+      const previous = resolveComparison(key, {}, now);
+      expect(previous.endYmd).toBeLessThanOrEqual(current.startYmd);
+    }
   });
 });
 
