@@ -835,6 +835,10 @@ choice lists are stale snapshots — never treat them as exhaustive.** The impor
   Recaps CSV export to decode; ticket Q4, Q5, Q7–Q11 (built on the stated assumptions).
 - **Data gap, not a bug:** 1,131 of 1,679 historic deals have no source and no lead link → the
   "No source" row. A repair with the Smith Family Agency team.
-- **After #114 has been live one release:** migration dropping the embedded `leadSource` on leads +
-  deals. Not before — it is what makes #114's migration reversible.
+- **The embedded `leadSource` is dropped in the same release** by
+  `20260921161115-drop_embedded_lead_source` (Asad ships dev → prod as one release, so both
+  migrations apply in one boot, in filename order). It refuses to run unless the backfill
+  demonstrably finished — any record naming a real source with no `leadSourceId` makes it throw and
+  change nothing. Its `down` rebuilds `{ code: null, label }` from `leadSourceId`, so the pair can
+  still be unwound; only the raw SmartSuite code is gone, which nothing read.
 - `recharts` is unused in `packages/web` since the mock was deleted.
