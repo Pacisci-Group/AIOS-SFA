@@ -9,14 +9,14 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { formatRangeLabel } from "../dashboard-range";
-import type { DashboardRange } from "../useDashboardRange";
+import { formatRangeLabel } from "@/lib/date-range";
 
 /** Mirrors `MAX_CUSTOM_SPAN_DAYS` on the API, which rejects anything larger. */
 const MAX_SPAN_DAYS = 366;
 
 interface DateRangePickerProps {
-  range: DashboardRange;
+  /** The applied window, if any — only its `from`/`to` are read. */
+  range: { from?: string; to?: string };
   onApply: (from: string, to: string) => void;
   isActive: boolean;
 }
@@ -43,6 +43,9 @@ function spanDays(from: Date, to: Date): number {
 
 /**
  * The 📅 Custom Date chip and its picker (PAC-9).
+ *
+ * Shared: the Producer and Owner dashboards both end their chip strip with it
+ * (see `RangeChips`).
  *
  * Apply is explicit rather than applying on selection: `mode="range"` reports a
  * half-finished selection after the first click (`from` set, `to` undefined),
