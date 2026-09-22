@@ -34,6 +34,7 @@ import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
 import { CarriersModule } from './carriers/carriers.module';
+import { LeadSourcesModule } from './lead-sources/lead-sources.module';
 import { ClientsModule } from './clients/clients.module';
 import { CrmModule } from './crm/crm.module';
 import { ContactsModule } from './contacts/contacts.module';
@@ -187,6 +188,9 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // The Sold wizard's carrier vocabulary (PAC-56 #19). Also registers the
     // `carriers` model so its indexes build and the core seed can inject it.
     CarriersModule,
+    // Where a lead came from (PAC-135). Registers the `leadSources` model so its
+    // indexes build and the core seed can inject it.
+    LeadSourcesModule,
     SoldDealsModule,
     PerformanceModule,
     LeaderboardModule,

@@ -10,7 +10,8 @@ import type { MultiSelectOption } from "@/components/common/MultiSelect";
 export interface LeadFilters {
   status: string[];
   temperature: string[];
-  leadSource: string;
+  /** A `leadSources` row id, or `LEAD_SOURCE_NONE`. */
+  leadSourceId: string;
   producerId: string;
   dateFrom: string;
   dateTo: string;
@@ -19,7 +20,7 @@ export interface LeadFilters {
 export const EMPTY_LEAD_FILTERS: LeadFilters = {
   status: [],
   temperature: [],
-  leadSource: "",
+  leadSourceId: "",
   producerId: "",
   dateFrom: "",
   dateTo: "",

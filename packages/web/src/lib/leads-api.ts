@@ -54,7 +54,8 @@ export interface ListLeadsParams {
   status?: string[];
   /** Several are ORed together. */
   temperature?: string[];
-  leadSource?: string;
+  /** A `leadSources` row id, or `LEAD_SOURCE_NONE` for leads with none set. */
+  leadSourceId?: string;
   producerId?: string;
   /**
    * Every lead on one household — the Household page's "Start Quote" lead

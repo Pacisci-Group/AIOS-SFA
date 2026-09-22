@@ -253,11 +253,9 @@ export class ResolveLeadStep {
           lastName: normalizeName(input.primaryContact.lastName),
           status: INITIAL_STATUS,
           temperature: INITIAL_TEMPERATURE,
-          // Null on the public path — stored as the schema default
-          // `{ code: null, label: '' }`. `normalizeLeadSource` turns that into
-          // the label "Unknown" on read, and it is what the Leads-page
-          // "No source" filter matches.
-          leadSource: deps.ctx.leadSource ?? { code: null, label: '' },
+          // Null on the public path — left unset, which is what the Leads-page
+          // "No source" filter matches and what reads render as "Unknown".
+          leadSourceId: deps.ctx.leadSourceId ?? undefined,
           agingDays: 0,
           createdDate: now,
           // REQUIRED: `GET /leads` sorts on `lastActivityAt` (updatedAt is

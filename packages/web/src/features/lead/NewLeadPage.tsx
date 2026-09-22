@@ -35,7 +35,7 @@ export default function NewLeadPage() {
         // No policies of interest and no property address: this form does not
         // ask (PAC-56 #2 scopes that to the public one), and sending the unasked
         // defaults would record a choice the producer never made.
-        leadSourceCode: values.leadSourceCode ?? "",
+        leadSourceId: values.leadSourceId ?? "",
         submissionToken: submissionToken.current,
       }),
     onSuccess: (created) => {

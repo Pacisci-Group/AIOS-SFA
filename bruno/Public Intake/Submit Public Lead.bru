@@ -54,7 +54,7 @@ docs {
   Run **Create Share Link** first — it captures `shareLinkToken`.
 
   ## Body
-  Same shape as `POST /leads`, **minus `leadSourceCode`**. Lead source is
+  Same shape as `POST /leads`, **minus `leadSourceId`**. Lead source is
   internal vocabulary (Quotewizard, Soleo, Data Lot, JYA) and is never shown to
   an outside submitter.
 
@@ -83,7 +83,7 @@ docs {
   endpoint normalizes to the label **"Unknown"**, and a producer sets the real
   source by hand later. Guessing a default would record an
   assumption as fact, and once written nothing could distinguish it from a
-  genuine answer. Producers find these with `GET /leads?leadSource=__none__`.
+  genuine answer. Producers find these with `GET /leads?leadSourceId=__none__`.
 
   ## Provenance
   Every lead records `intakeSource.channel` (`share_link`) and

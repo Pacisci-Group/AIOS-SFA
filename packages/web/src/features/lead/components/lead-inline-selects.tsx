@@ -1,10 +1,9 @@
-import type { LeadTemperature, NormalizedLeadSource } from "@sfa/shared";
+import type { LeadSourceRef, LeadTemperature } from "@sfa/shared";
 import {
   LEAD_SOURCE_NONE,
   LEAD_STATUSES,
   LEAD_TEMPERATURE_OPTIONS,
   ModuleKey,
-  SELECTABLE_LEAD_SOURCE_OPTIONS,
 } from "@sfa/shared";
 import {
   Select,
@@ -13,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useLeadSources } from "@/hooks/useLeadSources";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
 import {
@@ -245,32 +245,32 @@ export function LeadSourceSelect({
   onChange,
   pending,
 }: {
-  value: NormalizedLeadSource;
-  onChange: (code: string) => void;
+  value: LeadSourceRef;
+  /** A `leadSources` row id, or `LEAD_SOURCE_NONE` to clear it. */
+  onChange: (leadSourceId: string) => void;
   pending?: boolean;
 }) {
   const { canWrite } = usePermissions();
   const editable = canWrite(ModuleKey.Leads);
-
-  const selectable = SELECTABLE_LEAD_SOURCE_OPTIONS.find(
-    (option) => option.code === value.code,
-  );
+  // Only an editor needs the list; a read-only viewer renders the label alone.
+  const { data: options = [] } = useLeadSources({ enabled: editable });
 
   // Three cases the stored value can be in:
-  //  - a selectable code            → normal round-trip
+  //  - a selectable source          → normal round-trip
   //  - unset (share link / cleared) → the `__none__` sentinel
-  //  - a label with no usable code  → shown, but not re-selectable
+  //  - an **archived** source       → shown, but not re-selectable. The list is
+  //    active rows only, so an id it does not contain is a source that was
+  //    retired after this lead was attributed to it.
   //
-  // `normalizeLeadSource` renders an unset source as the label `Unknown` (which
-  // is what the Leads list shows), so an empty label alone doesn't identify the
-  // state — a share-link lead arrives as `{ code: null, label: "Unknown" }`.
-  // The detail page says "No source" instead, because here it is an editable
-  // field and the producer needs to know there is something to fix.
-  const unset = !value.code && (!value.label || value.label === "Unknown");
-  const current = selectable
-    ? selectable.code
-    : unset
-      ? LEAD_SOURCE_NONE
+  // The detail page says "No source" rather than the list's "Unknown", because
+  // here it is an editable field and the producer needs to know there is
+  // something to fix.
+  const unset = !value.id;
+  const selectable = options.some((option) => option.id === value.id);
+  const current = unset
+    ? LEAD_SOURCE_NONE
+    : selectable
+      ? (value.id as string)
       : "__stored__";
 
   if (!editable) {
@@ -300,9 +300,9 @@ export function LeadSourceSelect({
         </SelectItem>
       )}
       <SelectItem value={LEAD_SOURCE_NONE}>No source</SelectItem>
-      {SELECTABLE_LEAD_SOURCE_OPTIONS.map((option) => (
-        <SelectItem key={option.code} value={option.code}>
-          {option.label}
+      {options.map((option) => (
+        <SelectItem key={option.id} value={option.id}>
+          {option.name}
         </SelectItem>
       ))}
     </InlineSelect>

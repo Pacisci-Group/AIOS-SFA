@@ -152,8 +152,23 @@ export class Deal extends TenantRecord {
   @Prop({ type: [String], default: [] })
   policyTypes: string[];
 
-  @Prop({ type: Object, default: { code: null, label: '' } })
-  leadSource: NormalizedLeadSource;
+  /**
+   * The source this sale was attributed to **when it has no lead** (PAC-135).
+   *
+   * Stamped from the lead at sale time, and the only source a migrated deal with
+   * no lead link has. Analytics prefer `lead.leadSourceId` whenever `leadId` is
+   * set, so a corrected lead moves its quotes *and* its sale together — read
+   * this field directly only as that fallback.
+   */
+  @Prop({ type: ObjectIdType, ref: 'LeadSource' })
+  leadSourceId?: Types.ObjectId;
+
+  /**
+   * @deprecated The pre-PAC-135 embedded `{ code, label }`. No longer written or
+   * read; kept for one release, then dropped by a follow-up migration.
+   */
+  @Prop({ type: Object })
+  leadSource?: NormalizedLeadSource;
 
   @Prop({ trim: true })
   clientName?: string;

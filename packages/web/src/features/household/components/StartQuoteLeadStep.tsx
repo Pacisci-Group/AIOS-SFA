@@ -99,7 +99,7 @@ export function StartQuoteLeadStep({
         // scopes that to the public one), and sending the unasked defaults
         // would record a choice the producer never made. Same as `NewLeadPage`
         // — and here the very next step asks what was quoted, with premiums.
-        leadSourceCode: values.leadSourceCode ?? "",
+        leadSourceId: values.leadSourceId ?? "",
         submissionToken: submissionToken.current,
         // The whole point of creating from here: the lead lands on the
         // household on screen, whatever the typed name would otherwise match.

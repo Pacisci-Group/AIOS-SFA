@@ -18,6 +18,9 @@ import { User } from '../users/schemas/user.schema';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { AgencyRole } from '../roles/schemas/agency-role.schema';
 import { provisionTenant } from '../seed/provision-tenant';
+import { seedLeadSources } from '../seed/lead-sources.seed';
+import { LeadSourcesService } from '../lead-sources/lead-sources.service';
+import { LeadSource } from '../lead-sources/schemas/lead-source.schema';
 import { SequenceService } from '../common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../households/household-ref';
 import { HouseholdMember } from '../households/schemas/household-member.schema';
@@ -88,6 +91,7 @@ import {
   isPlausibleItemCount,
   isPlausiblePolicyCount,
   isTestRecord,
+  leadSourceSlug,
   maxPlausibleItemCount,
   normalizeCancellationResponsibility,
   normalizeContactRole,
@@ -340,7 +344,36 @@ export class MigrationService {
     private readonly roleModel: Model<AgencyRole>,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
+    @InjectModel(LeadSource.name)
+    private readonly leadSourceModel: Model<LeadSource>,
+    private readonly leadSources: LeadSourcesService,
   ) {}
+
+  /** name slug → `leadSources` id, so thousands of records cost one query each source. */
+  private readonly leadSourceIds = new Map<string, Types.ObjectId | null>();
+
+  /**
+   * The `leadSources` row for an imported label (PAC-135), created as this
+   * agency's own when no platform row has the slug — Waterstone, JYA and the
+   * rest of one agency's vendors arrive this way.
+   *
+   * `undefined` for the placeholders (`Unknown`, `Test`, empty) and on a dry
+   * run, which must write nothing.
+   */
+  private async resolveLeadSourceId(
+    ctx: TenantCtx,
+    label: string,
+  ): Promise<Types.ObjectId | undefined> {
+    if (ctx.dryRun) return undefined;
+    const slug = leadSourceSlug(label);
+    if (!this.leadSourceIds.has(slug)) {
+      this.leadSourceIds.set(
+        slug,
+        await this.leadSources.findOrCreateByName(ctx.agencyId, label),
+      );
+    }
+    return this.leadSourceIds.get(slug) ?? undefined;
+  }
 
   async run(options: MigrationOptions): Promise<MigrationReport> {
     const report = createReport(options.dryRun);
@@ -359,6 +392,13 @@ export class MigrationService {
       const ctx = await this.step(report, 'Tenant', null, () =>
         this.resolveTenant(options, report),
       );
+
+      // Leads and deals point at platform lead sources by id, so those rows
+      // have to exist before the first record is written. Idempotent, and the
+      // same call the core seed makes — an import into a database nobody has
+      // seeded yet must not mint "Mailer" as this agency's private source.
+      this.leadSourceIds.clear();
+      if (!options.dryRun) await seedLeadSources(this.leadSourceModel);
 
       const producers = await this.step(report, 'Users', 'users', () =>
         this.migrateUsers(ss, ctx, options, report),
@@ -1313,7 +1353,7 @@ export class MigrationService {
            */
           status: selectCode(rec[LEAD_FIELDS.status]),
           temperature: normalizeTemperature(rec[LEAD_FIELDS.temperature]),
-          leadSource: { code: leadSource.code, label: leadSource.label },
+          leadSourceId: await this.resolveLeadSourceId(ctx, leadSource.label),
           agingDays: daysSince(createdDate),
           createdDate,
           lastActivityAt,
@@ -1847,7 +1887,7 @@ export class MigrationService {
           dealType: deriveDealType(isBundle, policyLabels),
           isBundle,
           policyTypes: policyLabels,
-          leadSource: { code: leadSource.code, label: leadSource.label },
+          leadSourceId: await this.resolveLeadSourceId(ctx, leadSource.label),
           clientName,
           producerId: producer?.userId,
           legacyProducerId: firstLinkedId(rec[DEAL_FIELDS.producer]),

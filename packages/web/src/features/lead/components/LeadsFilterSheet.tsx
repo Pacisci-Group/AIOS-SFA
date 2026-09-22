@@ -1,11 +1,8 @@
-import {
-  LEAD_SOURCE_LABELS,
-  LEAD_SOURCE_NONE,
-  LEAD_STATUSES,
-} from "@sfa/shared";
+import { LEAD_SOURCE_NONE, LEAD_STATUSES } from "@sfa/shared";
 import { useQuery } from "@tanstack/react-query";
 import { MultiSelect } from "@/components/common/MultiSelect";
 import { Button } from "@/components/ui/button";
+import { useLeadSources } from "@/hooks/useLeadSources";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -77,6 +74,9 @@ export function LeadsFilterSheet({
 
   const producers = producersQuery.data ?? [];
 
+  // Fetched only once the sheet has been opened; cached for the session after.
+  const { data: leadSources = [] } = useLeadSources({ enabled: open });
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="bg-background border-border">
@@ -103,8 +103,10 @@ export function LeadsFilterSheet({
           <div className="space-y-2">
             <Label className="text-sm text-muted-foreground">Lead source</Label>
             <Select
-              value={toSelectValue(filters.leadSource)}
-              onValueChange={(v) => onChange({ leadSource: toFilterValue(v) })}
+              value={toSelectValue(filters.leadSourceId)}
+              onValueChange={(v) =>
+                onChange({ leadSourceId: toFilterValue(v) })
+              }
             >
               <SelectTrigger className="w-full bg-card border-border">
                 <SelectValue placeholder="All sources" />
@@ -115,13 +117,11 @@ export function LeadsFilterSheet({
                     until a producer sets one, so isolating them has to be a
                     first-class choice rather than something you scan for. */}
                 <SelectItem value={LEAD_SOURCE_NONE}>No source</SelectItem>
-                {LEAD_SOURCE_LABELS.filter((label) => label !== "Test").map(
-                  (label) => (
-                    <SelectItem key={label} value={label}>
-                      {label}
-                    </SelectItem>
-                  ),
-                )}
+                {leadSources.map((source) => (
+                  <SelectItem key={source.id} value={source.id}>
+                    {source.name}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

@@ -55,7 +55,7 @@ export default function LeadsPage() {
       search: debouncedSearch.trim() || undefined,
       status: filters.status.length ? filters.status : undefined,
       temperature: filters.temperature.length ? filters.temperature : undefined,
-      leadSource: filters.leadSource || undefined,
+      leadSourceId: filters.leadSourceId || undefined,
       producerId: filters.producerId || undefined,
       dateFrom: filters.dateFrom || undefined,
       dateTo: filters.dateTo || undefined,
