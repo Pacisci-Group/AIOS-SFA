@@ -38,8 +38,13 @@ export function OwnerDashboard() {
       <div className="flex flex-col gap-4 px-4 py-4 md:px-6 md:py-5">
         <OwnerKpiRow params={params} />
 
-        {/* 60/40, stacked below `xl` — the leaderboard needs its six columns. */}
-        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[3fr_2fr]">
+        {/*
+         * 60/40, stacked below `xl` — the leaderboard needs its six columns.
+         * The two panels stretch to the taller one (grid's default): the row
+         * counts differ and move with every filter, and two cards whose bottom
+         * edges wander apart read as a layout bug rather than as data.
+         */}
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[3fr_2fr]">
           <ProducerLeaderboard params={params} />
           <LeadSourceMatrix params={params} />
         </div>
