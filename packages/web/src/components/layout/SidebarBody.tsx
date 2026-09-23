@@ -11,6 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { AvailabilityToggle } from "@/components/layout/AvailabilityToggle";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { cn } from "@/lib/utils";
 import { isNavItemActive, NAV_SECTIONS, type NavItem } from "./nav-items";
@@ -159,7 +160,7 @@ interface SidebarBodyProps {
 
 /**
  * Everything below the sidebar's own header: the permission-filtered nav, the
- * user chip, the theme switch and log out.
+ * user chip, the availability switch, the theme switch and log out.
  *
  * Shared verbatim by the desktop rail (`AppSidebar`) and the mobile drawer
  * (`MobileNav`) so the two can't drift — the drawer is the same sidebar, just
@@ -273,6 +274,10 @@ export function SidebarBody({
             )}
           </Link>
         </RailTooltip>
+
+        {/* Directly under the chip, on every page (PAC-139 §6): "they don't
+            need to go to three pages to set their status." */}
+        <AvailabilityToggle collapsed={collapsed} />
 
         <ThemeToggle collapsed={collapsed} />
 

@@ -1,4 +1,4 @@
-import type { PageLevelOverride } from '@sfa/shared';
+import type { PageLevelOverride, UserAvailability } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
 
 export interface AgencyUserRole {
@@ -14,6 +14,8 @@ export interface AgencyUser {
   email: string;
   firstName?: string;
   lastName?: string;
+  /** Taking leads or not (PAC-139 §6). Set by the user, never from the directory. */
+  availability: UserAvailability;
   isActive: boolean;
   /**
    * ISO-8601 when the user was removed from the agency; null otherwise.
@@ -146,6 +148,11 @@ export interface AgencyUserOption {
   email: string;
   firstName?: string;
   lastName?: string;
+  /**
+   * Taking leads or not (PAC-139 §6). Here so a *lead* picker (PAC-138) can
+   * list only the available people; the other pickers ignore it.
+   */
+  availability: UserAvailability;
 }
 
 /**
