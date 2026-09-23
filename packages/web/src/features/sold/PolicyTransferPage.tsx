@@ -14,6 +14,7 @@ import {
   toPolicyInput,
   type SoldDealFormValues,
 } from "./components/sold-deal-schema";
+import { managementDashboardKey } from "@/lib/management-dashboard-api";
 import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
@@ -71,6 +72,7 @@ export default function PolicyTransferPage() {
       void queryClient.invalidateQueries({ queryKey: ["performance"] });
       // The Owner dashboard sums the same sales and quotes (PAC-135).
       void queryClient.invalidateQueries({ queryKey: ownerDashboardKey });
+      void queryClient.invalidateQueries({ queryKey: managementDashboardKey });
       void queryClient.invalidateQueries({ queryKey: ["deal-audits"] });
       toast.success(
         `Transfer recorded — ${ticket.policyTransfer?.policyCount ?? 0} ${

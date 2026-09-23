@@ -7,15 +7,15 @@ import { RangeChips } from "@/components/common/RangeChips";
 import { Button } from "@/components/ui/button";
 import { useLeadSources } from "@/hooks/useLeadSources";
 import { usePermissions } from "@/hooks/usePermissions";
-import type { OwnerDashboardParams } from "@/lib/owner-dashboard-api";
+import type { DashboardFilterParams } from "@/lib/dashboard-filter-params";
 import { agencyUserOptionsKey, listUserOptions } from "@/lib/users-api";
-import { OWNER_RANGE_CHIPS } from "../owner-range";
-import type { OwnerRange } from "../useOwnerFilters";
+import { DASHBOARD_RANGE_CHIPS } from "./dashboard-range";
+import type { DashboardRange } from "./useDashboardFilters";
 
-interface OwnerFilterBarProps {
-  range: OwnerRange;
-  params: OwnerDashboardParams;
-  onRangeChange: (next: OwnerRange) => void;
+interface DashboardFilterBarProps {
+  range: DashboardRange;
+  params: DashboardFilterParams;
+  onRangeChange: (next: DashboardRange) => void;
   onFilterChange: (
     key: "producerIds" | "leadSourceIds" | "policyTypes",
     next: string[],
@@ -31,22 +31,24 @@ const POLICY_TYPE_OPTIONS = POLICY_TYPES.map((type) => ({
 }));
 
 /**
- * Period chips and the three multi-selects (PAC-135). Filtering is **instant** —
+ * Period chips and the three multi-selects (PAC-135), shared by the Owner view
+ * and the Manager view (PAC-139) — one bar, not two. Filtering is **instant** —
  * there is no Apply button — and everything lives in the URL, so a filtered view
  * survives a refresh and can be sent to someone.
  *
- * Every card and both tables react to all of it. The one exception is stated
- * where it applies rather than here: the lead-source table's Vol column cannot
- * take a line-of-business filter.
+ * What each filter reaches is stated where it applies rather than here: on the
+ * Owner view the lead-source table's Vol column cannot take a line-of-business
+ * filter; on the Manager view the producer filter narrows the alert cards but
+ * never the Team Activity roster.
  */
-export function OwnerFilterBar({
+export function DashboardFilterBar({
   range,
   params,
   onRangeChange,
   onFilterChange,
   onClear,
   activeCount,
-}: OwnerFilterBarProps) {
+}: DashboardFilterBarProps) {
   const { can } = usePermissions();
   // The agency directory is its own permission. An account can hold the
   // dashboard without it (the Data Team template does), and asking anyway would
@@ -88,7 +90,7 @@ export function OwnerFilterBar({
   return (
     <div className="flex flex-col gap-3 border-b border-border px-4 py-3 md:px-6 lg:flex-row lg:items-center lg:justify-between">
       <RangeChips
-        chips={OWNER_RANGE_CHIPS}
+        chips={DASHBOARD_RANGE_CHIPS}
         range={range}
         onChange={onRangeChange}
       />

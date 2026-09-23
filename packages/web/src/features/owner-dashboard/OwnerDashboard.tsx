@@ -1,8 +1,8 @@
 import { LeadSourceMatrix } from "./components/LeadSourceMatrix";
-import { OwnerFilterBar } from "./components/OwnerFilterBar";
 import { OwnerKpiRow } from "./components/OwnerKpiRow";
 import { ProducerLeaderboard } from "./components/ProducerLeaderboard";
-import { useOwnerFilters } from "./useOwnerFilters";
+import { DashboardFilterBar } from "@/features/management/filters/DashboardFilterBar";
+import { useDashboardFilters } from "@/features/management/filters/useDashboardFilters";
 
 /**
  * The Owner View — "Strategy Hub" (PAC-135): a compilation of everything going
@@ -22,11 +22,11 @@ import { useOwnerFilters } from "./useOwnerFilters";
  */
 export function OwnerDashboard() {
   const { range, params, setRange, setFilter, clearFilters, activeCount } =
-    useOwnerFilters();
+    useDashboardFilters();
 
   return (
     <>
-      <OwnerFilterBar
+      <DashboardFilterBar
         range={range}
         params={params}
         onRangeChange={setRange}

@@ -1,0 +1,114 @@
+meta {
+  name: Get Producer Drawer
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/management-dashboard/producers/{{managementProducerId}}?range=ytd
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: ytd
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto
+}
+
+auth:bearer {
+  token: {{managementDashboardToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    // Run `Get Team` first — it captures the first row's producer id.
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the header is the producer", function () {
+    const { producer } = res.getBody();
+    expect(producer.producerId).to.equal(bru.getVar("managementProducerId"));
+    expect(producer.initials).to.be.a("string");
+  });
+
+  test("the stats strip carries the row's four figures", function () {
+    const { stats } = res.getBody();
+    expect(stats).to.have.all.keys(
+      "householdsQuoted", "householdsSold", "householdCloseRatio", "openAuditItems",
+    );
+  });
+
+  test("the pipeline is open leads, most recently worked first", function () {
+    const leads = res.getBody().activePipeline;
+    for (const lead of leads) {
+      expect(["Sold", "Converted", "Not Qualified", "Lost", "Closed"]).to.not.include(lead.status);
+      expect(lead.ageDays).to.be.at.least(0);
+    }
+    const stamps = leads.map((lead) => lead.lastActivityAt).filter(Boolean).map(Date.parse);
+    for (let i = 1; i < stamps.length; i++) {
+      expect(stamps[i - 1]).to.be.at.least(stamps[i]);
+    }
+  });
+
+  test("the open items are the ones the column counts", function () {
+    const { stats, openAuditItems } = res.getBody();
+    // Equal unless the list hit its cap — 200 is far past any demo tenant.
+    expect(openAuditItems.length).to.equal(stats.openAuditItems);
+  });
+}
+
+docs {
+  # GET /management-dashboard/producers/:producerId — the producer drawer (PAC-139)
+
+  What a Team Activity row opens: the producer's header and availability, the
+  **same four figures** as their row, their **Active Pipeline**, and their
+  **open audit items** one row each.
+
+  - **Module / permission / filter:** as `Get Alerts`. The person is the path
+    parameter; the query's `producerIds` is ignored.
+  - **Scope:** the producer must be in the caller's scope, else `404` — the
+    same answer a wrong id gets, so the response never confirms a colleague
+    exists in another branch.
+
+  ## Active Pipeline
+  The leads the producer is working on: created in the window, status not
+  terminal, source and line-of-business filters applied, most recently worked
+  first, capped at 50. The **stage is the lead's own Status field** ("go to your
+  status field … those are your stat[us]" — David, 00:24:04).
+
+  | field | notes |
+  |---|---|
+  | lineOfBusiness | what the lead asked to have quoted, joined with ` · `; `null` when intake recorded nothing (every migrated lead) |
+  | ageDays | whole days since the lead was created |
+  | value | the latest quote recap's premium, or `null` when none was written |
+
+  ## Open audit items
+  One row per failed, unresolved item on the producer's deals — all time, the
+  set `stats.openAuditItems` counts — oldest first, capped at 200. Each opens
+  the household until the Deal Audit page ships (PAC-106).
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "ytd", "current": { "from": "2026-01-01", "to": "2026-09-23" }, "previous": { "from": "2025-01-01", "to": "2025-09-23" } },
+    "producer": { "producerId": "66f0…11", "name": "Pat Producer", "initials": "PP", "availability": "available" },
+    "stats": { "householdsQuoted": 12, "householdsSold": 7, "householdCloseRatio": 58.3, "openAuditItems": 2 },
+    "activePipeline": [
+      { "leadId": "66f0…a1", "name": "Dana Whitfield", "householdId": "66f0…b2", "status": "Quoted",
+        "lineOfBusiness": "Auto · Home", "ageDays": 9, "value": 2140, "lastActivityAt": "2026-09-22T16:40:00.000Z" }
+    ],
+    "openAuditItems": [
+      { "dealAuditId": "66f0…c3", "dealId": "66f0…d4", "householdId": "66f0…b2", "clientName": "Dana Whitfield",
+        "itemTitle": "Prior Insurance", "daysOpen": 12, "soldDate": "2026-09-11T05:00:00.000Z" }
+    ]
+  }
+  ```
+
+  ## Errors
+  | status | when |
+  |---|---|
+  | 400 | `producerId` is not a record id, or a bad query (as `Get Alerts`) |
+  | 404 | no such user in the agency, or one outside the caller's branch |
+  | 401 / 403 | as `Get Alerts` |
+}

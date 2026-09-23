@@ -22,6 +22,7 @@ export * from './domain/lead-detail';
 export * from './domain/lead-intake';
 export * from './domain/lead-source';
 export * from './domain/owner-dashboard';
+export * from './domain/management-dashboard';
 export * from './domain/lead-status';
 export * from './domain/lead-temperature';
 export * from './domain/mailer';

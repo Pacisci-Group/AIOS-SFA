@@ -1,0 +1,96 @@
+meta {
+  name: List Stalled Leads
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/management-dashboard/alerts/stalled-leads?range=ytd
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: ytd
+  ~page: 1
+  ~pageSize: 50
+  ~producerIds:
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto
+}
+
+auth:bearer {
+  token: {{managementDashboardToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the total is the card's number", function () {
+    // Run `Get Alerts` first — same query, same pipeline prefix.
+    expect(res.getBody().total).to.equal(bru.getVar("managementStalledLeads"));
+  });
+
+  test("every row is stalled and open", function () {
+    const cutoff = Date.now() - 48 * 3600 * 1000;
+    for (const row of res.getBody().items) {
+      expect(["Sold", "Converted", "Not Qualified", "Lost", "Closed"]).to.not.include(row.status);
+      if (row.lastActivityAt !== null) {
+        expect(Date.parse(row.lastActivityAt)).to.be.below(cutoff);
+        expect(row.hoursSinceActivity).to.be.at.least(48);
+      } else {
+        expect(row.hoursSinceActivity).to.equal(null);
+      }
+    }
+  });
+
+  test("stalest first", function () {
+    const stamps = res.getBody().items
+      .map((row) => row.lastActivityAt)
+      .filter((value) => value !== null)
+      .map(Date.parse);
+    for (let i = 1; i < stamps.length; i++) {
+      expect(stamps[i - 1]).to.be.at.most(stamps[i]);
+    }
+  });
+}
+
+docs {
+  # GET /management-dashboard/alerts/stalled-leads — the Stalled Leads drawer (PAC-139)
+
+  The records behind the card — "if you just have it there, how is a user
+  supposed to know what leads are stalled?" (David, 22 Sep 00:27:48). One row
+  per lead, stalest first; each row opens `/leads/:leadId`.
+
+  - **Module / permission / scope / filter:** identical to `Get Alerts`. Plus
+    `page` (1-based, default 1) and `pageSize` (default 50, max 200).
+  - **`total`** equals the card's `stalledLeads` under the same query.
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "ytd", "current": { "from": "2026-01-01", "to": "2026-09-23" }, "previous": { "from": "2025-01-01", "to": "2025-09-23" } },
+    "page": 1, "pageSize": 50, "total": 6, "totalPages": 1,
+    "items": [
+      {
+        "leadId": "66f0…a1", "name": "Dana Whitfield", "status": "New",
+        "producerId": "66f0…11", "producerName": "Pat Producer",
+        "householdId": "66f0…b2", "leadSourceName": "Mailer",
+        "lastActivityAt": "2026-09-18T14:02:11.000Z", "hoursSinceActivity": 118
+      }
+    ]
+  }
+  ```
+
+  | field | notes |
+  |---|---|
+  | status | canonical lead status (raw SmartSuite codes decoded), or `Unknown` |
+  | lastActivityAt | `null` for a lead never touched at all — still stalled |
+  | hoursSinceActivity | whole hours; `null` when there is no activity to measure from |
+  | leadSourceName | resolved through `leadSources`; `null` when the lead has no source |
+
+  ## Errors
+  As `Get Alerts`, plus `400` for `page` < 1 or `pageSize` outside 1–200.
+}

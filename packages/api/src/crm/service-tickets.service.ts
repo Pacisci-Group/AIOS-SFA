@@ -54,6 +54,10 @@ import {
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import { PolicyTransfersService } from './policy-transfers.service';
+import {
+  overdueTicketMatch,
+  ticketTenantFilter,
+} from './service-ticket-queries';
 import type { PresignTransferDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
 import type { CreatePolicyTransferDto } from './dto/policy-transfer.dto';
 import {
@@ -219,31 +223,13 @@ export class ServiceTicketsService {
   /**
    * Build the tenant + data-scope filter for the requesting user. `own` sees
    * only tickets assigned to them, `branch` sees their branch, `agency` sees
-   * the whole agency.
+   * the whole agency. The predicate itself lives in `service-ticket-queries.ts`
+   * since the Manager view (PAC-139) started counting tickets too.
    */
   private scopeFilter(
     access: AccessContext,
   ): FilterQuery<ServiceTicketDocument> {
-    if (!access.agencyId) {
-      // No agency context => nothing to see (defensive; guards prevent this).
-      throw new ForbiddenException('Agency context required');
-    }
-    const filter: FilterQuery<ServiceTicketDocument> = {
-      agencyId: new Types.ObjectId(access.agencyId),
-    };
-
-    if (access.dataScope === DataScope.Agency) {
-      return filter;
-    }
-    if (access.dataScope === DataScope.Branch) {
-      if (access.branchId) {
-        filter.branchId = new Types.ObjectId(access.branchId);
-      }
-      return filter;
-    }
-    // own
-    filter.assignedUserId = new Types.ObjectId(access.userId);
-    return filter;
+    return ticketTenantFilter(access);
   }
 
   async list(
@@ -727,16 +713,24 @@ export class ServiceTicketsService {
     // Scheduled onboarding calls are not work yet — keep them out of the KPIs
     // for the same reason they are kept out of the queue.
     filter.$nor = scheduledStepMatches(new Date());
-    const tickets = await this.ticketModel.find(filter).lean();
+    const now = new Date();
+    const [tickets, needsActionToday] = await Promise.all([
+      this.ticketModel.find(filter).lean(),
+      // Overdue is partly *derived* — an onboarding or renewal call past its
+      // step's `dueAt` is overdue whatever its stored status says — so this
+      // is the same predicate the Manager view's card uses (PAC-139), not a
+      // scan of the stored field, which missed every derived one.
+      this.ticketModel.countDocuments({
+        ...filter,
+        ...overdueTicketMatch(now),
+      }),
+    ]);
 
-    const startOfToday = new Date();
+    const startOfToday = new Date(now);
     startOfToday.setHours(0, 0, 0, 0);
 
     const openTickets = tickets.filter(
       (t) => !isTerminalTicketStatus(t.status),
-    ).length;
-    const needsActionToday = tickets.filter(
-      (t) => t.status === 'overdue',
     ).length;
     const resolvedToday = tickets.filter(
       (t) =>

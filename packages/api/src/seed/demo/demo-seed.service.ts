@@ -10,7 +10,7 @@ import {
   carrierSlug,
   type StoredAddress,
 } from '@sfa/shared';
-import type { DealAuditStatus } from '@sfa/shared';
+import type { DealAuditStatus, ServiceTicketStatus } from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
 import { SequenceService } from '../../common/mongo/sequence.service';
 import {
@@ -769,7 +769,7 @@ export class DemoSeedService {
       const hh = this.householdForBranch(households, producer.branchSlug, rng);
       const roster = hh ? (contactsByHousehold.get(hh.legacyId) ?? []) : [];
       const primary = roster.find((c) => c.isPrimary);
-      const temperature = rng.pick([
+      const drawnTemperature = rng.pick([
         'Hot',
         'Hot',
         'Warm',
@@ -779,7 +779,7 @@ export class DemoSeedService {
         'Cold',
         'Unknown',
       ]);
-      const status: string =
+      const drawnStatus: string =
         i < DEMO_CONFIG.deals
           ? 'Sold'
           : i < quotedCount
@@ -788,12 +788,32 @@ export class DemoSeedService {
       // 80 days, not 45: the Owner dashboard (PAC-135) compares a period with
       // the one before it, so sales have to reach back two full months for
       // "Last Month" to have anything to trend against.
-      const createdDate = this.daysAgo(rng.int(0, 80));
+      const drawnCreatedDate = this.daysAgo(rng.int(0, 80));
       // Never before the lead existed — a lead created 2 days ago cannot have
       // last been touched 6 days ago.
-      const lastActivityAt = this.daysAgo(
-        rng.int(0, Math.min(6, this.daysBetween(createdDate, this.now))),
+      const drawnLastActivityAt = this.daysAgo(
+        rng.int(0, Math.min(6, this.daysBetween(drawnCreatedDate, this.now))),
       );
+      /*
+       * The Manager view's Stalled Leads fixtures (PAC-139): the first few
+       * unquoted leads are pinned to an open status, created 3–6 days ago and
+       * never touched since. `Warm` rather than the draw because a Hot lead
+       * gets follow-up activities dated up to today in `seedActivities`, which
+       * would contradict "no update for 48 hours". Every draw above still
+       * happens, so the RNG sequence is unchanged.
+       */
+      const isStalledFixture =
+        i >= quotedCount && i < quotedCount + DEMO_CONFIG.stalledLeads;
+      const temperature = isStalledFixture ? 'Warm' : drawnTemperature;
+      const status = isStalledFixture
+        ? ['New', 'Contacted', 'Qualified'][i % 3]
+        : drawnStatus;
+      const createdDate = isStalledFixture
+        ? this.daysAgo(3 + (i % 4))
+        : drawnCreatedDate;
+      const lastActivityAt = isStalledFixture
+        ? createdDate
+        : drawnLastActivityAt;
       // Platform row, or created here as the demo agency's own (PAC-135).
       const leadSourceId =
         (await this.leadSources.findOrCreateByName(
@@ -1028,9 +1048,16 @@ export class DemoSeedService {
       // month, leaving the Owner dashboard's "Last Month" with nothing to trend
       // against (PAC-135). Deals really do close soon after they are quoted.
       const sinceEarliest = this.daysBetween(earliest, this.now);
-      const soldDate = this.daysAgo(
+      const drawnSoldDate = this.daysAgo(
         sinceEarliest - rng.int(0, Math.min(14, sinceEarliest)),
       );
+      // The Manager view's Aging Audits fixtures (PAC-139): the first few
+      // sales are pinned to twelve days ago — past the five-business-day SLA in
+      // any week — and `seedDealAuditItems` leaves each of them an open item, so
+      // their audits settle to a non-Pass status. The draw above still happens.
+      const soldDate = this.isAgingFixture(i)
+        ? this.daysAgo(12)
+        : drawnSoldDate;
       const premium = rng.int(900, 4800);
       // Drawn here, in the order the summed figure used to draw them, and kept
       // per policy: the policy rows below must add up to the deal (PAC-135).
@@ -1221,16 +1248,16 @@ export class DemoSeedService {
     rng: Rng,
   ): Promise<Set<string>> {
     // Newest deals drive the hand-off board — generate items for the most recent.
-    const recent = [...deals]
-      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
-      .slice(0, 16);
+    const recent = this.dealsWithAudits(deals);
 
     const withOpenItems = new Set<string>();
     let n = 0;
     for (const deal of recent) {
       const applicable = this.applicableTemplates(deal, rng);
-      // ~40% of recent deals still have open (failed, unresolved) items.
-      const hasOpen = rng.chance(0.4);
+      // ~40% of recent deals still have open (failed, unresolved) items — and
+      // every Aging Audits fixture does (PAC-139). The draw happens either way.
+      const drawnHasOpen = rng.chance(0.4);
+      const hasOpen = drawnHasOpen || this.isAgingFixture(deal);
       if (hasOpen && applicable.length) {
         withOpenItems.add(deal.legacyId);
       }
@@ -1309,9 +1336,7 @@ export class DemoSeedService {
     crms: TeamMember[],
     rng: Rng,
   ): Promise<Map<string, Types.ObjectId>> {
-    const recent = [...deals]
-      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
-      .slice(0, 16);
+    const recent = this.dealsWithAudits(deals);
     const ids = new Map<string, Types.ObjectId>();
     let n = 0;
     for (const deal of recent) {
@@ -1559,8 +1584,18 @@ export class DemoSeedService {
         : undefined;
       const policy = policies.find((p) => p.household.legacyId === hh.legacyId);
       const category = rng.pick(SERVICE_CATEGORIES);
-      const status = rng.pick(SERVICE_STATUSES);
-      const openedAt = this.daysAgo(rng.int(0, 30));
+      const drawnStatus = rng.pick(SERVICE_STATUSES);
+      const drawnOpenedAt = this.daysAgo(rng.int(0, 30));
+      // The Manager view's Overdue Tickets fixtures (PAC-139): the first few
+      // tickets are pinned to `overdue`, opened ten days ago. The generator
+      // never draws `overdue` on its own — a CSR marks a plain ticket so by
+      // hand — and it seeds no onboarding or renewal steps, whose overdue is
+      // derived from a due date. Both draws above still happen.
+      const isOverdueFixture = i < DEMO_CONFIG.overdueTickets;
+      const status: ServiceTicketStatus = isOverdueFixture
+        ? 'overdue'
+        : drawnStatus;
+      const openedAt = isOverdueFixture ? this.daysAgo(10) : drawnOpenedAt;
       const resolvedAt =
         status === 'resolved' ? this.addDays(openedAt, rng.int(1, 8)) : null;
       const legacyId = `demo:ticket:${i}`;
@@ -2119,6 +2154,38 @@ export class DemoSeedService {
     await this.sequences.reset(householdCounterKey(agencyId));
 
     this.logger.log('Purged existing demo records');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Manager view fixtures (PAC-139)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Whether this sale is one of the pinned Aging Audits fixtures — the first
+   * `DEMO_CONFIG.agingAudits` deals by index, which `seedDeals` dates twelve
+   * days back and `seedDealAuditItems` leaves an open item on.
+   */
+  private isAgingFixture(deal: number | DealRef): boolean {
+    const index =
+      typeof deal === 'number'
+        ? deal
+        : Number(deal.legacyId.replace('demo:deal:', ''));
+    return Number.isInteger(index) && index < DEMO_CONFIG.agingAudits;
+  }
+
+  /**
+   * The sales that get an audit roll-up and items: the sixteen most recent,
+   * which is what drives the hand-off board — plus every Aging Audits fixture,
+   * whichever place its pinned date lands it in. Shared by `seedDealAudits`
+   * and `seedDealAuditItems`, which must agree or the items have no parent.
+   */
+  private dealsWithAudits(deals: DealRef[]): DealRef[] {
+    const fixtures = deals.filter((deal) => this.isAgingFixture(deal));
+    const recent = deals
+      .filter((deal) => !this.isAgingFixture(deal))
+      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
+      .slice(0, Math.max(0, 16 - fixtures.length));
+    return [...fixtures, ...recent];
   }
 
   // ---------------------------------------------------------------------------

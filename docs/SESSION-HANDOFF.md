@@ -842,3 +842,59 @@ choice lists are stale snapshots — never treat them as exhaustive.** The impor
   change nothing. Its `down` rebuilds `{ code: null, label }` from `leadSourceId`, so the pair can
   still be unwound; only the raw SmartSuite code is gone, which nothing read.
 - `recharts` is unused in `packages/web` since the mock was deleted.
+
+---
+
+## 15. PAC-139 — Manager View dashboard (handoff, 2026-09-23)
+
+One PR against `dev` on `asad/pac-139-manager-view-dashboard`, after PR #121 (availability status)
+which was PAC-139 §6. Plan: `~/.claude/plans/create-an-implementation-plan-wild-whale.md`.
+
+### What exists now
+- **`GET /management-dashboard/{alerts, alerts/stalled-leads, alerts/aging-audits, alerts/overdue-tickets,
+  team, producers/:producerId}`** (`src/management-dashboard/`), `ModuleKey.Management` + `management:read`,
+  the Owner view's query schema (`common/dashboard/dashboard-filter-query.dto.ts`, extracted so both views
+  compose one field map). The `management` stub is de-registered. Bruno: `bruno/Management Dashboard/`
+  (runs as `manager@demoagency.local`, branch scope).
+- **Shared with the Owner view, not forked:** `common/sales-metrics/sales-pipelines.ts` (moved from
+  `owner-dashboard.pipelines.ts`), `sales-matches.ts` (`resolvePeriod`, `salesScope`, `soldMatch`,
+  `quotedMatch` lifted out of `OwnerDashboardService`), `common/domain/user-names.ts`.
+- **`common/dates/business-days.ts`** — US federal holidays by rule (observed days), `businessDaysBetween`,
+  `agingCutoff`. First business-day code in the repo.
+- **`crm/service-ticket-queries.ts`** — `overdueTicketMatch(now)` (the derived meaning: stored `overdue`, or
+  an onboarding/renewal step past `dueAt` and not pinned) and `ticketTenantFilter`. `ServiceTicketsService.stats()`
+  now counts "needs action today" with it — it used to read the stored field alone and missed every
+  derived overdue (prod has 0 stored `overdue` and 1,134 open renewal steps).
+- **Web:** `features/management/` rewritten (`ManagerDashboard`, `AlertCards`, `AlertDrawer`,
+  `TeamActivityTable`, `ProducerDrawer`); the Owner filter bar/hook/range moved to
+  `features/management/filters/` as `DashboardFilterBar` / `useDashboardFilters` / `dashboard-range.ts`
+  (one bar for both tabs); `components/common/AvailabilityBadge.tsx`; drawers in the URL
+  (`?drawer=stalled|aging|overdue`, `?producer=<id>`). The three prototype files are deleted.
+- **Migration `20260923185801-management_read_for_branch_managers`** upserts the `rolePermissions` row for
+  every `branch_manager` role (template updated too). Dev databases: `npm run api:sync:roles:dev` also
+  works. A running API's Redis permission cache clears on its TTL or the manager's next login.
+- **Demo seed** pins fixtures (`DEMO_CONFIG.stalledLeads / agingAudits / overdueTickets`) as
+  post-draw overrides, so the RNG sequence is unchanged and no card reads zero on a fresh seed.
+
+### Decisions that override the ticket text (Asad, 23 Sep) — do not re-litigate
+- **Stalled = `lastActivityAt`**, not `updatedAt` (the migration stamped `updatedAt` with the import
+  time; the demo seed re-stamps it on every reseed; nothing indexes it), **terminal statuses excluded**
+  via `terminalLeadStatusValues()`. On the prod dump all 1,129 leads are >48h old, 266 of them Sold.
+- **Aging = `auditStatus != 'Pass'`** (Not Submitted, Pending, Fail), new-business deal sold in the period,
+  more than 5 business days ago. A deal with no audit row is not aging.
+- **Open Audit Items is an all-time backlog** — the one figure the period chips do not move (the table's
+  sub-heading says so). The producer drawer's list is the same set.
+- Producer filter narrows the cards and the producer drawer, never the Team roster. On tickets it lands
+  on `assignedUserId` (the CSR). Lead source reaches tickets only through `leadId` (most have none).
+- Audit rows open the **household** until PAC-106 ships the Deal Audit page; `dealAuditId`/`dealId` are
+  already on the rows for it.
+
+### Verified
+`build -w @sfa/shared` · `tsc -p packages/api` (only pre-existing errors in untouched files) · unit
+97 (4 suites) · `management-dashboard.e2e-spec.ts` 32/32 · web `lint` · Bruno and the browser check:
+see the PR description.
+
+### Still open for David
+Q1 status vocabulary (Available / Busy built) · Q2 "open" audit = anything not Pass · Q4 person filter on
+tickets = assigned CSR · Q7 "Live" pill dropped, no auto-refresh · Q8 active pipeline = every non-terminal
+status, $ = latest quoted premium · Q9 roster = active producers + anyone with activity.
