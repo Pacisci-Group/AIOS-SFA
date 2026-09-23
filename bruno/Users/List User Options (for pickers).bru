@@ -28,6 +28,9 @@ tests {
     const row = res.getBody()[0];
     expect(row).to.have.property("_id");
     expect(row).to.have.property("email");
+    // PAC-139 §6: "taking leads or not", so a lead picker can grey out or
+    // hide the busy people. The list itself is not filtered on it.
+    expect(row).to.have.property("availability").that.is.oneOf(["available", "busy"]);
     // No roles, no branch, no status, no invite token.
     expect(row).to.not.have.property("roleIds");
     expect(row).to.not.have.property("deactivatedAt");

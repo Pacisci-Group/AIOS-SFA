@@ -13,6 +13,7 @@ import {
   SERVICE_TICKET_PRIORITIES,
   type ServiceTicketCategory,
   type ServiceTicketStatus,
+  type UserAvailability,
 } from '@sfa/shared';
 import {
   CORE_AUDIT_TEMPLATES,
@@ -34,6 +35,12 @@ export interface TeamMemberSpec {
   branch: BranchSlug;
   /** Monthly sold-premium goal (producers only) for the Motivation Hub. */
   monthlyGoal?: number;
+  /**
+   * Taking leads or not (PAC-139 §6). Omitted = `available`, the default;
+   * set on one producer so the Manager view's Status column and the Command
+   * Center's "assign to" picker have something to show besides one value.
+   */
+  availability?: UserAvailability;
 }
 
 /**
@@ -96,6 +103,7 @@ export const TEAM: TeamMemberSpec[] = [
     roleSlug: 'producer',
     branch: 'main',
     monthlyGoal: 70000,
+    availability: 'busy',
   },
   {
     key: 'producer-sam',

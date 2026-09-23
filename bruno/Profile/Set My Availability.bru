@@ -1,0 +1,70 @@
+meta {
+  name: Set My Availability
+  type: http
+  seq: 8
+}
+
+patch {
+  url: {{baseUrl}}/me/availability
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{profileAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "availability": "available"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the auth-user blob with the new availability", function () {
+    const body = res.getBody();
+    expect(body.availability).to.equal("available");
+    // Same shape as GET /auth/me — the client overwrites its stored copy.
+    expect(body).to.have.property("permissions");
+    expect(body).to.have.property("avatarUrl");
+  });
+}
+
+docs {
+  # PATCH /me/availability — set own "taking leads" status (PAC-139 §6)
+
+  **Module:** none (`@SkipTenant`, `@SkipBranch`, `@SkipModule`).
+  **Permission:** none beyond a valid access token — the route only ever
+  touches the caller's own document (`sub` from the JWT). Nobody sets it for
+  someone else, and nothing sets it automatically.
+
+  **Body**
+
+  | field        | type                     | rules                              |
+  |--------------|--------------------------|------------------------------------|
+  | availability | `"available"` \| `"busy"` | required; `null` is a `400`, not a clear |
+
+  `available` = taking new leads (every account's default). `busy` = not
+  taking new leads. It says nothing about being logged in. The vocabulary is
+  `USER_AVAILABILITIES` in `@sfa/shared`; the Manager view's Team Activity
+  table shows it and the Command Center's "assign to" picker (PAC-138) lists
+  only `available` people.
+
+  **Response `200`** — the full auth-user blob, exactly as `GET /auth/me`
+  returns it (which now carries `availability`), so the sidebar control can
+  replace the stored copy in one step.
+
+  **Errors** — `400` value outside the vocabulary, or missing · `401` no/expired
+  token or deactivated user.
+
+  > The value in this request is the default, so a collection run leaves the
+  > demo producer as it found them.
+}

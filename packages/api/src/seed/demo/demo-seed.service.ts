@@ -50,7 +50,12 @@ import { seedLeadSources } from '../lead-sources.seed';
 import { LeadSourcesService } from '../../lead-sources/lead-sources.service';
 import { LeadSource } from '../../lead-sources/schemas/lead-source.schema';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
-import { INSURANCE_MONTHS, POLICY_TYPES, resolveItemCount } from '@sfa/shared';
+import {
+  DEFAULT_USER_AVAILABILITY,
+  INSURANCE_MONTHS,
+  POLICY_TYPES,
+  resolveItemCount,
+} from '@sfa/shared';
 import { AUDIT_ITEM_DUE_DAYS } from '../../audit-generation/audit-generation.service';
 import { seedAuditTemplates } from '../audit-templates.seed';
 import {
@@ -453,6 +458,10 @@ export class DemoSeedService {
           passwordHash,
           firstName: 'Super',
           lastName: 'Admin',
+          // `updateOne` applies no schema defaults on upsert, so without this
+          // a database bootstrapped by the demo seed alone would have one user
+          // the backfill migration had already run past.
+          availability: DEFAULT_USER_AVAILABILITY,
         },
       },
       { upsert: true },
@@ -477,6 +486,9 @@ export class DemoSeedService {
             lastName: spec.lastName,
             isActive: true,
             isPlatformAdmin: false,
+            // Re-seeding resets it: the seed owns this roster's state, and a
+            // toggle flipped during a demo must not survive into the next one.
+            availability: spec.availability ?? DEFAULT_USER_AVAILABILITY,
             legacySmartSuiteId: userLegacyId(spec.key),
           },
           $setOnInsert: { passwordHash },

@@ -139,7 +139,7 @@ export class UsersService {
         isPlatformAdmin: { $ne: true },
         isActive: true,
       })
-      .select('email firstName lastName')
+      .select('email firstName lastName availability')
       .collation({ locale: 'en', strength: 2 })
       .sort({ lastName: 1, firstName: 1, email: 1 })
       .lean<AgencyUserOption[]>();

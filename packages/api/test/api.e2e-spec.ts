@@ -899,6 +899,7 @@ describe('SFA API (e2e)', () => {
           email: string;
           firstName?: string;
           lastName?: string;
+          availability: 'available' | 'busy';
         }>;
       };
 
@@ -921,10 +922,13 @@ describe('SFA API (e2e)', () => {
       it('carries only what a <Select> renders', async () => {
         const [row] = await options(ownerToken);
         expect(Object.keys(row).sort()).toEqual(
-          ['_id', 'email', 'firstName', 'lastName'].filter((key) =>
-            Object.prototype.hasOwnProperty.call(row, key),
+          // `availability` (PAC-139 §6) rides along so a *lead* picker can
+          // hide busy people; the list itself is not filtered on it.
+          ['_id', 'availability', 'email', 'firstName', 'lastName'].filter(
+            (key) => Object.prototype.hasOwnProperty.call(row, key),
           ),
         );
+        expect(['available', 'busy']).toContain(row.availability);
         expect(row).not.toHaveProperty('roleIds');
         expect(row).not.toHaveProperty('deactivatedAt');
         expect(row).not.toHaveProperty('passwordHash');

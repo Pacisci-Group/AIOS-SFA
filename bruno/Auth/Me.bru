@@ -30,6 +30,9 @@ tests {
       "firstName",
       "lastName",
       "avatarUrl",
+      // PAC-139 §6. Set by the user from the sidebar; see Profile/Set My
+      // Availability.
+      "availability",
       "roles",
       "agencyId",
       "branchId",
@@ -86,6 +89,7 @@ docs {
     "firstName": "Agency",
     "lastName": "Owner",
     "avatarUrl": "/me/avatar?v=1a2b3c4d",
+    "availability": "available",
     "roles": ["Agency Owner"],
     "agencyId": "…",
     "branchId": null,
@@ -102,6 +106,10 @@ docs {
   a **relative, authenticated** path (`GET /me/avatar`) carrying a
   key-derived cache-buster — fetch it with the bearer header, never from a
   bare `<img src>`.
+
+  `availability` (PAC-139 §6) is `"available"` or `"busy"` — whether the user
+  is taking new leads, set by them alone via `PATCH /me/availability`. Every
+  account starts `available`.
 
   `roles` are display names — never branch on them. `permissions` is the
   authority, and `dataScope` is the widest across the roles the user holds.
