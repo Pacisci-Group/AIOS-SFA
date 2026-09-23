@@ -848,7 +848,7 @@ choice lists are stale snapshots — never treat them as exhaustive.** The impor
 ## 15. PAC-139 — Manager View dashboard (handoff, 2026-09-23)
 
 One PR against `dev` on `asad/pac-139-manager-view-dashboard`, after PR #121 (availability status)
-which was PAC-139 §6. Plan: `~/.claude/plans/create-an-implementation-plan-wild-whale.md`.
+which was PAC-139 §6. Plan: `docs/plans/pac-139-manager-view-implementation-plan.md`.
 
 ### What exists now
 - **`GET /management-dashboard/{alerts, alerts/stalled-leads, alerts/aging-audits, alerts/overdue-tickets,
