@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   USER_AVAILABILITIES,
-  USER_AVAILABILITY_DESCRIPTIONS,
   USER_AVAILABILITY_LABELS,
   type UserAvailability,
 } from '@sfa/shared';
@@ -28,13 +27,17 @@ import { cn } from '@/lib/utils';
 import { AVAILABILITY_DOT_CLASS } from '@/components/common/AvailabilityBadge';
 
 /**
- * The user's own "taking leads or not" switch (PAC-139 §6).
+ * The user's own presence switch — Available / Busy / Away (PAC-139 §6, §6a).
  *
  * Lives in the sidebar footer, under the profile chip, because David was
  * explicit that it must be reachable from any page — "they don't need to go
  * to three pages to set their status." Styled like the theme and log-out rows
  * it sits between rather than as a `Button`: that footer is a bespoke sidebar
  * affordance.
+ *
+ * The menu lists the three names and nothing under them (David, 25 Sep). The
+ * worker sets everyone Away at 8 PM agency time; this is where a person comes
+ * back the next morning, which is why the row is always one click away.
  *
  * On success the returned auth blob is written straight into the `['auth',
  * 'me']` query, which is what `AuthProvider` mirrors into `user` — no refetch,
@@ -109,7 +112,7 @@ export function AvailabilityToggle({
       ) : (
         trigger
       )}
-      <DropdownMenuContent side="right" align="end" className="w-56">
+      <DropdownMenuContent side="right" align="end" className="w-48">
         <DropdownMenuLabel>My status</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup
@@ -121,19 +124,12 @@ export function AvailabilityToggle({
           }}
         >
           {USER_AVAILABILITIES.map((value) => (
-            <DropdownMenuRadioItem key={value} value={value}>
-              <span className="flex min-w-0 flex-col">
-                <span className="flex items-center gap-2">
-                  <span
-                    aria-hidden
-                    className={cn('size-2 rounded-full', AVAILABILITY_DOT_CLASS[value])}
-                  />
-                  {USER_AVAILABILITY_LABELS[value]}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {USER_AVAILABILITY_DESCRIPTIONS[value]}
-                </span>
-              </span>
+            <DropdownMenuRadioItem key={value} value={value} className="gap-2">
+              <span
+                aria-hidden
+                className={cn('size-2 rounded-full', AVAILABILITY_DOT_CLASS[value])}
+              />
+              {USER_AVAILABILITY_LABELS[value]}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

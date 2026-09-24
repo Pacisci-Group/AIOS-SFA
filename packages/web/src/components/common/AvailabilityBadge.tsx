@@ -4,14 +4,17 @@ import { NOT_AVAILABLE } from "@/lib/not-available";
 import { cn } from "@/lib/utils";
 
 /**
- * Dot colour per availability state (PAC-139 §6). `success` is the brand
+ * Dot colour per availability state (PAC-139 §6, §6a). `success` is the brand
  * emerald; `destructive` is the theme's amber (not red — see
- * `packages/web/CLAUDE.md`). One map, so the sidebar's own switch and the
- * Manager view's Status column can never disagree about what busy looks like.
+ * `packages/web/CLAUDE.md`); Away is the muted grey of "not here", which keeps
+ * the one warning colour for the state that is a choice rather than an
+ * absence. One map, so the sidebar's own switch and the Manager view's Status
+ * column can never disagree about what busy looks like.
  */
 export const AVAILABILITY_DOT_CLASS: Record<UserAvailability, string> = {
   available: "bg-success",
   busy: "bg-destructive",
+  away: "bg-muted-foreground",
 };
 
 export function AvailabilityDot({

@@ -895,6 +895,50 @@ which was PAC-139 §6. Plan: `docs/plans/pac-139-manager-view-implementation-pla
 see the PR description.
 
 ### Still open for David
-Q1 status vocabulary (Available / Busy built) · Q2 "open" audit = anything not Pass · Q4 person filter on
+~~Q1 status vocabulary~~ (settled 25 Sep, see §15a) · Q2 "open" audit = anything not Pass · Q4 person filter on
 tickets = assigned CSR · Q7 "Live" pill dropped, no auto-refresh · Q8 active pipeline = every non-terminal
 status, $ = latest quoted premium · Q9 roster = active producers + anyone with activity.
+
+---
+
+## 15a. PAC-139 §6a — nightly Away status (handoff, 2026-09-25)
+
+A second PR **stacked on PR #122** — branch `asad/pac-139-nightly-away-status`, base
+`asad/pac-139-manager-view-dashboard`. Merge #122 first, then retarget this one at `dev` (GitHub does
+that automatically when the base branch is deleted after merge).
+
+### What David asked for (relayed by Asad, 25 Sep)
+- Statuses **Available / Busy / Away**; the sidebar menu shows the three names and **no sub-text**.
+- **Every active user of every role, the owner included, is set Away at 8 PM in the agency's timezone.**
+- **No morning reset** — each person sets themself Available when they start work.
+- Agencies get a stored timezone, defaulted to Oklahoma / US Central.
+
+### What exists now
+- **`@sfa/shared` `USER_AVAILABILITIES = ['available', 'busy', 'away']`**, `END_OF_DAY_USER_AVAILABILITY`,
+  `USER_AVAILABILITY_DESCRIPTIONS` deleted. The PATCH body, the badge (`away` = `bg-muted-foreground`),
+  the demo seed (`sam.torres` starts `away`) and Bruno all derive from the list.
+- **`Agency.timezone`** (IANA, default `America/Chicago`, validated by `isIanaTimeZone`) and
+  **`Agency.availabilitySweep { lastAwayDate, lastAwayAt }`** — the "done tonight" marker.
+  Migration **`20260924233638-agency_timezone_backfill`** sets the default where missing.
+- **`common/dates/time-zones.ts`** (`DEFAULT_AGENCY_TIME_ZONE`, `isIanaTimeZone`, `localClock`) and
+  **`common/dates/end-of-day.ts`** (`END_OF_DAY_LOCAL_HOUR = 20`, `endOfDaySweepDate`). Both unit-tested,
+  DST and half-hour zones included.
+- **`worker/functions/set-users-away.fn.ts`** — Inngest cron `*/30 * * * *` (UTC), `forEachAgency`,
+  per agency: local clock ≥ 20:00 and marker ≠ today's local date → **claim the marker with a
+  conditional `updateOne`, then `updateMany` users** (`isActive`, not platform admin, not already `away`).
+  Claim-first is deliberate: a crash between the two skips a night rather than re-flipping someone who
+  came back after 8 PM. e2e: `test/worker/set-users-away.e2e-spec.ts` (8 cases, fixture-scoped, all
+  instants in 2025 so the marker it leaves on non-fixture agencies never blocks a real evening).
+
+### Deliberately not done
+- **`performance.range.ts`'s `AGENCY_TIME_ZONE` is still a constant.** Rewiring the dashboards' Chicago
+  calendar onto `Agency.timezone` touches every date window in the app — its own ticket.
+- No timezone picker in the onboarding wizard or settings; the validator is there for when one lands.
+- Not a `TZ=`-prefixed cron: that pins one zone for every tenant, which is what the field exists to avoid.
+
+### Verified
+`build -w @sfa/shared` · `build -w @sfa/api` · web `lint` (tsc) · eslint on every touched API file ·
+unit 15/15 (2 new suites) · e2e `set-users-away` 8/8, `profile` + `management-dashboard` still green
+(52/52 across the three) · Bruno `Auth` + `Profile` + `Management Dashboard` + `Users` 38/39 — the one
+failure is `Get Alerts` "the demo seed guarantees something on every card", a stale dev seed, not this
+change. **Not done: the browser check of the sidebar menu** (needs a signed-in session).

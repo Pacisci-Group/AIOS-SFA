@@ -36,9 +36,11 @@ export interface TeamMemberSpec {
   /** Monthly sold-premium goal (producers only) for the Motivation Hub. */
   monthlyGoal?: number;
   /**
-   * Taking leads or not (PAC-139 §6). Omitted = `available`, the default;
-   * set on one producer so the Manager view's Status column and the Command
-   * Center's "assign to" picker have something to show besides one value.
+   * Presence (PAC-139 §6, §6a). Omitted = `available`, the default; one
+   * producer is `busy` and one `away` so the Manager view's Status column
+   * shows all three dots and the Command Center's "assign to" picker has
+   * someone to leave out. (The worker sets everyone `away` at 8 PM agency
+   * time; the seed re-stamps these on every run.)
    */
   availability?: UserAvailability;
 }
@@ -113,6 +115,7 @@ export const TEAM: TeamMemberSpec[] = [
     roleSlug: 'producer',
     branch: 'main',
     monthlyGoal: 48000,
+    availability: 'away',
   },
   {
     key: 'producer-morgan',

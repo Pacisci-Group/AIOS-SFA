@@ -107,9 +107,10 @@ docs {
   key-derived cache-buster — fetch it with the bearer header, never from a
   bare `<img src>`.
 
-  `availability` (PAC-139 §6) is `"available"` or `"busy"` — whether the user
-  is taking new leads, set by them alone via `PATCH /me/availability`. Every
-  account starts `available`.
+  `availability` (PAC-139 §6, §6a) is `"available"`, `"busy"` or `"away"` —
+  the user's own presence, set via `PATCH /me/availability`. Every account
+  starts `available`; the worker sets everyone `away` at 8 PM agency time and
+  nobody is flipped back automatically.
 
   `roles` are display names — never branch on them. `permissions` is the
   authority, and `dataScope` is the widest across the roles the user holds.

@@ -10,6 +10,7 @@ import { RenewCertificatesFn } from './functions/renew-certificates.fn';
 import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
 import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
+import { SetUsersAwayFn } from './functions/set-users-away.fn';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { AcmeAccountService } from './acme/acme-account.service';
@@ -184,6 +185,9 @@ import {
     SweepEventLogFn,
     SyncTicketStatusFn,
     MaterializeRenewalCyclesFn,
+    // End-of-day Away sweep (PAC-139 §6a). Reads `Agency` and `User`, both
+    // registered above.
+    SetUsersAwayFn,
     // Declared here as well as in `CrmModule`: the standalone worker does not
     // import `AppModule`, so without these it would boot and then fail to
     // resolve them on the first renewal tick. Same reasoning as the explicit
