@@ -25,16 +25,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { type AuthUser } from '@/lib/api-client';
 import { updateMyAvailability } from '@/lib/profile-api';
 import { cn } from '@/lib/utils';
-
-/**
- * Dot colour per state. `success` is the brand emerald; `destructive` is the
- * theme's amber (not red — see `packages/web/CLAUDE.md`), which is what the
- * Manager view will use for a busy producer, so the two agree.
- */
-const DOT_CLASS: Record<UserAvailability, string> = {
-  available: 'bg-success',
-  busy: 'bg-destructive',
-};
+import { AVAILABILITY_DOT_CLASS } from '@/components/common/AvailabilityBadge';
 
 /**
  * The user's own "taking leads or not" switch (PAC-139 §6).
@@ -93,7 +84,7 @@ export function AvailabilityToggle({
           <span
             className={cn(
               'size-2.5 rounded-full transition-colors',
-              DOT_CLASS[current],
+              AVAILABILITY_DOT_CLASS[current],
               mutation.isPending && 'animate-pulse',
             )}
           />
@@ -135,7 +126,7 @@ export function AvailabilityToggle({
                 <span className="flex items-center gap-2">
                   <span
                     aria-hidden
-                    className={cn('size-2 rounded-full', DOT_CLASS[value])}
+                    className={cn('size-2 rounded-full', AVAILABILITY_DOT_CLASS[value])}
                   />
                   {USER_AVAILABILITY_LABELS[value]}
                 </span>

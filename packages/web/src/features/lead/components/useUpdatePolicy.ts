@@ -8,6 +8,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { updatePolicy } from "@/lib/policies-api";
 import { leadDetailKey } from "./useUpdateLead";
+import { managementDashboardKey } from "@/lib/management-dashboard-api";
 import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
 
 /**
@@ -86,6 +87,7 @@ export function useUpdatePolicy(leadId: string, policyId: string) {
       void queryClient.invalidateQueries({ queryKey: ["performance"] });
       // The Owner dashboard sums the same sales and quotes (PAC-135).
       void queryClient.invalidateQueries({ queryKey: ownerDashboardKey });
+      void queryClient.invalidateQueries({ queryKey: managementDashboardKey });
       void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
       // The Edit sale page (PAC-104) renders the same deal's totals.
       void queryClient.invalidateQueries({ queryKey: ["sold-deal"] });

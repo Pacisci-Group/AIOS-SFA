@@ -52,6 +52,7 @@ import {
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import { PolicyTransfersService } from './policy-transfers.service';
+import { ticketTenantFilter } from './service-ticket-queries';
 import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import type { PresignTransferDocumentDto } from '../sold-deals/dto/presign-sold-document.dto';
@@ -216,31 +217,13 @@ export class ServiceTicketsService {
   /**
    * Build the tenant + data-scope filter for the requesting user. `own` sees
    * only tickets assigned to them, `branch` sees their branch, `agency` sees
-   * the whole agency.
+   * the whole agency. The predicate itself lives in `service-ticket-queries.ts`
+   * since the Manager view (PAC-139) started counting tickets too.
    */
   private scopeFilter(
     access: AccessContext,
   ): FilterQuery<ServiceTicketDocument> {
-    if (!access.agencyId) {
-      // No agency context => nothing to see (defensive; guards prevent this).
-      throw new ForbiddenException('Agency context required');
-    }
-    const filter: FilterQuery<ServiceTicketDocument> = {
-      agencyId: new Types.ObjectId(access.agencyId),
-    };
-
-    if (access.dataScope === DataScope.Agency) {
-      return filter;
-    }
-    if (access.dataScope === DataScope.Branch) {
-      if (access.branchId) {
-        filter.branchId = new Types.ObjectId(access.branchId);
-      }
-      return filter;
-    }
-    // own
-    filter.assignedUserId = new Types.ObjectId(access.userId);
-    return filter;
+    return ticketTenantFilter(access);
   }
 
   async list(

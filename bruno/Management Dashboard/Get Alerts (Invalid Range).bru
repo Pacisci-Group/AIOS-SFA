@@ -1,0 +1,35 @@
+meta {
+  name: Get Alerts (Invalid Range)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/management-dashboard/alerts?range=week
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: week
+}
+
+auth:bearer {
+  token: {{managementDashboardToken}}
+}
+
+tests {
+  test("rejects a range that belongs to the producer dashboard", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # GET /management-dashboard/alerts — a range it does not offer
+
+  `today` and `week` are the **producer** dashboard's chips. The Manager view
+  takes the Owner view's filter, whose periods are `mtd` · `lastMonth` ·
+  `last3Months` · `ytd` · `lastYear` · `custom`. Also `400`: `custom` without
+  both bounds, reversed, an impossible date (`2026-02-31`), or more than 366
+  days.
+}

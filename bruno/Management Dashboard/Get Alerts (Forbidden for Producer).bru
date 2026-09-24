@@ -1,0 +1,26 @@
+meta {
+  name: Get Alerts (Forbidden for Producer)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/management-dashboard/alerts
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("a producer is refused", function () {
+    // `auth: inherit` is the collection token — the producer's.
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /management-dashboard/alerts — without `management:read`
+
+  The Producer template does not hold `management:read`, so every
+  `/management-dashboard/*` read is a `403` for them. This is the manager's
+  page: it names every colleague's stalled leads and open items.
+}

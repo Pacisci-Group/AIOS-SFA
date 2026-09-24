@@ -3,7 +3,6 @@ import {
   CommandCenterController,
   DashboardController,
   DealsController,
-  ManagementController,
   OnboardingsController,
 } from './feature.controllers';
 
@@ -27,7 +26,6 @@ const controllers = [
   DashboardController,
   DealsController,
   OnboardingsController,
-  ManagementController,
   CommandCenterController,
 ];
 
