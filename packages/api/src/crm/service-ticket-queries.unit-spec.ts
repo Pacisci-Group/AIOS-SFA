@@ -1,7 +1,7 @@
 import { AccessScope, DataScope } from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import { Types } from 'mongoose';
-import { deriveStepStatus } from './scheduling/step-status';
+import { deriveStepStatus } from '../common/scheduling/step-status';
 import {
   overdueTicketMatch,
   ticketTenantFilter,

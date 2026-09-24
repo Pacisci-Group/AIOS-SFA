@@ -8,7 +8,7 @@ import {
   normalizeRenewalPolicyType,
 } from '@sfa/shared';
 import type { RenewalStepDefinition } from '@sfa/shared';
-import { deriveStepStatus } from '../scheduling/step-status';
+import { deriveStepStatus } from '../../common/scheduling/step-status';
 import {
   computeRenewalStepTiming,
   daysUntil,

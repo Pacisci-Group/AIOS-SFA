@@ -115,7 +115,7 @@ export function scheduleSteps(
 }
 
 /**
- * Status derivation moved to `../scheduling/step-status`, which renewal
+ * Status derivation moved to `../../common/scheduling/step-status`, which renewal
  * outreach shares — it only ever read `{availableAt, dueAt, completedAt}`, so
  * nothing about it was onboarding-specific. Re-exported here (including
  * `deriveOnboardingStatus` under its original name) so every existing importer
@@ -127,4 +127,4 @@ export {
   isStepActionable,
   isStepOverdue,
   type StatusStep,
-} from '../scheduling/step-status';
+} from '../../common/scheduling/step-status';

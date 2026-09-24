@@ -8,6 +8,8 @@ import {
   SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_PRIORITIES,
   SERVICE_TICKET_STATUSES,
+  priorityRankFor,
+  urgencyRankFor,
 } from '@sfa/shared';
 import type {
   OnboardingStepKey,
@@ -21,6 +23,7 @@ import type {
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
+import { deriveStepStatus } from '../../common/scheduling/step-status';
 import { LEGACY_DEDUPE_INDEX_OPTIONS } from '../../common/schemas/tenant-record.schema';
 
 export type ServiceTicketDocument = HydratedDocument<ServiceTicket>;
@@ -218,6 +221,50 @@ export class ServiceTicket {
   @Prop({ type: Date, default: null })
   statusOverriddenAt?: Date | null;
 
+  /* ------------------------------------------------------------------ *
+   * Materialized sort keys
+   *
+   * The queue orders by status, then by how long a ticket has been
+   * demanding attention, then by priority. None of those three sort as
+   * stored: `status` is a string whose alphabetical order is meaningless,
+   * `priority` orders `high < low < medium`, and the age key lives on a
+   * nested step. Computing them per query is possible and unindexable —
+   * which is the whole problem, because an unindexable sort means every
+   * page read scans the caller's entire scope and sorts it in memory.
+   *
+   * So they are stored. `urgencyAt` and `priorityRank` are pure functions
+   * of fields written at the same time, and are set on write.
+   * `urgencyRank` tracks `status`, which for a scheduled step changes with
+   * the clock and no write — `SyncTicketStatusFn` is what advances it.
+   * ------------------------------------------------------------------ */
+
+  /**
+   * {@link urgencyRankFor} of the current `status`. Maintained wherever
+   * `status` is, the sweep included — the two must never disagree.
+   */
+  @Prop({ type: Number, required: true, default: 1 })
+  urgencyRank: number;
+
+  /**
+   * The instant this ticket started demanding attention: its call's due date
+   * if it has one, else when it was opened. *Earlier means more urgent*,
+   * which is what makes "overdue the longest first" fall out of a plain
+   * ascending sort.
+   *
+   * ⚠ Deliberately reads `onboarding.dueAt` and **not** `renewal.dueAt`,
+   * mirroring `urgencyInstant` in the web app, so materializing this changes
+   * no existing ordering. That asymmetry looks like an oversight — a renewal
+   * call sorts by when it was opened rather than when it is due — but it is
+   * the ordering the queue ships today, and correcting it here would reorder
+   * every rep's list invisibly. It gets its own change.
+   */
+  @Prop({ type: Date, required: true, default: () => new Date() })
+  urgencyAt: Date;
+
+  /** {@link priorityRankFor} of `priority`. Set on write; never time-varying. */
+  @Prop({ type: Number, required: true, default: 1 })
+  priorityRank: number;
+
   @Prop({
     type: String,
     enum: SERVICE_TICKET_PRIORITIES,
@@ -344,6 +391,35 @@ ServiceTicketSchema.index({ agencyId: 1, branchId: 1, status: 1 });
 ServiceTicketSchema.index({ assignedUserId: 1, status: 1 });
 ServiceTicketSchema.index({ agencyId: 1, status: 1, resolvedAt: 1 });
 
+/*
+ * The queue's urgency sort (PAC-98), one index per data scope.
+ *
+ * `scopeFilter` clamps by `agencyId` for an agency- or branch-scoped reader
+ * and by `assignedUserId` for an `own`-scoped one, and a compound index is
+ * only usable from its left edge — so neither of these can serve the other's
+ * query. Without them the paged read answers with an in-memory `SORT` over the
+ * caller's whole scope, which is the cost paging exists to remove: measured at
+ * 1,470 documents examined to return a page of 8, against 8 with these.
+ *
+ * Declared here so a *new* database gets them from `autoIndex`, and in
+ * `migrations/20260910123159-queue-sort-indexes.js` so existing ones do —
+ * `autoIndex` only ever adds what is missing.
+ */
+ServiceTicketSchema.index({
+  agencyId: 1,
+  urgencyRank: 1,
+  urgencyAt: 1,
+  priorityRank: 1,
+  _id: 1,
+});
+ServiceTicketSchema.index({
+  assignedUserId: 1,
+  urgencyRank: 1,
+  urgencyAt: 1,
+  priorityRank: 1,
+  _id: 1,
+});
+
 // One quote ticket per lead, ever. This is the idempotency guard for
 // `LeadTicketsService.ensureForLead`, which the Start Quote dialog calls on
 // every run — including when the producer picks a lead that already has one.
@@ -422,3 +498,68 @@ ServiceTicketSchema.index(
     },
   },
 );
+
+/**
+ * Keep the materialized sort keys in step with the fields they derive from.
+ *
+ * A hook rather than three assignments at each call site: tickets are created
+ * and mutated from a dozen places (the create dialog, Start Quote, onboarding
+ * and renewal chaining, the migration, the demo seed), and a sort key that is
+ * merely *usually* set produces a queue that is merely usually in the right
+ * order — the kind of bug nobody reports because every individual row looks
+ * plausible.
+ *
+ * ⚠ **Document middleware only.** `updateOne`, `updateMany` and
+ * `findOneAndUpdate` bypass this, by Mongoose's design. Anything writing
+ * `status` or `priority` through the query API owns these fields itself —
+ * `SyncTicketStatusFn` sets `urgencyRank` alongside every `status` it writes
+ * for exactly this reason. If a third writer appears, it has the same
+ * obligation.
+ */
+ServiceTicketSchema.pre('save', function syncSortKeys(next) {
+  /*
+   * A scheduled call's status is the schedule's to decide, so derive it here
+   * rather than trusting whatever the caller set.
+   *
+   * Every creation path — the onboarding chain, renewal materialization, the
+   * migration, the demo seed — leaves `status` on its `open` default, even for
+   * a call that does not open for another three days. That was invisible while
+   * `serializeTicket` re-derived on every read: the column said `open`, the
+   * API said `waiting`, and only the API was ever looked at. Now that readers
+   * trust the column, the write has to be right, and fixing it here fixes
+   * every caller at once instead of the four that exist today and the fifth
+   * somebody adds later.
+   *
+   * `statusOverriddenAt` is the escape hatch, unchanged: a CSR's explicit
+   * choice outranks the schedule, and this leaves those tickets alone.
+   */
+  const scheduled = this.onboarding ?? this.renewal ?? null;
+  if (scheduled && !this.statusOverriddenAt) {
+    this.status = deriveStepStatus(
+      {
+        availableAt: scheduled.availableAt ?? null,
+        dueAt: scheduled.dueAt ?? null,
+        completedAt: scheduled.completedAt ?? null,
+      },
+      new Date(),
+    );
+  }
+
+  if (this.isModified('status') || this.isNew) {
+    this.urgencyRank = urgencyRankFor(this.status);
+  }
+  if (this.isModified('priority') || this.isNew) {
+    this.priorityRank = priorityRankFor(this.priority);
+  }
+  // Mirrors `urgencyInstant` in the web app: the call's deadline if it has
+  // one, else when the ticket was opened. Recomputed whenever either input
+  // moves, because renewal re-planning does move `dueAt` on an open call.
+  if (
+    this.isModified('onboarding') ||
+    this.isModified('openedAt') ||
+    this.isNew
+  ) {
+    this.urgencyAt = this.onboarding?.dueAt ?? this.openedAt;
+  }
+  next();
+});

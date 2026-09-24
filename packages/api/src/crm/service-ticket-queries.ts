@@ -52,7 +52,7 @@ export function ticketTenantFilter(
  *
  * Overdue is only *partly* stored. An onboarding or renewal call carries a
  * scheduled step and derives its status from that step's timing on every read
- * (`deriveStepStatus` in `scheduling/step-status.ts`): incomplete and past
+ * (`deriveStepStatus` in `common/scheduling/step-status.ts`): incomplete and past
  * `dueAt` is overdue, whatever `status` says, unless a CSR set the status by
  * hand (`statusOverriddenAt`). Every other ticket is overdue only when its
  * stored `status` says so. This mirrors that derivation branch for branch, and

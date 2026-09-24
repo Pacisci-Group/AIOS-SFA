@@ -32,6 +32,27 @@ import type {
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 
+/**
+ * A policy as the renewal scan sees it.
+ *
+ * Declared here rather than on `ClientsService` (where it lived) because the
+ * materializer that consumes it runs on a worker cron, and the worker's import
+ * boundary admits `common/` but not feature services. `ClientsService` imports
+ * it back from here, so there is still exactly one definition.
+ */
+export interface PolicyRenewalCandidate {
+  id: string;
+  policyNumber: string;
+  policyType: string;
+  carrier: string;
+  premium: number;
+  renewalDate: Date | null;
+  expirationDate: Date | null;
+  householdId: string | null;
+  dealId: string | null;
+  branchId: string | null;
+}
+
 export interface RenewalStepTiming {
   /** When the call opens for work. */
   availableAt: Date;
