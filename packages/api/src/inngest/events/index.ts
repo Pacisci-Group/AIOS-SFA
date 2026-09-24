@@ -13,3 +13,4 @@
 export * from './envelope';
 export * from './email.events';
 export * from './mailer.events';
+export * from './tls.events';

@@ -4,10 +4,12 @@ import { Model } from 'mongoose';
 import { getModelToken } from '@nestjs/mongoose';
 import { AppModule } from '../app.module';
 import { Carrier } from '../carriers/schemas/carrier.schema';
+import { LeadSource } from '../lead-sources/schemas/lead-source.schema';
 import { MailerZipMarket } from '../mailers/schemas/mailer-zip-market.schema';
 import { Permission } from '../permissions/schemas/permission.schema';
 import { User } from '../users/schemas/user.schema';
 import { seedCarriers } from './carriers.seed';
+import { seedLeadSources } from './lead-sources.seed';
 import { seedPermissions } from './permissions.seed';
 import { seedZipMarkets } from './zip-markets.seed';
 
@@ -38,6 +40,9 @@ async function seed() {
 
   const userModel = app.get<Model<User>>(getModelToken(User.name));
   const carrierModel = app.get<Model<Carrier>>(getModelToken(Carrier.name));
+  const leadSourceModel = app.get<Model<LeadSource>>(
+    getModelToken(LeadSource.name),
+  );
   const permissionModel = app.get<Model<Permission>>(
     getModelToken(Permission.name),
   );
@@ -87,6 +92,14 @@ async function seed() {
   const carriers = await seedCarriers(carrierModel);
   console.log(
     `Carriers seeded (${carriers.created} created, ${carriers.refreshed} already present)`,
+  );
+
+  // Lead sources (PAC-135). Platform-required: the lead form's source select is
+  // required and the mailer flow finds "Mailer" by slug, so an empty collection
+  // means no lead can be created at all.
+  const leadSources = await seedLeadSources(leadSourceModel);
+  console.log(
+    `Lead sources seeded (${leadSources.created} created, ${leadSources.existing} already present)`,
   );
 
   // The permission vocabulary as rows, for `rolePermissions` and

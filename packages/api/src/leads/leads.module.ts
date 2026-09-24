@@ -9,6 +9,7 @@ import { ContactsModule } from '../contacts/contacts.module';
 import { CrmModule } from '../crm/crm.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 import { HouseholdMembersModule } from '../households/household-members.module';
+import { LeadSourcesModule } from '../lead-sources/lead-sources.module';
 import {
   Household,
   HouseholdSchema,
@@ -70,6 +71,9 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     // one way only: `CrmModule` registers the `Lead` *schema* rather than
     // importing this module back.
     CrmModule,
+    // `LeadSourcesService` — validates a picked source on write and renders the
+    // label on read (PAC-135). It depends on nothing, so no cycle is possible.
+    LeadSourcesModule,
     // `ContactIdentityService` — the one full-key duplicate check (PAC-91 §9),
     // run by `ResolveContactStep` ahead of the fuzzy scorer. Shared rather than
     // reimplemented: intake and the Household form must agree on what "the same

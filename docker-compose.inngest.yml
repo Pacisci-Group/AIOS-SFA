@@ -16,6 +16,15 @@
 #                           hex with an even number of characters:
 #                           `openssl rand -hex 32`
 #   APP_PRIVATE_IP       -> the app droplet's VPC address; where the functions live
+#   APP_INNGEST_PORT     -> which process there serves them, and it depends on
+#                           the environment's topology:
+#                             4001 - the worker, as its own container
+#                             4000 - the API, in-process (default)
+#                           Exactly one process may serve them. It must match
+#                           the port the app droplet's firewall admits, which
+#                           terraform derives from the same `enable_node_edge`
+#                           flag. Disagree and Inngest reports healthy while
+#                           syncing zero functions.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # ⚠ THE DASHBOARD HAS NO AUTHENTICATION.
@@ -39,7 +48,7 @@ services:
     # app — so every check passes while no async work exists. Verified
     # locally: with the env vars the GraphQL `apps` list stays empty; with
     # these flags the app appears with functionCount > 0.
-    command: "inngest start -u http://${APP_PRIVATE_IP}:4000/api/inngest --poll-interval 30"
+    command: "inngest start -u http://${APP_PRIVATE_IP}:${APP_INNGEST_PORT:-4000}/api/inngest --poll-interval 30"
     restart: unless-stopped
     environment:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}

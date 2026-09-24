@@ -3,12 +3,16 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { HostTenantResolver } from '../common/tenancy/host-tenant.resolver';
+import { certificateRequested } from '../inngest/events';
+import { InngestService } from '../inngest/inngest.service';
+import { CertificateRegistrationService } from '../tls/certificate-registration.service';
 import {
   isValidHostname,
   normalizeHostname,
@@ -33,12 +37,16 @@ import type {
 
 @Injectable()
 export class AgencyDomainsService {
+  private readonly logger = new Logger(AgencyDomainsService.name);
+
   constructor(
     @InjectModel(AgencyDomain.name)
     private readonly domainModel: Model<AgencyDomainDocument>,
     private readonly hostResolver: HostTenantResolver,
     private readonly dns: DnsVerifier,
     private readonly config: ConfigService,
+    private readonly certificates: CertificateRegistrationService,
+    private readonly events: InngestService,
   ) {}
 
   async list(agencyId: string): Promise<AgencyDomainView[]> {
@@ -109,7 +117,47 @@ export class AgencyDomainsService {
     });
 
     this.hostResolver.invalidate(hostname);
+
+    // A subdomain is created `active` — we own the parent zone, so there is
+    // nothing for the owner to prove and no verification step to pass through.
+    // That makes this the moment it becomes serveable, and therefore the moment
+    // it needs a certificate. A custom domain is created `pending` and reaches
+    // the same point later, in `verify`.
+    if (isSubdomain) {
+      await this.onDomainActivated(created.hostname);
+    }
+
     return this.toView(created.toObject());
+  }
+
+  /**
+   * Everything that must happen when a hostname becomes serveable.
+   *
+   * ⚠ Call this from EVERY path that sets a domain `active`, and there are two:
+   * `create` for a subdomain, `verify` for a custom domain. Registration lived
+   * only in `verify` at first, which meant subdomains were routable but had no
+   * certificate — the app served them happily while the edge refused the TLS
+   * handshake, so the browser reported a cancelled request and nothing in any
+   * log said why.
+   *
+   * The ordering is the design. `register` writes the certificate row
+   * synchronously, and that row is what `RenewCertificatesFn` sweeps, so from
+   * here on the hostname *will* get a certificate even if everything below
+   * fails. The event only makes it happen in seconds rather than within one
+   * sweep interval — an optimisation, which is why its failure is logged rather
+   * than surfaced. A tenant should not see an error because an event bus was
+   * briefly unreachable when the outcome is "a few minutes later".
+   */
+  private async onDomainActivated(hostname: string): Promise<void> {
+    await this.certificates.register(hostname);
+    try {
+      await this.events.send(certificateRequested, { hostname });
+    } catch (error) {
+      this.logger.warn(
+        `Could not request a certificate for ${hostname} now; the ` +
+          `renewal sweep will pick it up. ${String(error)}`,
+      );
+    }
   }
 
   /**
@@ -168,6 +216,11 @@ export class AgencyDomainsService {
 
     await domain.save();
     this.hostResolver.invalidate(domain.hostname);
+
+    // The domain may now serve, so it needs a certificate. Same call as the
+    // subdomain path in `create` — see `onDomainActivated`.
+    await this.onDomainActivated(domain.hostname);
+
     return this.toView(domain.toObject());
   }
 

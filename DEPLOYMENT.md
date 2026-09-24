@@ -1,8 +1,12 @@
 # Deployment
 
-SFA deploys to a DigitalOcean Droplet running Docker Compose behind host Nginx,
-with Managed MongoDB. Infrastructure is provisioned with Terraform
-(`infra/terraform/`). CI/CD lives in `.github/workflows/`.
+SFA deploys to DigitalOcean as Docker Compose with Managed MongoDB. Dev and
+production run the **autoscale pool** shape — interchangeable app droplets behind
+a load balancer, TLS terminated by our own Node edge from certificates held in
+Mongo. The older shape (one droplet, host Nginx or Caddy) is still what the flags
+default to, so an environment that has not moved plans and deploys unchanged.
+Infrastructure is provisioned with Terraform (`infra/terraform/`). CI/CD lives in
+`.github/workflows/`.
 
 ## Pipeline overview
 
@@ -57,12 +61,12 @@ All of these are **required** — the deploy fails preflight if any is empty.
 
 | Secret | Description |
 |--------|-------------|
-| `SSH_HOST` | Droplet public IP (`terraform output -raw droplet_ip`) |
+| `SSH_HOST` | App droplet public IP (`terraform output -raw droplet_ip`). **Not required where `AUTOSCALE_ENABLED=true`** — a pool is deployed to by publishing, and it has no stable droplet address. |
 | `SSH_KEY` | Private SSH key for the `deploy` user (matches `ssh_public_key` in tfvars) |
 | `MONGODB_URI` | Managed Mongo URI (`terraform output -raw mongodb_uri`) |
 | `JWT_ACCESS_SECRET` | `openssl rand -base64 48` |
 | `JWT_REFRESH_SECRET` | `openssl rand -base64 48` |
-| `CORS_ORIGIN` | Public site URL (dev: `http://<droplet_ip>`) |
+| `CORS_ORIGIN` | Public site URL, e.g. `https://app.smithfamily.agency`. Must match the scheme the browser actually uses, and `spaces_cors_origins` in tfvars. |
 | `APP_BASE_URL` | Public site URL again, as a **single** URL. Every invite / accept-invite link is built from it. Unset, links are generated pointing at `http://localhost:5173` and arrive dead while everything else looks healthy. |
 | `GHCR_PULL_USER` | GitHub username/bot with `read:packages` |
 | `GHCR_PULL_TOKEN` | PAT with `read:packages` (droplet pulls images) |
@@ -104,11 +108,25 @@ Required **only in Environments where the variable `INNGEST_ENABLED` is `true`**
 `enable_inngest`, and the preflight, the `deploy-inngest` job and the
 infrastructure all read the same flag so they cannot disagree).
 
+> **The worker is its own container, and that is not optional.** Exactly one
+> process may serve the Inngest functions: with the worker inline, every API
+> process registers under the same Inngest app id and whichever synced last
+> wins. That is invisible while there is one node and breaks async work outright
+> on an autoscaled tier, so the deploy writes `WORKER_INLINE=false` and starts
+> the `worker` service unconditionally.
+>
+> The consequences to keep straight, because three places have to agree:
+> Inngest invokes functions at `<APP_PRIVATE_IP>:4001/api/inngest`, the DO
+> firewall admits **4001** (not 4000) from the Inngest droplet, and the API is
+> published on loopback only. Get one of the three wrong and Inngest reports
+> healthy while syncing zero functions — which the `deploy-inngest` job's
+> `functionCount > 0` assertion is there to catch.
+
 | Secret | Description |
 |--------|-------------|
 | `INNGEST_SSH_HOST` | Inngest droplet public IP (`terraform output -raw inngest_droplet_ip`). SSH only — nothing is served publicly. |
 | `INNGEST_BASE_URL` | `http://<terraform output -raw inngest_droplet_private_ip>:8288` — where the API sends events |
-| `APP_PRIVATE_IP` | App droplet VPC address (`terraform output -raw droplet_private_ip`). Inngest invokes functions at `<this>:4000/api/inngest`. |
+| `APP_PRIVATE_IP` | App droplet VPC address (`terraform output -raw droplet_private_ip`). Inngest invokes functions at `<this>:4001/api/inngest` — the **worker** container's port. The API serves no functions. |
 | `INNGEST_EVENT_KEY` | Authenticates events the API sends. `openssl rand -hex 32` |
 | `INNGEST_SIGNING_KEY` | Signs Inngest's requests to `/api/inngest`. **Must be hex with an even number of characters** — `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Resend API key for outbound email |
@@ -123,7 +141,7 @@ infrastructure all read the same flag so they cannot disagree).
 
 > **`INNGEST_SIGNING_KEY` is the only authentication on `/api/inngest`.** That
 > endpoint is mounted as raw Express middleware, so none of the seven global
-> guards see it. The droplet firewall (port 4000, Inngest droplet only) is the
+> guards see it. The droplet firewall (port 4001, Inngest droplet only) is the
 > second layer.
 
 > ⚠ **Never expose port 8288.** It serves Inngest's Event API, its REST/GraphQL
@@ -139,6 +157,305 @@ infrastructure all read the same flag so they cannot disagree).
 > volume; the documented upgrade is `INNGEST_POSTGRES_URI` + `INNGEST_REDIS_URI`,
 > which is two environment variables rather than a rewrite. **Back the volume
 > up** — losing it loses scheduled-function state and run history.
+
+### TLS certificates (application-managed ACME)
+
+Required **only in Environments where the variable `ACME_ENABLED` is `true`**
+(a GitHub Environment *variable*, same shape as `INNGEST_ENABLED`).
+
+The platform issues its own certificates — for the platform host, agency
+subdomains and agency-owned custom domains — and stores them in the
+`certificates` collection. That is what lets every app node serve every
+hostname, and therefore what lets the app tier scale horizontally.
+
+| Secret | Description |
+|--------|-------------|
+| `ACME_DIRECTORY_URL` | `production`, `staging`, or a full directory URL. **Required when enabled**, because the default is staging and staging certificates are not trusted by browsers. |
+| `CERT_ENCRYPTION_KEY` | Encrypts private keys at rest. `openssl rand -base64 32`, **different per environment**. |
+| `ACME_CONTACT_EMAIL` | Optional. Registered with the CA for expiry notices. |
+
+> **`ACME_ENABLED` must stay `false` until the Node edge owns port 80.** The CA
+> validates by fetching a plain-HTTP URL on the hostname being issued, so
+> whatever listens on port 80 has to answer it. While Caddy is the edge it
+> answers its own challenges and knows nothing of ours, so every order fails
+> validation — and failed validations spend a Let's Encrypt limit that is
+> separate from the issuance limit and blocks orders that would have succeeded.
+
+> **Losing `CERT_ENCRYPTION_KEY` is not immediately visible.** Nodes that
+> already hold a decrypted certificate keep serving with it. The failure appears
+> when a node restarts or a new one joins the pool — it can decrypt nothing, and
+> serves no TLS at all. Recovery is to set a new key and re-issue every
+> certificate, so treat this as a secret to back up rather than one to regenerate.
+
+### The edge: Caddy or our own
+
+Which edge an environment runs is decided by **two flags that must agree**:
+
+| Where | Flag | Effect |
+|---|---|---|
+| GitHub Environment *variable* | `NODE_EDGE_ENABLED` | Starts the `edge` + `worker` containers, sets `WORKER_INLINE=false`, points Inngest at 4001 |
+| `terraform.tfvars` | `enable_node_edge` | Opens firewall 4001 instead of 4000, and selects the cloud-init **without** Caddy |
+
+Both default to false, which is Caddy plus an inline worker. **Dev and
+production both have them on**; the defaults exist so that a new environment,
+and any environment still on the old shape, plans clean.
+
+> **They are two flags because they are applied by two different things.** The
+> deploy runs from a git branch; terraform runs from someone's laptop. There is
+> no single place that could set both, so the failure mode is that one moves
+> without the other:
+>
+> - terraform on, deploy off → no Caddy, no edge container. Nothing serves
+>   port 443 at all.
+> - deploy on, terraform off → the edge runs, but the firewall admits 4000
+>   while the worker listens on 4001. Inngest reports healthy, syncs zero
+>   functions, and not one email is sent. The `deploy-inngest` job's
+>   `functionCount > 0` assertion is what catches this.
+>
+> This is the same shape as `INNGEST_ENABLED`/`enable_inngest`, and for the same
+> reason.
+
+> **Flipping `enable_node_edge` REPLACES the app droplet.** `user_data` cannot
+> be changed in place. The reserved IP re-attaches so the public address
+> survives, but the box is rebuilt — expect to re-run the seed. That is why the
+> two cloud-init templates are separate files chosen by the flag rather than one
+> template with a conditional: editing the file production uses would replace
+> production.
+
+#### Cutting production over
+
+The terraform half is already in the repo — `environments/production` carries
+`enable_node_edge = true` and `enable_autoscale = true`. What follows is the
+sequence for the apply itself, and the order is load-bearing.
+
+> **Read this first: production goes down, and the rollback is not symmetric.**
+>
+> The apply destroys the reserved IP that `app.smithfamily.agency` currently
+> resolves to. From that moment nothing serves production until DNS points at
+> the balancer *and* the deploy has published *and* the worker has issued a
+> certificate — in that order, because Let's Encrypt validates by fetching a
+> plain-HTTP URL on the hostname, so DNS has to be right before issuance can
+> even be attempted. Budget **30–60 minutes**, most of it DNS propagation.
+>
+> Rolling back is another cutover, not an undo: flipping the flags off builds a
+> *new* droplet with a *new* reserved IP, and DNS has to move again. The old
+> address is released by DigitalOcean and is not recoverable.
+
+**Before the day.** Drop the TTL on the `app` and `*.app` A records at GoDaddy to
+600s at least a few hours ahead — whatever the TTL is when you start is how long
+the dead address stays cached. Generate production's `CERT_ENCRYPTION_KEY` now
+(`openssl rand -base64 32`) and put it somewhere it can be recovered from; it is
+a secret to **back up**, not one to regenerate, because losing it means
+re-issuing every certificate the platform holds.
+
+1. **Plan and read it.**
+
+   ```bash
+   make plan ENV=production
+   ```
+
+   Expect exactly: the app droplet and its reserved IP **destroyed**; the
+   `sfa-production-pool` tag, the deploy-config bucket and its two keys, the
+   autoscale pool and **two** load balancers **created**; the firewall's 80/443
+   rules re-sourced to the public balancer with 8081 and 4001 added; the Mongo
+   allow-list and the Inngest firewall moving from droplet ids to the pool tag.
+   Anything touching the **VPC or the Managed MongoDB cluster** is a stop —
+   those carry the data.
+
+2. **Apply.** `make apply ENV=production`. Production is down from here.
+
+3. **Collect the new addresses.**
+
+   ```bash
+   cd infra/terraform/environments/production
+   terraform output -raw public_ip        # the public balancer
+   terraform output -raw worker_endpoint  # the internal balancer = APP_PRIVATE_IP
+   terraform output deploy_config_github_secrets
+   terraform output -raw deploy_config_secret_key
+   ```
+
+   `-raw` prints no trailing newline, so zsh shows a trailing `%`. It is not
+   part of the value.
+
+4. **Move DNS at GoDaddy — both records.** `app` and `*.app`, to `public_ip`.
+   The wildcard is the one that gets forgotten, and missing it takes out every
+   agency subdomain while the platform host looks perfectly healthy.
+
+5. **Wait for DNS, and check before deploying.** `dig +short app.smithfamily.agency`
+   and `dig +short anything.app.smithfamily.agency` must both return the
+   balancer. Do not run the deploy with `ACME_ENABLED=true` until they do:
+   every order placed against a hostname that does not resolve here fails
+   validation, and failed validations spend a Let's Encrypt limit that is
+   separate from the issuance one and blocks orders that would have succeeded.
+
+6. **Set the production Environment values.** Secrets:
+
+   | Secret | Value |
+   |---|---|
+   | `PUBLIC_SERVER_IPS` | `public_ip` from step 3 |
+   | `APP_PRIVATE_IP` | `worker_endpoint` — the **internal balancer**, never a member's own address |
+   | `DEPLOY_CONFIG_BUCKET` / `_ENDPOINT` / `_REGION` / `_ACCESS_KEY_ID` | `deploy_config_github_secrets` |
+   | `DEPLOY_CONFIG_SECRET_ACCESS_KEY` | `deploy_config_secret_key` |
+   | `CERT_ENCRYPTION_KEY` | the key generated above — **production's own**, not dev's |
+   | `ACME_DIRECTORY_URL` | `production` |
+
+   Variables — all four, or the halves disagree:
+
+   | Variable | Value | Paired with |
+   |---|---|---|
+   | `NODE_EDGE_ENABLED` | `true` | `enable_node_edge` |
+   | `AUTOSCALE_ENABLED` | `true` | `enable_autoscale` |
+   | `ACME_ENABLED` | `true` | the Node edge owning port 80 |
+   | `EDGE_PROXY_PROTOCOL` | `true` | `pool_proxy_protocol` |
+
+7. **Run *Deploy production*.** It publishes to the config bucket rather than
+   SSHing; members converge within ~30s of the publish, so the rollout is not
+   instant. The job's own `functionCount > 0` assertion is what catches an
+   Inngest port mismatch.
+
+8. **Verify, in this order** — each rules out a different half:
+
+   ```bash
+   # balancer + edge, before TLS is in the picture
+   curl -sS -o /dev/null -w '%{http_code}\n' http://app.smithfamily.agency/healthz
+
+   # the certificate actually issued, and from the real CA
+   echo | openssl s_client -connect app.smithfamily.agency:443 \
+       -servername app.smithfamily.agency 2>/dev/null \
+       | openssl x509 -noout -issuer -dates
+
+   # a tenant subdomain, which is what the wildcard record is for
+   curl -sS -o /dev/null -w '%{http_code}\n' https://<agency>.app.smithfamily.agency/healthz
+   ```
+
+   `(STAGING)` in the issuer means `ACME_DIRECTORY_URL` is wrong — browsers will
+   not trust it. Then confirm both pool members show healthy in the DigitalOcean
+   console, and send one real email to prove the worker is reachable on 4001.
+
+> **Scaling the app tier does not scale what is behind it.** Production Mongo is
+> still `node_count = 1` with no backups, there is no Redis so every request
+> resolves permissions from Mongo, Inngest is one droplet with SQLite, and the
+> rate limits are per-node once the pool grows past one. None of that blocks the
+> cutover; all of it is Phase 5.
+
+### Horizontal autoscaling
+
+The app tier can run as an autoscale pool behind a load balancer instead of one
+directly-addressed droplet. Controlled by **two flags that must agree**, both
+defaulting to off:
+
+| Where | Flag |
+|---|---|
+| GitHub Environment *variable* | `AUTOSCALE_ENABLED` |
+| `terraform.tfvars` | `enable_autoscale` (+ `pool_min_instances`, `pool_max_instances`, `pool_target_cpu`) |
+
+`enable_autoscale` **requires** `enable_node_edge`. The pool depends on every
+node being interchangeable, and that is only true once certificates come from
+MongoDB rather than a node's disk — with Caddy each droplet would run its own
+ACME client and race the others for the same tenant hostnames. The deploy's
+preflight fails if the two disagree.
+
+#### Deploys change shape
+
+**Pool members are never deployed to.** A droplet created during a traffic spike
+has nothing to SSH to it, so the deploy *publishes* instead:
+
+```
+CI ──> s3://<env>-deploy-config/current/{docker-compose.prod.yml,app.env}
+                    ↑ every droplet fetches this at boot and every 30s
+```
+
+Each droplet runs `sfa-converge` on a systemd timer. It checksums both files
+together and does nothing unless they changed, so a droplet up for a month and
+one created a second ago reach the same state by the same path. Deploy latency
+is therefore ~30s rather than instant.
+
+> **Do not hand-edit `/opt/sfa/.env` on a pool member.** The next tick overwrites
+> it. Change the Environment secret and re-run the deploy.
+
+Debugging a member:
+
+```bash
+journalctl -u sfa-converge -n 50     # what it fetched and whether it applied
+/usr/local/bin/sfa-converge          # force a check now
+```
+
+#### Two load balancers
+
+- **Public** — TLS **passthrough**, so our own edge still terminates. Terminating
+  at the balancer would mean DigitalOcean holding a certificate per hostname,
+  and for an agency-owned domain that is a manual upload per domain — the
+  operator step white-labelling exists to remove.
+- **Internal** (`REGIONAL_NETWORK`/`INTERNAL`, no public address) — how Inngest
+  reaches the workers. `APP_PRIVATE_IP` becomes this balancer's address
+  (`terraform output worker_endpoint`), which is stable across scaling.
+
+> **The public balancer health-checks port 8081, not 80.** With PROXY protocol
+> on, the balancer's own check carries no PROXY header, so the edge would drop
+> it as malformed — every droplet marked unhealthy, the pool serving nothing,
+> each droplet in fact fine. 8081 is a plain listener the edge never wraps, and
+> the firewall admits it from the balancer alone.
+
+> **`pool_proxy_protocol` and `EDGE_PROXY_PROTOCOL` must match.** Either alone
+> breaks every connection: the header is read as the first bytes of a TLS
+> handshake, or it never arrives and the edge drops the connection. With it off,
+> every caller appears to come from the balancer and the public intake rate
+> limits collapse into one shared bucket.
+
+#### The reserved IP goes away, and that is a DNS cutover
+
+A reserved IP attaches to a *droplet* (`digitalocean_reserved_ip_assignment`
+takes a `droplet_id` and nothing else), so it cannot front a pool. It lives
+inside the droplet module, which autoscaling removes — so **enabling the pool
+destroys the reserved IP**, DigitalOcean releases it, and the environment's
+public address becomes the load balancer's.
+
+The balancer's own address is stable for the life of the balancer, which is why
+`modules/loadbalancer` carries `create_before_destroy`: replacing one hands out
+a new address and breaks every tenant domain until DNS is updated everywhere.
+
+Get it with:
+
+```bash
+terraform -chdir=infra/terraform/environments/<env> output -raw public_ip
+```
+
+Then update **three** things. Missing any one of them fails silently:
+
+| What | Where | If missed |
+|---|---|---|
+| `<host>` A — `dev` / `app` | GoDaddy | The platform host stops resolving |
+| `*.<host>` A — `*.dev` / `*.app` | GoDaddy | **Every agency subdomain stops resolving** |
+| `PUBLIC_SERVER_IPS` | Environment secret | Custom-domain owners are told to point an A record at a dead address |
+
+That last one is the quietest. TXT verification is independent of routing, so the
+domain still goes `active` — but Let's Encrypt cannot reach the host, the
+certificate never issues, and the owner sees a domain marked live that does not
+load. `pointsAtUs()` does record "Ownership verified, but …" in `lastError`,
+which is the only place it surfaces.
+
+Owners who used the **CNAME** rather than the A record self-correct, because the
+CNAME points at the platform host by name.
+
+#### Everything is addressed by tag
+
+The pool's droplets do not exist at plan time and change as it scales, so the
+firewall, **the Managed MongoDB allow-list**, and both balancers all target the
+`sfa-<env>-pool` tag. An id-based rule would admit only the droplets that existed
+at the last apply and silently refuse every one created since — which presents
+as one node serving 500s while its siblings are fine.
+
+#### Extra Environment secrets
+
+| Secret | From |
+|---|---|
+| `DEPLOY_CONFIG_BUCKET` / `_ENDPOINT` / `_REGION` / `_ACCESS_KEY_ID` | `terraform output deploy_config_github_secrets` |
+| `DEPLOY_CONFIG_SECRET_ACCESS_KEY` | `terraform output -raw deploy_config_secret_key` |
+
+That key is **read/write and CI-only**. Droplets hold a separate read-only key
+that terraform bakes into `user_data` and which never passes through GitHub — so
+a compromised droplet cannot rewrite the config every other droplet is about to
+fetch.
 
 ### Repo-level secrets (Terraform in CI — only for plan-on-PR)
 
@@ -246,7 +563,8 @@ trap does not apply to them, and adding one never touches `webpack.config.js`.
 2. Collect the outputs the Environment secrets need:
    ```bash
    cd infra/terraform/environments/dev
-   terraform output -raw droplet_ip
+   terraform output -raw public_ip      # DNS + PUBLIC_SERVER_IPS (balancer on a pool)
+   terraform output -raw droplet_ip     # SSH_HOST — single-droplet environments only
    terraform output -raw mongodb_uri
    terraform output -raw spaces_endpoint
    terraform output -raw spaces_region
@@ -258,23 +576,27 @@ trap does not apply to them, and adding one never touches `webpack.config.js`.
 3. Create the `dev` GitHub Environment and add every Environment secret listed
    above. The deploy's preflight step names any that are missing.
 4. Push to `dev`, or run **Deploy dev** manually.
-5. One-time DB seed (SSH to droplet):
+5. One-time DB seed. SSH to the droplet — on a pool, to **any one member**
+   (public address from the DigitalOcean console); the seed writes to the shared
+   database, so it must be run once and not once per member:
    ```bash
    cd /opt/sfa
    docker compose -f docker-compose.prod.yml run --rm api node packages/api/dist/seed/seed.js
    ```
-6. **TLS needs no step.** The edge is Caddy with on-demand issuance: the first
-   HTTPS request for a hostname triggers a Let's Encrypt certificate, provided
-   the app says it serves that name. Point DNS at the droplet and load the site.
+6. **TLS needs no step**, but it does need DNS. The worker orders a certificate
+   over ACME and the edge serves it from Mongo; Let's Encrypt validates by
+   fetching a plain-HTTP URL on the hostname, so the record has to resolve here
+   before issuance can succeed. Point DNS at `public_ip` first, then deploy with
+   `ACME_ENABLED=true`.
 
    Switching to HTTPS changes the browser's `Origin`, so update `CORS_ORIGIN`,
    `PUBLIC_FORM_BASE_URL` and `spaces_cors_origins` at the same time — otherwise
    uploads start failing preflight while everything else keeps working.
 7. Verify:
-   - `http://<droplet_ip>/api/v1/health` — plain HTTP on the bare IP is served
-     deliberately (an IP can never hold a certificate), which is why the deploy
-     health check keeps working before DNS exists.
-   - `https://<domain>/` — a valid certificate, obtained on first load.
+   - `http://<domain>/healthz` — answered by the edge before any certificate
+     exists, and the same path the balancer health-checks on 8081.
+   - `https://<domain>/` — a valid certificate. `(STAGING)` in the issuer means
+     `ACME_DIRECTORY_URL` is not `production` and no browser will trust it.
    - API log names the platform host and the subdomain zone
      (`Platform host: … ; agency subdomains: …`). A wrong `PLATFORM_HOST` shows
      up here and nowhere else until someone fails to log in.
@@ -306,30 +628,45 @@ cannot reach production.
 
 ### Production
 
-Serves **`app.smithfamily.agency`**. Same shape as dev: single app droplet + Inngest
-droplet, Managed MongoDB, Spaces, host Nginx with Certbot, `enable_inngest = true`.
-Sized identically to dev (`s-1vcpu-2gb` / `db-s-1vcpu-1gb`) — scale vertically until the
-load-balanced autoscaling work lands.
+Serves **`app.smithfamily.agency`**. Same topology as dev — an autoscale pool of
+app droplets behind two load balancers, plus the Inngest droplet, Managed
+MongoDB and Spaces (`enable_inngest`, `enable_node_edge`, `enable_autoscale` all
+true). Members are `s-1vcpu-2gb` and Mongo is `db-s-1vcpu-1gb`, as in dev.
 
 Deviations from dev worth knowing:
 
+- **The pool settings are dev's exactly** — floor 1, ceiling 3, CPU target 0.6,
+  cooldown 10, PROXY protocol on. Production starts on one droplet and scales on
+  load rather than pre-buying capacity.
+
+  > A floor of 1 is not redundancy. Between a member dying and its replacement
+  > answering, nothing is serving — and the same holds for the whole of any
+  > change that rebuilds members (`droplet_size`, `user_data`). Raising
+  > `pool_min_instances` to 2 is the fix when that matters, and it costs one
+  > extra `s-1vcpu-2gb` droplet permanently.
 - **`mongo_allowed_ip_addresses = []`** — dev allow-lists two developer IPs for
   Compass/mongosh; production has no standing hole in the database perimeter. Add a
   named entry only when someone genuinely needs it, and remove it the same day.
-- **DNS is manual**, same as dev (`enable_dns = false`) — the zone is at GoDaddy. Point
-  an `app` A record at `terraform output -raw droplet_ip` (the reserved IP), and a
-  **wildcard `*` A record at the same IP** if agencies are to get subdomains.
+- **`prevent_destroy = true`** — documentation rather than protection (no
+  resource references it). Real safety is DigitalOcean's own database delete
+  protection and never running `make destroy ENV=production`.
+- **DNS is manual**, same as dev (`enable_dns = false`) — the zone is at GoDaddy.
+  Point the `app` A record at `terraform output -raw public_ip` (the **public
+  balancer** — there is no reserved IP any more), and a **wildcard `*.app` A
+  record at the same address**, which is what gives agencies subdomains.
 - **No auto-seed and no demo data.** Nothing seeds on startup. Bring the data up by
   hand once TLS is up — see "Data bring-up" below. Never run `seed:demo` against
   production; it writes ~500 synthetic CRM records into the live tenant.
 
-Ordering that matters: **`user_data` cannot be changed in place** — any edit to
-`cloud-init.yaml.tpl` replaces the droplet. That includes the Nginx → Caddy
-switch, so do it on `dev` first and expect to re-run the seed afterwards.
+Ordering that matters: **`user_data` cannot be changed in place.** On a pool it
+lives in `droplet_template`, so editing `cloud-init-pool.yaml.tpl` rebuilds every
+member — prove it on dev first. Nothing that varies per deploy belongs there;
+that is what the config bucket is for.
 
-TLS itself no longer has an ordering constraint: Caddy issues a certificate the
-first time each hostname is requested, so DNS can be wired before or after the
-apply.
+TLS has no ordering constraint on the apply, but it does on DNS: the worker
+orders certificates over ACME and Let's Encrypt validates by fetching a
+plain-HTTP URL on the hostname, so the record has to point at the balancer
+before issuance can succeed. See "Cutting production over" above.
 
 ## White labelling: agency domains
 
@@ -345,40 +682,62 @@ Each agency can serve the app on a subdomain of ours
 | `PLATFORM_HOST` | Environment secret | The one hostname the super-admin app answers on. **Required** — it decides who may sign in where. |
 | `BASE_DOMAIN` | Environment secret | Parent zone for agency subdomains. Optional; unset disables subdomains. |
 | `PUBLIC_SERVER_IPS` | Environment secret | Public IP(s), so the UI can tell an owner what to put in an A record. |
-| Wildcard `*` A record | DNS (GoDaddy) | Points `*.<BASE_DOMAIN>` at the reserved IP. |
+| Wildcard `*` A record | DNS (GoDaddy) | Points `*.<BASE_DOMAIN>` at `terraform output -raw public_ip` — the load balancer on a pool, the reserved IP otherwise. |
 
 ### How TLS happens
 
-Caddy is configured with **on-demand TLS**. Before requesting a certificate for
-a hostname it has not seen, it calls
-`GET /api/v1/public/domains/allow?domain=<host>` on the API. A `200` means the
-domain is `active` for some agency (or is the platform host); anything else and
-Caddy refuses the connection without contacting Let's Encrypt.
+Certificates are obtained by the **worker**, over ACME, and stored in the
+`certificates` collection. The edge terminates TLS by looking the hostname up by
+SNI (`CertificateStoreService.contextFor`) — it never issues anything, which is
+what lets a droplet created thirty seconds ago serve a tenant domain added
+minutes ago.
 
-That gate is load-bearing. The droplet has a public IP answering on 443, so
-without it anyone could point a domain at us and make us request certificates
-until the account hits a Let's Encrypt rate limit — which would then block
-issuance for our real domains too.
+Nothing is issued on demand from a connection. A `certificates` row is written
+**synchronously by the request that decided the domain may serve** — a subdomain
+being created, a custom domain passing verification, the platform host at
+bootstrap — and `RenewCertificatesFn` then sweeps rows whose `renewAfter` has
+passed. The event that follows the write is a latency optimisation, not the
+guarantee: lose it and the sweep still picks the row up, which is why a domain
+can never end up `active` with nothing issuing for it.
 
-Agency subdomains currently go through the same on-demand path rather than a
-wildcard certificate, because a wildcard needs the DNS-01 challenge and hence a
-Caddy build carrying the zone provider's DNS plugin. The Caddyfile has the
-wildcard block written out and commented, with what is required to enable it.
+That ordering is also the rate-limit defence that Caddy's `domains/allow` hook
+used to be. An order is only ever placed for a hostname the app already decided
+is live, so pointing a domain at us does not make us ask a CA for anything. An
+unknown SNI simply finds no certificate and the connection is refused.
+
+`GET /api/v1/public/domains/allow?domain=<host>` still exists and is still the
+quickest way to ask "does the app consider this domain live?", but nothing in
+the edge path calls it any more.
 
 ### When a tenant says their domain does not work
 
-On the droplet, in order:
+There is no Caddy and no `journalctl -u caddy` — issuance happens in the worker
+and the certificate lives in Mongo. SSH to any pool member (its public address is
+in the DigitalOcean console; the deploy key opens it), then in order:
 
 ```bash
 # 1. Does the app consider the domain live? Must be 200.
 curl -sI "http://127.0.0.1:4000/api/v1/public/domains/allow?domain=texasholdings.com"
 
-# 2. What did Caddy try to do?
-journalctl -u caddy -n 100 --no-pager
-
-# 3. Does DNS actually point here?
+# 2. Does DNS actually point at our balancer?
 dig +short texasholdings.com
+
+# 3. What did issuance do? The worker orders; the edge only serves.
+cd /opt/sfa
+docker compose -f docker-compose.prod.yml logs worker \
+  | grep -iE "ordering|order complete|issued certificate|skipped|acme"
+docker compose -f docker-compose.prod.yml logs edge \
+  | grep -i "could not load a certificate"
 ```
+
+The row itself carries the diagnosis — `lastError`, `failureCount` and
+`renewAfter` say whether issuance was attempted, failed, or is being backed off.
+Project away `certPem` and `keyPemEncrypted` when reading it.
+
+> **"Could not load a certificate" on the edge, for a hostname that has a row,
+> means `CERT_ENCRYPTION_KEY` does not match the key the row was encrypted
+> with.** Nodes holding an already-decrypted certificate keep serving, so this
+> surfaces only when a member restarts or a new one joins.
 
 Step 1 failing means the domain is still `pending` or `failed` in the app — the
 owner has not published the TXT record, or it has not propagated. That is

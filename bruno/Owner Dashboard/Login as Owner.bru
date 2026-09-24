@@ -1,0 +1,50 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("ownerDashboardToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the owner holds owner_dashboard:read", function () {
+    // Through `grantsAllEnabledModules` on the Agency Owner template.
+    expect(res.getBody().user.permissions).to.include("owner_dashboard:read");
+  });
+}
+
+docs {
+  # Sign in as the agency owner
+
+  The collection's default token belongs to the **producer**, who does not hold
+  `owner_dashboard:read` — so every request in this folder uses the token
+  captured here (`ownerDashboardToken`) instead of `auth: inherit`.
+
+  Its own variable rather than `ownerAccessToken`, which the White Label folder
+  owns: a folder that borrows another's token only works when run after it.
+}

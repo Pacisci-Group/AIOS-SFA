@@ -8,6 +8,7 @@ import {
   normalizeDealAuditStatus,
   normalizeInsuranceMonth,
   parseHouseholdRef,
+  type StoredAddress,
 } from '@sfa/shared';
 import { reconcileDealAudits } from '../deal-audits/audit-reconcile';
 import { Agency } from '../platform/schemas/agency.schema';
@@ -17,6 +18,9 @@ import { User } from '../users/schemas/user.schema';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { AgencyRole } from '../roles/schemas/agency-role.schema';
 import { provisionTenant } from '../seed/provision-tenant';
+import { seedLeadSources } from '../seed/lead-sources.seed';
+import { LeadSourcesService } from '../lead-sources/lead-sources.service';
+import { LeadSource } from '../lead-sources/schemas/lead-source.schema';
 import { SequenceService } from '../common/mongo/sequence.service';
 import { reconcileHouseholdRefs } from '../households/household-ref';
 import { HouseholdMember } from '../households/schemas/household-member.schema';
@@ -73,6 +77,7 @@ import {
   allLinkedIds,
   firstLinkedId,
   selectCode,
+  selectLabel,
   toBool,
   toDate,
   toRichText,
@@ -87,13 +92,14 @@ import {
   isPlausibleItemCount,
   isPlausiblePolicyCount,
   isTestRecord,
+  leadSourceSlug,
   maxPlausibleItemCount,
   normalizeCancellationResponsibility,
   normalizeContactRole,
   normalizeHouseholdStatus,
   normalizeLeadSource,
   normalizePolicyStatus,
-  normalizePolicyType,
+  isCanonicalPolicyType,
   normalizePriorPolicyCancellationStatus,
   normalizePriorPolicyType,
   normalizeTimeOffDecision,
@@ -106,6 +112,7 @@ import {
   deriveDealType,
   normalizeTemperature,
   policyTypeLabels,
+  resolvePolicyType,
   resolveContactHousehold,
   resolvePremium,
 } from './helpers/derive';
@@ -123,6 +130,7 @@ import {
   emptyStat,
   MigrationRunError,
   recordRejection,
+  recordUnmappedChoice,
 } from './report';
 
 /**
@@ -339,7 +347,36 @@ export class MigrationService {
     private readonly roleModel: Model<AgencyRole>,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
+    @InjectModel(LeadSource.name)
+    private readonly leadSourceModel: Model<LeadSource>,
+    private readonly leadSources: LeadSourcesService,
   ) {}
+
+  /** name slug → `leadSources` id, so thousands of records cost one query each source. */
+  private readonly leadSourceIds = new Map<string, Types.ObjectId | null>();
+
+  /**
+   * The `leadSources` row for an imported label (PAC-135), created as this
+   * agency's own when no platform row has the slug — Waterstone, JYA and the
+   * rest of one agency's vendors arrive this way.
+   *
+   * `undefined` for the placeholders (`Unknown`, `Test`, empty) and on a dry
+   * run, which must write nothing.
+   */
+  private async resolveLeadSourceId(
+    ctx: TenantCtx,
+    label: string,
+  ): Promise<Types.ObjectId | undefined> {
+    if (ctx.dryRun) return undefined;
+    const slug = leadSourceSlug(label);
+    if (!this.leadSourceIds.has(slug)) {
+      this.leadSourceIds.set(
+        slug,
+        await this.leadSources.findOrCreateByName(ctx.agencyId, label),
+      );
+    }
+    return this.leadSourceIds.get(slug) ?? undefined;
+  }
 
   async run(options: MigrationOptions): Promise<MigrationReport> {
     const report = createReport(options.dryRun);
@@ -358,6 +395,13 @@ export class MigrationService {
       const ctx = await this.step(report, 'Tenant', null, () =>
         this.resolveTenant(options, report),
       );
+
+      // Leads and deals point at platform lead sources by id, so those rows
+      // have to exist before the first record is written. Idempotent, and the
+      // same call the core seed makes — an import into a database nobody has
+      // seeded yet must not mint "Mailer" as this agency's private source.
+      this.leadSourceIds.clear();
+      if (!options.dryRun) await seedLeadSources(this.leadSourceModel);
 
       const producers = await this.step(report, 'Users', 'users', () =>
         this.migrateUsers(ss, ctx, options, report),
@@ -1051,8 +1095,17 @@ export class MigrationService {
           status: normalizeHouseholdStatus(
             selectCode(rec[HOUSEHOLD_FIELDS.status]),
           ),
-          propertyAddress: this.asObject(rec[HOUSEHOLD_FIELDS.propertyAddress]),
-          mailingAddress: this.asObject(rec[HOUSEHOLD_FIELDS.mailingAddress]),
+          // ⚠ Mapped, not passed through. SmartSuite's address object is keyed
+          // `location_address` / `location_city` / …, and since PAC-101 the
+          // household stores a typed sub-schema — an un-mapped object is not
+          // rejected, it is **silently reduced to `{}`**, which would erase the
+          // address of every household this import touches.
+          propertyAddress: this.toHouseholdAddress(
+            rec[HOUSEHOLD_FIELDS.propertyAddress],
+          ),
+          mailingAddress: this.toHouseholdAddress(
+            rec[HOUSEHOLD_FIELDS.mailingAddress],
+          ),
           /*
            * No `primaryContactName` / `primaryEmails` / `primaryPhones`
            * (PAC-91 §4). SmartSuite's household row does carry a lookup of its
@@ -1303,7 +1356,7 @@ export class MigrationService {
            */
           status: selectCode(rec[LEAD_FIELDS.status]),
           temperature: normalizeTemperature(rec[LEAD_FIELDS.temperature]),
-          leadSource: { code: leadSource.code, label: leadSource.label },
+          leadSourceId: await this.resolveLeadSourceId(ctx, leadSource.label),
           agingDays: daysSince(createdDate),
           createdDate,
           lastActivityAt,
@@ -1662,9 +1715,10 @@ export class MigrationService {
        * Hoisted out of the document literal because `itemCount` is bounded by
        * its length (PAC-80).
        */
-      const productsQuoted = this.selectCodes(
+      const productsQuoted = policyTypeLabels(
         rec[QUOTE_RECAP_FIELDS.productsQuoted],
-      ).map(normalizePolicyType);
+      );
+      this.flagUnmappedPolicyTypes(stat, productsQuoted);
 
       const id = await this.persist(
         this.quoteRecapModel,
@@ -1792,6 +1846,7 @@ export class MigrationService {
       );
       const soldDate = toDate(rec[DEAL_FIELDS.soldDate]);
       const policyLabels = policyTypeLabels(rec[DEAL_FIELDS.policyTypes]);
+      this.flagUnmappedPolicyTypes(stat, policyLabels);
       const isBundle = toBool(rec[DEAL_FIELDS.bundle]);
 
       const legacyLeadId = firstLinkedId(rec[DEAL_FIELDS.lead]);
@@ -1837,7 +1892,7 @@ export class MigrationService {
           dealType: deriveDealType(isBundle, policyLabels),
           isBundle,
           policyTypes: policyLabels,
-          leadSource: { code: leadSource.code, label: leadSource.label },
+          leadSourceId: await this.resolveLeadSourceId(ctx, leadSource.label),
           clientName,
           producerId: producer?.userId,
           legacyProducerId: firstLinkedId(rec[DEAL_FIELDS.producer]),
@@ -2037,6 +2092,10 @@ export class MigrationService {
       if (test) stat.excludedTest++;
 
       const policyNumber = toText(rec[POLICY_FIELDS.policyNumber]);
+      // Code first, then the hydrated label SmartSuite sent beside it — so a
+      // choice our map has never seen is stored by name, not as `Tz3ny`.
+      const policyType = resolvePolicyType(rec[POLICY_FIELDS.policyType]);
+      this.flagUnmappedPolicyTypes(stat, [policyType]);
 
       const id = await this.persist(
         this.policyModel,
@@ -2052,9 +2111,7 @@ export class MigrationService {
           // MIN_POLICY_NUMBER_KEY_LENGTH usable characters, because a match on
           // two or three digits carries no information.
           policyNumberKey: normalizePolicyNumber(policyNumber),
-          policyType: normalizePolicyType(
-            selectCode(rec[POLICY_FIELDS.policyType]),
-          ),
+          policyType,
           // Mapped at write as well as normalized on read (PAC-56 #19): the raw
           // `B4tEH` was being rendered to users, and mapping only on read would
           // leave the stored value un-matchable against the carrier catalog.
@@ -3002,6 +3059,22 @@ export class MigrationService {
   }
 
   /** {@link plausibleItemCount}'s counterpart for the policy count itself. */
+  /**
+   * Report any policy type that came through as something other than one of our
+   * canonical labels — i.e. a SmartSuite code the alias map does not know
+   * (PAC-135). The value is still stored as-is; see `unmappedChoices`.
+   */
+  private flagUnmappedPolicyTypes(
+    stat: CollectionStat,
+    values: readonly (string | undefined)[],
+  ): void {
+    for (const value of values) {
+      if (value && !isCanonicalPolicyType(value)) {
+        recordUnmappedChoice(stat, 'policyType', value);
+      }
+    }
+  }
+
   private rejectPolicyCount(
     value: number,
     legacyId: string,
@@ -3083,6 +3156,39 @@ export class MigrationService {
   // Small extraction helpers
   // ---------------------------------------------------------------------------
 
+  /**
+   * A SmartSuite address object as the household stores it (PAC-101).
+   *
+   * The vendor keys every part `location_*`, and `location_address2` carries
+   * the apartment / unit line — which the old read-time coercion dropped
+   * entirely, so it was invisible to every consumer. It is kept as `street2`.
+   *
+   * Returns `undefined` when nothing usable survives, so an empty SmartSuite
+   * object does not become an empty sub-document.
+   */
+  private toHouseholdAddress(value: unknown): StoredAddress | undefined {
+    const raw = this.asObject(value);
+    if (!raw) return undefined;
+
+    const text = (key: string): string | undefined => {
+      const found = raw[key];
+      if (typeof found !== 'string') return undefined;
+      const trimmed = found.trim();
+      return trimmed === '' ? undefined : trimmed;
+    };
+
+    const address: StoredAddress = {
+      street: text('location_address'),
+      street2: text('location_address2'),
+      city: text('location_city'),
+      state: text('location_state'),
+      zip: text('location_zip'),
+    };
+    return Object.values(address).some((part) => part !== undefined)
+      ? address
+      : undefined;
+  }
+
   private asObject(value: unknown): Record<string, unknown> | undefined {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>;
@@ -3091,10 +3197,7 @@ export class MigrationService {
   }
 
   private selectLabel(value: unknown): string | undefined {
-    const o = this.asObject(value);
-    if (!o) return undefined;
-    const label = o.label ?? o.display_value;
-    return typeof label === 'string' ? label : undefined;
+    return selectLabel(value);
   }
 
   private selectCodes(value: unknown): string[] {

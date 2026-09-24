@@ -42,7 +42,7 @@ interface LeadIntakePayload {
 }
 
 export interface CreateLeadPayload extends LeadIntakePayload {
-  leadSourceCode: string;
+  leadSourceId: string;
   /**
    * Pin the lead to a household the producer already has open — the Household
    * page's "Start Quote" dialog.

@@ -21,10 +21,13 @@ import type {
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
+import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import type {
   ContactDetail,
   CreateActivityResponse,
+  AddSoldDealPoliciesResponse,
   CreateSoldDealResponse,
+  SoldDealEditView,
   HotLeadListResponse,
   LeaderboardResponse,
   LeadDetail,
@@ -40,6 +43,7 @@ import { Contact } from '../src/contacts/schemas/contact.schema';
 import { AuditTemplate } from '../src/audit-templates/schemas/audit-template.schema';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
 import { ServiceTicketsService } from '../src/crm/service-tickets.service';
+import { AuditGenerationService } from '../src/audit-generation/audit-generation.service';
 import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
 import { DealAuditItem } from '../src/deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
@@ -48,6 +52,8 @@ import { Household } from '../src/households/schemas/household.schema';
 import { InterestedParty } from '../src/interested-parties/schemas/interested-party.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
+import { LeadSource } from '../src/lead-sources/schemas/lead-source.schema';
+import { seedLeadSources } from '../src/seed/lead-sources.seed';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { Policy } from '../src/policies/schemas/policy.schema';
 import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
@@ -95,6 +101,20 @@ interface TicketListBody {
 
 const ticketList = (res: { body: unknown }): TicketListBody =>
   res.body as TicketListBody;
+
+/** The `GET /users` envelope, as this suite asserts against it (PAC-101). */
+interface AgencyUserListEnvelope {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: Array<{
+    _id: string;
+    email: string;
+    isActive: boolean;
+    deactivatedAt?: string | null;
+  }>;
+}
 
 describe('SFA API (e2e)', () => {
   let app: INestApplication<App>;
@@ -381,7 +401,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(201);
 
@@ -753,14 +773,212 @@ describe('SFA API (e2e)', () => {
   describe('Users', () => {
     let invitedUserId: string;
 
-    it('GET /api/v1/users', async () => {
+    it('GET /api/v1/users — a paginated envelope (PAC-101)', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/v1/users')
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(Array.isArray(res.body)).toBe(true);
-      expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(2);
+      // Was a bare array until PAC-101. The three pickers that relied on that
+      // shape read `GET /users/options` now.
+      const body = res.body as AgencyUserListEnvelope;
+      expect(Array.isArray(body)).toBe(false);
+      expect(body).toMatchObject({ page: 1, pageSize: 25 });
+      expect(body.items.length).toBeGreaterThanOrEqual(2);
+      expect(body.total).toBeGreaterThanOrEqual(body.items.length);
+    });
+
+    describe('GET /api/v1/users — search and paging (PAC-101)', () => {
+      const list = async (token: string, qs = '') => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/users${qs}`)
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as AgencyUserListEnvelope;
+      };
+      const emails = (body: AgencyUserListEnvelope) =>
+        body.items.map((row) => row.email);
+
+      it('searches name and email', async () => {
+        expect(emails(await list(ownerToken, '?q=producer'))).toContain(
+          seed.producerEmail,
+        );
+      });
+
+      it('searches by role name, which the Roles column renders', async () => {
+        const body = await list(ownerToken, '?q=Producer');
+        expect(emails(body)).toContain(seed.producerEmail);
+      });
+
+      it('searches by branch name — a column that was never searchable', async () => {
+        const body = await list(ownerToken, '?q=Test%20Branch');
+        expect(emails(body)).toContain(seed.producerEmail);
+      });
+
+      it('hides the branch arm from a caller who cannot see the column', async () => {
+        /*
+         * `agency:branches:read` gates the Branch column. Matching on a column
+         * the caller cannot see reads as a broken search *and* leaks branch
+         * names by oracle.
+         *
+         * Every default role holding `agency:users:read` also holds
+         * `agency:branches:read`, so this needs a **custom** role — which is
+         * exactly the case the gate exists for, since agencies can create them.
+         */
+        const roles = app.get<Model<AgencyRole>>(
+          getModelToken(AgencyRole.name),
+        );
+        const users = app.get<Model<User>>(getModelToken(User.name));
+        const assignments = app.get(RoleAssignmentsService);
+
+        const agencyId = new Types.ObjectId(seed.agencyId);
+        const auditorRole = await roles.create({
+          agencyId,
+          name: 'Directory Auditor',
+          slug: 'directory_auditor',
+          dataScope: 'agency',
+          isSystemTemplate: false,
+        });
+        await assignments.setRolePermissions(agencyId, auditorRole._id, [
+          'agency:users:read',
+        ]);
+
+        const auditorEmail = 'test-directory-auditor@sfa.local';
+        const auditor = await users.create({
+          agencyId,
+          branchId: new Types.ObjectId(seed.branchId),
+          email: auditorEmail,
+          passwordHash: await bcrypt.hash(TEST_PASSWORD, 10),
+          firstName: 'Directory',
+          lastName: 'Auditor',
+          isActive: true,
+        });
+        await assignments.setUserRoles(
+          { userId: auditor._id.toString(), isPlatformAdmin: true },
+          agencyId,
+          auditor._id,
+          [auditorRole._id],
+        );
+
+        const auditorToken = (await login(app, auditorEmail, TEST_PASSWORD))
+          .accessToken;
+
+        // The owner, who can see the column, finds the row by branch name.
+        expect(
+          (await list(ownerToken, '?q=Test%20Branch')).total,
+        ).toBeGreaterThan(0);
+
+        // The auditor, who cannot, finds nothing by branch name — but the rest
+        // of the search still works for them, so this is the arm being
+        // withheld rather than the endpoint being broken.
+        expect((await list(auditorToken, '?q=Test%20Branch')).total).toBe(0);
+        expect(emails(await list(auditorToken, '?q=producer'))).toContain(
+          seed.producerEmail,
+        );
+      });
+
+      it('ranks invited before active before deactivated', async () => {
+        // The old client-side STATUS_RANK, reproduced by the server sort.
+        const body = await list(ownerToken, '?pageSize=100');
+        const rank = (row: AgencyUserListEnvelope['items'][number]) =>
+          row.deactivatedAt ? 2 : row.isActive ? 1 : 0;
+        const ranks = body.items.map(rank);
+        expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+      });
+
+      it('filters by the Status facet', async () => {
+        const body = await list(ownerToken, '?status=active&pageSize=100');
+        expect(body.items.every((row) => row.isActive)).toBe(true);
+      });
+
+      it('pages deterministically', async () => {
+        const first = await list(ownerToken, '?page=1&pageSize=1');
+        const second = await list(ownerToken, '?page=2&pageSize=1');
+        expect(first.items[0]._id).not.toBe(second.items[0]._id);
+        expect(first.total).toBe(second.total);
+      });
+
+      it('a cleared search is no filter, not an impossible one', async () => {
+        const all = await list(ownerToken, '?pageSize=100');
+        const cleared = await list(ownerToken, '?q=&pageSize=100');
+        expect(cleared.total).toBe(all.total);
+      });
+
+      it('rejects a malformed status with 400, not 500', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users?status=nonsense')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
+    });
+
+    describe('GET /api/v1/users/options (PAC-101)', () => {
+      const options = async (token: string) => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/users/options')
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as Array<{
+          _id: string;
+          email: string;
+          firstName?: string;
+          lastName?: string;
+          availability: 'available' | 'busy';
+        }>;
+      };
+
+      it('is a bare array, not a paginated envelope', async () => {
+        // Deliberate: a picker renders every option at once, and one showing
+        // page 1 of 3 is a bug. `GET /users` is the one that paginates.
+        const body = await options(ownerToken);
+        expect(Array.isArray(body)).toBe(true);
+        expect(body.length).toBeGreaterThanOrEqual(2);
+      });
+
+      it('is not swallowed by the :userId route', async () => {
+        // `@Get('options')` has to be declared above `@Get(':userId')` or Nest
+        // matches the bare param first and `options` arrives as a user id —
+        // which would 404, not 200.
+        const body = await options(ownerToken);
+        expect(body.every((row) => row.email.includes('@'))).toBe(true);
+      });
+
+      it('carries only what a <Select> renders', async () => {
+        const [row] = await options(ownerToken);
+        expect(Object.keys(row).sort()).toEqual(
+          // `availability` (PAC-139 §6) rides along so a *lead* picker can
+          // hide busy people; the list itself is not filtered on it.
+          ['_id', 'availability', 'email', 'firstName', 'lastName'].filter(
+            (key) => Object.prototype.hasOwnProperty.call(row, key),
+          ),
+        );
+        expect(['available', 'busy']).toContain(row.availability);
+        expect(row).not.toHaveProperty('roleIds');
+        expect(row).not.toHaveProperty('deactivatedAt');
+        expect(row).not.toHaveProperty('passwordHash');
+      });
+
+      it('excludes the platform admin', async () => {
+        const emails = (await options(ownerToken)).map((row) => row.email);
+        expect(emails).not.toContain(seed.superAdminEmail);
+        expect(emails).toContain(seed.producerEmail);
+      });
+
+      it('is sorted by last name, then first, then email', async () => {
+        const keys = (await options(ownerToken)).map((row) =>
+          [row.lastName ?? '', row.firstName ?? '', row.email]
+            .join(' ')
+            .toLowerCase(),
+        );
+        expect(keys).toEqual([...keys].sort());
+      });
+
+      it('needs agency:users:read', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users/options')
+          .set(authHeader(readOnlyToken))
+          .expect(403);
+      });
     });
 
     it('GET /api/v1/users/assignable-permissions', async () => {
@@ -779,7 +997,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      const users = list.body as { _id: string; email: string }[];
+      const users = (list.body as AgencyUserListEnvelope).items;
       const producer = users.find((u) => u.email === seed.producerEmail);
       expect(producer).toBeDefined();
       invitedUserId = producer!._id;
@@ -2346,7 +2564,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(409);
       expect((res.body as { code: string }).code).toBe('contact_deceased');
@@ -2410,9 +2628,10 @@ describe('SFA API (e2e)', () => {
         city: 'Austin',
         state: 'TX',
       });
-      // `city`/`state` above are coerced from `propertyAddress.line1` — one of
-      // the three key shapes the three writers use, which is why the API
-      // resolves it rather than each client re-implementing the lookup.
+      // `city`/`state` come straight off the typed `propertyAddress` since
+      // PAC-101. They used to be coerced at read time from whichever of three
+      // key shapes the writer happened to use, which is exactly why the
+      // Location column could not be searched.
       const raw = row as unknown as Record<string, unknown>;
       for (const key of [
         'agencyId',
@@ -2511,6 +2730,57 @@ describe('SFA API (e2e)', () => {
         const body = await listBody(ownerToken, '?q=Nonexistent%20Zzz');
         expect(body.items).toEqual([]);
         expect(body.total).toBe(0);
+      });
+    });
+
+    describe('searches every column the row renders (PAC-101)', () => {
+      it('finds a household by its primary contact email', async () => {
+        // The Contact column renders this, and PAC-91 removed the copy that
+        // used to live on the household — so it can only resolve through
+        // `contacts`.
+        const body = await listBody(ownerToken, '?q=client%40test.local');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds it by a fragment of that email', async () => {
+        const body = await listBody(ownerToken, '?q=test.local');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it.each([
+        ['raw digits', '5550100100'],
+        ['dashed', '555-010-0100'],
+        ['parenthesised', '(555)%20010-0100'],
+      ])('finds it by phone, %s', async (_label, typed) => {
+        // Stored as `5550100100`; the query must fold formatting on both sides.
+        const body = await listBody(ownerToken, `?q=${typed}`);
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds a household by the city its Location column shows', async () => {
+        // Unreachable before the address became a typed sub-schema: the city
+        // was resolved in application code after the fetch.
+        const body = await listBody(ownerToken, '?q=Austin');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds it by street, which is not a column', async () => {
+        const body = await listBody(ownerToken, '?q=1%20Test%20St');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds a household reference by its number alone', async () => {
+        // `147` must reach `HH-2147`; here `1` must reach `HH-1`.
+        const body = await listBody(ownerToken, '?q=HH-1');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('no longer lets a reference suppress the name branch', async () => {
+        // `routeSearchTerm` used to drop the name route whenever the term
+        // parsed as a reference or a date, so these two dimensions could never
+        // be searched together.
+        const body = await listBody(ownerToken, '?q=Test');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
       });
     });
 
@@ -3123,9 +3393,11 @@ describe('SFA API (e2e)', () => {
       // covered by its own describe block below. That also removed the bare
       // `PATCH /households`, which only ever echoed `{status:'updated'}`; the
       // real household write is `POST /households/:id/members`.
+      // `owner-dashboard` left with PAC-135, which replaced its stub with the
+      // real `OwnerDashboardModule` — `GET /owner-dashboard/{summary,producers,
+      // lead-sources}`, covered by its own describe block below.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
-      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 
@@ -3283,7 +3555,12 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/mailers/log-lead')
         .set(authHeader(csrToken))
-        .send({ controlNumber: 'NOSUCHQCN123' })
+        .send({
+          controlNumber: 'NOSUCHQCN123',
+          dateOfBirth: '1971-04-12',
+          phone: '9185550142',
+          email: 'probe@example.com',
+        })
         .expect(404);
     });
 
@@ -3349,7 +3626,8 @@ describe('SFA API (e2e)', () => {
       'deal-audits',
       'leaderboard',
       'management',
-      'owner-dashboard',
+      // No bare route since PAC-135 — the summary is what the page loads first.
+      'owner-dashboard/summary',
       'command-center',
     ];
     it.each(csrDeniedFeatureRoutes)(
@@ -3402,9 +3680,9 @@ describe('SFA API (e2e)', () => {
       // with PAC-89: its stub is de-registered, so there is no bare
       // `PATCH /households` to probe — the write is
       // `POST /households/:id/members`, covered by the Client records block.
+      // `owner-dashboard` left with PAC-135: read-only, no mutating handler.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
-      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 
@@ -3456,7 +3734,12 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/mailers/log-lead')
         .set(authHeader(readOnlyToken))
-        .send({ controlNumber: 'NOSUCHQCN123' })
+        .send({
+          controlNumber: 'NOSUCHQCN123',
+          dateOfBirth: '1971-04-12',
+          phone: '9185550142',
+          email: 'probe@example.com',
+        })
         .expect(403);
     });
 
@@ -5400,6 +5683,157 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Lead sources (PAC-135)', () => {
+    interface LeadSourcesBody {
+      leadSources: { id: string; name: string; slug: string }[];
+    }
+    let leadSourceModel: Model<LeadSource>;
+    const created: Types.ObjectId[] = [];
+
+    const listSources = async (token: string) => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/lead-sources')
+        .set(authHeader(token))
+        .expect(200);
+      return (res.body as LeadSourcesBody).leadSources;
+    };
+
+    beforeAll(async () => {
+      leadSourceModel = app.get<Model<LeadSource>>(
+        getModelToken(LeadSource.name),
+      );
+      const rows = await leadSourceModel.create([
+        // This agency's own vendor.
+        { agencyId: seed.agencyId, name: 'Waterstone', slug: 'waterstone' },
+        // Retired: stays on old records, leaves the picker.
+        {
+          agencyId: seed.agencyId,
+          name: 'Stride',
+          slug: 'stride',
+          active: false,
+        },
+        // Another tenant's row must never leak across.
+        { agencyId: seed.otherAgencyId, name: 'Soleo', slug: 'soleo' },
+        // Same slug as a platform row: the agency's wording wins.
+        { agencyId: seed.agencyId, name: 'Web Form', slug: 'web' },
+      ]);
+      created.push(...rows.map((row) => row._id));
+    });
+
+    // Removed rather than left behind: every later block lists sources through
+    // the same endpoint, and the "Web Form" override would rename theirs.
+    afterAll(async () => {
+      await leadSourceModel.deleteMany({ _id: { $in: created } });
+    });
+
+    it("orders platform sources, then the agency's own, then Other", async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      // `Web Form` overrides the platform `Web`, so it sorts as the agency's.
+      expect(names).toEqual([
+        'Mailer',
+        'Book of Business',
+        'Customer Referral',
+        'Facebook',
+        'Google',
+        'Walk-In',
+        'Waterstone',
+        'Web Form',
+        'Other',
+      ]);
+    });
+
+    it("adds the agency's own rows, and never another agency's", async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      expect(names).toContain('Waterstone');
+      expect(names).not.toContain('Soleo');
+    });
+
+    it('leaves an archived source out of the picker', async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      expect(names).not.toContain('Stride');
+    });
+
+    it('lets an agency row shadow the platform row of the same slug', async () => {
+      const web = (await listSources(producerToken)).filter(
+        (s) => s.slug === 'web',
+      );
+
+      expect(web.map((s) => s.name)).toEqual(['Web Form']);
+    });
+
+    it("rejects an archived source, and another agency's, on a new lead (400)", async () => {
+      const body = (leadSourceId: string) => ({
+        primaryContact: {
+          firstName: 'Archie',
+          lastName: 'Sourceless',
+          dateOfBirth: '1980-01-01',
+          phone: '(555) 010-2030',
+          email: 'archie.sourceless@example.com',
+        },
+        address: {
+          street: '1 Sourceless Way',
+          city: 'Tulsa',
+          state: 'OK',
+          zip: '74101',
+        },
+        members: [],
+        leadSourceId,
+      });
+      const stride = await leadSourceModel.findOne({ slug: 'stride' });
+      const soleo = await leadSourceModel.findOne({ slug: 'soleo' });
+
+      for (const row of [stride, soleo]) {
+        await request(app.getHttpServer())
+          .post('/api/v1/leads')
+          .set(authHeader(producerToken))
+          .send(body(row!._id.toString()))
+          .expect(400);
+      }
+
+      // Refused before anything was written — no half-made lead left behind.
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      expect(await leadModel.countDocuments({ lastName: 'Sourceless' })).toBe(
+        0,
+      );
+    });
+
+    it('re-seeding creates nothing, and never undoes a curated row', async () => {
+      // A redeploy re-runs the core seed. Once a curation surface exists, a
+      // super admin renaming or archiving a platform source has made a decision,
+      // and the seed quietly reverting it would be the bug — hence
+      // `$setOnInsert` only.
+      const walkIn = { agencyId: null, slug: 'walk-in' };
+      await leadSourceModel.updateOne(walkIn, {
+        $set: { name: 'Walk-in (office)', active: false },
+      });
+
+      try {
+        const result = await seedLeadSources(leadSourceModel);
+        const row = await leadSourceModel.findOne(walkIn).lean();
+
+        expect(result.created).toBe(0);
+        expect(row!.name).toBe('Walk-in (office)');
+        expect(row!.active).toBe(false);
+      } finally {
+        // Every later block reads these rows.
+        await leadSourceModel.updateOne(walkIn, {
+          $set: { name: 'Walk-In', active: true },
+        });
+      }
+    });
+
+    it('is read-only — there is no curation surface yet', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/lead-sources')
+        .set(authHeader(ownerToken))
+        .send({ name: 'Billboard' })
+        .expect(404);
+    });
+  });
+
   describe('Leads (PAC-36 list)', () => {
     interface LeadRowBody {
       id: string;
@@ -5469,7 +5903,7 @@ describe('SFA API (e2e)', () => {
           // writes it — the API must normalize this to `Requote`.
           status: 'arW7O',
           temperature: 'Hot',
-          leadSource: { code: 'WCO7l', label: 'Mailer' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.mailer),
           primaryContactId: maria._id,
           quoteControlNumber: 'QCN-100001',
           producerId: producer!._id,
@@ -5482,7 +5916,7 @@ describe('SFA API (e2e)', () => {
           lastName: 'Smith',
           status: 'New',
           temperature: 'Cold',
-          leadSource: { code: 'X2Wrh', label: 'Facebook' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.facebook),
           primaryContactId: john._id,
           producerId: producer!._id,
           lastActivityAt: new Date(Date.now() - 86_400_000),
@@ -5495,7 +5929,7 @@ describe('SFA API (e2e)', () => {
           lastName: 'Else',
           status: 'New',
           temperature: 'Warm',
-          leadSource: { code: '30sDe', label: 'Google' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.google),
           producerId: owner!._id,
           lastActivityAt: new Date(),
           isTestRecord: false,
@@ -5506,7 +5940,6 @@ describe('SFA API (e2e)', () => {
           lastName: 'Record',
           status: 'New',
           temperature: 'Hot',
-          leadSource: { code: 'ENEJP', label: 'Test' },
           producerId: producer!._id,
           isTestRecord: true,
         },
@@ -5601,6 +6034,33 @@ describe('SFA API (e2e)', () => {
         .expect(400);
     });
 
+    it('leadSourceId narrows to one source, and the row renders its name', async () => {
+      const mailer = await listAs(
+        producerToken,
+        `?leadSourceId=${seed.leadSourceIds.mailer}`,
+      );
+
+      expect(mailer.total).toBe(1);
+      expect(mailer.items[0].name).toBe('Maria Rodriguez');
+      // Resolved through the `leadSources` row — the lead holds only the id.
+      expect(mailer.items[0].leadSource).toBe('Mailer');
+    });
+
+    it('search reaches a lead through its source name', async () => {
+      // The name lives on the `leadSources` row, not on the lead (PAC-135), so
+      // this only works if the search resolves matching source ids first.
+      const body = await listAs(producerToken, '?search=facebook');
+
+      expect(body.items.map((i) => i.name)).toEqual(['John Smith']);
+    });
+
+    it('rejects a malformed leadSourceId (400)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads?leadSourceId=Mailer')
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
     it('rows expose only display fields', async () => {
       const body = await listAs(producerToken);
       const row = body.items[0] as unknown as Record<string, unknown>;
@@ -5686,7 +6146,7 @@ describe('SFA API (e2e)', () => {
         zip: '74101',
       },
       members: [],
-      leadSourceCode: 'WCO7l',
+      leadSourceId: seed.leadSourceIds.mailer,
       ...overrides,
     });
 
@@ -5717,7 +6177,7 @@ describe('SFA API (e2e)', () => {
       expect(lead).not.toBeNull();
       expect(lead!.status).toBe('New');
       expect(lead!.temperature).toBe('Hot');
-      expect(lead!.leadSource?.label).toBe('Mailer');
+      expect(lead!.leadSourceId?.toString()).toBe(seed.leadSourceIds.mailer);
       expect(lead!.householdId).toBeTruthy();
       expect(lead!.primaryContactId).toBeTruthy();
       expect(lead!.intakeSource?.channel).toBe('internal');
@@ -5836,6 +6296,58 @@ describe('SFA API (e2e)', () => {
       expect(listed.some((row) => row.id === created.id)).toBe(true);
     });
 
+    describe('phone search (PAC-101 follow-up)', () => {
+      /*
+       * Reported after the PAC-101 PR: a *partial* phone number finds nothing
+       * on Leads while the same fragment works on Clients.
+       *
+       * The cause is an asymmetry between the two. Clients matches the
+       * contact's `phone` **per token**, so any digit run is a substring hit
+       * against the normalized `5552223333`. Leads only matched phone as a
+       * whole-term branch gated on `isPhoneLike` (>= 7 digits), so anything
+       * shorter never reached `contacts` at all.
+       */
+      const search = async (term: string) => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/leads?search=${encodeURIComponent(term)}`)
+          .set(authHeader(producerToken))
+          .expect(200);
+        return (res.body as { items: { id: string }[] }).items;
+      };
+
+      it.each([
+        ['the full number, as stored', '5552223333'],
+        ['the full number, as printed', '(555) 222-3333'],
+        ['a 7-digit fragment', '2223333'],
+        ['a 6-digit fragment', '222333'],
+        ['the last four', '3333'],
+        ['the area code and exchange', '555222'],
+      ])('finds a lead by %s', async (_label, term) => {
+        const created = await createAs(producerToken, payload('Pellworth'));
+        const found = await search(term);
+        expect(found.some((row) => row.id === created.id)).toBe(true);
+      });
+
+      it('still narrows — an unrelated number finds nothing', async () => {
+        await createAs(producerToken, payload('Quarrow'));
+        expect(await search('9998888')).toHaveLength(0);
+      });
+
+      it('matches the Clients list for the same fragment', async () => {
+        // The parity the report is really about: one fragment, two tables.
+        const created = await createAs(producerToken, payload('Rensworth'));
+
+        const leads = await search('222333');
+        expect(leads.some((row) => row.id === created.id)).toBe(true);
+
+        const clients = await request(app.getHttpServer())
+          .get('/api/v1/households?q=222333')
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect((clients.body as { total: number }).total).toBeGreaterThan(0);
+      });
+    });
+
     // `leads:write` is held by Agency Owner too, so an owner becomes the
     // producer of any lead they enter. Pinned by a test because it is an
     // accepted trade-off (PAC-53), not an accident — if it ever changes, it
@@ -5864,13 +6376,13 @@ describe('SFA API (e2e)', () => {
       );
       await createAs(
         producerToken,
-        payload('Bad', { leadSourceCode: 'nope' }),
+        payload('Bad', { leadSourceId: 'nope' }),
         400,
       );
-      // `Test` must never be selectable at intake.
+      // Well-formed, but no such row — the shape check alone must not pass it.
       await createAs(
         producerToken,
-        payload('Bad', { leadSourceCode: 'ENEJP' }),
+        payload('Bad', { leadSourceId: new Types.ObjectId().toString() }),
         400,
       );
     });
@@ -6576,7 +7088,7 @@ describe('SFA API (e2e)', () => {
         // Raw SmartSuite code — the detail read must normalize it to `Requote`.
         status: 'arW7O',
         temperature: 'Hot',
-        leadSource: { code: 'WCO7l', label: 'Mailer' },
+        leadSourceId: new Types.ObjectId(seed.leadSourceIds.mailer),
         quoteControlNumber: 'QCN-380001',
         // `PYgez` is stored as the raw Quote Recaps choice code, to prove the
         // read path normalizes this field like every other policy type here.
@@ -6798,7 +7310,10 @@ describe('SFA API (e2e)', () => {
       // Stored as `arW7O`.
       expect(body.status).toBe('Requote');
       expect(body.temperature).toBe('Hot');
-      expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
+      expect(body.leadSource).toEqual({
+        id: seed.leadSourceIds.mailer,
+        label: 'Mailer',
+      });
       expect(body.quoteControlNumber).toBe('QCN-380001');
       // `PYgez` is the SmartSuite code for Auto — normalized on read. The
       // dwelling rides on the row that needs it (PAC-56 #14); a row without one
@@ -7063,7 +7578,6 @@ describe('SFA API (e2e)', () => {
         lastName: 'Patch',
         status: 'New',
         temperature: 'Unknown',
-        leadSource: { code: null, label: '' },
         producerId: producer!._id,
         lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
         intakeSource: { channel: 'share_link' },
@@ -7087,13 +7601,16 @@ describe('SFA API (e2e)', () => {
       const res = await patchAs(producerToken, leadId, {
         status: 'Contacted',
         temperature: 'Warm',
-        leadSourceCode: 'WCO7l',
+        leadSourceId: seed.leadSourceIds.mailer,
       }).expect(200);
 
       const body = res.body as UpdateLeadResult;
       expect(body.status).toBe('Contacted');
       expect(body.temperature).toBe('Warm');
-      expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
+      expect(body.leadSource).toEqual({
+        id: seed.leadSourceIds.mailer,
+        label: 'Mailer',
+      });
 
       // Only the patchable fields — not a whole LeadDetail.
       expect(body).not.toHaveProperty('household');
@@ -7123,14 +7640,17 @@ describe('SFA API (e2e)', () => {
 
     it('clears the source with __none__, and the lead matches the no-source filter', async () => {
       const res = await patchAs(producerToken, leadId, {
-        leadSourceCode: '__none__',
+        leadSourceId: '__none__',
       }).expect(200);
 
-      // The schema default shape, which is what the list filter matches.
-      expect((res.body as UpdateLeadResult).leadSource.code).toBeNull();
+      // Unset, which is what the list filter matches.
+      expect((res.body as UpdateLeadResult).leadSource).toEqual({
+        id: null,
+        label: '',
+      });
 
       const list = await request(app.getHttpServer())
-        .get('/api/v1/leads?leadSource=__none__')
+        .get('/api/v1/leads?leadSourceId=__none__')
         .set(authHeader(producerToken))
         .expect(200);
 
@@ -7147,9 +7667,9 @@ describe('SFA API (e2e)', () => {
         400,
       );
       await patchAs(producerToken, leadId, {}).expect(400);
-      // `Test` hides the record from every read path — never selectable.
+      // Well-formed, but no such row.
       await patchAs(producerToken, leadId, {
-        leadSourceCode: 'ENEJP',
+        leadSourceId: new Types.ObjectId().toString(),
       }).expect(400);
     });
 
@@ -7349,7 +7869,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(201);
       return res.body.id as string;
@@ -8759,8 +9279,7 @@ describe('SFA API (e2e)', () => {
       expect(lead!.intakeSource?.channel).toBe('share_link');
       expect(lead!.intakeSource?.shareLinkId?.toString()).toBe(activeLinkId);
       // Left empty on purpose: nobody has said where this came from yet.
-      expect(lead!.leadSource?.code ?? null).toBeNull();
-      expect(lead!.leadSource?.label ?? '').toBe('');
+      expect(lead!.leadSourceId ?? null).toBeNull();
     });
 
     it('records the policies of interest submitted publicly (PAC-56 #2)', async () => {
@@ -8813,7 +9332,7 @@ describe('SFA API (e2e)', () => {
         .expect(201);
 
       const res = await request(app.getHttpServer())
-        .get('/api/v1/leads?leadSource=__none__&search=Okonjo')
+        .get('/api/v1/leads?leadSourceId=__none__&search=Okonjo')
         .set(authHeader(producerToken))
         .expect(200);
 
@@ -8836,7 +9355,7 @@ describe('SFA API (e2e)', () => {
           agencyId: 'attacker-agency',
           branchId: 'attacker-branch',
           producerId: owner!._id.toString(),
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
           isTestRecord: true,
         })
         .expect(201);
@@ -8844,7 +9363,7 @@ describe('SFA API (e2e)', () => {
       const lead = await leadModel.findOne({ lastName: 'Pemberton' });
       expect(lead!.agencyId).toBe(seed.agencyId);
       expect(lead!.producerId?.toString()).toBe(producer!._id.toString());
-      expect(lead!.leadSource?.label ?? '').toBe('');
+      expect(lead!.leadSourceId ?? null).toBeNull();
       expect(lead!.isTestRecord).toBe(false);
     });
 
@@ -10389,6 +10908,73 @@ describe('SFA API (e2e)', () => {
 
     afterAll(() => {
       genStatSpy.mockRestore();
+    });
+
+    it('adds the items a policy added after booking requires, and leaves resolved ones resolved (PAC-104)', async () => {
+      const { lead } = await seedLead();
+      const leadId = lead._id.toString();
+      const deal = await sell(leadId, [autoPolicy(leadId)]);
+      const dealId = new Types.ObjectId(deal.id);
+
+      // The service team has already cleared one item on the Auto sale.
+      await genItemModel.updateOne(
+        { dealId, itemName: 'Drivers Verified' },
+        { $set: { isResolved: true, isFailed: false } },
+      );
+
+      const res = await request(app.getHttpServer())
+        .post(`${SOLD}/${deal.id}/policies`)
+        .set(authHeader(producerToken))
+        .send({
+          policies: [autoPolicy(leadId, { policyType: 'Home' })],
+          submissionToken: `gen-add-${nextNum()}`,
+        })
+        .expect(201);
+      const added = res.body as AddSoldDealPoliciesResponse;
+
+      const items = await genItemModel.find({ dealId });
+      const names = items.map((item) => item.itemName);
+      // Required now the deal holds a Home policy.
+      expect(names).toContain('Home Inspection');
+      // Upserted by dedupe key, so the baseline is not duplicated…
+      expect(names.filter((name) => name === 'Correct Sold Date')).toHaveLength(
+        1,
+      );
+      // …and nothing already worked is reopened.
+      expect(
+        items.find((item) => item.itemName === 'Drivers Verified')!.isResolved,
+      ).toBe(true);
+
+      expect(added.auditItemCount).toBe(items.length);
+    });
+
+    it("keeps a submitted audit's status on the deal when generation re-runs (PAC-104)", async () => {
+      const { lead } = await seedLead();
+      const leadId = lead._id.toString();
+      const deal = await sell(leadId, [autoPolicy(leadId)]);
+      const dealId = new Types.ObjectId(deal.id);
+
+      // The producer submitted the audit; the deal mirrors that status.
+      await genAuditModel.updateOne(
+        { agencyId: seed.agencyId, dealId },
+        { $set: { auditStatus: 'Pending' } },
+      );
+      await genDealModel.updateOne(
+        { _id: dealId },
+        { $set: { dealAuditStatus: 'Pending' } },
+      );
+
+      // A create replay, or a policy added to the deal, re-runs generation.
+      await app.get(AuditGenerationService).generateForDeal({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        dealId,
+      });
+
+      // It used to stamp the default here, telling the board "Not Submitted".
+      expect((await genDealModel.findById(dealId))!.dealAuditStatus).toBe(
+        'Pending',
+      );
     });
 
     it('generates the baseline plus policy-type items for a simple sale', async () => {
@@ -12395,6 +12981,497 @@ describe('SFA API (e2e)', () => {
         .expect(200);
 
       expect((res.body as SoldDealLeadContext).householdId).toBeNull();
+    });
+
+    /**
+     * Editing a booked sale (PAC-104): correcting the sold date, and adding
+     * policies after booking. Nested here to reuse this block's fixtures and
+     * its storage stub.
+     */
+    describe('sold deal edit (PAC-104)', () => {
+      const editUrl = (dealId: string) => `${SOLD}/${dealId}`;
+
+      const getDeal = async (token: string, dealId: string, expected = 200) => {
+        const res = await request(app.getHttpServer())
+          .get(editUrl(dealId))
+          .set(authHeader(token))
+          .expect(expected);
+        return res.body as SoldDealEditView;
+      };
+
+      const patchSoldDate = (
+        token: string,
+        dealId: string,
+        soldDate: string,
+        expected = 200,
+      ) =>
+        request(app.getHttpServer())
+          .patch(editUrl(dealId))
+          .set(authHeader(token))
+          .send({ soldDate })
+          .expect(expected);
+
+      const addPolicies = async (
+        token: string,
+        dealId: string,
+        leadId: string,
+        policies: Array<Record<string, unknown>>,
+        options: { submissionToken?: string; expected?: number } = {},
+      ) => {
+        const res = await request(app.getHttpServer())
+          .post(`${editUrl(dealId)}/policies`)
+          .set(authHeader(token))
+          .send({
+            policies: withApplications(leadId, policies),
+            submissionToken: options.submissionToken ?? `add-${nextNumber()}`,
+          })
+          .expect(options.expected ?? 201);
+        return res.body as AddSoldDealPoliciesResponse;
+      };
+
+      /** An app-booked Auto sale: 1000.10, two vehicles, sold 2026-02-15. */
+      const bookAuto = async (overrides: Record<string, unknown> = {}) => {
+        const { lead, household } = await seedSoldLead(producerId);
+        const created = await createAs(
+          producerToken,
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({ premium: 1000.1, itemCount: 2, ...overrides }),
+            ],
+          }),
+        );
+        return { lead, household, leadId: lead._id.toString(), created };
+      };
+
+      const changeRows = (dealId: string) =>
+        soldActivityModel
+          .find({ dealId: dealRef(dealId), type: 'field_changed' })
+          .lean();
+
+      describe('GET /sold-deals/:id', () => {
+        it('returns the booked deal in the shape the Edit sale page renders', async () => {
+          const { leadId, created } = await bookAuto();
+          const view = await getDeal(producerToken, created.id);
+
+          expect(view.id).toBe(created.id);
+          expect(view.leadId).toBe(leadId);
+          // A calendar date — the value a date input holds.
+          expect(view.soldDate).toBe('2026-02-15');
+          expect(view.clientName).toBe('Sam Sold');
+          expect(view.premium).toBe(1000.1);
+          expect(view.policies).toHaveLength(1);
+          expect(view.policies[0]).toMatchObject({
+            policyType: 'Auto',
+            premium: 1000.1,
+            effectiveDate: '2026-02-01',
+          });
+          expect(view.isMigrated).toBe(false);
+          expect(view.canAddPolicies).toBe(true);
+          expect(view.addPoliciesBlockedBy).toBeNull();
+          expect(view).not.toHaveProperty('policyAdditionTokens');
+        });
+
+        it("404s for another producer's deal, a transfer, and a malformed id", async () => {
+          const soldDate = new Date('2026-02-15T00:00:00.000Z');
+          const foreign = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId: new Types.ObjectId(),
+            soldDate,
+            premiumSource: 'snapshot',
+          });
+          await getDeal(producerToken, foreign._id.toString(), 404);
+
+          // Corrected from its CRM ticket, not from a lead's Edit sale page.
+          const transfer = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            businessType: 'company_transfer',
+            soldDate,
+          });
+          await getDeal(producerToken, transfer._id.toString(), 404);
+
+          await getDeal(producerToken, 'not-a-deal', 404);
+        });
+
+        it('says why a deal with no lead cannot take another policy', async () => {
+          const orphan = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            soldDate: new Date('2026-02-15T00:00:00.000Z'),
+            premiumSource: 'snapshot',
+          });
+
+          const view = await getDeal(producerToken, orphan._id.toString());
+          expect(view.canAddPolicies).toBe(false);
+          expect(view.addPoliciesBlockedBy).toBe('no_lead');
+        });
+      });
+
+      describe('PATCH /sold-deals/:id', () => {
+        it('moves soldDate and soldDateYmd together, and the sold timeline entry with them', async () => {
+          const { created } = await bookAuto();
+
+          const res = await patchSoldDate(
+            producerToken,
+            created.id,
+            '2026-01-20',
+          );
+          const view = res.body as SoldDealEditView;
+          expect(view.soldDate).toBe('2026-01-20');
+          // Nothing but the date moved.
+          expect(view.premium).toBe(1000.1);
+          expect(view.policyCount).toBe(1);
+
+          const deal = await soldDealModel.findById(created.id);
+          // The Sold scorecard's bucket key — the deal now reports in January.
+          expect(deal!.soldDateYmd).toBe(20260120);
+          expect(deal!.soldDate?.toISOString()).toBe(
+            '2026-01-20T00:00:00.000Z',
+          );
+
+          const sold = await soldActivityModel.findOne({
+            dealId: dealRef(created.id),
+            type: 'sold',
+          });
+          expect(sold!.occurredAt?.toISOString()).toBe(
+            '2026-01-20T00:00:00.000Z',
+          );
+        });
+
+        it('logs the correction, and writes nothing when the date did not change', async () => {
+          const { created } = await bookAuto();
+
+          await patchSoldDate(producerToken, created.id, '2026-02-15');
+          expect(await changeRows(created.id)).toHaveLength(0);
+
+          await patchSoldDate(producerToken, created.id, '2026-02-10');
+          const rows = await changeRows(created.id);
+          expect(rows).toHaveLength(1);
+          expect(rows[0].summary).toBe('Sold deal edited');
+          expect(rows[0].changes).toEqual([
+            expect.objectContaining({
+              field: 'soldDate',
+              kind: 'date',
+              from: '2026-02-15',
+              to: '2026-02-10',
+            }),
+          ]);
+        });
+
+        it('corrects a migrated deal too, without touching its imported total', async () => {
+          const migrated = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            soldDate: new Date('2025-11-03T00:00:00.000Z'),
+            soldDateYmd: 20251103,
+            premium: 9999,
+            premiumSource: 'rollup',
+            legacySmartSuiteId: 'legacy-deal-pac104-date',
+          });
+
+          await patchSoldDate(
+            producerToken,
+            migrated._id.toString(),
+            '2025-11-04',
+          );
+
+          const after = await soldDealModel.findById(migrated._id);
+          expect(after!.soldDateYmd).toBe(20251104);
+          expect(after!.premium).toBe(9999);
+        });
+
+        it('rejects a malformed date, and a caller without deal_audits:write', async () => {
+          const { created } = await bookAuto();
+          await patchSoldDate(producerToken, created.id, '02/15/2026', 400);
+          await patchSoldDate(readOnlyToken, created.id, '2026-02-10', 403);
+        });
+      });
+
+      describe('POST /sold-deals/:id/policies', () => {
+        it('adds a policy and recomputes the deal from its stored rows', async () => {
+          const { household, leadId, created } = await bookAuto();
+
+          const body = await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({ policyType: 'Home', premium: 899.95, itemCount: 3 }),
+          ]);
+
+          expect(body.replayed).toBe(false);
+          expect(body.addedPolicyIds).toHaveLength(1);
+          // 1000.10 + 899.95 to the cent, and the Home row's implied single item.
+          expect(body.deal).toMatchObject({
+            premium: 1900.05,
+            itemCount: 3,
+            policyCount: 2,
+            dealType: 'Bundle',
+            isBundle: true,
+            soldDate: '2026-02-15',
+          });
+          expect(body.deal.policies).toHaveLength(2);
+
+          const deal = await soldDealModel.findById(created.id);
+          // Adding a policy never re-dates the sale.
+          expect(deal!.soldDateYmd).toBe(20260215);
+          expect(deal!.premiumSource).toBe('snapshot');
+
+          const added = await soldPolicyModel.findById(body.addedPolicyIds[0]);
+          expect(added!.dealId?.toString()).toBe(created.id);
+          expect(added!.householdId?.toString()).toBe(household._id.toString());
+          expect(added!.renewalDate).toBeTruthy();
+
+          const rows = await changeRows(created.id);
+          expect(rows).toHaveLength(1);
+          expect(rows[0].summary).toBe('Policy added to sold deal');
+          expect(rows[0].changes!.map((change) => change.field)).toEqual([
+            'policies',
+            'premium',
+            'itemCount',
+            'dealType',
+          ]);
+
+          expect(
+            (await soldHouseholdModel.findById(household._id))!
+              .totalActivePolicies,
+          ).toBe(2);
+        });
+
+        it('adds the policies once, however many times the same token arrives', async () => {
+          const { leadId, created } = await bookAuto();
+
+          const submissionToken = `add-replay-${nextNumber()}`;
+          const home = soldPolicy({ policyType: 'Home', premium: 500 });
+          await addPolicies(producerToken, created.id, leadId, [home], {
+            submissionToken,
+          });
+          const replay = await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [home],
+            { submissionToken },
+          );
+          expect(replay.replayed).toBe(true);
+          expect(replay.deal.policyCount).toBe(2);
+
+          // And concurrently: the guard is a conditional write, not a read.
+          const renters = soldPolicy({ policyType: 'Renters', premium: 200 });
+          const racing = `add-race-${nextNumber()}`;
+          const results = await Promise.all([
+            addPolicies(producerToken, created.id, leadId, [renters], {
+              submissionToken: racing,
+            }),
+            addPolicies(producerToken, created.id, leadId, [renters], {
+              submissionToken: racing,
+            }),
+          ]);
+          expect(results.filter((result) => !result.replayed)).toHaveLength(1);
+
+          expect(
+            await soldPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
+          ).toBe(3);
+          expect(await changeRows(created.id)).toHaveLength(2);
+        });
+
+        it('refuses a policy already on the sale, and one that belongs to another sale', async () => {
+          const { leadId, created } = await bookAuto();
+          const ours = await soldPolicyModel.findOne({
+            dealId: dealRef(created.id),
+          });
+
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [soldPolicy({ policyNumber: ours!.policyNumber })],
+            { expected: 400 },
+          );
+
+          // Re-pointing another sale's policy would silently remove it from
+          // that sale — which a booked sale does not allow.
+          const other = await bookAuto();
+          const theirs = await soldPolicyModel.findOne({
+            dealId: dealRef(other.created.id),
+          });
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [
+              soldPolicy({
+                policyNumber: theirs!.policyNumber,
+                existingPolicyId: theirs!._id.toString(),
+              }),
+            ],
+            { expected: 409 },
+          );
+
+          expect(
+            await soldPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
+          ).toBe(1);
+          expect(
+            (await soldPolicyModel.findById(theirs!._id))!.dealId?.toString(),
+          ).toBe(other.created.id);
+        });
+
+        it('409s once the audit has been submitted', async () => {
+          const { leadId, created } = await bookAuto();
+          await app
+            .get<Model<DealAudit>>(getModelToken(DealAudit.name))
+            .updateOne(
+              { agencyId: seed.agencyId, dealId: dealRef(created.id) },
+              {
+                $set: { auditStatus: 'Pending' },
+                $setOnInsert: {
+                  branchId: seed.branchId,
+                  title: 'Submitted audit',
+                  auditDate: new Date(),
+                  isTestRecord: false,
+                },
+              },
+              { upsert: true },
+            );
+
+          const view = await getDeal(producerToken, created.id);
+          expect(view.auditStatus).toBe('Pending');
+          expect(view.canAddPolicies).toBe(false);
+          expect(view.addPoliciesBlockedBy).toBe('audit_submitted');
+
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [soldPolicy({ policyType: 'Home' })],
+            { expected: 409 },
+          );
+        });
+
+        it('merges into the prior-insurance summary rather than writing a second one', async () => {
+          const { leadId, created } = await bookAuto({
+            priorInsurance: {
+              none: false,
+              carrier: 'Geico',
+              agentName: 'A. Agent',
+            },
+          });
+
+          await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({
+              policyType: 'Home',
+              priorInsurance: {
+                none: false,
+                carrier: 'State Farm',
+                agentName: 'H. Agent',
+              },
+            }),
+          ]);
+
+          // Lead Detail reads the summary with an unsorted `findOne`, so a
+          // second row would make which one it shows an accident of storage.
+          const summaries = await priorInsuranceModel
+            .find({ dealId: dealRef(created.id) })
+            .lean();
+          expect(summaries).toHaveLength(1);
+          expect(summaries[0]).toMatchObject({
+            previousCarrierAuto: 'Geico',
+            previousCarrierHome: 'State Farm',
+            previousAgentName: 'A. Agent',
+            autoHomeSameCarrier: 'No',
+          });
+          expect(
+            await priorPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
+          ).toBe(2);
+        });
+
+        it('adds to a migrated deal and recomputes its imported total', async () => {
+          const { lead, household } = await seedSoldLead(producerId);
+          const migrated = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            leadId: lead._id,
+            householdId: household._id,
+            soldDate: new Date('2025-10-01T00:00:00.000Z'),
+            soldDateYmd: 20251001,
+            premium: 9999,
+            itemCount: 42,
+            policyCount: 7,
+            premiumSource: 'rollup',
+            legacySmartSuiteId: 'legacy-deal-pac104-add',
+          });
+          const dealId = migrated._id.toString();
+
+          expect((await getDeal(producerToken, dealId)).isMigrated).toBe(true);
+
+          const body = await addPolicies(
+            producerToken,
+            dealId,
+            lead._id.toString(),
+            [soldPolicy({ premium: 500, itemCount: 1 })],
+          );
+
+          // Recomputed from the policies linked to it — the product owner's call.
+          expect(body.deal).toMatchObject({
+            premium: 500,
+            itemCount: 1,
+            policyCount: 1,
+            isMigrated: true,
+          });
+          const after = await soldDealModel.findById(migrated._id);
+          // So later per-policy corrections keep the new total in step.
+          expect(after!.premiumSource).toBe('snapshot');
+          expect(after!.soldDateYmd).toBe(20251001);
+        });
+
+        it("keeps a manager's addition in the producer's book", async () => {
+          const { leadId, created } = await bookAuto();
+
+          await addPolicies(ownerToken, created.id, leadId, [
+            soldPolicy({
+              policyType: 'Home',
+              priorInsurance: {
+                none: false,
+                carrier: 'State Farm',
+                agentName: 'H. Agent',
+              },
+            }),
+          ]);
+
+          // `own` visibility on the hand-off board follows the deal's producer,
+          // not whoever added the policy.
+          const summary = await priorInsuranceModel.findOne({
+            dealId: dealRef(created.id),
+          });
+          expect(summary!.producerId?.toString()).toBe(producerId.toString());
+        });
+
+        it('leaves the lead and its sold timeline entry alone', async () => {
+          const { lead, leadId, created } = await bookAuto();
+          const statusBefore = (await soldLeadModel.findById(lead._id))!.status;
+
+          await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({ policyType: 'Home' }),
+          ]);
+
+          expect(
+            await soldActivityModel.countDocuments({
+              dealId: dealRef(created.id),
+              type: 'sold',
+            }),
+          ).toBe(1);
+          expect((await soldLeadModel.findById(lead._id))!.status).toBe(
+            statusBefore,
+          );
+        });
+      });
     });
 
     describe('deal roll-up recompute on PATCH /policies/:id (PAC-56 #25)', () => {

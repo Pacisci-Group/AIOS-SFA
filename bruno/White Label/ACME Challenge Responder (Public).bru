@@ -1,0 +1,81 @@
+meta {
+  name: ACME Challenge Responder (Public)
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{host}}/.well-known/acme-challenge/not-a-real-token
+  auth: none
+}
+
+tests {
+  test("an unknown token is not found", function () {
+    // 404 rather than 200-with-empty-body. A CA treats any non-matching
+    // response as a failed validation either way, but an empty 200 would make a
+    // genuinely broken lookup indistinguishable from a token that expired.
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("does not say whether the token was absent or merely expired", function () {
+    // A generic message, deliberately. Absent and expired answer identically —
+    // the distinction is only useful to someone probing for live tokens, and
+    // the CA treats either as a failed validation regardless.
+    expect(res.getBody().message).to.equal("Not Found");
+  });
+}
+
+docs {
+  # GET /.well-known/acme-challenge/:token
+
+  Answers ACME `http-01` validation requests, so the platform can obtain its own
+  TLS certificates — for the platform host, agency subdomains, and agency-owned
+  custom domains.
+
+  **Module** — none. **Permission** — none, `@Public()` and `@SkipThrottle()`.
+
+  ## Not under `{{baseUrl}}`
+
+  Note the URL uses `{{host}}`, not `{{baseUrl}}`. RFC 8555 fixes this path at
+  the **root** of the host being validated, so it is excluded from the global
+  `api/v1` prefix in `main.ts`. Left prefixed, every certificate order fails
+  validation with a 404 and nothing says why.
+
+  ## What it returns
+
+  The key authorization for a live challenge (`text/plain`), or `404`. Expiry is
+  checked in the handler as well as by the collection's TTL index, because
+  Mongo's TTL monitor runs about once a minute and removal is eventual.
+
+  ## Why it reads from MongoDB
+
+  The CA's validation request goes through the load balancer like any other, so
+  it arrives at whichever app node the balancer picks — essentially never the
+  node whose worker placed the order. Challenge tokens therefore live in the
+  `acmeChallenges` collection rather than in process memory, which is what makes
+  issuance work on more than one node. A single-server design that skips this
+  fails intermittently in a way that looks exactly like flaky DNS.
+
+  ## Why the guards are skipped
+
+  - `@Public()` — the request arrives on a hostname that resolves to no tenant
+    yet, which is precisely the case `HostTenantGuard` 404s. A domain being
+    verified for the first time has to get past it.
+  - `@SkipThrottle()` — `TrustedProxyThrottlerGuard` runs first and globally.
+    Behind a TLS-passthrough load balancer every caller can share one bucket,
+    and a throttled validation means no certificate for anyone until someone
+    works out why. The skipped surface is one indexed lookup returning a short
+    string, with no write and nothing enumerable.
+
+  ## Testing it for real
+
+  This request only exercises the 404 path — a real token exists for seconds
+  during an order. To see the whole flow, point `ACME_DIRECTORY_URL` at a local
+  Pebble instance and set `ACME_ENABLED=true`, then verify a domain.
+
+  ⚠ `ACME_ENABLED` is `false` by default and must stay false until the Node edge
+  owns port 80. While Caddy is the edge it answers its own ACME challenges and
+  knows nothing of ours, so every order fails validation — and failed
+  validations spend a Let's Encrypt limit that blocks orders which would have
+  succeeded.
+}

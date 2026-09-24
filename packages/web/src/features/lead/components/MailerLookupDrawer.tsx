@@ -3,7 +3,7 @@ import {
   MIN_MAILER_CONTROL_NUMBER_KEY_LENGTH,
   mailerControlNumberKey,
 } from "@sfa/shared";
-import type { MailerLookupView } from "@sfa/shared";
+import type { LogMailerLeadResponse, MailerLookupView } from "@sfa/shared";
 import {
   CheckCircle2,
   ExternalLink,
@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { ApiError } from "@/lib/api-client";
 import { formatAddress } from "@/lib/format-address";
 import { logMailerLead, lookupMailer } from "@/lib/mailers-api";
 import {
@@ -36,6 +37,9 @@ import {
   formatCurrencyExact,
   formatDate,
 } from "./lead-display";
+import type { ContactDetailsFormValues } from "./lead-intake-schema";
+import { MAILER_CONTACT_FORM_ID, MailerContactStep } from "./MailerContactStep";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** The query key, exported so the mutation and the drawer cannot disagree. */
 export function mailerLookupKey(key: string) {
@@ -64,6 +68,11 @@ interface MailerLookupDrawerProps {
  * that will never arrive. Same for `address.county`, which the API returns as
  * `null` when it cannot resolve the FIPS code to a name.
  *
+ * Missing is not the end of it, though. *Log lead* does not create the lead
+ * straight away: it opens a **contact step** ({@link MailerContactStep}) that
+ * requires all three, pre-filled from the mailer where it has them (PAC-103).
+ * Creating the lead then closes the drawer and opens it.
+ *
  * ## The premium
  *
  * `yearly` is the headline and `total` sits below it under a source label. They
@@ -82,7 +91,15 @@ export function MailerLookupDrawer({
   onOpenChange,
 }: MailerLookupDrawerProps) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [input, setInput] = useState("");
+  /**
+   * The lookup key the contact step was opened for, or `null` on the lookup
+   * view. Keyed rather than a boolean so typing a different number drops back
+   * to the lookup without an effect to reset it.
+   */
+  const [contactStepKey, setContactStepKey] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Debounce the raw input and derive the key from it, so `#abc…` and `ABC…`
   // resolve to one cache entry instead of two requests.
@@ -99,14 +116,19 @@ export function MailerLookupDrawer({
 
   const mailer = query.data ?? null;
 
+  // Only while the mailer can still be logged: a 409 refetch that flips
+  // `alreadyLogged` drops back to the lookup, whose footer says why.
+  const onContactStep =
+    mailer !== null && !mailer.alreadyLogged && contactStepKey === key;
+
   const logLead = useMutation({
-    mutationFn: () => logMailerLead(mailer?.controlNumber ?? key),
+    mutationFn: (details: ContactDetailsFormValues) =>
+      logMailerLead({
+        controlNumber: mailer?.controlNumber ?? key,
+        ...details,
+      }),
     onSuccess: (result) => {
-      toast.success(
-        result.alreadyExisted
-          ? "This mailer is already logged as a lead."
-          : "Lead created from mailer.",
-      );
+      toast.success(successMessage(result, mailer?.name ?? null));
 
       if (result.alreadyExisted) {
         // The existing lead may belong to someone this caller cannot see, in
@@ -132,9 +154,26 @@ export function MailerLookupDrawer({
       // Contact List. Nothing else caches leads by this control number.
       void queryClient.invalidateQueries({ queryKey: ["leads"] });
       void queryClient.invalidateQueries({ queryKey: ["hot-leads"] });
+
+      // A lead we just created is ours, so open it. An existing one is not
+      // opened: the address dedupe can resolve to a colleague's lead outside
+      // this caller's scope, and its page would 404. The refetch above lets the
+      // footer offer "View lead" only when that link would resolve.
+      if (!result.alreadyExisted) {
+        handleOpenChange(false);
+        void navigate(`/leads/${result.leadId}`);
+      } else {
+        setContactStepKey(null);
+      }
     },
     onError: (error: Error) => {
-      toast.error(error.message || "Couldn't log this mailer as a lead.");
+      // Inline on the step, where the producer is looking. A 409 also flips
+      // the drawer back to the lookup once the refetch below lands.
+      setSubmitError(
+        error instanceof ApiError && error.message
+          ? error.message
+          : "Couldn't log this mailer as a lead.",
+      );
       // Refetch regardless of the reason. The likeliest failure is a 409 —
       // another agency logged this mailer on a shared campaign between the
       // lookup and the click, and one mailer produces one lead platform-wide
@@ -149,6 +188,8 @@ export function MailerLookupDrawer({
       // Cancel writes nothing and leaves nothing behind — reopening starts on
       // an empty field rather than on whoever was looked up last week.
       setInput("");
+      setContactStepKey(null);
+      setSubmitError(null);
       logLead.reset();
     }
     onOpenChange(next);
@@ -235,7 +276,26 @@ export function MailerLookupDrawer({
             </div>
           )}
 
-          {mailer && (
+          {mailer && onContactStep && (
+            <MailerContactStep
+              // Fresh form state per mailer: defaults are read on mount only.
+              key={key}
+              mailer={mailer}
+              addressLine={addressLine}
+              submitting={logLead.isPending}
+              errorMessage={submitError}
+              onBack={() => {
+                setContactStepKey(null);
+                setSubmitError(null);
+              }}
+              onSubmit={(details) => {
+                setSubmitError(null);
+                logLead.mutate(details);
+              }}
+            />
+          )}
+
+          {mailer && !onContactStep && (
             <>
               <MailerCard title="Recipient">
                 <p className="text-base leading-tight font-semibold">
@@ -377,20 +437,39 @@ export function MailerLookupDrawer({
                   </p>
                 )}
               </>
-            ) : (
+            ) : onContactStep ? (
+              // Distinct keys on the two buttons are load-bearing. Without them
+              // React reuses one <button> for both, so the click that opens the
+              // step flips it to `type="submit"` mid-event and the browser's
+              // default action submits the form before anything is typed.
               <Button
-                type="button"
+                key="create-lead"
+                type="submit"
+                form={MAILER_CONTACT_FORM_ID}
                 variant="brand"
                 className="w-full"
                 disabled={logLead.isPending}
-                onClick={() => logLead.mutate()}
               >
                 <Zap className="size-4" />
-                {logLead.isPending ? "Logging…" : "Log lead into my pipeline"}
+                {logLead.isPending ? "Creating lead…" : "Create lead"}
+              </Button>
+            ) : (
+              <Button
+                key="log-lead"
+                type="button"
+                variant="brand"
+                className="w-full"
+                onClick={() => {
+                  setSubmitError(null);
+                  setContactStepKey(key);
+                }}
+              >
+                <Zap className="size-4" />
+                Log lead into my pipeline
               </Button>
             )}
 
-            {addressLine && (
+            {addressLine && !onContactStep && (
               <Button asChild variant="outline" className="w-full">
                 <a
                   href={`https://www.zillow.com/homes/${encodeURIComponent(addressLine)}`}
@@ -407,6 +486,24 @@ export function MailerLookupDrawer({
       </SheetContent>
     </Sheet>
   );
+}
+
+/**
+ * The toast after logging. A matched contact is worth saying out loud: the
+ * producer typed details for someone the agency already knew, and the lead now
+ * hangs off that existing record rather than a new one.
+ */
+function successMessage(
+  result: LogMailerLeadResponse,
+  name: string | null,
+): string {
+  if (result.alreadyExisted) return "This mailer is already logged as a lead.";
+  if (result.contactMatched) {
+    return name
+      ? `Lead created and linked to existing client ${name}.`
+      : "Lead created and linked to an existing client.";
+  }
+  return "Lead created from mailer.";
 }
 
 /** Whether any coverage figure came back — the card is hidden when none did. */
@@ -454,7 +551,7 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-base font-semibold tabular-nums">{value ?? "—"}</p>
+      <p className="text-base font-semibold tabular-nums">{value ?? NOT_AVAILABLE}</p>
     </div>
   );
 }

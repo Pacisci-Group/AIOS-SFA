@@ -1,4 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import {
+  DEFAULT_USER_AVAILABILITY,
+  USER_AVAILABILITIES,
+  type UserAvailability,
+} from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
 
@@ -52,6 +57,26 @@ export class User {
    */
   @Prop()
   avatarKey?: string;
+
+  /**
+   * Whether this person is taking new leads right now (PAC-139 §6). Set only
+   * by the user themself via `PATCH /me/availability`; nothing else writes it.
+   *
+   * Unrelated to {@link isActive}, which is whether the *account* exists in
+   * good standing. A deactivated user's availability is meaningless and is not
+   * cleared — every reader already filters on `isActive` first.
+   *
+   * `type: String` is explicit because `UserAvailability` is an indexed-access
+   * type, which `emitDecoratorMetadata` reports as `Object`. Backfilled onto
+   * pre-existing rows by the `user_availability_backfill` migration, so a raw
+   * `{ availability: 'available' }` filter can rely on the field being there.
+   */
+  @Prop({
+    type: String,
+    enum: USER_AVAILABILITIES,
+    default: DEFAULT_USER_AVAILABILITY,
+  })
+  availability: UserAvailability;
 
   /**
    * ⚠ `isActive: false` alone does **not** mean "pending invite".

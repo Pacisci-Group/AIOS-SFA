@@ -17,6 +17,7 @@ import {
   formatAddress as formatAddressLine,
   type AddressLike,
 } from "@/lib/format-address";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * Shared display vocabulary for the Leads list and the Lead Detail page — the
@@ -307,7 +308,7 @@ export function initials(name: string | null): string {
  * the field where that is most obviously wrong.
  */
 export function formatDate(value: string | null): string {
-  if (!value) return "—";
+  if (!value) return NOT_AVAILABLE;
 
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (dateOnly) {
@@ -316,7 +317,7 @@ export function formatDate(value: string | null): string {
   }
 
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "—";
+  if (Number.isNaN(parsed.getTime())) return NOT_AVAILABLE;
   return parsed.toLocaleDateString("en-US", {
     year: "numeric",
     month: "2-digit",
@@ -360,5 +361,5 @@ export function formatCurrencyExact(value: number): string {
  * placeholder belongs here rather than at every call site.
  */
 export function formatAddress(address: AddressLike | null): string {
-  return formatAddressLine(address) ?? "—";
+  return formatAddressLine(address) ?? NOT_AVAILABLE;
 }

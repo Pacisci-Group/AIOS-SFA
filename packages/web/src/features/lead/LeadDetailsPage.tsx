@@ -101,8 +101,8 @@ export default function LeadDetailsPage() {
           <main className="flex flex-col gap-4 p-4 md:p-5 lg:w-3/5">
             <LeadContactCard
               lead={lead}
-              onSourceChange={(leadSourceCode) =>
-                update.mutate({ leadSourceCode })
+              onSourceChange={(leadSourceId) =>
+                update.mutate({ leadSourceId })
               }
               pending={update.isPending}
             />

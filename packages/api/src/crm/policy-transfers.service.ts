@@ -163,7 +163,7 @@ export class PolicyTransfersService {
     };
 
     // No lead source: a transfer did not come from anywhere, it was already
-    // ours. `resolveLeadSource` renders `undefined` as the empty source.
+    // ours, so the deal carries none.
     const outcome = await this.intake.process(
       ctx,
       intakeDto,

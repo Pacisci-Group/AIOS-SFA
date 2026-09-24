@@ -4,12 +4,19 @@ import {
 } from './household-address';
 
 /**
- * Three writers use three different key sets for the same address. If any one
- * of them stops being handled, "Same as Household Address" silently pre-fills
- * blank fields rather than failing loudly — hence a test per shape.
+ * One key set now, not three.
+ *
+ * PAC-101 made `Household.propertyAddress` a typed sub-schema and migrated
+ * every stored document onto `street/street2/city/state/zip`, so the `line1`
+ * and `location_*` aliases are gone.
+ *
+ * The alias cases below are **inverted rather than deleted**: a test asserting
+ * that the old SmartSuite shape now yields `null` is worth more than a missing
+ * one. It is what would fail if someone re-added the aliases to paper over an
+ * un-migrated database instead of running the migration.
  */
 describe('normalizeStoredAddress', () => {
-  it('reads the lead-intake shape', () => {
+  it('reads the one stored shape', () => {
     expect(
       normalizeStoredAddress({
         street: '420 Main St',
@@ -25,23 +32,16 @@ describe('normalizeStoredAddress', () => {
     });
   });
 
-  it('reads the demo-seed shape (`line1`)', () => {
+  it('no longer reads the demo-seed shape (`line1`)', () => {
+    // The seed writes `street` since PAC-101; a `line1` document could only
+    // exist in a database the migration has not reached.
     expect(
-      normalizeStoredAddress({
-        line1: '1200 Oak Ave',
-        city: 'Tulsa',
-        state: 'OK',
-        zip: '74101',
-      }),
-    ).toEqual({
-      street: '1200 Oak Ave',
-      city: 'Tulsa',
-      state: 'OK',
-      zip: '74101',
-    });
+      normalizeStoredAddress({ line1: '1200 Oak Ave', city: 'Tulsa' }),
+    ).toEqual({ street: '', city: 'Tulsa', state: '', zip: '' });
   });
 
-  it('reads the raw SmartSuite shape (`location_*`)', () => {
+  it('no longer reads the raw SmartSuite shape (`location_*`)', () => {
+    // Nothing usable at all, so this is `null` rather than a blank address.
     expect(
       normalizeStoredAddress({
         location_address: '77 Birch Rd',
@@ -50,20 +50,32 @@ describe('normalizeStoredAddress', () => {
         location_state: 'Oklahoma',
         location_zip: '74008',
       }),
+    ).toBeNull();
+  });
+
+  it('carries `street2` through without folding it into `street`', () => {
+    // `addressKey` is `"<street>|<zip>"`, so a unit line folded into `street`
+    // would split two households in one building onto different keys.
+    expect(
+      normalizeStoredAddress({
+        street: '77 Birch Rd',
+        street2: 'Apt 4',
+        city: 'Bixby',
+        zip: '74008',
+      }),
     ).toEqual({
       street: '77 Birch Rd',
       city: 'Bixby',
-      state: 'Oklahoma',
+      state: '',
       zip: '74008',
     });
   });
 
-  it('trims and prefers the first non-empty candidate key', () => {
+  it('trims', () => {
     expect(
       normalizeStoredAddress({
-        street: '  ',
-        line1: '  9 Elm Ct  ',
-        location_city: 'Owasso',
+        street: '  9 Elm Ct  ',
+        city: 'Owasso',
         zip: '74055',
       }),
     ).toEqual({ street: '9 Elm Ct', city: 'Owasso', state: '', zip: '74055' });
@@ -80,10 +92,15 @@ describe('normalizeStoredAddress', () => {
   });
 });
 
+/**
+ * Precedence, not key shape — that is the whole of what this function decides,
+ * and it is why it survives PAC-101 unchanged. The fixtures use the one stored
+ * shape now.
+ */
 describe('resolveHouseholdAddress', () => {
   const lead = { street: 'Lead St', city: 'A', state: 'OK', zip: '1' };
-  const property = { line1: 'Property Ave', city: 'B', state: 'OK', zip: '2' };
-  const mailing = { location_address: 'Mail Rd', location_city: 'C' };
+  const property = { street: 'Property Ave', city: 'B', state: 'OK', zip: '2' };
+  const mailing = { street: 'Mail Rd', city: 'C' };
 
   it('prefers the lead address', () => {
     expect(resolveHouseholdAddress(lead, property, mailing)?.street).toBe(

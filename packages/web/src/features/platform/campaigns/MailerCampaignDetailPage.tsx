@@ -47,6 +47,7 @@ import {
   formatMoney,
   formatRate,
 } from "./campaign-format";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 const POLL_MS = 1500;
 
@@ -185,7 +186,7 @@ export default function MailerCampaignDetailPage() {
                   value={
                     campaign.stats.premium
                       ? `${formatMoney(campaign.stats.premium.min)} · ${formatMoney(campaign.stats.premium.avg)} · ${formatMoney(campaign.stats.premium.max)}`
-                      : "—"
+                      : NOT_AVAILABLE
                   }
                 />
               </div>
@@ -440,17 +441,17 @@ function Settings({ campaign }: { campaign: MailerCampaign }) {
         <Detail label="Default market">
           {settings.defaultMarket} · {settings.defaultPhone}
         </Detail>
-        <Detail label="Square-footage discounts">{bands || "—"}</Detail>
+        <Detail label="Square-footage discounts">{bands || NOT_AVAILABLE}</Detail>
         <Detail label="Home-age discount">
           {`≤ ${settings.discounts.homeAge.maxNewYears} years → ${(settings.discounts.homeAge.newRate * 100).toFixed(0)}%, older → ${(settings.discounts.homeAge.oldRate * 100).toFixed(0)}%`}
         </Detail>
         <Detail label="Market phones">
           {Object.entries(settings.marketPhones)
             .map(([market, phone]) => `${market} → ${phone}`)
-            .join(", ") || "—"}
+            .join(", ") || NOT_AVAILABLE}
         </Detail>
         <Detail label="Output recipients">
-          {settings.outputRecipients.join(", ") || "—"}
+          {settings.outputRecipients.join(", ") || NOT_AVAILABLE}
         </Detail>
         {Object.keys(settings.zipResolutions).length > 0 && (
           <Detail label="ZIPs resolved in preview">

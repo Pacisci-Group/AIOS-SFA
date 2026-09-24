@@ -16,7 +16,11 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/auth-context";
 import { ApiError } from "@/lib/api-client";
 import { listRoles } from "@/lib/roles-api";
-import { updateUserRoles, type AgencyUser } from "@/lib/users-api";
+import {
+  agencyUserOptionsKey,
+  updateUserRoles,
+  type AgencyUser,
+} from "@/lib/users-api";
 
 interface ChangeRoleDialogProps {
   user: AgencyUser;
@@ -67,6 +71,7 @@ export function ChangeRoleDialog({
     mutationFn: () => updateUserRoles(user._id, selected),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["users"] });
+      await queryClient.invalidateQueries({ queryKey: agencyUserOptionsKey });
       // Editing your own roles changes your own menu and route access. Without
       // this the sidebar keeps offering pages that have already started 403ing.
       if (currentUser?.id === user._id) await refreshUser();

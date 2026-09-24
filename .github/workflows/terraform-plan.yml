@@ -1,5 +1,11 @@
-name: Terraform Plan (dev)
+name: Terraform Plan
 
+# Runs for EVERY live environment, not just dev.
+#
+# It used to run for dev alone, which is how production's `main.tf` came to
+# reference variables its own `variables.tf` never declared: nothing validated
+# that directory, so the drift was invisible until someone planned it by hand.
+# `terraform validate` in a matrix is what catches that class of error.
 on:
   pull_request:
     paths:
@@ -12,11 +18,29 @@ permissions:
   pull-requests: write
 
 jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+        working-directory: infra/terraform
+
   plan:
     runs-on: ubuntu-latest
+    strategy:
+      # Every environment is reported, rather than stopping at the first
+      # failure — knowing production is broken too is the point.
+      fail-fast: false
+      matrix:
+        environment: [dev, production]
+
     defaults:
       run:
-        working-directory: infra/terraform/environments/dev
+        working-directory: infra/terraform/environments/${{ matrix.environment }}
 
     env:
       DIGITALOCEAN_TOKEN: ${{ secrets.DO_API_TOKEN }}
@@ -41,21 +65,22 @@ jobs:
         with:
           terraform_version: "1.9.8"
 
-      - name: Terraform fmt check
-        run: terraform fmt -check -recursive
-        working-directory: infra/terraform
-
+      # ⚠ Both `backend.tf` and `terraform.tfvars` are gitignored — they are
+      # generated per environment and the live tfvars may carry addresses we do
+      # not publish. So a CI checkout almost always lacks them, and this job
+      # validates the configuration rather than planning it against real state.
+      # That still catches undeclared variables, bad references and type errors;
+      # the blast radius of an actual change is read from `make plan` locally.
       - name: Guard against missing backend
         run: |
           if [ ! -f backend.tf ]; then
-            echo "::warning::No backend.tf in environments/dev — run 'make bootstrap' and 'make apply ENV=dev' locally first."
-            echo "Skipping remote plan; validating configuration only."
+            echo "::notice::No backend.tf in environments/${{ matrix.environment }} (it is gitignored) — validating configuration only."
             echo "SKIP_REMOTE=true" >> "$GITHUB_ENV"
           fi
 
       - name: Terraform init (local, no backend)
         if: env.SKIP_REMOTE == 'true'
-        run: terraform init -backend=false
+        run: terraform init -backend=false -input=false
 
       - name: Terraform validate
         if: env.SKIP_REMOTE == 'true'
@@ -67,4 +92,9 @@ jobs:
 
       - name: Terraform plan
         if: env.SKIP_REMOTE != 'true'
-        run: terraform plan -input=false -var-file=terraform.tfvars -no-color
+        run: |
+          if [ -f terraform.tfvars ]; then
+            terraform plan -input=false -var-file=terraform.tfvars -no-color
+          else
+            terraform plan -input=false -no-color
+          fi

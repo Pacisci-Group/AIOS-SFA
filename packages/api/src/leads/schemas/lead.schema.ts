@@ -3,7 +3,6 @@ import type {
   IntakeChannel,
   LeadMailerMatchedBy,
   LeadTemperature,
-  NormalizedLeadSource,
 } from '@sfa/shared';
 import { HydratedDocument, IndexOptions, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
@@ -175,8 +174,15 @@ export class Lead extends TenantRecord {
   @Prop({ type: String, default: 'Unknown', index: true })
   temperature: LeadTemperature;
 
-  @Prop({ type: Object, default: { code: null, label: '' } })
-  leadSource: NormalizedLeadSource;
+  /**
+   * Where this lead came from — a `leadSources` row (PAC-135). Unset = nobody
+   * has said yet (share-link intake), or the import had nothing to map.
+   *
+   * **The lead owns this fact.** Quotes and deals resolve their source through
+   * their lead; `Deal.leadSourceId` is only the fallback for a deal with none.
+   */
+  @Prop({ type: ObjectIdType, ref: 'LeadSource' })
+  leadSourceId?: Types.ObjectId;
 
   /** Days since created_date; derived at migration time (recompute in API for live aging). */
   @Prop({ default: 0 })
@@ -257,9 +263,8 @@ export class Lead extends TenantRecord {
   @Prop({ trim: true })
   submissionToken?: string;
 
-  // `type: Object` is explicit for the same reason `leadSource` needs it: an
-  // interface type emits as `Object` under `emitDecoratorMetadata`, so Mongoose
-  // can't infer a schema from it.
+  // `type: Object` is explicit: an interface type emits as `Object` under
+  // `emitDecoratorMetadata`, so Mongoose can't infer a schema from it.
   @Prop({ type: Object })
   address?: LeadAddress;
 
@@ -279,6 +284,9 @@ LeadSchema.index(
 LeadSchema.index({ agencyId: 1, producerId: 1, temperature: 1, status: 1 });
 // Default Leads-list query (PAC-36): scope clamp + the `lastActivityAt` sort.
 LeadSchema.index({ agencyId: 1, producerId: 1, lastActivityAt: -1 });
+
+/** The Leads-page lead-source filter, and the Owner dashboard's volume count. */
+LeadSchema.index({ agencyId: 1, leadSourceId: 1 });
 
 /**
  * The Hot Leads / Priority Contact List (PAC-15): equality on `temperature`,

@@ -35,7 +35,8 @@ const FEATURE_DIRS = [
   'leaderboard', 'leads', 'mail', 'mailers', 'performance', 'permissions',
   'platform', 'policies', 'prior-insurance', 'prior-policies',
   'producer-assignments', 'producer-goals', 'quote-recaps', 'roles',
-  'service-tickets', 'share-links', 'sold-deals', 'time-off-requests', 'users',
+  'service-tickets', 'share-links', 'sold-deals', 'time-off-requests', 'tls',
+  'users',
 ];
 
 const WORKER_IS_PRIVATE =

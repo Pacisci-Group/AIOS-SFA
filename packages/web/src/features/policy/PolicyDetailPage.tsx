@@ -20,12 +20,13 @@ import {
   toDisplayPolicy,
 } from "@/features/household/components/policy-display";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** `Jun 9, 2026`, or an em dash. */
 function shortDate(iso: string | null | undefined) {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return NOT_AVAILABLE;
   return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -140,7 +141,7 @@ export default function PolicyDetailPage() {
 
           <DetailCard title="Policy terms">
             <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-              <DataRow label="Carrier" value={policy.carrier ?? "—"} />
+              <DataRow label="Carrier" value={policy.carrier ?? NOT_AVAILABLE} />
               <DataRow
                 label="Premium"
                 value={

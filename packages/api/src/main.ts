@@ -1,4 +1,4 @@
-import { ValidationPipe } from '@nestjs/common';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
@@ -47,7 +47,23 @@ async function bootstrap() {
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  app.setGlobalPrefix('api/v1');
+  /*
+   * Every route lives under `api/v1` — except the ACME challenge responder.
+   *
+   * RFC 8555 fixes the validation path at `/.well-known/acme-challenge/<token>`
+   * in the root of the host being validated. There is no version of it that
+   * lives under an API prefix: the CA builds that URL itself and will not be
+   * told otherwise. Left prefixed, every certificate order fails validation
+   * with a 404 that points at nothing in particular.
+   */
+  app.setGlobalPrefix('api/v1', {
+    exclude: [
+      {
+        path: '.well-known/acme-challenge/:token',
+        method: RequestMethod.GET,
+      },
+    ],
+  });
   app.enableCors({
     origin: process.env.CORS_ORIGIN?.split(',') ?? ['http://localhost:3000'],
     credentials: true,
@@ -62,6 +78,20 @@ async function bootstrap() {
   );
 
   /*
+   * Body limit for every route, set unconditionally.
+   *
+   * ⚠ This used to live inside the `WORKER_INLINE` branch below, raised for
+   * Inngest's function payloads — but `useBodyParser` is app-wide, so every API
+   * route silently inherited 10mb too. Splitting the worker out therefore
+   * dropped the API back to Express's 100kb default, and the only symptom would
+   * have been a 413 on whichever request happened to be large. Hoisting it here
+   * keeps the limit the same in both configurations, which is what it should
+   * always have been: what the API accepts has nothing to do with where the
+   * worker runs.
+   */
+  app.useBodyParser('json', { limit: '10mb' });
+
+  /*
    * The Inngest serve handler, when the worker runs in this process.
    *
    * Mounted after the pipes but it makes no difference: `serve()` is raw
@@ -69,14 +99,12 @@ async function bootstrap() {
    * router entirely — no guard, no pipe, and no global prefix applies to it.
    * Its path is literally `/api/inngest`.
    *
-   * Skipped when `WORKER_INLINE=false`, because then a separate worker process
-   * owns the functions and two processes serving the same app id would fight
-   * over which one Inngest syncs to.
+   * Skipped when `WORKER_INLINE=false` — which is now the case in every deployed
+   * environment, because a separate worker process owns the functions and two
+   * processes serving the same app id would fight over which one Inngest syncs
+   * to. It stays true for the host dev loop, where one process is simpler.
    */
   if (process.env.WORKER_INLINE !== 'false') {
-    // Inngest POSTs function payloads here, which can exceed Express's 100kb
-    // default once an email body is in flight.
-    app.useBodyParser('json', { limit: '10mb' });
     mountInngest(app);
   }
 

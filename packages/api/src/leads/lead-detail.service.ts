@@ -14,9 +14,9 @@ import {
   LeadDetailQuoteRecap,
   LeadDetailQuoteRecapSummary,
   LEAD_SOURCE_NONE,
+  LeadSourceRef,
   UpdateLeadResult,
   normalizeContactRole,
-  normalizeLeadSource,
   normalizeLeadStatus,
   normalizeInsuranceMonth,
   normalizePolicyType,
@@ -56,6 +56,7 @@ import {
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { LeadAccessService } from './lead-access.service';
 import { Lead, LeadDocument } from './schemas/lead.schema';
 
@@ -139,6 +140,7 @@ export class LeadDetailService {
     private readonly leadAccess: LeadAccessService,
     private readonly leadTickets: LeadTicketsService,
     private readonly memberships: HouseholdMembersService,
+    private readonly leadSources: LeadSourcesService,
   ) {}
 
   /**
@@ -180,9 +182,10 @@ export class LeadDetailService {
       ),
     ]);
 
-    const [priorInsurance, userNames] = await Promise.all([
+    const [priorInsurance, userNames, leadSource] = await Promise.all([
       this.loadPriorInsurance(deal, household, agencyId),
       this.loadUserNames(lead, activities, recaps),
+      this.toLeadSource(lead),
     ]);
 
     const [latestRecap, ...earlierRecaps] = recaps;
@@ -194,7 +197,7 @@ export class LeadDetailService {
       lastName: lead.lastName ?? '',
       status: normalizeLeadStatus(lead.status),
       temperature: lead.temperature ?? 'Unknown',
-      leadSource: this.toLeadSource(lead),
+      leadSource,
       address: resolveHouseholdAddress(
         lead.address,
         household?.propertyAddress,
@@ -210,7 +213,7 @@ export class LeadDetailService {
           itemCount: policy.itemCount,
           // Per-row since PAC-56 #14, and through the same coercion as every
           // other address on this page: the stored shape is
-          // `Record<string, unknown>` and three writers disagree about its keys.
+          // `Record<string, unknown>` — `Lead.address` is still untyped.
           propertyAddress: normalizeStoredAddress(policy.propertyAddress),
         }))
         .filter((policy) => policy.policyType.length > 0),
@@ -301,16 +304,16 @@ export class LeadDetailService {
     if (dto.temperature !== undefined) {
       lead.temperature = dto.temperature;
     }
-    if (dto.leadSourceCode !== undefined) {
-      lead.leadSource =
-        dto.leadSourceCode === LEAD_SOURCE_NONE
-          ? // The schema default, and the shape the `leadSource=__none__` list
-            // filter matches — clearing has to land the lead back in that facet.
-            { code: null, label: '' }
-          : (() => {
-              const source = normalizeLeadSource(dto.leadSourceCode);
-              return { code: source.code, label: source.label };
-            })();
+    if (dto.leadSourceId !== undefined) {
+      // Clearing unsets the field, which is what the `leadSourceId=__none__`
+      // list filter matches — it has to land the lead back in that facet.
+      lead.leadSourceId =
+        dto.leadSourceId === LEAD_SOURCE_NONE
+          ? undefined
+          : await this.leadSources.assertSelectable(
+              String(lead.agencyId),
+              dto.leadSourceId,
+            );
     }
 
     lead.lastActivityAt = new Date();
@@ -328,18 +331,16 @@ export class LeadDetailService {
       id: lead._id.toString(),
       status: normalizeLeadStatus(lead.status),
       temperature: lead.temperature ?? 'Unknown',
-      leadSource: this.toLeadSource(lead),
+      leadSource: await this.toLeadSource(lead),
       lastActivityAt: lead.lastActivityAt.toISOString(),
     };
   }
 
-  /** Canonical source; migrated leads may hold only a label, share-link leads neither. */
-  private toLeadSource(lead: LeadDocument) {
-    const source = normalizeLeadSource(
-      lead.leadSource?.code,
-      lead.leadSource?.label,
-    );
-    return { code: source.code, label: source.label };
+  /** `{ id: null, label: '' }` for a lead nobody has attributed yet. */
+  private async toLeadSource(lead: LeadDocument): Promise<LeadSourceRef> {
+    if (!lead.leadSourceId) return { id: null, label: '' };
+    const labels = await this.leadSources.labelsFor(String(lead.agencyId));
+    return LeadSourcesService.toRef(lead.leadSourceId, labels);
   }
 
   /**

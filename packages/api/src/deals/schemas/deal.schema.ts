@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE } from '@sfa/shared';
-import type { BusinessType, NormalizedLeadSource } from '@sfa/shared';
+import type { BusinessType } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
 import {
@@ -152,8 +152,16 @@ export class Deal extends TenantRecord {
   @Prop({ type: [String], default: [] })
   policyTypes: string[];
 
-  @Prop({ type: Object, default: { code: null, label: '' } })
-  leadSource: NormalizedLeadSource;
+  /**
+   * The source this sale was attributed to **when it has no lead** (PAC-135).
+   *
+   * Stamped from the lead at sale time, and the only source a migrated deal with
+   * no lead link has. Analytics prefer `lead.leadSourceId` whenever `leadId` is
+   * set, so a corrected lead moves its quotes *and* its sale together — read
+   * this field directly only as that fallback.
+   */
+  @Prop({ type: ObjectIdType, ref: 'LeadSource' })
+  leadSourceId?: Types.ObjectId;
 
   @Prop({ trim: true })
   clientName?: string;
@@ -203,6 +211,19 @@ export class Deal extends TenantRecord {
   /** Per-wizard-session idempotency key; see the partial unique index below. */
   @Prop({ trim: true })
   submissionToken?: string;
+
+  /**
+   * Idempotency keys for policies added after the deal was booked (PAC-104),
+   * each `SOLDADD|…`.
+   *
+   * An array on the deal rather than a second partial-unique index: a deal takes
+   * any number of additions, and the guard is a conditional `$push` on this one
+   * document, which a concurrent duplicate cannot also pass — its transaction
+   * write-conflicts, retries, and finds the key already here. Unindexed: it is
+   * only ever read off a deal already loaded by `_id`.
+   */
+  @Prop({ type: [String], default: undefined })
+  policyAdditionTokens?: string[];
 
   /**
    * Set when any policy claimed escrow. Legacy tracked this as a separate

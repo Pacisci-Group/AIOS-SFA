@@ -18,6 +18,8 @@
  * and whose UTC arithmetic is deliberately **not** ported.
  */
 
+import type { OwnerDashboardRangeKey } from '@sfa/shared';
+
 export const AGENCY_TIME_ZONE = 'America/Chicago';
 
 export const RANGE_KEYS = [
@@ -29,6 +31,16 @@ export const RANGE_KEYS = [
 ] as const;
 
 export type RangeKey = (typeof RANGE_KEYS)[number];
+
+/**
+ * Every key {@link resolveRange} understands: the Producer Dashboard's
+ * {@link RANGE_KEYS} plus the Owner dashboard's longer presets (PAC-135).
+ *
+ * The two lists stay separate on purpose. Each endpoint's DTO accepts only its
+ * own chips — widening `RANGE_KEYS` would make `GET /performance` quietly accept
+ * `lastYear`, a window its `$addToSet` was never sized for.
+ */
+export type AnyRangeKey = RangeKey | OwnerDashboardRangeKey;
 
 /**
  * Upper bound on a custom window, in inclusive days. Load-bearing, not
@@ -163,6 +175,9 @@ export function recentChicagoMonths(
  * | `week` | `[T-6, T+1)` — rolling trailing 7 days **including today**, not a calendar week |
  * | `mtd` | `[1st of T's month, T+1)` |
  * | `lastMonth` | `[1st of previous month, 1st of T's month)` |
+ * | `last3Months` | the three **complete** calendar months before T's month |
+ * | `ytd` | `[Jan 1 of T's year, T+1)` |
+ * | `lastYear` | the whole previous calendar year |
  * | `custom` | `[from, to+1)` — the API's `to` is inclusive |
  *
  * `mtd` deliberately stops at today rather than at month end, which diverges
@@ -174,7 +189,7 @@ export function recentChicagoMonths(
  * (the `daysSince` convention in `common/domain/deal-derive`).
  */
 export function resolveRange(
-  key: RangeKey,
+  key: AnyRangeKey,
   custom: { from?: string; to?: string } = {},
   now: Date = new Date(),
 ): YmdRange {
@@ -194,12 +209,107 @@ export function resolveRange(
       return build(addDays(today, -6), today);
     case 'mtd':
       return build({ ...today, day: 1 }, today);
-    case 'lastMonth': {
-      const firstOfThisMonth: CalendarDate = { ...today, day: 1 };
-      const lastOfPrevMonth = addDays(firstOfThisMonth, -1);
-      return build({ ...lastOfPrevMonth, day: 1 }, lastOfPrevMonth);
+    case 'lastMonth':
+      return wholeMonths(today, -1, 1);
+    case 'last3Months':
+      return wholeMonths(today, -3, 3);
+    case 'ytd':
+      return build({ year: today.year, month: 1, day: 1 }, today);
+    case 'lastYear':
+      return wholeYear(today.year - 1);
+  }
+}
+
+/**
+ * The window a range is **compared against** — the Owner dashboard's trend
+ * badges and "vs …" line (PAC-135).
+ *
+ * | key | compared with |
+ * |---|---|
+ * | `mtd` | the same elapsed days of the previous month: Sep 1–21 → Aug 1–21 |
+ * | `lastMonth` | the month before it |
+ * | `last3Months` | the three months before those |
+ * | `ytd` | Jan 1 → the same day, one year earlier |
+ * | `lastYear` | the year before it |
+ * | anything else | the immediately preceding span of equal length |
+ *
+ * ## Why presets are not "the preceding span of equal length"
+ *
+ * That rule is right for a custom window and wrong for every preset. For
+ * `mtd` on Sep 21 it yields Aug 11–31, which nobody means by "vs last month";
+ * comparing against *all* of August instead shows red until the month ends; and
+ * "equal length" is not even true of calendar months — February against
+ * January. David's wording was "the same time period of the previous month",
+ * which is what this does: shift by the calendar unit, keep the elapsed part.
+ *
+ * A day that does not exist in the earlier month clamps to its last day —
+ * Mar 31 compares with Feb 1–28, and a leap-day `ytd` with Feb 28.
+ */
+export function resolveComparison(
+  key: AnyRangeKey,
+  custom: { from?: string; to?: string } = {},
+  now: Date = new Date(),
+): YmdRange {
+  const today = chicagoParts(now);
+
+  switch (key) {
+    case 'mtd': {
+      const first = addMonths({ ...today, day: 1 }, -1);
+      return build(first, clampDay(first, today.day));
+    }
+    case 'lastMonth':
+      return wholeMonths(today, -2, 1);
+    case 'last3Months':
+      return wholeMonths(today, -6, 3);
+    case 'ytd': {
+      const year = today.year - 1;
+      return build(
+        { year, month: 1, day: 1 },
+        clampDay({ year, month: today.month, day: 1 }, today.day),
+      );
+    }
+    case 'lastYear':
+      return wholeYear(today.year - 2);
+    default: {
+      // `today`, `week` and `custom`: the span itself is the unit.
+      const current = resolveRange(key, custom, now);
+      const from = parseIsoDate(current.from);
+      const days = spanDays(current.from, current.to);
+      return build(addDays(from, -days), addDays(from, -1));
     }
   }
+}
+
+/** The 1st of the month `delta` months from `date`'s. `Date.UTC` normalizes years. */
+function addMonths(date: CalendarDate, delta: number): CalendarDate {
+  const anchor = new Date(Date.UTC(date.year, date.month - 1 + delta, 1));
+  return {
+    year: anchor.getUTCFullYear(),
+    month: anchor.getUTCMonth() + 1,
+    day: 1,
+  };
+}
+
+/** `day` within `month`'s own length — the 31st of a 30-day month is the 30th. */
+function clampDay(month: CalendarDate, day: number): CalendarDate {
+  // Day 0 of the next month is the last day of this one.
+  const last = new Date(Date.UTC(month.year, month.month, 0)).getUTCDate();
+  return { year: month.year, month: month.month, day: Math.min(day, last) };
+}
+
+/** `count` complete calendar months, starting `offset` months from `today`'s. */
+function wholeMonths(
+  today: CalendarDate,
+  offset: number,
+  count: number,
+): YmdRange {
+  const first = addMonths({ ...today, day: 1 }, offset);
+  const lastMonth = addMonths(first, count - 1);
+  return build(first, clampDay(lastMonth, 31));
+}
+
+function wholeYear(year: number): YmdRange {
+  return build({ year, month: 1, day: 1 }, { year, month: 12, day: 31 });
 }
 
 /** `to` is inclusive on the way in; `endYmd` is exclusive on the way out. */

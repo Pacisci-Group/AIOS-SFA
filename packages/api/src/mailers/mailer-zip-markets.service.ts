@@ -6,6 +6,7 @@ import type {
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import type { ZipMarketRow } from '../common/mailers/zip-markets';
+import { escapeRegex } from '../common/mongo/escape-regex';
 import type {
   ListZipMarketsDto,
   UpsertZipMarketsDto,
@@ -46,7 +47,7 @@ export class MailerZipMarketsService {
       agencyId: query.agencyId ?? null,
     };
     if (query.q) {
-      const escaped = query.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = escapeRegex(query.q);
       filter.$or = [
         // Anchored on the ZIP so the `{agencyId, zip5}` index can serve it;
         // the market match is a scan over what that already narrowed.

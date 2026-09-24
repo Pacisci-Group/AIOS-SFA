@@ -8,7 +8,6 @@ import {
   resolveItemCount,
 } from '@sfa/shared';
 import type {
-  NormalizedLeadSource,
   SoldDocumentMeta,
   SoldPolicyDiscounts,
   SoldPolicyInput,
@@ -21,6 +20,7 @@ import type {
 } from '../../deals/schemas/deal.schema';
 import { emptyAuditTriggers } from '../../deals/schemas/deal.schema';
 import type { SoldUploadKind } from '../dto/presign-sold-document.dto';
+import type { Types } from 'mongoose';
 
 /**
  * Pure derivations for the Sold write path (PAC-40).
@@ -39,6 +39,18 @@ import type { SoldUploadKind } from '../dto/presign-sold-document.dto';
 export function buildSoldSubmissionToken(raw?: string | null): string | null {
   const token = raw?.trim();
   return token ? `SOLD|${token.toUpperCase()}` : null;
+}
+
+/**
+ * `SOLDADD|<UPPERCASED>` — the key for policies added to a booked deal (PAC-104).
+ *
+ * Its own namespace rather than `SOLD|`: the create token lives in the
+ * partial-unique index on `deals.submissionToken`, this one in the deal's
+ * `policyAdditionTokens`, and a client reusing one wizard's token for the other
+ * must not make either look already applied.
+ */
+export function buildSoldAdditionToken(raw: string): string {
+  return `SOLDADD|${raw.trim().toUpperCase()}`;
 }
 
 /** `YYYY-MM-DD` → the `YYYYMMDD` integer the sold-date range filters use. */
@@ -367,13 +379,6 @@ export function buildDealTitle(
   return name ? `Deal - ${name}` : `Deal - ${fallbackId.slice(0, 8)}`;
 }
 
-/** Carried from the lead so the Sold scorecard can attribute by source. */
-export function resolveLeadSource(
-  leadSource: NormalizedLeadSource | undefined,
-): NormalizedLeadSource {
-  return leadSource ?? { code: null, label: '' };
-}
-
 /** Legacy stores these yes/no answers as strings, not booleans. */
 export function yesNo(value: boolean): 'Yes' | 'No' {
   return value ? 'Yes' : 'No';
@@ -416,6 +421,130 @@ export function derivePriorCarriers(
     // carriers are not "the same carrier".
     sameCarrier: Boolean(
       auto && home && auto.toLowerCase() === home.toLowerCase(),
+    ),
+  };
+}
+
+/**
+ * OR the triggers a deal already carries with those of policies being added to
+ * it (PAC-104).
+ *
+ * The union is what {@link deriveAuditTriggers} would have produced had the
+ * added policies been on the original submission, so audit generation sees the
+ * same deal either way. Only ever widens: nothing is removed from a booked sale.
+ *
+ * `stored` is read leniently because deals written before a flag existed simply
+ * do not have it — `=== true` treats an absent flag as unset rather than
+ * letting `undefined || false` leak through as a non-boolean.
+ */
+export function mergeAuditTriggers(
+  stored: Partial<DealAuditTriggers> | undefined,
+  added: DealAuditTriggers,
+): DealAuditTriggers {
+  const either = (
+    key: Exclude<keyof DealAuditTriggers, 'defensiveDriverNames'>,
+  ) => stored?.[key] === true || added[key] === true;
+
+  // Deduped by trimmed name, exactly as `deriveAuditTriggers` dedupes within
+  // one submission — one certificate per driver, however many policies name them.
+  const names = new Set(
+    [...(stored?.defensiveDriverNames ?? []), ...added.defensiveDriverNames]
+      .map((name) => name.trim())
+      .filter(Boolean),
+  );
+
+  return {
+    defensiveDriver: either('defensiveDriver'),
+    goodStudent: either('goodStudent'),
+    drivewise: either('drivewise'),
+    fireSubscription: either('fireSubscription'),
+    actualCashValue: either('actualCashValue'),
+    hailResistantRoof: either('hailResistantRoof'),
+    priorInsurance: either('priorInsurance'),
+    priorPolicyDeclared: either('priorPolicyDeclared'),
+    defensiveDriverNames: [...names],
+  };
+}
+
+/** The deal-level `priorInsurance` summary fields `PriorInsuranceStep` derives. */
+export interface PriorInsuranceSummary {
+  previousCarrierAuto?: string;
+  previousCarrierHome?: string;
+  previousAgentName?: string;
+  /** `'Yes' | 'No'` — legacy stores these as strings. */
+  cancelledPreviousInsurance?: string;
+  cancellationDate?: Date;
+  cancellationResponsibility?: string;
+  cancellationHandledByUserId?: Types.ObjectId;
+  cancellationHandledByName?: string;
+  autoHomeSameCarrier?: string;
+}
+
+function isBlank(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === 'string' && value.trim() === '')
+  );
+}
+
+/**
+ * Fold the summary of policies added to a booked deal into the one it already
+ * has (PAC-104).
+ *
+ * The summary is one row per deal, derived as "the first declared answer wins"
+ * (see `PriorInsuranceStep`). Merging keeps that rule across the two
+ * submissions: whatever the deal already says stands, and the addition only
+ * fills what it left blank — adding a Home policy supplies the prior home
+ * carrier an Auto-only sale never had, but does not overwrite anything.
+ *
+ *   - **Who cancelled** moves as a unit — responsibility, user id and name —
+ *     so a name can never be paired with another answer's responsibility.
+ *   - **`cancelledPreviousInsurance`** is "Yes" if either side cancelled.
+ *   - **`cancellationDate`** is the earlier of the two, for the same reason the
+ *     step takes the earliest: that is when a gap in coverage would start.
+ *   - **`autoHomeSameCarrier`** is recomputed from the merged pair; it is a
+ *     fact about both carriers, which may now come from different submissions.
+ */
+export function mergePriorInsuranceSummary(
+  existing: PriorInsuranceSummary,
+  incoming: PriorInsuranceSummary,
+): PriorInsuranceSummary {
+  const fill = <K extends keyof PriorInsuranceSummary>(
+    key: K,
+  ): PriorInsuranceSummary[K] =>
+    isBlank(existing[key]) ? incoming[key] : existing[key];
+
+  const auto = fill('previousCarrierAuto');
+  const home = fill('previousCarrierHome');
+
+  const dates = [existing.cancellationDate, incoming.cancellationDate].filter(
+    (date): date is Date =>
+      date instanceof Date && !Number.isNaN(date.getTime()),
+  );
+
+  const cancelledBy = isBlank(existing.cancellationResponsibility)
+    ? incoming
+    : existing;
+
+  return {
+    previousCarrierAuto: auto,
+    previousCarrierHome: home,
+    previousAgentName: fill('previousAgentName'),
+    cancelledPreviousInsurance: yesNo(
+      existing.cancelledPreviousInsurance === 'Yes' ||
+        incoming.cancelledPreviousInsurance === 'Yes',
+    ),
+    cancellationDate: dates.length
+      ? new Date(Math.min(...dates.map((date) => date.getTime())))
+      : undefined,
+    cancellationResponsibility: cancelledBy.cancellationResponsibility,
+    cancellationHandledByUserId: cancelledBy.cancellationHandledByUserId,
+    cancellationHandledByName: cancelledBy.cancellationHandledByName,
+    autoHomeSameCarrier: yesNo(
+      Boolean(
+        auto && home && auto.trim().toLowerCase() === home.trim().toLowerCase(),
+      ),
     ),
   };
 }

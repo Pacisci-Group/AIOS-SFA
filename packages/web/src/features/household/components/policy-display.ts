@@ -10,6 +10,7 @@ import {
 import type { PolicySummary } from "@sfa/shared";
 import { normalizePolicyStatus } from "@sfa/shared";
 import { premiumTermSuffix } from "@sfa/shared";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * The shape the policy cards render. Kept separate from the API's
@@ -109,7 +110,7 @@ function toCardStatus(policy: PolicySummary): DisplayPolicy["status"] {
 }
 
 function formatDate(iso: string | null) {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   return new Date(iso).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -122,7 +123,7 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
   return {
     id: policy.id,
     line: policy.policyType ?? "Policy",
-    policyNumber: policy.policyNumber ?? "—",
+    policyNumber: policy.policyNumber ?? NOT_AVAILABLE,
     premium: `$${policy.premium.toLocaleString()}`,
     // Auto is quoted on a 6-month term (2026-08-19 scrum), so the unit follows
     // the policy type rather than being hard-coded annual.
@@ -131,7 +132,7 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
     status: toCardStatus(policy),
     effective: formatDate(policy.effectiveDate),
     expiration: formatDate(policy.expirationDate),
-    carrier: policy.carrier ?? "—",
+    carrier: policy.carrier ?? NOT_AVAILABLE,
     deductible: undefined,
     ...style,
   };

@@ -3,11 +3,10 @@ import { useState } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { AddLeadButton } from "@/components/leads/AddLeadButton";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { RangeChips } from "@/components/common/RangeChips";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
 import { RANGE_CHIPS } from "../dashboard-range";
 import type { DashboardRange } from "../useDashboardRange";
-import { DateRangePicker } from "./DateRangePicker";
 
 interface HeaderProps {
   range: DashboardRange;
@@ -91,38 +90,8 @@ export function Header({ range, onRangeChange }: HeaderProps) {
         </div>
       </div>
 
-      {/* Row 2 — Temporal filter. Selection lives in the URL (PAC-9).
-          Six chips are wider than a phone, so the strip scrolls sideways and
-          bleeds into the page gutter to show that it does. */}
-      <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
-        <div className="flex w-max items-center gap-1 rounded-lg bg-muted p-1">
-          {RANGE_CHIPS.map((chip) =>
-            chip.key === "custom" ? (
-              <DateRangePicker
-                key={chip.key}
-                range={range}
-                isActive={range.key === "custom"}
-                onApply={(from, to) =>
-                  onRangeChange({ key: "custom", from, to })
-                }
-              />
-            ) : (
-              <button
-                key={chip.key}
-                onClick={() => onRangeChange({ key: chip.key })}
-                className={cn(
-                  "rounded-md border px-3 py-1.5 text-xs whitespace-nowrap transition-all duration-150",
-                  range.key === chip.key
-                    ? "border-primary/20 bg-background font-semibold text-primary"
-                    : "border-transparent bg-transparent text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {chip.label}
-              </button>
-            ),
-          )}
-        </div>
-      </div>
+      {/* Row 2 — Temporal filter. Selection lives in the URL (PAC-9). */}
+      <RangeChips chips={RANGE_CHIPS} range={range} onChange={onRangeChange} />
     </div>
   );
 }

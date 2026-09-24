@@ -17,6 +17,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TablePagination } from "@/components/common/TablePagination";
+import {
+  SEARCH_DEBOUNCE_MS,
+  TableSearchInput,
+} from "@/components/common/TableSearchInput";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   deleteZipMarket,
@@ -52,7 +57,7 @@ export default function ZipMarketsPage() {
   const [paste, setPaste] = useState("");
   const [pasteError, setPasteError] = useState<string | null>(null);
 
-  const debouncedQ = useDebouncedValue(q);
+  const debouncedQ = useDebouncedValue(q, SEARCH_DEBOUNCE_MS);
   const params = { page, pageSize: PAGE_SIZE, q: debouncedQ || undefined };
 
   const { data, isPending, isFetching } = useQuery({
@@ -207,19 +212,17 @@ export default function ZipMarketsPage() {
         </CardContent>
       </Card>
 
-      <div className="relative mb-3">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setPage(1);
-          }}
-          placeholder="Search by ZIP or market…"
-          className="border-border bg-card pl-9"
-          aria-label="Search ZIP mappings"
-        />
-      </div>
+      <TableSearchInput
+        className="mb-3"
+        value={q}
+        onValueChange={(next) => {
+          setQ(next);
+          setPage(1);
+        }}
+        placeholder="Search by ZIP or market…"
+        label="Search ZIP mappings"
+        busy={isFetching}
+      />
 
       {isPending ? (
         <div className="space-y-2">
@@ -273,31 +276,16 @@ export default function ZipMarketsPage() {
         </div>
       )}
 
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <span className="text-sm tabular-nums text-muted-foreground">
-          {total.toLocaleString()} mappings
-        </span>
-        {totalPages > 1 && (
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1 || isFetching}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= totalPages || isFetching}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        )}
-      </div>
+      <TablePagination
+        className="mt-4"
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={total}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        busy={isFetching}
+        noun="mappings"
+      />
     </SuperAdminLayout>
   );
 }

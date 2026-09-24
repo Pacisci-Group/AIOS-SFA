@@ -6,13 +6,16 @@
 # Docker-side services split by compose profile (see docker-compose.yml): mongo,
 # minio and redis have no profile so they start in both modes; api and web sit
 # behind `--profile app`.
-.PHONY: help dev infra up start down stop build logs logs-infra restart ps seed seed-demo migrate migrate-status worker worker-logs
+.PHONY: help dev infra up start down stop build logs logs-infra restart ps seed seed-demo migrate migrate-status worker-logs
 
 COMPOSE := docker compose
+# api, web AND worker all live in the `app` profile — the worker is not optional,
+# because exactly one process may serve the Inngest functions and the API is
+# started with WORKER_INLINE=false.
 APP     := $(COMPOSE) --profile app
-# Teardown must name every profile: profiled services are NOT orphans, so
+# Teardown must name the profile: profiled services are NOT orphans, so
 # `--remove-orphans` does not reach them and they survive a plain `down`.
-ALL     := $(COMPOSE) --profile app --profile worker
+ALL     := $(APP)
 
 help:
 	@echo "SFA Platform — local stack"
@@ -30,7 +33,7 @@ help:
 	@echo "    make up         Build and start Mongo, MinIO, Redis, API and web"
 	@echo ""
 	@echo "  Async work (Inngest):"
-	@echo "    make worker     Run the worker as its own container (see caveat below)"
+	@echo "    (the worker starts with 'make up' — it is part of the app profile)"
 	@echo "    make worker-logs  Follow worker logs"
 	@echo ""
 	@echo "  Both:"
@@ -87,28 +90,20 @@ up start: build
 	$(APP) up -d
 	@echo ""
 	@echo "SFA is running:"
-	@echo "  Web:   http://localhost:5173"
-	@echo "  API:   http://localhost:4000/api/v1"
-	@echo "  Mongo: mongodb://localhost:27017/sfa"
+	@echo "  Web:    http://localhost:5173"
+	@echo "  API:    http://localhost:4000/api/v1"
+	@echo "  Worker: http://localhost:4001/api/inngest"
+	@echo "  Mongo:  mongodb://localhost:27017/sfa"
 
 # Every profile on down: without them the profiled containers are out of scope
 # and survive the teardown.
 down stop:
 	$(ALL) down
 
-# Run async work as its own container instead of inside the API.
-#
-# ⚠ Exactly one process may serve the Inngest functions. Set WORKER_INLINE=false
-# on the api service first, or both register under the same app id and whichever
-# synced last wins. See docker-compose.yml.
-worker:
-	$(COMPOSE) --profile worker up -d --build
-	@echo ""
-	@echo "Worker running:  http://localhost:4001/api/inngest"
-	@echo "Inngest UI:      http://localhost:8288"
-
+# The worker comes up with `make up` now, so there is no separate target to
+# start it. This follows its logs.
 worker-logs:
-	$(COMPOSE) --profile worker logs -f worker
+	$(APP) logs -f worker
 
 build:
 	$(APP) build

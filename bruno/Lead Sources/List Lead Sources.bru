@@ -1,0 +1,136 @@
+meta {
+  name: List Lead Sources
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/lead-sources
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // Every request that creates or re-attributes a lead sends a `leadSourceId`,
+  // and ids differ per database — so they are captured here rather than pasted
+  // into request bodies. This folder sorts before `Leads`, so a full run has
+  // them in hand; running a Leads request on its own needs this one run first.
+  if (res.getStatus() === 200) {
+    const sources = res.getBody().leadSources;
+    const bySlug = (slug) => (sources.find((s) => s.slug === slug) || {}).id;
+    bru.setVar("mailerLeadSourceId", bySlug("mailer"));
+    bru.setVar("facebookLeadSourceId", bySlug("facebook"));
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a leadSources array", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("leadSources");
+    expect(body.leadSources).to.be.an("array");
+    expect(body.leadSources.length).to.be.above(0);
+  });
+
+  test("every source carries id, name and slug — and nothing internal", function () {
+    for (const source of res.getBody().leadSources) {
+      expect(source).to.have.all.keys("id", "name", "slug");
+    }
+  });
+
+  test("Mailer is present and sorts first", function () {
+    const sources = res.getBody().leadSources;
+    expect(sources[0].slug).to.equal("mailer");
+  });
+
+  test("Other, the catch-all, sorts last", function () {
+    const sources = res.getBody().leadSources;
+    expect(sources[sources.length - 1].slug).to.equal("other");
+  });
+
+  test("captured the ids later requests send", function () {
+    expect(bru.getVar("mailerLeadSourceId")).to.match(/^[a-f0-9]{24}$/);
+  });
+}
+
+docs {
+  # GET /lead-sources — where a lead came from (PAC-135)
+
+  The list behind the lead form's required **source select**, the Leads page's
+  **lead-source filter**, and the Owner dashboard's lead-source filter. Returns
+  platform sources unioned with the calling agency's own rows, **active only**.
+
+  - **Module:** `leads` **or** `owner_dashboard` (either enabled for the agency)
+  - **Permission:** `leads:read` **or** `owner_dashboard:read`
+  - **Data scope:** none — reference data, identical for everyone in the agency
+
+  > **Why no `lead_sources` module?** Same argument as `GET /carriers`: this is a
+  > catalog read behind pages that already have gates, not a page. A module key
+  > of its own would add a row to the permission matrix and hand every agency a
+  > switch that silently empties the lead form's dropdown. It accepts *either*
+  > gate because an account can hold the Owner dashboard without the Leads
+  > module (the Data Team template does).
+
+  ## Why a collection
+  Lead source used to be a `{ code, label }` object copied onto every lead and
+  deal, picked from a list hard-coded in `@sfa/shared`. Production had already
+  outgrown that list — real leads carry Web, Walk-In, Other and Live Call
+  Transfer — and the same source sat under several SmartSuite choice codes,
+  because those codes are per-field. Leads and deals now hold a `leadSourceId`.
+
+  ## Two kinds of row
+  | `agencyId` | meaning | who writes it |
+  |---|---|---|
+  | `null` | platform source, visible to every agency | the core seed (`seedLeadSources`) and the `lead_sources_backfill` migration |
+  | an id | that agency's own source | the migration and the SmartSuite import, from the labels that agency actually uses |
+
+  An agency row **shadows** a platform row with the same slug, so an agency can
+  reword a platform source rather than having to invent a different name.
+
+  ## Order
+  Platform sources in seeded order, then the agency's own alphabetically, then
+  **Other** last. Resolved in application code: Mongo sorts a missing
+  `displayOrder` *before* every number, which would put an agency's vendors above
+  Mailer.
+
+  ## Archived sources
+  `active: false` takes a source out of this list — and out of what
+  `POST /leads` / `PATCH /leads/:id` will accept — but the row stays, so a lead or
+  sale attributed to it years ago still renders its name.
+
+  ## Curation is deliberately not here
+  Seeded only. Super-admin CRUD over the platform rows and agency-settings CRUD
+  over an agency's own are future work; the schema already carries `agencyId`,
+  `active` and `displayOrder` so both drop in as controllers.
+
+  ## Response `200`
+  ```json
+  {
+    "leadSources": [
+      { "id": "66f0…a1", "name": "Mailer", "slug": "mailer" },
+      { "id": "66f0…a2", "name": "Book of Business", "slug": "book-of-business" },
+      { "id": "66f0…b7", "name": "Waterstone", "slug": "waterstone" },
+      { "id": "66f0…a8", "name": "Other", "slug": "other" }
+    ]
+  }
+  ```
+
+  | field | notes |
+  |---|---|
+  | id   | what `leadSourceId` takes on `POST /leads`, `PATCH /leads/:id` and `GET /leads` |
+  | name | what is rendered |
+  | slug | stable key — a rename does not change it |
+
+  ## Errors
+  | status | when |
+  |---|---|
+  | 401 | no / expired token |
+  | 403 | neither `leads:read` nor `owner_dashboard:read`, or neither module enabled |
+}

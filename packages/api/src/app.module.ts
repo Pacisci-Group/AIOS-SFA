@@ -28,11 +28,13 @@ import {
 import { ActivitiesModule } from './activities/activities.module';
 import { AddressModule } from './address/address.module';
 import { AgencyDomainsModule } from './agency-domains/agency-domains.module';
+import { TlsModule } from './tls/tls.module';
 import { AgencyEmailModule } from './agency-email/agency-email.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
 import { CarriersModule } from './carriers/carriers.module';
+import { LeadSourcesModule } from './lead-sources/lead-sources.module';
 import { ClientsModule } from './clients/clients.module';
 import { CrmModule } from './crm/crm.module';
 import { ContactsModule } from './contacts/contacts.module';
@@ -41,6 +43,7 @@ import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { MailersModule } from './mailers/mailers.module';
 import { LeadsModule } from './leads/leads.module';
 import { PerformanceModule } from './performance/performance.module';
+import { OwnerDashboardModule } from './owner-dashboard/owner-dashboard.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -129,6 +132,9 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // `agency/branding`, `public/*`), so neither participates in the route
     // ordering hazards documented further down.
     AgencyDomainsModule,
+    // The ACME http-01 responder. Sits with the white-label modules because
+    // it is what makes a tenant's own domain able to serve HTTPS at all.
+    TlsModule,
     AgencyEmailModule,
     TenantBrandingModule,
     // The owner's first-run setup flag (PAC-69). Sits with the white-label
@@ -183,8 +189,13 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // The Sold wizard's carrier vocabulary (PAC-56 #19). Also registers the
     // `carriers` model so its indexes build and the core seed can inject it.
     CarriersModule,
+    // Where a lead came from (PAC-135). Registers the `leadSources` model so its
+    // indexes build and the core seed can inject it.
+    LeadSourcesModule,
     SoldDealsModule,
     PerformanceModule,
+    // The Owner View dashboard (PAC-135) — replaces the `owner-dashboard` stub.
+    OwnerDashboardModule,
     LeaderboardModule,
     ActivitiesModule,
     // Super Admin mailer imports (PAC-73). Registers the `mailers` and

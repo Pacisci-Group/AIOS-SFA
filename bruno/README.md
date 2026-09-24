@@ -54,8 +54,16 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Mailers | Lookup Mailer (Long Form) | `GET /mailers/:controlNumber` | **PAC-61** — Mailers drawer QCN lookup. `mailers:read`. The `#`-prefixed form must be percent-encoded in the URL; the web client sends the normalized key instead. |
 | Mailers | Lookup Mailer (Short Form) | `GET /mailers/:controlNumber` | **PAC-61** — the 12-char printed form must resolve to the *same* mailer. Reads the short form off the previous response, not the env. |
 | Mailers | Lookup Mailer (Not Found) | `GET /mailers/:controlNumber` | **PAC-61** — an unknown number is a 404, which the drawer renders as an empty state rather than an error. |
-| Mailers | Log Mailer Lead | `POST /mailers/log-lead` | **PAC-61** — creates Lead + Household + Contact via `LeadIntakeService`. Needs `mailers:read` **and** `leads:write`. 200, not 201: resolve-or-create. |
+| Mailers | Log Mailer Lead | `POST /mailers/log-lead` | **PAC-61 / PAC-103** — creates Lead + Household + Contact via `LeadIntakeService`, with the producer-supplied DOB, phone and email on the contact. Needs `mailers:read` **and** `leads:write`. 200, not 201: resolve-or-create. |
 | Mailers | Log Mailer Lead (Replay, Other Form) | `POST /mailers/log-lead` | **PAC-61** — the same mailer through the *other* control-number form returns the same `leadId` with `alreadyExisted: true`. One mailer, one lead. |
+| Mailers | Log Mailer Lead (Missing Contact Details, 400) | `POST /mailers/log-lead` | **PAC-103** — no date of birth, phone or email is a 400 before anything is looked up or written. |
+| Lead Sources | List Lead Sources | `GET /lead-sources` | **PAC-135** — platform sources ∪ the agency's own, active only. `leads:read` **or** `owner_dashboard:read`. Captures `mailerLeadSourceId` for every Leads request that sends a `leadSourceId` — this folder sorts before `Leads` for that reason. |
+| Owner Dashboard | Login as Owner | `POST /auth/login` | **PAC-135** — the collection token is the producer's, who holds no `owner_dashboard:read`. Captures `ownerDashboardToken` under its own name. |
+| Owner Dashboard | Get Summary | `GET /owner-dashboard/summary` | **PAC-135** — the KPI row: premium, items, avg premium/household, premium closing ratio, LOB mix, each against its comparison window. The query schema all three reads share is documented here. |
+| Owner Dashboard | Get Producers | `GET /owner-dashboard/producers` | **PAC-135** — the owner's leaderboard, per-producer dollars. Asserts its total equals the summary card. |
+| Owner Dashboard | Get Lead Sources | `GET /owner-dashboard/lead-sources` | **PAC-135** — Conv % · Vol · Premium per source, with "No source" kept as a row. Asserts its total equals the summary card. |
+| Owner Dashboard | Get Summary (Forbidden for Producer) | `GET /owner-dashboard/summary` | **PAC-135** — a producer is a `403`. |
+| Owner Dashboard | Get Summary (Invalid Range) | `GET /owner-dashboard/summary` | **PAC-135** — the producer dashboard's `week` chip must 400 here. |
 | Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
