@@ -8,9 +8,15 @@ import type { ServiceTicketDocument } from './schemas/service-ticket.schema';
  * Mongo predicates over `serviceTickets` that more than one reader needs.
  *
  * Extracted from `ServiceTicketsService` when the Manager view (PAC-139) became
- * the second reader of "which tickets are overdue": that service is 2,500 lines
- * of workflow, and importing it for one predicate would drag the whole CRM
- * module into a dashboard that only counts.
+ * the second reader of the collection: that service is 2,500 lines of
+ * workflow, and importing it for one predicate would drag the whole CRM module
+ * into a dashboard that only counts.
+ *
+ * "Which tickets are overdue" is deliberately *not* here any more. It used to
+ * be — a derived `$or` over the steps' `dueAt` — until PAC-102 materialised
+ * `status`, at which point the stored column became the one answer and the
+ * predicate a second implementation of the rule. Readers match
+ * `status: 'overdue'`; `common/scheduling/step-status.ts` owns the derivation.
  */
 
 /**
@@ -44,43 +50,4 @@ export function ticketTenantFilter(
   // own
   filter.assignedUserId = new Types.ObjectId(access.userId);
   return filter;
-}
-
-/**
- * "This ticket is overdue right now" — the Service dashboard's meaning, as a
- * query the database can answer.
- *
- * Overdue is only *partly* stored. An onboarding or renewal call carries a
- * scheduled step and derives its status from that step's timing on every read
- * (`deriveStepStatus` in `common/scheduling/step-status.ts`): incomplete and past
- * `dueAt` is overdue, whatever `status` says, unless a CSR set the status by
- * hand (`statusOverriddenAt`). Every other ticket is overdue only when its
- * stored `status` says so. This mirrors that derivation branch for branch, and
- * the unit spec pins the two together.
- *
- * Returns a `$or`, so a caller with its own `$or` must nest this under `$and`.
- */
-export function overdueTicketMatch(
-  now: Date,
-): FilterQuery<ServiceTicketDocument> {
-  return {
-    $or: [
-      // Neither kind of scheduled step — the stored status is the whole truth.
-      { onboarding: null, renewal: null, status: 'overdue' },
-      // A scheduled call whose status a CSR pinned by hand.
-      { statusOverriddenAt: { $ne: null }, status: 'overdue' },
-      // The derived branches. `$ne: null` before `$lt`: BSON sorts null before
-      // dates, so a bare `$lt` would match an unscheduled step too.
-      {
-        statusOverriddenAt: null,
-        'onboarding.completedAt': null,
-        'onboarding.dueAt': { $ne: null, $lt: now },
-      },
-      {
-        statusOverriddenAt: null,
-        'renewal.completedAt': null,
-        'renewal.dueAt': { $ne: null, $lt: now },
-      },
-    ],
-  };
 }

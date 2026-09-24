@@ -94,15 +94,17 @@ describe('overdueTicketsPrefix', () => {
   };
   const producer = new Types.ObjectId().toString();
 
-  it('windows on openedAt and carries the overdue predicate', () => {
-    const first = match(overdueTicketsPrefix({}, {}, window, NOW));
+  it('windows on openedAt and matches the stored status only', () => {
+    const first = match(overdueTicketsPrefix({}, {}, window));
     expect(first.openedAt).toEqual({ $gte: window.from, $lt: window.to });
-    expect(first.$or).toHaveLength(4);
+    // The column is materialised (PAC-102); no derived `$or` over `dueAt`.
+    expect(first.status).toBe('overdue');
+    expect(first.$or).toBeUndefined();
   });
 
   it('applies the person filter to the assignee, unless own scope pinned it', () => {
     const agency = match(
-      overdueTicketsPrefix({}, { producerIds: [producer] }, window, NOW),
+      overdueTicketsPrefix({}, { producerIds: [producer] }, window),
     );
     expect(agency.assignedUserId).toEqual({
       $in: [new Types.ObjectId(producer)],
@@ -114,7 +116,6 @@ describe('overdueTicketsPrefix', () => {
         { assignedUserId: self },
         { producerIds: [producer] },
         window,
-        NOW,
       ),
     );
     expect(own.assignedUserId).toBe(self);
@@ -122,7 +123,7 @@ describe('overdueTicketsPrefix', () => {
 
   it('filters line of business on the ticket policy type', () => {
     const first = match(
-      overdueTicketsPrefix({}, { policyTypes: ['Home'] }, window, NOW),
+      overdueTicketsPrefix({}, { policyTypes: ['Home'] }, window),
     );
     expect((first.policyType as { $in: string[] }).$in).toContain('Home');
   });

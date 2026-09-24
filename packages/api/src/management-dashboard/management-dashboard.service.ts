@@ -216,8 +216,9 @@ function householdRatio(sold: number, quoted: number): number | null {
  *   status not terminal. Not `updatedAt`: see `stalledLeadsPrefix`.
  * - **Aging audit** — a new-business deal sold in the period, more than five
  *   *business* days ago (`business-days.ts`), whose audit is not `Pass`.
- * - **Overdue ticket** — the Service dashboard's derived meaning
- *   (`overdueTicketMatch`), for tickets opened in the period.
+ * - **Overdue ticket** — stored `status: 'overdue'`, for tickets opened in
+ *   the period. The column is materialised by `SyncTicketStatusFn`
+ *   (PAC-102), so this agrees with the Service dashboard and the queue.
  *
  * ## What the filters reach
  *
@@ -269,7 +270,7 @@ export class ManagementDashboardService {
       ),
       this.count(
         this.ticketModel,
-        this.overduePrefix(access, branchId, query, current, now),
+        this.overduePrefix(access, branchId, query, current),
       ),
     ]);
 
@@ -364,12 +365,14 @@ export class ManagementDashboardService {
     branchId: string | null,
     query: ManagementAlertListQueryDto,
   ): Promise<ManagementAlertList<OverdueTicketRow>> {
+    // `now` is for the row's `daysOverdue` only; the match reads the stored
+    // status and needs no clock.
     const now = new Date();
     const { period, current } = resolvePeriod(query);
 
     const { total, items } = await this.page<OverdueTicketLean>(
       this.ticketModel,
-      this.overduePrefix(access, branchId, query, current, now),
+      this.overduePrefix(access, branchId, query, current),
       { openedAt: 1, _id: 1 },
       query,
     );
@@ -605,7 +608,6 @@ export class ManagementDashboardService {
     branchId: string | null,
     query: ManagementDashboardQueryDto,
     range: YmdRange,
-    now: Date,
   ): PipelineStage[] {
     // `openedAt` is a real instant, so the Chicago calendar window has to be
     // turned into two instants; `endYmd` is exclusive already.
@@ -613,7 +615,7 @@ export class ManagementDashboardService {
       from: chicagoDayStart(fromYmd(range.startYmd)),
       to: chicagoDayStart(fromYmd(range.endYmd)),
     };
-    return overdueTicketsPrefix(ticketTenantFilter(access), query, window, now);
+    return overdueTicketsPrefix(ticketTenantFilter(access), query, window);
   }
 
   private async householdsSoldBy(

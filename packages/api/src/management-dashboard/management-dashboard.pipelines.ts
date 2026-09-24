@@ -12,7 +12,6 @@ import {
   sourceStages,
   ymdWindow,
 } from '../common/sales-metrics/sales-pipelines';
-import { overdueTicketMatch } from '../crm/service-ticket-queries';
 import type { ServiceTicketDocument } from '../crm/schemas/service-ticket.schema';
 import type { YmdRange } from '../performance/performance.range';
 
@@ -152,7 +151,16 @@ export function agingAuditsPrefix(
 }
 
 /**
- * Overdue tickets: opened in the window, past due right now.
+ * Overdue tickets: opened in the window, `status: 'overdue'` right now.
+ *
+ * Reads the stored column. Overdue is a *materialised* status (PAC-102):
+ * `SyncTicketStatusFn` advances a scheduled onboarding or renewal call to
+ * `overdue` once its `dueAt` passes, so the column is the single answer every
+ * reader shares — this card, the Service dashboard's KPI strip and the ticket
+ * queue's paged sort. Do not re-derive it from the step's `dueAt` here: that
+ * was how this card first shipped, and it disagreed with the other two by
+ * exactly the sweep's five-minute lag. `deriveStepStatus` in
+ * `common/scheduling/step-status.ts` is the one definition of the rule.
  *
  * `tenant` is `ticketTenantFilter` (ObjectId tenancy — see there). The person
  * filter lands on `assignedUserId`, the CSR working the ticket: the filter bar
@@ -167,12 +175,11 @@ export function overdueTicketsPrefix(
   tenant: FilterQuery<ServiceTicketDocument>,
   filter: OwnerFilterClauses & { producerIds?: readonly string[] },
   window: { from: Date; to: Date },
-  now: Date,
 ): PipelineStage[] {
   const match: Record<string, unknown> = {
     ...tenant,
     openedAt: { $gte: window.from, $lt: window.to },
-    ...overdueTicketMatch(now),
+    status: 'overdue',
   };
   if (!('assignedUserId' in tenant) && filter.producerIds?.length) {
     const ids = filter.producerIds

@@ -72,6 +72,10 @@ days elapsed. Reuse `CalendarDate`, `addDays`, `toYmd`, `chicagoParts` from
   cannot `.extend()`, hence the field map).
 
 ### 2.3 Ticket predicate — new `src/crm/service-ticket-queries.ts`
+> **Superseded on merge with dev (24 Sep 2026).** PAC-102 materialises `status` via `SyncTicketStatusFn`,
+> so `overdueTicketMatch` was removed: the card and `stats()` both match the stored `status: 'overdue'`.
+> `ticketTenantFilter` stands. Kept below as approved.
+
 `overdueTicketMatch(now)` = `$or` of `{onboarding:null, renewal:null, status:'overdue'}`,
 `{statusOverriddenAt:{$ne:null}, status:'overdue'}`, `{statusOverriddenAt:null, 'onboarding.completedAt':null, 'onboarding.dueAt':{$ne:null,$lt:now}}`,
 same for `renewal`. `ticketTenantFilter(access, branchId)` lifted from the private `scopeFilter`

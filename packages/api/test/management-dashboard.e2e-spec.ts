@@ -86,8 +86,11 @@ import {
  * |---|---|---|---|
  * | T1 | P | plain, `overdue`, Home | **overdue** |
  * | T2 | C | plain, `open` | |
- * | T3 | C | onboarding, due 3 days ago | **overdue** (derived) |
- * | T4 | C | renewal, due yesterday | **overdue** (derived) |
+ * | T3 | C | onboarding, due 3 days ago, `overdue` | **overdue** |
+ * | T4 | C | renewal, due yesterday, `overdue` | **overdue** |
+ *
+ * T3 and T4 carry the stored `overdue` the status sweep would have written
+ * (PAC-102): the card reads the column, not the step's `dueAt`.
  * | T5 | C | onboarding, due 3 days ago, status pinned `open` | overridden |
  * | T6 | C | onboarding, opens in 2 days | waiting |
  * | T7 | C | plain, `overdue`, opened 100 days ago | outside the window |
@@ -497,9 +500,10 @@ describe('Management dashboard (PAC-139) (e2e)', () => {
       policyType: 'Home',
     });
     await ticket('T2', { status: 'open' });
-    await ticket('T3', onboarding(daysAgo(3)));
+    await ticket('T3', { ...onboarding(daysAgo(3)), status: 'overdue' });
     await ticket('T4', {
       category: 'Renewal Review',
+      status: 'overdue',
       renewal: {
         renewalCycleId: new Types.ObjectId(),
         stepKey: 'annual_review',
@@ -667,7 +671,7 @@ describe('Management dashboard (PAC-139) (e2e)', () => {
   });
 
   describe('overdue tickets', () => {
-    it('is the derived meaning: stored overdue, or a scheduled call past due and not pinned', async () => {
+    it('is the stored status the sweep maintains, with the step dueAt on the row', async () => {
       const { items } = await overdue();
       expect(items.map((row) => row.ticketId).sort()).toEqual(
         [ids.T1, ids.T3, ids.T4, ids.T8, ids.T9].sort(),
