@@ -65,6 +65,20 @@ export function isTerminalTicketStatus(status: ServiceTicketStatus): boolean {
 }
 
 /**
+ * Every status that is still somebody's work — the complement of
+ * {@link SERVICE_TICKET_TERMINAL_STATUSES}.
+ *
+ * Sent as `?status=` by the Priority Ticket Queue, which must not show a ticket
+ * that was resolved yesterday. The list endpoint only excludes *archived*
+ * tickets (terminal and past the archive window), so without this a resolved
+ * ticket would sit in "My Priority Tickets" for a week (PAC-98 review).
+ * Derived rather than restated, so a new status lands on the right side of the
+ * line without anyone remembering this list.
+ */
+export const SERVICE_TICKET_ACTIVE_STATUSES: readonly ServiceTicketStatus[] =
+  SERVICE_TICKET_STATUSES.filter((status) => !isTerminalTicketStatus(status));
+
+/**
  * How loudly a status demands attention. **Lower sorts first.**
  *
  * The eight stored statuses collapse onto the four states a queue actually
@@ -564,7 +578,10 @@ export type ServiceTicketQueueTab =
 export interface ServiceTicketListResponse {
   page: number;
   pageSize: number;
-  /** Rows matching the filters, before the tab predicate. */
+  /**
+   * Rows in the requested tab — what `totalPages` is computed from. The
+   * pre-tab total is `counts.all`.
+   */
   total: number;
   totalPages: number;
   items: ServiceTicketView[];

@@ -138,6 +138,13 @@ module.exports = {
       { priorityRank: { $exists: false } },
       { $set: { priorityRank: PRIORITY_RANK.medium } },
     );
+    // Same for a status outside the eight keys above. A missing `urgencyRank`
+    // sorts *before* `overdue`'s 0, so such a ticket would head every queue;
+    // ranking it with `open` puts it among ordinary work instead.
+    await tickets.updateMany(
+      { urgencyRank: { $exists: false } },
+      { $set: { urgencyRank: URGENCY_RANK.open } },
+    );
 
     /*
      * Stage 3 — `urgencyAt`: the onboarding call's due date, else `openedAt`.

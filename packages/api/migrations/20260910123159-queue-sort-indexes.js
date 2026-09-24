@@ -40,10 +40,16 @@
  * `autoIndex` creates only indexes that are missing and never rebuilds one
  * whose options changed, so a schema-only edit would leave every existing
  * database on the old definition.
+ *
+ * ## ⚠ Named the way Mongoose names them
+ *
+ * The schema declares these same key patterns **unnamed**, so `autoIndex`
+ * asks for `agencyId_1_urgencyRank_1_…`. An index created here under any other
+ * name is the same keys under a different name, and the next `autoIndex` pass
+ * throws `IndexOptionsConflict` (85) — the trap `mailer.schema.ts` documents.
+ * So the names are derived from the keys, exactly as the PAC-91 contacts
+ * migration does it, and this and `autoIndex` agree whichever runs first.
  */
-
-const AGENCY_INDEX = 'queue_urgency_agency';
-const OWN_INDEX = 'queue_urgency_own';
 
 const KEY_SUFFIX = {
   urgencyRank: 1,
@@ -52,25 +58,33 @@ const KEY_SUFFIX = {
   _id: 1,
 };
 
+const AGENCY_KEYS = { agencyId: 1, ...KEY_SUFFIX };
+const OWN_KEYS = { assignedUserId: 1, ...KEY_SUFFIX };
+
+/** Mongoose's default index name: `field_direction`, joined with `_`. */
+function indexName(keys) {
+  return Object.entries(keys)
+    .map(([field, direction]) => `${field}_${direction}`)
+    .join('_');
+}
+
 module.exports = {
   async up(db) {
     const tickets = db.collection('serviceTickets');
     // `createIndex` is idempotent for an identical definition, which is what
     // makes a retry after a partial failure safe — a failed migration is not
     // recorded and re-runs from the top.
-    await tickets.createIndex(
-      { agencyId: 1, ...KEY_SUFFIX },
-      { name: AGENCY_INDEX, background: true },
-    );
-    await tickets.createIndex(
-      { assignedUserId: 1, ...KEY_SUFFIX },
-      { name: OWN_INDEX, background: true },
-    );
+    for (const keys of [AGENCY_KEYS, OWN_KEYS]) {
+      await tickets.createIndex(keys, {
+        name: indexName(keys),
+        background: true,
+      });
+    }
   },
 
   async down(db) {
     const tickets = db.collection('serviceTickets');
-    for (const name of [AGENCY_INDEX, OWN_INDEX]) {
+    for (const name of [AGENCY_KEYS, OWN_KEYS].map(indexName)) {
       // Tolerate absence: `down` may run against a database where `up` failed
       // partway, and IndexNotFound (27) is the expected shape of that.
       await tickets.dropIndex(name).catch((error) => {

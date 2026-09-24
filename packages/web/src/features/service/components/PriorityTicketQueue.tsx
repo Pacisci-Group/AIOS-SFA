@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2, Lock } from "lucide-react";
 import {
   SERVICE_TICKET_CATEGORIES,
@@ -18,7 +18,7 @@ import type {
   ServiceTicketView,
 } from "@sfa/shared";
 import { useUrlState } from "@/hooks/useUrlState";
-import { PaginationFooter } from "@/components/common/PaginationFooter";
+import { TablePagination } from "@/components/common/TablePagination";
 
 type SlaStatus = "critical" | "warning" | "normal";
 
@@ -44,6 +44,8 @@ interface PriorityTicketQueueProps {
   onOpen: (id: string) => void;
   onAddNote: (id: string, content: string) => void;
   onChangeStatus: (id: string, status: ServiceTicketStatus) => void;
+  /** A page is in flight — disables Prev/Next so a double click cannot skip one. */
+  busy?: boolean;
 }
 
 interface QueueTicket {
@@ -60,19 +62,6 @@ interface QueueTicket {
   /** Quote tickets take their status from their lead — no picker on the row. */
   isStatusLocked: boolean;
 }
-
-/**
- * Rows per page.
- *
- * The queue is paginated in the browser, not on the server, because everything
- * around the rows needs the whole set: `sortByUrgency` ranks by status, then
- * age, then priority; the three tab counts are over all assigned tickets; and
- * the SLA badge is derived here from `daysOpen`. Paging on the server would
- * mean porting that ranking into Mongo and recounting per tab — a rewrite of
- * `GET /crm/service-tickets`, which two other pages also read. Worth doing if a
- * rep's own queue ever grows past a few hundred; it does not today.
- */
-const PAGE_SIZE = 8;
 
 /**
  * The queue's tab and page live in the URL, not in `useState`.
@@ -151,6 +140,7 @@ export function PriorityTicketQueue({
   onOpen,
   onAddNote,
   onChangeStatus,
+  busy = false,
 }: PriorityTicketQueueProps) {
   const [urlState, setUrlState] = useUrlState({
     defaults: URL_DEFAULTS,
@@ -240,20 +230,6 @@ export function PriorityTicketQueue({
     setUrlState({ tab: next, page: "" });
     resetView();
   };
-
-  /*
-   * Reconcile the URL with the clamp above.
-   *
-   * The render already shows the right page, so this only fixes the address
-   * bar — but leaving `?page=3` on a two-page queue is both a lie in a URL
-   * somebody might copy and a trap: one new ticket arriving on the next
-   * refetch would grow `totalPages` and silently jump the rep to page 3.
-   */
-  useEffect(() => {
-    if (page !== currentPage) {
-      setUrlState({ page: currentPage <= 1 ? "" : String(currentPage) });
-    }
-  }, [page, currentPage, setUrlState]);
 
   const tabs: { key: FilterTab; label: string; count: number }[] = [
     { key: "all", label: "All Assigned", count: counts.all },
@@ -518,13 +494,15 @@ export function PriorityTicketQueue({
         })}
       </div>
 
-      <PaginationFooter
+      <TablePagination
         page={currentPage}
-        totalPages={totalPages}
-        pageCount={pageRows.length}
+        pageSize={pageData?.pageSize ?? pageRows.length}
         total={total}
-        onChange={goToPage}
-        label="Ticket queue"
+        totalPages={totalPages}
+        onPageChange={goToPage}
+        busy={busy}
+        noun="tickets"
+        className="flex-shrink-0 border-t border-border px-5 py-3"
       />
 
       {/* Click-away for the status picker */}

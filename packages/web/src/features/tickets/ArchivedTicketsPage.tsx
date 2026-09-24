@@ -8,11 +8,15 @@ import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
-import type { ServiceTicketStatus } from "@sfa/shared";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
-import { PaginationFooter } from "@/components/common/PaginationFooter";
+import { TablePagination } from "@/components/common/TablePagination";
+import { SEARCH_DEBOUNCE_MS } from "@/components/common/TableSearchInput";
 import type { TicketFeedFilters } from "./components/TicketFeed";
 import { TicketFeed } from "./components/TicketFeed";
+import {
+  FEED_PAGE_SIZE,
+  feedRequestFilters,
+} from "./components/ticket-feed-query";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import type { TicketStatus } from "./components/ticket-data";
 import {
@@ -30,30 +34,6 @@ const ARCHIVED_KEY = ["service-tickets", "archived"];
  * active queue. Reopening one (via the status picker) pulls it straight back
  * into the working ticket list.
  */
-/**
- * Rows per page of the feed.
- *
- * Larger than the dashboard queue's 8: this is a full-height list rather than
- * a card, and the server caps every caller at 100 regardless.
- */
-/**
- * The feed's status tabs, as the API's `?status=`.
- *
- * `open` covers overdue too — an overdue ticket is an open one that is late,
- * and the tab has always shown both. The API takes a single status, so this is
- * expressed as "no status filter, the tab is the whole list" for `all` and a
- * direct mapping otherwise; `open` sends nothing and relies on the queue tab
- * instead.
- */
-const FEED_TAB_STATUS: Record<string, ServiceTicketStatus | undefined> = {
-  all: undefined,
-  open: undefined,
-  waiting: "waiting",
-  resolved: "resolved",
-};
-
-const FEED_PAGE_SIZE = 25;
-
 export default function ArchivedTicketsPage() {
   const queryClient = useQueryClient();
   const { canWrite } = usePermissions();
@@ -86,15 +66,11 @@ export default function ArchivedTicketsPage() {
     category: "all",
   });
   // Typing should not fire a request per keystroke.
-  const debouncedQuery = useDebouncedValue(filters.query, 300);
+  const debouncedQuery = useDebouncedValue(filters.query, SEARCH_DEBOUNCE_MS);
 
   const feedQuery = useMemo(
-    () => ({
-      search: debouncedQuery.trim() || undefined,
-      category: filters.category === "all" ? undefined : filters.category,
-      status: FEED_TAB_STATUS[filters.filter],
-    }),
-    [debouncedQuery, filters.category, filters.filter],
+    () => feedRequestFilters(filters, debouncedQuery),
+    [filters, debouncedQuery],
   );
 
   const changeFilters = (next: TicketFeedFilters) => {
@@ -207,7 +183,7 @@ export default function ArchivedTicketsPage() {
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 {ticketsQuery.isLoading || ticketsQuery.isError
                   ? " "
-                  : `${tickets.length} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
+                  : `${ticketPage?.total ?? 0} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
               </p>
             </div>
           </div>
@@ -241,16 +217,19 @@ export default function ArchivedTicketsPage() {
                 onFiltersChange={changeFilters}
                 selectedId={selectedTicketId}
                 onSelect={handleSelect}
+                busy={ticketsQuery.isFetching}
                 showStatusTabs={false}
                 emptyLabel={`Nothing archived yet. Tickets land here ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days after they are resolved.`}
               />
-              <PaginationFooter
+              <TablePagination
                 page={ticketPage?.page ?? page}
-                totalPages={ticketPage?.totalPages ?? 1}
-                pageCount={tickets.length}
+                pageSize={ticketPage?.pageSize ?? FEED_PAGE_SIZE}
                 total={ticketPage?.total ?? 0}
-                onChange={goToPage}
-                label="Tickets"
+                totalPages={ticketPage?.totalPages ?? 1}
+                onPageChange={goToPage}
+                busy={ticketsQuery.isFetching}
+                noun="tickets"
+                className="border-t border-border px-4 py-3"
               />
             </div>
 

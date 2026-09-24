@@ -10,6 +10,7 @@ import {
   DEFAULT_ROLE_TEMPLATES,
   ModuleKey,
   PlatformPermission,
+  SERVICE_TICKET_ACTIVE_STATUSES,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
@@ -4856,6 +4857,134 @@ describe('SFA API (e2e)', () => {
         expect(ticketList(res).items).toHaveLength(0);
         expect(ticketList(res).total).toBe(0);
       });
+
+      it('searches AND across tokens, OR across fields', async () => {
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Quillon Varga', category: 'Billing' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+
+        // Tokens split across two fields, in the "wrong" order — a single
+        // regex over one field could match neither.
+        const hit = await request(app.getHttpServer())
+          .get(
+            '/api/v1/crm/service-tickets?search=billing%20varga&pageSize=100',
+          )
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(hit).items.map((t) => t.id)).toContain(ticketId);
+
+        // Every token must land somewhere.
+        const miss = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?search=varga%20zzqx&pageSize=100')
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(miss).items.map((t) => t.id)).not.toContain(ticketId);
+      });
+
+      it('ORs a list of statuses', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?status=open,overdue&pageSize=100')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).items.length).toBeGreaterThan(0);
+        for (const t of ticketList(res).items) {
+          expect(['open', 'overdue']).toContain(t.status);
+        }
+      });
+
+      it('keeps a resolved ticket out of an active-statuses request', async () => {
+        // What the Priority Ticket Queue sends. The list only excludes
+        // *archived* tickets, so without it a ticket resolved today would sit
+        // in the queue for the whole archive window.
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Resolved Today Client', category: 'Billing' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+        await request(app.getHttpServer())
+          .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+          .set(authHeader(ownerToken))
+          .send({ status: 'resolved' })
+          .expect(200);
+
+        const active = SERVICE_TICKET_ACTIVE_STATUSES.join(',');
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/crm/service-tickets?status=${active}&pageSize=100`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(res).items.map((t) => t.id)).not.toContain(ticketId);
+      });
+
+      it('keeps a tab and an explicit status both in force', async () => {
+        // The tab used to be spread over the filter, silently replacing
+        // `?status=` — so `counts` and `total` described different sets.
+        const res = await request(app.getHttpServer())
+          .get(
+            '/api/v1/crm/service-tickets?status=open&tab=overdue&pageSize=100',
+          )
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(res).items).toHaveLength(0);
+        expect(ticketList(res).counts.overdue).toBe(0);
+      });
+
+      it('keeps a hand-picked status on a renewal call', async () => {
+        // The save hook re-derives a scheduled call's status unless
+        // `statusOverriddenAt` is stamped. It used to be stamped for onboarding
+        // only, so resolving a renewal call was undone inside the same save —
+        // `open` again, beside a fresh `resolvedAt`.
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Renewal Override Client', category: 'Other' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+        const hour = 60 * 60 * 1000;
+        const connection = app.get<Connection>(getConnectionToken());
+        await connection.collection('serviceTickets').updateOne(
+          { _id: new Types.ObjectId(ticketId) },
+          {
+            $set: {
+              renewal: {
+                renewalCycleId: new Types.ObjectId(),
+                stepKey: 'annual_review',
+                track: 'annual',
+                sequence: 1,
+                totalSteps: 2,
+                renewalDate: new Date(Date.now() + 60 * 24 * hour),
+                availableAt: new Date(Date.now() - hour),
+                dueAt: new Date(Date.now() + 24 * hour),
+                completedAt: null,
+              },
+            },
+          },
+        );
+
+        const res = await request(app.getHttpServer())
+          .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+          .set(authHeader(ownerToken))
+          .send({ status: 'resolved' })
+          .expect(200);
+        expect((res.body as { status: string }).status).toBe('resolved');
+
+        const stored = await connection
+          .collection('serviceTickets')
+          .findOne({ _id: new Types.ObjectId(ticketId) });
+        expect(stored?.status).toBe('resolved');
+        expect(stored?.statusOverriddenAt).toBeInstanceOf(Date);
+      });
+
+      it('rejects a status outside the vocabulary', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?status=open,bogus')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
     });
 
     it('own-scope: CSR only sees their own tickets', async () => {
@@ -4867,7 +4996,7 @@ describe('SFA API (e2e)', () => {
       csrTicketId = created.body.id;
 
       const res = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
 
@@ -4886,7 +5015,7 @@ describe('SFA API (e2e)', () => {
 
     it('agency-scope: owner sees tickets created by others', async () => {
       const res = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
 
@@ -5052,7 +5181,7 @@ describe('SFA API (e2e)', () => {
 
       // Freshly resolved: still in the active queue, not yet archived.
       const active = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
@@ -5060,7 +5189,7 @@ describe('SFA API (e2e)', () => {
       ).toContain(ticketId);
 
       const archivedBefore = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?archived=true')
+        .get('/api/v1/crm/service-tickets?archived=true&pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
@@ -5082,7 +5211,7 @@ describe('SFA API (e2e)', () => {
       );
 
       const activeAfter = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
@@ -5090,7 +5219,7 @@ describe('SFA API (e2e)', () => {
       ).not.toContain(ticketId);
 
       const archivedAfter = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?archived=true')
+        .get('/api/v1/crm/service-tickets?archived=true&pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       const archivedTicket = ticketList(archivedAfter).items.find(
@@ -5109,7 +5238,7 @@ describe('SFA API (e2e)', () => {
       expect(reopened.body.isArchived).toBe(false);
 
       const queueAgain = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
@@ -5288,13 +5417,13 @@ describe('SFA API (e2e)', () => {
     /** The visibility rule the owner asked for: not on the plate until it opens. */
     it('hides a scheduled ticket from every list but serves it by id', async () => {
       const list = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
       expect(ids(list.body)).not.toContain(threeDayTicketId);
 
       const filtered = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?category=Onboarding')
+        .get('/api/v1/crm/service-tickets?category=Onboarding&pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
       expect(ids(filtered.body)).not.toContain(threeDayTicketId);

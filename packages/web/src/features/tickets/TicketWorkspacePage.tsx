@@ -7,11 +7,15 @@ import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { KpiStrip } from "./components/KpiStrip";
-import type { ServiceTicketStatus } from "@sfa/shared";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
-import { PaginationFooter } from "@/components/common/PaginationFooter";
+import { TablePagination } from "@/components/common/TablePagination";
+import { SEARCH_DEBOUNCE_MS } from "@/components/common/TableSearchInput";
 import type { TicketFeedFilters } from "./components/TicketFeed";
 import { TicketFeed } from "./components/TicketFeed";
+import {
+  FEED_PAGE_SIZE,
+  feedRequestFilters,
+} from "./components/ticket-feed-query";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import type { TicketStatus } from "./components/ticket-data";
 import {
@@ -48,30 +52,6 @@ const RENEWAL_DESK_KEY = ["renewal-desk"];
  * header. The fixed 40/60 split this used to have never collapsed, so on a
  * handset the queue rows were ~140px wide and the workspace ~200px.
  */
-/**
- * Rows per page of the feed.
- *
- * Larger than the dashboard queue's 8: this is a full-height list rather than
- * a card, and the server caps every caller at 100 regardless.
- */
-/**
- * The feed's status tabs, as the API's `?status=`.
- *
- * `open` covers overdue too — an overdue ticket is an open one that is late,
- * and the tab has always shown both. The API takes a single status, so this is
- * expressed as "no status filter, the tab is the whole list" for `all` and a
- * direct mapping otherwise; `open` sends nothing and relies on the queue tab
- * instead.
- */
-const FEED_TAB_STATUS: Record<string, ServiceTicketStatus | undefined> = {
-  all: undefined,
-  open: undefined,
-  waiting: "waiting",
-  resolved: "resolved",
-};
-
-const FEED_PAGE_SIZE = 25;
-
 export default function TicketWorkspacePage() {
   const queryClient = useQueryClient();
   const { canWrite } = usePermissions();
@@ -106,15 +86,11 @@ export default function TicketWorkspacePage() {
     category: "all",
   });
   // Typing should not fire a request per keystroke.
-  const debouncedQuery = useDebouncedValue(filters.query, 300);
+  const debouncedQuery = useDebouncedValue(filters.query, SEARCH_DEBOUNCE_MS);
 
   const feedQuery = useMemo(
-    () => ({
-      search: debouncedQuery.trim() || undefined,
-      category: filters.category === "all" ? undefined : filters.category,
-      status: FEED_TAB_STATUS[filters.filter],
-    }),
-    [debouncedQuery, filters.category, filters.filter],
+    () => feedRequestFilters(filters, debouncedQuery),
+    [filters, debouncedQuery],
   );
 
   const changeFilters = (next: TicketFeedFilters) => {
@@ -135,6 +111,8 @@ export default function TicketWorkspacePage() {
 
   const ticketPage = ticketsQuery.data;
   const tickets = useMemo(() => ticketPage?.items ?? [], [ticketPage]);
+  // The whole filtered queue, not the page in hand.
+  const queueTotal = ticketPage?.total ?? 0;
 
   const goToPage = (next: number) => {
     const params = new URLSearchParams(searchParams);
@@ -284,7 +262,7 @@ export default function TicketWorkspacePage() {
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 {ticketsQuery.isLoading || ticketsQuery.isError
                   ? " "
-                  : `${tickets.length} ticket${tickets.length !== 1 ? "s" : ""} in your queue`}
+                  : `${queueTotal} ticket${queueTotal !== 1 ? "s" : ""} in your queue`}
               </p>
             </div>
           </div>
@@ -330,14 +308,17 @@ export default function TicketWorkspacePage() {
                   onFiltersChange={changeFilters}
                   selectedId={selectedTicketId}
                   onSelect={handleSelect}
+                  busy={ticketsQuery.isFetching}
                 />
-                <PaginationFooter
+                <TablePagination
                   page={ticketPage?.page ?? page}
-                  totalPages={ticketPage?.totalPages ?? 1}
-                  pageCount={tickets.length}
+                  pageSize={ticketPage?.pageSize ?? FEED_PAGE_SIZE}
                   total={ticketPage?.total ?? 0}
-                  onChange={goToPage}
-                  label="Tickets"
+                  totalPages={ticketPage?.totalPages ?? 1}
+                  onPageChange={goToPage}
+                  busy={ticketsQuery.isFetching}
+                  noun="tickets"
+                  className="border-t border-border px-4 py-3"
                 />
               </div>
 

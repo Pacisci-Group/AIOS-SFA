@@ -1,5 +1,4 @@
-import { Check, ListFilter, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Check, ListFilter } from "lucide-react";
 import {
   SERVICE_TICKET_CATEGORIES,
   type ServiceTicketCategory,
@@ -12,7 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+import { TableSearchInput } from "@/components/common/TableSearchInput";
 import { FilterToggles } from "@/components/common/FilterToggles";
 import { cn } from "@/lib/utils";
 import {
@@ -54,6 +53,11 @@ interface TicketFeedProps {
   onFiltersChange: (next: TicketFeedFilters) => void;
   /** Categories to offer, from the whole queue rather than the loaded page. */
   categoryOptions?: readonly ServiceTicketCategory[];
+  /**
+   * A page is in flight. The search is a debounce plus a round trip now, not
+   * an in-memory filter, so the box needs to say it is working.
+   */
+  busy?: boolean;
 }
 
 const TABS: readonly { label: string; value: FilterTab }[] = [
@@ -66,9 +70,10 @@ const TABS: readonly { label: string; value: FilterTab }[] = [
 /**
  * The queue on the left of the ticket workspace.
  *
- * Search, the status filters and the category filter go through `Input`,
- * `FilterToggles` and `DropdownMenu` rather than the hand-rolled equivalents
- * this had before — the previous search box drew its own focus ring off
+ * Search, the status filters and the category filter go through
+ * `TableSearchInput`, `FilterToggles` and `DropdownMenu` rather than the
+ * hand-rolled equivalents this had before — the previous search box drew its
+ * own focus ring off
  * `--ring`, the filter row was bare `<button>`s with no group semantics or
  * pressed state, and the category picker was a `fixed inset-0` click-away layer
  * with no escape handling and no `aria-expanded`.
@@ -82,6 +87,7 @@ export function TicketFeed({
   filters,
   onFiltersChange,
   categoryOptions,
+  busy = false,
 }: TicketFeedProps) {
   const { query, filter, category } = filters;
   const setQuery = (next: string) => onFiltersChange({ ...filters, query: next });
@@ -114,20 +120,13 @@ export function TicketFeed({
   return (
     <div className="flex h-full flex-col overflow-hidden border-border bg-card lg:border-r">
       <div className="space-y-3 border-b border-border px-4 py-3">
-        <div className="relative">
-          <Search
-            aria-hidden
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            type="search"
-            aria-label="Search tickets"
-            placeholder="Search name, policy, phone, ID…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="pl-9 bg-card border-border"
-          />
-        </div>
+        <TableSearchInput
+          value={query}
+          onValueChange={setQuery}
+          label="Search tickets"
+          placeholder="Search name, policy, phone, ID…"
+          busy={busy}
+        />
 
         {showStatusTabs && (
           <FilterToggles

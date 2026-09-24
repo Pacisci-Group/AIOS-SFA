@@ -48,8 +48,11 @@ export type {
 const BASE = '/crm/service-tickets';
 
 export interface ListServiceTicketsOptions {
-  status?: ServiceTicketStatus;
+  /** One status, or several ORed — `["open", "overdue"]` is the Open tab. */
+  status?: ServiceTicketStatus | readonly ServiceTicketStatus[];
   category?: ServiceTicketCategory;
+  /** Free text, matched server-side across the whole scope. */
+  search?: string;
   /**
    * When true, returns only archived tickets (resolved longer ago than the
    * archive window). Omitted returns the active queue, which excludes them.
@@ -77,8 +80,14 @@ export interface ListServiceTicketsOptions {
  */
 export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   const params = new URLSearchParams();
-  if (options.status) {
-    params.set('status', options.status);
+  const statuses =
+    typeof options.status === 'string' ? [options.status] : options.status;
+  if (statuses?.length) {
+    params.set('status', statuses.join(','));
+  }
+  const search = options.search?.trim();
+  if (search) {
+    params.set('search', search);
   }
   if (options.category) {
     params.set('category', options.category);

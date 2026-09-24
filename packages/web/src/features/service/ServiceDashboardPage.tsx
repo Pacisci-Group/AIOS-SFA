@@ -4,9 +4,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Search, ChevronDown, Archive, Plus } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
-import type {
-  ServiceTicketCategory,
-  ServiceTicketQueueTab,
+import {
+  SERVICE_TICKET_ACTIVE_STATUSES,
+  type ServiceTicketCategory,
+  type ServiceTicketQueueTab,
 } from "@sfa/shared";
 import { CreateTicketDialog } from "./components/CreateTicketDialog";
 import { ScorecardRow } from "./components/ScorecardRow";
@@ -67,6 +68,10 @@ export default function App() {
         page,
         pageSize: TICKET_PAGE_SIZE,
         category: category as ServiceTicketCategory | undefined,
+        // A priority queue is work still to do. The list endpoint only drops
+        // *archived* tickets, so without this a ticket resolved today would
+        // sit here — and in the tab counts — for the whole archive window.
+        status: SERVICE_TICKET_ACTIVE_STATUSES,
       }),
     // Keep the previous page on screen while the next one loads. Without it
     // every page turn blanks the list and collapses the card's height, which
@@ -218,6 +223,7 @@ export default function App() {
           >
             <PriorityTicketQueue
               page={ticketPage}
+              busy={ticketsQuery.isFetching}
               onOpen={openTicket}
               onAddNote={(id, content) => noteMutation.mutate({ id, content })}
               onChangeStatus={(id, status) => statusMutation.mutate({ id, status })}

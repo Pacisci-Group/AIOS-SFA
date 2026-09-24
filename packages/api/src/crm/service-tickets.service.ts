@@ -21,9 +21,11 @@ import {
   ServiceTicketAssignee,
   ServiceTicketStats,
   ServiceTicketView,
+  isPhoneLike,
   isTerminalTicketStatus,
   normalizeLeadStatus,
   allowsPolicyTransfer,
+  searchDigits,
 } from '@sfa/shared';
 import type {
   ServiceTicketListResponse,
@@ -38,6 +40,10 @@ import type {
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ClientsService } from '../clients/clients.service';
+import {
+  buildSearchFilter,
+  phoneDigitsRegex,
+} from '../common/mongo/search-filter';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   DealAudit,
@@ -249,46 +255,47 @@ export class ServiceTicketsService {
     if (query.category) {
       filter.category = query.category;
     }
-    if (query.status) {
+    if (query.status?.length) {
       /*
-       * A plain equality, now that `SyncTicketStatusFn` keeps the column true.
+       * A plain match on the stored column, now that `SyncTicketStatusFn`
+       * keeps it true.
        *
        * This used to be a three-branch `$or` reproducing the read-time
        * derivation in Mongo, and it was wrong: the branches keyed on
        * `category: 'Onboarding'`, while the derivation applies to *any*
        * scheduled step — `onboarding ?? renewal`. So `?status=overdue` matched
-       * no overdue renewal call at all. Nothing surfaced it because no web
-       * caller passes `status`; the dashboard filtered client-side on the
-       * derived value. Deleting the mirror deletes the class of bug.
+       * no overdue renewal call at all. Deleting the mirror deletes the class
+       * of bug.
        */
-      filter.status = query.status;
+      filter.status =
+        query.status.length === 1 ? query.status[0] : { $in: query.status };
     }
-    if (query.search?.trim()) {
-      /*
-       * The same fields the ticket feed matched in the browser.
-       *
-       * A regex `$or` is not indexable and scans the scope — but so did the
-       * client-side version, which fetched every ticket to filter it. This at
-       * least scans on the server and returns one page. If search becomes hot,
-       * the answer is a text index, not a return to shipping the collection.
-       *
-       * Escaped, so a term containing `.` or `(` is a search rather than a
-       * pattern the user did not know they were writing.
-       */
-      const term = escapeRegExp(query.search.trim());
-      const rx = new RegExp(term, 'i');
-      filter.$and = [
-        ...(filter.$and ?? []),
-        {
-          $or: [
-            { clientName: rx },
-            { ticketNumber: rx },
-            { category: rx },
-            { policyNumber: rx },
-            { phone: rx },
-          ],
-        },
-      ];
+    /*
+     * The PAC-101 search shape: AND across tokens, OR across fields — so
+     * `john smith` and `smith auto` both land — with the phone matched as one
+     * whole, digits-only value rather than as tokens, so `5550134` finds a
+     * stored `(918) 555-0134`.
+     *
+     * A contains-regex is a scan of the caller's scope, not an index seek;
+     * `search-filter.ts` argues that trade. The scope keys stay outside the
+     * search, which is what bounds it to one agency's range.
+     */
+    const search = await buildSearchFilter<ServiceTicketDocument>(
+      query.search,
+      {
+        fields: TICKET_SEARCH_FIELDS,
+        termBranches: [
+          (term) =>
+            Promise.resolve(
+              isPhoneLike(term)
+                ? { phone: { $regex: phoneDigitsRegex(searchDigits(term)) } }
+                : null,
+            ),
+        ],
+      },
+    );
+    if (search) {
+      filter.$and = [...(filter.$and ?? []), search];
     }
 
     // Resolved tickets age out of the active queue after the archive window;
@@ -315,16 +322,10 @@ export class ServiceTicketsService {
      */
     const [all, overdue, waiting, rows] = await Promise.all([
       this.ticketModel.countDocuments(filter),
-      this.ticketModel.countDocuments({
-        ...filter,
-        ...queueTabMatch('overdue'),
-      }),
-      this.ticketModel.countDocuments({
-        ...filter,
-        ...queueTabMatch('waiting'),
-      }),
+      this.ticketModel.countDocuments(withQueueTab(filter, 'overdue')),
+      this.ticketModel.countDocuments(withQueueTab(filter, 'waiting')),
       this.ticketModel
-        .find({ ...filter, ...queueTabMatch(tab) })
+        .find(withQueueTab(filter, tab))
         /*
          * The urgency order, served by an index rather than computed.
          *
@@ -727,9 +728,9 @@ export class ServiceTicketsService {
   }
 
   /**
-   * Write a hand-picked status and log it. On an onboarding ticket this also
-   * stamps `statusOverriddenAt`, which is what makes the stored value beat the
-   * call schedule on the way back out.
+   * Write a hand-picked status and log it. On a scheduled call (onboarding or
+   * renewal) this also stamps `statusOverriddenAt`, which is what makes the
+   * stored value beat the call schedule on the way back out.
    */
   private async applyManualStatus(
     access: AccessContext,
@@ -742,7 +743,10 @@ export class ServiceTicketsService {
     ticket.lastActivityAt = now;
     // Restart the archive clock each time the ticket ends; reopening clears it.
     ticket.resolvedAt = isTerminalTicketStatus(next) ? now : null;
-    if (ticket.onboarding) {
+    // Any scheduled step, not just onboarding: without the stamp the pre-save
+    // hook re-derives a renewal call's status inside this same `save()` and
+    // overwrites the pick — leaving, say, `open` beside a fresh `resolvedAt`.
+    if (ticket.onboarding || ticket.renewal) {
       ticket.statusOverriddenAt = now;
     }
     ticket.timeline.push({
@@ -777,35 +781,77 @@ export class ServiceTicketsService {
     // Scheduled onboarding calls are not work yet — keep them out of the KPIs
     // for the same reason they are kept out of the queue.
     filter.$nor = scheduledStepMatches(new Date());
-    const tickets = await this.ticketModel.find(filter).lean();
-
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
+    const terminal = [...SERVICE_TICKET_TERMINAL_STATUSES];
 
-    const openTickets = tickets.filter(
-      (t) => !isTerminalTicketStatus(t.status),
-    ).length;
     /*
-     * Reads the stored column, which `SyncTicketStatusFn` keeps true.
+     * One `$group` rather than fetching the scope and counting in Node.
      *
-     * This line is unchanged and used to be wrong (PAC-102): a scheduled call's
-     * status was derived on read, so the column said `open` forever and this
-     * counted only tickets a CSR had flagged by hand — near-zero, beside a
-     * queue tab showing hundreds. Nothing here needed fixing; the column did.
-     * Do not reintroduce a derivation to "make it accurate" — that is the bug,
-     * not the fix, and it would disagree with the sort order the queue pages by.
+     * This used to be an unbounded `find().lean()` over every ticket the caller
+     * can see — on the same dashboard PAC-98 paginated precisely so its cost
+     * would stop growing with the book. Counting server-side is only correct
+     * because the stored `status` is (PAC-102); see the note on `overdue`.
      */
-    const needsActionToday = tickets.filter(
-      (t) => t.status === 'overdue',
-    ).length;
-    const resolvedToday = tickets.filter(
-      (t) =>
-        isTerminalTicketStatus(t.status) &&
-        t.lastActivityAt &&
-        new Date(t.lastActivityAt) >= startOfToday,
-    ).length;
+    const [totals] = await this.ticketModel.aggregate<{
+      openTickets: number;
+      needsActionToday: number;
+      resolvedToday: number;
+      households: string[];
+    }>([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          openTickets: {
+            $sum: { $cond: [{ $in: ['$status', terminal] }, 0, 1] },
+          },
+          /*
+           * Reads the stored column, which `SyncTicketStatusFn` keeps true.
+           *
+           * This used to be wrong (PAC-102): a scheduled call's status was
+           * derived on read, so the column said `open` forever and this
+           * counted only tickets a CSR had flagged by hand — near-zero, beside
+           * a queue tab showing hundreds. Do not reintroduce a derivation to
+           * "make it accurate" — that is the bug, not the fix, and it would
+           * disagree with the sort order the queue pages by.
+           */
+          needsActionToday: {
+            $sum: { $cond: [{ $eq: ['$status', 'overdue'] }, 1, 0] },
+          },
+          resolvedToday: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $in: ['$status', terminal] },
+                    { $gte: ['$lastActivityAt', startOfToday] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          // `household || clientName`, as the Node version had it: a ticket
+          // with neither is left out rather than counted as a household.
+          households: {
+            $addToSet: {
+              $cond: [
+                { $gt: [{ $ifNull: ['$household', ''] }, ''] },
+                '$household',
+                { $ifNull: ['$clientName', null] },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+    const openTickets = totals?.openTickets ?? 0;
+    const needsActionToday = totals?.needsActionToday ?? 0;
+    const resolvedToday = totals?.resolvedToday ?? 0;
     const households = new Set(
-      tickets.map((t) => t.household || t.clientName).filter(Boolean),
+      (totals?.households ?? []).filter((h): h is string => Boolean(h)),
     );
 
     return {
@@ -1855,20 +1901,44 @@ const DEFAULT_TICKET_PAGE_SIZE = 8;
  */
 function queueTabMatch(
   tab: ServiceTicketQueueTab,
-): FilterQuery<ServiceTicketDocument> {
+): FilterQuery<ServiceTicketDocument> | null {
   if (tab === 'overdue') return { status: 'overdue' };
   if (tab === 'waiting') {
     return {
       status: { $in: ['waiting', 'waiting_on_client', 'waiting_on_carrier'] },
     };
   }
-  return {};
+  return null;
 }
 
-/** Treat a search term as text, not as a pattern the user did not intend. */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * `filter` narrowed to one tab — ANDed, never spread.
+ *
+ * Spreading the tab's `{ status }` over the filter would silently replace a
+ * `?status=` the caller also sent, so the tab counts would describe a different
+ * set from the rows beside them.
+ */
+function withQueueTab(
+  filter: FilterQuery<ServiceTicketDocument>,
+  tab: ServiceTicketQueueTab,
+): FilterQuery<ServiceTicketDocument> {
+  const match = queueTabMatch(tab);
+  if (!match) return filter;
+  return { ...filter, $and: [...(filter.$and ?? []), match] };
 }
+
+/**
+ * What the ticket search box matches, per token. The feed's rows print all of
+ * these. `phone` is deliberately absent: it is matched as a whole digits-only
+ * value in `list()`, since tokenizing `(918) 555-0134` leaves nothing that
+ * looks like a phone number.
+ */
+const TICKET_SEARCH_FIELDS = [
+  'clientName',
+  'ticketNumber',
+  'category',
+  'policyNumber',
+] as const;
 
 /** Roles whose holders can be a ticket's Assigned Client Relation Manager. */
 const ASSIGNABLE_ROLE_SLUGS = ['csr', 'crm'];

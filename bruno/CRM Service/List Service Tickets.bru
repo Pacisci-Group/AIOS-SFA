@@ -15,7 +15,7 @@ params:query {
   ~page: 1
   ~tab: overdue
   ~category: Renewal Review
-  ~status: open
+  ~status: open,overdue
   ~search: smith
   ~archived: true
 }
@@ -127,8 +127,8 @@ docs {
   | `pageSize` | query | Default 8, **capped at 100**. Past the cap is a 400, not a clamp — a silent clamp is how "pagination" becomes a suggestion. |
   | `tab` | query | `all` (default) · `overdue` · `waiting`. The queue's three tabs, as a server-side predicate. |
   | `category` | query | One of `SERVICE_TICKET_CATEGORIES`. |
-  | `status` | query | One stored status. |
-  | `search` | query | Free text over client name, ticket number, category, policy number and phone. Max 120 chars. |
+  | `status` | query | One stored status, or several ORed — comma-separated or repeated (`open,overdue`). The Priority Ticket Queue sends every non-terminal status. |
+  | `search` | query | Free text, tokenized (PAC-101): every word must match one of client name, ticket number, category or policy number. A phone-shaped term (7+ digits) also matches the stored phone in any format. Max 120 chars. |
   | `archived` | query | `true` returns only tickets past the archive window; omitted returns the active queue. |
 
   ## Response — `ServiceTicketListResponse`
