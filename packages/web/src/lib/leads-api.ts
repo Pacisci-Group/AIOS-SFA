@@ -5,6 +5,8 @@ import type {
   LeadTemperature,
   ReassignLeadResult,
   ServiceTicketView,
+  UnclaimedLeadListResponse,
+  UnclaimedLeadRow,
   UpdateLeadInput,
   UpdateLeadResult,
 } from '@sfa/shared';
@@ -12,6 +14,7 @@ import { apiFetch } from '@/lib/api-client';
 import { NOT_AVAILABLE } from '@/lib/not-available';
 
 export type { HotLeadListResponse, HotLeadRow };
+export type { UnclaimedLeadListResponse, UnclaimedLeadRow };
 
 /**
  * The detail contracts are **re-exported from `@sfa/shared`**, not redeclared.
@@ -176,6 +179,32 @@ export function listHotLeads(params: ListHotLeadsParams = {}) {
   const qs = search.toString();
 
   return apiFetch<HotLeadListResponse>(`/leads/hot${qs ? `?${qs}` : ''}`);
+}
+
+/** Query key for the unclaimed pool, so the page and its panel cannot disagree. */
+export const unclaimedLeadsKey = (limit: number) =>
+  ['leads', 'unclaimed', limit] as const;
+
+/**
+ * `GET /leads/unclaimed` — the Agency Command Center's lead pool (PAC-138).
+ *
+ * Every lead in the agency that no producer owns yet, oldest arrival first.
+ * Takes no `scope`: "unclaimed" already means "owned by nobody", so asking for
+ * the caller's own would describe an empty set.
+ *
+ * ⚠ `phone` and `email` come back `null` for a producer, who cannot open these
+ * leads anyway — the API withholds them rather than trusting the client to hide
+ * them. Both render as {@link NOT_AVAILABLE}; there is deliberately no way to
+ * tell a withheld value from a missing one.
+ */
+export function listUnclaimedLeads(params: { limit?: number } = {}) {
+  const search = new URLSearchParams();
+  if (params.limit != null) search.set('limit', String(params.limit));
+  const qs = search.toString();
+
+  return apiFetch<UnclaimedLeadListResponse>(
+    `/leads/unclaimed${qs ? `?${qs}` : ''}`,
+  );
 }
 
 /**

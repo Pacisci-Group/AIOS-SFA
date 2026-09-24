@@ -45,8 +45,10 @@ const ReportBugDialog = lazy(() =>
  *
  * `bottom-6 right-6`, `z-40`. Below the `z-50` Radix dialog/popover layer so it
  * never floats over an open modal, and above page content. It claims the
- * bottom-right corner app-wide: the "Fast Log Mailer" button on
- * `/dashboard/management-alt` was moved up to `bottom-20` to yield to it.
+ * bottom-right corner app-wide, uncontested: the one other floating button —
+ * "Fast Log Mailer" on `/dashboard/management-alt`, which had been pushed up to
+ * `bottom-20` to yield to this one — is gone, since the Command Center rewrite
+ * (PAC-138) made it a header action instead.
  *
  * ## Colour
  *

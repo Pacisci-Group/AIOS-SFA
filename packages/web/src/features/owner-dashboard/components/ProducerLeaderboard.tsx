@@ -24,7 +24,7 @@ import type {
 import { UserX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCount, formatMoney } from "../owner-format";
-import { OwnerPanel } from "./OwnerPanel";
+import { DataPanel } from "@/components/common/DataPanel";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** Pinned so the loading state is the height of a typical board. */
@@ -61,7 +61,7 @@ export function ProducerLeaderboard({
   });
 
   return (
-    <OwnerPanel
+    <DataPanel
       title="Producer leaderboard"
       isPending={isPending}
       isError={isError}
@@ -107,7 +107,7 @@ export function ProducerLeaderboard({
           </TableFooter>
         </Table>
       )}
-    </OwnerPanel>
+    </DataPanel>
   );
 }
 

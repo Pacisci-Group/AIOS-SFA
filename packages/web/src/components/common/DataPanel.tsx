@@ -4,7 +4,7 @@ import { DetailCard } from "@/components/common/DetailCard";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
-interface OwnerPanelProps {
+interface DataPanelProps {
   title: string;
   subheading?: ReactNode;
   isPending: boolean;
@@ -21,12 +21,17 @@ interface OwnerPanelProps {
 }
 
 /**
- * The shell both Owner dashboard tables share: the app's `DetailCard`, plus the
- * three states a table has that a KPI card does not. Unlike a figure, a table
- * *can* be empty — "no producers sold or quoted in this period" is a sentence,
- * not a row of zeroes.
+ * A self-fetching table's shell: the app's `DetailCard`, plus the three states a
+ * table has that a KPI card does not. Unlike a figure, a table *can* be empty —
+ * "no producers sold or quoted in this period" is a sentence, not a row of
+ * zeroes.
+ *
+ * Lived in `features/owner-dashboard/` as `OwnerPanel` until the Command Center
+ * (PAC-138) needed the same three states. Promoted rather than imported
+ * sideways: one feature reaching into another's components folder is how a
+ * shared thing ends up owned by whichever feature happened to need it first.
  */
-export function OwnerPanel({
+export function DataPanel({
   title,
   subheading,
   isPending,
@@ -38,7 +43,7 @@ export function OwnerPanel({
   skeletonRows,
   children,
   className,
-}: OwnerPanelProps) {
+}: DataPanelProps) {
   return (
     <DetailCard
       title={title}

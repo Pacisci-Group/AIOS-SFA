@@ -82,9 +82,11 @@ interface MailerLookupDrawerProps {
  * offer and the only premium the legacy app ever displayed, which makes it the
  * number producers have been quoting all along.
  *
- * The layout comes from the `SidecarMailer` prototype in `management-alt`, but
- * none of its markup: that is a throwaway dashboard built on raw
- * `emerald-*`/`sky-*` values with no light theme.
+ * The layout came from the `SidecarMailer` prototype on the old
+ * `management-alt` dashboard, but none of its markup: that was a throwaway
+ * screen built on raw `emerald-*`/`sky-*` values with no light theme. That
+ * prototype is gone (PAC-138) and the Command Center that replaced it mounts
+ * this drawer, so this is now the only QCN lookup in the app.
  */
 export function MailerLookupDrawer({
   open,

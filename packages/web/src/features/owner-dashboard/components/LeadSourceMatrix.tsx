@@ -23,7 +23,7 @@ import type {
 } from "@/lib/owner-dashboard-api";
 import { cn } from "@/lib/utils";
 import { formatCount, formatMoney, formatPct } from "../owner-format";
-import { OwnerPanel } from "./OwnerPanel";
+import { DataPanel } from "@/components/common/DataPanel";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 
 const SKELETON_ROWS = 6;
@@ -85,7 +85,7 @@ export function LeadSourceMatrix({
   });
 
   return (
-    <OwnerPanel
+    <DataPanel
       title="Lead source performance"
       subheading={
         params.policyTypes.length > 0 && (
@@ -156,6 +156,6 @@ export function LeadSourceMatrix({
           </TableFooter>
         </Table>
       )}
-    </OwnerPanel>
+    </DataPanel>
   );
 }

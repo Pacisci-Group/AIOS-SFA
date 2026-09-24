@@ -46,7 +46,7 @@ const navSections = [
       },
       {
         to: '/dashboard/management-alt',
-        label: 'Management Dashboard (v2)',
+        label: 'Agency Command Center',
         icon: BarChart3,
         module: ModuleKey.Management,
       },

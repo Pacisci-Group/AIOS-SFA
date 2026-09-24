@@ -20,8 +20,11 @@ import { HotLeadsService } from './hot-leads.service';
 import { LeadAssignmentService } from './lead-assignment.service';
 import { LeadDetailService } from './lead-detail.service';
 import { LeadsService } from './leads.service';
+import { UnclaimedLeadsService } from './unclaimed-leads.service';
 import { listHotLeadsSchema } from './dto/list-hot-leads.dto';
 import type { ListHotLeadsDto } from './dto/list-hot-leads.dto';
+import { listUnclaimedLeadsSchema } from './dto/list-unclaimed-leads.dto';
+import type { ListUnclaimedLeadsDto } from './dto/list-unclaimed-leads.dto';
 import { listLeadsSchema } from './dto/list-leads.dto';
 import type { ListLeadsDto } from './dto/list-leads.dto';
 import { createLeadSchema } from './dto/create-lead.dto';
@@ -46,6 +49,7 @@ export class LeadsController {
     private readonly leadsService: LeadsService,
     private readonly leadDetailService: LeadDetailService,
     private readonly hotLeadsService: HotLeadsService,
+    private readonly unclaimedLeadsService: UnclaimedLeadsService,
     private readonly leadAssignment: LeadAssignmentService,
   ) {}
 
@@ -99,6 +103,31 @@ export class LeadsController {
     query: ListHotLeadsDto,
   ) {
     return this.hotLeadsService.list(access, branchId, query);
+  }
+
+  /**
+   * The Unclaimed Agency Leads Pool on the Agency Command Center (PAC-138).
+   *
+   * `leads:read` like the rest of this controller, and no module of its own —
+   * this is a different *view* of the agency's leads, not a different resource.
+   *
+   * 🔴 **The one read here that crosses `DataScope`.** A producer (`own`) sees
+   * leads they do not own and cannot open, because a pool nobody can look into
+   * distributes nothing. `UnclaimedLeadsService`'s docblock has the full
+   * reasoning and the redaction that pays for it; read it before widening the
+   * row. Handing the lead over is a separate, stricter action —
+   * `PATCH :id/assignment` below.
+   *
+   * **Must stay above the `:id` banner below**, for the reason given there.
+   */
+  @Get('unclaimed')
+  unclaimed(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Query(new ZodValidationPipe(listUnclaimedLeadsSchema))
+    query: ListUnclaimedLeadsDto,
+  ) {
+    return this.unclaimedLeadsService.list(access, branchId, query);
   }
 
   /*

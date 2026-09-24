@@ -2,23 +2,9 @@ import { Clock, Star } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import type { HotLeadRow as HotLead } from "@/lib/leads-api";
+import { relativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import { LeadQuickActions } from "./LeadQuickActions";
-
-/** `2h ago` / `3d ago` — how long since anyone touched this lead. */
-function relativeTime(iso: string | null): string {
-  if (!iso) return "never";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "never";
-
-  const minutes = Math.max(0, Math.round((Date.now() - then) / 60_000));
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return `${Math.round(days / 30)}mo ago`;
-}
 
 interface HotLeadRowProps {
   lead: HotLead;
@@ -83,7 +69,9 @@ export function HotLeadRow({ lead, isLast }: HotLeadRowProps) {
 
         <div className="mt-0.5 flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           <Clock className="size-3" />
-          {relativeTime(lead.lastActivityAt)}
+          {/* "never", not N/A: a lead with no activity has not been touched,
+              which is a fact about it rather than a missing value. */}
+          {relativeTime(lead.lastActivityAt, "never")}
         </div>
       </div>
 
