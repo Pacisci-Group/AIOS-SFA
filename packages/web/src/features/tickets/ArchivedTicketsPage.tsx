@@ -8,7 +8,15 @@ import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { TablePagination } from "@/components/common/TablePagination";
+import { SEARCH_DEBOUNCE_MS } from "@/components/common/TableSearchInput";
+import type { TicketFeedFilters } from "./components/TicketFeed";
 import { TicketFeed } from "./components/TicketFeed";
+import {
+  FEED_PAGE_SIZE,
+  feedRequestFilters,
+} from "./components/ticket-feed-query";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import type { TicketStatus } from "./components/ticket-data";
 import {
@@ -40,12 +48,58 @@ export default function ArchivedTicketsPage() {
     searchParams.get("ticket") ? "workspace" : "queue",
   );
 
+  /*
+   * Paged by the server since PAC-98. This list used to fetch every ticket in
+   * the caller's scope in one response; the feed rendered all of them and the
+   * payload grew with the book.
+   */
+  const page = Number(searchParams.get("page")) || 1;
+
+  /*
+   * The feed's controls live here rather than inside it, because they are part
+   * of the *request* now — see `TicketFeedFilters`. Changing one resets to page
+   * 1: page 3 of an unfiltered list is not page 3 of a filtered one.
+   */
+  const [filters, setFilters] = useState<TicketFeedFilters>({
+    query: "",
+    filter: "all",
+    category: "all",
+  });
+  // Typing should not fire a request per keystroke.
+  const debouncedQuery = useDebouncedValue(filters.query, SEARCH_DEBOUNCE_MS);
+
+  const feedQuery = useMemo(
+    () => feedRequestFilters(filters, debouncedQuery),
+    [filters, debouncedQuery],
+  );
+
+  const changeFilters = (next: TicketFeedFilters) => {
+    setFilters(next);
+    const params = new URLSearchParams(searchParams);
+    params.delete("page");
+    params.delete("ticket");
+    setSearchParams(params, { replace: true });
+  };
+
   const ticketsQuery = useQuery({
-    queryKey: ARCHIVED_KEY,
-    queryFn: () => listServiceTickets({ archived: true }),
+    queryKey: [...ARCHIVED_KEY, { page, ...feedQuery }],
+    queryFn: () => listServiceTickets({ archived: true, page, pageSize: FEED_PAGE_SIZE, ...feedQuery }),
+    // Hold the previous page while the next loads, so paging does not blank
+    // the feed and drop the selection out from under the workspace pane.
+    placeholderData: (previous) => previous,
   });
 
-  const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
+  const ticketPage = ticketsQuery.data;
+  const tickets = useMemo(() => ticketPage?.items ?? [], [ticketPage]);
+
+  const goToPage = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (next <= 1) params.delete("page");
+    else params.set("page", String(next));
+    // The selected ticket belongs to the page being left.
+    params.delete("ticket");
+    setSearchParams(params, { replace: true });
+  };
 
   useEffect(() => {
     if (!tickets.length) {
@@ -129,7 +183,7 @@ export default function ArchivedTicketsPage() {
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 {ticketsQuery.isLoading || ticketsQuery.isError
                   ? " "
-                  : `${tickets.length} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
+                  : `${ticketPage?.total ?? 0} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
               </p>
             </div>
           </div>
@@ -159,10 +213,23 @@ export default function ArchivedTicketsPage() {
             >
               <TicketFeed
                 tickets={tickets}
+                filters={filters}
+                onFiltersChange={changeFilters}
                 selectedId={selectedTicketId}
                 onSelect={handleSelect}
+                busy={ticketsQuery.isFetching}
                 showStatusTabs={false}
                 emptyLabel={`Nothing archived yet. Tickets land here ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days after they are resolved.`}
+              />
+              <TablePagination
+                page={ticketPage?.page ?? page}
+                pageSize={ticketPage?.pageSize ?? FEED_PAGE_SIZE}
+                total={ticketPage?.total ?? 0}
+                totalPages={ticketPage?.totalPages ?? 1}
+                onPageChange={goToPage}
+                busy={ticketsQuery.isFetching}
+                noun="tickets"
+                className="border-t border-border px-4 py-3"
               />
             </div>
 

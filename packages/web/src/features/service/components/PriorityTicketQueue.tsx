@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { MessageSquarePlus, ExternalLink, Clock, ChevronRight, ChevronDown, CheckCircle2, Lock } from "lucide-react";
 import {
   SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_PICKER_STATUSES,
-  isTerminalTicketStatus,
   type ServiceTicketStatus,
 } from "@sfa/shared";
 import {
@@ -14,9 +13,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TICKET_STATUS_CONFIG } from "@/features/tickets/components/ticket-data";
-import type { ServiceTicketView } from "@/lib/service-tickets-api";
-import { sortByUrgency } from "@/lib/ticket-urgency";
+import type {
+  ServiceTicketListResponse,
+  ServiceTicketView,
+} from "@sfa/shared";
 import { useUrlState } from "@/hooks/useUrlState";
+import { TablePagination } from "@/components/common/TablePagination";
 
 type SlaStatus = "critical" | "warning" | "normal";
 
@@ -37,10 +39,13 @@ type FilterTab = (typeof FILTER_TABS)[number];
 const ALL_TYPES = "__all__";
 
 interface PriorityTicketQueueProps {
-  tickets: ServiceTicketView[];
+  /** One page of the queue, already ranked by the server. */
+  page: ServiceTicketListResponse | undefined;
   onOpen: (id: string) => void;
   onAddNote: (id: string, content: string) => void;
   onChangeStatus: (id: string, status: ServiceTicketStatus) => void;
+  /** A page is in flight — disables Prev/Next so a double click cannot skip one. */
+  busy?: boolean;
 }
 
 interface QueueTicket {
@@ -57,19 +62,6 @@ interface QueueTicket {
   /** Quote tickets take their status from their lead — no picker on the row. */
   isStatusLocked: boolean;
 }
-
-/**
- * Rows per page.
- *
- * The queue is paginated in the browser, not on the server, because everything
- * around the rows needs the whole set: `sortByUrgency` ranks by status, then
- * age, then priority; the three tab counts are over all assigned tickets; and
- * the SLA badge is derived here from `daysOpen`. Paging on the server would
- * mean porting that ranking into Mongo and recounting per tab — a rewrite of
- * `GET /crm/service-tickets`, which two other pages also read. Worth doing if a
- * rep's own queue ever grows past a few hundred; it does not today.
- */
-const PAGE_SIZE = 8;
 
 /**
  * The queue's tab and page live in the URL, not in `useState`.
@@ -93,15 +85,17 @@ const URL_ALLOWED = {
   tab: FILTER_TABS,
   page: (value: string) => /^[1-9]\d*$/.test(value),
   /*
-   * Bounded rather than pinned to `SERVICE_TICKET_CATEGORIES`.
+   * Pinned to the vocabulary again, because this value now reaches the API.
    *
-   * This filter is applied to tickets already in memory and never reaches the
-   * API, so a value outside the vocabulary costs nothing worse than an empty
-   * list — while pinning it means any category the data carries but the enum
-   * has since renamed is unselectable, because the guard resets it to '' on
-   * the way back out of the URL. Length is all that needs guarding.
+   * PAC-97 loosened it to a length bound, and the reasoning was sound at the
+   * time: the filter ran against tickets already in memory, so a value outside
+   * the enum cost nothing worse than an empty list, while pinning it made an
+   * off-vocabulary category unselectable. PAC-98 moved the filter onto the
+   * request — `?type=` becomes `?category=` on `GET /crm/service-tickets` — and
+   * a hand-edited URL should render the default view, not send junk to Mongo
+   * and take a 400.
    */
-  type: (value: string) => value.length <= 60,
+  type: SERVICE_TICKET_CATEGORIES,
 } as const;
 
 /** Every flavour of "blocked on someone else" feeds the Waiting filter. */
@@ -142,10 +136,11 @@ const slaConfig: Record<SlaStatus, { color: string; label: string; bg: string; t
 };
 
 export function PriorityTicketQueue({
-  tickets,
+  page: pageData,
   onOpen,
   onAddNote,
   onChangeStatus,
+  busy = false,
 }: PriorityTicketQueueProps) {
   const [urlState, setUrlState] = useUrlState({
     defaults: URL_DEFAULTS,
@@ -160,72 +155,51 @@ export function PriorityTicketQueue({
   const [noteDraft, setNoteDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Most urgent first: overdue leads, and within overdue the ticket that has
-  // been late the longest is at the top. Sorted before mapping so the ranking
-  // can use the due date, which the flattened row shape drops.
-  const queueTickets = useMemo(
-    () =>
-      sortByUrgency(tickets.filter((t) => !isTerminalTicketStatus(t.status)))
-        .map(toQueueTicket),
-    [tickets],
+  /*
+   * The rows, in the order the server sent them.
+   *
+   * Everything that used to happen here — `sortByUrgency`, the tab filter, the
+   * `slice` for the current page, the three tab counts — now happens in Mongo
+   * (PAC-98). The browser was doing it over *every* ticket in the rep's scope,
+   * which is why the dashboard's first paint grew with the size of the book.
+   *
+   * ⚠ Do not re-sort. The ranking is a total order across the whole queue, and
+   * re-applying it to the eight rows of one page would order that page against
+   * itself rather than against the pages either side of it.
+   */
+  const pageRows = useMemo(
+    () => (pageData?.items ?? []).map(toQueueTicket),
+    [pageData],
   );
 
   /**
-   * The filter's options: the whole shared vocabulary, plus anything the
-   * tickets carry that isn't in it.
+   * The filter's options: the whole shared vocabulary, plus anything the rows
+   * carry that isn't in it.
    *
    * Deriving the list from the loaded tickets instead — offering only the
    * categories with an open ticket — reads well and fails badly. A queue that
    * is all one category offers a single row, and a stored category the enum
    * doesn't recognise (a legacy label, a rename) drops out of both sides at
    * once: no option to pick, and no way to reach those tickets. Listing the
-   * vocabulary means the control is the same control on every queue, and the
-   * union keeps an off-vocabulary category selectable. An option with nothing
-   * behind it lands on "No tickets in this view", which is an honest answer.
+   * vocabulary means the control is the same control on every queue.
+   *
+   * Now that rows arrive one page at a time, deriving would be worse still:
+   * the options would change as the rep pages.
    */
   const typeOptions = useMemo(() => {
     const canonical = new Set<string>(SERVICE_TICKET_CATEGORIES);
     const extras = [
       ...new Set(
-        queueTickets
-          .map((t) => t.ticketType)
-          .filter((type) => type && !canonical.has(type)),
+        pageRows.map((t) => t.ticketType).filter((t) => t && !canonical.has(t)),
       ),
     ].sort();
     return [...SERVICE_TICKET_CATEGORIES, ...extras];
-  }, [queueTickets]);
+  }, [pageRows]);
 
-  /*
-   * Type narrows the queue *before* the tabs, so the three tab counts describe
-   * the set the rows are drawn from. Counting them over every assigned ticket
-   * while the list showed one category would put a "577 Overdue" chip above
-   * eleven rows.
-   */
-  const typeFiltered = useMemo(
-    () =>
-      activeType
-        ? queueTickets.filter((t) => t.ticketType === activeType)
-        : queueTickets,
-    [queueTickets, activeType],
-  );
-
-  const filtered = typeFiltered.filter((t) => {
-    if (activeFilter === "all") return true;
-    if (activeFilter === "overdue") return t.slaStatus === "critical";
-    if (activeFilter === "waiting") return t.isWaiting;
-    return true;
-  });
-
-  /*
-   * Clamped while rendering, so the list never paints a frame of "No tickets in
-   * this view" — resolving the last ticket on the last page shrinks `filtered`
-   * out from under `page`, and correcting that in an effect alone would show
-   * the empty state for one frame before fixing it.
-   */
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const pageStart = (currentPage - 1) * PAGE_SIZE;
-  const pageRows = filtered.slice(pageStart, pageStart + PAGE_SIZE);
+  const counts = pageData?.counts ?? { all: 0, overdue: 0, waiting: 0 };
+  const total = pageData?.total ?? 0;
+  const totalPages = pageData?.totalPages ?? 1;
+  const currentPage = pageData?.page ?? page;
 
   /** Whatever the rows are about to become, this is no longer their view. */
   const resetView = useCallback(() => {
@@ -257,24 +231,10 @@ export function PriorityTicketQueue({
     resetView();
   };
 
-  /*
-   * Reconcile the URL with the clamp above.
-   *
-   * The render already shows the right page, so this only fixes the address
-   * bar — but leaving `?page=3` on a two-page queue is both a lie in a URL
-   * somebody might copy and a trap: one new ticket arriving on the next
-   * refetch would grow `totalPages` and silently jump the rep to page 3.
-   */
-  useEffect(() => {
-    if (page !== currentPage) {
-      setUrlState({ page: currentPage <= 1 ? "" : String(currentPage) });
-    }
-  }, [page, currentPage, setUrlState]);
-
   const tabs: { key: FilterTab; label: string; count: number }[] = [
-    { key: "all", label: "All Assigned", count: typeFiltered.length },
-    { key: "overdue", label: "Overdue", count: typeFiltered.filter((t) => t.slaStatus === "critical").length },
-    { key: "waiting", label: "Waiting on Others", count: typeFiltered.filter((t) => t.isWaiting).length },
+    { key: "all", label: "All Assigned", count: counts.all },
+    { key: "overdue", label: "Overdue", count: counts.overdue },
+    { key: "waiting", label: "Waiting on Others", count: counts.waiting },
   ];
 
   return (
@@ -284,7 +244,7 @@ export function PriorityTicketQueue({
         <div className="flex items-center justify-between gap-3 mb-4">
           <h2 className="min-w-0 truncate text-base font-semibold text-foreground tracking-tight">My Priority Tickets</h2>
           <div className="flex flex-shrink-0 items-center gap-2">
-            <span className="text-xs text-muted-foreground tabular-nums">{filtered.length} tickets</span>
+            <span className="text-xs text-muted-foreground tabular-nums">{total} tickets</span>
             <Select value={activeType || ALL_TYPES} onValueChange={changeType}>
               <SelectTrigger
                 size="sm"
@@ -328,7 +288,7 @@ export function PriorityTicketQueue({
 
       {/* Ticket list */}
       <div ref={listRef} className="flex-1 overflow-y-auto divide-y divide-white/5">
-        {filtered.length === 0 && (
+        {pageRows.length === 0 && (
           <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
             No tickets in this view.
           </div>
@@ -339,8 +299,8 @@ export function PriorityTicketQueue({
           const menuOpen = statusMenu === ticket.id || actionMenu === ticket.id;
           // Rows near the bottom of the scroll area open their menu upward so
           // it isn't clipped by the list container. Measured against the rows
-          // on this page — against `filtered` it would point the wrong way on
-          // every page but the last.
+          // on this page — measured against the whole queue it would point the
+          // wrong way on every page but the last.
           const dropUp = pageRows.length > 3 && index >= pageRows.length - 2;
           return (
             <div
@@ -534,38 +494,16 @@ export function PriorityTicketQueue({
         })}
       </div>
 
-      {/* Pagination. Hidden on a single page: a footer that can only say
-          "1 / 1" is chrome, and this card is short on vertical room. */}
-      {totalPages > 1 && (
-        <nav
-          aria-label="Ticket queue pagination"
-          className="flex-shrink-0 flex items-center justify-between gap-3 px-5 py-3 border-t border-white/8"
-        >
-          <span className="text-[11px] text-muted-foreground tabular-nums">
-            Showing {pageStart + 1}–{pageStart + pageRows.length} of{" "}
-            {filtered.length}
-          </span>
-          <div className="flex items-center gap-1.5">
-            <button
-              disabled={currentPage <= 1}
-              onClick={() => goToPage(currentPage - 1)}
-              className="px-2.5 py-1 rounded-md bg-secondary border border-white/8 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary/80 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted-foreground disabled:hover:bg-secondary"
-            >
-              Prev
-            </button>
-            <span className="px-1 text-[11px] text-muted-foreground tabular-nums">
-              {currentPage} / {totalPages}
-            </span>
-            <button
-              disabled={currentPage >= totalPages}
-              onClick={() => goToPage(currentPage + 1)}
-              className="px-2.5 py-1 rounded-md bg-secondary border border-white/8 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary/80 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted-foreground disabled:hover:bg-secondary"
-            >
-              Next
-            </button>
-          </div>
-        </nav>
-      )}
+      <TablePagination
+        page={currentPage}
+        pageSize={pageData?.pageSize ?? pageRows.length}
+        total={total}
+        totalPages={totalPages}
+        onPageChange={goToPage}
+        busy={busy}
+        noun="tickets"
+        className="flex-shrink-0 border-t border-border px-5 py-3"
+      />
 
       {/* Click-away for the status picker */}
       {statusMenu && (

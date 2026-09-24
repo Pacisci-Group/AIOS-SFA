@@ -1,5 +1,4 @@
-import { Check, ListFilter, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Check, ListFilter } from "lucide-react";
 import {
   SERVICE_TICKET_CATEGORIES,
   type ServiceTicketCategory,
@@ -12,9 +11,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+import { TableSearchInput } from "@/components/common/TableSearchInput";
 import { FilterToggles } from "@/components/common/FilterToggles";
-import { compareTicketUrgency } from "@/lib/ticket-urgency";
 import { cn } from "@/lib/utils";
 import {
   CATEGORY_SHORT,
@@ -26,6 +24,21 @@ import { NOT_AVAILABLE } from "@/lib/not-available";
 
 type FilterTab = "all" | "open" | "waiting" | "resolved";
 
+/**
+ * The feed's three controls, owned by the page rather than the feed.
+ *
+ * Lifted out in PAC-98. They used to be local state filtering an array the
+ * page had already fetched in full; now the list is paged server-side, so a
+ * filter applied here would only ever narrow the page in front of you. The
+ * page holds them, sends them with the request, and resets to page 1 when
+ * they change.
+ */
+export interface TicketFeedFilters {
+  query: string;
+  filter: FilterTab;
+  category: ServiceTicketCategory | 'all';
+}
+
 interface TicketFeedProps {
   tickets: Ticket[];
   selectedId: string | null;
@@ -36,6 +49,15 @@ interface TicketFeedProps {
    */
   showStatusTabs?: boolean;
   emptyLabel?: string;
+  filters: TicketFeedFilters;
+  onFiltersChange: (next: TicketFeedFilters) => void;
+  /** Categories to offer, from the whole queue rather than the loaded page. */
+  categoryOptions?: readonly ServiceTicketCategory[];
+  /**
+   * A page is in flight. The search is a debounce plus a round trip now, not
+   * an in-memory filter, so the box needs to say it is working.
+   */
+  busy?: boolean;
 }
 
 const TABS: readonly { label: string; value: FilterTab }[] = [
@@ -48,9 +70,10 @@ const TABS: readonly { label: string; value: FilterTab }[] = [
 /**
  * The queue on the left of the ticket workspace.
  *
- * Search, the status filters and the category filter go through `Input`,
- * `FilterToggles` and `DropdownMenu` rather than the hand-rolled equivalents
- * this had before — the previous search box drew its own focus ring off
+ * Search, the status filters and the category filter go through
+ * `TableSearchInput`, `FilterToggles` and `DropdownMenu` rather than the
+ * hand-rolled equivalents this had before — the previous search box drew its
+ * own focus ring off
  * `--ring`, the filter row was bare `<button>`s with no group semantics or
  * pressed state, and the category picker was a `fixed inset-0` click-away layer
  * with no escape handling and no `aria-expanded`.
@@ -61,65 +84,49 @@ export function TicketFeed({
   onSelect,
   showStatusTabs = true,
   emptyLabel = "No tickets match your search.",
+  filters,
+  onFiltersChange,
+  categoryOptions,
+  busy = false,
 }: TicketFeedProps) {
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<FilterTab>("all");
-  const [category, setCategory] = useState<ServiceTicketCategory | "all">("all");
+  const { query, filter, category } = filters;
+  const setQuery = (next: string) => onFiltersChange({ ...filters, query: next });
+  const setFilter = (next: FilterTab) =>
+    onFiltersChange({ ...filters, filter: next });
+  const setCategory = (next: ServiceTicketCategory | "all") =>
+    onFiltersChange({ ...filters, category: next });
 
-  // Only offer categories actually present in the queue — a picker listing all
-  // twelve when the CSR has three is noise.
-  const availableCategories = useMemo(
-    () =>
-      SERVICE_TICKET_CATEGORIES.filter((c) =>
-        tickets.some((t) => t.category === c),
-      ),
-    [tickets],
-  );
+  /*
+   * The picker offers the whole vocabulary unless the page supplies a list.
+   *
+   * It used to derive the options from `tickets` — "only offer categories
+   * actually present in the queue". That reasoning does not survive paging:
+   * `tickets` is now one page, so the options would change under the rep as
+   * they page, and a category would vanish from the picker while its tickets
+   * sat on page two. Same trap PAC-97 hit on the dashboard queue.
+   */
+  const availableCategories = categoryOptions ?? SERVICE_TICKET_CATEGORIES;
 
-  const filtered = useMemo(() => {
-    const matches = tickets.filter((t) => {
-      const matchesFilter =
-        filter === "all" ||
-        (filter === "open" && (t.status === "open" || t.status === "overdue")) ||
-        (filter === "waiting" && t.status === "waiting") ||
-        (filter === "resolved" && t.status === "resolved");
-
-      const matchesCategory = category === "all" || t.category === category;
-
-      const q = query.toLowerCase();
-      const matchesQuery =
-        !q ||
-        t.clientName.toLowerCase().includes(q) ||
-        t.ticketNumber.toLowerCase().includes(q) ||
-        t.category.toLowerCase().includes(q) ||
-        t.policyNumber.includes(q) ||
-        t.phone.includes(q);
-
-      return matchesFilter && matchesCategory && matchesQuery;
-    });
-
-    // Same ranking the Service Dashboard queue uses, so a ticket holds the
-    // same relative position wherever it is seen.
-    return matches.sort(compareTicketUrgency);
-  }, [tickets, filter, category, query]);
+  /*
+   * The rows as the server sent them.
+   *
+   * The status, category and text filtering that used to happen here is now
+   * part of the request (PAC-98), and the ranking comes back applied — so
+   * there is nothing left to do but render. Re-sorting would order one page
+   * against itself rather than against the pages either side of it.
+   */
+  const filtered = tickets;
 
   return (
     <div className="flex h-full flex-col overflow-hidden border-border bg-card lg:border-r">
       <div className="space-y-3 border-b border-border px-4 py-3">
-        <div className="relative">
-          <Search
-            aria-hidden
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            type="search"
-            aria-label="Search tickets"
-            placeholder="Search name, policy, phone, ID…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="pl-9 bg-card border-border"
-          />
-        </div>
+        <TableSearchInput
+          value={query}
+          onValueChange={setQuery}
+          label="Search tickets"
+          placeholder="Search name, policy, phone, ID…"
+          busy={busy}
+        />
 
         {showStatusTabs && (
           <FilterToggles

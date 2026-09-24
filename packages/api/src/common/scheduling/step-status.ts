@@ -3,6 +3,10 @@ import type { ServiceTicketStatus } from '@sfa/shared';
 /**
  * Status derivation for any *scheduled step* a ticket can carry.
  *
+ * Lives under `common/` rather than `crm/` so the worker may import it: the
+ * boundary in `eslint.config.mjs` admits only schemas from feature
+ * directories, and `SyncTicketStatusFn` needs this rule to advance statuses.
+ *
  * Extracted from `onboarding-scheduling.ts` unchanged: these three functions
  * only ever looked at `{availableAt, dueAt, completedAt}`, so nothing about
  * them was onboarding-specific except their names. Renewal outreach carries a
@@ -26,10 +30,18 @@ export interface StatusStep {
  *   waiting  — incomplete and not yet open (scheduled; hidden from lists)
  *   resolved — complete
  *
- * Computed on read rather than stored because the `waiting -> open` and
- * `open -> overdue` transitions happen through the passage of time, with no
- * write to hang an update off. Nothing here mutates rows, so the queue needs
- * no cron.
+ * The `waiting -> open` and `open -> overdue` transitions happen through the
+ * passage of time, with no write to hang an update off. This function was
+ * therefore called on every read, and the stored `status` column was left
+ * stale — which is exactly what `SyncTicketStatusFn` now fixes: the sweep
+ * calls this and writes the answer, so reads can trust the column.
+ *
+ * That makes this the **single definition of the rule**, not one of two. It is
+ * still pure and still safe to call on a read; what changed is that nothing
+ * has to, and nothing else may re-implement it. The Mongo predicates that
+ * select tickets due to transition are derived from the same precedence in
+ * `step-status.query.ts` — change one, change both, and the tests in
+ * `step-status.query.spec.ts` will tell you if you didn't.
  */
 export function deriveStepStatus(
   step: StatusStep,
