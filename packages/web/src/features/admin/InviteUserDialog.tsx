@@ -18,7 +18,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { ApiError } from "@/lib/api-client";
 import { listBranches } from "@/lib/branches-api";
 import { listRoles } from "@/lib/roles-api";
-import { inviteUser } from "@/lib/users-api";
+import { agencyUserOptionsKey, inviteUser } from "@/lib/users-api";
 import {
   EMPTY_INVITE,
   inviteFormSchema,
@@ -68,6 +68,9 @@ export function InviteUserDialog() {
     onSuccess: (result) => {
       // The new row renders with the existing amber "Invited" badge.
       void queryClient.invalidateQueries({ queryKey: ["users"] });
+      // The pickers read a different key; invalidate both or they hold a
+      // roster the directory has already moved on from.
+      void queryClient.invalidateQueries({ queryKey: agencyUserOptionsKey });
       toast.success("Invite sent", {
         description: `They have until ${new Date(
           result.expiresAt,

@@ -40,7 +40,7 @@ JWT auth + native forms.
 
 | Package | State |
 |---|---|
-| `packages/web` | Auth + **permission-management pages wired to the API**; the 7 mockup dashboards still render **hard-coded mock data** (Producer Dashboard data widgets being wired now) |
+| `packages/web` | Auth + **permission-management pages wired to the API**; the **Producer Dashboard**, the **Owner view** (PAC-135) and the **Manager view** (PAC-139) are live — the Command Center and Service Dashboard still render **hard-coded mock data** |
 | `packages/api` | Full **permission/multi-tenancy spine** + **Mongoose schemas for all ~22 domain collections** + a **SmartSuite→Mongo migration**; the HTTP **feature controllers are still stubs** returning `{ status: 'ready' }` (real query services/DTOs not wired yet) |
 | `packages/shared` | Source of truth for module keys & permissions |
 
@@ -66,7 +66,7 @@ each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 |---|---|---|
 | **Producer Dashboard** ← current focus | `/dashboard/producer` | Sales producer (`DataScope = own`) |
 | Lead Details | `/leads/:id`, `/leads/demo` | Producer |
-| Management v1 | `/dashboard/management` | Owner + Manager |
+| Management v1 — **Owner view is live** (PAC-135, `owner_dashboard:read`); Manager view is still the prototype | `/dashboard/management` | Owner + Manager |
 | Management v2 (actually an "Agency Command Center" / lead-distribution board — clarify intent) | `/dashboard/management-alt` | Owner/Manager |
 | Service Dashboard | `/crm/service` | Service rep |
 | Ticket Workspace | `/crm/tickets` | CRM/service |
@@ -235,6 +235,7 @@ whenever you work under `packages/web`.
   paths. react-hook-form is fully removed; there is no second forms idiom.
   Two API traps are written up in `docs/tanstack-form-spike-findings.md` —
   read it before touching the Sold wizard's per-card validation.
+- **A lead source is a `leadSources` row, referenced by `leadSourceId`** (PAC-135) — never a label on the record and never a hard-coded list. Platform rows have `agencyId: null`, an agency's own carry its id; find one in code by **`slug`**, never by name. The lead owns the fact: a sale or quote resolves its source *through its lead*, with `Deal.leadSourceId` only as the fallback. Read paths resolve names through `LeadSourcesService.labelsFor`, not `$lookup`.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
 - **Model the domain, never the SmartSuite field type.** When a SmartSuite field is an array, a select code or a `{ date, include_time }` object, the Mongo field is whatever the *business fact* actually is — not a mirror of how SmartSuite happens to type it. The schemas were generated straight from the API docs and this went wrong three times, each costing a ticket: `Contact.emails: string[]` / `phones: string[]` because SmartSuite's Email field is `string[]` and its Phone field is `phone[]`, when a contact is **one person with one email and one phone** (PAC-91 §1 — every consumer already read `[0]`, which is the tell); raw option codes stored where labels belong, so 2,095 households render `b5qvJ` (PAC-80 §6); and a single `Contact.householdId` because SmartSuite's `Household` link is single-valued, when membership is genuinely many-to-many (PAC-91 §5). The test: if you cannot say what the array's *second* element would mean, it is not an array. **A denormalised copy is the same mistake in another shape** — `Lead.emails`, `Household.primaryContactName/primaryEmails/primaryPhones` were all copies of a fact that lives on the contact, nothing kept them in step, and they read as empty on every migrated record (PAC-91 §1–§4). Store the reference and resolve through it.
 - **Changes to data or indexes that already exist go in `packages/api/migrations/`** — the versioned migrate-mongo setup (`npm run db:migrate:create -- <description>`). Each file runs once per database, in filename order, recorded in `migrations_changelog`, and **the API applies pending ones at startup** before it binds a port, so a deploy migrates itself. Read `packages/api/migrations/README.md` first; the short version is that applied migrations are immutable (fix a mistake with a *new* one), they use the raw `db` handle and never a Mongoose model (importing a schema fires `autoIndex` and races the migration), and they must be idempotent because a failure is not recorded and retries from the top. Do **not** write another one-off `src/migration/backfill/`-style script — that pattern is what this replaces. Note `src/migration/` is a *different thing*: the one-time SmartSuite→Mongo data import for bringing up an empty database.

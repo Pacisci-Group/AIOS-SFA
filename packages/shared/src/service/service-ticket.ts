@@ -65,6 +65,20 @@ export function isTerminalTicketStatus(status: ServiceTicketStatus): boolean {
 }
 
 /**
+ * Every status that is still somebody's work — the complement of
+ * {@link SERVICE_TICKET_TERMINAL_STATUSES}.
+ *
+ * Sent as `?status=` by the Priority Ticket Queue, which must not show a ticket
+ * that was resolved yesterday. The list endpoint only excludes *archived*
+ * tickets (terminal and past the archive window), so without this a resolved
+ * ticket would sit in "My Priority Tickets" for a week (PAC-98 review).
+ * Derived rather than restated, so a new status lands on the right side of the
+ * line without anyone remembering this list.
+ */
+export const SERVICE_TICKET_ACTIVE_STATUSES: readonly ServiceTicketStatus[] =
+  SERVICE_TICKET_STATUSES.filter((status) => !isTerminalTicketStatus(status));
+
+/**
  * How loudly a status demands attention. **Lower sorts first.**
  *
  * The eight stored statuses collapse onto the four states a queue actually
@@ -589,6 +603,24 @@ export const SERVICE_TICKET_SCOPES = ['own', 'others', 'agency'] as const;
 export type ServiceTicketScope = (typeof SERVICE_TICKET_SCOPES)[number];
 
 /**
+ * How a queue ranks inside its urgency bands — the vocabulary the API accepts
+ * for `?sort=`.
+ *
+ * Urgency is never switched off: overdue leads, then workable, then blocked,
+ * then done, under both. The option only decides the order *inside* a band —
+ * `urgency` puts the ticket that has demanded attention longest first,
+ * `activity` the one touched most recently (`lastActivityAt`). A plain recency
+ * sort put a ticket someone had just typed a note into above every overdue
+ * one, which is the one thing a work queue must not do.
+ *
+ * Server-side because the list pages: ranking one page in the browser would
+ * order it against itself rather than against the pages either side.
+ */
+export const SERVICE_TICKET_QUEUE_SORTS = ['urgency', 'activity'] as const;
+export type ServiceTicketQueueSort =
+  (typeof SERVICE_TICKET_QUEUE_SORTS)[number];
+
+/**
  * Paginated envelope for `GET /crm/service-tickets`, mirroring
  * `LeadListResponse` and `HouseholdListResponse`.
  *
@@ -603,7 +635,10 @@ export type ServiceTicketScope = (typeof SERVICE_TICKET_SCOPES)[number];
 export interface ServiceTicketListResponse {
   page: number;
   pageSize: number;
-  /** Rows matching the filters, before the tab predicate. */
+  /**
+   * Rows in the requested tab — what `totalPages` is computed from. The
+   * pre-tab total is `counts.all`.
+   */
   total: number;
   totalPages: number;
   items: ServiceTicketView[];

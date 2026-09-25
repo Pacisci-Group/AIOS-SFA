@@ -87,10 +87,13 @@ function titleCase(segment: string): string {
 const PAGE_BY_MODULE = new Map(PAGES.map((page) => [page.moduleKey, page]));
 
 /**
- * Labels for the admin capabilities. Written out rather than derived: these are
- * the 13 permissions with no UI at all today, so the wording is the entire
- * difference between a usable role editor and a list of colon-separated
- * strings.
+ * Labels for the admin capabilities. Written out rather than derived: the
+ * wording is the entire difference between a usable role editor and a list of
+ * colon-separated strings.
+ *
+ * Add an entry alongside every new `AgencyPermission`. `adminDefinitions` falls
+ * back to a generated label, so a missing one type-checks and seeds fine — the
+ * parity spec's "written copy" test is what notices.
  */
 const ADMIN_COPY: Record<string, { label: string; description: string }> = {
   [AgencyPermission.RolesRead]: {
@@ -127,6 +130,36 @@ const ADMIN_COPY: Record<string, { label: string; description: string }> = {
   [AgencyPermission.ChangeLogsRead]: {
     label: 'View change history',
     description: 'See who changed a record and what they changed.',
+  },
+  [AgencyPermission.BrandingRead]: {
+    label: 'View branding',
+    description:
+      'See how the agency is presented in the app, on its login page and in its emails.',
+  },
+  [AgencyPermission.BrandingWrite]: {
+    label: 'Manage branding',
+    description:
+      'Upload the agency’s logo and change how it is presented in the app, on its login page and in its emails.',
+  },
+  [AgencyPermission.DomainsRead]: {
+    label: 'View domains',
+    description:
+      'See the addresses the agency’s app is served on, whether each is verified, and which is primary.',
+  },
+  [AgencyPermission.DomainsWrite]: {
+    label: 'Manage domains',
+    description:
+      'Add, verify and remove the agency’s domains, and choose the primary one. Removing a domain takes the app offline at that address.',
+  },
+  [AgencyPermission.EmailRead]: {
+    label: 'View email settings',
+    description:
+      'See how the agency’s outgoing email is addressed, including its sending domain.',
+  },
+  [AgencyPermission.EmailWrite]: {
+    label: 'Manage email settings',
+    description:
+      'Change how the agency’s outgoing email is addressed and manage its sending domain. A mistake here can stop invites and share links arriving.',
   },
   [AgencyPermission.CarrierAppointmentsRead]: {
     label: 'View carrier appointments',

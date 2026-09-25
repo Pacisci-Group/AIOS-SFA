@@ -1,0 +1,113 @@
+meta {
+  name: Get Producers
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/owner-dashboard/producers?range=lastMonth
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: lastMonth
+  ~producerIds: 
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+auth:bearer {
+  token: {{ownerDashboardToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("ranks 1..n by premium, with Unassigned always last", function () {
+    const rows = res.getBody().rows;
+    rows.forEach((row, index) => expect(row.rank).to.equal(index + 1));
+
+    const named = rows.filter((row) => row.producerId !== null);
+    for (let i = 1; i < named.length; i++) {
+      expect(named[i - 1].premium).to.be.at.least(named[i].premium);
+    }
+    const unassigned = rows.findIndex((row) => row.producerId === null);
+    if (unassigned !== -1) expect(unassigned).to.equal(rows.length - 1);
+  });
+
+  test("the totals are the sum of the rows", function () {
+    const { rows, totals } = res.getBody();
+    const sum = (key) => Math.round(rows.reduce((s, r) => s + r[key], 0) * 100) / 100;
+    expect(totals.premium).to.equal(sum("premium"));
+    expect(totals.bound).to.equal(sum("bound"));
+    expect(totals.quotes).to.equal(sum("quotes"));
+  });
+
+  test("agrees with the summary card under the same filter", function () {
+    // Run `Get Summary` first — same `range`, so the same matched rows.
+    const { totals } = res.getBody();
+    expect(totals.premium).to.equal(bru.getVar("ownerSummaryPremium"));
+    expect(totals.bound).to.equal(bru.getVar("ownerSummaryItems"));
+  });
+
+  test("goal progress is a placeholder until goals ship", function () {
+    for (const row of res.getBody().rows) {
+      expect(row.goalProgress).to.equal(null);
+    }
+  });
+}
+
+docs {
+  # GET /owner-dashboard/producers — the owner's leaderboard (PAC-135)
+
+  Quotes · Bound · Total Premium per producer, **ranked by premium**, for the
+  selected window. Reacts to every filter.
+
+  - **Module / permission / scope / query:** identical to
+    `GET /owner-dashboard/summary` — see that request's docs. The three reads
+    share one query schema so they cannot be asked different questions.
+
+  ## Why this is not `GET /leaderboard`
+  The producer-facing leaderboard returns rank and goal attainment and
+  **deliberately never a colleague's dollars**. This one is per-producer dollars,
+  which is exactly what `owner_dashboard:read` is for.
+
+  ## Who gets a row
+  Anyone with a sale **or** a quote in the window — including a user who has
+  since been deactivated, because they still sold what they sold. Sales with no
+  producer attached appear as **Unassigned**, always last.
+
+  That last row is not tidy, and it is not optional: without it the table's total
+  would fall short of the Total Bound Premium card above it. `totals.premium`
+  equals the summary's `premium.current`, and `totals.bound` its
+  `items.current`, under any filter — asserted here and in the e2e suite.
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "lastMonth", "current": { "from": "2026-08-01", "to": "2026-08-31" }, "previous": { "from": "2026-07-01", "to": "2026-07-31" } },
+    "rows": [
+      { "producerId": "66f0…11", "name": "Jessica Yates", "initials": "JY", "rank": 1, "quotes": 23, "bound": 82, "premium": 110357.2, "goalProgress": null },
+      { "producerId": null, "name": "Unassigned", "initials": "—", "rank": 2, "quotes": 0, "bound": 3, "premium": 2180, "goalProgress": null }
+    ],
+    "totals": { "quotes": 23, "bound": 85, "premium": 112537.2 }
+  }
+  ```
+
+  | field | notes |
+  |---|---|
+  | quotes | quote recaps **written** in the window (a count, not a premium) |
+  | bound | **items** sold — three cars on one auto policy is three |
+  | premium | summed from policy lines, so a line-of-business filter counts only the matching policies of a bundle |
+  | goalProgress | always `null`. Goals are PAC-116; the column renders `N/A` until then |
+
+  ## Errors
+  Same as `GET /owner-dashboard/summary`: `400` bad query · `401` · `403`.
+}

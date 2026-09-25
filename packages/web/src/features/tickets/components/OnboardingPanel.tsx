@@ -23,6 +23,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { getOnboarding } from "@/lib/service-tickets-api";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface OnboardingPanelProps {
   step: OnboardingStepRef;
@@ -315,7 +316,7 @@ function stepDetail(step: OnboardingStepRef, state: StepState): string {
 }
 
 function shortDate(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   return new Date(iso).toLocaleString("en-US", {
     month: "short",
     day: "numeric",

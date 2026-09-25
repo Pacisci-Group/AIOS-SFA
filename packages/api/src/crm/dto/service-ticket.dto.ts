@@ -1,5 +1,7 @@
 import { Transform } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsIn,
@@ -18,16 +20,19 @@ import {
   SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_NOTE_TYPES,
   SERVICE_TICKET_PRIORITIES,
+  SERVICE_TICKET_QUEUE_SORTS,
   SERVICE_TICKET_QUEUE_TABS,
   SERVICE_TICKET_SCOPES,
   SERVICE_TICKET_STATUSES,
 } from '@sfa/shared';
+import { multiValue } from '../../leads/dto/multi-value';
 import type {
   OnboardingEmailMilestoneKey,
   RenewalOutcome,
   ServiceTicketCategory,
   ServiceTicketNoteType,
   ServiceTicketPriority,
+  ServiceTicketQueueSort,
   ServiceTicketQueueTab,
   ServiceTicketScope,
   ServiceTicketStatus,
@@ -208,9 +213,20 @@ export class SetRenewalOutcomeDto {
 }
 
 export class ListTicketsQueryDto {
+  /**
+   * One status, or several ORed (`?status=open,overdue`, or repeated).
+   *
+   * A list since the PAC-98 review: the workspace's "Open" tab is `open` *or*
+   * `overdue`, and the Priority Ticket Queue asks for every non-terminal
+   * status. With a single value the first had to send nothing — which made
+   * "Open" identical to "All" — and the second could not be expressed at all.
+   */
   @IsOptional()
-  @IsIn(SERVICE_TICKET_STATUSES)
-  status?: ServiceTicketStatus;
+  @Transform(({ value }) => multiValue(value))
+  @IsArray()
+  @ArrayMaxSize(SERVICE_TICKET_STATUSES.length)
+  @IsIn(SERVICE_TICKET_STATUSES, { each: true })
+  status?: ServiceTicketStatus[];
 
   @IsOptional()
   @IsIn(SERVICE_TICKET_CATEGORIES)
@@ -252,6 +268,14 @@ export class ListTicketsQueryDto {
   @IsOptional()
   @IsIn(SERVICE_TICKET_SCOPES)
   scope?: ServiceTicketScope;
+
+  /**
+   * The order inside each urgency band — see `SERVICE_TICKET_QUEUE_SORTS`.
+   * Omitted means `urgency`.
+   */
+  @IsOptional()
+  @IsIn(SERVICE_TICKET_QUEUE_SORTS)
+  sort?: ServiceTicketQueueSort;
 
   /**
    * Free text across the fields the ticket feed searches: client name, ticket

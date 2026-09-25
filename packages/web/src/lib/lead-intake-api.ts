@@ -1,13 +1,20 @@
 import type {
   CreateLeadResponse,
   LeadPolicyOfInterestInput,
+  PolicyReplacementReason,
   PublicLeadFormInfo,
   PublicLeadSubmitResponse,
+  ReplacementLeadLookup,
   ShareLinkRow,
 } from "@sfa/shared";
 import { apiFetch, publicFetch } from "@/lib/api-client";
 
-export type { CreateLeadResponse, PublicLeadFormInfo, ShareLinkRow };
+export type {
+  CreateLeadResponse,
+  PublicLeadFormInfo,
+  ReplacementLeadLookup,
+  ShareLinkRow,
+};
 
 interface LeadIntakePayload {
   primaryContact: {
@@ -42,7 +49,7 @@ interface LeadIntakePayload {
 }
 
 export interface CreateLeadPayload extends LeadIntakePayload {
-  leadSourceCode: string;
+  leadSourceId: string;
   /**
    * Pin the lead to a household the producer already has open — the Household
    * page's "Start Quote" dialog.
@@ -52,6 +59,44 @@ export interface CreateLeadPayload extends LeadIntakePayload {
    * `submitPublicLead`, which takes the base type.
    */
   householdId?: string;
+  /**
+   * Create this lead to replace a policy — a Cancel Rewrite or a Company
+   * Transfer (PAC-126).
+   *
+   * The **policy** is named, not the household: the server derives the household
+   * from it, so a caller cannot aim a replacement at a book it does not own. It
+   * also re-runs the replaceable guards, so a policy that went inactive while
+   * the rep was filling in the form fails here rather than two forms later.
+   *
+   * On `CreateLeadPayload` rather than the base type, like `householdId` and for
+   * a stronger version of the same reason: the public route must never be able
+   * to queue a cancellation on somebody's coverage.
+   */
+  replacementIntent?: {
+    policyId: string;
+    reason: PolicyReplacementReason;
+  };
+}
+
+/**
+ * `GET /leads/for-replacement` — where a replacement should start.
+ *
+ * The one call an entry point makes before routing. Three answers in one read:
+ * `blockedReason` set (this policy cannot be replaced), `leadId` set (a lead was
+ * already created and abandoned — resume at the Sold form), or both null
+ * (nothing started — create the lead first).
+ *
+ * Gated on `deal_audits:write`, matching the Sold form it leads to, so a caller
+ * who passes this can finish the chain.
+ */
+export function getReplacementLead(
+  policyId: string,
+  reason: PolicyReplacementReason,
+) {
+  const params = new URLSearchParams({ policyId, reason });
+  return apiFetch<ReplacementLeadLookup>(
+    `/leads/for-replacement?${params.toString()}`,
+  );
 }
 
 /** `POST /leads` — authenticated New Lead form. */

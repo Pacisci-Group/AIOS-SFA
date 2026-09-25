@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
+  UnanchoredPolicyRow,
   UnlinkedContactRow,
   UnlinkedCounts,
   UnlinkedHouseholdRow,
@@ -33,7 +34,7 @@ import {
 import { ListUnlinkedDto } from './dto/list-unlinked.dto';
 
 /**
- * The **Unlinked records** work list (PAC-91 §10).
+ * The **Unlinked records** work list (PAC-91 §10, extended by PAC-126).
  *
  * ── Why it exists ───────────────────────────────────────────────────────────
  * The Phase 1 CSV backfill repaired every link SmartSuite could prove and
@@ -43,10 +44,16 @@ import { ListUnlinkedDto } from './dto/list-unlinked.dto';
  * team work them by hand — but nothing in the app *showed* them, so the only
  * way to find an unlinked policy was to stumble on it.
  *
- * This is deliberately the smallest thing that fixes that: three predicates
+ * This is deliberately the smallest thing that fixes that: four predicates
  * over data that already exists, no new schema, no new writes. Each row opens
  * the record it names so the existing actions can be used; where an action does
  * not exist yet the view's job is to make that gap visible, not to fill it.
+ *
+ * The fourth — {@link listUnanchoredPolicies} — is PAC-126's, and is a missing
+ * *date* rather than a missing *link*. It is filed here because it is the same
+ * job for the same people, and because the 2026-09-08 renewal backfill reported
+ * exactly this population to a console log nobody reads. See the shared
+ * `unlinked-records.ts` docblock for why the page keeps its narrower title.
  *
  * ── Its own service, not another method on `ClientsService` ─────────────────
  * `ClientsService` is the read/write surface for *a* client record. This is a
@@ -56,9 +63,14 @@ import { ListUnlinkedDto } from './dto/list-unlinked.dto';
  * whose existing ones are all about one search.
  *
  * ── Indexes ────────────────────────────────────────────────────────────────
- * Every query here rides an index that already exists, which is why Phase 5
- * ships no migration:
+ * Every query here rides an index that already exists, which is why neither
+ * Phase 5 nor PAC-126 ships a migration:
  * - policies → `{agencyId, householdId}` on `policies`;
+ * - unanchored → `{agencyId, active, renewalDate}` on `policies`, the index the
+ *   renewal scan added. It serves the `active` + `renewalDate: null` prefix; the
+ *   `effectiveDate` / `expirationDate` legs then filter the matched set, which
+ *   is small by construction — a book where most policies have no date at all
+ *   has a bigger problem than this query;
  * - households → `primaryContactId_1` (non-sparse, so missing values are
  *   indexed as null and `{primaryContactId: null}` is served by it);
  * - both memberships lookups → `{agencyId, householdId, contactId}` and
@@ -77,6 +89,9 @@ export class UnlinkedRecordsService {
    */
   private readonly membersCollection: string;
 
+  /** Same reason as {@link membersCollection} — see {@link listUnanchoredPolicies}. */
+  private readonly householdsCollection: string;
+
   constructor(
     @InjectModel(Household.name)
     private readonly householdModel: Model<HouseholdDocument>,
@@ -88,28 +103,30 @@ export class UnlinkedRecordsService {
     memberModel: Model<HouseholdMemberDocument>,
   ) {
     this.membersCollection = memberModel.collection.name;
+    this.householdsCollection = householdModel.collection.name;
   }
 
   /**
-   * The three numbers behind the filter chips.
+   * The numbers behind the filter chips.
    *
-   * Run in parallel: they are three independent counts over three collections,
-   * and the page shows all three whichever list is open.
+   * Run in parallel: they are independent counts over three collections, and
+   * the page shows all of them whichever list is open.
    */
   async counts(access: AccessContext): Promise<UnlinkedCounts> {
     const scope = clientScopeFilter(access);
     const agencyId = clientAgencyId(access);
 
-    const [policies, contacts, households] = await Promise.all([
+    const [policies, contacts, households, unanchored] = await Promise.all([
       this.policyModel.countDocuments(unlinkedPolicyFilter(scope)),
       this.countAggregate(
         this.contactModel,
         this.contactPipeline(scope, agencyId),
       ),
       this.householdModel.countDocuments(unlinkedHouseholdFilter(scope)),
+      this.policyModel.countDocuments(unanchoredPolicyFilter(scope)),
     ]);
 
-    return { policies, contacts, households };
+    return { policies, contacts, households, unanchored };
   }
 
   /** One page of one kind. The `kind` discriminates the response, not just the query. */
@@ -124,6 +141,8 @@ export class UnlinkedRecordsService {
         return this.listUnlinkedContacts(access, query);
       case 'households':
         return this.listUnlinkedHouseholds(access, query);
+      case 'unanchored':
+        return this.listUnanchoredPolicies(access, query);
     }
   }
 
@@ -292,7 +311,7 @@ export class UnlinkedRecordsService {
       ...envelope(page, pageSize, total),
       items: households.map((household): UnlinkedHouseholdRow => {
         // Coerced here rather than in the client, for the reason
-        // `toHouseholdListRow` spells out: three writers, three key shapes.
+        // `toHouseholdListRow` spells out: property first, then mailing.
         const address = resolveHouseholdAddress(
           null,
           household.propertyAddress,
@@ -309,6 +328,96 @@ export class UnlinkedRecordsService {
           memberCount: household.members ?? 0,
           dataQuality: household.dataQuality ?? null,
           createdAt: toIso(household.createdAt),
+        };
+      }),
+    };
+  }
+
+  /**
+   * Active policies with **no renewal anchor at all** (PAC-126).
+   *
+   * `renewalDate` is what every renewal call counts backwards from. The scan's
+   * fallback chain is `renewalDate ?? effectiveDate ?? expirationDate`; when all
+   * three are empty there is nothing to derive a term from, `nextRenewalDate`
+   * returns null, and the policy is skipped on every pass forever. The 2026-09-08
+   * backfill counted these and deliberately refused to invent a date — "a policy
+   * with neither anchor is left alone and reported rather than given a guessed
+   * date that would call real clients". This list *is* that report.
+   *
+   * ## Why the predicate is not the backfill's
+   *
+   * The migration's rule was `effectiveDate ?? deal.soldDate`, which would pull
+   * in the deal collection and — worse — disagree with the runtime. A row must
+   * disappear from this list exactly when the scan starts seeing it, so the
+   * predicate mirrors `rollForwardRenewalDates`'s chain and nothing else.
+   *
+   * ## Why `active: true`
+   *
+   * An inactive policy gets no outreach, so a missing anchor on one is not work.
+   * It also keeps the count honest as a queue: it is the number of live policies
+   * the renewal desk currently cannot see.
+   *
+   * The household rides along because it is the only actionable thing on the row
+   * — every date is null by construction. It is looked up **after** `$skip`/
+   * `$limit`, one indexed `_id` hit per rendered row, the same way
+   * {@link listUnlinkedHouseholds} counts members.
+   */
+  private async listUnanchoredPolicies(
+    access: AccessContext,
+    { page, pageSize }: ListUnlinkedDto,
+  ): Promise<UnlinkedRecordsResponse> {
+    const filter = unanchoredPolicyFilter(clientScopeFilter(access));
+
+    const [total, policies] = await Promise.all([
+      this.policyModel.countDocuments(filter),
+      this.policyModel
+        .aggregate<
+          Policy & {
+            _id: Types.ObjectId;
+            createdAt?: Date;
+            household: { householdRef?: string; name?: string }[];
+          }
+        >([
+          { $match: filter },
+          { $sort: NEWEST_FIRST },
+          { $skip: (page - 1) * pageSize },
+          { $limit: pageSize },
+          {
+            $lookup: {
+              from: this.householdsCollection,
+              let: { householdId: '$householdId' },
+              pipeline: [
+                // A null `householdId` matches nothing and yields `[]` — a
+                // policy can legitimately be unattributed *and* undated, and so
+                // appear in this list and the `policies` one at once.
+                { $match: { $expr: { $eq: ['$_id', '$$householdId'] } } },
+                { $limit: 1 },
+                { $project: { householdRef: 1, name: 1 } },
+              ],
+              as: 'household',
+            },
+          },
+        ])
+        .exec(),
+    ]);
+
+    return {
+      kind: 'unanchored',
+      ...envelope(page, pageSize, total),
+      items: policies.map((policy): UnanchoredPolicyRow => {
+        const household = policy.household?.[0];
+        return {
+          id: String(policy._id),
+          policyNumber: policy.policyNumber ?? null,
+          policyType: normalizePolicyType(policy.policyType) || null,
+          carrier: normalizeCarrier(policy.carrier) || null,
+          policyStatus: normalizePolicyStatus(policy.policyStatus) || null,
+          premium: policy.premium ?? 0,
+          items: policy.items ?? 0,
+          householdId: policy.householdId ? String(policy.householdId) : null,
+          householdRef: household?.householdRef ?? null,
+          householdName: household?.name ?? null,
+          createdAt: toIso(policy.createdAt),
         };
       }),
     };
@@ -387,6 +496,25 @@ function unlinkedPolicyFilter(scope: ClientScopeFilter) {
 
 function unlinkedHouseholdFilter(scope: ClientScopeFilter) {
   return { ...scope, ...NOT_A_TEST_RECORD, primaryContactId: null };
+}
+
+/**
+ * An active policy the renewal scan can never schedule (PAC-126).
+ *
+ * All three legs of the runtime fallback chain empty — see
+ * {@link UnlinkedRecordsService.listUnanchoredPolicies} for why it is this chain
+ * and not the backfill's. `null` matches an absent field too, which is the usual
+ * case: a migrated policy that never carried a date has no key at all.
+ */
+function unanchoredPolicyFilter(scope: ClientScopeFilter) {
+  return {
+    ...scope,
+    ...NOT_A_TEST_RECORD,
+    active: true,
+    renewalDate: null,
+    effectiveDate: null,
+    expirationDate: null,
+  };
 }
 
 function envelope(page: number, pageSize: number, total: number) {

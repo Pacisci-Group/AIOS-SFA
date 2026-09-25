@@ -130,10 +130,40 @@ docs {
      member's name, the primary included, and returns a `matchedOn` label the
      stored copy never could.
 
-  `q` is routed by shape before it is used — `HH-\d+` to the reference, a parsed
-  date (`YYYY-MM-DD` or `MM/DD/YYYY`) to date of birth, a normalized key of at
-  least 4 alphanumerics to the policy number, and anything else to names.
-  Routing is additive: a term that could be two things is queried as both.
+  ### How `q` is interpreted (PAC-101)
+
+  Tokenized *and* shape-routed, with the two ORed — **nothing suppresses
+  anything**.
+
+  **Tokens.** Lower-cased, accent-stripped, split into at most 4. Every token
+  must match something, but not all in the same field, so `smith tulsa` finds a
+  Smith in Tulsa and `John Smith` matches either order. Each token is a
+  case-insensitive substring against:
+
+  | Column | Matched against |
+  |---|---|
+  | Household | `name`, `householdRef` (a *contains*, so `1` reaches `HH-1`) |
+  | Location | `propertyAddress.*` and `mailingAddress.*` — the Location column falls back from one to the other |
+  | Contact | the primary's `firstName`/`lastName`/`email`/`phone`, resolved through `contacts` (capped at 500) |
+
+  **Whole-term routes**, ORed around the token clause because splitting them
+  destroys them: the canonical reference (`#HH2614` -> `HH-2614`), a date
+  (`YYYY-MM-DD` or `MM/DD/YYYY`) against members' `dateOfBirth`, a normalized
+  policy key of at least 4 alphanumerics, and a phone number of at least 7
+  digits — `(555) 010-0100`, `555-010-0100` and `5550100100` are one query, and
+  match a stored number in whatever format it was saved in.
+
+  Routing is additive in both directions: a term that could be two things is
+  queried as both. Before PAC-101 a term that parsed as a reference or a date
+  **suppressed the name branch entirely**, so those dimensions could never be
+  searched together.
+
+  Address search only became possible when `propertyAddress` became a typed
+  sub-schema — before that the city was resolved in application code after the
+  fetch, which no Mongo query can do.
+
+  `status` is not searched (it has its own filter), nor are the policy count and
+  `updatedAt`.
 
   ## Response
   `{ page, pageSize, total, totalPages, items: HouseholdListRow[] }` — the same
@@ -153,9 +183,17 @@ docs {
     Searching a policy number otherwise returns households whose names match
     nothing the caller typed, and the list reads as broken.
 
-  `city`/`state` come from `resolveHouseholdAddress`, which coerces the three
-  writers' differing key shapes (`street` / `line1` / `location_address`) into
-  one — never read `propertyAddress` raw.
+    That suppression is **stated** since PAC-101, not inherited from the
+    routing. It used to fall out of a reference suppressing the name branch;
+    once every dimension is searched, `HH-1` also asks `contacts` for a token
+    `1`, which matches somebody's phone number and would label the row "member
+    …" for no reason a reader could follow.
+
+  `city`/`state` come from `resolveHouseholdAddress`, which applies the
+  property -> mailing precedence. Since PAC-101 the stored address is a typed
+  sub-schema (`street`, `street2`, `city`, `state`, `zip`) rather than three
+  writers' differing key shapes, which is what makes the Location column
+  queryable at all.
 
   ## Errors
   | Status | When |

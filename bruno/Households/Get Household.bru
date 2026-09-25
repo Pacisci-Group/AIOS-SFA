@@ -72,13 +72,24 @@ tests {
     }
   });
 
-  test("address is normalized, not the raw stored object", function () {
-    // The raw objects use three different key sets (`street` from lead intake,
-    // `line1` from the demo seed, `location_address` from the SmartSuite
-    // migration). `address` is the one shape every client reads.
+  test("address is the resolved shape, not a raw stored object", function () {
+    // `address` applies the property -> mailing precedence and is always these
+    // four keys. The stored objects may also carry `street2`, which the
+    // resolved shape drops.
     const address = res.getBody().address;
     if (address !== null) {
       expect(address).to.have.all.keys("street", "city", "state", "zip");
+    }
+  });
+
+  test("stored addresses use the one typed shape (PAC-101)", function () {
+    // Since the sub-schema landed there is no `line1` and no `location_*`.
+    // A key from either set means a database the migration has not reached.
+    const legacy = ["line1", "line2", "location_address", "location_address2",
+                    "location_city", "location_state", "location_zip"];
+    for (const stored of [res.getBody().propertyAddress, res.getBody().mailingAddress]) {
+      if (!stored) continue;
+      expect(Object.keys(stored)).to.not.have.any.keys(legacy);
     }
   });
 
@@ -87,7 +98,7 @@ tests {
     const body = res.getBody();
     if (body.propertyAddress || body.mailingAddress) {
       const stored = JSON.stringify(body.propertyAddress ?? body.mailingAddress);
-      const hasParts = /"(street|line1|location_address|city|location_city|zip|postalCode|location_zip)"\s*:\s*"[^"]+"/.test(stored);
+      const hasParts = /"(street|city|zip)"\s*:\s*"[^"]+"/.test(stored);
       if (hasParts) {
         expect(body.address).to.not.equal(null);
       }
@@ -168,11 +179,20 @@ docs {
   the role or the end date). `roleInHousehold` is read from the membership: the
   same person is a Named Insured at home and a Driver on a parent's policy.
 
-  **The address.** `propertyAddress` is an untyped object and three writers use
-  three key sets — `street` (lead intake), `line1` (demo seed),
-  `location_address` (SmartSuite migration). `resolveHouseholdAddress` coerces
-  them into one shape, property address first and mailing address as the
-  fallback, and returns null only when street, city and zip are all blank.
+  **The address.** `propertyAddress` / `mailingAddress` are a **typed
+  sub-schema** since PAC-101 — `street`, `street2`, `city`, `state`, `zip` —
+  where they used to be untyped objects written with three different key sets
+  (`street` from lead intake, `line1` from the demo seed, `location_address`
+  from the SmartSuite migration). A Mongo query cannot apply a coercion that
+  runs after the fetch, which is why the Clients list's Location column could
+  not be searched; the migration
+  `20260910184549-household-address-subschema.js` rewrites every stored
+  document and recovers `location_address2` as `street2`.
+
+  `address` is still the field a client should read: it applies the lead →
+  property → mailing precedence and returns null only when street, city and zip
+  are all blank. It drops `street2`, so a caller that needs the unit line reads
+  `propertyAddress` directly.
 
   ## Errors
   | Status | When |

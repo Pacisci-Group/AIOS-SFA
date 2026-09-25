@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { reassignLead } from "@/lib/leads-api";
-import { listUsers } from "@/lib/users-api";
+import { agencyUserOptionsKey, listUserOptions } from "@/lib/users-api";
 import { DetailCard } from "@/components/common/DetailCard";
 import { leadDetailKey } from "./useUpdateLead";
 
@@ -43,8 +43,8 @@ export function LeadOwnerCard({ lead }: { lead: LeadDetail }) {
   const frozen = lead.status === "Sold";
 
   const users = useQuery({
-    queryKey: ["agency-users"],
-    queryFn: listUsers,
+    queryKey: agencyUserOptionsKey,
+    queryFn: listUserOptions,
     enabled: canReassign && !frozen,
   });
 
@@ -76,11 +76,10 @@ export function LeadOwnerCard({ lead }: { lead: LeadDetail }) {
               <SelectValue placeholder={owner} />
             </SelectTrigger>
             <SelectContent>
-              {(users.data ?? [])
-                // Assigning to a de-provisioned account is how a lead quietly
-                // reaches nobody; the API refuses it too.
-                .filter((user) => user.isActive)
-                .map((user) => (
+              {/* Assigning to a de-provisioned account is how a lead quietly
+                  reaches nobody. `/users/options` excludes them server-side
+                  now, so there is nothing to filter here. */}
+              {(users.data ?? []).map((user) => (
                   <SelectItem key={user._id} value={user._id}>
                     {[user.firstName, user.lastName]
                       .filter(Boolean)

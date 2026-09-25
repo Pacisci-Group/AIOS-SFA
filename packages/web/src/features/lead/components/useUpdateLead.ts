@@ -1,11 +1,13 @@
 import type {
   LeadDetail,
+  LeadSourceOption,
   UpdateLeadInput,
   UpdateLeadResult,
 } from "@sfa/shared";
-import { LEAD_SOURCE_NONE, normalizeLeadSource } from "@sfa/shared";
+import { LEAD_SOURCE_NONE } from "@sfa/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { leadSourcesKey } from "@/lib/lead-sources-api";
 import { updateLead } from "@/lib/leads-api";
 
 /** The detail query key. Exported so the page and the hook cannot disagree. */
@@ -16,26 +18,29 @@ export function leadDetailKey(leadId: string) {
 /**
  * Apply a patch to a cached `LeadDetail` the same way the server will.
  *
- * Computing the canonical label here rather than echoing the raw input is what
- * makes the optimistic value *equal* the value `onSuccess` writes — otherwise
- * the pill would show the code for one frame and then snap to the label.
+ * Resolving the source's name here rather than echoing the raw id is what makes
+ * the optimistic value *equal* the value `onSuccess` writes — otherwise the pill
+ * would show an id for one frame and then snap to the label. The name comes from
+ * the cached `GET /lead-sources` list: the select that fired this edit rendered
+ * from it, so the picked id is in there.
  */
 function applyLeadPatch(
   current: LeadDetail,
   input: UpdateLeadInput,
+  leadSources: readonly LeadSourceOption[],
 ): LeadDetail {
   const next: LeadDetail = { ...current };
 
   if (input.status !== undefined) next.status = input.status;
   if (input.temperature !== undefined) next.temperature = input.temperature;
 
-  if (input.leadSourceCode !== undefined) {
-    if (input.leadSourceCode === LEAD_SOURCE_NONE) {
-      // The shape the server stores when a source is cleared.
-      next.leadSource = { code: null, label: "" };
+  if (input.leadSourceId !== undefined) {
+    if (input.leadSourceId === LEAD_SOURCE_NONE) {
+      // The shape the server returns when a source is cleared.
+      next.leadSource = { id: null, label: "" };
     } else {
-      const source = normalizeLeadSource(input.leadSourceCode);
-      next.leadSource = { code: source.code, label: source.label };
+      const picked = leadSources.find((o) => o.id === input.leadSourceId);
+      next.leadSource = { id: input.leadSourceId, label: picked?.name ?? "" };
     }
   }
 
@@ -72,8 +77,11 @@ export function useUpdateLead(leadId: string) {
 
       const previous = queryClient.getQueryData<LeadDetail>(queryKey);
 
+      const leadSources =
+        queryClient.getQueryData<LeadSourceOption[]>(leadSourcesKey) ?? [];
+
       queryClient.setQueryData<LeadDetail>(queryKey, (current) =>
-        current ? applyLeadPatch(current, input) : current,
+        current ? applyLeadPatch(current, input, leadSources) : current,
       );
 
       return { previous };

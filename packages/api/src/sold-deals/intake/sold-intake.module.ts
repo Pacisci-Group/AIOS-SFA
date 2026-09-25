@@ -7,6 +7,10 @@ import {
 import { CarriersModule } from '../../carriers/carriers.module';
 import { Deal, DealSchema } from '../../deals/schemas/deal.schema';
 import {
+  Household,
+  HouseholdSchema,
+} from '../../households/schemas/household.schema';
+import {
   InterestedParty,
   InterestedPartySchema,
 } from '../../interested-parties/schemas/interested-party.schema';
@@ -24,6 +28,7 @@ import { AdvanceLeadStep } from './advance-lead.step';
 import { InterestedPartiesStep } from './interested-parties.step';
 import { PriorInsuranceStep } from './prior-insurance.step';
 import { ResolveDealStep } from './resolve-deal.step';
+import { SoldDealAmendmentService } from './sold-deal-amendment.service';
 import { SoldDealIntakeService } from './sold-deal-intake.service';
 import { SoldSubmissionValidator } from './sold-submission.validator';
 import { UpsertPoliciesStep } from './upsert-policies.step';
@@ -45,6 +50,9 @@ import { UpsertPoliciesStep } from './upsert-policies.step';
     MongooseModule.forFeature([
       { name: Deal.name, schema: DealSchema },
       { name: Policy.name, schema: PolicySchema },
+      // `Household.totalActivePolicies` is recounted after every deal this
+      // pipeline books — see `SoldDealIntakeService.recountHouseholdPolicies`.
+      { name: Household.name, schema: HouseholdSchema },
       { name: PriorInsurance.name, schema: PriorInsuranceSchema },
       { name: PriorPolicy.name, schema: PriorPolicySchema },
       { name: InterestedParty.name, schema: InterestedPartySchema },
@@ -56,6 +64,9 @@ import { UpsertPoliciesStep } from './upsert-policies.step';
   ],
   providers: [
     SoldDealIntakeService,
+    // Policies added to a booked deal (PAC-104) — the same steps, run against
+    // a deal that already exists.
+    SoldDealAmendmentService,
     SoldSubmissionValidator,
     ResolveDealStep,
     UpsertPoliciesStep,
@@ -63,6 +74,10 @@ import { UpsertPoliciesStep } from './upsert-policies.step';
     InterestedPartiesStep,
     AdvanceLeadStep,
   ],
-  exports: [SoldDealIntakeService, SoldSubmissionValidator],
+  exports: [
+    SoldDealIntakeService,
+    SoldDealAmendmentService,
+    SoldSubmissionValidator,
+  ],
 })
 export class SoldIntakeModule {}

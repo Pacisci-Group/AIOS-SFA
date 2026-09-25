@@ -1,8 +1,8 @@
-import { Search, SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import { MultiSelect } from "@/components/common/MultiSelect";
+import { TableSearchInput } from "@/components/common/TableSearchInput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   countActiveFilters,
@@ -14,6 +14,8 @@ import {
 interface LeadsFiltersProps {
   search: string;
   onSearchChange: (value: string) => void;
+  /** A search or page is in flight — shows the spinner in the box. */
+  busy?: boolean;
   filters: LeadFilters;
   onChange: (patch: Partial<LeadFilters>) => void;
   onOpenAdvanced: () => void;
@@ -27,6 +29,7 @@ interface LeadsFiltersProps {
 export function LeadsFilters({
   search,
   onSearchChange,
+  busy,
   filters,
   onChange,
   onOpenAdvanced,
@@ -60,12 +63,12 @@ export function LeadsFilters({
 
       <div className="flex flex-col gap-3 md:flex-row md:items-center">
         <div className="relative flex-1 min-w-0">
-          <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-          <Input
+          <TableSearchInput
             value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search by name, phone, email, or lead source…"
-            className="pl-9 bg-card border-border"
+            onValueChange={onSearchChange}
+            placeholder="Search by name, phone, email, address, source or QCN…"
+            label="Search leads"
+            busy={busy}
           />
         </div>
 

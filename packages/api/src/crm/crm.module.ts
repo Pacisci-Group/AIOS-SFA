@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { AuditGenerationModule } from '../audit-generation/audit-generation.module';
 import { ClientsModule } from '../clients/clients.module';
 import {
   DealAudit,
@@ -13,8 +12,6 @@ import {
 } from '../households/schemas/household.schema';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
-import { SoldIntakeModule } from '../sold-deals/intake/sold-intake.module';
-import { PolicyTransfersService } from './policy-transfers.service';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
@@ -53,15 +50,6 @@ import {
     // Ticket creation resolves the picked household/policy through the same
     // scoped reads the Clients pages use.
     ClientsModule,
-    /*
-     * Policy Transfer drives the *same* pipeline as the Sold form. Importing
-     * `SoldIntakeModule` — which deliberately imports no feature module — rather
-     * than `SoldDealsModule` is what keeps this acyclic: `SoldDealsModule`
-     * imports this one back, for `LeadTicketsService`.
-     */
-    SoldIntakeModule,
-    // A transfer generates its hand-off checklist exactly as a sale does.
-    AuditGenerationModule,
     MongooseModule.forFeature([
       { name: ServiceTicket.name, schema: ServiceTicketSchema },
       { name: User.name, schema: UserSchema },
@@ -95,7 +83,6 @@ import {
   providers: [
     ServiceTicketsService,
     LeadTicketsService,
-    PolicyTransfersService,
     // Both live in `common/` so the worker can reach them across its import
     // boundary (PAC-99). Provided here as well so the API side resolves the
     // same classes rather than a second copy.

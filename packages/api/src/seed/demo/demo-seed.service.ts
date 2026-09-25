@@ -8,8 +8,9 @@ import {
   DEFAULT_DEAL_AUDIT_STATUS,
   SERVICE_TICKET_CATEGORY_PREFIX,
   carrierSlug,
+  type StoredAddress,
 } from '@sfa/shared';
-import type { DealAuditStatus } from '@sfa/shared';
+import type { DealAuditStatus, ServiceTicketStatus } from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
 import { SequenceService } from '../../common/mongo/sequence.service';
 import {
@@ -45,10 +46,13 @@ import { Permission } from '../../permissions/schemas/permission.schema';
 import { Carrier } from '../../carriers/schemas/carrier.schema';
 import { seedPermissions } from '../permissions.seed';
 import { seedCarriers } from '../carriers.seed';
+import { seedLeadSources } from '../lead-sources.seed';
+import { LeadSourcesService } from '../../lead-sources/lead-sources.service';
+import { LeadSource } from '../../lead-sources/schemas/lead-source.schema';
 import { deriveDealType, daysSince } from '../../migration/helpers/derive';
 import {
+  DEFAULT_USER_AVAILABILITY,
   INSURANCE_MONTHS,
-  normalizeLeadSource,
   POLICY_TYPES,
   resolveItemCount,
 } from '@sfa/shared';
@@ -64,10 +68,11 @@ import {
   DEMO_CONFIG,
   FIRST_NAMES,
   LAST_NAMES,
-  LEAD_SOURCE_CODES,
+  DEMO_LEAD_SOURCE_NAMES,
   MAILER_CITIES,
   DEMO_LEAD_UNQUOTED_STATUSES,
   POLICY_TYPE_SETS,
+  splitAmount,
   SERVICE_CATEGORIES,
   SERVICE_PRIORITIES,
   SERVICE_STATUSES,
@@ -146,7 +151,7 @@ interface HouseholdRef {
   branchId: string;
   assignedCrm?: TeamMember;
   city: CitySpec;
-  address: Record<string, unknown>;
+  address: StoredAddress;
 }
 
 interface ContactRef {
@@ -167,6 +172,8 @@ interface LeadRef {
   temperature: string;
   /** Drives the pipeline: `Sold` leads get a deal, `Quoted`/`Requote` a recap. */
   status: string;
+  /** Carried onto the lead's deal — a sale is attributed to its lead's source. */
+  leadSourceId?: Types.ObjectId;
 }
 
 interface QuoteRef {
@@ -190,6 +197,8 @@ interface DealRef {
   policyTypes: string[];
   isBundle: boolean;
   premium: number;
+  /** Items per policy, parallel to `policyTypes`; sums to the deal's `itemCount`. */
+  itemsByPolicy: number[];
 }
 
 interface PolicyRef {
@@ -261,6 +270,9 @@ export class DemoSeedService {
     @InjectModel(Permission.name)
     private readonly permissionModel: Model<Permission>,
     @InjectModel(Carrier.name) private readonly carrierModel: Model<Carrier>,
+    @InjectModel(LeadSource.name)
+    private readonly leadSourceModel: Model<LeadSource>,
+    private readonly leadSources: LeadSourcesService,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
   ) {}
@@ -366,6 +378,9 @@ export class DemoSeedService {
 
     const carriers = await seedCarriers(this.carrierModel);
     this.inc('carriers', carriers.created);
+
+    const leadSources = await seedLeadSources(this.leadSourceModel);
+    this.inc('leadSources', leadSources.created);
   }
 
   // ---------------------------------------------------------------------------
@@ -443,6 +458,10 @@ export class DemoSeedService {
           passwordHash,
           firstName: 'Super',
           lastName: 'Admin',
+          // `updateOne` applies no schema defaults on upsert, so without this
+          // a database bootstrapped by the demo seed alone would have one user
+          // the backfill migration had already run past.
+          availability: DEFAULT_USER_AVAILABILITY,
         },
       },
       { upsert: true },
@@ -467,6 +486,9 @@ export class DemoSeedService {
             lastName: spec.lastName,
             isActive: true,
             isPlatformAdmin: false,
+            // Re-seeding resets it: the seed owns this roster's state, and a
+            // toggle flipped during a demo must not survive into the next one.
+            availability: spec.availability ?? DEFAULT_USER_AVAILABILITY,
             legacySmartSuiteId: userLegacyId(spec.key),
           },
           $setOnInsert: { passwordHash },
@@ -747,7 +769,7 @@ export class DemoSeedService {
       const hh = this.householdForBranch(households, producer.branchSlug, rng);
       const roster = hh ? (contactsByHousehold.get(hh.legacyId) ?? []) : [];
       const primary = roster.find((c) => c.isPrimary);
-      const temperature = rng.pick([
+      const drawnTemperature = rng.pick([
         'Hot',
         'Hot',
         'Warm',
@@ -757,19 +779,47 @@ export class DemoSeedService {
         'Cold',
         'Unknown',
       ]);
-      const status: string =
+      const drawnStatus: string =
         i < DEMO_CONFIG.deals
           ? 'Sold'
           : i < quotedCount
             ? rng.pick<string>(['Quoted', 'Quoted', 'Requote'])
             : rng.pick<string>([...DEMO_LEAD_UNQUOTED_STATUSES]);
-      const createdDate = this.daysAgo(rng.int(0, 45));
+      // 80 days, not 45: the Owner dashboard (PAC-135) compares a period with
+      // the one before it, so sales have to reach back two full months for
+      // "Last Month" to have anything to trend against.
+      const drawnCreatedDate = this.daysAgo(rng.int(0, 80));
       // Never before the lead existed — a lead created 2 days ago cannot have
       // last been touched 6 days ago.
-      const lastActivityAt = this.daysAgo(
-        rng.int(0, Math.min(6, this.daysBetween(createdDate, this.now))),
+      const drawnLastActivityAt = this.daysAgo(
+        rng.int(0, Math.min(6, this.daysBetween(drawnCreatedDate, this.now))),
       );
-      const source = normalizeLeadSource(rng.pick(LEAD_SOURCE_CODES));
+      /*
+       * The Manager view's Stalled Leads fixtures (PAC-139): the first few
+       * unquoted leads are pinned to an open status, created 3–6 days ago and
+       * never touched since. `Warm` rather than the draw because a Hot lead
+       * gets follow-up activities dated up to today in `seedActivities`, which
+       * would contradict "no update for 48 hours". Every draw above still
+       * happens, so the RNG sequence is unchanged.
+       */
+      const isStalledFixture =
+        i >= quotedCount && i < quotedCount + DEMO_CONFIG.stalledLeads;
+      const temperature = isStalledFixture ? 'Warm' : drawnTemperature;
+      const status = isStalledFixture
+        ? ['New', 'Contacted', 'Qualified'][i % 3]
+        : drawnStatus;
+      const createdDate = isStalledFixture
+        ? this.daysAgo(3 + (i % 4))
+        : drawnCreatedDate;
+      const lastActivityAt = isStalledFixture
+        ? createdDate
+        : drawnLastActivityAt;
+      // Platform row, or created here as the demo agency's own (PAC-135).
+      const leadSourceId =
+        (await this.leadSources.findOrCreateByName(
+          ctx.agencyId,
+          rng.pick<string>([...DEMO_LEAD_SOURCE_NAMES]),
+        )) ?? undefined;
       const first = hh ? hh.clientFirst : rng.pick(FIRST_NAMES);
       const last = hh ? hh.clientLast : rng.pick(LAST_NAMES);
       const legacyId = `demo:lead:${i}`;
@@ -787,7 +837,7 @@ export class DemoSeedService {
           // `primaryContactId`, which is set below.
           status,
           temperature,
-          leadSource: { code: source.code, label: source.label },
+          leadSourceId,
           agingDays: daysSince(createdDate),
           createdDate,
           lastActivityAt,
@@ -822,6 +872,7 @@ export class DemoSeedService {
         occurredAt: createdDate,
         temperature,
         status,
+        leadSourceId,
       });
     }
     return refs;
@@ -871,11 +922,14 @@ export class DemoSeedService {
     for (const { lead, count } of plan) {
       const producer = lead.producer;
       const hh = lead.household;
-      // Every recap lands between the lead's creation and now; oldest first, so
-      // the last one written is the current proposal.
+      // Every recap lands within ten days of the lead's creation; oldest first,
+      // so the last one written is the current proposal. Not "anywhere up to
+      // now": that drew most quotes — and so most sales — into the current
+      // month, whatever the lead's age (PAC-135).
       const leadAgeDays = this.daysBetween(lead.occurredAt, this.now);
-      const offsets = Array.from({ length: count }, () =>
-        rng.int(0, leadAgeDays),
+      const offsets = Array.from(
+        { length: count },
+        () => leadAgeDays - rng.int(0, Math.min(10, leadAgeDays)),
       ).sort((a, b) => b - a);
 
       for (let n = 0; n < count; n++) {
@@ -883,6 +937,15 @@ export class DemoSeedService {
         const quoteDate = this.daysAgo(offsets[n]);
         const products = rng.pick(POLICY_TYPE_SETS);
         const premium = rng.int(700, 5200);
+        // One line per product, as the Quote form writes them (PAC-135): the
+        // Owner dashboard's line-of-business filter splits a quote by these.
+        // Item counts drawn in the same order the summed figure used to draw
+        // them, so the seeded sequence — and every record after this — is
+        // unchanged.
+        const lineItems = products.map((product) =>
+          resolveItemCount(product, rng.int(1, 3)),
+        );
+        const linePremiums = splitAmount(premium, products.length);
         const legacyId = `demo:quote:${i++}`;
 
         const id = await this.upsert(
@@ -901,12 +964,14 @@ export class DemoSeedService {
             premium,
             // Summed the way a real recap's rows sum: a vehicle line can
             // carry several, every other line carries exactly one.
-            itemCount: products.reduce(
-              (total, product) =>
-                total + resolveItemCount(product, rng.int(1, 3)),
-              0,
-            ),
+            itemCount: lineItems.reduce((total, items) => total + items, 0),
             productsQuoted: products,
+            policies: products.map((policyType, index) => ({
+              policyType,
+              premium: linePremiums[index],
+              itemCount: lineItems[index],
+              sameAsHousehold: true,
+            })),
             // PAC-56 #16 — seeded so the Quote Summary card and the edit form
             // have something to render locally.
             insuranceRenewalMonth: rng.pick([...INSURANCE_MONTHS]),
@@ -977,12 +1042,29 @@ export class DemoSeedService {
       const quote = winningQuote.get(lead.legacyId);
       // A sale cannot predate the quote it closed on, nor the lead itself.
       const earliest = quote?.occurredAt ?? lead.occurredAt;
-      const soldDate = this.daysAgo(
-        rng.int(0, this.daysBetween(earliest, this.now)),
+      //
+      // Within a fortnight *of the quote*, not anywhere between the quote and
+      // today: a uniform draw up to now piled 20 of 24 sales into the current
+      // month, leaving the Owner dashboard's "Last Month" with nothing to trend
+      // against (PAC-135). Deals really do close soon after they are quoted.
+      const sinceEarliest = this.daysBetween(earliest, this.now);
+      const drawnSoldDate = this.daysAgo(
+        sinceEarliest - rng.int(0, Math.min(14, sinceEarliest)),
       );
+      // The Manager view's Aging Audits fixtures (PAC-139): the first few
+      // sales are pinned to twelve days ago — past the five-business-day SLA in
+      // any week — and `seedDealAuditItems` leaves each of them an open item, so
+      // their audits settle to a non-Pass status. The draw above still happens.
+      const soldDate = this.isAgingFixture(i)
+        ? this.daysAgo(12)
+        : drawnSoldDate;
       const premium = rng.int(900, 4800);
+      // Drawn here, in the order the summed figure used to draw them, and kept
+      // per policy: the policy rows below must add up to the deal (PAC-135).
+      const itemsByPolicy = policyTypes.map((policyType) =>
+        resolveItemCount(policyType, rng.int(1, 3)),
+      );
       const clientName = `${hh.clientFirst} ${hh.clientLast}`;
-      const source = normalizeLeadSource(rng.pick(LEAD_SOURCE_CODES));
       const legacyId = `demo:deal:${i}`;
 
       const id = await this.upsert(
@@ -999,16 +1081,12 @@ export class DemoSeedService {
           premium,
           premiumSource: 'rollup',
           // Summed the way `deriveDealAggregates` sums the real thing.
-          itemCount: policyTypes.reduce(
-            (total, policyType) =>
-              total + resolveItemCount(policyType, rng.int(1, 3)),
-            0,
-          ),
+          itemCount: itemsByPolicy.reduce((total, items) => total + items, 0),
           policyCount: policyTypes.length,
           dealType,
           isBundle,
           policyTypes,
-          leadSource: { code: source.code, label: source.label },
+          leadSourceId: lead.leadSourceId,
           clientName,
           producerId: producer.userId,
           leadId: lead.id,
@@ -1043,6 +1121,7 @@ export class DemoSeedService {
         policyTypes,
         isBundle,
         premium,
+        itemsByPolicy,
       });
     }
     return refs;
@@ -1060,8 +1139,11 @@ export class DemoSeedService {
     const refs: PolicyRef[] = [];
     let n = 0;
     for (const deal of deals) {
-      const share = deal.premium / Math.max(deal.policyTypes.length, 1);
-      for (const policyType of deal.policyTypes) {
+      // The rows add up to the deal exactly — premium and items both. The Owner
+      // dashboard sums policies while the Producer scorecard sums deals
+      // (PAC-135), and a rounded equal share left the two a dollar apart.
+      const premiums = splitAmount(deal.premium, deal.policyTypes.length);
+      for (const [index, policyType] of deal.policyTypes.entries()) {
         const effectiveDate = deal.occurredAt;
         const expirationDate = new Date(effectiveDate);
         expirationDate.setMonth(expirationDate.getMonth() + 6);
@@ -1087,8 +1169,11 @@ export class DemoSeedService {
             effectiveDate,
             expirationDate,
             renewalDate,
-            premium: Math.round(share),
-            items: 1 + rng.int(0, 2),
+            premium: premiums[index],
+            // Still drawn, then unused: the policy's items now come from the
+            // deal, and skipping the draw would shift the seeded sequence for
+            // every record written after this one.
+            items: (rng.int(0, 2), deal.itemsByPolicy[index] ?? 1),
             policyStatus: 'Active',
             householdId: deal.household.id,
             legacyHouseholdId: deal.household.legacyId,
@@ -1163,16 +1248,16 @@ export class DemoSeedService {
     rng: Rng,
   ): Promise<Set<string>> {
     // Newest deals drive the hand-off board — generate items for the most recent.
-    const recent = [...deals]
-      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
-      .slice(0, 16);
+    const recent = this.dealsWithAudits(deals);
 
     const withOpenItems = new Set<string>();
     let n = 0;
     for (const deal of recent) {
       const applicable = this.applicableTemplates(deal, rng);
-      // ~40% of recent deals still have open (failed, unresolved) items.
-      const hasOpen = rng.chance(0.4);
+      // ~40% of recent deals still have open (failed, unresolved) items — and
+      // every Aging Audits fixture does (PAC-139). The draw happens either way.
+      const drawnHasOpen = rng.chance(0.4);
+      const hasOpen = drawnHasOpen || this.isAgingFixture(deal);
       if (hasOpen && applicable.length) {
         withOpenItems.add(deal.legacyId);
       }
@@ -1251,9 +1336,7 @@ export class DemoSeedService {
     crms: TeamMember[],
     rng: Rng,
   ): Promise<Map<string, Types.ObjectId>> {
-    const recent = [...deals]
-      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
-      .slice(0, 16);
+    const recent = this.dealsWithAudits(deals);
     const ids = new Map<string, Types.ObjectId>();
     let n = 0;
     for (const deal of recent) {
@@ -1501,8 +1584,18 @@ export class DemoSeedService {
         : undefined;
       const policy = policies.find((p) => p.household.legacyId === hh.legacyId);
       const category = rng.pick(SERVICE_CATEGORIES);
-      const status = rng.pick(SERVICE_STATUSES);
-      const openedAt = this.daysAgo(rng.int(0, 30));
+      const drawnStatus = rng.pick(SERVICE_STATUSES);
+      const drawnOpenedAt = this.daysAgo(rng.int(0, 30));
+      // The Manager view's Overdue Tickets fixtures (PAC-139): the first few
+      // tickets are pinned to `overdue`, opened ten days ago. The generator
+      // never draws `overdue` on its own — a CSR marks a plain ticket so by
+      // hand — and it seeds no onboarding or renewal steps, whose overdue is
+      // derived from a due date. Both draws above still happen.
+      const isOverdueFixture = i < DEMO_CONFIG.overdueTickets;
+      const status: ServiceTicketStatus = isOverdueFixture
+        ? 'overdue'
+        : drawnStatus;
+      const openedAt = isOverdueFixture ? this.daysAgo(10) : drawnOpenedAt;
       const resolvedAt =
         status === 'resolved' ? this.addDays(openedAt, rng.int(1, 8)) : null;
       const legacyId = `demo:ticket:${i}`;
@@ -2064,6 +2157,38 @@ export class DemoSeedService {
   }
 
   // ---------------------------------------------------------------------------
+  // Manager view fixtures (PAC-139)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Whether this sale is one of the pinned Aging Audits fixtures — the first
+   * `DEMO_CONFIG.agingAudits` deals by index, which `seedDeals` dates twelve
+   * days back and `seedDealAuditItems` leaves an open item on.
+   */
+  private isAgingFixture(deal: number | DealRef): boolean {
+    const index =
+      typeof deal === 'number'
+        ? deal
+        : Number(deal.legacyId.replace('demo:deal:', ''));
+    return Number.isInteger(index) && index < DEMO_CONFIG.agingAudits;
+  }
+
+  /**
+   * The sales that get an audit roll-up and items: the sixteen most recent,
+   * which is what drives the hand-off board — plus every Aging Audits fixture,
+   * whichever place its pinned date lands it in. Shared by `seedDealAudits`
+   * and `seedDealAuditItems`, which must agree or the items have no parent.
+   */
+  private dealsWithAudits(deals: DealRef[]): DealRef[] {
+    const fixtures = deals.filter((deal) => this.isAgingFixture(deal));
+    const recent = deals
+      .filter((deal) => !this.isAgingFixture(deal))
+      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
+      .slice(0, Math.max(0, 16 - fixtures.length));
+    return [...fixtures, ...recent];
+  }
+
+  // ---------------------------------------------------------------------------
   // Small helpers
   // ---------------------------------------------------------------------------
 
@@ -2144,9 +2269,16 @@ export class DemoSeedService {
     });
   }
 
-  private address(rng: Rng, city: CitySpec): Record<string, unknown> {
+  /**
+   * ⚠ `street`, not `line1`. This seed wrote `line1` until PAC-101, which is
+   * one of the three key conventions that made `households.propertyAddress`
+   * unqueryable. The field is a typed sub-schema now, so `line1` would not be
+   * rejected — it would be **silently dropped**, leaving every demo household
+   * with a city and no street.
+   */
+  private address(rng: Rng, city: CitySpec): StoredAddress {
     return {
-      line1: `${rng.int(100, 9999)} ${rng.pick(STREET_NAMES)} ${rng.pick(STREET_SUFFIXES)}`,
+      street: `${rng.int(100, 9999)} ${rng.pick(STREET_NAMES)} ${rng.pick(STREET_SUFFIXES)}`,
       city: city.city,
       state: city.state,
       zip: city.zip,

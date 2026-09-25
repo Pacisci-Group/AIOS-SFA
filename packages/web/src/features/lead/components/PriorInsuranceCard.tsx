@@ -2,6 +2,7 @@ import type { LeadDetailPriorInsurance } from "@sfa/shared";
 import { Badge } from "@/components/ui/badge";
 import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { formatDate } from "./lead-display";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface PriorInsuranceCardProps {
   priorInsurance: LeadDetailPriorInsurance;
@@ -104,7 +105,7 @@ export function PriorInsuranceCard({ priorInsurance }: PriorInsuranceCardProps) 
                       : null,
                   ]
                     .filter(Boolean)
-                    .join(" · ") || "—"}
+                    .join(" · ") || NOT_AVAILABLE}
                 </span>
               </li>
             ))}

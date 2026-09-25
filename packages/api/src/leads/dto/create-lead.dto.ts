@@ -1,7 +1,7 @@
 import {
   HOUSEHOLD_MEMBER_ROLES,
+  POLICY_REPLACEMENT_REASONS,
   POLICY_TYPES,
-  SELECTABLE_LEAD_SOURCE_OPTIONS,
 } from '@sfa/shared';
 import { z } from 'zod';
 import {
@@ -9,10 +9,15 @@ import {
   requirePolicyPropertyAddress,
 } from '../../common/address/policy-property-address';
 
-/** `Test` (ENEJP) is excluded — it must never be selectable at intake. */
-const SELECTABLE_LEAD_SOURCE_CODES = SELECTABLE_LEAD_SOURCE_OPTIONS.map(
-  (option) => option.code,
-) as [string, ...string[]];
+/**
+ * A `leadSources` row id. Only the *shape* is checked here — whether the row
+ * exists, is active and belongs to this agency needs the database, so
+ * `LeadSourcesService.assertSelectable` answers that in the service.
+ */
+export const leadSourceIdField = z
+  .string()
+  .trim()
+  .regex(/^[a-f0-9]{24}$/i, 'Select a lead source from the list.');
 
 const name = z.string().trim().min(1).max(60);
 const dateOfBirth = z
@@ -20,12 +25,23 @@ const dateOfBirth = z
   .trim()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be YYYY-MM-DD');
 
-const person = z.object({
-  firstName: name,
-  lastName: name,
+/**
+ * The three contact details every *captured* primary contact must carry — the
+ * identity legs of the PAC-91 §9 duplicate rule, alongside the name.
+ *
+ * Exported so `POST /mailers/log-lead` (PAC-103) validates them exactly as a
+ * hand-typed lead does; the mailer supplies the name, the producer these.
+ */
+export const primaryContactDetailsFields = {
   dateOfBirth,
   phone: z.string().trim().min(10).max(20),
   email: z.string().trim().email().max(160),
+};
+
+const person = z.object({
+  firstName: name,
+  lastName: name,
+  ...primaryContactDetailsFields,
 });
 
 const member = z.object({
@@ -104,7 +120,7 @@ export const leadIntakeBaseSchema = z.object({
  * `.superRefine` of its own — which also means `.extend` still works here.
  */
 export const createLeadSchema = leadIntakeBaseSchema.extend({
-  leadSourceCode: z.enum(SELECTABLE_LEAD_SOURCE_CODES),
+  leadSourceId: leadSourceIdField,
   /**
    * Pin the lead to a household the caller already has on screen — the
    * Household page's "Start Quote" flow, where the household is a fact rather
@@ -120,16 +136,45 @@ export const createLeadSchema = leadIntakeBaseSchema.extend({
     .trim()
     .regex(/^[a-f0-9]{24}$/i, 'householdId must be a record id')
     .optional(),
+  /**
+   * Create this lead **to replace a policy** (PAC-126).
+   *
+   * A Cancel Rewrite and a Company Transfer run through the ordinary Sold
+   * pipeline, which is anchored on a lead — so one is created for the
+   * replacement and stamped with why. `POST /sold-deals` then reads the stamp
+   * and applies it: the business type, the replacement reason, the
+   * `fromPolicyId` on the first policy row, and the chargeback on a rewrite.
+   *
+   * The **policy** is named here, not the household: the household is derived
+   * from the policy server-side, so a caller cannot point a replacement at a
+   * book it does not own. `LeadIntakeService` re-checks scope, that the policy is
+   * still active and unreplaced, and that any `householdId` sent alongside
+   * agrees with the policy's — the same guards the flow's own entry point
+   * applies, because a typed request must not walk around them.
+   *
+   * Deliberately absent from `publicCreateLeadSchema`, like `householdId` and
+   * for a stronger version of the same reason: an outside submitter naming a
+   * policy would be queueing a cancellation on someone else's coverage.
+   */
+  replacementIntent: z
+    .object({
+      policyId: z
+        .string()
+        .trim()
+        .regex(/^[a-f0-9]{24}$/i, 'policyId must be a record id'),
+      reason: z.enum(POLICY_REPLACEMENT_REASONS),
+    })
+    .optional(),
 });
 
 export type CreateLeadDto = z.infer<typeof createLeadSchema>;
 
 /**
- * `POST /public/leads/:token` — the same fields **minus** `leadSourceCode`.
+ * `POST /public/leads/:token` — the same fields **minus** `leadSourceId`.
  *
  * Lead source is internal vocabulary (Quotewizard, Soleo, Data Lot, JYA) and is
  * never shown to an outside submitter; a producer sets it afterwards. Because
- * zod strips unknown keys, an injected `leadSourceCode` — or `agencyId`,
+ * zod strips unknown keys, an injected `leadSourceId` — or `agencyId`,
  * `producerId`, `branchId` — is silently discarded here, and `LeadIntakeService`
  * reads none of them anyway. Two independent layers.
  */

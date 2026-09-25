@@ -78,6 +78,9 @@ describe('policy-type vocabulary', () => {
     expect(values).toContain('mCt4m');
     expect(values).toContain('AiFB5');
     expect(values).toContain('landlords');
+    // `$in` is case-sensitive, and a stored label is capitalized.
+    expect(values).toContain('Landlords');
+    expect(new Set(values).size).toBe(values.length);
 
     const auto = policyTypeQueryValues('Auto');
     expect(auto).toContain('Auto');
@@ -85,6 +88,58 @@ describe('policy-type vocabulary', () => {
     expect(auto).toContain('Zgsh3');
     // "Auto - Special" is its own type and must not be swept in.
     expect(auto).not.toContain('UAOk8');
+  });
+
+  // PAC-135. The Policies table doc listed six of SmartSuite's thirteen choices,
+  // so these passed through the import raw. Decoded against the labelled
+  // 2026-09-04 Policies export, where every one of the 92 rows agreed.
+  it.each([
+    ['BK08B', 'Boat Owners'],
+    ['ayKjZ', 'Valuable Item Protection'],
+    ['UrNOp', 'Condominium'],
+    ['HicyK', 'Life'],
+    ['Tz3ny', 'Manufactured Home'],
+    ['sTSOE', 'RV'],
+    ['cgoHC', 'ATV / ORV'],
+  ])('resolves the Policies code %s to %s', (code, label) => {
+    expect(normalizePolicyType(code)).toBe(label);
+    expect(policyTypeQueryValues(label)).toContain(code);
+  });
+
+  it("resolves SmartSuite's own wording, and can query for it exactly", () => {
+    expect(normalizePolicyType('Manufactured Homes')).toBe('Manufactured Home');
+    expect(normalizePolicyType('atvs / orvs')).toBe('ATV / ORV');
+    expect(normalizePolicyType('Boat')).toBe('Boat Owners');
+    // Exact case: a Mongo `$in` would not match a re-capitalized guess.
+    expect(policyTypeQueryValues('ATV / ORV')).toContain('ATVs / ORVs');
+  });
+
+  it('resolves the Quote Recaps code for an RV', () => {
+    // On six migrated recaps; the table doc does not list the choice.
+    expect(normalizePolicyType('AP0VA')).toBe('RV');
+    expect(policyTypeQueryValues('RV')).toEqual(
+      expect.arrayContaining(['RV', 'sTSOE', 'AP0VA']),
+    );
+  });
+
+  it('leaves a code nobody has identified alone', () => {
+    expect(normalizePolicyType('Zz9Qx')).toBe('Zz9Qx');
+  });
+
+  it('treats a manufactured home as a dwelling', () => {
+    expect(isPropertyPolicyType('Manufactured Home')).toBe(true);
+    expect(isPropertyPolicyType('Tz3ny')).toBe(true);
+  });
+
+  it('counts RVs and ATVs as vehicles without making them auto', () => {
+    for (const type of ['RV', 'ATV / ORV']) {
+      expect(policyTypeHasItemCount(type)).toBe(true);
+      expect(itemCountLabel(type)).toBe('Number of Vehicles');
+      // Not auto: no Drivewise / Student discounts, no `Drivers Verified`.
+      expect(isAutoPolicyType(type)).toBe(false);
+      // And annual — David's six-month rule was about auto.
+      expect(isSemiannualPolicyType(type)).toBe(false);
+    }
   });
 
   it('answers the property question for codes as well as labels', () => {
@@ -200,9 +255,8 @@ describe('policy-type vocabulary', () => {
  * because getting it wrong misstates a producer's commission basis on screen.
  */
 describe('premium term', () => {
-  it('puts the whole auto family on a 6-month term', () => {
-    // "And it applies for any auto vehicle, right?" — "Correct."
-    for (const policyType of ['Auto', 'Auto - Special', 'Motorcycle']) {
+  it('puts the auto lines on a 6-month term', () => {
+    for (const policyType of ['Auto', 'Auto - Special']) {
       expect(isSemiannualPolicyType(policyType)).toBe(true);
       expect(policyTermMonths(policyType)).toBe(SEMIANNUAL_TERM_MONTHS);
       expect(premiumTermSuffix(policyType)).toBe('/6 mo');
@@ -226,11 +280,24 @@ describe('premium term', () => {
     }
   });
 
+  it('writes motorcycle on a 12-month term', () => {
+    // 2026-09-11: motorcycle had been on the 6-month track since the term rule
+    // was first read as "any auto vehicle". The carrier writes it annually.
+    // Pinned by label, by both SmartSuite code sets, and by the plural spelling,
+    // because each of those is a distinct path through `isSemiannualPolicyType`.
+    for (const policyType of ['Motorcycle', 'motorcycles', 'OMJjl', 'gGKei']) {
+      expect(isSemiannualPolicyType(policyType)).toBe(false);
+      expect(policyTermMonths(policyType)).toBe(ANNUAL_TERM_MONTHS);
+      expect(premiumTermSuffix(policyType)).toBe('/yr');
+      expect(premiumTermLabel(policyType)).toBe('Annual premium');
+    }
+  });
+
   it('resolves a raw SmartSuite code and an alias spelling too', () => {
-    // `PYgez` is Quote Recaps' Auto; `OMJjl` is Motorcycle. A migrated recap
-    // stores the code, and it must label the same as the canonical spelling.
+    // `PYgez` is Quote Recaps' Auto. A migrated recap stores the code, and it
+    // must label the same as the canonical spelling.
     expect(isSemiannualPolicyType('PYgez')).toBe(true);
-    expect(isSemiannualPolicyType('OMJjl')).toBe(true);
+    expect(isSemiannualPolicyType('Zgsh3')).toBe(true);
     expect(isSemiannualPolicyType('auto - special')).toBe(true);
     expect(isSemiannualPolicyType('sNMRK')).toBe(false);
   });
@@ -245,9 +312,17 @@ describe('premium term', () => {
   });
 
   it('keeps the term set separate from the auto-discount set', () => {
-    // They coincide today. The test exists so that changing one to fix a
-    // carrier rule does not silently move the Sold form's discount branch or
-    // the `Drivers Verified` audit item with it.
-    expect([...SEMIANNUAL_TERM_POLICY_TYPES]).toEqual([...AUTO_POLICY_TYPES]);
+    // These used to be the same array. Motorcycle moving to the annual term on
+    // 2026-09-11 is exactly why they are not: it is still a motor vehicle, so
+    // it keeps the Sold form's discount branch and the `Drivers Verified` audit
+    // item, while being quoted and renewed annually.
+    expect(isAutoPolicyType('Motorcycle')).toBe(true);
+    expect(isSemiannualPolicyType('Motorcycle')).toBe(false);
+
+    // Every 6-month type is still an auto line; the containment runs one way.
+    const autos = new Set<string>(AUTO_POLICY_TYPES);
+    for (const policyType of SEMIANNUAL_TERM_POLICY_TYPES) {
+      expect(autos.has(policyType)).toBe(true);
+    }
   });
 });

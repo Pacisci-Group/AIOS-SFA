@@ -1,5 +1,4 @@
 import {
-  LEAD_SOURCE_LABELS,
   LEAD_SOURCE_NONE,
   LEAD_STATUSES,
   LEAD_TEMPERATURE_OPTIONS,
@@ -28,7 +27,7 @@ const DEFAULTS = {
   search: '',
   status: [] as string[],
   temperature: [] as string[],
-  leadSource: '',
+  leadSourceId: '',
   producerId: '',
   dateFrom: '',
   dateTo: '',
@@ -39,9 +38,12 @@ const DEFAULTS = {
 const ALLOWED = {
   status: LEAD_STATUSES,
   temperature: LEAD_TEMPERATURE_OPTIONS,
-  // `LEAD_SOURCE_NONE` is a real choice in the filter ("No source"), not an
-  // absent value, so it belongs in the vocabulary.
-  leadSource: [...LEAD_SOURCE_LABELS, LEAD_SOURCE_NONE],
+  // The sources are data now (PAC-135), so the URL can only be checked for
+  // *shape*: a stale or foreign id is harmless — the API 400s nothing, it simply
+  // matches no lead. `LEAD_SOURCE_NONE` is a real choice ("No source"), not an
+  // absent value.
+  leadSourceId: (value: string) =>
+    value === LEAD_SOURCE_NONE || OBJECT_ID.test(value),
   producerId: (value: string) => OBJECT_ID.test(value),
   dateFrom: (value: string) => ISO_DATE.test(value),
   dateTo: (value: string) => ISO_DATE.test(value),
@@ -86,7 +88,7 @@ export function useLeadsUrlState(): LeadsUrlState {
     () => ({
       status: values.status,
       temperature: values.temperature,
-      leadSource: values.leadSource,
+      leadSourceId: values.leadSourceId,
       producerId: values.producerId,
       dateFrom: values.dateFrom,
       dateTo: values.dateTo,

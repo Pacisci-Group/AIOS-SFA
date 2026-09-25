@@ -9,6 +9,8 @@ import { ContactsModule } from '../contacts/contacts.module';
 import { CrmModule } from '../crm/crm.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 import { HouseholdMembersModule } from '../households/household-members.module';
+import { LeadSourcesModule } from '../lead-sources/lead-sources.module';
+import { PoliciesModule } from '../policies/policies.module';
 import {
   Household,
   HouseholdSchema,
@@ -70,6 +72,9 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     // one way only: `CrmModule` registers the `Lead` *schema* rather than
     // importing this module back.
     CrmModule,
+    // `LeadSourcesService` — validates a picked source on write and renders the
+    // label on read (PAC-135). It depends on nothing, so no cycle is possible.
+    LeadSourcesModule,
     // `ContactIdentityService` — the one full-key duplicate check (PAC-91 §9),
     // run by `ResolveContactStep` ahead of the fuzzy scorer. Shared rather than
     // reimplemented: intake and the Household form must agree on what "the same
@@ -79,6 +84,19 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     // instead of moving the contact, `ResolveHouseholdStep` derives the
     // household from it, and the Lead Detail roster reads it.
     HouseholdMembersModule,
+    /*
+     * `PoliciesService.loadHouseholdPolicy` — the scope clamp on a replacement
+     * lead (PAC-126). A Cancel Rewrite or Company Transfer creates its lead
+     * from a policy, and that policy has to be one the caller may actually
+     * reach under the household rule.
+     *
+     * One way only, and it stays that way: `PoliciesModule` imports
+     * `SoldIntakeModule`, `AuditGenerationModule` and `CarriersModule`, none of
+     * which reach back here — so this needs no `forwardRef`. Registering the
+     * `Policy` schema instead (the house pattern for a cycle) would not do: the
+     * scope rule lives in that service and must not be reimplemented here.
+     */
+    PoliciesModule,
   ],
   controllers: [LeadsController],
   providers: [

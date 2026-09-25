@@ -99,6 +99,6 @@ export class MailersController {
     @BranchId() branchId: string | null,
     @Body(new ZodValidationPipe(logMailerLeadSchema)) body: LogMailerLeadDto,
   ) {
-    return this.mailers.logLead(access, branchId, body.controlNumber);
+    return this.mailers.logLead(access, branchId, body);
   }
 }

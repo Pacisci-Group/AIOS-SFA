@@ -169,10 +169,15 @@ export class SyncTicketStatusFn implements InngestFunctionProvider {
   /**
    * Both transitions, for both step kinds, in one tenant.
    *
-   * Four indexed range updates rather than a scan: `{agencyId, '<step>.dueAt'}`
-   * and `{agencyId, '<step>.availableAt'}` already exist for onboarding and
-   * renewal alike, which is why this can afford to run every five minutes over
-   * every agency.
+   * Four `updateMany`s scoped to one agency. For renewal the step's range is
+   * indexed directly — `{agencyId, 'renewal.dueAt'}` and
+   * `{agencyId, 'renewal.availableAt'}`. Onboarding's indexes are
+   * `{agencyId, category, 'onboarding.…'}`, and this sweep does not filter on
+   * `category`, so only their `agencyId` prefix is usable: an onboarding pass
+   * walks the agency's tickets rather than a date range. That is still bounded
+   * by one tenant, which is what lets this run every five minutes; adding
+   * `category: 'Onboarding'` would tighten it if a large agency ever makes it
+   * matter.
    *
    * Order matters. `overdue` runs first because it outranks `open` in the
    * derivation: a step that became available and blew its deadline between two

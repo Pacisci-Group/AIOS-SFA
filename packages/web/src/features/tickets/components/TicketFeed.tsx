@@ -1,10 +1,5 @@
-import { Check, ListFilter, Search, User } from "lucide-react";
-import { useMemo, useState } from "react";
-import {
-  SERVICE_TICKET_CATEGORIES,
-  type ServiceTicketCategory,
-  type ServiceTicketScope,
-} from "@sfa/shared";
+import { ArrowDownUp, Check, ListFilter, User, X } from "lucide-react";
+import type { ServiceTicketScope } from "@sfa/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,145 +8,112 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+import { TableSearchInput } from "@/components/common/TableSearchInput";
 import { FilterToggles } from "@/components/common/FilterToggles";
+import {
+  DEFAULT_TICKET_QUEUE_SORT,
+  TICKET_QUEUE_SORTS,
+  TICKET_QUEUE_TAB_LABELS,
+  type TicketQueueSort,
+  type TicketQueueTab,
+} from "@/lib/ticket-queue";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 import { cn } from "@/lib/utils";
+import type { TicketQueue } from "../useTicketQueue";
 import {
   CATEGORY_SHORT,
-  TICKET_PRIORITY_CLASS,
   TICKET_STATUS_CONFIG,
   type Ticket,
 } from "./ticket-data";
 
-type FilterTab = "all" | "open" | "waiting" | "resolved";
-
 /**
- * The feed's three controls, owned by the page rather than the feed.
- *
- * Lifted out in PAC-98. They used to be local state filtering an array the
- * page had already fetched in full; now the list is paged server-side, so a
- * filter applied here would only ever narrow the page in front of you. The
- * page holds them, sends them with the request, and resets to page 1 when
- * they change.
+ * Mine / Everyone (PAC-109). `own` pins the queue to the viewer; `agency` asks
+ * for everything they may see, which for a service role is their branch — a
+ * ticket is shared work, so a colleague's queue is reachable.
  */
-export interface TicketFeedFilters {
-  query: string;
-  filter: FilterTab;
-  category: ServiceTicketCategory | 'all';
-  /**
-   * Mine / Everyone (PAC-109). `own` pins the queue to the viewer; `agency`
-   * asks for everything they may see, which for a service role is their
-   * branch — a ticket is shared work, so a colleague's queue is reachable.
-   *
-   * Defaults to `own` on the page, deliberately the opposite of the Leads
-   * list: a rep opens the workspace to work their own plate, and picking up
-   * someone else's is the exception they go looking for.
-   */
-  scope: ServiceTicketScope;
-}
-
 const SCOPE_TABS: readonly { label: string; value: ServiceTicketScope }[] = [
   { label: "Mine", value: "own" },
   { label: "Everyone", value: "agency" },
 ];
 
 interface TicketFeedProps {
-  tickets: Ticket[];
+  /**
+   * The queue this feed renders and drives: its filters, its ranking, and the
+   * page of rows they produce. Held in the URL by `useTicketQueue` so the view
+   * survives the trip from the Service Dashboard (and a refresh, and back).
+   */
+  queue: TicketQueue;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  /**
-   * Status tabs are meaningless where every ticket shares one status (the
-   * Archived Tickets view), so they can be hidden.
-   */
-  showStatusTabs?: boolean;
   emptyLabel?: string;
-  filters: TicketFeedFilters;
-  onFiltersChange: (next: TicketFeedFilters) => void;
-  /** Categories to offer, from the whole queue rather than the loaded page. */
-  categoryOptions?: readonly ServiceTicketCategory[];
 }
-
-const TABS: readonly { label: string; value: FilterTab }[] = [
-  { label: "All", value: "all" },
-  { label: "Open", value: "open" },
-  { label: "Waiting", value: "waiting" },
-  { label: "Resolved", value: "resolved" },
-];
 
 /**
  * The queue on the left of the ticket workspace.
  *
- * Search, the status filters and the category filter go through `Input`,
- * `FilterToggles` and `DropdownMenu` rather than the hand-rolled equivalents
- * this had before — the previous search box drew its own focus ring off
- * `--ring`, the filter row was bare `<button>`s with no group semantics or
+ * Search, the status filters, the category filter and the sort go through
+ * `TableSearchInput`, `FilterToggles` and `DropdownMenu` rather than the hand-rolled
+ * equivalents this had before — the previous search box drew its own focus ring
+ * off `--ring`, the filter row was bare `<button>`s with no group semantics or
  * pressed state, and the category picker was a `fixed inset-0` click-away layer
  * with no escape handling and no `aria-expanded`.
+ *
+ * The state behind all four is the page's, not this component's: see
+ * `useTicketQueue`. Since PAC-98 all four are request parameters, and the rows
+ * arrive narrowed and ranked — render them in the order given. Re-sorting would
+ * order one page against itself rather than against the pages either side.
  */
 export function TicketFeed({
-  tickets,
+  queue,
   selectedId,
   onSelect,
-  showStatusTabs = true,
   emptyLabel = "No tickets match your search.",
-  filters,
-  onFiltersChange,
-  categoryOptions,
 }: TicketFeedProps) {
-  const { query, filter, category, scope } = filters;
-  const setQuery = (next: string) => onFiltersChange({ ...filters, query: next });
-  const setFilter = (next: FilterTab) =>
-    onFiltersChange({ ...filters, filter: next });
-  const setCategory = (next: ServiceTicketCategory | "all") =>
-    onFiltersChange({ ...filters, category: next });
-  const setScope = (next: ServiceTicketScope) =>
-    onFiltersChange({ ...filters, scope: next });
+  const {
+    rows,
+    tabs,
+    tab,
+    setTab,
+    type,
+    setType,
+    categoryOptions,
+    sort,
+    setSort,
+    query,
+    setQuery,
+    scope,
+    setScope,
+    isFiltered,
+    clearFilters,
+    page,
+    isFetching,
+  } = queue;
+  // The whole filtered queue, not the page in hand.
+  const total = page?.total ?? rows.length;
 
-  /*
-   * The picker offers the whole vocabulary unless the page supplies a list.
-   *
-   * It used to derive the options from `tickets` — "only offer categories
-   * actually present in the queue". That reasoning does not survive paging:
-   * `tickets` is now one page, so the options would change under the rep as
-   * they page, and a category would vanish from the picker while its tickets
-   * sat on page two. Same trap PAC-97 hit on the dashboard queue.
-   */
-  const availableCategories = categoryOptions ?? SERVICE_TICKET_CATEGORIES;
-
-  /*
-   * The rows as the server sent them.
-   *
-   * The status, category and text filtering that used to happen here is now
-   * part of the request (PAC-98), and the ranking comes back applied — so
-   * there is nothing left to do but render. Re-sorting would order one page
-   * against itself rather than against the pages either side of it.
-   */
-  const filtered = tickets;
+  const sortLabel =
+    TICKET_QUEUE_SORTS.find((option) => option.value === sort)?.label ?? "";
 
   return (
     <div className="flex h-full flex-col overflow-hidden border-border bg-card lg:border-r">
       <div className="space-y-3 border-b border-border px-4 py-3">
-        <div className="relative">
-          <Search
-            aria-hidden
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            type="search"
-            aria-label="Search tickets"
-            placeholder="Search name, policy, phone, ID…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="pl-9 bg-card border-border"
-          />
-        </div>
+        <TableSearchInput
+          value={query}
+          onValueChange={setQuery}
+          label="Search tickets"
+          placeholder="Search name, policy, phone, ID…"
+          busy={isFetching}
+        />
 
-        {showStatusTabs && (
+        {tabs.length > 0 && (
           <FilterToggles
             label="Filter tickets by status"
-            options={TABS}
-            value={filter}
-            onChange={setFilter}
+            options={tabs.map((value) => ({
+              value,
+              label: TICKET_QUEUE_TAB_LABELS[value],
+            }))}
+            value={tab}
+            onChange={(next: TicketQueueTab) => setTab(next)}
           />
         )}
 
@@ -167,50 +129,99 @@ export function TicketFeed({
 
       <div className="flex items-center justify-between gap-2 px-4 py-2">
         <span className="truncate text-sm text-muted-foreground">
-          {filtered.length} ticket{filtered.length !== 1 ? "s" : ""}
-          {category !== "all" && (
-            <span className="text-foreground"> · {category}</span>
-          )}
+          {total} ticket{total !== 1 ? "s" : ""}
+          {type && <span className="text-foreground"> · {type}</span>}
         </span>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {/* One way out of a view that arrived with the link, rather than
+              three controls to walk back by hand. */}
+          {isFiltered && (
             <Button
               variant="ghost"
-              size="icon-sm"
-              aria-label="Filter by category"
-              className={cn(category !== "all" && "text-primary")}
+              size="sm"
+              className="h-8 px-2 text-xs text-muted-foreground"
+              onClick={clearFilters}
             >
-              <ListFilter />
+              <X />
+              Clear
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="max-h-64 w-48 overflow-y-auto">
-            <CategoryOption
-              label="All categories"
-              active={category === "all"}
-              onSelect={() => setCategory("all")}
-            />
-            {availableCategories.map((c) => (
-              <CategoryOption
-                key={c}
-                label={c}
-                active={category === c}
-                onSelect={() => setCategory(c)}
+          )}
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Sort tickets — ${sortLabel}`}
+                className={cn(
+                  sort !== DEFAULT_TICKET_QUEUE_SORT && "text-primary",
+                )}
+              >
+                <ArrowDownUp />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              {TICKET_QUEUE_SORTS.map((option) => (
+                <FilterOption
+                  key={option.value}
+                  label={option.label}
+                  active={sort === option.value}
+                  onSelect={() => setSort(option.value as TicketQueueSort)}
+                />
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Filter by category"
+                className={cn(type && "text-primary")}
+              >
+                <ListFilter />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="max-h-64 w-48 overflow-y-auto"
+            >
+              <FilterOption
+                label="All categories"
+                active={!type}
+                onSelect={() => setType("")}
               />
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              {categoryOptions.map((category) => (
+                <FilterOption
+                  key={category}
+                  label={category}
+                  active={type === category}
+                  onSelect={() => setType(category)}
+                />
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* List — scrolls independently of the workspace pane. `min-h-0` keeps
           this flex child from growing past its parent instead of scrolling. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {filtered.length === 0 && (
-          <p className="flex h-32 items-center justify-center px-4 text-center text-sm text-muted-foreground">
-            {emptyLabel}
-          </p>
+        {rows.length === 0 && (
+          <div className="flex h-32 flex-col items-center justify-center gap-2 px-4 text-center">
+            <p className="text-sm text-muted-foreground">
+              {isFiltered ? "No tickets match these filters." : emptyLabel}
+            </p>
+            {isFiltered && (
+              <Button variant="outline" size="sm" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
+          </div>
         )}
-        {filtered.map((ticket) => (
+        {rows.map((ticket) => (
           <TicketRow
             key={ticket.id}
             ticket={ticket}
@@ -279,8 +290,9 @@ function TicketRow({
         </Badge>
       </span>
 
+      {/* No status dot here any more — the status badge at the foot of the row
+          carries the same colour with a label attached. */}
       <span className="mb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-        <span className={cn("size-2 shrink-0 rounded-full", status.dot)} />
         <span className="tabular-nums">{ticket.ticketNumber}</span>
         <span>·</span>
         <span className="truncate">
@@ -315,13 +327,17 @@ function TicketRow({
         </span>
       )}
 
+      {/* The ticket's state, where the priority pill used to be. Priority reads
+          "medium" on everything this app opens and nothing can change it — see
+          the note in `ticket-data.ts`. */}
       <span className="flex items-center justify-between gap-2">
         <Badge
           size="sm"
           variant="ghost"
-          className={cn("capitalize", TICKET_PRIORITY_CLASS[ticket.priority])}
+          className={cn("gap-1", status.bg, status.text)}
         >
-          {ticket.priority}
+          <span className={cn("size-2 shrink-0 rounded-full", status.dot)} />
+          {status.label}
         </Badge>
         <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           {/* Whose ticket this is, so the queue is scannable by owner without
@@ -345,7 +361,7 @@ function TicketRow({
   );
 }
 
-function CategoryOption({
+function FilterOption({
   label,
   active,
   onSelect,
@@ -366,7 +382,7 @@ function CategoryOption({
 }
 
 function shortDate(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   return new Date(iso).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",

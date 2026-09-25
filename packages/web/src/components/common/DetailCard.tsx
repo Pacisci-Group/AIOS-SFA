@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface DetailCardProps {
   title: string;
@@ -125,7 +126,7 @@ export function DataRow({
     <div className={cn("flex min-w-0 flex-col gap-0.5", className)}>
       <SectionLabel>{label}</SectionLabel>
       <span className="min-w-0 text-base text-card-foreground">
-        {value ?? "—"}
+        {value ?? NOT_AVAILABLE}
       </span>
     </div>
   );

@@ -8,6 +8,7 @@ import {
   Household,
   HouseholdSchema,
 } from '../households/schemas/household.schema';
+import { PoliciesModule } from '../policies/policies.module';
 import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
 import { ClientsService } from './clients.service';
 import { HouseholdRecordsController } from './household-records.controller';
@@ -34,6 +35,10 @@ import { UnlinkedRecordsService } from './unlinked-records.service';
     HouseholdMembersModule,
     // `POST /households/:id/primary-contact` (PAC-91 §7).
     PrimaryContactModule,
+    // `PATCH /households/:id/policies/:policyId` (PAC-126) runs the Sold card's
+    // mutation against a household-scoped policy — one copy of the renewal
+    // re-derivation and the edit log, not two.
+    PoliciesModule,
   ],
   controllers: [
     HouseholdRecordsController,

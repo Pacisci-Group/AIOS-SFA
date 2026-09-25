@@ -40,7 +40,7 @@ Chakra, etc.).
   is light. When a light fix would shift the dark rendering, pin the original
   with a `dark:` override rather than accepting the drift (see
   `components/form/FormError.tsx`).
-- **3 prototype dashboards remain** (management, management-alt, service). They
+- **2 prototype dashboards remain** (management-alt, service). They
   are **not** light-theme clean and are not meant to be — they are slated for
   replacement, and they still reference `--navy-900`, `--emerald`, `--red`,
   `--amber` and `--font-mono`, which are defined nowhere and render transparent.
@@ -72,6 +72,14 @@ Chakra, etc.).
   the PR what you changed and why, so it can be put to the owner in one batch.
   Where the design asks for data we do not capture, the honest move is to say so
   (see the docblock on `QuoteRecapCard.tsx`), not to render empty rows.
+- **A missing value renders as `N/A` — always via `NOT_AVAILABLE` from
+  `@/lib/not-available`, never a literal.** The app used to say "no data" three
+  ways (an em dash, an `X`, a blank), and an em dash reads as punctuation or a
+  glitch to anyone who is not a developer. Use it for a value that is missing or
+  does not apply. Not for a **zero** (`$0` is information), not for **loading**
+  (a skeleton, or `…` on a chip whose width must not jump), and not for an
+  **empty list** (that is a sentence). The constant exists because introducing it
+  took a 46-file sweep; the next wording change should be one line.
 - **Follow the type & sizing scale** in `packages/web/src/styles/TYPOGRAPHY.md` —
   text roles, icon sizes, radii and the "every clickable thing goes through
   `Button`" rule. It exists because the first pass over Leads/Lead Detail drifted

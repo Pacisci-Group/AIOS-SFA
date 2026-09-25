@@ -12,12 +12,12 @@ import type {
   ServiceTicketNoteType,
   ServiceTicketPriority,
   ServiceTicketListResponse,
+  ServiceTicketQueueSort,
   ServiceTicketQueueTab,
   ServiceTicketScope,
   ServiceTicketStats,
   ServiceTicketStatus,
   ServiceTicketView,
-  SoldPolicyInput,
 } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
 
@@ -42,6 +42,7 @@ export type {
   ServiceTicketStats,
   ServiceTicketStatus,
   ServiceTicketListResponse,
+  ServiceTicketQueueSort,
   ServiceTicketQueueTab,
   ServiceTicketScope,
   ServiceTicketView,
@@ -50,8 +51,11 @@ export type {
 const BASE = '/crm/service-tickets';
 
 export interface ListServiceTicketsOptions {
-  status?: ServiceTicketStatus;
+  /** One status, or several ORed — `["open", "overdue"]` is the Open tab. */
+  status?: ServiceTicketStatus | readonly ServiceTicketStatus[];
   category?: ServiceTicketCategory;
+  /** Free text, matched server-side across the whole scope. */
+  search?: string;
   /**
    * When true, returns only archived tickets (resolved longer ago than the
    * archive window). Omitted returns the active queue, which excludes them.
@@ -68,6 +72,8 @@ export interface ListServiceTicketsOptions {
    * convenience, never a grant.
    */
   scope?: ServiceTicketScope;
+  /** Order inside each urgency band. Omitted means `urgency`. */
+  sort?: ServiceTicketQueueSort;
   /** 1-based. */
   page?: number;
   /** Capped server-side at 100; the API defaults to 8 if omitted. */
@@ -88,8 +94,14 @@ export interface ListServiceTicketsOptions {
  */
 export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   const params = new URLSearchParams();
-  if (options.status) {
-    params.set('status', options.status);
+  const statuses =
+    typeof options.status === 'string' ? [options.status] : options.status;
+  if (statuses?.length) {
+    params.set('status', statuses.join(','));
+  }
+  const search = options.search?.trim();
+  if (search) {
+    params.set('search', search);
   }
   if (options.category) {
     params.set('category', options.category);
@@ -102,8 +114,11 @@ export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   }
   // Sent only when narrowing. `agency` is the API's default, so spelling it
   // out would put a redundant param in the URL and in the query key.
-  if (options.scope === 'own') {
-    params.set('scope', 'own');
+  if (options.scope && options.scope !== 'agency') {
+    params.set('scope', options.scope);
+  }
+  if (options.sort && options.sort !== 'urgency') {
+    params.set('sort', options.sort);
   }
   if (options.page && options.page > 1) {
     params.set('page', String(options.page));
@@ -155,27 +170,6 @@ export function listServiceTicketsForHousehold(householdId: string) {
 
 export function getServiceTicket(id: string) {
   return apiFetch<ServiceTicketView>(`${BASE}/${id}`);
-}
-
-/**
- * `POST /crm/service-tickets/:id/policy-transfer` — book the client's move from
- * one package to another.
- *
- * Returns the refreshed ticket, like every other action on this controller, so
- * the caller renders the recorded transfer without a second read.
- */
-export function recordPolicyTransfer(
-  ticketId: string,
-  input: {
-    transferDate: string;
-    policies: SoldPolicyInput[];
-    submissionToken?: string;
-  },
-) {
-  return apiFetch<ServiceTicketView>(
-    `${BASE}/${encodeURIComponent(ticketId)}/policy-transfer`,
-    { method: 'POST', body: JSON.stringify(input) },
-  );
 }
 
 export function updateServiceTicketStatus(

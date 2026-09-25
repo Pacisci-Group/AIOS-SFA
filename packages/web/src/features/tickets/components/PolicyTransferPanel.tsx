@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { DataRow, DetailCard } from "@/components/common/DetailCard";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 const money = (value: number) =>
   value.toLocaleString("en-US", {
@@ -19,7 +20,7 @@ const shortDate = (iso: string | null) =>
         day: "numeric",
         year: "numeric",
       })
-    : "—";
+    : NOT_AVAILABLE;
 
 interface PolicyTransferPanelProps {
   transfer: PolicyTransferRef;
@@ -100,7 +101,7 @@ export function PolicyTransferPanel({ transfer }: PolicyTransferPanelProps) {
                 )}
               >
                 {delta === null
-                  ? "—"
+                  ? NOT_AVAILABLE
                   : `${delta > 0 ? "+" : ""}${money(delta)}${saving ? " saved" : ""}`}
               </span>
             }

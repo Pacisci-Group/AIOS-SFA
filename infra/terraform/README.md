@@ -1,13 +1,20 @@
 # SFA Infrastructure (Terraform + DigitalOcean)
 
-Infrastructure as Code for the SFA platform. Ships **dev only** today; staging
-and production are one command away (`make create ENV=staging`).
+Infrastructure as Code for the SFA platform. **dev** and **production** are
+live and run the same topology — an autoscale pool of app droplets behind a load
+balancer, with TLS terminated by our own Node edge from certificates held in
+Mongo. A further environment is one command away (`make create ENV=staging`).
 
 ## What it provisions (per environment)
 
 - VPC (private networking)
-- Droplet (Ubuntu 24.04, Docker + Nginx + Certbot via cloud-init)
-- Cloud Firewall (SSH from allowlist, 80/443 public)
+- App tier — an **autoscale pool** addressed by tag behind a public load
+  balancer (`enable_autoscale`), or a single droplet where that flag is off
+- A second, **internal** load balancer carrying Inngest to the workers
+- A Spaces bucket the pool fetches its published config from — members are
+  never deployed to
+- Cloud Firewall (SSH from allowlist; 80/443/8081 from the public balancer,
+  4001 from the internal one)
 - Managed MongoDB (app DB + user + DB-level firewall to the droplet)
 - DNS A record
 - Spaces bucket for document uploads, with browser CORS rules and a

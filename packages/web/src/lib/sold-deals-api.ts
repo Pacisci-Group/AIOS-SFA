@@ -1,11 +1,15 @@
 import type {
+  AddSoldDealPoliciesInput,
+  AddSoldDealPoliciesResponse,
   CreateSoldDealInput,
   CreateSoldDealResponse,
   PolicyCheckResponse,
+  SoldDealEditView,
   SoldDealLeadContext,
   SoldDocumentMeta,
   SoldDocumentPresignResponse,
   SoldStaffOption,
+  UpdateSoldDealInput,
 } from "@sfa/shared";
 import { apiFetch } from "./api-client";
 import { uploadToPresignedUrl } from "./quote-recaps-api";
@@ -33,15 +37,18 @@ export type SoldUploadKind = "discount_proof" | "new_business_application";
  * What an in-progress upload hangs off.
  *
  * The wizard uploads while it is still being filled in, so there is no deal yet
- * to scope a document to — it is anchored on whatever the flow *does* have. A
- * sale has a lead; a policy transfer has a ticket (and, through it, a
- * household). The two use different key prefixes on the server, and that prefix
- * is the ownership check, so this has to be explicit rather than a bare id
- * whose meaning depends on the caller.
+ * to scope a document to — it is anchored on the lead, and the key prefix the
+ * server derives from it is the ownership check.
+ *
+ * Still a discriminated union with one member, and still passed in by the flow
+ * rather than derived inside the wizard, on purpose. It had three members until
+ * PAC-126 — a ticket-anchored transfer and a policy-anchored rewrite each had a
+ * presign of their own — and the wizard inferred which from its variant, which
+ * is how the rewrite fell through to the lead branch with an empty `leadId` and
+ * could never upload. Both flows run on a lead now. The shape stays so the next
+ * anchor, if there is one, is a compile error here rather than a fallback.
  */
-export type UploadScope =
-  | { kind: "lead"; leadId: string }
-  | { kind: "ticket"; ticketId: string };
+export type UploadScope = { kind: "lead"; leadId: string };
 
 /** `GET /sold-deals/context?leadId=` — the header and driver picker source. */
 export function getSoldDealContext(
@@ -80,22 +87,28 @@ export function checkPolicyNumber(
  * #23) — the prefix is what lets the server enforce PDF-only on the new
  * business application at verification time rather than trusting the presign.
  */
+/**
+ * Where each anchor presigns. Exhaustive over {@link UploadScope}, so a new
+ * anchor is a compile error here rather than a silent fallback.
+ */
+function presignEndpoint(scope: UploadScope): string {
+  switch (scope.kind) {
+    case "lead":
+      return "/sold-deals/documents/presign";
+  }
+}
+
 export async function uploadSoldDocument(
   scope: UploadScope,
   file: File,
   kind: SoldUploadKind = "discount_proof",
 ): Promise<SoldDocumentMeta> {
   const presigned = await apiFetch<SoldDocumentPresignResponse>(
-    scope.kind === "lead"
-      ? "/sold-deals/documents/presign"
-      : `/crm/service-tickets/${encodeURIComponent(scope.ticketId)}/policy-transfer/presign`,
+    presignEndpoint(scope),
     {
       method: "POST",
       body: JSON.stringify({
-        // The lead endpoint takes its anchor in the body; the ticket one takes
-        // it in the path and reads the household off it server-side, so a
-        // caller cannot name a household it does not own.
-        ...(scope.kind === "lead" ? { leadId: scope.leadId } : {}),
+        leadId: scope.leadId,
         kind,
         filename: file.name,
         contentType: file.type,
@@ -142,4 +155,43 @@ export const soldStaffKey = ["sold-deals", "staff"] as const;
  */
 export function getSoldStaff() {
   return apiFetch<SoldStaffOption[]>("/sold-deals/staff");
+}
+
+/**
+ * The Edit sale page's query key (PAC-104).
+ *
+ * The `["sold-deal"]` prefix is what a per-policy quick edit invalidates, so
+ * the page's totals follow a correction made in the edit dialog.
+ */
+export function soldDealKey(dealId: string) {
+  return ["sold-deal", dealId] as const;
+}
+
+/** `GET /sold-deals/:id` — a booked deal, its policies, and whether it can take another. */
+export function getSoldDeal(dealId: string): Promise<SoldDealEditView> {
+  return apiFetch<SoldDealEditView>(
+    `/sold-deals/${encodeURIComponent(dealId)}`,
+  );
+}
+
+/** `PATCH /sold-deals/:id` — correct the sold date. */
+export function updateSoldDeal(
+  dealId: string,
+  input: UpdateSoldDealInput,
+): Promise<SoldDealEditView> {
+  return apiFetch<SoldDealEditView>(
+    `/sold-deals/${encodeURIComponent(dealId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+/** `POST /sold-deals/:id/policies` — add policies to the booked deal. */
+export function addSoldDealPolicies(
+  dealId: string,
+  input: AddSoldDealPoliciesInput,
+): Promise<AddSoldDealPoliciesResponse> {
+  return apiFetch<AddSoldDealPoliciesResponse>(
+    `/sold-deals/${encodeURIComponent(dealId)}/policies`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
 }

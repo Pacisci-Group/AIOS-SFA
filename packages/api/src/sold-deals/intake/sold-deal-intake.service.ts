@@ -8,14 +8,22 @@ import {
 } from '../../activities/schemas/activity.schema';
 import { TransactionRunner } from '../../common/mongo/transaction.runner';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
-import type { NormalizedLeadSource } from '@sfa/shared';
+import {
+  Household,
+  HouseholdDocument,
+} from '../../households/schemas/household.schema';
+import { Policy, PolicyDocument } from '../../policies/schemas/policy.schema';
 import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import { AdvanceLeadStep } from './advance-lead.step';
 import { InterestedPartiesStep } from './interested-parties.step';
 import { PriorInsuranceStep } from './prior-insurance.step';
 import { ResolveDealStep } from './resolve-deal.step';
-import { SoldIntakeContext, SoldIntakeOutcome } from './sold-intake.types';
-import { UpsertPoliciesStep } from './upsert-policies.step';
+import {
+  SoldIntakeContext,
+  SoldIntakeOutcome,
+  SoldStepDeps,
+} from './sold-intake.types';
+import { UpsertPoliciesStep, UpsertedPolicy } from './upsert-policies.step';
 
 /** Mongo duplicate-key error. */
 const DUPLICATE_KEY = 11000;
@@ -56,6 +64,10 @@ export class SoldDealIntakeService {
     @InjectModel(Deal.name) private readonly dealModel: Model<DealDocument>,
     @InjectModel(Activity.name)
     private readonly activityModel: Model<ActivityDocument>,
+    @InjectModel(Household.name)
+    private readonly householdModel: Model<HouseholdDocument>,
+    @InjectModel(Policy.name)
+    private readonly policyModel: Model<PolicyDocument>,
     private readonly transactions: TransactionRunner,
     private readonly deals: ResolveDealStep,
     private readonly policies: UpsertPoliciesStep,
@@ -65,16 +77,38 @@ export class SoldDealIntakeService {
   ) {}
 
   /**
-   * `leadSource` rather than the lead document: it is the only field of the
+   * `leadSourceId` rather than the lead document: it is the only field of the
    * lead this pipeline ever read, and taking the narrower input is what lets a
    * leadless policy transfer run the identical steps. A transfer passes
-   * `undefined`, which `resolveLeadSource` already renders as the empty source.
+   * `undefined`, and the deal simply carries no source.
    */
   async process(
     ctx: SoldIntakeContext,
     dto: SoldIntakeDto,
     access: AccessContext,
-    leadSource: NormalizedLeadSource | undefined,
+    leadSourceId: Types.ObjectId | undefined,
+    /**
+     * Extra work to commit **with** the deal, run after every step inside the
+     * same transaction.
+     *
+     * Exists for the Cancel Rewrite chargeback, which is money: a replacement
+     * written but a claw-back lost would take a producer's credit and never give
+     * it back, and nothing would ever notice. Every other post-submission side
+     * effect here (audit generation, the household recount, the ticket timeline)
+     * is deliberately best-effort post-commit, because re-running it is cheap
+     * and failing the request would tell a CSR their work did not happen when it
+     * did. A ledger row is the one thing that is neither.
+     *
+     * A callback rather than another step so the shared pipeline keeps knowing
+     * nothing about chargebacks — the two write paths that use it have no such
+     * concept, and a step that no-ops for both of them is a step in the wrong
+     * module.
+     */
+    afterSteps?: (
+      deps: SoldStepDeps,
+      policies: UpsertedPolicy[],
+      dealId: Types.ObjectId,
+    ) => Promise<void>,
   ): Promise<SoldIntakeOutcome> {
     // Probe BEFORE opening a transaction, the same reasoning as lead intake: a
     // replay should not re-run policy upserts or re-derive anything.
@@ -89,13 +123,15 @@ export class SoldDealIntakeService {
 
         const { dealId, aggregates } = await this.deals.run(
           dto,
-          leadSource,
+          leadSourceId,
           deps,
         );
         const policies = await this.policies.run(dto, dealId, access, deps);
         await this.priorInsurance.run(dto, dealId, deps);
         // After the policies: an escrow row links to the policy it secures.
         await this.interestedParties.run(dto, policies, deps);
+        // Last, so a caller's extra write sees everything the steps produced.
+        await afterSteps?.(deps, policies, dealId);
 
         return {
           dealId,
@@ -138,23 +174,34 @@ export class SoldDealIntakeService {
    * row failed would fail in the wrong direction. Same precedent as
    * `LeadIntakeService.recordCreatedActivity`.
    *
-   * **Both effects are lead-scoped, so a policy transfer skips both.** There is
-   * no lead to advance, and `ACTIVITY_TYPES` has no member meaning
-   * "transferred" — `Activity.leadId` is required by every reader of the feed,
-   * and writing a `sold` row for something that was not sold would be worse
-   * than writing nothing. The transfer's ticket timeline carries it instead.
+   * The household recount runs first and for **every** deal, lead or not. The
+   * other two are lead-scoped: there is no lead to advance on a leadless
+   * booking.
+   *
+   * **A Company Transfer writes no `sold` activity.** It runs through a lead
+   * now (PAC-126), but it is not a sale — a package change within the client's
+   * own book, kept off the leaderboard for that reason — and `ACTIVITY_TYPES`
+   * has no member meaning "transferred". Writing a `sold` row for it would be
+   * worse than nothing: the feed and every "sold" activity count would read a
+   * transfer as new business. The deal itself, `businessType: company_transfer`,
+   * is on the lead page regardless. The lead *is* still advanced: it was
+   * created for this one action, `Sold` is the pipeline's "done, with a deal"
+   * state, and leaving it open would list a finished lead as workable forever.
+   * A rewrite keeps the row — it books genuine new business.
    */
   async recordSideEffects(
     ctx: SoldIntakeContext,
     outcome: SoldIntakeOutcome,
   ): Promise<{ leadStatus: string | null }> {
+    await this.recountHouseholdPolicies(ctx.householdId);
+
     if (!ctx.leadId) {
       return { leadStatus: null };
     }
     const leadId = ctx.leadId;
     const leadStatus = await this.leads.run(leadId, ctx.agencyId);
 
-    if (outcome.dealIsNew) {
+    if (outcome.dealIsNew && ctx.replacementReason !== 'company_transfer') {
       try {
         await this.activityModel.create({
           agencyId: ctx.agencyId,
@@ -180,6 +227,41 @@ export class SoldDealIntakeService {
     }
 
     return { leadStatus };
+  }
+
+  /**
+   * Bring `Household.totalActivePolicies` back in line with reality.
+   *
+   * Lived on the ticket-anchored transfer until PAC-126 retired it, which
+   * meant the **sold path never recounted at all** — every ordinary sale left
+   * the stored count where the migration put it. The household card computes
+   * its headline from the live policy list so nobody saw it there, but the
+   * Clients list sorts on the stored field, and a replacement that splits one
+   * policy into two moves it. It belongs here, where every booking passes.
+   *
+   * Recounted rather than incremented so a re-run is still correct, and
+   * best-effort like the activity row: the deal is committed by now, and a
+   * stale count is a worse reason to fail a request than no reason.
+   */
+  private async recountHouseholdPolicies(
+    householdId: Types.ObjectId,
+  ): Promise<void> {
+    try {
+      const active = await this.policyModel.countDocuments({
+        householdId,
+        active: true,
+      });
+      await this.householdModel.updateOne(
+        { _id: householdId },
+        { $set: { totalActivePolicies: active } },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Household policy recount failed for ${householdId.toString()}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private async findByToken(

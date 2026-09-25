@@ -1,8 +1,16 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, ChevronRight, Loader2, StickyNote, Users } from "lucide-react";
 import {
+  AlertCircle,
+  ChevronRight,
+  Loader2,
+  RefreshCw,
+  StickyNote,
+  Users,
+} from "lucide-react";
+import {
+  ModuleKey,
   isCanonicalPolicyType,
   itemCountLabel,
   policyTypeHasItemCount,
@@ -13,19 +21,23 @@ import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { usePermissions } from "@/hooks/usePermissions";
 import { getPolicy } from "@/lib/policies-api";
+import { PolicyHistoryCard } from "./components/PolicyHistoryCard";
+import { PolicyReplacementActions } from "./components/PolicyReplacementActions";
 import { PolicyCard } from "@/features/household/components/PolicyPortfolio";
 import {
   statusColors,
   toDisplayPolicy,
 } from "@/features/household/components/policy-display";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** `Jun 9, 2026`, or an em dash. */
 function shortDate(iso: string | null | undefined) {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return NOT_AVAILABLE;
   return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -49,6 +61,7 @@ function shortDate(iso: string | null | undefined) {
 export default function PolicyDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [expanded, setExpanded] = useState(true);
+  const { can } = usePermissions();
 
   const query = useQuery({
     queryKey: ["policy", id],
@@ -138,9 +151,29 @@ export default function PolicyDetailPage() {
             showOpenLink={false}
           />
 
+          {/*
+            The two replacements, offered only where they can actually be done:
+            an active policy, and a user holding the permission the whole chain
+            needs. Showing them otherwise would send someone into a flow that
+            refuses at its first step — and an inactive policy has usually
+            already been replaced, in which case the history card below names the
+            replacement to work on instead.
+          */}
+          {policy.active && can(`${ModuleKey.DealAudits}:write`) && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
+              <p className="text-sm text-muted-foreground">
+                Replacing this policy? The old one is retired and the new one
+                written together, so the two stay linked.
+              </p>
+              <PolicyReplacementActions policyId={policy.id} />
+            </div>
+          )}
+
+          <PolicyHistoryCard policyId={policy.id} />
+
           <DetailCard title="Policy terms">
             <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-              <DataRow label="Carrier" value={policy.carrier ?? "—"} />
+              <DataRow label="Carrier" value={policy.carrier ?? NOT_AVAILABLE} />
               <DataRow
                 label="Premium"
                 value={
@@ -167,12 +200,30 @@ export default function PolicyDetailPage() {
                   }
                 />
               )}
+              {/*
+                Inception, not the start of the current term — see the card's
+                note. Without the term beside it, an auto policy effective a
+                year ago reads as annual when its March renewal has simply
+                already gone by.
+              */}
               <DataRow
-                label="Effective"
+                label="Coverage began"
                 value={shortDate(policy.effectiveDate)}
               />
-              <DataRow label="Renews" value={shortDate(policy.renewalDate)} />
-              <DataRow label="Expires" value={shortDate(policy.expirationDate)} />
+              <DataRow label="Term" value={display.term} />
+              {/*
+                The same value the card above leads with, not the raw
+                `renewalDate` (PAC-126). The card falls back to the expiration
+                when no anchor is stored, so reading the raw field here would
+                put two different dates under the word "Renews" on one screen.
+              */}
+              <DataRow label="Renews" value={display.renewal} />
+              {/*
+                Derived one day back from the renewal, not the stored
+                `expirationDate` — which is empty on most migrated policies and
+                describes a term that has since passed where it is set.
+              */}
+              <DataRow label="Expires" value={display.expiration} />
             </div>
           </DetailCard>
 

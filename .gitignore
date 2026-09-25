@@ -14,8 +14,14 @@ migration-report.json
 
 # Local project folders / symlinks (not pushed)
 # Read-only reference to the legacy SFA app (see .claude/rules/legacy-sfa-reference.md)
+#
+# Anchored. An unanchored `SFA/` matches a directory of that name at ANY depth,
+# and on a case-insensitive filesystem that includes
+# `infra/terraform/stacks/sfa/` — so a new file added to the terraform stack was
+# silently ignored on a Mac and committed normally on Linux. The tracked .tf
+# files there predate the rule, which is the only reason this went unnoticed.
 /SFA
-SFA/
+/SFA/
 # Read-only reference to the Figma FE mockups repo (see .claude/rules/figma-mockups-reference.md)
 /agencyops_fe_mockups
 agencyops_fe_mockups/

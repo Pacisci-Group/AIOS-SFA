@@ -1,0 +1,130 @@
+meta {
+  name: Get Lead Sources
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/owner-dashboard/lead-sources?range=lastMonth
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: lastMonth
+  ~producerIds: 
+  ~leadSourceIds: __none__
+  ~policyTypes: Auto
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+auth:bearer {
+  token: {{ownerDashboardToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("sorts by premium, with No source always last", function () {
+    const rows = res.getBody().rows;
+    const named = rows.filter((row) => row.leadSourceId !== null);
+    for (let i = 1; i < named.length; i++) {
+      expect(named[i - 1].premium).to.be.at.least(named[i].premium);
+    }
+    const none = rows.findIndex((row) => row.leadSourceId === null);
+    if (none !== -1) {
+      expect(none).to.equal(rows.length - 1);
+      expect(rows[none].name).to.equal("No source");
+    }
+  });
+
+  test("a conversion rate is a number or a stated gap — never both, never neither", function () {
+    const { rows, totals } = res.getBody();
+    for (const row of [...rows, totals]) {
+      if (row.convPct === null) {
+        expect(["no_quotes", "too_few_quotes"]).to.include(row.convGap);
+      } else {
+        expect(row.convGap).to.equal(null);
+      }
+    }
+  });
+
+  test("agrees with the summary card under the same filter", function () {
+    expect(res.getBody().totals.premium).to.equal(bru.getVar("ownerSummaryPremium"));
+  });
+}
+
+docs {
+  # GET /owner-dashboard/lead-sources — the lead-source matrix (PAC-135)
+
+  Per lead source: **Conv %** · **Vol** · **Premium**, plus a total row, for the
+  selected window.
+
+  - **Module / permission / scope / query:** identical to
+    `GET /owner-dashboard/summary` — see that request's docs.
+
+  The mockup calls this an "ROI matrix". There is no cost data anywhere in the
+  system, so it is a performance table, not a return on anything.
+
+  ## The columns
+  | field | meaning |
+  |---|---|
+  | volume | **leads received** in the window, by their creation day |
+  | premium | sold premium, summed from policy lines |
+  | quotedPremium | quoted premium, from quote-recap lines |
+  | convPct | sold ÷ quoted premium × 100 — the same premium-based rule as the closing-ratio card |
+  | convGap | why `convPct` is `null`: `no_quotes`, or `too_few_quotes` (under one recap per ten sales) |
+
+  `volume` answers a different question from the other two — leads *received*
+  versus business *written* — so a source can show volume with no premium yet,
+  or premium from leads that arrived before the window.
+
+  ## Which source a record belongs to
+  **The lead owns the source.** A sale and the quotes behind it resolve it through
+  their lead, so correcting a lead moves all of them together and a conversion
+  rate always divides like by like. A deal's own `leadSourceId` is the fallback —
+  for a deal with no lead, and for a lead that has none of its own.
+
+  Everything left over lands in **No source**, always last. On migrated data that
+  row is large: about two thirds of historic deals carry no source and no lead
+  link. It is the honest size of the gap, and hiding it would make the table's
+  total disagree with the card — `totals.premium` equals the summary's
+  `premium.current` under any filter.
+
+  ## How the filters apply
+  | filter | sold · quoted | volume |
+  |---|---|---|
+  | period | sold date · quote date | lead creation day |
+  | producerIds | ✓ — "this producer's sources" | ✓ |
+  | leadSourceIds | ✓ — narrows the rows | ✓ |
+  | policyTypes | ✓ | ✗ **cannot apply** |
+
+  A lead is not a policy, and `policiesOfInterest` is empty on every migrated
+  lead, so a line-of-business filter on `volume` would zero the column for all
+  of history. Volume means "how many leads this source sent", whatever they went
+  on to buy.
+
+  A migrated lead's creation date is date-only, stored as UTC midnight. It is
+  read as that calendar day — not as the Chicago evening before it — the same
+  provenance rule `quoteDateYmd` applies.
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "lastMonth", "current": { "from": "2026-08-01", "to": "2026-08-31" }, "previous": { "from": "2026-07-01", "to": "2026-07-31" } },
+    "rows": [
+      { "leadSourceId": "66f0…a1", "name": "Mailer", "volume": 329, "premium": 72882.4, "quotedPremium": 69280, "convPct": 105.2, "convGap": null },
+      { "leadSourceId": null, "name": "No source", "volume": 4, "premium": 9120, "quotedPremium": 0, "convPct": null, "convGap": "no_quotes" }
+    ],
+    "totals": { "volume": 333, "premium": 82002.4, "quotedPremium": 69280, "convPct": 118.4, "convGap": null }
+  }
+  ```
+
+  ## Errors
+  Same as `GET /owner-dashboard/summary`: `400` bad query · `401` · `403`.
+}

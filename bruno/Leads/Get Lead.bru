@@ -276,7 +276,7 @@ docs {
     "lastName": "Rodriguez",
     "status": "Quoted",
     "temperature": "Hot",
-    "leadSource": { "code": "WCO7l", "label": "Mailer" },
+    "leadSource": { "id": "66f0…a1", "label": "Mailer" },
     "address": { "street": "4821 Maple Grove Dr", "city": "Austin", "state": "TX", "zip": "78745" },
     "quoteControlNumber": "QCN-11741",
     "policiesOfInterest": [
@@ -368,7 +368,7 @@ docs {
   | name               | string          | `first last`, or `"Unknown Lead"`                         |
   | status             | string          | canonical label — `arW7O` is normalized to `Requote`      |
   | temperature        | enum            | `Hot` \| `Warm` \| `Cold` \| `Unknown`                    |
-  | leadSource         | object          | `{ code, label }` — `code` is what `PATCH` accepts back   |
+  | leadSource         | object          | `{ id, label }` — `id` is what `PATCH` accepts back as `leadSourceId`; `{ id: null, label: "" }` = not set |
   | address            | object \| null  | household living address, coerced from three stored shapes |
   | policiesOfInterest | array           | `{ policyType, itemCount, propertyAddress }` captured at intake (PAC-56 #2); `[]` on migrated leads |
   | propertyAddress    | object \| null  | **lead-level** dwelling — migrated records and pre-PAC-56-#14 leads only; read the per-row one first |

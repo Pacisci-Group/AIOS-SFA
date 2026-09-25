@@ -1,0 +1,140 @@
+meta {
+  name: Update Household Policy
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/households/{{policyEditHouseholdId}}/policies/{{policyEditPolicyId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "premium": {{policyEditPremium}}
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the PolicySummary the household card renders", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("id");
+    expect(body).to.have.property("policyNumber");
+    expect(body).to.have.property("policyType");
+    expect(body).to.have.property("carrier");
+    expect(body).to.have.property("active");
+    expect(body).to.have.property("policyStatus");
+    expect(body).to.have.property("premium");
+    expect(body).to.have.property("items");
+    expect(body).to.have.property("effectiveDate");
+    expect(body).to.have.property("expirationDate");
+  });
+
+  test("carries the renewal anchor — the reason this route exists", function () {
+    // `UpdatePolicyResult` (what `PATCH /policies/:id` returns) has no field for
+    // this. The household card leads with it, so losing it here would defeat the
+    // ticket.
+    expect(res.getBody()).to.have.property("renewalDate");
+  });
+
+  test("the premium is written back unchanged", function () {
+    const sent = bru.getVar("policyEditPremium");
+    if (sent !== undefined && sent !== null) {
+      expect(res.getBody().premium).to.equal(sent);
+    }
+  });
+
+  test("never echoes internals", function () {
+    const body = res.getBody();
+    expect(body).to.not.have.property("agencyId");
+    expect(body).to.not.have.property("branchId");
+    expect(body).to.not.have.property("isTestRecord");
+    expect(body).to.not.have.property("legacySmartSuiteId");
+  });
+}
+
+docs {
+  # PATCH /households/:id/policies/:policyId
+
+  Correct a policy **from the household page** (PAC-126).
+
+  - **Module:** `clients` OR `crm_service`
+  - **Permission:** `clients:write` **OR** `crm_service:write`
+  - **Data scope:** `own` collapses to **branch**
+
+  ## Why this exists beside `PATCH /policies/:id`
+
+  That endpoint is the Lead Detail **Sold card's** quick edit. It gates on
+  `deal_audits:write` and resolves `own` scope through the policy's **deal**,
+  which is right for a producer correcting their own sale and wrong for every
+  policy this route is about. Two consequences, both fatal here:
+
+  - a **CSR holds no `deal_audits` permission at all**, so the service team gets
+    a 403 on the endpoint they need most;
+  - `own` scope reads ownership off `deal.producerId`, and a **migrated policy
+    has no deal**, so it reports as 404 — "masking something unattributable is
+    the safe direction", which it is, for a sales record.
+
+  A household policy is neither unattributable nor a sales record: it belongs to
+  the household in the path. So the household supplies both the permission and
+  the scope, and the policy is re-checked against it — a policy that is not this
+  household's is a **404**, never a fall-through to editing someone else's record.
+
+  Only the *finding* differs. The mutation is `PoliciesService.applyUpdate`, one
+  copy shared with the Sold card, so the renewal re-derivation, the item-count
+  normalization, the `policyNumberKey` upkeep and the edit log cannot drift
+  between the two routes.
+
+  ⚠ Producers also hold `clients:write` (PAC-38 gave them contact editing) and
+  therefore reach this. Deliberate: every other write on this controller — add
+  member, name the primary, end a membership — is already open to them under the
+  same branch-collapsed scope.
+
+  ## Body
+  Identical to `PATCH /policies/:id` — see **Sold Deals › Update Policy** for the
+  full field table, the `null`-clears-vs-omitted rule, the `items` normalization
+  and the `status` vocabulary. Every field optional, object must not be empty.
+
+  ## `renewalDate` is derived, never sent
+  `policies.renewalDate` is the anchor every renewal call counts backwards from,
+  and the schema is explicit: *"never accept it from a client — an anchor that
+  disagrees with the effective date schedules real calls to real clients on the
+  wrong day."* It is **not** a body field.
+
+  Send **`effectiveDate`** instead: the server re-derives the anchor from it and
+  the policy's term (6 months for the auto family, 12 otherwise) and returns the
+  new value. That is the whole mechanism behind this ticket — the operator types
+  the date on the declaration page, and the date they cannot compute appears on
+  the card. Changing `policyType` re-derives it too. Clearing `effectiveDate`
+  clears the anchor, because there is then nothing to count from.
+
+  ## Response
+  A **`PolicySummary`** — the shape the household page already renders, so the
+  card swaps the row in place rather than refetching the whole 360° assembly for
+  a one-field correction. Note this is *not* `PATCH /policies/:id`'s
+  `UpdatePolicyResult`, which has no `renewalDate` field at all.
+
+  ## Edit log
+  Writes the same `activities` change row as the Sold card's edit (PAC-65 #9),
+  covering policy number, type, carrier, premium, items, effective date,
+  expiration date and status. Readable by `agency:changelogs:read` — Agency Owner
+  and Branch Manager only, so a CSR's corrections are recorded but not readable
+  by them.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | Empty object, an unknown `status`, or a malformed date |
+  | 401 | Missing/expired bearer token |
+  | 403 | Both `clients` and `crm_service` disabled, or the caller holds neither write |
+  | 404 | Policy or household outside the caller's scope, or the policy is not this household's |
+}

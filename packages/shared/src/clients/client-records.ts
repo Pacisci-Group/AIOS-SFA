@@ -10,7 +10,7 @@
  *   distinguish `undefined` from `null`
  */
 
-import type { StructuredAddress } from '../domain/address';
+import type { StoredAddress, StructuredAddress } from '../domain/address';
 
 /** A household member, from the `contacts` collection. */
 export interface ContactSummary {
@@ -113,11 +113,17 @@ export interface HouseholdView extends HouseholdSummary {
    */
   address: StructuredAddress | null;
   /**
-   * The raw stored objects, kept for callers that need a key the normalized
-   * shape drops (`location_address2`). Prefer {@link HouseholdView.address}.
+   * The stored addresses, typed since PAC-101.
+   *
+   * These used to be `Record<string, unknown>` and existed only so a caller
+   * could reach `location_address2`, the one key the normalized shape dropped.
+   * The household now stores a typed sub-schema that carries it as `street2`,
+   * so these are ordinary objects — but {@link HouseholdView.address} is still
+   * what a display should read: it applies the lead → property → mailing
+   * precedence, which neither of these knows about.
    */
-  propertyAddress: Record<string, unknown> | null;
-  mailingAddress: Record<string, unknown> | null;
+  propertyAddress: StoredAddress | null;
+  mailingAddress: StoredAddress | null;
   /**
    * The primary contact's email and phone, **resolved from that contact** —
    * the household no longer stores a copy of either (PAC-91 §1/§4). Null when

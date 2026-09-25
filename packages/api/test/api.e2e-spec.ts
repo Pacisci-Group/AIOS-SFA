@@ -10,21 +10,26 @@ import {
   DEFAULT_ROLE_TEMPLATES,
   ModuleKey,
   PlatformPermission,
+  SERVICE_TICKET_ACTIVE_STATUSES,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
 import type {
   HouseholdListResponse,
+  PolicySummary,
   UnlinkedCounts,
   UnlinkedRecordsResponse,
 } from '@sfa/shared';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
+import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import type {
   ContactDetail,
   CreateActivityResponse,
+  AddSoldDealPoliciesResponse,
   CreateSoldDealResponse,
+  SoldDealEditView,
   HotLeadListResponse,
   LeaderboardResponse,
   LeadDetail,
@@ -40,14 +45,18 @@ import { Contact } from '../src/contacts/schemas/contact.schema';
 import { AuditTemplate } from '../src/audit-templates/schemas/audit-template.schema';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
 import { ServiceTicketsService } from '../src/crm/service-tickets.service';
+import { AuditGenerationService } from '../src/audit-generation/audit-generation.service';
 import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
 import { DealAuditItem } from '../src/deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
 import { HouseholdMember } from '../src/households/schemas/household-member.schema';
+import { Chargeback } from '../src/chargebacks/schemas/chargeback.schema';
 import { Household } from '../src/households/schemas/household.schema';
 import { InterestedParty } from '../src/interested-parties/schemas/interested-party.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
+import { LeadSource } from '../src/lead-sources/schemas/lead-source.schema';
+import { seedLeadSources } from '../src/seed/lead-sources.seed';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { Policy } from '../src/policies/schemas/policy.schema';
 import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
@@ -95,6 +104,20 @@ interface TicketListBody {
 
 const ticketList = (res: { body: unknown }): TicketListBody =>
   res.body as TicketListBody;
+
+/** The `GET /users` envelope, as this suite asserts against it (PAC-101). */
+interface AgencyUserListEnvelope {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: Array<{
+    _id: string;
+    email: string;
+    isActive: boolean;
+    deactivatedAt?: string | null;
+  }>;
+}
 
 describe('SFA API (e2e)', () => {
   let app: INestApplication<App>;
@@ -286,9 +309,18 @@ describe('SFA API (e2e)', () => {
       expect(body.user.permissions).not.toContain('platform:users:impersonate');
       expect(body.user.permissions).not.toContain('platform:agencies:read');
       expect(body.user.impersonatedBy).toBe(superAdminUserId);
-      // The test agency has no domain, so the session is used on the platform
-      // host — `APP_BASE_URL` as pinned by `setup-env.ts`.
-      expect(body.appBaseUrl).toBe('http://localhost:5173');
+      /*
+       * The test agency has no domain, so the session is used on the platform
+       * host: `PLATFORM_HOST` with `APP_BASE_URL`'s scheme and port, both
+       * pinned by `setup-env.ts`.
+       *
+       * This suite's own env is the worked example of why that is the host and
+       * not `APP_BASE_URL`'s: supertest talks to `127.0.0.1`, which is why
+       * `PLATFORM_HOST` is pinned to it, while `APP_BASE_URL` stays
+       * `localhost`. `localhost` resolves to no tenant here, so the old answer
+       * handed the panel an origin whose every request would 404.
+       */
+      expect(body.appBaseUrl).toBe('http://127.0.0.1:5173');
     });
 
     it('points the client at the target agency’s own host', async () => {
@@ -381,7 +413,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(201);
 
@@ -753,14 +785,212 @@ describe('SFA API (e2e)', () => {
   describe('Users', () => {
     let invitedUserId: string;
 
-    it('GET /api/v1/users', async () => {
+    it('GET /api/v1/users — a paginated envelope (PAC-101)', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/v1/users')
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(Array.isArray(res.body)).toBe(true);
-      expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(2);
+      // Was a bare array until PAC-101. The three pickers that relied on that
+      // shape read `GET /users/options` now.
+      const body = res.body as AgencyUserListEnvelope;
+      expect(Array.isArray(body)).toBe(false);
+      expect(body).toMatchObject({ page: 1, pageSize: 25 });
+      expect(body.items.length).toBeGreaterThanOrEqual(2);
+      expect(body.total).toBeGreaterThanOrEqual(body.items.length);
+    });
+
+    describe('GET /api/v1/users — search and paging (PAC-101)', () => {
+      const list = async (token: string, qs = '') => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/users${qs}`)
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as AgencyUserListEnvelope;
+      };
+      const emails = (body: AgencyUserListEnvelope) =>
+        body.items.map((row) => row.email);
+
+      it('searches name and email', async () => {
+        expect(emails(await list(ownerToken, '?q=producer'))).toContain(
+          seed.producerEmail,
+        );
+      });
+
+      it('searches by role name, which the Roles column renders', async () => {
+        const body = await list(ownerToken, '?q=Producer');
+        expect(emails(body)).toContain(seed.producerEmail);
+      });
+
+      it('searches by branch name — a column that was never searchable', async () => {
+        const body = await list(ownerToken, '?q=Test%20Branch');
+        expect(emails(body)).toContain(seed.producerEmail);
+      });
+
+      it('hides the branch arm from a caller who cannot see the column', async () => {
+        /*
+         * `agency:branches:read` gates the Branch column. Matching on a column
+         * the caller cannot see reads as a broken search *and* leaks branch
+         * names by oracle.
+         *
+         * Every default role holding `agency:users:read` also holds
+         * `agency:branches:read`, so this needs a **custom** role — which is
+         * exactly the case the gate exists for, since agencies can create them.
+         */
+        const roles = app.get<Model<AgencyRole>>(
+          getModelToken(AgencyRole.name),
+        );
+        const users = app.get<Model<User>>(getModelToken(User.name));
+        const assignments = app.get(RoleAssignmentsService);
+
+        const agencyId = new Types.ObjectId(seed.agencyId);
+        const auditorRole = await roles.create({
+          agencyId,
+          name: 'Directory Auditor',
+          slug: 'directory_auditor',
+          dataScope: 'agency',
+          isSystemTemplate: false,
+        });
+        await assignments.setRolePermissions(agencyId, auditorRole._id, [
+          'agency:users:read',
+        ]);
+
+        const auditorEmail = 'test-directory-auditor@sfa.local';
+        const auditor = await users.create({
+          agencyId,
+          branchId: new Types.ObjectId(seed.branchId),
+          email: auditorEmail,
+          passwordHash: await bcrypt.hash(TEST_PASSWORD, 10),
+          firstName: 'Directory',
+          lastName: 'Auditor',
+          isActive: true,
+        });
+        await assignments.setUserRoles(
+          { userId: auditor._id.toString(), isPlatformAdmin: true },
+          agencyId,
+          auditor._id,
+          [auditorRole._id],
+        );
+
+        const auditorToken = (await login(app, auditorEmail, TEST_PASSWORD))
+          .accessToken;
+
+        // The owner, who can see the column, finds the row by branch name.
+        expect(
+          (await list(ownerToken, '?q=Test%20Branch')).total,
+        ).toBeGreaterThan(0);
+
+        // The auditor, who cannot, finds nothing by branch name — but the rest
+        // of the search still works for them, so this is the arm being
+        // withheld rather than the endpoint being broken.
+        expect((await list(auditorToken, '?q=Test%20Branch')).total).toBe(0);
+        expect(emails(await list(auditorToken, '?q=producer'))).toContain(
+          seed.producerEmail,
+        );
+      });
+
+      it('ranks invited before active before deactivated', async () => {
+        // The old client-side STATUS_RANK, reproduced by the server sort.
+        const body = await list(ownerToken, '?pageSize=100');
+        const rank = (row: AgencyUserListEnvelope['items'][number]) =>
+          row.deactivatedAt ? 2 : row.isActive ? 1 : 0;
+        const ranks = body.items.map(rank);
+        expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+      });
+
+      it('filters by the Status facet', async () => {
+        const body = await list(ownerToken, '?status=active&pageSize=100');
+        expect(body.items.every((row) => row.isActive)).toBe(true);
+      });
+
+      it('pages deterministically', async () => {
+        const first = await list(ownerToken, '?page=1&pageSize=1');
+        const second = await list(ownerToken, '?page=2&pageSize=1');
+        expect(first.items[0]._id).not.toBe(second.items[0]._id);
+        expect(first.total).toBe(second.total);
+      });
+
+      it('a cleared search is no filter, not an impossible one', async () => {
+        const all = await list(ownerToken, '?pageSize=100');
+        const cleared = await list(ownerToken, '?q=&pageSize=100');
+        expect(cleared.total).toBe(all.total);
+      });
+
+      it('rejects a malformed status with 400, not 500', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users?status=nonsense')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
+    });
+
+    describe('GET /api/v1/users/options (PAC-101)', () => {
+      const options = async (token: string) => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/users/options')
+          .set(authHeader(token))
+          .expect(200);
+        return res.body as Array<{
+          _id: string;
+          email: string;
+          firstName?: string;
+          lastName?: string;
+          availability: 'available' | 'busy';
+        }>;
+      };
+
+      it('is a bare array, not a paginated envelope', async () => {
+        // Deliberate: a picker renders every option at once, and one showing
+        // page 1 of 3 is a bug. `GET /users` is the one that paginates.
+        const body = await options(ownerToken);
+        expect(Array.isArray(body)).toBe(true);
+        expect(body.length).toBeGreaterThanOrEqual(2);
+      });
+
+      it('is not swallowed by the :userId route', async () => {
+        // `@Get('options')` has to be declared above `@Get(':userId')` or Nest
+        // matches the bare param first and `options` arrives as a user id —
+        // which would 404, not 200.
+        const body = await options(ownerToken);
+        expect(body.every((row) => row.email.includes('@'))).toBe(true);
+      });
+
+      it('carries only what a <Select> renders', async () => {
+        const [row] = await options(ownerToken);
+        expect(Object.keys(row).sort()).toEqual(
+          // `availability` (PAC-139 §6) rides along so a *lead* picker can
+          // hide busy people; the list itself is not filtered on it.
+          ['_id', 'availability', 'email', 'firstName', 'lastName'].filter(
+            (key) => Object.prototype.hasOwnProperty.call(row, key),
+          ),
+        );
+        expect(['available', 'busy']).toContain(row.availability);
+        expect(row).not.toHaveProperty('roleIds');
+        expect(row).not.toHaveProperty('deactivatedAt');
+        expect(row).not.toHaveProperty('passwordHash');
+      });
+
+      it('excludes the platform admin', async () => {
+        const emails = (await options(ownerToken)).map((row) => row.email);
+        expect(emails).not.toContain(seed.superAdminEmail);
+        expect(emails).toContain(seed.producerEmail);
+      });
+
+      it('is sorted by last name, then first, then email', async () => {
+        const keys = (await options(ownerToken)).map((row) =>
+          [row.lastName ?? '', row.firstName ?? '', row.email]
+            .join(' ')
+            .toLowerCase(),
+        );
+        expect(keys).toEqual([...keys].sort());
+      });
+
+      it('needs agency:users:read', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users/options')
+          .set(authHeader(readOnlyToken))
+          .expect(403);
+      });
     });
 
     it('GET /api/v1/users/assignable-permissions', async () => {
@@ -779,7 +1009,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      const users = list.body as { _id: string; email: string }[];
+      const users = (list.body as AgencyUserListEnvelope).items;
       const producer = users.find((u) => u.email === seed.producerEmail);
       expect(producer).toBeDefined();
       invitedUserId = producer!._id;
@@ -992,7 +1222,9 @@ describe('SFA API (e2e)', () => {
       // Absolute, because the link is opened from an email client that has no
       // origin to resolve a relative path against. This is the regression that
       // motivated the change — it used to return `/auth/accept-invite?token=…`.
-      expect(body.inviteUrl.startsWith('http://localhost:5173/')).toBe(true);
+      // Origin is the platform host (`PLATFORM_HOST`) with `APP_BASE_URL`'s
+      // scheme and port — see the impersonation case above.
+      expect(body.inviteUrl.startsWith('http://127.0.0.1:5173/')).toBe(true);
       expect(body.inviteUrl).toContain('/auth/accept-invite?token=');
       expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
 
@@ -1354,7 +1586,7 @@ describe('SFA API (e2e)', () => {
 
       // Absolute, for the same reason the invite URL is: an email client has no
       // origin to resolve a relative path against.
-      expect(resetUrl.startsWith('http://localhost:5173/')).toBe(true);
+      expect(resetUrl.startsWith('http://127.0.0.1:5173/')).toBe(true);
       expect(resetUrl).toContain('/auth/reset-password?token=');
       expect(new Date(expiresAt).getTime()).toBeGreaterThan(Date.now());
     });
@@ -2346,7 +2578,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(409);
       expect((res.body as { code: string }).code).toBe('contact_deceased');
@@ -2410,9 +2642,10 @@ describe('SFA API (e2e)', () => {
         city: 'Austin',
         state: 'TX',
       });
-      // `city`/`state` above are coerced from `propertyAddress.line1` — one of
-      // the three key shapes the three writers use, which is why the API
-      // resolves it rather than each client re-implementing the lookup.
+      // `city`/`state` come straight off the typed `propertyAddress` since
+      // PAC-101. They used to be coerced at read time from whichever of three
+      // key shapes the writer happened to use, which is exactly why the
+      // Location column could not be searched.
       const raw = row as unknown as Record<string, unknown>;
       for (const key of [
         'agencyId',
@@ -2511,6 +2744,57 @@ describe('SFA API (e2e)', () => {
         const body = await listBody(ownerToken, '?q=Nonexistent%20Zzz');
         expect(body.items).toEqual([]);
         expect(body.total).toBe(0);
+      });
+    });
+
+    describe('searches every column the row renders (PAC-101)', () => {
+      it('finds a household by its primary contact email', async () => {
+        // The Contact column renders this, and PAC-91 removed the copy that
+        // used to live on the household — so it can only resolve through
+        // `contacts`.
+        const body = await listBody(ownerToken, '?q=client%40test.local');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds it by a fragment of that email', async () => {
+        const body = await listBody(ownerToken, '?q=test.local');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it.each([
+        ['raw digits', '5550100100'],
+        ['dashed', '555-010-0100'],
+        ['parenthesised', '(555)%20010-0100'],
+      ])('finds it by phone, %s', async (_label, typed) => {
+        // Stored as `5550100100`; the query must fold formatting on both sides.
+        const body = await listBody(ownerToken, `?q=${typed}`);
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds a household by the city its Location column shows', async () => {
+        // Unreachable before the address became a typed sub-schema: the city
+        // was resolved in application code after the fetch.
+        const body = await listBody(ownerToken, '?q=Austin');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds it by street, which is not a column', async () => {
+        const body = await listBody(ownerToken, '?q=1%20Test%20St');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('finds a household reference by its number alone', async () => {
+        // `147` must reach `HH-2147`; here `1` must reach `HH-1`.
+        const body = await listBody(ownerToken, '?q=HH-1');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
+      });
+
+      it('no longer lets a reference suppress the name branch', async () => {
+        // `routeSearchTerm` used to drop the name route whenever the term
+        // parsed as a reference or a date, so these two dimensions could never
+        // be searched together.
+        const body = await listBody(ownerToken, '?q=Test');
+        expect(body.items.map((item) => item.id)).toContain(seed.householdId);
       });
     });
 
@@ -2731,6 +3015,10 @@ describe('SFA API (e2e)', () => {
 
     let unlinkedPolicyId: string;
     let testPolicyId: string;
+    let unanchoredPolicyId: string;
+    let anchoredPolicyId: string;
+    let inactiveUnanchoredPolicyId: string;
+    let testUnanchoredPolicyId: string;
     let unlinkedContactId: string;
     let departedContactId: string;
     let testContactId: string;
@@ -2745,7 +3033,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(token));
 
     const page = async (
-      kind: 'policies' | 'contacts' | 'households',
+      kind: 'policies' | 'contacts' | 'households' | 'unanchored',
       extra = '',
     ): Promise<UnlinkedRecordsResponse> => {
       const res = await unlinked(ownerToken, `?kind=${kind}${extra}`).expect(
@@ -2811,6 +3099,76 @@ describe('SFA API (e2e)', () => {
       });
       testPolicyId = junkPolicy._id.toString();
       cleanup.push(() => policyModel.deleteOne({ _id: junkPolicy._id }));
+
+      /*
+       * PAC-126 — an active policy with no date of any kind, attached to a
+       * household. The renewal scan's chain (`renewalDate ?? effectiveDate ??
+       * expirationDate`) yields nothing, so it is skipped on every pass forever.
+       */
+      const unanchored = await policyModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: 'UNANCHORED-1',
+        policyType: 'Auto',
+        carrier: 'Test Carrier',
+        active: true,
+        policyStatus: 'Active',
+        premium: 700,
+        items: 1,
+      });
+      unanchoredPolicyId = unanchored._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: unanchored._id }));
+
+      // The control: same shape, but dated — so it must never be listed.
+      const anchored = await policyModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: 'ANCHORED-1',
+        policyType: 'Auto',
+        active: true,
+        policyStatus: 'Active',
+        premium: 800,
+        items: 1,
+        effectiveDate: new Date('2026-03-01T00:00:00.000Z'),
+      });
+      anchoredPolicyId = anchored._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: anchored._id }));
+
+      /*
+       * Active, undated, and declared a test row — so `isTestRecord` is the
+       * *only* thing that can keep it off the list. The `UNLINKED-TEST-1` policy
+       * above cannot prove that: it never sets `active`, which defaults to
+       * false, so the `active` leg would exclude it either way.
+       */
+      const junkUnanchored = await policyModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: 'UNANCHORED-TEST-1',
+        policyType: 'Auto',
+        active: true,
+        policyStatus: 'Active',
+        premium: 0,
+        items: 0,
+        isTestRecord: true,
+      });
+      testUnanchoredPolicyId = junkUnanchored._id.toString();
+      cleanup.push(() => policyModel.deleteOne({ _id: junkUnanchored._id }));
+
+      // Undated but **inactive** — no outreach is owed on it, so it is not work.
+      const inactiveUnanchored = await policyModel.create({
+        ...tenant,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: 'UNANCHORED-INACTIVE-1',
+        policyType: 'Auto',
+        active: false,
+        policyStatus: 'Cancelled',
+        premium: 100,
+        items: 1,
+      });
+      inactiveUnanchoredPolicyId = inactiveUnanchored._id.toString();
+      cleanup.push(() =>
+        policyModel.deleteOne({ _id: inactiveUnanchored._id }),
+      );
 
       const orphanContact = await contactModel.create({
         ...tenant,
@@ -2933,7 +3291,7 @@ describe('SFA API (e2e)', () => {
     });
 
     describe('validation', () => {
-      it('400s without a kind — three row shapes, no default', async () => {
+      it('400s without a kind — a row shape per kind, no default', async () => {
         await unlinked(ownerToken, '').expect(400);
       });
 
@@ -3029,6 +3387,75 @@ describe('SFA API (e2e)', () => {
       });
     });
 
+    describe('kind=unanchored (PAC-126)', () => {
+      it('lists an active policy with no date of any kind', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        expect(body.kind).toBe('unanchored');
+        expect(idsIn(body)).toContain(unanchoredPolicyId);
+      });
+
+      it('never lists one that has an effective date to derive from', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(anchoredPolicyId);
+      });
+
+      /*
+       * The `active` leg. An inactive policy gets no renewal outreach, so a
+       * missing anchor on one is not work — and leaving it in would make the
+       * count useless as a queue.
+       */
+      it('never lists an inactive policy, however undated', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(inactiveUnanchoredPolicyId);
+      });
+
+      /*
+       * The two policy kinds ask different questions, and one record can answer
+       * both: `UNLINKED-1` is active, attached to nothing and dated with
+       * nothing. Listing it twice is correct — it is two jobs.
+       */
+      it('overlaps kind=policies rather than competing with it', async () => {
+        const [unanchoredPage, policiesPage] = await Promise.all([
+          page('unanchored', '&pageSize=100'),
+          page('policies', '&pageSize=100'),
+        ]);
+        expect(idsIn(unanchoredPage)).toContain(unlinkedPolicyId);
+        expect(idsIn(policiesPage)).toContain(unlinkedPolicyId);
+      });
+
+      it('carries the household, which is where the fix is made', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        const row = body.items.find((item) => item.id === unanchoredPolicyId);
+        expect(row).toMatchObject({
+          policyNumber: 'UNANCHORED-1',
+          policyType: 'Auto',
+          premium: 700,
+          householdId: seed.householdId,
+        });
+      });
+
+      /*
+       * Every date on one of these rows is null by definition — that *is* the
+       * predicate — so none is carried. Three empty columns would be worse than
+       * none, and the household is the field that makes the row actionable.
+       */
+      it('carries no date fields, and leaks no internals', async () => {
+        const body = await page('unanchored', '&pageSize=100');
+        const row = body.items.find((item) => item.id === unanchoredPolicyId);
+        const raw = row as unknown as Record<string, unknown>;
+        for (const key of [
+          'effectiveDate',
+          'expirationDate',
+          'renewalDate',
+          'agencyId',
+          'branchId',
+          'isTestRecord',
+        ]) {
+          expect(raw[key]).toBeUndefined();
+        }
+      });
+    });
+
     describe('test records are never work', () => {
       it('excludes a declared test policy, contact and household', async () => {
         const [policies, contacts, households] = await Promise.all([
@@ -3040,31 +3467,42 @@ describe('SFA API (e2e)', () => {
         expect(idsIn(contacts)).not.toContain(testContactId);
         expect(idsIn(households)).not.toContain(testHouseholdId);
       });
+
+      it('excludes an active, undated test policy from the renewal-anchor list', async () => {
+        // This fixture satisfies every leg of the predicate except the flag, so
+        // `isTestRecord` is the only thing that can be keeping it out.
+        const body = await page('unanchored', '&pageSize=100');
+        expect(idsIn(body)).not.toContain(testUnanchoredPolicyId);
+      });
     });
 
     describe('counts', () => {
-      it('returns the three numbers the chips show', async () => {
+      it('returns the numbers the chips show', async () => {
         const body = await counts();
         expect(Object.keys(body).sort()).toEqual([
           'contacts',
           'households',
           'policies',
+          'unanchored',
         ]);
         expect(typeof body.policies).toBe('number');
         expect(typeof body.contacts).toBe('number');
         expect(typeof body.households).toBe('number');
+        expect(typeof body.unanchored).toBe('number');
       });
 
       it('agrees with the list it summarises', async () => {
         const summary = await counts();
-        const [policies, contacts, households] = await Promise.all([
+        const [policies, contacts, households, unanchored] = await Promise.all([
           page('policies', '&pageSize=100'),
           page('contacts', '&pageSize=100'),
           page('households', '&pageSize=100'),
+          page('unanchored', '&pageSize=100'),
         ]);
         expect(summary.policies).toBe(policies.total);
         expect(summary.contacts).toBe(contacts.total);
         expect(summary.households).toBe(households.total);
+        expect(summary.unanchored).toBe(unanchored.total);
       });
 
       it('403s for a CSR', async () => {
@@ -3103,6 +3541,275 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  /*
+   * PAC-126 — the household page's policy edit.
+   *
+   * The point of the block is that this is **not** `PATCH /policies/:id` with a
+   * wider gate. That endpoint answers 403 to a CSR and 404 for a deal-less
+   * policy, which between them is exactly the people and exactly the records
+   * this route exists for; both are asserted here so a future "simplification"
+   * that merges the two fails loudly.
+   */
+  describe('Household policy edit (PAC-126)', () => {
+    let policyModel: Model<Policy>;
+    const cleanup: Array<() => Promise<unknown>> = [];
+
+    /** A fresh policy per test, so no test depends on another's mutation. */
+    const makePolicy = async (
+      overrides: Record<string, unknown> = {},
+    ): Promise<string> => {
+      const created = await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: new Types.ObjectId(seed.householdId),
+        policyNumber: `PAC126-${Math.random().toString(36).slice(2, 10)}`,
+        policyType: 'Auto',
+        carrier: 'Test Carrier',
+        active: true,
+        policyStatus: 'Active',
+        premium: 500,
+        items: 1,
+        ...overrides,
+      });
+      cleanup.push(() => policyModel.deleteOne({ _id: created._id }));
+      return created._id.toString();
+    };
+
+    const patch = (token: string, householdId: string, policyId: string) =>
+      request(app.getHttpServer())
+        .patch(`/api/v1/households/${householdId}/policies/${policyId}`)
+        .set(authHeader(token));
+
+    /** A successful edit, typed — `res.body` is `any` and the lint rules say so. */
+    const patchOk = async (
+      policyId: string,
+      body: Record<string, unknown>,
+      token = ownerToken,
+      householdId = seed.householdId,
+    ): Promise<PolicySummary> => {
+      const res = await patch(token, householdId, policyId)
+        .send(body)
+        .expect(200);
+      return res.body as PolicySummary;
+    };
+
+    beforeAll(() => {
+      policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+    });
+
+    afterAll(async () => {
+      for (const undo of cleanup.reverse()) await undo();
+    });
+
+    describe('permissions', () => {
+      /*
+       * The headline. A CSR holds `crm_service:*` and no `clients` or
+       * `deal_audits` permission at all, so this route's OR-gate is the only
+       * thing that lets the service team correct a policy.
+       */
+      it('lets a CSR correct a policy from the household page', async () => {
+        const policyId = await makePolicy();
+        const saved = await patchOk(policyId, { premium: 650 }, csrToken);
+        expect(saved.premium).toBe(650);
+      });
+
+      it('still refuses that CSR the Sold card endpoint', async () => {
+        const policyId = await makePolicy();
+        await request(app.getHttpServer())
+          .patch(`/api/v1/policies/${policyId}`)
+          .set(authHeader(csrToken))
+          .send({ premium: 650 })
+          .expect(403);
+      });
+
+      it('401s unauthenticated', async () => {
+        const policyId = await makePolicy();
+        await request(app.getHttpServer())
+          .patch(`/api/v1/households/${seed.householdId}/policies/${policyId}`)
+          .send({ premium: 650 })
+          .expect(401);
+      });
+    });
+
+    describe('the household in the path is the authorisation', () => {
+      it("404s for a policy that is not this household's", async () => {
+        const policyId = await makePolicy();
+        await patch(ownerToken, seed.secondHouseholdId, policyId)
+          .send({ premium: 650 })
+          .expect(404);
+      });
+
+      it('404s for a policy with no household at all', async () => {
+        const policyId = await makePolicy({ householdId: null });
+        await patch(ownerToken, seed.householdId, policyId)
+          .send({ premium: 650 })
+          .expect(404);
+      });
+
+      /*
+       * Out of scope is indistinguishable from does not exist — the blanket
+       * clamp every write path here uses, so record existence does not leak
+       * across tenants.
+       */
+      it("404s for another agency's policy rather than 403ing", async () => {
+        // Its branch comes off the household rather than being invented: the
+        // seed exposes the other agency's id but not its branch, and a policy
+        // must carry the branch of the household it belongs to.
+        const foreignHousehold = await app
+          .get<Model<Household>>(getModelToken(Household.name))
+          .findById(seed.otherAgencyHouseholdId)
+          .lean();
+
+        const foreign = await policyModel.create({
+          agencyId: seed.otherAgencyId,
+          branchId: foreignHousehold!.branchId,
+          householdId: new Types.ObjectId(seed.otherAgencyHouseholdId),
+          policyNumber: 'PAC126-FOREIGN',
+          policyType: 'Auto',
+          active: true,
+          premium: 500,
+          items: 1,
+        });
+        cleanup.push(() => policyModel.deleteOne({ _id: foreign._id }));
+
+        await patch(
+          ownerToken,
+          seed.otherAgencyHouseholdId,
+          foreign._id.toString(),
+        )
+          .send({ premium: 650 })
+          .expect(404);
+      });
+    });
+
+    describe('the renewal anchor', () => {
+      /*
+       * The whole mechanism of the ticket: the operator types the date on the
+       * declaration page, and the date nobody can compute by hand appears on
+       * the card.
+       */
+      it('is derived when the effective date is set', async () => {
+        const policyId = await makePolicy();
+        const before = await policyModel.findById(policyId).lean();
+        expect(before?.renewalDate ?? null).toBeNull();
+
+        const saved = await patchOk(policyId, { effectiveDate: '2026-03-01' });
+
+        expect(saved.renewalDate).not.toBeNull();
+        // Strictly ahead of today: an anchor in the past is the defect the
+        // 2026-09-08 backfill existed to repair.
+        expect(new Date(saved.renewalDate!).getTime()).toBeGreaterThan(
+          Date.now(),
+        );
+      });
+
+      it('is cleared when the effective date is cleared', async () => {
+        const policyId = await makePolicy({
+          effectiveDate: new Date('2026-03-01T00:00:00.000Z'),
+          renewalDate: new Date('2027-03-01T00:00:00.000Z'),
+        });
+        const saved = await patchOk(policyId, { effectiveDate: null });
+        expect(saved.renewalDate).toBeNull();
+      });
+
+      /*
+       * `PolicySchema`: "never accept it from a client — an anchor that
+       * disagrees with the effective date schedules real calls to real clients
+       * on the wrong day." The DTO has no such key, so zod strips it.
+       */
+      it('cannot be set directly by a client', async () => {
+        const policyId = await makePolicy();
+        await patch(ownerToken, seed.householdId, policyId)
+          .send({ renewalDate: '2030-01-01', premium: 650 })
+          .expect(200);
+        const stored = await policyModel.findById(policyId).lean();
+        expect(stored?.renewalDate ?? null).toBeNull();
+      });
+    });
+
+    describe('status vocabulary', () => {
+      it('accepts a canonical label', async () => {
+        const policyId = await makePolicy();
+        const saved = await patchOk(policyId, { status: 'Lapsed' });
+        expect(saved.policyStatus).toBe('Lapsed');
+      });
+
+      /*
+       * `Cancel Rewrite` and `Company Transfer` are refused here (PAC-126).
+       * Neither is a status an operator can choose: each means "replaced by
+       * *that* policy", and the flow that sets it writes the replacement in the
+       * same transaction. Allowing it on a field patch would produce a cancelled
+       * policy pointing at nothing and, for a rewrite, no chargeback.
+       *
+       * This case previously asserted the opposite — it was written when the two
+       * labels carried no semantics and `PATCH` took any canonical value.
+       */
+      it.each(['Cancel Rewrite', 'Company Transfer', 'cancel rewrite'])(
+        'refuses %s, which only a flow may write',
+        async (status) => {
+          const policyId = await makePolicy();
+          await patch(ownerToken, seed.householdId, policyId)
+            .send({ status })
+            .expect(400);
+          const stored = await policyModel.findById(policyId).lean();
+          expect(stored?.policyStatus).not.toBe('Cancel Rewrite');
+          expect(stored?.policyStatus).not.toBe('Company Transfer');
+        },
+      );
+
+      it('heals a raw SmartSuite code into its label', async () => {
+        const policyId = await makePolicy();
+        const saved = await patchOk(policyId, { status: 'QsrnM' });
+        expect(saved.policyStatus).toBe('Active');
+      });
+
+      /*
+       * The uncatalogued migrated codes must not be written *back*. This is why
+       * the edit dialog omits `status` unless the operator picked a new one.
+       */
+      it('400s on an uncatalogued code', async () => {
+        const policyId = await makePolicy();
+        await patch(ownerToken, seed.householdId, policyId)
+          .send({ status: '1943j' })
+          .expect(400);
+      });
+
+      it('400s on an empty patch', async () => {
+        const policyId = await makePolicy();
+        await patch(ownerToken, seed.householdId, policyId)
+          .send({})
+          .expect(400);
+      });
+    });
+
+    it('returns the PolicySummary the household card renders', async () => {
+      const policyId = await makePolicy();
+      const saved = await patchOk(policyId, { premium: 650 });
+
+      // `renewalDate` is the field `UpdatePolicyResult` has no room for, and
+      // the reason this route returns a different shape.
+      for (const key of [
+        'id',
+        'policyNumber',
+        'policyType',
+        'carrier',
+        'active',
+        'policyStatus',
+        'premium',
+        'items',
+        'effectiveDate',
+        'expirationDate',
+        'renewalDate',
+      ]) {
+        expect(saved).toHaveProperty(key);
+      }
+      const raw = saved as unknown as Record<string, unknown>;
+      for (const key of ['agencyId', 'branchId', 'isTestRecord']) {
+        expect(raw[key]).toBeUndefined();
+      }
+    });
+  });
+
   describe('Feature modules', () => {
     const featureRoutes = [
       { path: 'dashboard', module: ModuleKey.Dashboard },
@@ -3123,9 +3830,13 @@ describe('SFA API (e2e)', () => {
       // covered by its own describe block below. That also removed the bare
       // `PATCH /households`, which only ever echoed `{status:'updated'}`; the
       // real household write is `POST /households/:id/members`.
+      // `owner-dashboard` left with PAC-135, which replaced its stub with the
+      // real `OwnerDashboardModule` — `GET /owner-dashboard/{summary,producers,
+      // lead-sources}`, covered by its own describe block below.
+      // `management` left with PAC-139, which replaced its stub with the real
+      // `ManagementDashboardModule` on `management-dashboard/*`, covered by
+      // `management-dashboard.e2e-spec.ts`.
       { path: 'onboardings', module: ModuleKey.Onboardings },
-      { path: 'management', module: ModuleKey.Management },
-      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 
@@ -3283,7 +3994,12 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/mailers/log-lead')
         .set(authHeader(csrToken))
-        .send({ controlNumber: 'NOSUCHQCN123' })
+        .send({
+          controlNumber: 'NOSUCHQCN123',
+          dateOfBirth: '1971-04-12',
+          phone: '9185550142',
+          email: 'probe@example.com',
+        })
         .expect(404);
     });
 
@@ -3348,8 +4064,10 @@ describe('SFA API (e2e)', () => {
       // note at the top of this block).
       'deal-audits',
       'leaderboard',
-      'management',
-      'owner-dashboard',
+      // No bare route since PAC-139 — the alert cards are what the page loads first.
+      'management-dashboard/alerts',
+      // No bare route since PAC-135 — the summary is what the page loads first.
+      'owner-dashboard/summary',
       'command-center',
     ];
     it.each(csrDeniedFeatureRoutes)(
@@ -3402,9 +4120,9 @@ describe('SFA API (e2e)', () => {
       // with PAC-89: its stub is de-registered, so there is no bare
       // `PATCH /households` to probe — the write is
       // `POST /households/:id/members`, covered by the Client records block.
+      // `owner-dashboard` left with PAC-135: read-only, no mutating handler.
+      // `management` left with PAC-139 for the same reason.
       { path: 'onboardings', module: ModuleKey.Onboardings },
-      { path: 'management', module: ModuleKey.Management },
-      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 
@@ -3456,7 +4174,12 @@ describe('SFA API (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/mailers/log-lead')
         .set(authHeader(readOnlyToken))
-        .send({ controlNumber: 'NOSUCHQCN123' })
+        .send({
+          controlNumber: 'NOSUCHQCN123',
+          dateOfBirth: '1971-04-12',
+          phone: '9185550142',
+          email: 'probe@example.com',
+        })
         .expect(403);
     });
 
@@ -4573,6 +5296,134 @@ describe('SFA API (e2e)', () => {
         expect(ticketList(res).items).toHaveLength(0);
         expect(ticketList(res).total).toBe(0);
       });
+
+      it('searches AND across tokens, OR across fields', async () => {
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Quillon Varga', category: 'Billing' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+
+        // Tokens split across two fields, in the "wrong" order — a single
+        // regex over one field could match neither.
+        const hit = await request(app.getHttpServer())
+          .get(
+            '/api/v1/crm/service-tickets?search=billing%20varga&pageSize=100',
+          )
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(hit).items.map((t) => t.id)).toContain(ticketId);
+
+        // Every token must land somewhere.
+        const miss = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?search=varga%20zzqx&pageSize=100')
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(miss).items.map((t) => t.id)).not.toContain(ticketId);
+      });
+
+      it('ORs a list of statuses', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?status=open,overdue&pageSize=100')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).items.length).toBeGreaterThan(0);
+        for (const t of ticketList(res).items) {
+          expect(['open', 'overdue']).toContain(t.status);
+        }
+      });
+
+      it('keeps a resolved ticket out of an active-statuses request', async () => {
+        // What the Priority Ticket Queue sends. The list only excludes
+        // *archived* tickets, so without it a ticket resolved today would sit
+        // in the queue for the whole archive window.
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Resolved Today Client', category: 'Billing' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+        await request(app.getHttpServer())
+          .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+          .set(authHeader(ownerToken))
+          .send({ status: 'resolved' })
+          .expect(200);
+
+        const active = SERVICE_TICKET_ACTIVE_STATUSES.join(',');
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/crm/service-tickets?status=${active}&pageSize=100`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(res).items.map((t) => t.id)).not.toContain(ticketId);
+      });
+
+      it('keeps a tab and an explicit status both in force', async () => {
+        // The tab used to be spread over the filter, silently replacing
+        // `?status=` — so `counts` and `total` described different sets.
+        const res = await request(app.getHttpServer())
+          .get(
+            '/api/v1/crm/service-tickets?status=open&tab=overdue&pageSize=100',
+          )
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(res).items).toHaveLength(0);
+        expect(ticketList(res).counts.overdue).toBe(0);
+      });
+
+      it('keeps a hand-picked status on a renewal call', async () => {
+        // The save hook re-derives a scheduled call's status unless
+        // `statusOverriddenAt` is stamped. It used to be stamped for onboarding
+        // only, so resolving a renewal call was undone inside the same save —
+        // `open` again, beside a fresh `resolvedAt`.
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Renewal Override Client', category: 'Other' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+        const hour = 60 * 60 * 1000;
+        const connection = app.get<Connection>(getConnectionToken());
+        await connection.collection('serviceTickets').updateOne(
+          { _id: new Types.ObjectId(ticketId) },
+          {
+            $set: {
+              renewal: {
+                renewalCycleId: new Types.ObjectId(),
+                stepKey: 'annual_review',
+                track: 'annual',
+                sequence: 1,
+                totalSteps: 2,
+                renewalDate: new Date(Date.now() + 60 * 24 * hour),
+                availableAt: new Date(Date.now() - hour),
+                dueAt: new Date(Date.now() + 24 * hour),
+                completedAt: null,
+              },
+            },
+          },
+        );
+
+        const res = await request(app.getHttpServer())
+          .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+          .set(authHeader(ownerToken))
+          .send({ status: 'resolved' })
+          .expect(200);
+        expect((res.body as { status: string }).status).toBe('resolved');
+
+        const stored = await connection
+          .collection('serviceTickets')
+          .findOne({ _id: new Types.ObjectId(ticketId) });
+        expect(stored?.status).toBe('resolved');
+        expect(stored?.statusOverriddenAt).toBeInstanceOf(Date);
+      });
+
+      it('rejects a status outside the vocabulary', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?status=open,bogus')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
     });
 
     it('branch floor: CSR sees their own tickets, not another branch', async () => {
@@ -4584,7 +5435,7 @@ describe('SFA API (e2e)', () => {
       csrTicketId = created.body.id;
 
       const res = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
 
@@ -4816,7 +5667,7 @@ describe('SFA API (e2e)', () => {
 
     it('agency-scope: owner sees tickets created by others', async () => {
       const res = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
 
@@ -4992,7 +5843,7 @@ describe('SFA API (e2e)', () => {
        * views holds a resolved ticket, not whether it clutters the queue.
        */
       const active = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
@@ -5011,7 +5862,7 @@ describe('SFA API (e2e)', () => {
       expect(onResolvedTab.isArchived).toBe(false);
 
       const archivedBefore = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?archived=true')
+        .get('/api/v1/crm/service-tickets?archived=true&pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
@@ -5033,7 +5884,7 @@ describe('SFA API (e2e)', () => {
       );
 
       const activeAfter = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
@@ -5041,7 +5892,7 @@ describe('SFA API (e2e)', () => {
       ).not.toContain(ticketId);
 
       const archivedAfter = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?archived=true')
+        .get('/api/v1/crm/service-tickets?archived=true&pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       const archivedTicket = ticketList(archivedAfter).items.find(
@@ -5060,7 +5911,7 @@ describe('SFA API (e2e)', () => {
       expect(reopened.body.isArchived).toBe(false);
 
       const queueAgain = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
@@ -5239,13 +6090,13 @@ describe('SFA API (e2e)', () => {
     /** The visibility rule the owner asked for: not on the plate until it opens. */
     it('hides a scheduled ticket from every list but serves it by id', async () => {
       const list = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
       expect(ids(list.body)).not.toContain(threeDayTicketId);
 
       const filtered = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?category=Onboarding')
+        .get('/api/v1/crm/service-tickets?category=Onboarding&pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
       expect(ids(filtered.body)).not.toContain(threeDayTicketId);
@@ -5634,6 +6485,157 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Lead sources (PAC-135)', () => {
+    interface LeadSourcesBody {
+      leadSources: { id: string; name: string; slug: string }[];
+    }
+    let leadSourceModel: Model<LeadSource>;
+    const created: Types.ObjectId[] = [];
+
+    const listSources = async (token: string) => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/lead-sources')
+        .set(authHeader(token))
+        .expect(200);
+      return (res.body as LeadSourcesBody).leadSources;
+    };
+
+    beforeAll(async () => {
+      leadSourceModel = app.get<Model<LeadSource>>(
+        getModelToken(LeadSource.name),
+      );
+      const rows = await leadSourceModel.create([
+        // This agency's own vendor.
+        { agencyId: seed.agencyId, name: 'Waterstone', slug: 'waterstone' },
+        // Retired: stays on old records, leaves the picker.
+        {
+          agencyId: seed.agencyId,
+          name: 'Stride',
+          slug: 'stride',
+          active: false,
+        },
+        // Another tenant's row must never leak across.
+        { agencyId: seed.otherAgencyId, name: 'Soleo', slug: 'soleo' },
+        // Same slug as a platform row: the agency's wording wins.
+        { agencyId: seed.agencyId, name: 'Web Form', slug: 'web' },
+      ]);
+      created.push(...rows.map((row) => row._id));
+    });
+
+    // Removed rather than left behind: every later block lists sources through
+    // the same endpoint, and the "Web Form" override would rename theirs.
+    afterAll(async () => {
+      await leadSourceModel.deleteMany({ _id: { $in: created } });
+    });
+
+    it("orders platform sources, then the agency's own, then Other", async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      // `Web Form` overrides the platform `Web`, so it sorts as the agency's.
+      expect(names).toEqual([
+        'Mailer',
+        'Book of Business',
+        'Customer Referral',
+        'Facebook',
+        'Google',
+        'Walk-In',
+        'Waterstone',
+        'Web Form',
+        'Other',
+      ]);
+    });
+
+    it("adds the agency's own rows, and never another agency's", async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      expect(names).toContain('Waterstone');
+      expect(names).not.toContain('Soleo');
+    });
+
+    it('leaves an archived source out of the picker', async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      expect(names).not.toContain('Stride');
+    });
+
+    it('lets an agency row shadow the platform row of the same slug', async () => {
+      const web = (await listSources(producerToken)).filter(
+        (s) => s.slug === 'web',
+      );
+
+      expect(web.map((s) => s.name)).toEqual(['Web Form']);
+    });
+
+    it("rejects an archived source, and another agency's, on a new lead (400)", async () => {
+      const body = (leadSourceId: string) => ({
+        primaryContact: {
+          firstName: 'Archie',
+          lastName: 'Sourceless',
+          dateOfBirth: '1980-01-01',
+          phone: '(555) 010-2030',
+          email: 'archie.sourceless@example.com',
+        },
+        address: {
+          street: '1 Sourceless Way',
+          city: 'Tulsa',
+          state: 'OK',
+          zip: '74101',
+        },
+        members: [],
+        leadSourceId,
+      });
+      const stride = await leadSourceModel.findOne({ slug: 'stride' });
+      const soleo = await leadSourceModel.findOne({ slug: 'soleo' });
+
+      for (const row of [stride, soleo]) {
+        await request(app.getHttpServer())
+          .post('/api/v1/leads')
+          .set(authHeader(producerToken))
+          .send(body(row!._id.toString()))
+          .expect(400);
+      }
+
+      // Refused before anything was written — no half-made lead left behind.
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      expect(await leadModel.countDocuments({ lastName: 'Sourceless' })).toBe(
+        0,
+      );
+    });
+
+    it('re-seeding creates nothing, and never undoes a curated row', async () => {
+      // A redeploy re-runs the core seed. Once a curation surface exists, a
+      // super admin renaming or archiving a platform source has made a decision,
+      // and the seed quietly reverting it would be the bug — hence
+      // `$setOnInsert` only.
+      const walkIn = { agencyId: null, slug: 'walk-in' };
+      await leadSourceModel.updateOne(walkIn, {
+        $set: { name: 'Walk-in (office)', active: false },
+      });
+
+      try {
+        const result = await seedLeadSources(leadSourceModel);
+        const row = await leadSourceModel.findOne(walkIn).lean();
+
+        expect(result.created).toBe(0);
+        expect(row!.name).toBe('Walk-in (office)');
+        expect(row!.active).toBe(false);
+      } finally {
+        // Every later block reads these rows.
+        await leadSourceModel.updateOne(walkIn, {
+          $set: { name: 'Walk-In', active: true },
+        });
+      }
+    });
+
+    it('is read-only — there is no curation surface yet', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/lead-sources')
+        .set(authHeader(ownerToken))
+        .send({ name: 'Billboard' })
+        .expect(404);
+    });
+  });
+
   describe('Leads (PAC-36 list)', () => {
     interface LeadRowBody {
       id: string;
@@ -5703,7 +6705,7 @@ describe('SFA API (e2e)', () => {
           // writes it — the API must normalize this to `Requote`.
           status: 'arW7O',
           temperature: 'Hot',
-          leadSource: { code: 'WCO7l', label: 'Mailer' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.mailer),
           primaryContactId: maria._id,
           quoteControlNumber: 'QCN-100001',
           producerId: producer!._id,
@@ -5716,7 +6718,7 @@ describe('SFA API (e2e)', () => {
           lastName: 'Smith',
           status: 'New',
           temperature: 'Cold',
-          leadSource: { code: 'X2Wrh', label: 'Facebook' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.facebook),
           primaryContactId: john._id,
           producerId: producer!._id,
           lastActivityAt: new Date(Date.now() - 86_400_000),
@@ -5729,7 +6731,7 @@ describe('SFA API (e2e)', () => {
           lastName: 'Else',
           status: 'New',
           temperature: 'Warm',
-          leadSource: { code: '30sDe', label: 'Google' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.google),
           producerId: owner!._id,
           lastActivityAt: new Date(),
           isTestRecord: false,
@@ -5740,7 +6742,6 @@ describe('SFA API (e2e)', () => {
           lastName: 'Record',
           status: 'New',
           temperature: 'Hot',
-          leadSource: { code: 'ENEJP', label: 'Test' },
           producerId: producer!._id,
           isTestRecord: true,
         },
@@ -5835,6 +6836,33 @@ describe('SFA API (e2e)', () => {
         .expect(400);
     });
 
+    it('leadSourceId narrows to one source, and the row renders its name', async () => {
+      const mailer = await listAs(
+        producerToken,
+        `?leadSourceId=${seed.leadSourceIds.mailer}`,
+      );
+
+      expect(mailer.total).toBe(1);
+      expect(mailer.items[0].name).toBe('Maria Rodriguez');
+      // Resolved through the `leadSources` row — the lead holds only the id.
+      expect(mailer.items[0].leadSource).toBe('Mailer');
+    });
+
+    it('search reaches a lead through its source name', async () => {
+      // The name lives on the `leadSources` row, not on the lead (PAC-135), so
+      // this only works if the search resolves matching source ids first.
+      const body = await listAs(producerToken, '?search=facebook');
+
+      expect(body.items.map((i) => i.name)).toEqual(['John Smith']);
+    });
+
+    it('rejects a malformed leadSourceId (400)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads?leadSourceId=Mailer')
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
     it('rows expose only display fields', async () => {
       const body = await listAs(producerToken);
       const row = body.items[0] as unknown as Record<string, unknown>;
@@ -5920,7 +6948,7 @@ describe('SFA API (e2e)', () => {
         zip: '74101',
       },
       members: [],
-      leadSourceCode: 'WCO7l',
+      leadSourceId: seed.leadSourceIds.mailer,
       ...overrides,
     });
 
@@ -5951,7 +6979,7 @@ describe('SFA API (e2e)', () => {
       expect(lead).not.toBeNull();
       expect(lead!.status).toBe('New');
       expect(lead!.temperature).toBe('Hot');
-      expect(lead!.leadSource?.label).toBe('Mailer');
+      expect(lead!.leadSourceId?.toString()).toBe(seed.leadSourceIds.mailer);
       expect(lead!.householdId).toBeTruthy();
       expect(lead!.primaryContactId).toBeTruthy();
       expect(lead!.intakeSource?.channel).toBe('internal');
@@ -6070,6 +7098,58 @@ describe('SFA API (e2e)', () => {
       expect(listed.some((row) => row.id === created.id)).toBe(true);
     });
 
+    describe('phone search (PAC-101 follow-up)', () => {
+      /*
+       * Reported after the PAC-101 PR: a *partial* phone number finds nothing
+       * on Leads while the same fragment works on Clients.
+       *
+       * The cause is an asymmetry between the two. Clients matches the
+       * contact's `phone` **per token**, so any digit run is a substring hit
+       * against the normalized `5552223333`. Leads only matched phone as a
+       * whole-term branch gated on `isPhoneLike` (>= 7 digits), so anything
+       * shorter never reached `contacts` at all.
+       */
+      const search = async (term: string) => {
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/leads?search=${encodeURIComponent(term)}`)
+          .set(authHeader(producerToken))
+          .expect(200);
+        return (res.body as { items: { id: string }[] }).items;
+      };
+
+      it.each([
+        ['the full number, as stored', '5552223333'],
+        ['the full number, as printed', '(555) 222-3333'],
+        ['a 7-digit fragment', '2223333'],
+        ['a 6-digit fragment', '222333'],
+        ['the last four', '3333'],
+        ['the area code and exchange', '555222'],
+      ])('finds a lead by %s', async (_label, term) => {
+        const created = await createAs(producerToken, payload('Pellworth'));
+        const found = await search(term);
+        expect(found.some((row) => row.id === created.id)).toBe(true);
+      });
+
+      it('still narrows — an unrelated number finds nothing', async () => {
+        await createAs(producerToken, payload('Quarrow'));
+        expect(await search('9998888')).toHaveLength(0);
+      });
+
+      it('matches the Clients list for the same fragment', async () => {
+        // The parity the report is really about: one fragment, two tables.
+        const created = await createAs(producerToken, payload('Rensworth'));
+
+        const leads = await search('222333');
+        expect(leads.some((row) => row.id === created.id)).toBe(true);
+
+        const clients = await request(app.getHttpServer())
+          .get('/api/v1/households?q=222333')
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect((clients.body as { total: number }).total).toBeGreaterThan(0);
+      });
+    });
+
     // `leads:write` is held by Agency Owner too, so an owner becomes the
     // producer of any lead they enter. Pinned by a test because it is an
     // accepted trade-off (PAC-53), not an accident — if it ever changes, it
@@ -6098,13 +7178,13 @@ describe('SFA API (e2e)', () => {
       );
       await createAs(
         producerToken,
-        payload('Bad', { leadSourceCode: 'nope' }),
+        payload('Bad', { leadSourceId: 'nope' }),
         400,
       );
-      // `Test` must never be selectable at intake.
+      // Well-formed, but no such row — the shape check alone must not pass it.
       await createAs(
         producerToken,
-        payload('Bad', { leadSourceCode: 'ENEJP' }),
+        payload('Bad', { leadSourceId: new Types.ObjectId().toString() }),
         400,
       );
     });
@@ -6810,7 +7890,7 @@ describe('SFA API (e2e)', () => {
         // Raw SmartSuite code — the detail read must normalize it to `Requote`.
         status: 'arW7O',
         temperature: 'Hot',
-        leadSource: { code: 'WCO7l', label: 'Mailer' },
+        leadSourceId: new Types.ObjectId(seed.leadSourceIds.mailer),
         quoteControlNumber: 'QCN-380001',
         // `PYgez` is stored as the raw Quote Recaps choice code, to prove the
         // read path normalizes this field like every other policy type here.
@@ -7032,7 +8112,10 @@ describe('SFA API (e2e)', () => {
       // Stored as `arW7O`.
       expect(body.status).toBe('Requote');
       expect(body.temperature).toBe('Hot');
-      expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
+      expect(body.leadSource).toEqual({
+        id: seed.leadSourceIds.mailer,
+        label: 'Mailer',
+      });
       expect(body.quoteControlNumber).toBe('QCN-380001');
       // `PYgez` is the SmartSuite code for Auto — normalized on read. The
       // dwelling rides on the row that needs it (PAC-56 #14); a row without one
@@ -7297,7 +8380,6 @@ describe('SFA API (e2e)', () => {
         lastName: 'Patch',
         status: 'New',
         temperature: 'Unknown',
-        leadSource: { code: null, label: '' },
         producerId: producer!._id,
         lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
         intakeSource: { channel: 'share_link' },
@@ -7321,13 +8403,16 @@ describe('SFA API (e2e)', () => {
       const res = await patchAs(producerToken, leadId, {
         status: 'Contacted',
         temperature: 'Warm',
-        leadSourceCode: 'WCO7l',
+        leadSourceId: seed.leadSourceIds.mailer,
       }).expect(200);
 
       const body = res.body as UpdateLeadResult;
       expect(body.status).toBe('Contacted');
       expect(body.temperature).toBe('Warm');
-      expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
+      expect(body.leadSource).toEqual({
+        id: seed.leadSourceIds.mailer,
+        label: 'Mailer',
+      });
 
       // Only the patchable fields — not a whole LeadDetail.
       expect(body).not.toHaveProperty('household');
@@ -7357,14 +8442,17 @@ describe('SFA API (e2e)', () => {
 
     it('clears the source with __none__, and the lead matches the no-source filter', async () => {
       const res = await patchAs(producerToken, leadId, {
-        leadSourceCode: '__none__',
+        leadSourceId: '__none__',
       }).expect(200);
 
-      // The schema default shape, which is what the list filter matches.
-      expect((res.body as UpdateLeadResult).leadSource.code).toBeNull();
+      // Unset, which is what the list filter matches.
+      expect((res.body as UpdateLeadResult).leadSource).toEqual({
+        id: null,
+        label: '',
+      });
 
       const list = await request(app.getHttpServer())
-        .get('/api/v1/leads?leadSource=__none__')
+        .get('/api/v1/leads?leadSourceId=__none__')
         .set(authHeader(producerToken))
         .expect(200);
 
@@ -7381,9 +8469,9 @@ describe('SFA API (e2e)', () => {
         400,
       );
       await patchAs(producerToken, leadId, {}).expect(400);
-      // `Test` hides the record from every read path — never selectable.
+      // Well-formed, but no such row.
       await patchAs(producerToken, leadId, {
-        leadSourceCode: 'ENEJP',
+        leadSourceId: new Types.ObjectId().toString(),
       }).expect(400);
     });
 
@@ -7583,7 +8671,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(201);
       return res.body.id as string;
@@ -8993,8 +10081,7 @@ describe('SFA API (e2e)', () => {
       expect(lead!.intakeSource?.channel).toBe('share_link');
       expect(lead!.intakeSource?.shareLinkId?.toString()).toBe(activeLinkId);
       // Left empty on purpose: nobody has said where this came from yet.
-      expect(lead!.leadSource?.code ?? null).toBeNull();
-      expect(lead!.leadSource?.label ?? '').toBe('');
+      expect(lead!.leadSourceId ?? null).toBeNull();
     });
 
     it('records the policies of interest submitted publicly (PAC-56 #2)', async () => {
@@ -9047,7 +10134,7 @@ describe('SFA API (e2e)', () => {
         .expect(201);
 
       const res = await request(app.getHttpServer())
-        .get('/api/v1/leads?leadSource=__none__&search=Okonjo')
+        .get('/api/v1/leads?leadSourceId=__none__&search=Okonjo')
         .set(authHeader(producerToken))
         .expect(200);
 
@@ -9070,7 +10157,7 @@ describe('SFA API (e2e)', () => {
           agencyId: 'attacker-agency',
           branchId: 'attacker-branch',
           producerId: owner!._id.toString(),
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
           isTestRecord: true,
         })
         .expect(201);
@@ -9078,7 +10165,7 @@ describe('SFA API (e2e)', () => {
       const lead = await leadModel.findOne({ lastName: 'Pemberton' });
       expect(lead!.agencyId).toBe(seed.agencyId);
       expect(lead!.producerId?.toString()).toBe(producer!._id.toString());
-      expect(lead!.leadSource?.label ?? '').toBe('');
+      expect(lead!.leadSourceId ?? null).toBeNull();
       expect(lead!.isTestRecord).toBe(false);
     });
 
@@ -10623,6 +11710,73 @@ describe('SFA API (e2e)', () => {
 
     afterAll(() => {
       genStatSpy.mockRestore();
+    });
+
+    it('adds the items a policy added after booking requires, and leaves resolved ones resolved (PAC-104)', async () => {
+      const { lead } = await seedLead();
+      const leadId = lead._id.toString();
+      const deal = await sell(leadId, [autoPolicy(leadId)]);
+      const dealId = new Types.ObjectId(deal.id);
+
+      // The service team has already cleared one item on the Auto sale.
+      await genItemModel.updateOne(
+        { dealId, itemName: 'Drivers Verified' },
+        { $set: { isResolved: true, isFailed: false } },
+      );
+
+      const res = await request(app.getHttpServer())
+        .post(`${SOLD}/${deal.id}/policies`)
+        .set(authHeader(producerToken))
+        .send({
+          policies: [autoPolicy(leadId, { policyType: 'Home' })],
+          submissionToken: `gen-add-${nextNum()}`,
+        })
+        .expect(201);
+      const added = res.body as AddSoldDealPoliciesResponse;
+
+      const items = await genItemModel.find({ dealId });
+      const names = items.map((item) => item.itemName);
+      // Required now the deal holds a Home policy.
+      expect(names).toContain('Home Inspection');
+      // Upserted by dedupe key, so the baseline is not duplicated…
+      expect(names.filter((name) => name === 'Correct Sold Date')).toHaveLength(
+        1,
+      );
+      // …and nothing already worked is reopened.
+      expect(
+        items.find((item) => item.itemName === 'Drivers Verified')!.isResolved,
+      ).toBe(true);
+
+      expect(added.auditItemCount).toBe(items.length);
+    });
+
+    it("keeps a submitted audit's status on the deal when generation re-runs (PAC-104)", async () => {
+      const { lead } = await seedLead();
+      const leadId = lead._id.toString();
+      const deal = await sell(leadId, [autoPolicy(leadId)]);
+      const dealId = new Types.ObjectId(deal.id);
+
+      // The producer submitted the audit; the deal mirrors that status.
+      await genAuditModel.updateOne(
+        { agencyId: seed.agencyId, dealId },
+        { $set: { auditStatus: 'Pending' } },
+      );
+      await genDealModel.updateOne(
+        { _id: dealId },
+        { $set: { dealAuditStatus: 'Pending' } },
+      );
+
+      // A create replay, or a policy added to the deal, re-runs generation.
+      await app.get(AuditGenerationService).generateForDeal({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        dealId,
+      });
+
+      // It used to stamp the default here, telling the board "Not Submitted".
+      expect((await genDealModel.findById(dealId))!.dealAuditStatus).toBe(
+        'Pending',
+      );
     });
 
     it('generates the baseline plus policy-type items for a simple sale', async () => {
@@ -12631,6 +13785,497 @@ describe('SFA API (e2e)', () => {
       expect((res.body as SoldDealLeadContext).householdId).toBeNull();
     });
 
+    /**
+     * Editing a booked sale (PAC-104): correcting the sold date, and adding
+     * policies after booking. Nested here to reuse this block's fixtures and
+     * its storage stub.
+     */
+    describe('sold deal edit (PAC-104)', () => {
+      const editUrl = (dealId: string) => `${SOLD}/${dealId}`;
+
+      const getDeal = async (token: string, dealId: string, expected = 200) => {
+        const res = await request(app.getHttpServer())
+          .get(editUrl(dealId))
+          .set(authHeader(token))
+          .expect(expected);
+        return res.body as SoldDealEditView;
+      };
+
+      const patchSoldDate = (
+        token: string,
+        dealId: string,
+        soldDate: string,
+        expected = 200,
+      ) =>
+        request(app.getHttpServer())
+          .patch(editUrl(dealId))
+          .set(authHeader(token))
+          .send({ soldDate })
+          .expect(expected);
+
+      const addPolicies = async (
+        token: string,
+        dealId: string,
+        leadId: string,
+        policies: Array<Record<string, unknown>>,
+        options: { submissionToken?: string; expected?: number } = {},
+      ) => {
+        const res = await request(app.getHttpServer())
+          .post(`${editUrl(dealId)}/policies`)
+          .set(authHeader(token))
+          .send({
+            policies: withApplications(leadId, policies),
+            submissionToken: options.submissionToken ?? `add-${nextNumber()}`,
+          })
+          .expect(options.expected ?? 201);
+        return res.body as AddSoldDealPoliciesResponse;
+      };
+
+      /** An app-booked Auto sale: 1000.10, two vehicles, sold 2026-02-15. */
+      const bookAuto = async (overrides: Record<string, unknown> = {}) => {
+        const { lead, household } = await seedSoldLead(producerId);
+        const created = await createAs(
+          producerToken,
+          payload(lead._id.toString(), {
+            policies: [
+              soldPolicy({ premium: 1000.1, itemCount: 2, ...overrides }),
+            ],
+          }),
+        );
+        return { lead, household, leadId: lead._id.toString(), created };
+      };
+
+      const changeRows = (dealId: string) =>
+        soldActivityModel
+          .find({ dealId: dealRef(dealId), type: 'field_changed' })
+          .lean();
+
+      describe('GET /sold-deals/:id', () => {
+        it('returns the booked deal in the shape the Edit sale page renders', async () => {
+          const { leadId, created } = await bookAuto();
+          const view = await getDeal(producerToken, created.id);
+
+          expect(view.id).toBe(created.id);
+          expect(view.leadId).toBe(leadId);
+          // A calendar date — the value a date input holds.
+          expect(view.soldDate).toBe('2026-02-15');
+          expect(view.clientName).toBe('Sam Sold');
+          expect(view.premium).toBe(1000.1);
+          expect(view.policies).toHaveLength(1);
+          expect(view.policies[0]).toMatchObject({
+            policyType: 'Auto',
+            premium: 1000.1,
+            effectiveDate: '2026-02-01',
+          });
+          expect(view.isMigrated).toBe(false);
+          expect(view.canAddPolicies).toBe(true);
+          expect(view.addPoliciesBlockedBy).toBeNull();
+          expect(view).not.toHaveProperty('policyAdditionTokens');
+        });
+
+        it("404s for another producer's deal, a transfer, and a malformed id", async () => {
+          const soldDate = new Date('2026-02-15T00:00:00.000Z');
+          const foreign = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId: new Types.ObjectId(),
+            soldDate,
+            premiumSource: 'snapshot',
+          });
+          await getDeal(producerToken, foreign._id.toString(), 404);
+
+          // Corrected from its CRM ticket, not from a lead's Edit sale page.
+          const transfer = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            businessType: 'company_transfer',
+            soldDate,
+          });
+          await getDeal(producerToken, transfer._id.toString(), 404);
+
+          await getDeal(producerToken, 'not-a-deal', 404);
+        });
+
+        it('says why a deal with no lead cannot take another policy', async () => {
+          const orphan = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            soldDate: new Date('2026-02-15T00:00:00.000Z'),
+            premiumSource: 'snapshot',
+          });
+
+          const view = await getDeal(producerToken, orphan._id.toString());
+          expect(view.canAddPolicies).toBe(false);
+          expect(view.addPoliciesBlockedBy).toBe('no_lead');
+        });
+      });
+
+      describe('PATCH /sold-deals/:id', () => {
+        it('moves soldDate and soldDateYmd together, and the sold timeline entry with them', async () => {
+          const { created } = await bookAuto();
+
+          const res = await patchSoldDate(
+            producerToken,
+            created.id,
+            '2026-01-20',
+          );
+          const view = res.body as SoldDealEditView;
+          expect(view.soldDate).toBe('2026-01-20');
+          // Nothing but the date moved.
+          expect(view.premium).toBe(1000.1);
+          expect(view.policyCount).toBe(1);
+
+          const deal = await soldDealModel.findById(created.id);
+          // The Sold scorecard's bucket key — the deal now reports in January.
+          expect(deal!.soldDateYmd).toBe(20260120);
+          expect(deal!.soldDate?.toISOString()).toBe(
+            '2026-01-20T00:00:00.000Z',
+          );
+
+          const sold = await soldActivityModel.findOne({
+            dealId: dealRef(created.id),
+            type: 'sold',
+          });
+          expect(sold!.occurredAt?.toISOString()).toBe(
+            '2026-01-20T00:00:00.000Z',
+          );
+        });
+
+        it('logs the correction, and writes nothing when the date did not change', async () => {
+          const { created } = await bookAuto();
+
+          await patchSoldDate(producerToken, created.id, '2026-02-15');
+          expect(await changeRows(created.id)).toHaveLength(0);
+
+          await patchSoldDate(producerToken, created.id, '2026-02-10');
+          const rows = await changeRows(created.id);
+          expect(rows).toHaveLength(1);
+          expect(rows[0].summary).toBe('Sold deal edited');
+          expect(rows[0].changes).toEqual([
+            expect.objectContaining({
+              field: 'soldDate',
+              kind: 'date',
+              from: '2026-02-15',
+              to: '2026-02-10',
+            }),
+          ]);
+        });
+
+        it('corrects a migrated deal too, without touching its imported total', async () => {
+          const migrated = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            soldDate: new Date('2025-11-03T00:00:00.000Z'),
+            soldDateYmd: 20251103,
+            premium: 9999,
+            premiumSource: 'rollup',
+            legacySmartSuiteId: 'legacy-deal-pac104-date',
+          });
+
+          await patchSoldDate(
+            producerToken,
+            migrated._id.toString(),
+            '2025-11-04',
+          );
+
+          const after = await soldDealModel.findById(migrated._id);
+          expect(after!.soldDateYmd).toBe(20251104);
+          expect(after!.premium).toBe(9999);
+        });
+
+        it('rejects a malformed date, and a caller without deal_audits:write', async () => {
+          const { created } = await bookAuto();
+          await patchSoldDate(producerToken, created.id, '02/15/2026', 400);
+          await patchSoldDate(readOnlyToken, created.id, '2026-02-10', 403);
+        });
+      });
+
+      describe('POST /sold-deals/:id/policies', () => {
+        it('adds a policy and recomputes the deal from its stored rows', async () => {
+          const { household, leadId, created } = await bookAuto();
+
+          const body = await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({ policyType: 'Home', premium: 899.95, itemCount: 3 }),
+          ]);
+
+          expect(body.replayed).toBe(false);
+          expect(body.addedPolicyIds).toHaveLength(1);
+          // 1000.10 + 899.95 to the cent, and the Home row's implied single item.
+          expect(body.deal).toMatchObject({
+            premium: 1900.05,
+            itemCount: 3,
+            policyCount: 2,
+            dealType: 'Bundle',
+            isBundle: true,
+            soldDate: '2026-02-15',
+          });
+          expect(body.deal.policies).toHaveLength(2);
+
+          const deal = await soldDealModel.findById(created.id);
+          // Adding a policy never re-dates the sale.
+          expect(deal!.soldDateYmd).toBe(20260215);
+          expect(deal!.premiumSource).toBe('snapshot');
+
+          const added = await soldPolicyModel.findById(body.addedPolicyIds[0]);
+          expect(added!.dealId?.toString()).toBe(created.id);
+          expect(added!.householdId?.toString()).toBe(household._id.toString());
+          expect(added!.renewalDate).toBeTruthy();
+
+          const rows = await changeRows(created.id);
+          expect(rows).toHaveLength(1);
+          expect(rows[0].summary).toBe('Policy added to sold deal');
+          expect(rows[0].changes!.map((change) => change.field)).toEqual([
+            'policies',
+            'premium',
+            'itemCount',
+            'dealType',
+          ]);
+
+          expect(
+            (await soldHouseholdModel.findById(household._id))!
+              .totalActivePolicies,
+          ).toBe(2);
+        });
+
+        it('adds the policies once, however many times the same token arrives', async () => {
+          const { leadId, created } = await bookAuto();
+
+          const submissionToken = `add-replay-${nextNumber()}`;
+          const home = soldPolicy({ policyType: 'Home', premium: 500 });
+          await addPolicies(producerToken, created.id, leadId, [home], {
+            submissionToken,
+          });
+          const replay = await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [home],
+            { submissionToken },
+          );
+          expect(replay.replayed).toBe(true);
+          expect(replay.deal.policyCount).toBe(2);
+
+          // And concurrently: the guard is a conditional write, not a read.
+          const renters = soldPolicy({ policyType: 'Renters', premium: 200 });
+          const racing = `add-race-${nextNumber()}`;
+          const results = await Promise.all([
+            addPolicies(producerToken, created.id, leadId, [renters], {
+              submissionToken: racing,
+            }),
+            addPolicies(producerToken, created.id, leadId, [renters], {
+              submissionToken: racing,
+            }),
+          ]);
+          expect(results.filter((result) => !result.replayed)).toHaveLength(1);
+
+          expect(
+            await soldPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
+          ).toBe(3);
+          expect(await changeRows(created.id)).toHaveLength(2);
+        });
+
+        it('refuses a policy already on the sale, and one that belongs to another sale', async () => {
+          const { leadId, created } = await bookAuto();
+          const ours = await soldPolicyModel.findOne({
+            dealId: dealRef(created.id),
+          });
+
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [soldPolicy({ policyNumber: ours!.policyNumber })],
+            { expected: 400 },
+          );
+
+          // Re-pointing another sale's policy would silently remove it from
+          // that sale — which a booked sale does not allow.
+          const other = await bookAuto();
+          const theirs = await soldPolicyModel.findOne({
+            dealId: dealRef(other.created.id),
+          });
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [
+              soldPolicy({
+                policyNumber: theirs!.policyNumber,
+                existingPolicyId: theirs!._id.toString(),
+              }),
+            ],
+            { expected: 409 },
+          );
+
+          expect(
+            await soldPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
+          ).toBe(1);
+          expect(
+            (await soldPolicyModel.findById(theirs!._id))!.dealId?.toString(),
+          ).toBe(other.created.id);
+        });
+
+        it('409s once the audit has been submitted', async () => {
+          const { leadId, created } = await bookAuto();
+          await app
+            .get<Model<DealAudit>>(getModelToken(DealAudit.name))
+            .updateOne(
+              { agencyId: seed.agencyId, dealId: dealRef(created.id) },
+              {
+                $set: { auditStatus: 'Pending' },
+                $setOnInsert: {
+                  branchId: seed.branchId,
+                  title: 'Submitted audit',
+                  auditDate: new Date(),
+                  isTestRecord: false,
+                },
+              },
+              { upsert: true },
+            );
+
+          const view = await getDeal(producerToken, created.id);
+          expect(view.auditStatus).toBe('Pending');
+          expect(view.canAddPolicies).toBe(false);
+          expect(view.addPoliciesBlockedBy).toBe('audit_submitted');
+
+          await addPolicies(
+            producerToken,
+            created.id,
+            leadId,
+            [soldPolicy({ policyType: 'Home' })],
+            { expected: 409 },
+          );
+        });
+
+        it('merges into the prior-insurance summary rather than writing a second one', async () => {
+          const { leadId, created } = await bookAuto({
+            priorInsurance: {
+              none: false,
+              carrier: 'Geico',
+              agentName: 'A. Agent',
+            },
+          });
+
+          await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({
+              policyType: 'Home',
+              priorInsurance: {
+                none: false,
+                carrier: 'State Farm',
+                agentName: 'H. Agent',
+              },
+            }),
+          ]);
+
+          // Lead Detail reads the summary with an unsorted `findOne`, so a
+          // second row would make which one it shows an accident of storage.
+          const summaries = await priorInsuranceModel
+            .find({ dealId: dealRef(created.id) })
+            .lean();
+          expect(summaries).toHaveLength(1);
+          expect(summaries[0]).toMatchObject({
+            previousCarrierAuto: 'Geico',
+            previousCarrierHome: 'State Farm',
+            previousAgentName: 'A. Agent',
+            autoHomeSameCarrier: 'No',
+          });
+          expect(
+            await priorPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
+          ).toBe(2);
+        });
+
+        it('adds to a migrated deal and recomputes its imported total', async () => {
+          const { lead, household } = await seedSoldLead(producerId);
+          const migrated = await soldDealModel.create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            producerId,
+            leadId: lead._id,
+            householdId: household._id,
+            soldDate: new Date('2025-10-01T00:00:00.000Z'),
+            soldDateYmd: 20251001,
+            premium: 9999,
+            itemCount: 42,
+            policyCount: 7,
+            premiumSource: 'rollup',
+            legacySmartSuiteId: 'legacy-deal-pac104-add',
+          });
+          const dealId = migrated._id.toString();
+
+          expect((await getDeal(producerToken, dealId)).isMigrated).toBe(true);
+
+          const body = await addPolicies(
+            producerToken,
+            dealId,
+            lead._id.toString(),
+            [soldPolicy({ premium: 500, itemCount: 1 })],
+          );
+
+          // Recomputed from the policies linked to it — the product owner's call.
+          expect(body.deal).toMatchObject({
+            premium: 500,
+            itemCount: 1,
+            policyCount: 1,
+            isMigrated: true,
+          });
+          const after = await soldDealModel.findById(migrated._id);
+          // So later per-policy corrections keep the new total in step.
+          expect(after!.premiumSource).toBe('snapshot');
+          expect(after!.soldDateYmd).toBe(20251001);
+        });
+
+        it("keeps a manager's addition in the producer's book", async () => {
+          const { leadId, created } = await bookAuto();
+
+          await addPolicies(ownerToken, created.id, leadId, [
+            soldPolicy({
+              policyType: 'Home',
+              priorInsurance: {
+                none: false,
+                carrier: 'State Farm',
+                agentName: 'H. Agent',
+              },
+            }),
+          ]);
+
+          // `own` visibility on the hand-off board follows the deal's producer,
+          // not whoever added the policy.
+          const summary = await priorInsuranceModel.findOne({
+            dealId: dealRef(created.id),
+          });
+          expect(summary!.producerId?.toString()).toBe(producerId.toString());
+        });
+
+        it('leaves the lead and its sold timeline entry alone', async () => {
+          const { lead, leadId, created } = await bookAuto();
+          const statusBefore = (await soldLeadModel.findById(lead._id))!.status;
+
+          await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({ policyType: 'Home' }),
+          ]);
+
+          expect(
+            await soldActivityModel.countDocuments({
+              dealId: dealRef(created.id),
+              type: 'sold',
+            }),
+          ).toBe(1);
+          expect((await soldLeadModel.findById(lead._id))!.status).toBe(
+            statusBefore,
+          );
+        });
+      });
+    });
+
     describe('deal roll-up recompute on PATCH /policies/:id (PAC-56 #25)', () => {
       const patchPolicy = (policyId: string, body: object, expected = 200) =>
         request(app.getHttpServer())
@@ -12806,112 +14451,217 @@ describe('SFA API (e2e)', () => {
   });
 
   /**
-   * Policy Transfer — the Sold pipeline, minus the lead, booked as company
-   * transfer.
+   * Replacements — Cancel Rewrite and Company Transfer through the Sold form
+   * (PAC-126).
    *
-   * Two things are load-bearing enough to be worth stating: the from-policy is
-   * *retired* rather than edited (both rows survive, linked), and the premium
-   * must land on the Transfers scorecard **without** moving Sold. The
-   * absent-`businessType` case below is the guard for the one mistake that
-   * would silently zero every historic sale.
+   * Neither has an endpoint of its own any more. Both run the ordinary
+   * `POST /leads` → `POST /sold-deals` chain on a lead stamped with a
+   * `replacementIntent`, and the sold submit reads that stamp and applies it:
+   * the from-policy on the first row, the business type, the retired status,
+   * the chargeback on a rewrite, and the consumed mark that stops the chain
+   * being resumed into a second booking. `GET /leads/for-replacement` is what
+   * makes the two-form chain survivable when the rep closes the tab between
+   * them.
+   *
+   * Three things are load-bearing enough to pin: the from-policy is *retired*
+   * rather than edited (both rows survive, linked); a transfer's premium must
+   * land on the Transfers scorecard **without** moving Sold; and a rewrite's
+   * chargeback must be carried by the producer credited on the *original* deal,
+   * not by whoever recorded the replacement.
    */
-  describe('Policy transfers (company transfer)', () => {
-    const TICKETS = '/api/v1/crm/service-tickets';
+  describe('Policy replacements (rewrite and company transfer)', () => {
+    const LEADS = '/api/v1/leads';
+    const SOLD = '/api/v1/sold-deals';
 
-    let xferDealModel: Model<Deal>;
-    let xferPolicyModel: Model<Policy>;
-    let xferHouseholdModel: Model<Household>;
+    let rplDealModel: Model<Deal>;
+    let rplPolicyModel: Model<Policy>;
+    let rplHouseholdModel: Model<Household>;
+    let rplLeadModel: Model<Lead>;
+    let rplChargebackModel: Model<Chargeback>;
+    let originalProducerId: Types.ObjectId;
     let statSpy: jest.SpyInstance;
 
     const uploaded = new Map<string, { size: number; contentType: string }>();
     let counter = 0;
-    const nextNumber = () =>
-      `XFER-${(counter += 1).toString().padStart(6, '0')}`;
+    const next = () => (counter += 1).toString().padStart(6, '0');
 
-    /** A key under the transfer's own `/nba/` prefix, which the server enforces. */
-    const nba = (householdId: string) => {
-      const key = `agencies/${seed.agencyId}/policy-transfers/${householdId}/nba/app.pdf`;
+    /** A key under the **lead's** NBA prefix — the only prefix a sale verifies. */
+    const nba = (leadId: string) => {
+      const key = `agencies/${seed.agencyId}/sold-deals/${leadId}/nba/2026/application.pdf`;
       uploaded.set(key, { size: 2048, contentType: 'application/pdf' });
       return {
         key,
-        filename: 'app.pdf',
+        filename: 'application.pdf',
         contentType: 'application/pdf',
         size: 2048,
       };
     };
 
-    /** A household with one active policy — the thing a transfer moves within. */
-    const makeHousehold = async (premium = 1400) => {
-      const household = await xferHouseholdModel.create({
+    /**
+     * A household with one active policy — the thing a replacement replaces.
+     *
+     * `withDeal` also books the original sale the policy came from, dated 1
+     * March and credited to the seeded producer: the clawback window is
+     * measured from that deal's sold date and the chargeback lands on that
+     * deal's producer, and both of those are what the money tests assert.
+     * Inserted through the driver so no Mongoose default is applied.
+     */
+    const makeHousehold = async (
+      options: { premium?: number; withDeal?: boolean } = {},
+    ) => {
+      const premium = options.premium ?? 1400;
+      const n = next();
+      const household = await rplHouseholdModel.create({
         agencyId: seed.agencyId,
         branchId: seed.branchId,
-        name: `Transfer HH ${counter}`,
+        name: `Replacement HH ${n}`,
         totalActivePolicies: 1,
       });
-      const policy = await xferPolicyModel.create({
+
+      let dealId: Types.ObjectId | undefined;
+      if (options.withDeal) {
+        const inserted = await rplDealModel.collection.insertOne({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          householdId: household._id,
+          producerId: originalProducerId,
+          clientName: `Replacement HH ${n}`,
+          premium,
+          itemCount: 1,
+          policyCount: 1,
+          soldDateYmd: 20260301,
+          soldDate: new Date('2026-03-01T00:00:00.000Z'),
+          businessType: 'new_business',
+          isTestRecord: false,
+        });
+        dealId = inserted.insertedId;
+      }
+
+      const policy = await rplPolicyModel.create({
         agencyId: seed.agencyId,
         branchId: seed.branchId,
         householdId: household._id,
-        policyNumber: nextNumber(),
+        dealId,
+        policyNumber: `RPL${n}`,
         policyType: 'Auto',
         premium,
         items: 1,
         active: true,
         policyStatus: 'Active',
       });
-      return { household, policy };
+      return { household, policy, dealId };
     };
 
-    const makeTicket = async (
-      householdId: string,
-      category = 'Policy Change',
+    const lookup = (policyId: string, reason: string, expected = 200) =>
+      request(app.getHttpServer())
+        .get(`${LEADS}/for-replacement?policyId=${policyId}&reason=${reason}`)
+        .set(authHeader(ownerToken))
+        .expect(expected);
+
+    /** Step 1 of the chain — the lead, stamped with what it is for. */
+    const createLead = async (
+      policyId: string,
+      reason: 'cancel_rewrite' | 'company_transfer',
+      overrides: Record<string, unknown> = {},
+      expected = 201,
     ) => {
+      const n = next();
       const res = await request(app.getHttpServer())
-        .post(TICKETS)
-        .set(authHeader(csrToken))
-        .send({ clientName: 'Transfer Client', category, householdId })
-        .expect(201);
+        .post(LEADS)
+        .set(authHeader(ownerToken))
+        .send({
+          primaryContact: {
+            firstName: 'Replace',
+            lastName: `Ment${n}`,
+            dateOfBirth: '1985-06-15',
+            phone: '(555) 300-0001',
+            email: `replace.ment.${n}@example.com`,
+          },
+          address: {
+            street: `${n} Replacement Way`,
+            city: 'Tulsa',
+            state: 'OK',
+            zip: '74101',
+          },
+          members: [],
+          leadSourceId: seed.leadSourceIds.mailer,
+          replacementIntent: { policyId, reason },
+          ...overrides,
+        })
+        .expect(expected);
       return res.body as { id: string };
     };
 
-    const transferBody = (
-      householdId: string,
-      fromPolicyId: string,
-      overrides: Record<string, unknown> = {},
-    ) => ({
-      transferDate: '2026-03-10',
-      policies: [
-        {
-          fromPolicyId,
-          policyType: 'Auto',
-          effectiveDate: '2026-03-15',
-          carrier: 'Allstate',
-          policyNumber: nextNumber(),
-          premium: 900,
-          itemCount: 1,
-          newBusinessApplication: nba(householdId),
-        },
-      ],
-      ...overrides,
-    });
-
-    const record = (ticketId: string, body: unknown, expected = 201) =>
+    /** Step 2 — the Sold form. No `fromPolicyId`: the server injects it. */
+    const sell = (leadId: string, premium = 900, expected = 201) =>
       request(app.getHttpServer())
-        .post(`${TICKETS}/${ticketId}/policy-transfer`)
-        .set(authHeader(csrToken))
-        .send(body)
+        .post(SOLD)
+        .set(authHeader(ownerToken))
+        .send({
+          leadId,
+          soldDate: '2026-03-10',
+          policies: [
+            {
+              policyType: 'Auto',
+              effectiveDate: '2026-03-15',
+              carrier: 'Allstate',
+              policyNumber: `RPL${next()}`,
+              premium,
+              itemCount: 1,
+              newBusinessApplication: nba(leadId),
+              priorInsurance: { none: true },
+              cancellation: { cancelled: false },
+            },
+          ],
+        })
         .expect(expected);
 
-    beforeAll(() => {
-      xferDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
-      xferPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
-      xferHouseholdModel = app.get<Model<Household>>(
+    /**
+     * The whole chain, for the tests that assert what it produced.
+     *
+     * Two deals come out of this: `originalDealId` is the fixture's sale the
+     * policy came from (only with `withDeal`), `dealId` is the replacement
+     * booked by the chain. Named apart on purpose — a spread that let the new
+     * id shadow the old one had the chargeback test reading the wrong deal.
+     */
+    const replace = async (
+      reason: 'cancel_rewrite' | 'company_transfer',
+      options: { premium?: number; withDeal?: boolean } = {},
+    ) => {
+      const {
+        household,
+        policy,
+        dealId: originalDealId,
+      } = await makeHousehold(options);
+      const lead = await createLead(String(policy._id), reason);
+      const res = await sell(lead.id);
+      return {
+        household,
+        policy,
+        originalDealId,
+        leadId: lead.id,
+        dealId: res.body.id as string,
+      };
+    };
+
+    beforeAll(async () => {
+      rplDealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      rplPolicyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      rplHouseholdModel = app.get<Model<Household>>(
         getModelToken(Household.name),
       );
+      rplLeadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      rplChargebackModel = app.get<Model<Chargeback>>(
+        getModelToken(Chargeback.name),
+      );
+
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      originalProducerId = producer!._id;
+
       // Storage isn't running under test; report only what this block declared.
-      const storage = app.get(StorageService);
       statSpy = jest
-        .spyOn(storage, 'statObject')
+        .spyOn(app.get(StorageService), 'statObject')
         .mockImplementation((key: string) =>
           Promise.resolve(uploaded.get(key) ?? null),
         );
@@ -12919,144 +14669,193 @@ describe('SFA API (e2e)', () => {
 
     afterAll(() => statSpy?.mockRestore());
 
-    it.each(['Renewal Review', 'Policy Change', 'Payment', 'Company Transfer'])(
-      'records a transfer from a %s ticket',
-      async (category) => {
-        const { household, policy } = await makeHousehold();
-        const ticket = await makeTicket(String(household._id), category);
+    /* ─── Where to start ────────────────────────────────────────────────── */
 
-        const res = await record(
-          ticket.id,
-          transferBody(String(household._id), String(policy._id)),
-        );
-
-        expect(res.body.policyTransfer).not.toBeNull();
-        expect(res.body.policyTransfer.pairs).toHaveLength(1);
-        expect(res.body.policyTransfer.pairs[0].fromPolicyId).toBe(
-          String(policy._id),
-        );
-        expect(res.body.allowsPolicyTransfer).toBe(true);
-      },
-    );
-
-    it('is refused from a category that does not allow it', async () => {
+    it('says "start fresh" for an active, unreplaced policy', async () => {
       const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id), 'Billing');
+      const res = await lookup(String(policy._id), 'cancel_rewrite');
+      expect(res.body).toEqual({
+        leadId: null,
+        householdId: String(household._id),
+        blockedReason: null,
+      });
+    });
 
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
+    it("creates the lead on the policy's household, stamped with the intent", async () => {
+      const { household, policy } = await makeHousehold();
+      const lead = await createLead(String(policy._id), 'cancel_rewrite');
+
+      const stored = await rplLeadModel.findById(lead.id);
+      expect(String(stored!.householdId)).toBe(String(household._id));
+      expect(String(stored!.replacementIntent!.policyId)).toBe(
+        String(policy._id),
+      );
+      expect(stored!.replacementIntent!.reason).toBe('cancel_rewrite');
+      expect(stored!.replacementIntent!.consumedAt).toBeNull();
+    });
+
+    it('resumes the abandoned lead rather than opening a second one', async () => {
+      const { policy } = await makeHousehold();
+      const lead = await createLead(String(policy._id), 'cancel_rewrite');
+
+      const res = await lookup(String(policy._id), 'cancel_rewrite');
+      expect(res.body.leadId).toBe(lead.id);
+
+      // The reason is part of the key: a rewrite lead must not resume into a
+      // transfer, which applies different money rules.
+      const other = await lookup(String(policy._id), 'company_transfer');
+      expect(other.body.leadId).toBeNull();
+    });
+
+    it('refuses a household that disagrees with the policy', async () => {
+      const { policy } = await makeHousehold();
+      const other = await makeHousehold();
+      await createLead(
+        String(policy._id),
+        'cancel_rewrite',
+        { householdId: String(other.household._id) },
         400,
       );
-      expect(
-        await xferDealModel.countDocuments({
-          ticketId: new Types.ObjectId(ticket.id),
-        }),
-      ).toBe(0);
     });
 
-    it('retires the old policy and links both ways', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      const res = await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
+    it('refuses a policy that is no longer active, at both steps', async () => {
+      const { policy } = await makeHousehold();
+      await rplPolicyModel.updateOne(
+        { _id: policy._id },
+        { $set: { active: false, policyStatus: 'Cancelled' } },
       );
 
-      const from = await xferPolicyModel.findById(policy._id);
+      const res = await lookup(String(policy._id), 'cancel_rewrite');
+      expect(res.body.leadId).toBeNull();
+      expect(res.body.blockedReason).toMatch(/not active/);
+
+      await createLead(String(policy._id), 'cancel_rewrite', {}, 409);
+    });
+
+    /*
+     * The guards are re-run at the moment of retirement, inside the Sold
+     * transaction — not only when the lead is created. The intent is stored
+     * and the rep can leave for a week; the policy can change underneath it.
+     */
+    it('refuses the Sold submit if the policy was cancelled after the lead was created', async () => {
+      const { policy } = await makeHousehold();
+      const lead = await createLead(String(policy._id), 'cancel_rewrite');
+
+      // The household edit, between step 1 and step 2.
+      await rplPolicyModel.updateOne(
+        { _id: policy._id },
+        { $set: { active: false, policyStatus: 'Cancelled' } },
+      );
+
+      const res = await sell(lead.id, 900, 409);
+      expect(res.body.message).toMatch(/not active/);
+
+      // Nothing written: no replacement policy, intent still open.
+      const stored = await rplLeadModel.findById(lead.id);
+      expect(stored!.replacementIntent!.consumedAt).toBeNull();
+      const after = await rplPolicyModel.findById(policy._id);
+      expect(after!.transferredToPolicyId).toBeFalsy();
+    });
+
+    it('refuses to replace a policy twice, even from the other reason’s lead', async () => {
+      const { policy, dealId } = await makeHousehold({ withDeal: true });
+      // Both leads may be open at once: the resume lookup is keyed on reason.
+      const transfer = await createLead(String(policy._id), 'company_transfer');
+      const rewrite = await createLead(String(policy._id), 'cancel_rewrite');
+
+      await sell(transfer.id);
+      const first = await rplPolicyModel.findById(policy._id);
+      const replacementId = String(first!.transferredToPolicyId);
+
+      const res = await sell(rewrite.id, 900, 409);
+      expect(res.body.message).toMatch(/already been replaced/);
+
+      // The first replacement stands, and the rewrite charged nothing back.
+      const after = await rplPolicyModel.findById(policy._id);
+      expect(String(after!.transferredToPolicyId)).toBe(replacementId);
+      expect(after!.policyStatus).toBe('Company Transfer');
+      expect(
+        await rplChargebackModel.countDocuments({ policyId: policy._id }),
+      ).toBe(0);
+      const deal = await rplDealModel.findById(dealId);
+      expect(deal!.chargebackAdjustment ?? 0).toBe(0);
+    });
+
+    /* ─── What the sale does ────────────────────────────────────────────── */
+
+    it('a rewrite retires the old policy, links both ways, and books new business', async () => {
+      const { policy, leadId, dealId } = await replace('cancel_rewrite');
+
+      const from = await rplPolicyModel.findById(policy._id);
       expect(from!.active).toBe(false);
-      expect(from!.policyStatus).toBe('Cancelled');
+      expect(from!.policyStatus).toBe('Cancel Rewrite');
+      expect(from!.transferredToPolicyId).toBeDefined();
 
-      const toId = res.body.policyTransfer.pairs[0].toPolicyId;
-      expect(String(from!.transferredToPolicyId)).toBe(toId);
-
-      const to = await xferPolicyModel.findById(toId);
+      const to = await rplPolicyModel.findById(from!.transferredToPolicyId);
       expect(to!.active).toBe(true);
       expect(String(to!.transferredFromPolicyId)).toBe(String(policy._id));
+      expect(String(to!.dealId)).toBe(dealId);
+
+      const deal = await rplDealModel.findById(dealId);
+      expect(deal!.businessType).toBe('new_business');
+      expect(String(deal!.leadId)).toBe(leadId);
     });
 
-    it('books a company-transfer deal with no lead', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
+    it('consumes the intent in the same transaction, so the chain cannot resume', async () => {
+      const { policy, leadId, dealId } = await replace('cancel_rewrite');
 
-      const res = await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
+      const lead = await rplLeadModel.findById(leadId);
+      expect(lead!.replacementIntent!.consumedAt).not.toBeNull();
+      expect(String(lead!.replacementIntent!.consumedByDealId)).toBe(dealId);
 
-      const deal = await xferDealModel.findById(
-        res.body.policyTransfer.dealId as string,
-      );
+      // Replaced now, so the entry point blocks rather than offering the lead.
+      const res = await lookup(String(policy._id), 'cancel_rewrite');
+      expect(res.body.leadId).toBeNull();
+      expect(res.body.blockedReason).not.toBeNull();
+    });
+
+    it('a rewrite inside the window charges the premium back and reverses the credit', async () => {
+      const { policy, originalDealId } = await replace('cancel_rewrite', {
+        withDeal: true,
+      });
+
+      const row = await rplChargebackModel.findOne({ policyId: policy._id });
+      expect(row).not.toBeNull();
+      expect(row!.reason).toBe('cancel_rewrite');
+      expect(row!.amount).toBe(1400);
+      expect(row!.withinClawbackWindow).toBe(true);
+      expect(row!.soldAdjustment).toBe(-1400);
+      // Carried by the producer credited on the ORIGINAL deal — not by the
+      // owner who recorded the replacement.
+      expect(String(row!.producerId)).toBe(String(originalProducerId));
+
+      const original = await rplDealModel.findById(originalDealId);
+      expect(original!.chargebackAdjustment).toBe(-1400);
+    });
+
+    it('a company transfer books company_transfer, retires as such, and charges nothing', async () => {
+      const { policy, dealId } = await replace('company_transfer', {
+        withDeal: true,
+      });
+
+      const from = await rplPolicyModel.findById(policy._id);
+      expect(from!.active).toBe(false);
+      expect(from!.policyStatus).toBe('Company Transfer');
+
+      const deal = await rplDealModel.findById(dealId);
       expect(deal!.businessType).toBe('company_transfer');
-      expect(deal!.leadId ?? null).toBeNull();
-      expect(String(deal!.ticketId)).toBe(ticket.id);
+
+      expect(
+        await rplChargebackModel.countDocuments({ policyId: policy._id }),
+      ).toBe(0);
     });
 
     it('recomputes the household active-policy count', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
-
+      const { household } = await replace('cancel_rewrite');
       // One retired, one activated — still one, but recounted rather than
       // assumed, which is what makes a re-run correct too.
-      const after = await xferHouseholdModel.findById(household._id);
+      const after = await rplHouseholdModel.findById(household._id);
       expect(after!.totalActivePolicies).toBe(1);
-    });
-
-    it('allows only one transfer per ticket', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-        409,
-      );
-    });
-
-    it('refuses a from-policy on another household, and writes nothing', async () => {
-      const { household } = await makeHousehold();
-      const other = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(other.policy._id)),
-        400,
-      );
-
-      const untouched = await xferPolicyModel.findById(other.policy._id);
-      expect(untouched!.active).toBe(true);
-      expect(
-        await xferDealModel.countDocuments({
-          ticketId: new Types.ObjectId(ticket.id),
-        }),
-      ).toBe(0);
-    });
-
-    it('logs the transfer on the ticket timeline', async () => {
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-
-      const res = await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
-
-      expect(
-        (res.body.timeline as { type: string; content: string }[]).some(
-          (e) => e.type === 'system' && e.content.includes('Policy transfer'),
-        ),
-      ).toBe(true);
     });
 
     /* ─── The reporting split ─────────────────────────────────────────────── */
@@ -13075,22 +14874,28 @@ describe('SFA API (e2e)', () => {
         };
       };
 
-      it('counts the transfer under transfers, never under sold', async () => {
+      it('counts a transfer under transfers, never under sold', async () => {
         const before = await performance(ownerToken);
-
-        const { household, policy } = await makeHousehold();
-        const ticket = await makeTicket(String(household._id));
-        await record(
-          ticket.id,
-          transferBody(String(household._id), String(policy._id)),
-        );
-
+        await replace('company_transfer');
         const after = await performance(ownerToken);
+
         expect(after.transfers.premium).toBeCloseTo(
           before.transfers.premium + 900,
           2,
         );
         expect(after.sold.premium).toBeCloseTo(before.sold.premium, 2);
+      });
+
+      it('counts a rewrite under sold', async () => {
+        const before = await performance(ownerToken);
+        await replace('cancel_rewrite');
+        const after = await performance(ownerToken);
+
+        expect(after.sold.premium).toBeCloseTo(before.sold.premium + 900, 2);
+        expect(after.transfers.premium).toBeCloseTo(
+          before.transfers.premium,
+          2,
+        );
       });
 
       /**
@@ -13108,7 +14913,7 @@ describe('SFA API (e2e)', () => {
 
         // Inserted through the driver so no Mongoose default is applied — this
         // is exactly the shape of every pre-existing row.
-        await xferDealModel.collection.insertOne({
+        await rplDealModel.collection.insertOne({
           agencyId: seed.agencyId,
           branchId: seed.branchId,
           premium: 777,
@@ -13128,7 +14933,7 @@ describe('SFA API (e2e)', () => {
       });
     });
 
-    it('keeps transfers off the producer leaderboard', async () => {
+    it('keeps a transfer off the producer leaderboard', async () => {
       const month = '2026-03';
       const read = async () => {
         const res = await request(app.getHttpServer())
@@ -13139,14 +14944,7 @@ describe('SFA API (e2e)', () => {
       };
 
       const before = await read();
-
-      const { household, policy } = await makeHousehold();
-      const ticket = await makeTicket(String(household._id));
-      await record(
-        ticket.id,
-        transferBody(String(household._id), String(policy._id)),
-      );
-
+      await replace('company_transfer');
       expect((await read()).officeTotalPremium).toBeCloseTo(
         before.officeTotalPremium,
         2,
