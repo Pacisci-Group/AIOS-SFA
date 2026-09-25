@@ -1,14 +1,12 @@
 import { ModuleKey } from "@sfa/shared";
 import { Crown, Users } from "lucide-react";
-import { useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { OwnerDashboard } from "@/features/owner-dashboard/OwnerDashboard";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useUrlState } from "@/hooks/useUrlState";
-import { GlobalFilterBar } from "./components/GlobalFilterBar";
-import { ManagerDashboard } from "./components/ManagerDashboard";
+import { ManagerDashboard } from "./ManagerDashboard";
 
 type View = "owner" | "manager";
 
@@ -22,19 +20,18 @@ const COPY: Record<View, { title: string; blurb: string }> = {
   },
   manager: {
     title: "Action Hub",
-    blurb: "Team operations, pipeline friction points and producer coaching.",
+    blurb: "Is the data flowing? Stalled leads, aging audits, overdue tickets and the team's households.",
   },
 };
 
 /**
- * `/dashboard/management` — the Owner view (PAC-135) and, beside it, the Manager
- * view.
+ * `/dashboard/management` — the Owner view (PAC-135) and the Manager view
+ * (PAC-139), side by side behind one filter bar.
  *
- * The **Owner view is real**: `features/owner-dashboard`, behind
- * `owner_dashboard:read`. The **Manager view is still the Figma prototype** —
- * hard-coded data, inline styles, undefined colour variables — kept reachable
- * because the office-manager work (PAC-106) replaces it, not this ticket. It is
- * quarantined in {@link ManagerPrototype} so none of it leaks into the page.
+ * Both are real now. The Owner view is `features/owner-dashboard`, behind
+ * `owner_dashboard:read`; the Manager view is {@link ManagerDashboard}, behind
+ * the route's `management:read`. The filter lives in the URL and is the same
+ * filter for both, so switching tabs keeps the period and the selections.
  *
  * What went with the mockup's chrome: the "Greenfield Insurance" brand block
  * (the sidebar already carries the agency's own brand), the second Owner/Manager
@@ -80,7 +77,9 @@ export default function ManagementDashboardPage() {
         {canSeeOwner && (
           <Tabs
             value={view}
-            // Owner is the default, so it is written as "no param".
+            // Owner is the default, so it is written as "no param". The
+            // drawers are Manager-only state; leaving them in the URL would
+            // pop one open again the next time the tab is chosen.
             onValueChange={(next) =>
               setUrl({ view: next === "manager" ? "manager" : "" })
             }
@@ -94,33 +93,8 @@ export default function ManagementDashboardPage() {
       </header>
 
       <div className="flex-1">
-        {view === "owner" ? <OwnerDashboard /> : <ManagerPrototype />}
+        {view === "owner" ? <OwnerDashboard /> : <ManagerDashboard />}
       </div>
     </AppShell>
-  );
-}
-
-const PROTOTYPE_FILTERS = {
-  producer: "All Producers",
-  leadSource: "All Sources",
-  lineOfBusiness: "All Lines",
-  dateRange: "This Month",
-};
-
-/**
- * The Manager view, exactly as the Figma export left it. Not wired to anything:
- * its filters are display strings held in local state, and its numbers are
- * fixtures. Do not copy from it — see `packages/web/CLAUDE.md`.
- */
-function ManagerPrototype() {
-  const [filters, setFilters] = useState(PROTOTYPE_FILTERS);
-
-  return (
-    <>
-      <GlobalFilterBar filters={filters} onChange={setFilters} />
-      <div className="px-4 py-5 md:px-6">
-        <ManagerDashboard />
-      </div>
-    </>
   );
 }

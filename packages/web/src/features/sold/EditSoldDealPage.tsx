@@ -37,6 +37,7 @@ import {
   type SoldPolicyFormValues,
 } from "./components/sold-deal-schema";
 import { SoldDateCard } from "./components/WizardCards";
+import { managementDashboardKey } from "@/lib/management-dashboard-api";
 import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
@@ -205,6 +206,7 @@ function useApplySavedDeal() {
     void queryClient.invalidateQueries({ queryKey: ["performance"] });
     // The Owner dashboard sums the same sales and quotes (PAC-135).
     void queryClient.invalidateQueries({ queryKey: ownerDashboardKey });
+    void queryClient.invalidateQueries({ queryKey: managementDashboardKey });
     void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
     if (options.audits) {
       void queryClient.invalidateQueries({ queryKey: ["deal-audits"] });

@@ -321,3 +321,31 @@ function build(from: CalendarDate, to: CalendarDate): YmdRange {
     to: toIsoDate(to),
   };
 }
+
+/** The `{year, month, day}` behind a `YYYYMMDD` integer. */
+export function fromYmd(ymd: number): CalendarDate {
+  return {
+    year: Math.floor(ymd / 10_000),
+    month: Math.floor(ymd / 100) % 100,
+    day: ymd % 100,
+  };
+}
+
+/**
+ * The UTC instant at which `date` begins in Chicago — for windowing a
+ * collection that stores real instants (`serviceTickets.openedAt`) rather than
+ * a `YYYYMMDD` integer.
+ *
+ * Found by walking back an hour at a time from noon UTC until the Chicago
+ * calendar date changes. Chicago's offset is a whole number of hours in both
+ * halves of the year, so an hourly walk lands exactly on midnight, and asking
+ * `chicagoParts` for each step is what makes DST somebody else's problem.
+ */
+export function chicagoDayStart(date: CalendarDate): Date {
+  const ymd = toYmd(date);
+  let instant = Date.UTC(date.year, date.month - 1, date.day, 12);
+  while (toYmd(chicagoParts(new Date(instant - 3_600_000))) === ymd) {
+    instant -= 3_600_000;
+  }
+  return new Date(instant);
+}

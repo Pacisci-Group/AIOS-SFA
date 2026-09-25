@@ -4,16 +4,19 @@ import { useCallback, useMemo } from "react";
 import { useUrlState } from "@/hooks/useUrlState";
 import { parseUrlRange, toUrlRange } from "@/lib/date-range";
 import type { UrlRange } from "@/lib/date-range";
-import type { OwnerDashboardParams } from "@/lib/owner-dashboard-api";
-import { OWNER_DEFAULT_RANGE_KEY, OWNER_RANGE_KEYS } from "./owner-range";
+import type { DashboardFilterParams } from "@/lib/dashboard-filter-params";
+import {
+  DASHBOARD_DEFAULT_RANGE_KEY,
+  DASHBOARD_RANGE_KEYS,
+} from "./dashboard-range";
 
-export type OwnerRange = UrlRange<OwnerDashboardRangeKey>;
+export type DashboardRange = UrlRange<OwnerDashboardRangeKey>;
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
 
 /** Frozen so `useUrlState`'s memo dependencies stay stable across renders. */
 const DEFAULTS = {
-  range: OWNER_DEFAULT_RANGE_KEY as string,
+  range: DASHBOARD_DEFAULT_RANGE_KEY as string,
   from: "",
   to: "",
   producerIds: [] as string[],
@@ -22,7 +25,7 @@ const DEFAULTS = {
 };
 
 const ALLOWED = {
-  range: OWNER_RANGE_KEYS,
+  range: DASHBOARD_RANGE_KEYS,
   producerIds: (value: string) => OBJECT_ID.test(value),
   // Sources are data, so the URL can only be checked for shape. "No source" is
   // a real choice, not an absent value.
@@ -32,8 +35,10 @@ const ALLOWED = {
 } as const;
 
 /**
- * The Owner dashboard's whole filter — period plus the three multi-selects —
- * held in the URL so a view survives a refresh and can be shared (PAC-135).
+ * The management dashboards' whole filter — period plus the three
+ * multi-selects — held in the URL so a view survives a refresh and can be
+ * shared (PAC-135). One hook for the Owner view and the Manager view
+ * (PAC-139): switching tabs keeps the filter, because it is the same filter.
  *
  * One hook owning all six params rather than a range hook beside a filter hook:
  * `useUrlState` explains why a group of keys has to be written in one
@@ -42,18 +47,18 @@ const ALLOWED = {
  * Filtering is instant — there is no Apply button — so `params` is what the
  * three queries key on directly.
  */
-export function useOwnerFilters() {
+export function useDashboardFilters() {
   const [values, setValues] = useUrlState({
     defaults: DEFAULTS,
     allowed: ALLOWED,
   });
 
-  const range = useMemo<OwnerRange>(
-    () => parseUrlRange(values, OWNER_DEFAULT_RANGE_KEY),
+  const range = useMemo<DashboardRange>(
+    () => parseUrlRange(values, DASHBOARD_DEFAULT_RANGE_KEY),
     [values],
   );
 
-  const params = useMemo<OwnerDashboardParams>(
+  const params = useMemo<DashboardFilterParams>(
     () => ({
       range: range.key,
       from: range.from,
@@ -66,7 +71,7 @@ export function useOwnerFilters() {
   );
 
   const setRange = useCallback(
-    (next: OwnerRange) => setValues(toUrlRange(next)),
+    (next: DashboardRange) => setValues(toUrlRange(next)),
     [setValues],
   );
 

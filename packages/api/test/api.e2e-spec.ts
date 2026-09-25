@@ -3833,8 +3833,10 @@ describe('SFA API (e2e)', () => {
       // `owner-dashboard` left with PAC-135, which replaced its stub with the
       // real `OwnerDashboardModule` — `GET /owner-dashboard/{summary,producers,
       // lead-sources}`, covered by its own describe block below.
+      // `management` left with PAC-139, which replaced its stub with the real
+      // `ManagementDashboardModule` on `management-dashboard/*`, covered by
+      // `management-dashboard.e2e-spec.ts`.
       { path: 'onboardings', module: ModuleKey.Onboardings },
-      { path: 'management', module: ModuleKey.Management },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 
@@ -4062,7 +4064,8 @@ describe('SFA API (e2e)', () => {
       // note at the top of this block).
       'deal-audits',
       'leaderboard',
-      'management',
+      // No bare route since PAC-139 — the alert cards are what the page loads first.
+      'management-dashboard/alerts',
       // No bare route since PAC-135 — the summary is what the page loads first.
       'owner-dashboard/summary',
       'command-center',
@@ -4118,8 +4121,8 @@ describe('SFA API (e2e)', () => {
       // `PATCH /households` to probe — the write is
       // `POST /households/:id/members`, covered by the Client records block.
       // `owner-dashboard` left with PAC-135: read-only, no mutating handler.
+      // `management` left with PAC-139 for the same reason.
       { path: 'onboardings', module: ModuleKey.Onboardings },
-      { path: 'management', module: ModuleKey.Management },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 

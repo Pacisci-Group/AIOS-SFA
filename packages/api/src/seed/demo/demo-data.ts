@@ -496,4 +496,13 @@ export const DEMO_CONFIG = {
   serviceTickets: 16,
   mailers: 14,
   timeOffRequests: 6,
+  /**
+   * Manager view fixtures (PAC-139), forced onto records the generators above
+   * would otherwise draw at random — so the three alert cards never all read
+   * zero on a fresh seed. Each override replaces a drawn value *after* the
+   * draw, so the seeded RNG sequence, and every record after it, is unchanged.
+   */
+  stalledLeads: 6,
+  agingAudits: 3,
+  overdueTickets: 3,
 } as const;

@@ -64,6 +64,15 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Owner Dashboard | Get Lead Sources | `GET /owner-dashboard/lead-sources` | **PAC-135** — Conv % · Vol · Premium per source, with "No source" kept as a row. Asserts its total equals the summary card. |
 | Owner Dashboard | Get Summary (Forbidden for Producer) | `GET /owner-dashboard/summary` | **PAC-135** — a producer is a `403`. |
 | Owner Dashboard | Get Summary (Invalid Range) | `GET /owner-dashboard/summary` | **PAC-135** — the producer dashboard's `week` chip must 400 here. |
+| Management Dashboard | Login as Manager | `POST /auth/login` | **PAC-139** — the Manager view is the Branch Manager's page, so the folder runs as `manager@demoagency.local` (branch scope). Asserts `management:read`, which proves the template + migration. Captures `managementDashboardToken`. |
+| Management Dashboard | Get Alerts | `GET /management-dashboard/alerts` | **PAC-139** — Stalled Leads · Aging Audits · Overdue Tickets, with the definitions and the shared filter documented. Captures the three counts for the drawer requests. |
+| Management Dashboard | List Stalled Leads | `GET /management-dashboard/alerts/stalled-leads` | **PAC-139** — the drawer: leads with no update > 48h (`lastActivityAt`, not `updatedAt`), open statuses only. Asserts `total` equals the card. |
+| Management Dashboard | List Aging Audits | `GET /management-dashboard/alerts/aging-audits` | **PAC-139** — one row per deal sold > 5 business days ago whose audit is not Pass. Asserts `total` equals the card. |
+| Management Dashboard | List Overdue Tickets | `GET /management-dashboard/alerts/overdue-tickets` | **PAC-139** — the Service dashboard's derived overdue, opened in the window. Asserts `total` equals the card. |
+| Management Dashboard | Get Team | `GET /management-dashboard/team` | **PAC-139** — one row per producer counted in **households**, availability status, all-time open audit items; `producerIds` ignored by design. Captures a producer id. |
+| Management Dashboard | Get Producer Drawer | `GET /management-dashboard/producers/:producerId` | **PAC-139** — the row's figures, the Active Pipeline (stage = lead status) and the open items one row each. |
+| Management Dashboard | Get Alerts (Forbidden for Producer) | `GET /management-dashboard/alerts` | **PAC-139** — a producer is a `403`. |
+| Management Dashboard | Get Alerts (Invalid Range) | `GET /management-dashboard/alerts` | **PAC-139** — the producer dashboard's `week` chip must 400 here. |
 | Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |

@@ -44,6 +44,7 @@ import { MailersModule } from './mailers/mailers.module';
 import { LeadsModule } from './leads/leads.module';
 import { PerformanceModule } from './performance/performance.module';
 import { OwnerDashboardModule } from './owner-dashboard/owner-dashboard.module';
+import { ManagementDashboardModule } from './management-dashboard/management-dashboard.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -196,6 +197,10 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     PerformanceModule,
     // The Owner View dashboard (PAC-135) — replaces the `owner-dashboard` stub.
     OwnerDashboardModule,
+    // The Manager View dashboard (PAC-139). Routes on `management-dashboard`,
+    // so it never collided with the `management` stub it replaces; the stub is
+    // gone anyway, since nothing served `GET /management` but a placeholder.
+    ManagementDashboardModule,
     LeaderboardModule,
     ActivitiesModule,
     // Super Admin mailer imports (PAC-73). Registers the `mailers` and
