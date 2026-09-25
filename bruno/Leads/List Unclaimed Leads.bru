@@ -1,0 +1,197 @@
+meta {
+  name: List Unclaimed Leads
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{baseUrl}}/leads/unclaimed?limit=10
+  body: none
+  auth: inherit
+}
+
+params:query {
+  limit: 10
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("resolves as its own route, not as GET /leads/:id", function () {
+    // `@Get(':id')` matches the literal string `unclaimed` just as happily as
+    // an ObjectId. If the controller's declaration order is ever changed, this
+    // request starts returning a lead detail (or a 404) instead.
+    const body = res.getBody();
+    expect(body).to.have.property("items");
+    expect(body).to.not.have.property("contact");
+  });
+
+  test("carries a total alongside the page", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("total");
+    expect(body.total).to.be.at.least(body.items.length);
+    // Not the paginated envelope — the panel has a count badge, not page
+    // controls, so shipping page arithmetic would advertise paging it lacks.
+    for (const key of ["page", "pageSize", "totalPages"]) {
+      expect(body).to.not.have.property(key);
+    }
+  });
+
+  test("every row is genuinely unowned", function () {
+    // The pool's whole definition. A row with an owner here means the filter
+    // stopped matching one of the two shapes an unset producer is stored in.
+    const items = res.getBody().items;
+    for (const item of items) {
+      expect(item).to.not.have.property("producerId");
+    }
+  });
+
+  test("ordered oldest arrival first", function () {
+    const items = res.getBody().items.filter((i) => i.arrivedAt);
+    for (let i = 1; i < items.length; i++) {
+      expect(items[i].arrivedAt >= items[i - 1].arrivedAt).to.equal(true);
+    }
+  });
+
+  test("no lead with no arrival date sorts to the top", function () {
+    // `arrivedAt` falls back to `createdAt`, which `timestamps: true` always
+    // writes — so a null here means the fallback in the pipeline stopped
+    // working, and Mongo sorts a missing value before every real date.
+    const items = res.getBody().items;
+    for (const item of items) {
+      expect(item.arrivedAt).to.not.equal(null);
+    }
+  });
+
+  test("rows resolve the lead source, never an id", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      expect(items[0]).to.have.property("leadSource");
+      expect(items[0].leadSource).to.not.match(/^[0-9a-f]{24}$/);
+      expect(items[0]).to.not.have.property("leadSourceId");
+    }
+  });
+
+  test("no terminal-status lead is in the pool", function () {
+    const closed = ["Sold", "Converted", "Not Qualified", "Lost", "Closed"];
+    for (const item of res.getBody().items) {
+      expect(closed).to.not.include(item.status);
+    }
+  });
+}
+
+docs {
+  # GET /leads/unclaimed — Unclaimed Agency Leads Pool (PAC-138)
+
+  Every lead in the agency that **no producer owns yet**, oldest arrival first.
+  Backs the Unclaimed Pool panel on the Agency Command Center.
+
+  - **Module:** `leads` — a different *view* of the agency's leads, not a
+    different resource, so it needs no module or permission of its own.
+  - **Permission:** `leads:read`
+  - **Data scope:** see below. This is the one lead read that deliberately
+    crosses `DataScope`.
+
+  ## 🔴 The scope bypass, and what pays for it
+
+  Every other lead read clamps through `buildScopeFilter`, which pins
+  `producerId` to the caller under `DataScope.Own`. Every lead in this pool has
+  **no** `producerId` at all, so that clamp would hand a producer an empty pool,
+  always — and a pool nobody can look into distributes nothing.
+
+  So the producer pin is lifted, exactly as `GET /leaderboard` lifts it, and the
+  safety moves into the **response contract** instead of the query:
+
+  - `phone`, `email` and `primaryContactDeceasedAt` are **withheld (`null`) from
+    an `own`-scoped caller**, who could not open any of these leads anyway
+    (`GET /leads/:id` 404s an unassigned lead under `own` scope, by design).
+    The contact lookup is skipped for them entirely, so the values never reach
+    the response shaper.
+  - No address, no notes, no activity narrative. The row says enough to
+    recognise a lead and decide who should get it, and no more.
+
+  Seeing that a lead exists and being able to work it are separate rights —
+  PAC-59's distinction, applied here to the one list that needs it now. **Adding
+  a contact-bearing field to this row widens who can read it.**
+
+  Everything else the clamp does still applies: the agency pin, the test-record
+  exclusion, and the branch pin for a `branch`-scoped caller.
+
+  ⚠ **Open product question (PAC-59 Q2):** whether pool visibility should be
+  agency-wide or branch-wide for a producer is undecided. Today a branch-scoped
+  caller stays inside their branch and a producer sees the agency, matching how
+  `DataScope.Own` is defined everywhere else — it constrains by *owner*, never
+  by branch.
+
+  ## Ordering
+
+  Oldest arrival first, where arrival is `createdDate ?? createdAt`:
+  `createdDate` is the source system's date and is when a migrated lead really
+  came in, while its `createdAt` is the night the import ran — identical across
+  hundreds of rows. Sorting on either column alone gets one half of the pool
+  wrong, so the fallback is computed in the pipeline and sorted on, with `_id`
+  as the tiebreaker so the panel does not reshuffle between refreshes.
+
+  Leads in a **terminal status** (Sold, Converted, Not Qualified, Lost, Closed)
+  are excluded — expanded through the raw SmartSuite choice codes, so a migrated
+  `Lost` lead stored as `jp76g` is caught too. A closed lead is not work waiting
+  to be picked up, however long it has sat unowned.
+
+  ## Claiming a lead from this pool
+
+  There is **no claim verb on this endpoint.** Handing the lead over is
+  `PATCH /leads/:id/assignment`, which requires `leads:write` **and**
+  `agency:users:read` — Agency Owner and Branch Manager only. A producer can see
+  the pool and cannot assign from it.
+
+  Self-service claiming by a producer is a *request* that an owner or manager
+  approves, and it is **not built**: it needs the `leadAccessRequests` collection
+  and approver queue from PAC-59, extended by PAC-105. Until those land, the
+  pool shows a producer no claim affordance at all.
+
+  ## Query params
+  | param | type | default | rules |
+  |-------|------|---------|-------|
+  | limit | int | 10 | 1–50 |
+
+  No `scope`, unlike `GET /leads` and `GET /leads/hot`. Those accept one because
+  it can only ever *narrow* a caller who might see more; here "unclaimed"
+  already means "owned by nobody", so `scope=own` would ask for leads that are
+  both unowned and owned by the caller — an empty set with a plausible name.
+
+  ## Response `200`
+
+  ```json
+  {
+    "items": [
+      {
+        "id": "6a71...b87",
+        "name": "Sandra Kowalski",
+        "initials": "SK",
+        "temperature": "Hot",
+        "leadSource": "Mail Referral",
+        "status": "New",
+        "phone": "(312) 555-8136",
+        "email": "sandra.kowalski@example.com",
+        "primaryContactDeceasedAt": null,
+        "arrivedAt": "2026-09-18T14:02:11.004Z"
+      }
+    ],
+    "total": 27
+  }
+  ```
+
+  | field | notes |
+  |-------|-------|
+  | total | every unclaimed lead in scope, not just the ones in `items` — the count badge is allowed to say more than the list shows |
+  | arrivedAt | `createdDate ?? createdAt`; the sort key, and what the row's "3h ago" means |
+  | temperature | the **stored** value, set by management during review. Deliberately not a computed aging band: the prototype's `fresh`/`warm`/`hot`/`critical` tiers had no rule behind them, and deriving temperature automatically is a later ticket |
+  | phone / email / primaryContactDeceasedAt | `null` when absent **or** withheld — see the scope note above. A client cannot tell the two apart and does not need to; both render as unavailable |
+  | leadSource | the source's name, or `"Unknown"` when none is set. Never an id or a raw choice code |
+
+  ## Errors
+  - `400` — `limit` outside 1–50.
+  - `401` / `403` — as for `GET /leads`.
+}

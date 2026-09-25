@@ -42,6 +42,7 @@ import { LeadAssignmentService } from './lead-assignment.service';
 import { LeadDetailService } from './lead-detail.service';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
+import { UnclaimedLeadsService } from './unclaimed-leads.service';
 import { Lead, LeadSchema } from './schemas/lead.schema';
 
 @Module({
@@ -103,6 +104,7 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     LeadsService,
     LeadDetailService,
     HotLeadsService,
+    UnclaimedLeadsService,
     LeadIntakeService,
     LeadAccessService,
     LeadAssignmentService,

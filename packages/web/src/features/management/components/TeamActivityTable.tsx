@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { AvailabilityBadge } from "@/components/common/AvailabilityBadge";
+import { DataPanel } from "@/components/common/DataPanel";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -11,7 +12,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { OwnerPanel } from "@/features/owner-dashboard/components/OwnerPanel";
 import { formatCount, formatPct } from "@/features/owner-dashboard/owner-format";
 import type { DashboardFilterParams } from "@/lib/dashboard-filter-params";
 import {
@@ -58,7 +58,7 @@ export function TeamActivityTable({
   });
 
   return (
-    <OwnerPanel
+    <DataPanel
       title="Team activity"
       subheading="Households quoted and sold this period. Open audit items are all-time. Click a producer to open their pipeline."
       isPending={isPending}
@@ -108,7 +108,7 @@ export function TeamActivityTable({
           </TableFooter>
         </Table>
       )}
-    </OwnerPanel>
+    </DataPanel>
   );
 }
 

@@ -22,8 +22,8 @@ const ProducerDashboardPage = lazy(
 const ManagementDashboardPage = lazy(
   () => import('@/features/management/ManagementDashboardPage'),
 );
-const ManagementDashboardAltPage = lazy(
-  () => import('@/features/management-alt/ManagementDashboardAltPage'),
+const CommandCenterPage = lazy(
+  () => import('@/features/command-center/CommandCenterPage'),
 );
 const ServiceDashboardPage = lazy(
   () => import('@/features/service/ServiceDashboardPage'),
@@ -345,11 +345,16 @@ export function App() {
                     </LazyPage>
                   }
                 />
+                {/* The Agency Command Center (PAC-138). Still on
+                    `management:read` with the Overview above it: the route's
+                    audience has not changed, and `command_center:read` exists
+                    but is held by Data Team, who have no leads permissions at
+                    all and would reach a page of empty panels. */}
                 <Route
                   path="/dashboard/management-alt"
                   element={
                     <LazyPage>
-                      <ManagementDashboardAltPage />
+                      <CommandCenterPage />
                     </LazyPage>
                   }
                 />

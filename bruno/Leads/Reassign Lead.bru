@@ -108,6 +108,21 @@ docs {
   Re-selecting the current owner is a **no-op**: it returns `200` and writes no
   timeline entry, rather than logging a change that did not happen.
 
+  ## 🔴 Concurrent assignment loses, it does not overwrite
+
+  The write is a **compare-and-swap on the owner the request read**, not a
+  read-modify-save. Two managers assigning the same lead — which the Command
+  Center's unclaimed pool (PAC-138) made an everyday case — would otherwise both
+  succeed: each reads the current owner, each writes its own target, and the
+  second silently overwrites the first. Two people are told the lead is theirs,
+  the timeline says it moved twice, and nothing says a race happened.
+
+  The loser now gets **`409`**, naming whoever won. Deliberately not the winner's
+  record with a `200`: telling a manager who picked Alice that the lead is now
+  Bob's, while their own click did nothing, reads as a bug in the picker.
+  (`CrmAssignmentService` adopts the winner instead, because it is a background
+  rotation with nobody waiting for an answer.)
+
   > ⚠ This request targets **Create Disposable Lead**, not `{{createdLeadId}}`.
   > Quote Recaps and Sold Deals both run later *as the producer* and use that
   > lead — moving it to the owner would 404 every one of them. See that
@@ -141,5 +156,6 @@ docs {
   - `400 Bad Request` — missing or malformed `producerId`.
   - `403 Forbidden` — missing `leads:write` or `agency:users:read`.
   - `404 Not Found` — no such lead (or out of scope), or no such user.
-  - `409 Conflict` — the lead is sold, or the target user is deactivated.
+  - `409 Conflict` — the lead is sold, the target user is deactivated, or
+    somebody else reassigned the lead first (see the compare-and-swap above).
 }
