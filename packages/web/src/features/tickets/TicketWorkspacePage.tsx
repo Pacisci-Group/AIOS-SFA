@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Archive } from "lucide-react";
@@ -6,17 +6,12 @@ import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { KpiStrip } from "./components/KpiStrip";
-import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { KpiStrip, type KpiCounts } from "./components/KpiStrip";
 import { TablePagination } from "@/components/common/TablePagination";
-import { SEARCH_DEBOUNCE_MS } from "@/components/common/TableSearchInput";
-import type { TicketFeedFilters } from "./components/TicketFeed";
 import { TicketFeed } from "./components/TicketFeed";
-import {
-  FEED_PAGE_SIZE,
-  feedRequestFilters,
-} from "./components/ticket-feed-query";
 import { WorkspacePanel } from "./components/WorkspacePanel";
+import { useTicketQueue } from "./useTicketQueue";
+import { useSelectedTicket } from "./useSelectedTicket";
 import type { TicketStatus } from "./components/ticket-data";
 import {
   addServiceTicketNote,
@@ -33,6 +28,7 @@ import {
   type RenewalStepKey,
   type ServiceTicketNoteType,
 } from "@/lib/service-tickets-api";
+import { ticketQueueTabStatuses } from "@/lib/ticket-queue";
 import { ModuleKey } from "@sfa/shared";
 import { usePermissions } from "@/hooks/usePermissions";
 
@@ -42,6 +38,33 @@ const ONBOARDING_KEY = ["onboarding"];
 const HOUSEHOLD_ONBOARDINGS_KEY = ["household-onboardings"];
 const RENEWAL_CYCLE_KEY = ["renewal-cycle"];
 const RENEWAL_DESK_KEY = ["renewal-desk"];
+
+/**
+ * The KPI strip's four counts, over the whole active queue.
+ *
+ * Two one-row requests rather than a count of the feed: the feed holds one page
+ * (PAC-98). The active request's `counts` answers three of the four — its tab
+ * counts are taken before any tab narrows it — and the resolved band is the
+ * `total` of the second.
+ */
+async function fetchKpiCounts(): Promise<KpiCounts> {
+  const [active, resolved] = await Promise.all([
+    listServiceTickets({
+      status: ticketQueueTabStatuses("all"),
+      pageSize: 1,
+    }),
+    listServiceTickets({
+      status: ticketQueueTabStatuses("resolved"),
+      pageSize: 1,
+    }),
+  ]);
+  return {
+    open: active.counts.all,
+    overdue: active.counts.overdue,
+    waiting: active.counts.waiting,
+    resolved: resolved.total,
+  };
+}
 
 /**
  * `/crm/tickets` — the CSR's queue on the left, the selected ticket's workspace
@@ -69,77 +92,38 @@ export default function TicketWorkspacePage() {
     searchParams.get("ticket") ? "workspace" : "queue",
   );
 
-  /*
-   * Paged by the server since PAC-98. This feed used to fetch every ticket in
-   * the caller's scope in one response, so its payload grew with the book.
+  /**
+   * The queue's filters, search, ranking and page — read from the URL, which is
+   * what carries them here from the Service Dashboard's Priority Ticket Queue —
+   * and one page of it, from the server (PAC-98).
    */
-  const page = Number(searchParams.get("page")) || 1;
+  const queue = useTicketQueue();
+  const tickets = queue.rows;
 
-  /*
-   * The feed's controls live here rather than inside it, because they are part
-   * of the *request* now — see `TicketFeedFilters`. Changing one resets to page
-   * 1: page 3 of an unfiltered list is not page 3 of a filtered one.
-   */
-  const [filters, setFilters] = useState<TicketFeedFilters>({
-    query: "",
-    filter: "all",
-    category: "all",
-  });
-  // Typing should not fire a request per keystroke.
-  const debouncedQuery = useDebouncedValue(filters.query, SEARCH_DEBOUNCE_MS);
-
-  const feedQuery = useMemo(
-    () => feedRequestFilters(filters, debouncedQuery),
-    [filters, debouncedQuery],
-  );
-
-  const changeFilters = (next: TicketFeedFilters) => {
-    setFilters(next);
-    const params = new URLSearchParams(searchParams);
-    params.delete("page");
-    params.delete("ticket");
-    setSearchParams(params, { replace: true });
-  };
-
-  const ticketsQuery = useQuery({
-    queryKey: [...TICKETS_KEY, { page, ...feedQuery }],
-    queryFn: () => listServiceTickets({ page, pageSize: FEED_PAGE_SIZE, ...feedQuery }),
-    // Hold the previous page while the next loads, so paging does not blank
-    // the feed and drop the selection out from under the workspace pane.
-    placeholderData: (previous) => previous,
+  const kpiQuery = useQuery({
+    queryKey: [...TICKETS_KEY, "kpis"],
+    queryFn: fetchKpiCounts,
   });
 
-  const ticketPage = ticketsQuery.data;
-  const tickets = useMemo(() => ticketPage?.items ?? [], [ticketPage]);
-  // The whole filtered queue, not the page in hand.
-  const queueTotal = ticketPage?.total ?? 0;
-
-  const goToPage = (next: number) => {
-    const params = new URLSearchParams(searchParams);
-    if (next <= 1) params.delete("page");
-    else params.set("page", String(next));
-    // The selected ticket belongs to the page being left.
-    params.delete("ticket");
-    setSearchParams(params, { replace: true });
-  };
-
-  // Preselect from ?ticket=<id> (deep link from the Service Dashboard "Open"),
-  // otherwise fall back to the first ticket in the list.
+  // Preselect from ?ticket=<id> (deep link from the Service Dashboard "Open",
+  // the household activity feed, an onboarding chain row), otherwise fall back
+  // to the first row of the page — which, now that the server ranks, is the
+  // first row the rep can see.
+  const requestedId = searchParams.get("ticket");
   useEffect(() => {
-    if (!tickets.length) return;
-    const requested = searchParams.get("ticket");
-    if (requested && tickets.some((t) => t.id === requested)) {
-      setSelectedTicketId(requested);
+    if (requestedId) {
+      setSelectedTicketId(requestedId);
       return;
     }
+    if (!tickets.length) return;
     setSelectedTicketId((current) =>
       current && tickets.some((t) => t.id === current)
         ? current
         : tickets[0].id,
     );
-  }, [tickets, searchParams]);
+  }, [tickets, requestedId]);
 
-  const selectedTicket = tickets.find((t) => t.id === selectedTicketId) ?? null;
+  const selectedTicket = useSelectedTicket(selectedTicketId, tickets);
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: TicketStatus }) =>
@@ -234,6 +218,11 @@ export default function TicketWorkspacePage() {
     onSuccess: invalidateRenewal,
   });
 
+  // The whole filtered queue, not the page in hand; and the open queue, the
+  // same number as the strip's "Total open".
+  const queueTotal = queue.page?.total ?? 0;
+  const openTotal = kpiQuery.data?.open;
+
   const handleSelect = (id: string) => {
     setSelectedTicketId(id);
     setMobilePane("workspace");
@@ -250,8 +239,15 @@ export default function TicketWorkspacePage() {
     // rather than pinning the viewport. This page is a two-pane layout that
     // scrolls each pane internally, so it has to assert the viewport height
     // itself — `h-full` would collapse against a parent with no set height.
+    //
+    // **No `flex-1` here.** The shell's column is a flex container with no
+    // height of its own, and `flex-1` sets `flex-basis: 0%` — which resolves
+    // to *content* against an indefinite parent and takes precedence over
+    // `height`. The container then sized itself to every ticket row, the item
+    // grew to match, and `h-screen` never applied: the whole page scrolled and
+    // neither pane did. With the basis left at `auto`, the height is the basis.
     <AppShell>
-      <div className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:gap-4 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <MobileNav className="-ml-1" />
@@ -259,10 +255,16 @@ export default function TicketWorkspacePage() {
               <h1 className="text-lg font-semibold tracking-tight">
                 Service tickets
               </h1>
+              {/* "3 matching · 41 open" while a filter is on, rather than a
+                  bare 41 above a list of 3 — the two disagreeing is what made
+                  the workspace look like a different queue from the dashboard.
+                  Not "3 of 41": the Resolved tab is not a subset of open work. */}
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {ticketsQuery.isLoading || ticketsQuery.isError
+                {queue.isLoading || queue.isError
                   ? " "
-                  : `${queueTotal} ticket${queueTotal !== 1 ? "s" : ""} in your queue`}
+                  : queue.isFiltered
+                    ? `${queueTotal} matching · ${openTotal ?? "…"} open in your queue`
+                    : `${queueTotal} ticket${queueTotal !== 1 ? "s" : ""} in your queue`}
               </p>
             </div>
           </div>
@@ -276,7 +278,7 @@ export default function TicketWorkspacePage() {
           </div>
         </header>
 
-        {ticketsQuery.isError ? (
+        {queue.isError ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
             <AlertCircle aria-hidden className="size-5 text-destructive" />
             <p className="text-sm text-muted-foreground">
@@ -285,14 +287,14 @@ export default function TicketWorkspacePage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void ticketsQuery.refetch()}
+              onClick={queue.refetch}
             >
               Retry
             </Button>
           </div>
         ) : (
           <>
-            <KpiStrip tickets={tickets} />
+            <KpiStrip counts={kpiQuery.data} />
 
             {/* Stacked below `lg`, 40/60 above it. */}
             <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -303,20 +305,17 @@ export default function TicketWorkspacePage() {
                 )}
               >
                 <TicketFeed
-                  tickets={tickets}
-                  filters={filters}
-                  onFiltersChange={changeFilters}
+                  queue={queue}
                   selectedId={selectedTicketId}
                   onSelect={handleSelect}
-                  busy={ticketsQuery.isFetching}
                 />
                 <TablePagination
-                  page={ticketPage?.page ?? page}
-                  pageSize={ticketPage?.pageSize ?? FEED_PAGE_SIZE}
-                  total={ticketPage?.total ?? 0}
-                  totalPages={ticketPage?.totalPages ?? 1}
-                  onPageChange={goToPage}
-                  busy={ticketsQuery.isFetching}
+                  page={queue.page?.page ?? queue.requestedPage}
+                  pageSize={queue.page?.pageSize ?? queue.pageSize}
+                  total={queue.page?.total ?? 0}
+                  totalPages={queue.page?.totalPages ?? 1}
+                  onPageChange={queue.setPage}
+                  busy={queue.isFetching}
                   noun="tickets"
                   className="border-t border-border px-4 py-3"
                 />

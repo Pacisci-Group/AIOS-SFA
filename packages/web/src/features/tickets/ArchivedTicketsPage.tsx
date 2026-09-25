@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, ChevronRight } from "lucide-react";
 import { ModuleKey, SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from "@sfa/shared";
 import { AppShell } from "@/components/layout/AppShell";
@@ -8,25 +8,25 @@ import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
-import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { TablePagination } from "@/components/common/TablePagination";
-import { SEARCH_DEBOUNCE_MS } from "@/components/common/TableSearchInput";
-import type { TicketFeedFilters } from "./components/TicketFeed";
 import { TicketFeed } from "./components/TicketFeed";
-import {
-  FEED_PAGE_SIZE,
-  feedRequestFilters,
-} from "./components/ticket-feed-query";
 import { WorkspacePanel } from "./components/WorkspacePanel";
+import { useTicketQueue } from "./useTicketQueue";
+import { useSelectedTicket } from "./useSelectedTicket";
+import type { TicketQueueTab } from "@/lib/ticket-queue";
 import type { TicketStatus } from "./components/ticket-data";
 import {
   addServiceTicketNote,
-  listServiceTickets,
   updateServiceTicketStatus,
   type ServiceTicketNoteType,
 } from "@/lib/service-tickets-api";
 
-const ARCHIVED_KEY = ["service-tickets", "archived"];
+/**
+ * No status strip here: every ticket on this page is resolved or closed, so
+ * four tabs of which one matches is noise. Frozen at module scope — the queue
+ * hook guards the URL against this list. Search, category and sort still work.
+ */
+const NO_STATUS_TABS: readonly TicketQueueTab[] = [];
 
 /**
  * Archived Tickets — tickets that were resolved more than
@@ -48,67 +48,24 @@ export default function ArchivedTicketsPage() {
     searchParams.get("ticket") ? "workspace" : "queue",
   );
 
-  /*
-   * Paged by the server since PAC-98. This list used to fetch every ticket in
-   * the caller's scope in one response; the feed rendered all of them and the
-   * payload grew with the book.
+  /**
+   * Paged by the server since PAC-98 — this list used to fetch every ticket in
+   * the caller's scope in one response. Same URL-held filters as the live
+   * workspace, on the other side of the archive window.
    */
-  const page = Number(searchParams.get("page")) || 1;
+  const queue = useTicketQueue({ archived: true, tabs: NO_STATUS_TABS });
+  const tickets = queue.rows;
 
-  /*
-   * The feed's controls live here rather than inside it, because they are part
-   * of the *request* now — see `TicketFeedFilters`. Changing one resets to page
-   * 1: page 3 of an unfiltered list is not page 3 of a filtered one.
-   */
-  const [filters, setFilters] = useState<TicketFeedFilters>({
-    query: "",
-    filter: "all",
-    category: "all",
-  });
-  // Typing should not fire a request per keystroke.
-  const debouncedQuery = useDebouncedValue(filters.query, SEARCH_DEBOUNCE_MS);
-
-  const feedQuery = useMemo(
-    () => feedRequestFilters(filters, debouncedQuery),
-    [filters, debouncedQuery],
-  );
-
-  const changeFilters = (next: TicketFeedFilters) => {
-    setFilters(next);
-    const params = new URLSearchParams(searchParams);
-    params.delete("page");
-    params.delete("ticket");
-    setSearchParams(params, { replace: true });
-  };
-
-  const ticketsQuery = useQuery({
-    queryKey: [...ARCHIVED_KEY, { page, ...feedQuery }],
-    queryFn: () => listServiceTickets({ archived: true, page, pageSize: FEED_PAGE_SIZE, ...feedQuery }),
-    // Hold the previous page while the next loads, so paging does not blank
-    // the feed and drop the selection out from under the workspace pane.
-    placeholderData: (previous) => previous,
-  });
-
-  const ticketPage = ticketsQuery.data;
-  const tickets = useMemo(() => ticketPage?.items ?? [], [ticketPage]);
-
-  const goToPage = (next: number) => {
-    const params = new URLSearchParams(searchParams);
-    if (next <= 1) params.delete("page");
-    else params.set("page", String(next));
-    // The selected ticket belongs to the page being left.
-    params.delete("ticket");
-    setSearchParams(params, { replace: true });
-  };
-
+  // Same rule as the live workspace: a `?ticket=` deep link wins, otherwise
+  // open the first row the list actually shows.
+  const requestedId = searchParams.get("ticket");
   useEffect(() => {
-    if (!tickets.length) {
-      setSelectedTicketId(null);
+    if (requestedId) {
+      setSelectedTicketId(requestedId);
       return;
     }
-    const requested = searchParams.get("ticket");
-    if (requested && tickets.some((t) => t.id === requested)) {
-      setSelectedTicketId(requested);
+    if (!tickets.length) {
+      setSelectedTicketId(null);
       return;
     }
     setSelectedTicketId((current) =>
@@ -116,9 +73,9 @@ export default function ArchivedTicketsPage() {
         ? current
         : tickets[0].id,
     );
-  }, [tickets, searchParams]);
+  }, [tickets, requestedId]);
 
-  const selectedTicket = tickets.find((t) => t.id === selectedTicketId) ?? null;
+  const selectedTicket = useSelectedTicket(selectedTicketId, tickets);
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["service-tickets"] });
@@ -158,9 +115,11 @@ export default function ArchivedTicketsPage() {
   return (
     // Asserts the viewport height itself, matching TicketWorkspacePage — same
     // two-column split, same internal scrolling, and `AppShell` is
-    // `min-h-screen` rather than a pinned parent to measure against.
+    // `min-h-screen` rather than a pinned parent to measure against. No
+    // `flex-1`, for the reason written up there: its `flex-basis: 0%` would
+    // override `h-screen` and let the page grow to the full list.
     <AppShell>
-      <div className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:gap-4 md:px-6">
           <div className="flex min-w-0 items-center gap-2 md:gap-3">
             <MobileNav className="-ml-1" />
@@ -181,15 +140,15 @@ export default function ArchivedTicketsPage() {
                 Archived tickets
               </h1>
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {ticketsQuery.isLoading || ticketsQuery.isError
+                {queue.isLoading || queue.isError
                   ? " "
-                  : `${ticketPage?.total ?? 0} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
+                  : `${queue.page?.total ?? 0} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
               </p>
             </div>
           </div>
         </header>
 
-        {ticketsQuery.isError ? (
+        {queue.isError ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
             <AlertCircle aria-hidden className="size-5 text-destructive" />
             <p className="text-sm text-muted-foreground">
@@ -198,7 +157,7 @@ export default function ArchivedTicketsPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void ticketsQuery.refetch()}
+              onClick={queue.refetch}
             >
               Retry
             </Button>
@@ -212,22 +171,18 @@ export default function ArchivedTicketsPage() {
               )}
             >
               <TicketFeed
-                tickets={tickets}
-                filters={filters}
-                onFiltersChange={changeFilters}
+                queue={queue}
                 selectedId={selectedTicketId}
                 onSelect={handleSelect}
-                busy={ticketsQuery.isFetching}
-                showStatusTabs={false}
                 emptyLabel={`Nothing archived yet. Tickets land here ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days after they are resolved.`}
               />
               <TablePagination
-                page={ticketPage?.page ?? page}
-                pageSize={ticketPage?.pageSize ?? FEED_PAGE_SIZE}
-                total={ticketPage?.total ?? 0}
-                totalPages={ticketPage?.totalPages ?? 1}
-                onPageChange={goToPage}
-                busy={ticketsQuery.isFetching}
+                page={queue.page?.page ?? queue.requestedPage}
+                pageSize={queue.page?.pageSize ?? queue.pageSize}
+                total={queue.page?.total ?? 0}
+                totalPages={queue.page?.totalPages ?? 1}
+                onPageChange={queue.setPage}
+                busy={queue.isFetching}
                 noun="tickets"
                 className="border-t border-border px-4 py-3"
               />

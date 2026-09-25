@@ -1,9 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
   CreateLeadResponse,
   LEAD_SOURCE_NONE,
+  PolicyReplacementReason,
+  ReplacementLeadLookup,
   ServiceTicketView,
   isPhoneLike,
   leadStatusQueryValues,
@@ -26,6 +32,7 @@ import {
 import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
+import { PoliciesService } from '../policies/policies.service';
 import { LeadAccessService } from './lead-access.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { ListLeadsDto } from './dto/list-leads.dto';
@@ -115,6 +122,13 @@ export class LeadsService {
     private readonly intake: LeadIntakeService,
     private readonly leadAccess: LeadAccessService,
     private readonly leadTickets: LeadTicketsService,
+    /*
+     * Cancel Rewrite and Company Transfer create their lead from a policy, and
+     * `loadHouseholdPolicy` is the authority on whether the caller may reach it
+     * — the household rule, the same clamp the household policy edit uses.
+     * Injected rather than reimplemented so the rule exists once.
+     */
+    private readonly policies: PoliciesService,
     private readonly leadSources: LeadSourcesService,
   ) {}
 
@@ -131,6 +145,18 @@ export class LeadsService {
     dto: CreateLeadDto,
   ): Promise<CreateLeadResponse> {
     const ctx = await this.buildInternalContext(access, branchId, dto);
+
+    /*
+     * A replacement names a **policy**; the household is derived from it here
+     * rather than trusted from the body, so a caller cannot write a replacement
+     * lead against a book they do not own. `resolveReplacement` also re-runs the
+     * replaceable checks, because the entry point's copy of them is a
+     * convenience and this is the enforcement.
+     */
+    const replacement = dto.replacementIntent
+      ? await this.resolveReplacement(access, dto)
+      : null;
+
     const outcome = await this.intake.process(ctx, {
       primaryContact: dto.primaryContact,
       address: dto.address,
@@ -138,12 +164,205 @@ export class LeadsService {
       policiesOfInterest: dto.policiesOfInterest,
       quoteControlNumber: dto.quoteControlNumber,
       submissionToken: dto.submissionToken,
-      // Set only by the Household page's "Start Quote" flow, where the caller
-      // already has the household open. Absent everywhere else, including the
-      // public route, whose schema does not accept it.
-      householdId: dto.householdId,
+      // Set by the Household page's "Start Quote" flow, where the caller already
+      // has the household open, and by a replacement, where it is derived from
+      // the policy. Absent everywhere else, including the public route, whose
+      // schema does not accept it.
+      householdId: replacement?.householdId ?? dto.householdId,
+      replacementIntent: replacement?.intent,
     });
     return { id: outcome.leadId.toString() };
+  }
+
+  /**
+   * Check a replacement is allowed, and say which household it belongs to.
+   *
+   * The guards mirror `PolicyRewritesService.record` exactly, and deliberately:
+   * the Sold submit is what finally retires the policy, but discovering there
+   * that it cannot be retired would strand a rep who has just filled in two
+   * forms. Failing at lead creation is the cheapest honest place.
+   *
+   * Scope is the **household** rule (`loadHouseholdPolicy`), the same one the
+   * household policy edit uses: a replacement is an action on the client's
+   * book, and the sales-record clamp would 404 every migrated policy for an
+   * `own`-scope producer. Out of scope 404s rather than 403s either way.
+   */
+  private async resolveReplacement(
+    access: AccessContext,
+    dto: CreateLeadDto,
+  ): Promise<{
+    householdId: string;
+    intent: { policyId: Types.ObjectId; reason: PolicyReplacementReason };
+  }> {
+    const requested = dto.replacementIntent;
+    if (!requested) {
+      throw new BadRequestException('No replacement was requested.');
+    }
+
+    const policy = await this.policies.loadHouseholdPolicy(
+      access,
+      requested.policyId,
+    );
+
+    if (!policy.householdId) {
+      throw new BadRequestException(
+        'This policy is not linked to a household, so a replacement cannot be written for it. Link it first.',
+      );
+    }
+    // Replaced before inactive: a replaced policy is also inactive, and
+    // "already replaced" is the message that tells the rep what to do next.
+    if (policy.transferredToPolicyId) {
+      throw new ConflictException(
+        'This policy has already been replaced. Replace its replacement instead.',
+      );
+    }
+    if (!policy.active) {
+      throw new ConflictException(
+        'This policy is not active, so it cannot be replaced.',
+      );
+    }
+
+    /*
+     * A household sent alongside must agree with the policy's. It is not used —
+     * the policy's own household wins — but a disagreement means the client is
+     * confused about which client it is looking at, and silently overriding it
+     * would write the replacement somewhere the rep is not expecting.
+     */
+    if (dto.householdId && dto.householdId !== String(policy.householdId)) {
+      throw new BadRequestException(
+        'That policy belongs to a different household than the one given.',
+      );
+    }
+
+    return {
+      householdId: String(policy.householdId),
+      intent: { policyId: policy._id, reason: requested.reason },
+    };
+  }
+
+  /**
+   * Where a replacement should start, for one policy and one reason.
+   *
+   * The single call both entry points make before routing anywhere. Three
+   * answers in one read, because the button needs all three to decide and a
+   * second round trip to learn it cannot proceed is a round trip wasted:
+   *
+   *   - **`blockedReason` set** — this policy cannot be replaced at all. The
+   *     same guards {@link resolveReplacement} enforces at lead creation,
+   *     reported here so the chain never starts rather than failing after a
+   *     form.
+   *   - **`leadId` set** — a lead was already created for this and abandoned
+   *     before the Sold form. Resume there.
+   *   - **both null** — nothing started. Create the lead first.
+   *
+   * Returned rather than thrown, unlike the guards themselves: the caller is
+   * asking *whether* it may act, and an exception is the wrong shape for "no,
+   * and here is why".
+   *
+   * ## Why this lives on the leads side
+   *
+   * It needs both `loadHouseholdPolicy` (is this policy reachable and replaceable?)
+   * and the lead scope rule (is there an open lead I am allowed to resume?).
+   * `LeadsModule` imports `PoliciesModule`, so both are available here; putting
+   * it on the policies controller would have needed the reverse import too, and
+   * that is the cycle.
+   */
+  async replacementLead(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+    reason: PolicyReplacementReason,
+  ): Promise<ReplacementLeadLookup> {
+    const policy = await this.policies.loadHouseholdPolicy(access, policyId);
+
+    const householdId = policy.householdId ? String(policy.householdId) : null;
+
+    // Same order as `resolveReplacement`: replaced before inactive.
+    const blockedReason = !policy.householdId
+      ? 'This policy is not linked to a household, so a replacement cannot be written for it. Link it first.'
+      : policy.transferredToPolicyId
+        ? 'This policy has already been replaced. Replace its replacement instead.'
+        : !policy.active
+          ? 'This policy is not active, so it cannot be replaced.'
+          : null;
+
+    if (blockedReason) {
+      return { leadId: null, householdId, blockedReason };
+    }
+
+    const lead = await this.findReplacementLead(
+      access,
+      branchId,
+      policyId,
+      reason,
+    );
+
+    return {
+      leadId: lead ? String(lead._id) : null,
+      householdId,
+      blockedReason: null,
+    };
+  }
+
+  /**
+   * The open lead already created for this policy's replacement, or null —
+   * what makes the two-form chain resumable.
+   *
+   * A rep can create the lead and close the tab before the Sold form. Asking
+   * again for the same action on the same policy must land them on that lead
+   * rather than opening a second one beside it, so both entry points ask this
+   * first.
+   *
+   * **Keyed on the intent, not the address**, which is why
+   * `ResolveLeadStep`'s address dedupe can be skipped for replacements without
+   * giving up duplicate protection where it matters.
+   *
+   * `reason` is part of the key: a policy could in principle be queued for a
+   * rewrite and a transfer, and resuming one into the other would apply the
+   * wrong money rules. Newest first, because a second intent for the same pair
+   * is not rejected at write time — see the index's note.
+   */
+  private async findReplacementLead(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+    reason: PolicyReplacementReason,
+  ): Promise<LeadDocument | null> {
+    const tenant = await this.tenancy.resolve(access, branchId);
+    if (!Types.ObjectId.isValid(policyId)) return null;
+
+    const leads = await this.leadModel
+      .find({
+        agencyId: tenant.agencyId,
+        'replacementIntent.policyId': new Types.ObjectId(policyId),
+        'replacementIntent.reason': reason,
+        // Unconsumed only. A consumed intent explains a lead whose work is
+        // already done; resuming into it would book a second replacement.
+        'replacementIntent.consumedAt': null,
+      })
+      .sort({ createdAt: -1 });
+
+    /*
+     * Scope is applied *after* the query rather than inside it: `own` scope on a
+     * lead is `producerId`, and a rep who abandoned a replacement someone else
+     * started should get a fresh lead of their own rather than a 404 on a record
+     * they cannot see. `assertOwned` is the authority on that rule and works on
+     * the document already in hand — this used to call `loadOwnedLead`, which
+     * re-fetched each candidate by id for nothing.
+     */
+    for (const lead of leads) {
+      try {
+        this.leadAccess.assertOwned(
+          { producerId: lead.producerId, branchId: lead.branchId },
+          access,
+          branchId,
+        );
+        return lead;
+      } catch {
+        continue;
+      }
+    }
+    return null;
   }
 
   /**

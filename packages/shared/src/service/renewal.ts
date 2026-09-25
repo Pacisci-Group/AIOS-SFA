@@ -27,6 +27,7 @@
  * reverse.
  */
 
+import { addUtcMonths, startOfUtcDay } from '../domain/calendar';
 import {
   ANNUAL_TERM_MONTHS,
   SEMIANNUAL_TERM_MONTHS,
@@ -82,9 +83,12 @@ export function normalizeRenewalPolicyType(
  *
  * This used to match a hand-written `['auto']` against
  * {@link normalizeRenewalPolicyType}, which was wrong twice over: `Auto -
- * Special` and `Motorcycle` fell through to the annual T-90/T-45 track, and a
- * migrated row storing a raw SmartSuite code (`Zgsh3`) did too, because the
- * de-pluralizing key function does not resolve codes.
+ * Special` fell through to the annual T-90/T-45 track, and a migrated row
+ * storing a raw SmartSuite code (`Zgsh3`) did too, because the de-pluralizing
+ * key function does not resolve codes. Delegating is what keeps that fixed —
+ * and what made moving Motorcycle back to the annual track (2026-09-11) a
+ * one-line edit in `SEMIANNUAL_TERM_POLICY_TYPES` rather than a hunt for every
+ * place a term is decided.
  */
 export function renewalTrackFor(
   policyType: string | null | undefined,
@@ -96,45 +100,14 @@ export function renewalTrackFor(
  * The anchor — when a policy actually renews next
  * -------------------------------------------------------------------------- */
 
-/**
- * Midnight UTC on the day `date` falls in.
- *
- * Renewals are calendar days, not instants: a policy renewing *today* has not
- * renewed "already" just because the clock has passed midnight. Comparing at
- * day granularity is what keeps {@link nextRenewalDate} from rolling a policy
- * a whole term forward on its own renewal day.
+/*
+ * `startOfUtcDay` and `addUtcMonths` used to live here as private helpers. They
+ * moved to `domain/calendar.ts` when the Cancel Rewrite clawback window needed
+ * the same two answers — day-granularity comparison and a non-overflowing month
+ * shift. Keeping a second private copy here is precisely how the anchors would
+ * start drifting from what the backfill migration wrote, which forks every
+ * renewal cycle. Same functions, one home; the behaviour is unchanged.
  */
-function startOfUtcDay(date: Date): Date {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-  );
-}
-
-/**
- * `date` shifted by whole calendar months, clamped to the end of the target
- * month.
- *
- * `Date.setUTCMonth` **overflows** rather than clamping — 31 Jan + 1 month
- * lands on 2 or 3 March, not 28 February. Left alone that would walk a
- * month-end policy forward a day or two every term until its renewal date had
- * drifted into the following month.
- */
-function addUtcMonths(date: Date, months: number): Date {
-  const shifted = new Date(date.getTime());
-  const dayOfMonth = date.getUTCDate();
-
-  // Move to the 1st first, so the month shift itself can never overflow.
-  shifted.setUTCDate(1);
-  shifted.setUTCMonth(shifted.getUTCMonth() + months);
-
-  // Day 0 of the *next* month is the last day of this one.
-  const daysInTargetMonth = new Date(
-    Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-  shifted.setUTCDate(Math.min(dayOfMonth, daysInTargetMonth));
-
-  return shifted;
-}
 
 /**
  * A policy's next renewal on or after `now`, counted in whole terms from the
@@ -177,6 +150,46 @@ export function nextRenewalDate(
     if (candidate >= today) return candidate;
   }
   return null;
+}
+
+/**
+ * The last day the **current term** covers: the day before it renews.
+ *
+ * A term runs up to, but not including, the day the next one begins — coverage
+ * on a policy renewing the 15th runs through the 14th. So this is
+ * {@link nextRenewalDate} minus one day, and the two are defined together here
+ * rather than a day's subtraction being written wherever an expiry is shown.
+ *
+ * ## Why this is derived rather than read from `expirationDate`
+ *
+ * `policies.expirationDate` is a stored field the SmartSuite import filled for
+ * some rows and left empty on most, which is why the household card rendered an
+ * em dash where the date should be (PAC-126). Worse, where it *is* set it
+ * describes the term that was current **when the row was imported** — a policy
+ * effective 2025-09-15 on a 6-month term has renewed since, so a stored
+ * 2026-03-14 is now historical.
+ *
+ * The renewal anchor is maintained (every write re-derives it, and the scan
+ * rolls it forward), so counting back from it always describes the term the
+ * household is actually in. A caller with no anchor has nothing to count from
+ * and should fall back to the stored value — see `toDisplayPolicy`.
+ *
+ * Returns null for an unusable input, never a guessed date.
+ */
+export function termExpirationDate(
+  renewalDate: Date | string | null | undefined,
+): Date | null {
+  if (!renewalDate) return null;
+  const renews =
+    renewalDate instanceof Date ? renewalDate : new Date(renewalDate);
+  if (Number.isNaN(renews.getTime())) return null;
+
+  // Day arithmetic on the UTC day, matching `nextRenewalDate`: these are
+  // calendar dates, and subtracting 24h from a local-time instant is how an
+  // expiry lands on the wrong day either side of a DST boundary.
+  const day = startOfUtcDay(renews);
+  day.setUTCDate(day.getUTCDate() - 1);
+  return day;
 }
 
 /* -------------------------------------------------------------------------- *

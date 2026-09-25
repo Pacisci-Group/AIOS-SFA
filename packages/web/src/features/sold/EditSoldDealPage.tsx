@@ -329,8 +329,10 @@ function PoliciesSection({
 
   /*
    * The steps take the Mark as sold form's lead-shaped context. Only the client
-   * name and the contacts behind the defensive-driver picker are read — the
-   * same compromise the policy transfer page makes.
+   * name and the contacts behind the defensive-driver picker are read.
+   *
+   * `replacementReason` is null: adding a policy to a booked sale replaces
+   * nothing, so the steps run the plain `sale` variant (PAC-126).
    */
   const context: SoldDealLeadContext = useMemo(
     () => ({
@@ -341,6 +343,7 @@ function PoliciesSection({
       contacts: deal.contacts,
       leadStatus: "Sold",
       hasQuoteRecap: true,
+      replacementReason: null,
     }),
     [deal],
   );
@@ -437,7 +440,6 @@ function PoliciesSection({
           carriers={carriers}
           staff={staff}
           uploadScope={uploadScope}
-          householdId={deal.householdId}
           position={deal.policies.length + 1}
           commitLabel="Add to sale"
           busy={mutation.isPending}

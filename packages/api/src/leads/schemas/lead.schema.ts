@@ -3,6 +3,7 @@ import type {
   IntakeChannel,
   LeadMailerMatchedBy,
   LeadTemperature,
+  PolicyReplacementReason,
 } from '@sfa/shared';
 import { HydratedDocument, IndexOptions, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
@@ -274,6 +275,66 @@ export class Lead extends TenantRecord {
 
   @Prop({ type: Object })
   intakeSource?: LeadIntakeSource;
+
+  /**
+   * Why this lead exists, when it exists only to replace a policy (PAC-126).
+   *
+   * Set by intake when the lead is created from a Cancel Rewrite or Company
+   * Transfer, and consumed by `POST /sold-deals` in the same transaction that
+   * books the replacement. Absent on every ordinary lead, which is why the
+   * index below is partial.
+   *
+   * See `LeadReplacementIntent` in `@sfa/shared` for why this is a field on the
+   * record rather than URL state: the chain is two forms long, and a rep who
+   * creates the lead and closes the tab has to be resumed at the second one
+   * rather than handed a duplicate lead.
+   *
+   * `type: Object` for the reason `address` and `leadSource` need it — an
+   * interface emits as `Object` under `emitDecoratorMetadata`, so Mongoose
+   * cannot infer a schema from it.
+   */
+  @Prop({ type: Object })
+  replacementIntent?: LeadReplacementIntentDoc;
+}
+
+/**
+ * The stored shape of {@link LeadReplacementIntent} — ids as `ObjectId`, dates
+ * as `Date`. The shared interface is the serialized one the API hands out.
+ */
+export interface LeadReplacementIntentDoc {
+  policyId: Types.ObjectId;
+  reason: PolicyReplacementReason;
+  consumedAt: Date | null;
+  consumedByDealId: Types.ObjectId | null;
+}
+
+/**
+ * The lead's **open** replacement intent, or null.
+ *
+ * Read on every Sold submit, which is what makes the intent enforcement rather
+ * than routing: a sale on a lead carrying one *becomes* the replacement.
+ *
+ * Returns null for an intent that is already consumed, and that is the guard
+ * against booking the same replacement twice. The resume path only offers
+ * unconsumed intents, but a rep can still have the Sold form open in a second
+ * tab, or press submit twice on a request whose response was lost — and the
+ * second one must land as an ordinary sale rather than retiring an already-
+ * retired policy and charging the producer again. (`UpsertPoliciesStep` would
+ * also refuse the second retire, and the submission token catches a true replay;
+ * this is the layer that makes the *intended* behaviour explicit rather than an
+ * error someone has to read.)
+ *
+ * Null-guarded on `policyId` rather than on the object: `.lean()` does not fill
+ * in a sub-document that was never written, but a partially written one is worth
+ * failing safe on too.
+ */
+export function replacementIntentOf(
+  lead: Pick<Lead, 'replacementIntent'>,
+): LeadReplacementIntentDoc | null {
+  const intent = lead.replacementIntent;
+  if (!intent?.policyId) return null;
+  if (intent.consumedAt) return null;
+  return intent;
 }
 
 export const LeadSchema = SchemaFactory.createForClass(Lead);
@@ -282,6 +343,30 @@ LeadSchema.index(
   LEGACY_DEDUPE_INDEX_OPTIONS,
 );
 LeadSchema.index({ agencyId: 1, producerId: 1, temperature: 1, status: 1 });
+
+/**
+ * The replacement-resume lookup (PAC-126): "is there already an open lead for
+ * this policy's rewrite?", asked every time the button is rendered.
+ *
+ * **Partial**, because almost no lead has an intent — indexing every lead in the
+ * agency to find the handful that do would be most of the collection for
+ * nothing. The filter matches the query `LeadsService.findReplacementLead`
+ * issues; a partial index is only used when the query provably implies its
+ * filter, so the two must stay in step.
+ *
+ * Not unique. Two open intents for one policy is a state worth *reading* rather
+ * than a write to reject: a rep whose scope hides a colleague's lead would hit
+ * an opaque duplicate-key error on a lead they cannot see, and the resume picks
+ * the newest anyway.
+ */
+LeadSchema.index(
+  { agencyId: 1, 'replacementIntent.policyId': 1 },
+  {
+    partialFilterExpression: {
+      'replacementIntent.policyId': { $exists: true },
+    },
+  },
+);
 // Default Leads-list query (PAC-36): scope clamp + the `lastActivityAt` sort.
 LeadSchema.index({ agencyId: 1, producerId: 1, lastActivityAt: -1 });
 

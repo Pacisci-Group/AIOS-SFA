@@ -564,6 +564,24 @@ export type ServiceTicketQueueTab =
   (typeof SERVICE_TICKET_QUEUE_TABS)[number];
 
 /**
+ * How a queue ranks inside its urgency bands — the vocabulary the API accepts
+ * for `?sort=`.
+ *
+ * Urgency is never switched off: overdue leads, then workable, then blocked,
+ * then done, under both. The option only decides the order *inside* a band —
+ * `urgency` puts the ticket that has demanded attention longest first,
+ * `activity` the one touched most recently (`lastActivityAt`). A plain recency
+ * sort put a ticket someone had just typed a note into above every overdue
+ * one, which is the one thing a work queue must not do.
+ *
+ * Server-side because the list pages: ranking one page in the browser would
+ * order it against itself rather than against the pages either side.
+ */
+export const SERVICE_TICKET_QUEUE_SORTS = ['urgency', 'activity'] as const;
+export type ServiceTicketQueueSort =
+  (typeof SERVICE_TICKET_QUEUE_SORTS)[number];
+
+/**
  * Paginated envelope for `GET /crm/service-tickets`, mirroring
  * `LeadListResponse` and `HouseholdListResponse`.
  *

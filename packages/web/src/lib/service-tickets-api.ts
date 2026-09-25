@@ -12,11 +12,11 @@ import type {
   ServiceTicketNoteType,
   ServiceTicketPriority,
   ServiceTicketListResponse,
+  ServiceTicketQueueSort,
   ServiceTicketQueueTab,
   ServiceTicketStats,
   ServiceTicketStatus,
   ServiceTicketView,
-  SoldPolicyInput,
 } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
 
@@ -41,6 +41,7 @@ export type {
   ServiceTicketStats,
   ServiceTicketStatus,
   ServiceTicketListResponse,
+  ServiceTicketQueueSort,
   ServiceTicketQueueTab,
   ServiceTicketView,
 } from '@sfa/shared';
@@ -60,6 +61,8 @@ export interface ListServiceTicketsOptions {
   archived?: boolean;
   /** Which queue tab to return. Omitted means all. */
   tab?: ServiceTicketQueueTab;
+  /** Order inside each urgency band. Omitted means `urgency`. */
+  sort?: ServiceTicketQueueSort;
   /** 1-based. */
   page?: number;
   /** Capped server-side at 100; the API defaults to 8 if omitted. */
@@ -97,6 +100,9 @@ export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   }
   if (options.tab && options.tab !== 'all') {
     params.set('tab', options.tab);
+  }
+  if (options.sort && options.sort !== 'urgency') {
+    params.set('sort', options.sort);
   }
   if (options.page && options.page > 1) {
     params.set('page', String(options.page));
@@ -148,27 +154,6 @@ export function listServiceTicketsForHousehold(householdId: string) {
 
 export function getServiceTicket(id: string) {
   return apiFetch<ServiceTicketView>(`${BASE}/${id}`);
-}
-
-/**
- * `POST /crm/service-tickets/:id/policy-transfer` — book the client's move from
- * one package to another.
- *
- * Returns the refreshed ticket, like every other action on this controller, so
- * the caller renders the recorded transfer without a second read.
- */
-export function recordPolicyTransfer(
-  ticketId: string,
-  input: {
-    transferDate: string;
-    policies: SoldPolicyInput[];
-    submissionToken?: string;
-  },
-) {
-  return apiFetch<ServiceTicketView>(
-    `${BASE}/${encodeURIComponent(ticketId)}/policy-transfer`,
-    { method: 'POST', body: JSON.stringify(input) },
-  );
 }
 
 export function updateServiceTicketStatus(

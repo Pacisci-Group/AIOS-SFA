@@ -1,0 +1,137 @@
+meta {
+  name: List Unanchored Policies
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/clients/unlinked?kind=unanchored&page=1&pageSize=25
+  body: none
+  auth: inherit
+}
+
+params:query {
+  kind: unanchored
+  page: 1
+  pageSize: 25
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope discriminated by kind", function () {
+    const body = res.getBody();
+    expect(body.kind).to.equal("unanchored");
+    expect(body).to.have.property("page");
+    expect(body).to.have.property("pageSize");
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("the envelope is internally consistent", function () {
+    const body = res.getBody();
+    expect(body.items.length).to.be.at.most(body.pageSize);
+    expect(body.totalPages).to.equal(
+      Math.max(1, Math.ceil(body.total / body.pageSize)),
+    );
+  });
+
+  test("agrees with the count on the chip", function () {
+    const counted = bru.getVar("unanchoredPolicyCount");
+    if (counted !== undefined) {
+      expect(res.getBody().total).to.equal(counted);
+    }
+  });
+
+  test("rows carry the household and no dates", function () {
+    const items = res.getBody().items;
+    if (items.length > 0) {
+      const row = items[0];
+      expect(row).to.have.property("id");
+      expect(row).to.have.property("policyNumber");
+      expect(row).to.have.property("policyType");
+      expect(row).to.have.property("carrier");
+      expect(row).to.have.property("premium");
+      // The household is what makes the row actionable — unlike `kind=policies`,
+      // where its absence is the defect being reported.
+      expect(row).to.have.property("householdId");
+      expect(row).to.have.property("householdRef");
+      expect(row).to.have.property("householdName");
+      // Every date on one of these rows would be null by definition, so none is
+      // carried. A date column here would be three empty columns.
+      expect(row).to.not.have.property("effectiveDate");
+      expect(row).to.not.have.property("expirationDate");
+      expect(row).to.not.have.property("renewalDate");
+      expect(row).to.not.have.property("isTestRecord");
+      expect(row).to.not.have.property("agencyId");
+    }
+  });
+}
+
+docs {
+  # GET /clients/unlinked?kind=unanchored
+
+  **Active policies with no renewal anchor** — the fourth chip on the Unlinked
+  tab (PAC-126).
+
+  - **Module:** `clients`
+  - **Permission:** `clients:read` (see `Unlinked Counts`)
+  - **Data scope:** `own` collapses to **branch**
+
+  ## What the predicate is, and why
+
+  `active: true` **and** `renewalDate`, `effectiveDate` and `expirationDate` all
+  absent.
+
+  `policies.renewalDate` is the date every renewal call counts backwards from.
+  The scan derives it through the chain `renewalDate ?? effectiveDate ??
+  expirationDate`; when all three are empty there is nothing to derive a term
+  from, `nextRenewalDate` returns null, and the policy is skipped on every pass
+  **forever**. The 2026-09-08 backfill counted exactly this population and
+  deliberately refused to invent a date — "a policy with neither anchor is left
+  alone and reported rather than given a guessed date that would call real
+  clients". This list is that report, in the app.
+
+  The predicate mirrors the **runtime** chain rather than the backfill's
+  (`effectiveDate ?? deal.soldDate`), so a row disappears from the list exactly
+  when outreach starts seeing it. Restricted to `active` because an inactive
+  policy gets no outreach, which also makes the count honest as a queue: the
+  number of live policies the renewal desk currently cannot see.
+
+  Rides the `{agencyId, active, renewalDate}` index the renewal scan added.
+
+  ## Response
+  `{ kind, page, pageSize, total, totalPages, items: UnanchoredPolicyRow[] }`
+
+  A row is `id`, `policyNumber`, `policyType`, `carrier`, `policyStatus`,
+  `premium`, `items`, `householdId`, `householdRef`, `householdName`,
+  `createdAt`. Sorted newest first.
+
+  **No date fields**, deliberately — all three are null by construction. What
+  makes a row actionable is *whose* policy it is, so the household is looked up
+  instead (after paging: one indexed `_id` hit per rendered row). It is nullable,
+  because a policy can be unattributed *and* undated, and so appear in this list
+  and `kind=policies` at once.
+
+  Rows exclude `isTestRecord` policies.
+
+  ## What the client does with a row
+  Opens `/clients/:householdId` and edits the policy on its card
+  (`PATCH /households/:id/policies/:policyId`). Entering the **effective date**
+  re-derives the renewal anchor server-side, which is what removes the row.
+  A row with no household falls back to `/policies/:id`.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | `kind` outside the vocabulary, `page`/`pageSize` out of bounds |
+  | 401 | Missing/expired bearer token |
+  | 403 | `clients` disabled, or the caller lacks `clients:read` |
+}

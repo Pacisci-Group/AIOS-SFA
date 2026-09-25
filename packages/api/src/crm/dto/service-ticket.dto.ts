@@ -20,6 +20,7 @@ import {
   SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_NOTE_TYPES,
   SERVICE_TICKET_PRIORITIES,
+  SERVICE_TICKET_QUEUE_SORTS,
   SERVICE_TICKET_QUEUE_TABS,
   SERVICE_TICKET_STATUSES,
 } from '@sfa/shared';
@@ -30,6 +31,7 @@ import type {
   ServiceTicketCategory,
   ServiceTicketNoteType,
   ServiceTicketPriority,
+  ServiceTicketQueueSort,
   ServiceTicketQueueTab,
   ServiceTicketStatus,
 } from '@sfa/shared';
@@ -248,6 +250,14 @@ export class ListTicketsQueryDto {
   @IsOptional()
   @IsIn(SERVICE_TICKET_QUEUE_TABS)
   tab?: ServiceTicketQueueTab;
+
+  /**
+   * The order inside each urgency band — see `SERVICE_TICKET_QUEUE_SORTS`.
+   * Omitted means `urgency`.
+   */
+  @IsOptional()
+  @IsIn(SERVICE_TICKET_QUEUE_SORTS)
+  sort?: ServiceTicketQueueSort;
 
   /**
    * Free text across the fields the ticket feed searches: client name, ticket

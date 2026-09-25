@@ -1,7 +1,6 @@
 import {
   AlertCircle,
   ArrowLeft,
-  ArrowLeftRight,
   Clock,
   ExternalLink,
   FileText,
@@ -38,13 +37,13 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { HouseholdDrawer } from "@/features/clients/components/HouseholdDrawer";
 import { PolicyDrawer } from "@/features/clients/components/PolicyDrawer";
+import { TicketTransferButton } from "./TicketTransferButton";
 import { cn } from "@/lib/utils";
 import { OnboardingPanel } from "./OnboardingPanel";
 import { PolicyTransferPanel } from "./PolicyTransferPanel";
 import { RenewalPanel } from "./RenewalPanel";
 import { TicketStatusSelect } from "./TicketStatusSelect";
 import {
-  TICKET_PRIORITY_CLASS,
   TICKET_STATUS_CONFIG,
   type Ticket,
   type TicketStatus,
@@ -282,18 +281,18 @@ export function WorkspacePanel({
 
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {/*
-              A policy transfer is recorded in the full Sold wizard, so this
-              navigates rather than opening a dialog. Hidden once one exists —
-              one transfer per ticket, and the panel below then shows it.
+              A transfer runs through the ordinary Sold form on a lead created
+              for it (PAC-126), so this starts — or resumes — that chain for the
+              ticket's policy rather than opening a form here. Offered only
+              where the ticket names a policy: with no policy there is nothing
+              to replace, and the household page is the place to pick one.
             */}
-            {ticket.allowsPolicyTransfer && !ticket.policyTransfer && canWrite && (
-              <Button asChild size="sm" variant="outline">
-                <Link to={`/policy-transfers/new?ticketId=${ticket.id}`}>
-                  <ArrowLeftRight />
-                  Policy transfer
-                </Link>
-              </Button>
-            )}
+            {ticket.allowsPolicyTransfer &&
+              !ticket.policyTransfer &&
+              canWrite &&
+              ticket.policyId && (
+                <TicketTransferButton policyId={ticket.policyId} />
+              )}
 
             {/*
               A quote ticket's status belongs to its lead, so there is nothing
@@ -373,18 +372,24 @@ export function WorkspacePanel({
                 )
               }
             />
+            {/*
+              Status, where "Priority" used to be. Priority is stored but
+              unreachable — nothing in the app can set it, so it read "medium"
+              on every ticket opened here (see the note in `ticket-data.ts`).
+              The picker in the header is the control; this row states the
+              stored value, which matters for the finer statuses the picker
+              cannot offer (`in_progress`, `waiting_on_carrier`, …).
+            */}
             <DataRow
-              label="Priority"
+              label="Status"
               value={
                 <Badge
                   size="sm"
                   variant="ghost"
-                  className={cn(
-                    "capitalize",
-                    TICKET_PRIORITY_CLASS[ticket.priority],
-                  )}
+                  className={cn("gap-1", status.bg, status.text)}
                 >
-                  {ticket.priority}
+                  <span className={cn("size-2 rounded-full", status.dot)} />
+                  {status.label}
                 </Badge>
               }
             />

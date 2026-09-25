@@ -6,7 +6,7 @@ interface WizardProgressProps {
   /**
    * This variant's ordered steps. Passed in rather than read off the module
    * constant, so "Step 4 of 7" counts the steps the user will actually see —
-   * a transfer's sequence is not the sale's.
+   * a replacement's sequence is not the sale's.
    */
   cards: readonly WizardCard[];
   /** 1-based position of this policy on the sale. */

@@ -6,6 +6,7 @@ import {
   renewalTrackFor,
   nextRenewalDate,
   normalizeRenewalPolicyType,
+  termExpirationDate,
 } from '@sfa/shared';
 import type { RenewalStepDefinition } from '@sfa/shared';
 import { deriveStepStatus } from '../../common/scheduling/step-status';
@@ -169,12 +170,9 @@ describe('renewalTrackFor', () => {
     'auto',
     '  AUTO  ',
     'Autos',
-    // David, 2026-08-19 scrum: the 6-month term applies to "any auto vehicle",
-    // so the whole auto family is on this track — not just plain Auto. Both of
-    // these used to fall through to annual.
+    // `Auto - Special` used to fall through to annual, because the old
+    // hand-written list held only 'auto'.
     'Auto - Special',
-    'Motorcycle',
-    'motorcycles',
   ])('puts %p on the semiannual track', (policyType) => {
     expect(renewalTrackFor(policyType)).toBe('semiannual');
   });
@@ -185,6 +183,10 @@ describe('renewalTrackFor', () => {
     'Umbrella',
     'Renters',
     'Boat Owners',
+    // Motorcycle is a motor vehicle but a 12-month policy (2026-09-11) — it
+    // gets the full T-90 warm-up plus the T-45 review, not the merged call.
+    'Motorcycle',
+    'motorcycles',
     '',
     null,
     undefined,
@@ -202,7 +204,9 @@ describe('renewalTrackFor', () => {
       expect(renewalTrackFor(code)).toBe(expected);
     }
     expect(renewalTrackFor('Zgsh3')).toBe('semiannual');
-    expect(renewalTrackFor('gGKei')).toBe('semiannual');
+    // The Policies table's Motorcycle — annual since 2026-09-11, and the code
+    // has to answer the same as the label or migrated rows split across tracks.
+    expect(renewalTrackFor('gGKei')).toBe('annual');
   });
 
   it('tracks the shared term vocabulary rather than its own list', () => {
@@ -403,6 +407,54 @@ describe('nextRenewalDate', () => {
     expect(nextRenewalDate(null, 'Home', NOW)).toBeNull();
     expect(nextRenewalDate(undefined, 'Home', NOW)).toBeNull();
     expect(nextRenewalDate(new Date('not a date'), 'Home', NOW)).toBeNull();
+  });
+});
+
+describe('termExpirationDate', () => {
+  const NOW = new Date('2026-09-08T14:30:00.000Z');
+  const iso = (date: Date | null) => date?.toISOString().slice(0, 10) ?? null;
+
+  /*
+   * PAC-126. The household card rendered an em dash where the expiry belongs,
+   * because `policies.expirationDate` is empty on most migrated rows. A term
+   * ends the day before the next one starts, and the renewal anchor *is*
+   * maintained — so the expiry is derived from it rather than stored.
+   */
+  it('ends a term the day before it renews', () => {
+    expect(iso(termExpirationDate(new Date('2026-09-15')))).toBe('2026-09-14');
+  });
+
+  it('pairs with nextRenewalDate on both tracks', () => {
+    // The case that was reported: an auto policy effective 15 Sep 2025 whose
+    // March renewal has already gone by. It renews again on the 15th, so the
+    // term it is in now runs out on the 14th.
+    const autoRenewal = nextRenewalDate(new Date('2025-09-15'), 'Auto', NOW);
+    expect(iso(autoRenewal)).toBe('2026-09-15');
+    expect(iso(termExpirationDate(autoRenewal))).toBe('2026-09-14');
+
+    // Same anchor, annual track, where the two tracks actually diverge.
+    const homeRenewal = nextRenewalDate(new Date('2026-04-01'), 'Home', NOW);
+    expect(iso(homeRenewal)).toBe('2027-04-01');
+    expect(iso(termExpirationDate(homeRenewal))).toBe('2027-03-31');
+  });
+
+  it('steps back across a month, a year and a leap February', () => {
+    // Plain `-24h` on a local-time instant is how these land a day out.
+    expect(iso(termExpirationDate(new Date('2026-03-01')))).toBe('2026-02-28');
+    expect(iso(termExpirationDate(new Date('2026-01-01')))).toBe('2025-12-31');
+    expect(iso(termExpirationDate(new Date('2028-03-01')))).toBe('2028-02-29');
+  });
+
+  it('accepts an ISO string, which is how the wire carries it', () => {
+    expect(iso(termExpirationDate('2026-09-15T00:00:00.000Z'))).toBe(
+      '2026-09-14',
+    );
+  });
+
+  it('says nothing rather than guessing when there is no renewal', () => {
+    expect(termExpirationDate(null)).toBeNull();
+    expect(termExpirationDate(undefined)).toBeNull();
+    expect(termExpirationDate('not a date')).toBeNull();
   });
 });
 

@@ -14,6 +14,7 @@ params:query {
   pageSize: 5
   ~page: 1
   ~tab: overdue
+  ~sort: activity
   ~category: Renewal Review
   ~status: open,overdue
   ~search: smith
@@ -126,6 +127,7 @@ docs {
   | `page` | query | 1-based. Default 1. |
   | `pageSize` | query | Default 8, **capped at 100**. Past the cap is a 400, not a clamp — a silent clamp is how "pagination" becomes a suggestion. |
   | `tab` | query | `all` (default) · `overdue` · `waiting`. The queue's three tabs, as a server-side predicate. |
+  | `sort` | query | `urgency` (default) · `activity`. The order *inside* each urgency band — overdue still leads, then workable, then blocked, then done, under both. `activity` puts the most recently touched ticket (`lastActivityAt`) first within its band. |
   | `category` | query | One of `SERVICE_TICKET_CATEGORIES`. |
   | `status` | query | One stored status, or several ORed — comma-separated or repeated (`open,overdue`). The Priority Ticket Queue sends every non-terminal status. |
   | `search` | query | Free text, tokenized (PAC-101): every word must match one of client name, ticket number, category or policy number. A phone-shaped term (7+ digits) also matches the stored phone in any format. Max 120 chars. |
