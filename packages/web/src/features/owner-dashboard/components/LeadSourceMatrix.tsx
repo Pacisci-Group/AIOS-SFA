@@ -4,7 +4,6 @@ import {
   TableBody,
   TableCell,
   TableFooter,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -24,6 +23,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { formatCount, formatMoney, formatPct } from "../owner-format";
 import { DataPanel } from "@/components/common/DataPanel";
+import { ColumnHead } from "./ColumnHead";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 
 const SKELETON_ROWS = 6;
@@ -52,18 +52,21 @@ function ConversionCell({ convPct, convGap }: Conversion) {
 }
 
 /**
- * Conv % · Vol · Premium per lead source (PAC-135).
+ * Closing ratio · New leads · Bound premium per lead source (PAC-135).
  *
  * The mockup titles this an "ROI matrix". Nothing in the system records what a
  * lead source *costs*, so there is no return to compute — this is lead-source
  * performance, and the title says so rather than promising a number we cannot
  * produce.
  *
- * - **Conv %** is premium-based, sold ÷ quoted, the same rule as the closing
- *   ratio card — and refuses a rate on the same grounds that card does.
- * - **Vol** is leads received. The line-of-business filter cannot apply to it: a
- *   lead is not a policy. The sub heading says so whenever that filter is on,
- *   because a column that silently ignores a filter looks like a bug.
+ * - **Closing ratio** is premium-based, sold ÷ quoted, the same rule as the
+ *   closing ratio card — and refuses a rate on the same grounds that card does.
+ *   It was first labelled "Conv %", which the owner read as leads converted; it
+ *   now carries the card's name because it is the card's formula.
+ * - **New leads** (once "Vol") is leads received. The line-of-business filter
+ *   cannot apply to it: a lead is not a policy. The sub heading says so whenever
+ *   that filter is on, because a column that silently ignores a filter looks
+ *   like a bug.
  * - **No source** is kept, last. On migrated data it is large — about two thirds
  *   of historic deals carry no source — and hiding it would make this table's
  *   total disagree with the card above.
@@ -90,7 +93,8 @@ export function LeadSourceMatrix({
       subheading={
         params.policyTypes.length > 0 && (
           <p className="mt-1 text-xs text-muted-foreground">
-            Vol counts every lead received — a lead has no line of business.
+            New leads counts every lead received — a lead has no line of
+            business.
           </p>
         )
       }
@@ -107,10 +111,23 @@ export function LeadSourceMatrix({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="pl-5">Source</TableHead>
-              <TableHead className="text-right">Conv %</TableHead>
-              <TableHead className="text-right">Vol</TableHead>
-              <TableHead className="pr-5 text-right">Premium</TableHead>
+              <ColumnHead label="Lead source" className="pl-5" />
+              <ColumnHead
+                label="Closing ratio"
+                hint="Bound premium ÷ quoted premium for this source in this period — the Agency Closing Ratio card, per source. Can exceed 100% when a sale was quoted in an earlier period."
+                align="right"
+              />
+              <ColumnHead
+                label="New leads"
+                hint="Leads created from this source in this period, whatever they went on to buy."
+                align="right"
+              />
+              <ColumnHead
+                label="Bound premium"
+                hint="Premium on new business sold to this source’s leads in this period. The Total Bound Premium card is the sum of this column."
+                align="right"
+                className="pr-5"
+              />
             </TableRow>
           </TableHeader>
           <TableBody>

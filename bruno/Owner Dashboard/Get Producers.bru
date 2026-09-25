@@ -67,8 +67,10 @@ tests {
 docs {
   # GET /owner-dashboard/producers — the owner's leaderboard (PAC-135)
 
-  Quotes · Bound · Total Premium per producer, **ranked by premium**, for the
-  selected window. Reacts to every filter.
+  **Quotes written** (`quotes`) · **Items bound** (`bound`) · **Bound premium**
+  (`premium`) per producer, **ranked by premium**, for the selected window.
+  Reacts to every filter. Those are the web's column names; the field names are
+  unchanged.
 
   - **Module / permission / scope / query:** identical to
     `GET /owner-dashboard/summary` — see that request's docs. The three reads
