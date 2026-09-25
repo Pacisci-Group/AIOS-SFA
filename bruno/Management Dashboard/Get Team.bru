@@ -39,7 +39,7 @@ tests {
     for (const row of rows) {
       expect(row.producerId).to.be.a("string");
       expect(row.name).to.be.a("string");
-      expect(["available", "busy", null]).to.include(row.availability);
+      expect(["available", "busy", "away", null]).to.include(row.availability);
     }
   });
 
@@ -90,7 +90,7 @@ docs {
   ## Columns
   | field | counts | window |
   |---|---|---|
-  | availability | the producer's own switch (PAC-139 §6); `null` for a deactivated user | — |
+  | availability | `available` / `busy` / `away` — the producer's own switch, set `away` nightly by the worker (PAC-139 §6, §6a); `null` for a deactivated user | — |
   | householdsQuoted | distinct households with a quote recap | period |
   | householdsSold | distinct households with a new-business sale | period |
   | householdCloseRatio | `householdsSold ÷ householdsQuoted`, %; `null` over no quotes | period |

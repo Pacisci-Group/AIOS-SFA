@@ -39,24 +39,32 @@ tests {
 }
 
 docs {
-  # PATCH /me/availability — set own "taking leads" status (PAC-139 §6)
+  # PATCH /me/availability — set own presence status (PAC-139 §6, §6a)
 
   **Module:** none (`@SkipTenant`, `@SkipBranch`, `@SkipModule`).
   **Permission:** none beyond a valid access token — the route only ever
   touches the caller's own document (`sub` from the JWT). Nobody sets it for
-  someone else, and nothing sets it automatically.
+  someone else. The one automatic write is the worker's end-of-day sweep
+  (below), which never goes through this route.
 
   **Body**
 
-  | field        | type                     | rules                              |
-  |--------------|--------------------------|------------------------------------|
-  | availability | `"available"` \| `"busy"` | required; `null` is a `400`, not a clear |
+  | field        | type                                   | rules                              |
+  |--------------|----------------------------------------|------------------------------------|
+  | availability | `"available"` \| `"busy"` \| `"away"` | required; `null` is a `400`, not a clear |
 
   `available` = taking new leads (every account's default). `busy` = not
-  taking new leads. It says nothing about being logged in. The vocabulary is
-  `USER_AVAILABILITIES` in `@sfa/shared`; the Manager view's Team Activity
-  table shows it and the Command Center's "assign to" picker (PAC-138) lists
-  only `available` people.
+  taking new leads. `away` = out of office. None of them says anything about
+  being logged in. The vocabulary is `USER_AVAILABILITIES` in `@sfa/shared`;
+  the Manager view's Team Activity table shows it and the Command Center's
+  "assign to" picker (PAC-138) lists only `available` people.
+
+  **End of day (§6a).** At **8 PM in the agency's timezone**
+  (`Agency.timezone`, default `America/Chicago`) the worker's
+  `set-users-away` cron sets every active user of the agency to `away` —
+  every role, the owner included. Nobody is flipped back: each person PATCHes
+  themself `available` again when they start work. Whatever a user sets after
+  8 PM sticks until the next evening.
 
   **Response `200`** — the full auth-user blob, exactly as `GET /auth/me`
   returns it (which now carries `availability`), so the sidebar control can

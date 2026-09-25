@@ -1,6 +1,10 @@
 import type { AgencySetupStatus, ModuleEntitlements } from '@sfa/shared';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, IndexOptions, Types } from 'mongoose';
+import {
+  DEFAULT_AGENCY_TIME_ZONE,
+  isIanaTimeZone,
+} from '../../common/dates/time-zones';
 import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type AgencyDocument = HydratedDocument<Agency>;
@@ -245,6 +249,33 @@ export class CarrierAppointment {
 export const CarrierAppointmentSchema =
   SchemaFactory.createForClass(CarrierAppointment);
 
+/**
+ * Where the end-of-day Away sweep is up to for this agency (PAC-139 §6a).
+ *
+ * The worker's `SetUsersAwayFn` ticks every thirty minutes and asks, per
+ * agency, "is it 8 PM or later here, and have I already done tonight?". This
+ * is the second half of that question. It is a **local calendar date** rather
+ * than an instant on purpose: "tonight" is defined by the agency's clock, and
+ * comparing dates keeps the answer stable across a DST change. Written with a
+ * conditional update so two workers cannot both win the same night.
+ *
+ * Absent on every agency until its first sweep — readers must treat a missing
+ * sub-document as "never", which `$ne` on the marker already does.
+ */
+@Schema({ _id: false })
+export class AgencyAvailabilitySweep {
+  /** `YYYY-MM-DD` in {@link Agency.timezone}. */
+  @Prop({ type: String, default: null })
+  lastAwayDate: string | null;
+
+  /** The instant the sweep ran, for reading a log against a clock. */
+  @Prop({ type: Date, default: null })
+  lastAwayAt: Date | null;
+}
+export const AgencyAvailabilitySweepSchema = SchemaFactory.createForClass(
+  AgencyAvailabilitySweep,
+);
+
 @Schema({ timestamps: true, collection: 'agencies' })
 export class Agency {
   @Prop({ required: true, trim: true })
@@ -323,6 +354,38 @@ export class Agency {
    */
   @Prop({ trim: true })
   npn?: string;
+
+  /**
+   * IANA zone the agency keeps its working day in, e.g. `America/Chicago`
+   * (PAC-139 §6a). Defaults to US Central because every agency on the platform
+   * today is in Oklahoma, which has no zone of its own. Backfilled onto rows
+   * that predate it by the `agency_timezone_backfill` migration, so a raw or
+   * `.lean()` read can rely on the field being there — the sweep still
+   * defaults in code, for a database that has not migrated yet.
+   *
+   * Read today by one job: the worker's end-of-day Away sweep. The dashboards'
+   * Chicago calendar (`performance.range.ts`'s `AGENCY_TIME_ZONE`) is still a
+   * constant and deliberately not rewired here — that is a change to every
+   * date window in the app, and it gets its own ticket.
+   *
+   * Nothing lets an operator set it yet (no wizard step, no settings field);
+   * the validator is for the day something does, so a typo cannot be stored
+   * and later throw inside the cron.
+   */
+  @Prop({
+    type: String,
+    trim: true,
+    default: DEFAULT_AGENCY_TIME_ZONE,
+    validate: {
+      validator: isIanaTimeZone,
+      message: 'timezone must be an IANA zone name, e.g. America/Chicago',
+    },
+  })
+  timezone: string;
+
+  /** Where the end-of-day Away sweep is up to. See {@link AgencyAvailabilitySweep}. */
+  @Prop({ type: AgencyAvailabilitySweepSchema, default: () => ({}) })
+  availabilitySweep: AgencyAvailabilitySweep;
 }
 
 export const AgencySchema = SchemaFactory.createForClass(Agency);
