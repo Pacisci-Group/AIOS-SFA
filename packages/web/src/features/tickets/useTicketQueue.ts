@@ -3,9 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import type {
   ServiceTicketCategory,
   ServiceTicketListResponse,
+  ServiceTicketScope,
   ServiceTicketView,
 } from '@sfa/shared';
-import { SERVICE_TICKET_CATEGORIES } from '@sfa/shared';
+import { SERVICE_TICKET_CATEGORIES, SERVICE_TICKET_SCOPES } from '@sfa/shared';
 import { useUrlState } from '@/hooks/useUrlState';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { SEARCH_DEBOUNCE_MS } from '@/components/common/TableSearchInput';
@@ -33,8 +34,18 @@ export const FEED_PAGE_SIZE = 25;
  * is the only queue with a search box, and its page size is its own. Frozen at
  * module scope so `useUrlState`'s memo dependencies stay stable across renders.
  * `page: ''` is the default, so `?page=1` never appears.
+ *
+ * `scope` is the Mine / Everyone toggle (PAC-109). Mine by default — a rep
+ * opens the workspace to work their own plate, the opposite default to the
+ * Leads list. It is not one of the shared params, so `ticketQueueLink` does not
+ * carry the dashboard's `own` / `others` split across.
  */
-const URL_DEFAULTS = { ...TICKET_QUEUE_URL_DEFAULTS, q: '', page: '' };
+const URL_DEFAULTS = {
+  ...TICKET_QUEUE_URL_DEFAULTS,
+  q: '',
+  page: '',
+  scope: 'own' as string,
+};
 
 interface UseTicketQueueOptions {
   /** The Archived Tickets view: the other side of the archive window. */
@@ -53,11 +64,14 @@ export interface TicketQueue {
   /** `''` means every category. */
   type: string;
   sort: TicketQueueSort;
+  /** Mine / Everyone (PAC-109). */
+  scope: ServiceTicketScope;
   /** What is in the search box — ahead of the request by the debounce. */
   query: string;
   setTab: (tab: TicketQueueTab) => void;
   setType: (type: string) => void;
   setSort: (sort: TicketQueueSort) => void;
+  setScope: (scope: ServiceTicketScope) => void;
   setQuery: (query: string) => void;
   setPage: (page: number) => void;
   clearFilters: () => void;
@@ -116,6 +130,7 @@ export function useTicketQueue({
     () => ({
       ...TICKET_QUEUE_URL_ALLOWED,
       tab: tabs,
+      scope: SERVICE_TICKET_SCOPES,
       page: (value: string) => /^[1-9]\d*$/.test(value),
     }),
     [tabs],
@@ -128,6 +143,7 @@ export function useTicketQueue({
   const tab = (tabs.length ? urlState.tab : 'all') as TicketQueueTab;
   const type = urlState.type;
   const sort = (urlState.sort || DEFAULT_TICKET_QUEUE_SORT) as TicketQueueSort;
+  const scope = urlState.scope as ServiceTicketScope;
   const query = urlState.q;
   const requestedPage = Number(urlState.page) || 1;
 
@@ -144,8 +160,9 @@ export function useTicketQueue({
       // No strip, no status filter — the archive lists whatever aged out.
       status: tabs.length ? ticketQueueTabStatuses(tab) : undefined,
       sort,
+      scope,
     }),
-    [archived, requestedPage, debouncedQuery, type, tabs, tab, sort],
+    [archived, requestedPage, debouncedQuery, type, tabs, tab, sort, scope],
   );
 
   const ticketsQuery = useQuery({
@@ -175,6 +192,10 @@ export function useTicketQueue({
       }),
     [setUrlState],
   );
+  const setScope = useCallback(
+    (next: ServiceTicketScope) => setUrlState({ scope: next, page: '' }),
+    [setUrlState],
+  );
   const setQuery = useCallback(
     (next: string) => setUrlState({ q: next, page: '' }),
     [setUrlState],
@@ -196,10 +217,12 @@ export function useTicketQueue({
     tab,
     type,
     sort,
+    scope,
     query,
     setTab,
     setType,
     setSort,
+    setScope,
     setQuery,
     setPage,
     clearFilters,

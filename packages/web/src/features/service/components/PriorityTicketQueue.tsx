@@ -4,6 +4,7 @@ import {
   SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_PICKER_STATUSES,
   urgencyRankFor,
+  type ServiceTicketScope,
   type ServiceTicketStatus,
 } from "@sfa/shared";
 import {
@@ -50,6 +51,19 @@ const FILTER_TABS = [
   "waiting",
 ] as const satisfies readonly TicketQueueTab[];
 type FilterTab = (typeof FILTER_TABS)[number];
+
+/**
+ * The queue's two parent tabs — My Tickets / Agency Tickets (PAC-109).
+ *
+ * A deliberate subset of `SERVICE_TICKET_SCOPES`: this panel splits the branch
+ * in two, so `agency` (the undivided view, which double-counts your own rows
+ * against both tabs) has no tab to select and is not a value the URL accepts
+ * here. The Ticket Workspace is the surface that uses it.
+ *
+ * Exported because `ServiceDashboardPage` builds the request and has to guard
+ * `?scope=` against the same list the tabs can render.
+ */
+export const QUEUE_SCOPES = ["own", "others"] as const satisfies readonly ServiceTicketScope[];
 
 /** Worded for the service-rep persona; the values are the shared vocabulary. */
 const TAB_LABELS: Record<FilterTab, string> = {
@@ -103,11 +117,21 @@ interface QueueTicket {
 const URL_DEFAULTS = {
   ...TICKET_QUEUE_URL_DEFAULTS,
   page: "",
+  /*
+   * The parent tab (PAC-109). `own` is the default, so the dashboard still
+   * opens on the rep's own plate.
+   *
+   * It rides the URL for the same reason the sub-tab does: `?tab=overdue&page=2`
+   * means a different set of tickets under "Agency Tickets" than under "My
+   * Tickets", so the two cannot be separated.
+   */
+  scope: "own" as string,
 };
 
 const URL_ALLOWED = {
   ...TICKET_QUEUE_URL_ALLOWED,
   tab: FILTER_TABS,
+  scope: QUEUE_SCOPES,
   page: (value: string) => /^[1-9]\d*$/.test(value),
 } as const;
 
@@ -168,6 +192,7 @@ export function PriorityTicketQueue({
   });
   const activeFilter = urlState.tab as FilterTab;
   const activeType = urlState.type;
+  const activeScope = urlState.scope as ServiceTicketScope;
   const activeSort = (urlState.sort ||
     DEFAULT_TICKET_QUEUE_SORT) as TicketQueueSort;
   const page = Number(urlState.page) || 1;
@@ -269,18 +294,50 @@ export function PriorityTicketQueue({
     resetView();
   };
 
+  /**
+   * Switch between My Tickets and Agency Tickets (PAC-109).
+   *
+   * Keeps the sub-tab — a rep looking at Overdue wants the agency's overdue
+   * work, not to be dropped back to All — but resets the page, because page 2
+   * of one scope is not page 2 of the other.
+   */
+  const changeScope = (next: ServiceTicketScope) => {
+    setUrlState({ scope: next, page: "" });
+    resetView();
+  };
+
+  const isAgencyScope = activeScope === "others";
+
   const tabs = FILTER_TABS.map((key) => ({
     key,
-    label: TAB_LABELS[key],
+    /*
+     * "All Assigned" is only true of the rep's own plate. Under Agency
+     * Tickets the same tab holds work assigned to everyone in the branch,
+     * so the label has to move with it or it quietly misdescribes the list.
+     */
+    label: key === "all" && isAgencyScope ? "All Tickets" : TAB_LABELS[key],
     count: counts[key],
   }));
+
+  /*
+   * A partition, not a widening: "Agency Tickets" is everyone *else's*
+   * (`others`), so a ticket appears under exactly one parent tab and the two
+   * counts add up. `agency` — the undivided view that includes your own — is
+   * what the Ticket Workspace's Mine / Everyone toggle uses instead.
+   */
+  const scopeTabs: { key: ServiceTicketScope; label: string }[] = [
+    { key: "own", label: "My Tickets" },
+    { key: "others", label: "Agency Tickets" },
+  ];
 
   return (
     <div className="flex flex-col rounded-xl border border-white/8 bg-card overflow-hidden h-full">
       {/* Header */}
       <div className="px-5 pt-5 pb-4 border-b border-white/8">
         <div className="flex items-center justify-between gap-3 mb-4">
-          <h2 className="min-w-0 truncate text-base font-semibold text-foreground tracking-tight">My Priority Tickets</h2>
+          <h2 className="min-w-0 truncate text-base font-semibold text-foreground tracking-tight">
+            {isAgencyScope ? "Agency Priority Tickets" : "My Priority Tickets"}
+          </h2>
           <div className="flex flex-shrink-0 items-center gap-2">
             <span className="text-xs text-muted-foreground tabular-nums">{total} tickets</span>
             {/*
@@ -327,6 +384,42 @@ export function PriorityTicketQueue({
               </SelectContent>
             </Select>
           </div>
+        </div>
+        {/*
+          Parent tabs (PAC-109) — My Tickets / Agency Tickets, with the three
+          existing filters nested beneath whichever is selected.
+
+          Underlined rather than a second pill strip: two identical segmented
+          controls stacked read as one row wrapped, and nothing would say which
+          governs which. Tokens, not the raw `white/[0.0x]` values around them
+          — this panel is one of the prototype dashboards that never went
+          light-theme clean, and `packages/web/CLAUDE.md` says not to carry
+          that into new markup.
+        */}
+        <div
+          role="tablist"
+          aria-label="Ticket ownership"
+          className="mb-3 flex gap-4 border-b border-border"
+        >
+          {scopeTabs.map((scopeTab) => {
+            const selected = activeScope === scopeTab.key;
+            return (
+              <button
+                key={scopeTab.key}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => changeScope(scopeTab.key)}
+                className={`-mb-px border-b-2 px-0.5 pb-2 text-sm font-semibold transition-colors ${
+                  selected
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {scopeTab.label}
+              </button>
+            );
+          })}
         </div>
         <div className="flex gap-1 p-1 rounded-lg bg-secondary/60">
           {tabs.map((tab) => (

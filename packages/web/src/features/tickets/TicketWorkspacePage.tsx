@@ -7,6 +7,7 @@ import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { KpiStrip, type KpiCounts } from "./components/KpiStrip";
+import type { ServiceTicketScope } from "@sfa/shared";
 import { TablePagination } from "@/components/common/TablePagination";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
@@ -46,15 +47,20 @@ const RENEWAL_DESK_KEY = ["renewal-desk"];
  * (PAC-98). The active request's `counts` answers three of the four — its tab
  * counts are taken before any tab narrows it — and the resolved band is the
  * `total` of the second.
+ *
+ * Follows the feed's Mine / Everyone toggle (PAC-109): without it the strip
+ * would count the whole branch above a list of the rep's own tickets.
  */
-async function fetchKpiCounts(): Promise<KpiCounts> {
+async function fetchKpiCounts(scope: ServiceTicketScope): Promise<KpiCounts> {
   const [active, resolved] = await Promise.all([
     listServiceTickets({
       status: ticketQueueTabStatuses("all"),
+      scope,
       pageSize: 1,
     }),
     listServiceTickets({
       status: ticketQueueTabStatuses("resolved"),
+      scope,
       pageSize: 1,
     }),
   ]);
@@ -101,8 +107,8 @@ export default function TicketWorkspacePage() {
   const tickets = queue.rows;
 
   const kpiQuery = useQuery({
-    queryKey: [...TICKETS_KEY, "kpis"],
-    queryFn: fetchKpiCounts,
+    queryKey: [...TICKETS_KEY, "kpis", queue.scope],
+    queryFn: () => fetchKpiCounts(queue.scope),
   });
 
   // Preselect from ?ticket=<id> (deep link from the Service Dashboard "Open",
@@ -222,6 +228,8 @@ export default function TicketWorkspacePage() {
   // same number as the strip's "Total open".
   const queueTotal = queue.page?.total ?? 0;
   const openTotal = kpiQuery.data?.open;
+  // "your queue" stops being true under the Everyone toggle (PAC-109).
+  const where = queue.scope === "own" ? "in your queue" : "in your branch";
 
   const handleSelect = (id: string) => {
     setSelectedTicketId(id);
@@ -263,8 +271,8 @@ export default function TicketWorkspacePage() {
                 {queue.isLoading || queue.isError
                   ? " "
                   : queue.isFiltered
-                    ? `${queueTotal} matching · ${openTotal ?? "…"} open in your queue`
-                    : `${queueTotal} ticket${queueTotal !== 1 ? "s" : ""} in your queue`}
+                    ? `${queueTotal} matching · ${openTotal ?? "…"} open ${where}`
+                    : `${queueTotal} ticket${queueTotal !== 1 ? "s" : ""} ${where}`}
               </p>
             </div>
           </div>

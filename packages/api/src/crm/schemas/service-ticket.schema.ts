@@ -37,6 +37,19 @@ export class ServiceTicketActivityEntry {
   @Prop({ trim: true })
   author?: string;
 
+  /**
+   * Who wrote the entry (PAC-109). `author` is their name at the time of
+   * writing; this is the id that survives a rename and can be queried.
+   *
+   * Needed because the queue is shared from PAC-109 on: "who touched a ticket
+   * they were not assigned to" is answerable against this field and not
+   * against a display string. Null on pre-PAC-109 entries and on anything
+   * written without a request context (worker, seeds, migration) — not
+   * backfilled, per the repo's rule on inventing authorship.
+   */
+  @Prop({ type: ObjectIdType, default: null })
+  userId?: Types.ObjectId | null;
+
   @Prop({ required: true, trim: true })
   content: string;
 

@@ -8,10 +8,14 @@ import {
   SERVICE_TICKET_ACTIVE_STATUSES,
   type ServiceTicketCategory,
   type ServiceTicketQueueTab,
+  type ServiceTicketScope,
 } from "@sfa/shared";
 import { CreateTicketDialog } from "./components/CreateTicketDialog";
 import { ScorecardRow } from "./components/ScorecardRow";
-import { PriorityTicketQueue } from "./components/PriorityTicketQueue";
+import {
+  PriorityTicketQueue,
+  QUEUE_SCOPES,
+} from "./components/PriorityTicketQueue";
 import { RenewalOutreachDesk } from "./components/RenewalOutreachDesk";
 import {
   addServiceTicketNote,
@@ -63,8 +67,25 @@ export default function App() {
   const sort =
     searchParams.get("sort") === "activity" ? "activity" : "urgency";
 
+  /*
+   * The queue's parent tab — My Tickets / Agency Tickets (PAC-109).
+   *
+   * Read here because this is where the request is built, and written by
+   * `PriorityTicketQueue`, which owns the tab strip. Both go through the same
+   * URL params, the way `tab`/`page`/`type` already do.
+   *
+   * Defaults to `own`: the dashboard opens on the rep's own plate. Validated
+   * against the vocabulary rather than trusted, so a hand-edited `?scope=`
+   * renders the default view instead of taking a 400 from the API.
+   */
+  const scope = (
+    QUEUE_SCOPES as readonly ServiceTicketScope[]
+  ).includes(searchParams.get("scope") as ServiceTicketScope)
+    ? (searchParams.get("scope") as ServiceTicketScope)
+    : "own";
+
   const ticketsQuery = useQuery({
-    queryKey: ["service-tickets", { tab, page, category, sort }],
+    queryKey: ["service-tickets", { tab, page, category, scope, sort }],
     queryFn: () =>
       listServiceTickets({
         tab,
@@ -72,9 +93,10 @@ export default function App() {
         page,
         pageSize: TICKET_PAGE_SIZE,
         category: category as ServiceTicketCategory | undefined,
-        // A priority queue is work still to do. The list endpoint only drops
-        // *archived* tickets, so without this a ticket resolved today would
-        // sit here — and in the tab counts — for the whole archive window.
+        scope,
+        // A priority queue is work still to do. The list endpoint drops
+        // resolved and closed tickets by default since PAC-109; asking for the
+        // active statuses keeps that true here even if the default changes.
         status: SERVICE_TICKET_ACTIVE_STATUSES,
       }),
     // Keep the previous page on screen while the next one loads. Without it
