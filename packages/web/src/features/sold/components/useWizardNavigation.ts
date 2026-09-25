@@ -23,8 +23,8 @@ export interface WizardNavigation {
  * order, so the position *is* the history.
  *
  * Takes the ordered list rather than reading the module constant, because the
- * variants run different sequences — a transfer has no prior-insurance card
- * and a sale has no from-policy card.
+ * two variants run different sequences — a replacement has no prior-insurance
+ * card (PAC-126).
  */
 export function useWizardNavigation(
   cards: readonly WizardCard[],

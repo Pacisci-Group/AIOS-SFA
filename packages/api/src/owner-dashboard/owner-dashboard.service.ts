@@ -1,9 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { NEW_BUSINESS_MATCH } from '@sfa/shared';
 import type {
   AccessContext,
-  OwnerDashboardPeriod,
   OwnerDashboardSummary,
   OwnerLeadSourceRow,
   OwnerLeadSourcesResponse,
@@ -11,18 +9,14 @@ import type {
   OwnerProducersResponse,
 } from '@sfa/shared';
 import { Model, PipelineStage, Types } from 'mongoose';
-import { buildScopeFilter } from '../common/access/scope-filter';
 import { initialsFrom } from '../common/domain/initials';
+import { displayNamesFor } from '../common/domain/user-names';
 import { HOUSEHOLD_KEY_EXPR } from '../common/sales-metrics/household-key';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { avgPerHousehold } from '../performance/performance.normalize';
-import {
-  YmdRange,
-  resolveComparison,
-  resolveRange,
-} from '../performance/performance.range';
+import { YmdRange } from '../performance/performance.range';
 import {
   QuoteRecap,
   QuoteRecapDocument,
@@ -43,7 +37,13 @@ import {
   linesPrefix,
   sourceMatch,
   ymdWindow,
-} from './owner-dashboard.pipelines';
+} from '../common/sales-metrics/sales-pipelines';
+import {
+  quotedMatch,
+  resolvePeriod,
+  salesScope,
+  soldMatch,
+} from '../common/sales-metrics/sales-matches';
 
 /** A `$group` key that may be null — sales with no producer, or no source. */
 type GroupKey = Types.ObjectId | null;
@@ -126,7 +126,7 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerDashboardSummary> {
-    const { period, current, previous } = this.resolvePeriod(query);
+    const { period, current, previous } = resolvePeriod(query);
 
     const [sold, quoted, priorSold, priorQuoted] = await Promise.all([
       this.soldWindow(access, branchId, query, current),
@@ -175,7 +175,7 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerProducersResponse> {
-    const { period, current } = this.resolvePeriod(query);
+    const { period, current } = resolvePeriod(query);
 
     const [sold, quoted] = await Promise.all([
       this.soldBy(access, branchId, query, current, '$producerId', false),
@@ -185,7 +185,10 @@ export class OwnerDashboardService {
     const quotedByKey = new Map(quoted.map((row) => [key(row._id), row]));
     const ids = new Set([...sold, ...quoted].map((row) => key(row._id)));
     const soldByKey = new Map(sold.map((row) => [key(row._id), row]));
-    const names = await this.namesFor([...ids].filter(Boolean));
+    const names = await displayNamesFor(
+      this.userModel,
+      [...ids].filter(Boolean),
+    );
 
     const rows: Omit<OwnerProducerRow, 'rank'>[] = [...ids].map((id) => {
       // `''` is the null group: sales or quotes with no producer attached. Kept
@@ -230,7 +233,7 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerLeadSourcesResponse> {
-    const { period, current } = this.resolvePeriod(query);
+    const { period, current } = resolvePeriod(query);
 
     const [sold, quoted, volume, labels] = await Promise.all([
       this.soldBy(access, branchId, query, current, '$sourceId', true),
@@ -310,62 +313,6 @@ export class OwnerDashboardService {
   // Windows
   // ---------------------------------------------------------------------------
 
-  private resolvePeriod(query: OwnerDashboardQueryDto): {
-    period: OwnerDashboardPeriod;
-    current: YmdRange;
-    previous: YmdRange;
-  } {
-    const custom = { from: query.from, to: query.to };
-    const current = resolveRange(query.range, custom);
-    const previous = resolveComparison(query.range, custom);
-    return {
-      current,
-      previous,
-      period: {
-        key: query.range,
-        current: { from: current.from, to: current.to },
-        previous: { from: previous.from, to: previous.to },
-      },
-    };
-  }
-
-  /** Tenancy + data scope + the producer multi-select. Narrow-only. */
-  private scope<T>(
-    access: AccessContext,
-    branchId: string | null,
-    query: OwnerDashboardQueryDto,
-  ) {
-    return buildScopeFilter<T>(access, branchId, {
-      producerIds: query.producerIds,
-    });
-  }
-
-  private soldMatch(
-    access: AccessContext,
-    branchId: string | null,
-    query: OwnerDashboardQueryDto,
-    range: YmdRange,
-  ): Record<string, unknown> {
-    return {
-      ...this.scope<DealDocument>(access, branchId, query),
-      // `$ne`, never `$eq`: `businessType` is absent on every historic deal.
-      ...NEW_BUSINESS_MATCH,
-      ...ymdWindow('soldDateYmd', range),
-    };
-  }
-
-  private quotedMatch(
-    access: AccessContext,
-    branchId: string | null,
-    query: OwnerDashboardQueryDto,
-    range: YmdRange,
-  ): Record<string, unknown> {
-    return {
-      ...this.scope<QuoteRecapDocument>(access, branchId, query),
-      ...ymdWindow('quoteDateYmd', range),
-    };
-  }
-
   private async soldWindow(
     access: AccessContext,
     branchId: string | null,
@@ -374,7 +321,7 @@ export class OwnerDashboardService {
   ): Promise<SoldWindow> {
     const pipeline: PipelineStage[] = [
       ...linesPrefix(
-        this.soldMatch(access, branchId, query, range),
+        soldMatch(access, branchId, query.producerIds, range),
         SOLD_LINES,
         query,
         false,
@@ -430,7 +377,7 @@ export class OwnerDashboardService {
   ): Promise<QuotedWindow> {
     const [row] = await this.quoteRecapModel.aggregate<QuotedWindow>([
       ...linesPrefix(
-        this.quotedMatch(access, branchId, query, range),
+        quotedMatch(access, branchId, query.producerIds, range),
         QUOTED_LINES,
         query,
         false,
@@ -457,7 +404,7 @@ export class OwnerDashboardService {
   ): Promise<KeyedSold[]> {
     return this.dealModel.aggregate<KeyedSold>([
       ...linesPrefix(
-        this.soldMatch(access, branchId, query, range),
+        soldMatch(access, branchId, query.producerIds, range),
         SOLD_LINES,
         query,
         withSource,
@@ -484,7 +431,7 @@ export class OwnerDashboardService {
   ): Promise<KeyedQuoted[]> {
     return this.quoteRecapModel.aggregate<KeyedQuoted>([
       ...linesPrefix(
-        this.quotedMatch(access, branchId, query, range),
+        quotedMatch(access, branchId, query.producerIds, range),
         QUOTED_LINES,
         query,
         withSource,
@@ -518,7 +465,7 @@ export class OwnerDashboardService {
       _id: GroupKey;
       count: number;
     }>([
-      { $match: this.scope<LeadDocument>(access, branchId, query) },
+      { $match: salesScope<LeadDocument>(access, branchId, query.producerIds) },
       ...sourceMatch(query.leadSourceIds, 'leadSourceId'),
       { $addFields: { createdYmd: LEAD_CREATED_YMD_EXPR } },
       { $match: ymdWindow('createdYmd', range) },
@@ -530,38 +477,5 @@ export class OwnerDashboardService {
       },
     ]);
     return new Map(rows.map((row) => [key(row._id), row.count]));
-  }
-
-  /**
-   * Display names, **deactivated users included**: someone who sold in March and
-   * left in June still sold in March, and dropping their row would make the
-   * table total disagree with the card above it.
-   */
-  private async namesFor(ids: string[]): Promise<Map<string, string>> {
-    if (ids.length === 0) return new Map();
-
-    const users = await this.userModel
-      .find(
-        { _id: { $in: ids.map((id) => new Types.ObjectId(id)) } },
-        { firstName: 1, lastName: 1, email: 1 },
-      )
-      .lean<
-        {
-          _id: Types.ObjectId;
-          firstName?: string;
-          lastName?: string;
-          email: string;
-        }[]
-      >();
-
-    return new Map(
-      users.map((user) => {
-        const name = [user.firstName, user.lastName]
-          .filter(Boolean)
-          .join(' ')
-          .trim();
-        return [user._id.toString(), name || user.email.split('@')[0]];
-      }),
-    );
   }
 }

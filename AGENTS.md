@@ -40,7 +40,7 @@ JWT auth + native forms.
 
 | Package | State |
 |---|---|
-| `packages/web` | Auth + **permission-management pages wired to the API**; the **Producer Dashboard** and the **Owner view** (PAC-135) are live — the Manager view, Command Center and Service Dashboard still render **hard-coded mock data** |
+| `packages/web` | Auth + **permission-management pages wired to the API**; the **Producer Dashboard**, the **Owner view** (PAC-135) and the **Manager view** (PAC-139) are live — the Command Center and Service Dashboard still render **hard-coded mock data** |
 | `packages/api` | Full **permission/multi-tenancy spine** + **Mongoose schemas for all ~22 domain collections** + a **SmartSuite→Mongo migration**; the HTTP **feature controllers are still stubs** returning `{ status: 'ready' }` (real query services/DTOs not wired yet) |
 | `packages/shared` | Source of truth for module keys & permissions |
 

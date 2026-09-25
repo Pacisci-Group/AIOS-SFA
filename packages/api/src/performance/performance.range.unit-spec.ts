@@ -1,7 +1,9 @@
 import {
   addDays,
+  chicagoDayStart,
   chicagoParts,
   currentChicagoMonth,
+  fromYmd,
   isValidIsoDate,
   resolveComparison,
   resolveRange,
@@ -405,5 +407,33 @@ describe('currentChicagoMonth', () => {
     expect(currentChicagoMonth(new Date('2026-09-01T02:00:00.000Z'))).toBe(
       '2026-08',
     );
+  });
+});
+
+describe('chicagoDayStart', () => {
+  it('is 05:00Z in summer (CDT)', () => {
+    expect(
+      chicagoDayStart({ year: 2026, month: 8, day: 6 }).toISOString(),
+    ).toBe('2026-08-06T05:00:00.000Z');
+  });
+
+  it('is 06:00Z in winter (CST)', () => {
+    expect(
+      chicagoDayStart({ year: 2026, month: 1, day: 15 }).toISOString(),
+    ).toBe('2026-01-15T06:00:00.000Z');
+  });
+
+  it('round-trips through chicagoParts', () => {
+    const date = { year: 2026, month: 11, day: 1 }; // DST ends that day
+    const start = chicagoDayStart(date);
+    expect(chicagoParts(start)).toEqual(date);
+    expect(chicagoParts(new Date(start.getTime() - 1))).not.toEqual(date);
+  });
+});
+
+describe('fromYmd', () => {
+  it('inverts toYmd', () => {
+    const date = { year: 2026, month: 9, day: 23 };
+    expect(fromYmd(toYmd(date))).toEqual(date);
   });
 });

@@ -40,9 +40,9 @@ Chakra, etc.).
   is light. When a light fix would shift the dark rendering, pin the original
   with a `dark:` override rather than accepting the drift (see
   `components/form/FormError.tsx`).
-- **2 prototype dashboards remain** (management, service). They
-  are **not** light-theme clean and are not meant to be — they are slated for
-  replacement, and they still reference `--navy-900`, `--emerald`, `--red`,
+- **1 prototype dashboard remains** (service). It
+  is **not** light-theme clean and is not meant to be — it is slated for
+  replacement, and it still references `--navy-900`, `--emerald`, `--red`,
   `--amber` and `--font-mono`, which are defined nowhere and render transparent.
   Don't copy those patterns into new work.
 - The **ticket workspace, household detail, policy detail and the Agency Command

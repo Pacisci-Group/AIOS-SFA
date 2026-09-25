@@ -27,11 +27,11 @@ import {
   buildSoldPolicySchema,
   cardsFor,
   emptyPolicy,
+  replacesOwnPolicy,
   type CardIssue,
   type SoldPolicyFormValues,
   type WizardVariant,
 } from "./sold-deal-schema";
-import { TransferFromCard } from "./TransferFromCard";
 import { useWizardNavigation } from "./useWizardNavigation";
 import {
   NewBusinessApplicationCard,
@@ -51,8 +51,6 @@ interface PolicyDraftStepperProps {
   staff: SoldStaffOption[];
   /** Where in-progress documents are uploaded — see `UploadScope`. */
   uploadScope: UploadScope;
-  /** The household the transfer variant's from-policy picker searches. */
-  householdId?: string | null;
   /**
    * The policy being edited, or omitted for a new one.
    *
@@ -105,7 +103,6 @@ export function PolicyDraftStepper({
   carriers,
   staff,
   uploadScope,
-  householdId,
   initialValues,
   position,
   commitLabel,
@@ -201,9 +198,6 @@ export function PolicyDraftStepper({
 
         <form.AppForm>
           <div className="space-y-4">
-            {nav.card === "transferFrom" && (
-              <TransferFromCard form={form} householdId={householdId ?? null} />
-            )}
             {nav.card === "policyType" && <PolicyTypeCard form={form} />}
             {nav.card === "policyDetails" && (
               <PolicyDetailsCard form={form} carriers={carriers} />
@@ -220,6 +214,10 @@ export function PolicyDraftStepper({
                 form={form}
                 uploadScope={uploadScope}
                 contacts={context.contacts}
+                // A replacement never shows the prior-insurance card, so the
+                // "Prior insurance" discount checkbox that would make it
+                // mandatory is hidden with it (PAC-126).
+                replacesOwnPolicy={replacesOwnPolicy(variant)}
               />
             )}
             {nav.card === "priorInsurance" && (

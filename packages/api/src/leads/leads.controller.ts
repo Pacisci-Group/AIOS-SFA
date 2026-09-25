@@ -22,6 +22,10 @@ import { LeadDetailService } from './lead-detail.service';
 import { LeadsService } from './leads.service';
 import { UnclaimedLeadsService } from './unclaimed-leads.service';
 import { listHotLeadsSchema } from './dto/list-hot-leads.dto';
+import {
+  replacementLeadQuerySchema,
+  type ReplacementLeadQueryDto,
+} from './dto/replacement-lead.dto';
 import type { ListHotLeadsDto } from './dto/list-hot-leads.dto';
 import { listUnclaimedLeadsSchema } from './dto/list-unclaimed-leads.dto';
 import type { ListUnclaimedLeadsDto } from './dto/list-unclaimed-leads.dto';
@@ -128,6 +132,39 @@ export class LeadsController {
     query: ListUnclaimedLeadsDto,
   ) {
     return this.unclaimedLeadsService.list(access, branchId, query);
+  }
+
+  /**
+   * Where a replacement should start — `GET /leads/for-replacement` (PAC-126).
+   *
+   * A Cancel Rewrite and a Company Transfer both run through the ordinary Sold
+   * pipeline on a lead created for them, so the entry point has to know whether
+   * that lead already exists before it routes: a rep who created one and closed
+   * the tab must be resumed at the Sold form, not handed a second lead.
+   *
+   * `deal_audits:write` rather than `leads:read`, matching what the flow it
+   * gates actually does: this is a read, but the only thing it is for is
+   * deciding a write, and a caller who cannot book the replacement has no
+   * business enumerating its state. It is also the permission the Sold form
+   * itself requires, so a caller who passes this can finish the chain.
+   *
+   * **Must stay above the `:id` banner below** — `@Get(':id')` would match
+   * `for-replacement` just as happily, and Nest resolves in declaration order.
+   */
+  @Get('for-replacement')
+  @RequireWrite(ModuleKey.DealAudits)
+  forReplacement(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Query(new ZodValidationPipe(replacementLeadQuerySchema))
+    query: ReplacementLeadQueryDto,
+  ) {
+    return this.leadsService.replacementLead(
+      access,
+      branchId,
+      query.policyId,
+      query.reason,
+    );
   }
 
   /*

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
@@ -14,6 +14,7 @@ import { SectionLabel } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { HouseholdPolicyActions } from "./HouseholdPolicyActions";
 import {
   statusColors,
   toDisplayPolicy,
@@ -80,11 +81,22 @@ export function PolicyCard({
   isSelected,
   /** Hidden on the policy detail page, which is already at that route. */
   showOpenLink = true,
+  /**
+   * Rendered in the expanded body — the edit trigger, where a caller has a
+   * record to write against (PAC-126).
+   *
+   * A slot rather than a built-in, because the card is shared with the policy
+   * detail page and the demo household, and neither of those has a household to
+   * scope a write to. Outside the disclosure trigger: a `<button>` may not
+   * contain another one.
+   */
+  action,
 }: {
   policy: Policy;
   onClick: () => void;
   isSelected: boolean;
   showOpenLink?: boolean;
+  action?: ReactNode;
 }) {
   const Icon = policy.icon;
   // Pairs `aria-expanded` on the trigger with the region it discloses; without
@@ -152,10 +164,17 @@ export function PolicyCard({
               </span>
             </span>
           </span>
+          {/*
+            The renewal anchor, not the stored expiration (PAC-126). "Renews"
+            rather than "Expires" because that is the date shown — the same label
+            the policy detail page uses for the same field — and because on a
+            migrated policy the stored expiration is usually blank while the
+            anchor is derived and in the future.
+          */}
           <span className="min-w-0 text-right">
-            <span className={CARD_LABEL}>Expires</span>
+            <span className={CARD_LABEL}>Renews</span>
             <span className="mt-0.5 block text-sm font-medium text-card-foreground">
-              {policy.expiration}
+              {policy.renewal}
             </span>
           </span>
         </span>
@@ -167,10 +186,24 @@ export function PolicyCard({
           className="mx-4 flex flex-col gap-1.5 border-t border-border py-3"
         >
           <DetailLine label="Carrier" value={policy.carrier} />
-          <DetailLine label="Effective" value={policy.effective} />
+          {/*
+            Both dates, spelled out (PAC-126). The face leads with the renewal
+            anchor; this is where the two facts behind it separate — the date
+            coverage began, and the stored expiration, which is what the service
+            team is correcting when it is blank.
+
+            "Coverage began" rather than "Effective": it is the *inception*
+            date, not the start of the current term, and calling it the latter
+            is what made a 6-month auto policy look annual. The term sits
+            directly beneath it so the two are read together.
+          */}
+          <DetailLine label="Coverage began" value={policy.effective} />
+          <DetailLine label="Term" value={policy.term} />
+          <DetailLine label="Expires" value={policy.expiration} />
           {policy.deductible && (
             <DetailLine label="Deductible" value={policy.deductible} />
           )}
+          {action && <div className="mt-1 flex justify-end">{action}</div>}
           {showOpenLink && (
             <Button asChild size="sm" className="mt-2 w-full">
               <Link to={`/policies/${policy.id}`}>
@@ -234,18 +267,35 @@ function CrossSellCard({ item }: { item: CrossSell }) {
 
 interface PolicyPortfolioProps {
   policies: PolicySummary[];
+  /**
+   * The household these belong to, or `null` where there is nothing to write
+   * against — the demo household (PAC-126). Absent means the cards are read-only.
+   */
+  householdId?: string | null;
   /** Enables the cross-sell block, which nothing derives yet. */
   isDemo?: boolean;
 }
 
-export function PolicyPortfolio({ policies, isDemo = false }: PolicyPortfolioProps) {
+export function PolicyPortfolio({
+  policies,
+  householdId = null,
+  isDemo = false,
+}: PolicyPortfolioProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Every policy renders — a lapsed one is exactly what a CSR needs to see, and
   // the card already carries a Lapsed badge. Only the headline count and the
   // premium total narrow to active, because both claim to describe active
   // coverage and a cancelled policy was inflating them.
-  const displayPolicies = policies.map(toDisplayPolicy);
+  //
+  // The source row rides along beside the view model: the card renders the
+  // display shape, but the edit dialog seeds from the raw `PolicySummary` — it
+  // needs the ISO dates and the stored status, not the formatted ones.
+  const rows = policies.map((policy) => ({
+    source: policy,
+    display: toDisplayPolicy(policy),
+  }));
+  const displayPolicies = rows.map((row) => row.display);
   const activePolicies = displayPolicies.filter((p) => p.status === "Active");
 
   // Summed across policy types, so it mixes a 6-month auto premium with an
@@ -288,12 +338,22 @@ export function PolicyPortfolio({ policies, isDemo = false }: PolicyPortfolioPro
             <p className="text-sm text-muted-foreground">No policies on file.</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
-              {displayPolicies.map((p) => (
+              {rows.map(({ source, display }) => (
                 <PolicyCard
-                  key={p.id}
-                  policy={p}
-                  isSelected={selectedId === p.id}
-                  onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
+                  key={display.id}
+                  policy={display}
+                  isSelected={selectedId === display.id}
+                  onClick={() =>
+                    setSelectedId(selectedId === display.id ? null : display.id)
+                  }
+                  action={
+                    householdId ? (
+                      <HouseholdPolicyActions
+                        householdId={householdId}
+                        policy={source}
+                      />
+                    ) : undefined
+                  }
                 />
               ))}
             </div>

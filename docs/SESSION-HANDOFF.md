@@ -842,3 +842,103 @@ choice lists are stale snapshots — never treat them as exhaustive.** The impor
   change nothing. Its `down` rebuilds `{ code: null, label }` from `leadSourceId`, so the pair can
   still be unwound; only the raw SmartSuite code is gone, which nothing read.
 - `recharts` is unused in `packages/web` since the mock was deleted.
+
+---
+
+## 15. PAC-139 — Manager View dashboard (handoff, 2026-09-23)
+
+One PR against `dev` on `asad/pac-139-manager-view-dashboard`, after PR #121 (availability status)
+which was PAC-139 §6. Plan: `docs/plans/pac-139-manager-view-implementation-plan.md`.
+
+### What exists now
+- **`GET /management-dashboard/{alerts, alerts/stalled-leads, alerts/aging-audits, alerts/overdue-tickets,
+  team, producers/:producerId}`** (`src/management-dashboard/`), `ModuleKey.Management` + `management:read`,
+  the Owner view's query schema (`common/dashboard/dashboard-filter-query.dto.ts`, extracted so both views
+  compose one field map). The `management` stub is de-registered. Bruno: `bruno/Management Dashboard/`
+  (runs as `manager@demoagency.local`, branch scope).
+- **Shared with the Owner view, not forked:** `common/sales-metrics/sales-pipelines.ts` (moved from
+  `owner-dashboard.pipelines.ts`), `sales-matches.ts` (`resolvePeriod`, `salesScope`, `soldMatch`,
+  `quotedMatch` lifted out of `OwnerDashboardService`), `common/domain/user-names.ts`.
+- **`common/dates/business-days.ts`** — US federal holidays by rule (observed days), `businessDaysBetween`,
+  `agingCutoff`. First business-day code in the repo.
+- **`crm/service-ticket-queries.ts`** — `overdueTicketMatch(now)` (the derived meaning: stored `overdue`, or
+  an onboarding/renewal step past `dueAt` and not pinned) and `ticketTenantFilter`. `ServiceTicketsService.stats()`
+  now counts "needs action today" with it — it used to read the stored field alone and missed every
+  derived overdue (prod has 0 stored `overdue` and 1,134 open renewal steps).
+- **Web:** `features/management/` rewritten (`ManagerDashboard`, `AlertCards`, `AlertDrawer`,
+  `TeamActivityTable`, `ProducerDrawer`); the Owner filter bar/hook/range moved to
+  `features/management/filters/` as `DashboardFilterBar` / `useDashboardFilters` / `dashboard-range.ts`
+  (one bar for both tabs); `components/common/AvailabilityBadge.tsx`; drawers in the URL
+  (`?drawer=stalled|aging|overdue`, `?producer=<id>`). The three prototype files are deleted.
+- **Migration `20260923185801-management_read_for_branch_managers`** upserts the `rolePermissions` row for
+  every `branch_manager` role (template updated too). Dev databases: `npm run api:sync:roles:dev` also
+  works. A running API's Redis permission cache clears on its TTL or the manager's next login.
+- **Demo seed** pins fixtures (`DEMO_CONFIG.stalledLeads / agingAudits / overdueTickets`) as
+  post-draw overrides, so the RNG sequence is unchanged and no card reads zero on a fresh seed.
+
+### Decisions that override the ticket text (Asad, 23 Sep) — do not re-litigate
+- **Stalled = `lastActivityAt`**, not `updatedAt` (the migration stamped `updatedAt` with the import
+  time; the demo seed re-stamps it on every reseed; nothing indexes it), **terminal statuses excluded**
+  via `terminalLeadStatusValues()`. On the prod dump all 1,129 leads are >48h old, 266 of them Sold.
+- **Aging = `auditStatus != 'Pass'`** (Not Submitted, Pending, Fail), new-business deal sold in the period,
+  more than 5 business days ago. A deal with no audit row is not aging.
+- **Open Audit Items is an all-time backlog** — the one figure the period chips do not move (the table's
+  sub-heading says so). The producer drawer's list is the same set.
+- Producer filter narrows the cards and the producer drawer, never the Team roster. On tickets it lands
+  on `assignedUserId` (the CSR). Lead source reaches tickets only through `leadId` (most have none).
+- Audit rows open the **household** until PAC-106 ships the Deal Audit page; `dealAuditId`/`dealId` are
+  already on the rows for it.
+
+### Verified
+`build -w @sfa/shared` · `tsc -p packages/api` (only pre-existing errors in untouched files) · unit
+97 (4 suites) · `management-dashboard.e2e-spec.ts` 32/32 · web `lint` · Bruno and the browser check:
+see the PR description.
+
+### Still open for David
+~~Q1 status vocabulary~~ (settled 25 Sep, see §15a) · Q2 "open" audit = anything not Pass · Q4 person filter on
+tickets = assigned CSR · Q7 "Live" pill dropped, no auto-refresh · Q8 active pipeline = every non-terminal
+status, $ = latest quoted premium · Q9 roster = active producers + anyone with activity.
+
+---
+
+## 15a. PAC-139 §6a — nightly Away status (handoff, 2026-09-25)
+
+A second PR **stacked on PR #122** — branch `asad/pac-139-nightly-away-status`, base
+`asad/pac-139-manager-view-dashboard`. Merge #122 first, then retarget this one at `dev` (GitHub does
+that automatically when the base branch is deleted after merge).
+
+### What David asked for (relayed by Asad, 25 Sep)
+- Statuses **Available / Busy / Away**; the sidebar menu shows the three names and **no sub-text**.
+- **Every active user of every role, the owner included, is set Away at 8 PM in the agency's timezone.**
+- **No morning reset** — each person sets themself Available when they start work.
+- Agencies get a stored timezone, defaulted to Oklahoma / US Central.
+
+### What exists now
+- **`@sfa/shared` `USER_AVAILABILITIES = ['available', 'busy', 'away']`**, `END_OF_DAY_USER_AVAILABILITY`,
+  `USER_AVAILABILITY_DESCRIPTIONS` deleted. The PATCH body, the badge (`away` = `bg-muted-foreground`),
+  the demo seed (`sam.torres` starts `away`) and Bruno all derive from the list.
+- **`Agency.timezone`** (IANA, default `America/Chicago`, validated by `isIanaTimeZone`) and
+  **`Agency.availabilitySweep { lastAwayDate, lastAwayAt }`** — the "done tonight" marker.
+  Migration **`20260924233638-agency_timezone_backfill`** sets the default where missing.
+- **`common/dates/time-zones.ts`** (`DEFAULT_AGENCY_TIME_ZONE`, `isIanaTimeZone`, `localClock`) and
+  **`common/dates/end-of-day.ts`** (`END_OF_DAY_LOCAL_HOUR = 20`, `endOfDaySweepDate`). Both unit-tested,
+  DST and half-hour zones included.
+- **`worker/functions/set-users-away.fn.ts`** — Inngest cron `*/30 * * * *` (UTC), `forEachAgency`,
+  per agency: local clock ≥ 20:00 and marker ≠ today's local date → **claim the marker with a
+  conditional `updateOne`, then `updateMany` users** (`isActive`, not platform admin, not already `away`).
+  Claim-first is deliberate: a crash between the two skips a night rather than re-flipping someone who
+  came back after 8 PM. e2e: `test/worker/set-users-away.e2e-spec.ts` (8 cases, fixture-scoped, all
+  instants in 2025 so the marker it leaves on non-fixture agencies never blocks a real evening).
+
+### Deliberately not done
+- **`performance.range.ts`'s `AGENCY_TIME_ZONE` is still a constant.** Rewiring the dashboards' Chicago
+  calendar onto `Agency.timezone` touches every date window in the app — its own ticket.
+- No timezone picker in the onboarding wizard or settings; the validator is there for when one lands.
+- Not a `TZ=`-prefixed cron: that pins one zone for every tenant, which is what the field exists to avoid.
+
+### Verified
+`build -w @sfa/shared` · `build -w @sfa/api` · web `lint` (tsc) · eslint on every touched API file ·
+unit 15/15 (2 new suites) · e2e `set-users-away` 8/8, `profile` + `management-dashboard` still green
+(52/52 across the three) · Bruno `Auth` + `Profile` + `Management Dashboard` + `Users` 38/39 — the one
+failure is `Get Alerts` "the demo seed guarantees something on every card", a stale dev seed, not this
+change. **Not done: the browser check of the sidebar menu** (needs a signed-in session).

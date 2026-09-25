@@ -1,0 +1,116 @@
+meta {
+  name: Get Team
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/management-dashboard/team?range=ytd
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: ytd
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto
+  ~producerIds:
+}
+
+auth:bearer {
+  token: {{managementDashboardToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const rows = res.getBody().rows;
+    if (rows.length) bru.setVar("managementProducerId", rows[0].producerId);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every active producer has a row, with an availability", function () {
+    const rows = res.getBody().rows;
+    expect(rows.length).to.be.at.least(1);
+    for (const row of rows) {
+      expect(row.producerId).to.be.a("string");
+      expect(row.name).to.be.a("string");
+      expect(["available", "busy", "away", null]).to.include(row.availability);
+    }
+  });
+
+  test("headers count households, and the ratio is sold over quoted", function () {
+    for (const row of res.getBody().rows) {
+      expect(Number.isInteger(row.householdsQuoted)).to.equal(true);
+      expect(Number.isInteger(row.householdsSold)).to.equal(true);
+      expect(Number.isInteger(row.openAuditItems)).to.equal(true);
+      if (row.householdsQuoted === 0) {
+        expect(row.householdCloseRatio).to.equal(null);
+      } else {
+        const expected = Math.round((row.householdsSold / row.householdsQuoted) * 1000) / 10;
+        expect(row.householdCloseRatio).to.equal(expected);
+      }
+    }
+  });
+
+  test("the Team Total row is the sum of the rows", function () {
+    const { rows, totals } = res.getBody();
+    const sum = (key) => rows.reduce((s, r) => s + r[key], 0);
+    expect(totals.householdsQuoted).to.equal(sum("householdsQuoted"));
+    expect(totals.householdsSold).to.equal(sum("householdsSold"));
+    expect(totals.openAuditItems).to.equal(sum("openAuditItems"));
+  });
+}
+
+docs {
+  # GET /management-dashboard/team — the Team Activity table (PAC-139)
+
+  One row per producer: **Status · Households Quoted · Households Sold ·
+  Household Close Ratio · Open Audit Items**, plus a Team Total. Each row opens
+  the producer drawer (`Get Producer Drawer`).
+
+  - **Module / permission / scope / filter:** as `Get Alerts`, except that
+    **`producerIds` is ignored** — the table *is* the team ("and not the list.
+    It will only affect the top." — Asad; "Correct." — David, 00:29:05).
+  - Headers say what they count, by rule (David, 00:06:53–00:11:59): these are
+    **households**, not items, quotes or policies. `householdCloseRatio` is
+    named so it cannot be read as the Owner view's premium closing ratio.
+
+  ## Who gets a row
+  Every active holder of the `producer` role in scope (a branch manager's
+  branch, the owner's agency), plus anyone else with a sale or quote in the
+  window — the owner closing a deal, a producer who has since left. The
+  mockup's "Calls Today" is gone: nothing tracks calls, and David will not
+  rely on producers logging them.
+
+  ## Columns
+  | field | counts | window |
+  |---|---|---|
+  | availability | `available` / `busy` / `away` — the producer's own switch, set `away` nightly by the worker (PAC-139 §6, §6a); `null` for a deactivated user | — |
+  | householdsQuoted | distinct households with a quote recap | period |
+  | householdsSold | distinct households with a new-business sale | period |
+  | householdCloseRatio | `householdsSold ÷ householdsQuoted`, %; `null` over no quotes | period |
+  | openAuditItems | every audit item still outstanding on the producer's deals — an **all-time backlog**, the one figure the period chips do not move | all time |
+
+  Distinct household is the same identity the Owner view and the producer
+  scorecard use (`HOUSEHOLD_KEY_EXPR`), so the three agree on what a household is.
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "ytd", "current": { "from": "2026-01-01", "to": "2026-09-23" }, "previous": { "from": "2025-01-01", "to": "2025-09-23" } },
+    "rows": [
+      { "producerId": "66f0…11", "name": "Pat Producer", "initials": "PP", "availability": "available",
+        "householdsQuoted": 12, "householdsSold": 7, "householdCloseRatio": 58.3, "openAuditItems": 2 }
+    ],
+    "totals": { "householdsQuoted": 31, "householdsSold": 19, "householdCloseRatio": 61.3, "openAuditItems": 5 }
+  }
+  ```
+
+  ## Errors
+  As `Get Alerts`.
+}

@@ -1,12 +1,21 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Search, ChevronDown, Archive, Plus } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
+import {
+  SERVICE_TICKET_ACTIVE_STATUSES,
+  type ServiceTicketCategory,
+  type ServiceTicketQueueTab,
+  type ServiceTicketScope,
+} from "@sfa/shared";
 import { CreateTicketDialog } from "./components/CreateTicketDialog";
 import { ScorecardRow } from "./components/ScorecardRow";
-import { PriorityTicketQueue } from "./components/PriorityTicketQueue";
+import {
+  PriorityTicketQueue,
+  QUEUE_SCOPES,
+} from "./components/PriorityTicketQueue";
 import { RenewalOutreachDesk } from "./components/RenewalOutreachDesk";
 import {
   addServiceTicketNote,
@@ -16,6 +25,7 @@ import {
   type ServiceTicketStats,
   type ServiceTicketStatus,
 } from "@/lib/service-tickets-api";
+import { ticketQueueLink } from "@/lib/ticket-queue";
 
 const FALLBACK_STATS: ServiceTicketStats = {
   openTickets: 0,
@@ -28,15 +38,71 @@ const FALLBACK_STATS: ServiceTicketStats = {
   avgLobDensity: 0,
 };
 
+/**
+ * Rows per page of the Priority Ticket Queue.
+ *
+ * Sent explicitly rather than left to the API's default so the two cannot
+ * drift: this number also decides the card's height, and a server that
+ * silently returned a different count would leave the card half empty.
+ */
+const TICKET_PAGE_SIZE = 8;
+
 export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  /*
+   * The queue's tab, page, type and sort live in the URL — `PriorityTicketQueue`
+   * owns writing them — and since PAC-98 they are query parameters on the
+   * request rather than a client-side filter. Read them here so the fetch and
+   * the query key move together: a key that ignored them would serve page 1's
+   * rows for page 3.
+   */
+  const [searchParams] = useSearchParams();
+  const tab = (searchParams.get("tab") ?? "all") as ServiceTicketQueueTab;
+  const page = Number(searchParams.get("page")) || 1;
+  const category = searchParams.get("type") ?? undefined;
+  const sort =
+    searchParams.get("sort") === "activity" ? "activity" : "urgency";
+
+  /*
+   * The queue's parent tab — My Tickets / Agency Tickets (PAC-109).
+   *
+   * Read here because this is where the request is built, and written by
+   * `PriorityTicketQueue`, which owns the tab strip. Both go through the same
+   * URL params, the way `tab`/`page`/`type` already do.
+   *
+   * Defaults to `own`: the dashboard opens on the rep's own plate. Validated
+   * against the vocabulary rather than trusted, so a hand-edited `?scope=`
+   * renders the default view instead of taking a 400 from the API.
+   */
+  const scope = (
+    QUEUE_SCOPES as readonly ServiceTicketScope[]
+  ).includes(searchParams.get("scope") as ServiceTicketScope)
+    ? (searchParams.get("scope") as ServiceTicketScope)
+    : "own";
+
   const ticketsQuery = useQuery({
-    queryKey: ["service-tickets"],
-    queryFn: () => listServiceTickets(),
+    queryKey: ["service-tickets", { tab, page, category, scope, sort }],
+    queryFn: () =>
+      listServiceTickets({
+        tab,
+        sort,
+        page,
+        pageSize: TICKET_PAGE_SIZE,
+        category: category as ServiceTicketCategory | undefined,
+        scope,
+        // A priority queue is work still to do. The list endpoint drops
+        // resolved and closed tickets by default since PAC-109; asking for the
+        // active statuses keeps that true here even if the default changes.
+        status: SERVICE_TICKET_ACTIVE_STATUSES,
+      }),
+    // Keep the previous page on screen while the next one loads. Without it
+    // every page turn blanks the list and collapses the card's height, which
+    // reads as a bug rather than a fetch.
+    placeholderData: (previous) => previous,
   });
   const statsQuery = useQuery({
     queryKey: ["service-tickets", "stats"],
@@ -63,14 +129,30 @@ export default function App() {
     },
   });
 
-  const tickets = ticketsQuery.data ?? [];
+  const ticketPage = ticketsQuery.data;
   const scorecardStats = statsQuery.data ?? FALLBACK_STATS;
 
-  const openTicket = (id: string) => navigate(`/crm/tickets?ticket=${id}`);
+  /**
+   * Opening a ticket takes the queue's view with it.
+   *
+   * The Priority Ticket Queue keeps its tab, type filter and sort in the URL,
+   * and the workspace's feed reads the same param names
+   * (`lib/ticket-queue.ts`), so forwarding them means the list beside the
+   * opened ticket is the list the rep clicked in. Without this the workspace
+   * loaded its own unfiltered, differently-tabbed queue and the tickets beside
+   * the one they opened looked like somebody else's.
+   *
+   * Read off the location rather than passed up from the queue: the renewal
+   * desk opens tickets too, and one filter context per page is the point.
+   */
+  const openTicket = (id: string) =>
+    navigate(ticketQueueLink("/crm/tickets", id, searchParams));
 
   return (
     <AppShell>
-      <div className="flex-1 flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
+      {/* No `flex-1` beside `h-screen` — see `TicketWorkspacePage` for why
+          the two cannot coexist inside `AppShell`. */}
+      <div className="flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
@@ -182,7 +264,8 @@ export default function App() {
             style={{ gridTemplateColumns: "3fr 2fr" }}
           >
             <PriorityTicketQueue
-              tickets={tickets}
+              page={ticketPage}
+              busy={ticketsQuery.isFetching}
               onOpen={openTicket}
               onAddNote={(id, content) => noteMutation.mutate({ id, content })}
               onChangeStatus={(id, status) => statusMutation.mutate({ id, status })}

@@ -59,8 +59,11 @@ export class User {
   avatarKey?: string;
 
   /**
-   * Whether this person is taking new leads right now (PAC-139 §6). Set only
-   * by the user themself via `PATCH /me/availability`; nothing else writes it.
+   * Presence — taking leads, busy, or away (PAC-139 §6, §6a). Set by the user
+   * themself via `PATCH /me/availability`, and by exactly one job: the
+   * worker's `SetUsersAwayFn` sets every active user of an agency to `away`
+   * at 8 PM in the agency's timezone (`Agency.timezone`). Nothing flips
+   * anyone back; the morning click is the person saying "I'm here".
    *
    * Unrelated to {@link isActive}, which is whether the *account* exists in
    * good standing. A deactivated user's availability is meaningless and is not

@@ -64,6 +64,68 @@ export function isTerminalTicketStatus(status: ServiceTicketStatus): boolean {
   );
 }
 
+/**
+ * Every status that is still somebody's work — the complement of
+ * {@link SERVICE_TICKET_TERMINAL_STATUSES}.
+ *
+ * Sent as `?status=` by the Priority Ticket Queue, which must not show a ticket
+ * that was resolved yesterday. The list endpoint only excludes *archived*
+ * tickets (terminal and past the archive window), so without this a resolved
+ * ticket would sit in "My Priority Tickets" for a week (PAC-98 review).
+ * Derived rather than restated, so a new status lands on the right side of the
+ * line without anyone remembering this list.
+ */
+export const SERVICE_TICKET_ACTIVE_STATUSES: readonly ServiceTicketStatus[] =
+  SERVICE_TICKET_STATUSES.filter((status) => !isTerminalTicketStatus(status));
+
+/**
+ * How loudly a status demands attention. **Lower sorts first.**
+ *
+ * The eight stored statuses collapse onto the four states a queue actually
+ * reasons about: something is late, something is workable now, something is
+ * blocked on someone else, or it is finished.
+ *
+ * Lives in `shared` rather than beside either consumer because it is written
+ * on the server and read on both sides. The API materializes it onto the
+ * ticket as `urgencyRank` so the queue's sort can be served by an index — a
+ * rank computed at query time cannot be — and the web app orders by the same
+ * numbers. Two copies of this table would mean the list silently paginating in
+ * one order while the client believed another.
+ */
+export const SERVICE_TICKET_URGENCY_RANK: Record<ServiceTicketStatus, number> =
+  {
+    overdue: 0,
+    open: 1,
+    in_progress: 1,
+    waiting: 2,
+    waiting_on_client: 2,
+    waiting_on_carrier: 2,
+    resolved: 3,
+    closed: 3,
+  };
+
+export function urgencyRankFor(status: ServiceTicketStatus): number {
+  return SERVICE_TICKET_URGENCY_RANK[status];
+}
+
+/**
+ * Priority as a sort key, for the same reason as {@link urgencyRankFor}: the
+ * stored values do not order alphabetically (`high` < `low` < `medium`), so a
+ * plain index on `priority` would sort them wrongly.
+ */
+export const SERVICE_TICKET_PRIORITY_RANK: Record<
+  ServiceTicketPriority,
+  number
+> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+export function priorityRankFor(priority: ServiceTicketPriority): number {
+  return SERVICE_TICKET_PRIORITY_RANK[priority];
+}
+
 /** Display labels for every status (the multi-word ones are stored snake_case). */
 export const SERVICE_TICKET_STATUS_LABELS: Record<
   ServiceTicketStatus,
@@ -478,6 +540,20 @@ export interface ServiceTicketActivity {
   id: string;
   type: ServiceTicketActivityType;
   author?: string;
+  /**
+   * Who wrote the entry, as an id rather than a display name (PAC-109).
+   *
+   * `author` has always carried a name, which is enough to render a timeline
+   * and useless for answering "who has been working tickets they were not
+   * assigned to" — the question that arrives the moment the queue is shared.
+   * Compare it against the ticket's `assignedUserId` to mark a cross-assignee
+   * entry.
+   *
+   * Null on every entry written before PAC-109, and on anything the worker or
+   * a seed writes. Deliberately not backfilled: a name is not an identity, and
+   * guessing one would put a wrong id behind a right-looking label.
+   */
+  userId?: string | null;
   content: string;
   /** ISO timestamp of when the activity was recorded. */
   at: string;
@@ -490,6 +566,85 @@ export interface ServiceTicketActivity {
  * web app. Field names mirror the original mock UI so components need minimal
  * changes.
  */
+/**
+ * The queue's three tabs, and the vocabulary the API accepts for `?tab=`.
+ *
+ * Shared because the tab is now a server-side predicate rather than a client
+ * filter: the web app sends it and the API narrows on it, so a tab added on
+ * one side and not the other has to be a compile error.
+ */
+export const SERVICE_TICKET_QUEUE_TABS = ['all', 'overdue', 'waiting'] as const;
+export type ServiceTicketQueueTab =
+  (typeof SERVICE_TICKET_QUEUE_TABS)[number];
+
+/**
+ * The vocabulary the API accepts for `?scope=` on the ticket queue (PAC-109).
+ *
+ * | Value | Means |
+ * |---|---|
+ * | `own` | Assigned to the caller. |
+ * | `others` | **Everyone else's** — the caller's scope *minus* their own rows. Includes unassigned tickets, which are nobody's and therefore not the caller's. |
+ * | `agency` | Everything the caller's `DataScope` reaches, their own included. |
+ *
+ * `own` and `others` are a **partition**, which is what the Service
+ * Dashboard's two parent tabs need: "My Tickets" and "Agency Tickets" sitting
+ * side by side, with nothing counted twice. `agency` is the undivided view,
+ * used by the Ticket Workspace's Mine / Everyone toggle.
+ *
+ * Where the caller's scope *stops* is the branch: PAC-109 gives service
+ * tickets a **branch floor**, so an `own`-scoped CSR reads their whole branch.
+ * Tickets are shared work; leads are owned, which is why `?scope=` on the
+ * leads list has no `others` and never widens past the assignee.
+ *
+ * None of these can widen — see `buildTicketScopeFilter`. `own` is honoured at
+ * every data scope, because narrowing is always safe.
+ */
+export const SERVICE_TICKET_SCOPES = ['own', 'others', 'agency'] as const;
+export type ServiceTicketScope = (typeof SERVICE_TICKET_SCOPES)[number];
+
+/**
+ * How a queue ranks inside its urgency bands — the vocabulary the API accepts
+ * for `?sort=`.
+ *
+ * Urgency is never switched off: overdue leads, then workable, then blocked,
+ * then done, under both. The option only decides the order *inside* a band —
+ * `urgency` puts the ticket that has demanded attention longest first,
+ * `activity` the one touched most recently (`lastActivityAt`). A plain recency
+ * sort put a ticket someone had just typed a note into above every overdue
+ * one, which is the one thing a work queue must not do.
+ *
+ * Server-side because the list pages: ranking one page in the browser would
+ * order it against itself rather than against the pages either side.
+ */
+export const SERVICE_TICKET_QUEUE_SORTS = ['urgency', 'activity'] as const;
+export type ServiceTicketQueueSort =
+  (typeof SERVICE_TICKET_QUEUE_SORTS)[number];
+
+/**
+ * Paginated envelope for `GET /crm/service-tickets`, mirroring
+ * `LeadListResponse` and `HouseholdListResponse`.
+ *
+ * `counts` rides along because the queue header renders all three tab totals
+ * beside the rows of one of them; without it every page load would need a
+ * second round trip to label the tabs it is already showing.
+ *
+ * The counts are over the filtered set — scope, category, archive window —
+ * but *before* the tab narrows it. That is what the chips have always meant:
+ * "how many would this tab show", not "how many are on screen".
+ */
+export interface ServiceTicketListResponse {
+  page: number;
+  pageSize: number;
+  /**
+   * Rows in the requested tab — what `totalPages` is computed from. The
+   * pre-tab total is `counts.all`.
+   */
+  total: number;
+  totalPages: number;
+  items: ServiceTicketView[];
+  counts: Record<ServiceTicketQueueTab, number>;
+}
+
 export interface ServiceTicketView {
   id: string;
   ticketNumber: string;

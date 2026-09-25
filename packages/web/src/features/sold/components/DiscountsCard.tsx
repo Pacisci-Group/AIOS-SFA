@@ -29,8 +29,16 @@ export const DiscountsCard = withForm({
   props: {
     uploadScope: { kind: "lead", leadId: "" } as UploadScope,
     contacts: [] as SoldHouseholdContact[],
+    /**
+     * True on a transfer or a replacement — the policy being written replaces
+     * one already in our book. Hides the "Prior insurance" checkbox: there is
+     * no other carrier's coverage to claim a discount for, and those variants
+     * drop the prior-insurance card that ticking it would have made mandatory.
+     * Ticking it there was a dead end (PAC-126) — see the schema's guard.
+     */
+    replacesOwnPolicy: false,
   },
-  render: function Render({ form, uploadScope, contacts }) {
+  render: function Render({ form, uploadScope, contacts, replacesOwnPolicy }) {
     const policyType = useStore(form.store, (s) => s.values.policyType);
 
     const isProperty = isPropertyPolicyType(policyType);
@@ -38,7 +46,7 @@ export const DiscountsCard = withForm({
 
     return (
       <div className="space-y-5">
-        <PriorInsuranceDiscountField form={form} />
+        {!replacesOwnPolicy && <PriorInsuranceDiscountField form={form} />}
 
         {isProperty && <PropertyDiscounts form={form} uploadScope={uploadScope} />}
         {isAuto && (
