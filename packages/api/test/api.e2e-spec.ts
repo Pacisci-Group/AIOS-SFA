@@ -14350,7 +14350,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
           replacementIntent: { policyId, reason },
           ...overrides,
         })
