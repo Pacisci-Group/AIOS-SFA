@@ -1,29 +1,44 @@
 import { useCallback, useMemo } from 'react';
-import type { ServiceTicketView } from '@sfa/shared';
+import { useQuery } from '@tanstack/react-query';
+import type {
+  ServiceTicketCategory,
+  ServiceTicketListResponse,
+  ServiceTicketView,
+} from '@sfa/shared';
+import { SERVICE_TICKET_CATEGORIES } from '@sfa/shared';
 import { useUrlState } from '@/hooks/useUrlState';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { SEARCH_DEBOUNCE_MS } from '@/components/common/TableSearchInput';
+import { listServiceTickets } from '@/lib/service-tickets-api';
 import {
   DEFAULT_TICKET_QUEUE_SORT,
   TICKET_QUEUE_TABS,
   TICKET_QUEUE_URL_ALLOWED,
   TICKET_QUEUE_URL_DEFAULTS,
-  matchesTicketQueueSearch,
-  matchesTicketQueueTab,
-  sortTicketQueue,
-  ticketQueueCategoryOptions,
+  ticketQueueTabStatuses,
   type TicketQueueSort,
   type TicketQueueTab,
 } from '@/lib/ticket-queue';
 
 /**
- * `q` on top of the shared three (`tab`, `type`, `sort`) — the feed is the only
- * queue with a search box. Frozen at module scope so `useUrlState`'s memo
- * dependencies stay stable across renders.
+ * Rows per page of the ticket feed (Ticket Workspace and Archived Tickets).
+ *
+ * Larger than the dashboard queue's 8: this is a full-height list rather than
+ * a card, and the server caps every caller at 100 regardless.
  */
-const URL_DEFAULTS = { ...TICKET_QUEUE_URL_DEFAULTS, q: '' };
+export const FEED_PAGE_SIZE = 25;
+
+/**
+ * `q` and `page` on top of the shared three (`tab`, `type`, `sort`) — the feed
+ * is the only queue with a search box, and its page size is its own. Frozen at
+ * module scope so `useUrlState`'s memo dependencies stay stable across renders.
+ * `page: ''` is the default, so `?page=1` never appears.
+ */
+const URL_DEFAULTS = { ...TICKET_QUEUE_URL_DEFAULTS, q: '', page: '' };
 
 interface UseTicketQueueOptions {
-  /** Everything this page loaded — the set the filters narrow. */
-  tickets: ServiceTicketView[];
+  /** The Archived Tickets view: the other side of the archive window. */
+  archived?: boolean;
   /**
    * Status tabs to offer; the whole vocabulary by default. `[]` hides the strip
    * and filters no status at all — what the Archived Tickets page wants, where
@@ -31,11 +46,6 @@ interface UseTicketQueueOptions {
    * matches.
    */
   tabs?: readonly TicketQueueTab[];
-  /**
-   * The ticket the workspace pane is showing. Kept in the list whatever the
-   * filters say — see `rows`.
-   */
-  selectedId?: string | null;
 }
 
 export interface TicketQueue {
@@ -43,26 +53,37 @@ export interface TicketQueue {
   /** `''` means every category. */
   type: string;
   sort: TicketQueueSort;
+  /** What is in the search box — ahead of the request by the debounce. */
   query: string;
   setTab: (tab: TicketQueueTab) => void;
   setType: (type: string) => void;
   setSort: (sort: TicketQueueSort) => void;
   setQuery: (query: string) => void;
+  setPage: (page: number) => void;
   clearFilters: () => void;
   /** Status tabs to render; empty when this queue has none. */
   tabs: readonly TicketQueueTab[];
-  /** Categories to offer: those present in the data, plus the selected one. */
-  categoryOptions: string[];
-  /** Rows to render — filtered, sorted, selected ticket kept visible. */
+  /** The whole category vocabulary — see the note on the hook. */
+  categoryOptions: readonly string[];
+  /** One page of rows, narrowed and ranked by the server. Render as given. */
   rows: ServiceTicketView[];
-  /** First matching ticket, for a page choosing a default selection. */
-  firstMatchId: string | null;
+  /** The page envelope, for pagination and the header count. */
+  page: ServiceTicketListResponse | undefined;
+  /** The page the URL asks for, before the response confirms it. */
+  requestedPage: number;
+  pageSize: number;
   /** Whether anything is currently narrowing the list. */
   isFiltered: boolean;
+  isLoading: boolean;
+  isError: boolean;
+  /** A page is in flight — the search box and the pager say so. */
+  isFetching: boolean;
+  refetch: () => void;
 }
 
 /**
- * The ticket workspace queue's filters, search and ranking — held in the URL.
+ * The ticket workspace queue — its filters, search, ranking and page, held in
+ * the URL and served by the API.
  *
  * The state is in the URL and the vocabulary is in `lib/ticket-queue.ts`
  * precisely so this queue and the Service Dashboard's are the same queue: the
@@ -71,16 +92,20 @@ export interface TicketQueue {
  * filters were `useState` here, so arriving from a filtered dashboard showed an
  * unfiltered list of different tickets in a different order.
  *
- * Lives in the page rather than inside `TicketFeed` because the page has to
- * choose which ticket the workspace pane opens on, and "the first one" has to
- * mean the first *row the rep can see* (`firstMatchId`) — it used to mean
- * `tickets[0]`, the API's own order, which is not the order the list renders.
+ * Since PAC-98 every one of them is a request parameter: the list is paged by
+ * the server, so a filter applied here would only ever narrow the page in
+ * front of you. Changing any of them returns to page 1 — page 3 of an
+ * unfiltered list is not page 3 of a filtered one.
+ *
+ * The category options are the whole vocabulary rather than the categories on
+ * screen: derived from one page, they would change under the rep as they
+ * paged, and a category would vanish from the picker while its tickets sat on
+ * page two.
  */
 export function useTicketQueue({
-  tickets,
+  archived = false,
   tabs = TICKET_QUEUE_TABS,
-  selectedId = null,
-}: UseTicketQueueOptions): TicketQueue {
+}: UseTicketQueueOptions = {}): TicketQueue {
   /*
    * `tab` is guarded against the tabs this queue actually shows, so a stale or
    * hand-edited value (or one carried from a queue with a different strip)
@@ -88,7 +113,11 @@ export function useTicketQueue({
    * explain it.
    */
   const allowed = useMemo(
-    () => ({ ...TICKET_QUEUE_URL_ALLOWED, tab: tabs }),
+    () => ({
+      ...TICKET_QUEUE_URL_ALLOWED,
+      tab: tabs,
+      page: (value: string) => /^[1-9]\d*$/.test(value),
+    }),
     [tabs],
   );
   const [urlState, setUrlState] = useUrlState({
@@ -100,63 +129,68 @@ export function useTicketQueue({
   const type = urlState.type;
   const sort = (urlState.sort || DEFAULT_TICKET_QUEUE_SORT) as TicketQueueSort;
   const query = urlState.q;
+  const requestedPage = Number(urlState.page) || 1;
 
-  const matches = useMemo(() => {
-    const hits = tickets.filter(
-      (ticket) =>
-        (!tabs.length || matchesTicketQueueTab(ticket.status, tab)) &&
-        (!type || ticket.category === type) &&
-        matchesTicketQueueSearch(ticket, query),
-    );
-    return sortTicketQueue(hits, sort);
-  }, [tickets, tabs, tab, type, query, sort]);
+  // Typing should not fire a request per keystroke.
+  const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
 
-  /**
-   * The open ticket stays in the list even when the filters exclude it.
-   *
-   * Without this, following a link to a resolved ticket (the household
-   * activity feed, an onboarding chain row) lands on a queue whose default tab
-   * is the active work — the workspace shows the ticket while the list beside
-   * it has no row for it, which reads as the wrong ticket having opened. It
-   * sorts into its natural band rather than being pinned to the top, and it
-   * counts towards the total, which is "what you can see" and not "what
-   * matches" — a count of 0 above a visible row is the same class of lie this
-   * whole change is about.
-   */
-  const rows = useMemo(() => {
-    if (!selectedId || matches.some((t) => t.id === selectedId)) return matches;
-    const selected = tickets.find((t) => t.id === selectedId);
-    if (!selected) return matches;
-    return sortTicketQueue([...matches, selected], sort);
-  }, [matches, tickets, selectedId, sort]);
-
-  const categoryOptions = useMemo(
-    () => ticketQueueCategoryOptions(tickets, type),
-    [tickets, type],
+  const request = useMemo(
+    () => ({
+      archived,
+      page: requestedPage,
+      pageSize: FEED_PAGE_SIZE,
+      search: debouncedQuery.trim() || undefined,
+      category: (type || undefined) as ServiceTicketCategory | undefined,
+      // No strip, no status filter — the archive lists whatever aged out.
+      status: tabs.length ? ticketQueueTabStatuses(tab) : undefined,
+      sort,
+    }),
+    [archived, requestedPage, debouncedQuery, type, tabs, tab, sort],
   );
 
+  const ticketsQuery = useQuery({
+    // Under the prefixes the pages' mutations invalidate.
+    queryKey: archived
+      ? ['service-tickets', 'archived', request]
+      : ['service-tickets', request],
+    queryFn: () => listServiceTickets(request),
+    // Hold the previous page while the next loads, so paging does not blank
+    // the feed and drop the selection out from under the workspace pane.
+    placeholderData: (previous) => previous,
+  });
+
   const setTab = useCallback(
-    (next: TicketQueueTab) => setUrlState({ tab: next }),
+    (next: TicketQueueTab) => setUrlState({ tab: next, page: '' }),
     [setUrlState],
   );
   const setType = useCallback(
-    (next: string) => setUrlState({ type: next }),
+    (next: string) => setUrlState({ type: next, page: '' }),
     [setUrlState],
   );
   const setSort = useCallback(
     (next: TicketQueueSort) =>
-      setUrlState({ sort: next === DEFAULT_TICKET_QUEUE_SORT ? '' : next }),
+      setUrlState({
+        sort: next === DEFAULT_TICKET_QUEUE_SORT ? '' : next,
+        page: '',
+      }),
     [setUrlState],
   );
   const setQuery = useCallback(
-    (next: string) => setUrlState({ q: next }),
+    (next: string) => setUrlState({ q: next, page: '' }),
     [setUrlState],
   );
-  /** One write, not four — see `useUrlState` on why a group updates together. */
+  const setPage = useCallback(
+    (next: number) => setUrlState({ page: next <= 1 ? '' : String(next) }),
+    [setUrlState],
+  );
+  /** One write, not five — see `useUrlState` on why a group updates together. */
   const clearFilters = useCallback(
-    () => setUrlState({ tab: 'all', type: '', sort: '', q: '' }),
+    () => setUrlState({ tab: 'all', type: '', sort: '', q: '', page: '' }),
     [setUrlState],
   );
+
+  const { refetch } = ticketsQuery;
+  const retry = useCallback(() => void refetch(), [refetch]);
 
   return {
     tab,
@@ -167,11 +201,21 @@ export function useTicketQueue({
     setType,
     setSort,
     setQuery,
+    setPage,
     clearFilters,
     tabs,
-    categoryOptions,
-    rows,
-    firstMatchId: matches[0]?.id ?? null,
+    categoryOptions: SERVICE_TICKET_CATEGORIES,
+    rows: ticketsQuery.data?.items ?? EMPTY,
+    page: ticketsQuery.data,
+    requestedPage,
+    pageSize: FEED_PAGE_SIZE,
     isFiltered: tab !== 'all' || Boolean(type) || Boolean(query.trim()),
+    isLoading: ticketsQuery.isLoading,
+    isError: ticketsQuery.isError,
+    isFetching: ticketsQuery.isFetching,
+    refetch: retry,
   };
 }
+
+/** Stable, so a page with no data does not hand consumers a new array each render. */
+const EMPTY: ServiceTicketView[] = [];

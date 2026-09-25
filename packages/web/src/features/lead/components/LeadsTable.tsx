@@ -10,6 +10,7 @@ import {
   temperatureDot,
   temperatureText,
 } from "./lead-display";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** Name · Source · Status · Temperature · Phone · Email · Actions */
 const GRID_COLS = "1.4fr 1fr 100px 110px 130px 1.2fr 140px";
@@ -123,7 +124,7 @@ export function LeadsTable({ leads, isPending, pageSize }: LeadsTableProps) {
               </span>
 
               <span className="text-sm text-muted-foreground truncate">
-                {lead.email ?? "—"}
+                {lead.email ?? NOT_AVAILABLE}
               </span>
 
               <span className="flex items-center gap-1.5 justify-self-end">

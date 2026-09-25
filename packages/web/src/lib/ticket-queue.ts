@@ -1,14 +1,12 @@
 import {
+  SERVICE_TICKET_ACTIVE_STATUSES,
   SERVICE_TICKET_CATEGORIES,
-  isTerminalTicketStatus,
+  SERVICE_TICKET_QUEUE_SORTS,
+  SERVICE_TICKET_STATUSES,
+  urgencyRankFor,
+  type ServiceTicketQueueSort,
   type ServiceTicketStatus,
-  type ServiceTicketView,
 } from '@sfa/shared';
-import {
-  sortByLatestActivity,
-  sortByUrgency,
-  ticketUrgencyBand,
-} from './ticket-urgency';
 
 /**
  * One filter model for every ticket queue.
@@ -25,13 +23,16 @@ import {
  * carried over, so the queue the rep had built was gone and the list beside
  * the ticket they opened looked unrelated to the one they clicked in.
  *
- * So the vocabulary, the predicates and the ranking live here, once, and the
- * *state* lives in the URL under the names below. Every queue reads the same
- * params, so a link out of one queue into another (`ticketQueueLink`) carries
- * the view with it, a refresh keeps it, and back restores it.
+ * So the vocabulary lives here, once, and the *state* lives in the URL under
+ * the names below. Every queue reads the same params, so a link out of one
+ * queue into another (`ticketQueueLink`) carries the view with it, a refresh
+ * keeps it, and back restores it.
  *
- * `lib/ticket-urgency.ts` owns the ordering and the four-state taxonomy the
- * status tabs are built from; this module owns the filtering.
+ * Since PAC-98 the filtering and the ranking happen on the server — the list
+ * pages, and a filter or a sort applied to one page in the browser would only
+ * ever describe that page. This module turns the view into request parameters;
+ * the rows come back already narrowed and ranked, and must be rendered in the
+ * order given.
  */
 
 /* -------------------------------------------------------------------------- *
@@ -41,8 +42,9 @@ import {
 /**
  * The status filters a queue can offer, in urgency order.
  *
- * Each maps onto one band of the shared taxonomy (see `ticketUrgencyBand`), so
- * a tab selects exactly the tickets that sort into that band — no tab can
+ * Each maps onto one band of the shared urgency rank
+ * (`SERVICE_TICKET_URGENCY_RANK`) — the same numbers the server sorts by — so a
+ * tab selects exactly the tickets that sort into that band, and no tab can
  * quietly mean something different from the ranking. `all` is "not finished",
  * which is what a work queue is: resolved and closed tickets are reached
  * through `resolved`, and the ones older than the archive window through the
@@ -74,53 +76,29 @@ export const TICKET_QUEUE_TAB_LABELS: Record<TicketQueueTab, string> = {
   resolved: 'Resolved',
 };
 
-/**
- * Takes a status rather than a ticket: the dashboard queue flattens its rows
- * into its own shape before filtering, and the status is all this needs.
- */
-export function matchesTicketQueueTab(
-  status: ServiceTicketStatus,
-  tab: TicketQueueTab,
-): boolean {
-  if (tab === 'all') return !isTerminalTicketStatus(status);
-  const band = ticketUrgencyBand(status);
-  if (tab === 'overdue') return band === 'overdue';
-  if (tab === 'open') return band === 'workable';
-  if (tab === 'waiting') return band === 'blocked';
-  return band === 'done';
-}
-
-/* -------------------------------------------------------------------------- *
- * Category filter
- * -------------------------------------------------------------------------- */
+/** The urgency band each narrowing tab selects. */
+const TAB_BAND: Record<Exclude<TicketQueueTab, 'all'>, number> = {
+  overdue: 0,
+  open: 1,
+  waiting: 2,
+  resolved: 3,
+};
 
 /**
- * The category filter's options: the whole shared vocabulary, plus anything the
- * tickets carry that isn't in it, plus whatever is currently selected.
+ * A tab as the API's `?status=` list.
  *
- * Offering only the categories with a ticket in the list reads well and fails
- * badly. A queue that is all one category offers a single option; a stored
- * category the enum doesn't recognise (a legacy label, a rename) drops out of
- * both sides at once — no option to pick, and no way to reach those tickets;
- * and a filter inherited from another queue (`?type=Billing` arriving from the
- * dashboard) would be unlisted here, leaving an empty list with nothing to say
- * what emptied it. Listing the vocabulary means the control is the same control
- * on every queue. An option with nothing behind it lands on the empty state,
- * which is an honest answer.
+ * Derived from the rank rather than listed, so the finer statuses land in the
+ * band they sort into: the workspace's "Waiting" used to send `waiting` alone
+ * and so never listed a `waiting_on_client` or `waiting_on_carrier` ticket,
+ * while the dashboard's "Waiting on Others" — the same band — always did.
  */
-export function ticketQueueCategoryOptions(
-  tickets: ServiceTicketView[],
-  selected: string,
-): string[] {
-  const canonical = new Set<string>(SERVICE_TICKET_CATEGORIES);
-  const extras = [
-    ...new Set(
-      [...tickets.map((t) => t.category as string), selected].filter(
-        (category) => category && !canonical.has(category),
-      ),
-    ),
-  ].sort();
-  return [...SERVICE_TICKET_CATEGORIES, ...extras];
+export function ticketQueueTabStatuses(
+  tab: TicketQueueTab,
+): readonly ServiceTicketStatus[] {
+  if (tab === 'all') return SERVICE_TICKET_ACTIVE_STATUSES;
+  return SERVICE_TICKET_STATUSES.filter(
+    (status) => urgencyRankFor(status) === TAB_BAND[tab],
+  );
 }
 
 /* -------------------------------------------------------------------------- *
@@ -129,47 +107,21 @@ export function ticketQueueCategoryOptions(
 
 /**
  * How the rows are ranked. Urgency is never switched off — the option only
- * decides the order *inside* each urgency band. Both comparators live in
- * `lib/ticket-urgency.ts`, which explains the distinction at length.
+ * decides the order *inside* each urgency band. See `SERVICE_TICKET_QUEUE_SORTS`
+ * for the distinction; the server applies it.
  */
-export const TICKET_QUEUE_SORTS = [
+export const TICKET_QUEUE_SORTS: readonly {
+  value: ServiceTicketQueueSort;
+  label: string;
+}[] = [
   { value: 'urgency', label: 'Urgency' },
   { value: 'activity', label: 'Latest activity' },
-] as const;
+];
 
-export type TicketQueueSort = (typeof TICKET_QUEUE_SORTS)[number]['value'];
+export type TicketQueueSort = ServiceTicketQueueSort;
 
 /** Stays out of the URL: the default view carries no `?sort=`. */
 export const DEFAULT_TICKET_QUEUE_SORT: TicketQueueSort = 'urgency';
-
-export function sortTicketQueue(
-  tickets: ServiceTicketView[],
-  sort: TicketQueueSort,
-): ServiceTicketView[] {
-  return sort === 'activity'
-    ? sortByLatestActivity(tickets)
-    : sortByUrgency(tickets);
-}
-
-/* -------------------------------------------------------------------------- *
- * Free-text search
- * -------------------------------------------------------------------------- */
-
-/** The fields a queue's search box looks at. Shared so every queue matches alike. */
-export function matchesTicketQueueSearch(
-  ticket: ServiceTicketView,
-  query: string,
-): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return (
-    ticket.clientName.toLowerCase().includes(q) ||
-    ticket.ticketNumber.toLowerCase().includes(q) ||
-    ticket.category.toLowerCase().includes(q) ||
-    ticket.policyNumber.toLowerCase().includes(q) ||
-    ticket.phone.includes(q)
-  );
-}
 
 /* -------------------------------------------------------------------------- *
  * URL state
@@ -178,10 +130,10 @@ export function matchesTicketQueueSearch(
 /**
  * The params every queue shares, with the value that means "not set".
  *
- * A surface with extra state of its own (the dashboard's `page`, the
- * workspace feed's `q`) spreads these into its own frozen defaults object —
- * `useUrlState` memoises on the identity of that object, so it has to be
- * module scope at the call site.
+ * A surface with extra state of its own (`page`, the workspace feed's `q`)
+ * spreads these into its own frozen defaults object — `useUrlState` memoises
+ * on the identity of that object, so it has to be module scope at the call
+ * site.
  */
 export const TICKET_QUEUE_URL_DEFAULTS = {
   tab: 'all' as string,
@@ -197,21 +149,20 @@ export const TICKET_QUEUE_URL_DEFAULTS = {
  */
 export const TICKET_QUEUE_URL_ALLOWED = {
   /*
-   * Bounded rather than pinned to `SERVICE_TICKET_CATEGORIES`.
+   * Pinned to the vocabulary, because this value reaches the API.
    *
-   * This filter is applied to tickets already in memory and never reaches the
-   * API, so a value outside the vocabulary costs nothing worse than an empty
-   * list — while pinning it means any category the data carries but the enum
-   * has since renamed is unselectable, because the guard resets it to '' on
-   * the way back out of the URL. Length is all that needs guarding.
+   * PAC-97 loosened it to a length bound while the filter ran against tickets
+   * already in memory, where a value outside the enum cost nothing worse than
+   * an empty list. PAC-98 moved the filter onto the request — `?type=` becomes
+   * `?category=` — and a hand-edited URL should render the default view, not
+   * send junk to Mongo and take a 400.
    */
-  type: (value: string) => value.length <= 60,
+  type: SERVICE_TICKET_CATEGORIES,
   /*
-   * Pinned to the vocabulary, unlike `type` above: a sort key is ours, not the
-   * data's, so anything outside the list is a stale or hand-edited link and
-   * falling back to the default ranking is the right answer.
+   * A sort key is ours, not the data's, so anything outside the list is a
+   * stale or hand-edited link and the default ranking is the right answer.
    */
-  sort: TICKET_QUEUE_SORTS.map((option) => option.value),
+  sort: SERVICE_TICKET_QUEUE_SORTS,
 } as const;
 
 /**
@@ -225,9 +176,10 @@ export const ALL_TICKET_TYPES = '__all__';
 /**
  * A link from one queue to a ticket in another, carrying the view along.
  *
- * Only the params that decide *which* tickets are listed travel. `page` does
- * not: the dashboard paginates and the workspace feed scrolls, so page 3 of
- * one is meaningless to the other. Nor does `q`, which is the feed's own.
+ * Only the params that decide *which* tickets are listed, and in what order,
+ * travel. `page` does not: the dashboard shows 8 rows a page and the workspace
+ * feed 25, so page 3 of one is meaningless to the other. Nor does `q`, which
+ * is the feed's own.
  */
 export function ticketQueueLink(
   path: string,

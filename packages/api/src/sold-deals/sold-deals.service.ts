@@ -421,7 +421,7 @@ export class SoldDealsService {
       ctx,
       intakeDto,
       access,
-      lead.leadSource,
+      lead.leadSourceId,
       replacement
         ? // Inside the transaction. A replacement written without its chargeback
           // keeps credit that was clawed back, and a replacement written without

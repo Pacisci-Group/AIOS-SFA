@@ -80,6 +80,7 @@ import {
   MailerCampaignSchema,
 } from '../../mailers/schemas/mailer-campaign.schema';
 import { Carrier, CarrierSchema } from '../../carriers/schemas/carrier.schema';
+import { LeadSourcesModule } from '../../lead-sources/lead-sources.module';
 import { PermissionsModule } from '../../permissions/permissions.module';
 import { DemoSeedService } from './demo-seed.service';
 
@@ -139,6 +140,9 @@ import { DemoSeedService } from './demo-seed.service';
       { name: MailerCampaign.name, schema: MailerCampaignSchema },
       { name: Carrier.name, schema: CarrierSchema },
     ]),
+    // Leads and deals reference a `leadSources` row (PAC-135). Self-contained,
+    // so it is safe in this standalone graph.
+    LeadSourcesModule,
   ],
   providers: [DemoSeedService],
 })

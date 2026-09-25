@@ -57,7 +57,7 @@ body:json {
         }
       }
     ],
-    "leadSourceCode": "WCO7l",
+    "leadSourceId": "{{mailerLeadSourceId}}",
     "submissionToken": "{{$guid}}"
   }
 }
@@ -113,7 +113,7 @@ docs {
   | policiesOfInterest[].itemCount  | number | yes | integer 1–99 — **stored as sent only for `Auto` / `Auto - Special` / `Motorcycle` / `Boat Owners`; every other type is stored as `1`** (nothing on a Home or Umbrella policy is countable, so the form no longer asks) |
   | policiesOfInterest[].sameAsHousehold | bool | no | defaults `true`; property rows only. When set, `address` is copied onto **this row** |
   | policiesOfInterest[].propertyAddress | object | cond. | required when the row is a property type **and** `sameAsHousehold` is false |
-  | leadSourceCode          | string | yes      | canonical code; `ENEJP` (Test) is rejected   |
+  | leadSourceId            | string | yes      | a row id from `GET /lead-sources`; an archived or foreign id is a 400 |
   | householdId             | string | no       | ObjectId (24 hex); pins the lead to an existing household — see below |
   | replacementIntent       | object | no       | `{ policyId, reason }` — create this lead to replace a policy. See below |
   | quoteControlNumber      | string | no       | dedupe signal 2                              |

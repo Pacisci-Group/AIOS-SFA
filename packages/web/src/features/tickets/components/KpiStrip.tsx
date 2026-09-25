@@ -1,32 +1,40 @@
 import { SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from "@sfa/shared";
-import { ticketUrgencyBand } from "@/lib/ticket-urgency";
 import { cn } from "@/lib/utils";
 import { SectionLabel } from "@/components/common/DetailCard";
-import type { Ticket } from "./ticket-data";
+
+/** The four counts, one per urgency band. */
+export interface KpiCounts {
+  open: number;
+  overdue: number;
+  waiting: number;
+  resolved: number;
+}
 
 interface KpiStripProps {
-  tickets: Ticket[];
+  /** Undefined while loading — the numerals render as `…`, not a false 0. */
+  counts: KpiCounts | undefined;
 }
 
 /**
  * The four counts above the workspace — over the whole queue, not the filtered
  * view. The feed below carries its own count of what the filters matched.
  *
- * Counted by urgency band rather than by raw status, which is what the feed's
- * status tabs do (`matchesTicketQueueTab`), so these agree with the tab counts
- * a rep sees one row down. Testing `status === 'waiting'` left the finer
- * `waiting_on_client` / `waiting_on_carrier` states out of "Waiting" and
- * `closed` counted as open work.
+ * Counted by the server since PAC-98: the feed now holds one page, and counting
+ * it here would put "25" above a queue of four hundred. The page asks by urgency
+ * band (`ticketQueueTabStatuses`), which is what the feed's status tabs do, so
+ * these agree with the tabs a rep sees one row down. Testing
+ * `status === 'waiting'` left the finer `waiting_on_client` /
+ * `waiting_on_carrier` states out of "Waiting" and `closed` counted as open
+ * work.
  *
  * Two-up on a phone and four-up from `sm`: the original was a fixed four-column
  * row that squeezed a 30px numeral and its two labels into ~90px on a handset.
  */
-export function KpiStrip({ tickets }: KpiStripProps) {
-  const bands = tickets.map((t) => ticketUrgencyBand(t.status));
-  const total = bands.filter((band) => band !== "done").length;
-  const overdue = bands.filter((band) => band === "overdue").length;
-  const waiting = bands.filter((band) => band === "blocked").length;
-  const resolved = bands.filter((band) => band === "done").length;
+export function KpiStrip({ counts }: KpiStripProps) {
+  const total = counts?.open;
+  const overdue = counts?.overdue;
+  const waiting = counts?.waiting;
+  const resolved = counts?.resolved;
 
   return (
     <div className="grid shrink-0 grid-cols-2 gap-px border-b border-border bg-border sm:grid-cols-4">
@@ -67,7 +75,7 @@ export function KpiStrip({ tickets }: KpiStripProps) {
 
 interface KpiItemProps {
   label: string;
-  value: number;
+  value: number | undefined;
   tone: string;
   subLabel: string;
   /** Background class for the attention dot; omitted means no dot. */
@@ -84,9 +92,9 @@ function KpiItem({ label, value, tone, subLabel, pulse }: KpiItemProps) {
             tone,
           )}
         >
-          {value}
+          {value ?? "…"}
         </span>
-        {pulse && value > 0 && (
+        {pulse && value !== undefined && value > 0 && (
           <span
             className={cn(
               "absolute -right-2 -top-1 size-2 animate-pulse rounded-full",

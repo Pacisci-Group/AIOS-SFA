@@ -49,6 +49,7 @@ import {
   type TicketStatus,
   type TimelineEntry,
 } from "./ticket-data";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface WorkspacePanelProps {
   ticket: Ticket | null;
@@ -623,7 +624,7 @@ function ContactLink({
   const body = (
     <>
       <Icon aria-hidden className="size-4 shrink-0" />
-      <span className="truncate">{value || "—"}</span>
+      <span className="truncate">{value || NOT_AVAILABLE}</span>
     </>
   );
 

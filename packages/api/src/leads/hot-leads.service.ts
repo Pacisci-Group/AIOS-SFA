@@ -1,17 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import {
-  normalizeLeadSource,
-  normalizeLeadStatus,
-  terminalLeadStatusValues,
-} from '@sfa/shared';
+import { normalizeLeadStatus, terminalLeadStatusValues } from '@sfa/shared';
 import type {
   AccessContext,
   ActivityType,
   HotLeadListResponse,
   HotLeadRow,
   LeadTemperature,
-  NormalizedLeadSource,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
 import {
@@ -25,6 +20,7 @@ import {
 } from '../contacts/contact-details';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { initialsFrom } from '../common/domain/initials';
+import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { ListHotLeadsDto } from './dto/list-hot-leads.dto';
 import { Lead, LeadDocument } from './schemas/lead.schema';
 
@@ -34,7 +30,7 @@ type HotLeadLean = Pick<
   'firstName' | 'lastName' | 'status' | 'temperature'
 > & {
   _id: Types.ObjectId;
-  leadSource?: NormalizedLeadSource;
+  leadSourceId?: Types.ObjectId;
   lastActivityAt?: Date;
   primaryContactId?: Types.ObjectId;
 };
@@ -76,6 +72,7 @@ export class HotLeadsService {
     private activityModel: Model<ActivityDocument>,
     @InjectModel(Contact.name)
     private contactModel: Model<ContactDocument>,
+    private readonly leadSources: LeadSourcesService,
   ) {}
 
   async list(
@@ -150,7 +147,7 @@ export class HotLeadsService {
       }
     }
 
-    const [summaries, contacts] = await Promise.all([
+    const [summaries, contacts, sourceLabels] = await Promise.all([
       this.latestActivityByLead(
         access.agencyId,
         records.map((record) => record._id),
@@ -161,10 +158,13 @@ export class HotLeadsService {
         this.contactModel,
         records.map((record) => record.primaryContactId),
       ),
+      this.leadSources.labelsFor(access.agencyId),
     ]);
 
     return {
-      items: records.map((record) => this.toRow(record, summaries, contacts)),
+      items: records.map((record) =>
+        this.toRow(record, summaries, contacts, sourceLabels),
+      ),
     };
   }
 
@@ -220,6 +220,7 @@ export class HotLeadsService {
     record: HotLeadLean,
     summaries: Map<string, LatestActivity>,
     contacts: Map<string, ContactDetails>,
+    sourceLabels: Map<string, string>,
   ): HotLeadRow {
     const id = record._id.toString();
     const name =
@@ -228,10 +229,7 @@ export class HotLeadsService {
         .join(' ')
         .trim() || 'Unknown Lead';
 
-    const source = normalizeLeadSource(
-      record.leadSource?.code,
-      record.leadSource?.label,
-    );
+    const source = LeadSourcesService.toRef(record.leadSourceId, sourceLabels);
     const latest = summaries.get(id);
     const contact = record.primaryContactId
       ? contacts.get(record.primaryContactId.toString())
@@ -242,7 +240,7 @@ export class HotLeadsService {
       name,
       initials: initialsFrom(name),
       temperature: record.temperature ?? 'Unknown',
-      leadSource: source.label,
+      leadSource: source.label || 'Unknown',
       status: normalizeLeadStatus(record.status),
       /*
        * From the primary contact, not the lead: the lead carries no copy any

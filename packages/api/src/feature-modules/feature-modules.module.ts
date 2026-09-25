@@ -5,7 +5,6 @@ import {
   DealsController,
   ManagementController,
   OnboardingsController,
-  OwnerDashboardController,
 } from './feature.controllers';
 
 // NOTE: `deal-audits` is now served by the real `DealAuditsModule`
@@ -29,7 +28,6 @@ const controllers = [
   DealsController,
   OnboardingsController,
   ManagementController,
-  OwnerDashboardController,
   CommandCenterController,
 ];
 

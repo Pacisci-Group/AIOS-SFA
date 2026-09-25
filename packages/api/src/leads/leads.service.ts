@@ -8,13 +8,11 @@ import {
   AccessContext,
   CreateLeadResponse,
   LEAD_SOURCE_NONE,
-  NormalizedLeadSource,
   PolicyReplacementReason,
   ReplacementLeadLookup,
   ServiceTicketView,
   isPhoneLike,
   leadStatusQueryValues,
-  normalizeLeadSource,
   normalizeLeadStatus,
   searchDigits,
 } from '@sfa/shared';
@@ -32,6 +30,7 @@ import {
   tokenRegex,
 } from '../common/mongo/search-filter';
 import { LeadTicketsService } from '../crm/lead-tickets.service';
+import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { PoliciesService } from '../policies/policies.service';
 import { LeadAccessService } from './lead-access.service';
@@ -73,7 +72,6 @@ const CONTACT_MATCH_CAP = 500;
 const LEAD_SEARCH_FIELDS = [
   'firstName',
   'lastName',
-  'leadSource.label',
   'quoteControlNumber',
   ...addressPaths('address'),
   ...addressPaths('propertyAddress'),
@@ -109,7 +107,7 @@ type LeadLean = Pick<
   'firstName' | 'lastName' | 'status' | 'temperature' | 'quoteControlNumber'
 > & {
   _id: Types.ObjectId;
-  leadSource?: NormalizedLeadSource;
+  leadSourceId?: Types.ObjectId;
   lastActivityAt?: Date;
   primaryContactId?: Types.ObjectId;
 };
@@ -131,6 +129,7 @@ export class LeadsService {
      * Injected rather than reimplemented so the rule exists once.
      */
     private readonly policies: PoliciesService,
+    private readonly leadSources: LeadSourcesService,
   ) {}
 
   /**
@@ -399,14 +398,19 @@ export class LeadsService {
     dto: CreateLeadDto,
   ): Promise<IntakeContext> {
     const tenant = await this.tenancy.resolve(access, branchId);
-    const source = normalizeLeadSource(dto.leadSourceCode);
+    // The DTO checked the shape; this checks the row is real, active and this
+    // agency's to pick — before anything is written.
+    const leadSourceId = await this.leadSources.assertSelectable(
+      tenant.agencyId,
+      dto.leadSourceId,
+    );
 
     return {
       agencyId: tenant.agencyId,
       branchId: tenant.branchId,
       producerId: new Types.ObjectId(access.userId),
       channel: 'internal',
-      leadSource: { code: source.code, label: source.label },
+      leadSourceId,
       actorUserId: new Types.ObjectId(access.userId),
     };
   }
@@ -441,17 +445,23 @@ export class LeadsService {
 
     // One batched lookup for the page, not one per row — the lead's own copy of
     // the primary contact's phone and email is gone (PAC-91 §2).
-    const contacts = await loadContactDetails(
-      this.contactModel,
-      records.map((record) => record.primaryContactId),
-    );
+    const [contacts, sourceLabels] = await Promise.all([
+      loadContactDetails(
+        this.contactModel,
+        records.map((record) => record.primaryContactId),
+      ),
+      // A few dozen rows, resolved in memory rather than `$lookup` per lead.
+      this.leadSources.labelsFor(access.agencyId),
+    ]);
 
     return {
       page,
       pageSize,
       total,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
-      items: records.map((record) => this.toRow(record, contacts)),
+      items: records.map((record) =>
+        this.toRow(record, contacts, sourceLabels),
+      ),
     };
   }
 
@@ -490,25 +500,15 @@ export class LeadsService {
     if (query.temperature?.length) {
       filter.temperature = { $in: query.temperature };
     }
-    if (query.leadSource === LEAD_SOURCE_NONE) {
+    if (query.leadSourceId === LEAD_SOURCE_NONE) {
       // Leads that arrived through a public share link carry no source — nobody
       // has said where they came from yet. Producers need to isolate them to
       // correct them, so "no source" is a first-class filter value rather than
-      // something you hunt for by eye. Both shapes are matched: the schema
-      // default `{ code: null, label: '' }`, and migrated records where the
-      // field is absent entirely.
-      filter.$and = [
-        ...(filter.$and ?? []),
-        {
-          $or: [
-            { 'leadSource.label': '' },
-            { 'leadSource.label': { $exists: false } },
-            { leadSource: null },
-          ],
-        },
-      ];
-    } else if (query.leadSource) {
-      filter['leadSource.label'] = query.leadSource;
+      // something you hunt for by eye. `null` matches an absent field too.
+      filter.leadSourceId = null;
+    } else if (query.leadSourceId) {
+      // The DTO has already shape-checked it, so the cast cannot throw.
+      filter.leadSourceId = new Types.ObjectId(query.leadSourceId);
     }
 
     const dateRange = this.buildDateRange(query);
@@ -580,12 +580,31 @@ export class LeadsService {
   ): Promise<FilterQuery<LeadDocument> | null> {
     return buildSearchFilter<LeadDocument>(raw, {
       fields: LEAD_SEARCH_FIELDS,
-      tokenBranches: [(token) => this.byContactText(agencyId, token)],
+      tokenBranches: [
+        (token) => this.byContactText(agencyId, token),
+        (token) => this.byLeadSourceName(agencyId, token),
+      ],
       termBranches: [
         (term) => this.byContactPhone(agencyId, term),
         (term) => Promise.resolve(byQuoteControlNumber(term)),
       ],
     });
+  }
+
+  /**
+   * Leads whose **lead source** name contains the token — `mailer` finds every
+   * mailer lead. Resolved to ids first: the lead holds a reference, not a copy
+   * of the name (PAC-135).
+   */
+  private async byLeadSourceName(
+    agencyId: string,
+    token: string,
+  ): Promise<FilterQuery<LeadDocument> | null> {
+    const ids = await this.leadSources.idsMatchingName(
+      agencyId,
+      tokenRegex(token),
+    );
+    return ids.length ? { leadSourceId: { $in: ids } } : null;
   }
 
   /**
@@ -685,16 +704,14 @@ export class LeadsService {
   private toRow(
     record: LeadLean,
     contacts: Map<string, ContactDetails>,
+    sourceLabels: Map<string, string>,
   ): LeadRow {
     const name = [record.firstName, record.lastName]
       .filter((part) => Boolean(part?.trim()))
       .join(' ')
       .trim();
 
-    const source = normalizeLeadSource(
-      record.leadSource?.code,
-      record.leadSource?.label,
-    );
+    const source = LeadSourcesService.toRef(record.leadSourceId, sourceLabels);
     const contact = record.primaryContactId
       ? contacts.get(record.primaryContactId.toString())
       : undefined;
@@ -702,7 +719,9 @@ export class LeadsService {
     return {
       id: record._id.toString(),
       name: name || 'Unknown Lead',
-      leadSource: source.label,
+      // `Unknown` is what this column has always shown for a lead nobody has
+      // attributed yet.
+      leadSource: source.label || 'Unknown',
       status: normalizeLeadStatus(record.status),
       temperature: record.temperature ?? 'Unknown',
       phone: contact?.phone ?? null,

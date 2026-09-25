@@ -26,6 +26,7 @@ import {
   money,
   shortDate,
 } from './drawer-primitives';
+import { NOT_AVAILABLE } from '@/lib/not-available';
 
 interface PolicyDrawerProps {
   policyId: string | null;
@@ -69,9 +70,9 @@ export function PolicyDrawer({
           {policy && (
             <>
               <div>
-                <DrawerRow label="Policy number" value={policy.policyNumber ?? '—'} />
-                <DrawerRow label="Type" value={policy.policyType ?? '—'} />
-                <DrawerRow label="Carrier" value={policy.carrier ?? '—'} />
+                <DrawerRow label="Policy number" value={policy.policyNumber ?? NOT_AVAILABLE} />
+                <DrawerRow label="Type" value={policy.policyType ?? NOT_AVAILABLE} />
+                <DrawerRow label="Carrier" value={policy.carrier ?? NOT_AVAILABLE} />
                 <DrawerRow
                   label="Status"
                   value={policy.policyStatus ?? (policy.active ? 'Active' : 'Inactive')}

@@ -10,6 +10,7 @@ import {
   DEFAULT_ROLE_TEMPLATES,
   ModuleKey,
   PlatformPermission,
+  SERVICE_TICKET_ACTIVE_STATUSES,
   SERVICE_TICKET_ARCHIVE_AFTER_DAYS,
   modulePermission,
 } from '@sfa/shared';
@@ -54,6 +55,8 @@ import { Household } from '../src/households/schemas/household.schema';
 import { InterestedParty } from '../src/interested-parties/schemas/interested-party.schema';
 import { LinkEntitiesStep } from '../src/leads/intake/link-entities.step';
 import { Lead } from '../src/leads/schemas/lead.schema';
+import { LeadSource } from '../src/lead-sources/schemas/lead-source.schema';
+import { seedLeadSources } from '../src/seed/lead-sources.seed';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { Policy } from '../src/policies/schemas/policy.schema';
 import { PriorInsurance } from '../src/prior-insurance/schemas/prior-insurance.schema';
@@ -77,6 +80,30 @@ import {
   createTestApp,
   dropTestDatabase,
 } from './helpers/test-app';
+
+/**
+ * `GET /crm/service-tickets` returns a paginated envelope (PAC-98), and
+ * supertest types `res.body` as `any`. One typed accessor rather than a cast
+ * at each of two dozen call sites — a bare `.body.items` is how a rename of
+ * the envelope stops being a compile error in the suite that guards it.
+ */
+interface TicketListBody {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: {
+    id: string;
+    status: string;
+    leadStatus: string | null;
+    isStatusLocked: boolean;
+    isArchived: boolean;
+  }[];
+  counts: { all: number; overdue: number; waiting: number };
+}
+
+const ticketList = (res: { body: unknown }): TicketListBody =>
+  res.body as TicketListBody;
 
 /** The `GET /users` envelope, as this suite asserts against it (PAC-101). */
 interface AgencyUserListEnvelope {
@@ -386,7 +413,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(201);
 
@@ -908,6 +935,7 @@ describe('SFA API (e2e)', () => {
           email: string;
           firstName?: string;
           lastName?: string;
+          availability: 'available' | 'busy';
         }>;
       };
 
@@ -930,10 +958,13 @@ describe('SFA API (e2e)', () => {
       it('carries only what a <Select> renders', async () => {
         const [row] = await options(ownerToken);
         expect(Object.keys(row).sort()).toEqual(
-          ['_id', 'email', 'firstName', 'lastName'].filter((key) =>
-            Object.prototype.hasOwnProperty.call(row, key),
+          // `availability` (PAC-139 §6) rides along so a *lead* picker can
+          // hide busy people; the list itself is not filtered on it.
+          ['_id', 'availability', 'email', 'firstName', 'lastName'].filter(
+            (key) => Object.prototype.hasOwnProperty.call(row, key),
           ),
         );
+        expect(['available', 'busy']).toContain(row.availability);
         expect(row).not.toHaveProperty('roleIds');
         expect(row).not.toHaveProperty('deactivatedAt');
         expect(row).not.toHaveProperty('passwordHash');
@@ -2547,7 +2578,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(409);
       expect((res.body as { code: string }).code).toBe('contact_deceased');
@@ -3799,9 +3830,11 @@ describe('SFA API (e2e)', () => {
       // covered by its own describe block below. That also removed the bare
       // `PATCH /households`, which only ever echoed `{status:'updated'}`; the
       // real household write is `POST /households/:id/members`.
+      // `owner-dashboard` left with PAC-135, which replaced its stub with the
+      // real `OwnerDashboardModule` — `GET /owner-dashboard/{summary,producers,
+      // lead-sources}`, covered by its own describe block below.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
-      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 
@@ -3946,7 +3979,7 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(csrToken))
         .expect(200);
 
-      expect(Array.isArray(res.body)).toBe(true);
+      expect(Array.isArray(ticketList(res).items)).toBe(true);
     });
 
     /*
@@ -4030,7 +4063,8 @@ describe('SFA API (e2e)', () => {
       'deal-audits',
       'leaderboard',
       'management',
-      'owner-dashboard',
+      // No bare route since PAC-135 — the summary is what the page loads first.
+      'owner-dashboard/summary',
       'command-center',
     ];
     it.each(csrDeniedFeatureRoutes)(
@@ -4083,9 +4117,9 @@ describe('SFA API (e2e)', () => {
       // with PAC-89: its stub is de-registered, so there is no bare
       // `PATCH /households` to probe — the write is
       // `POST /households/:id/members`, covered by the Client records block.
+      // `owner-dashboard` left with PAC-135: read-only, no mutating handler.
       { path: 'onboardings', module: ModuleKey.Onboardings },
       { path: 'management', module: ModuleKey.Management },
-      { path: 'owner-dashboard', module: ModuleKey.OwnerDashboard },
       { path: 'command-center', module: ModuleKey.CommandCenter },
     ];
 
@@ -5109,10 +5143,12 @@ describe('SFA API (e2e)', () => {
         .set(authHeader(ownerToken))
         .expect(200);
 
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.some((t: { id: string }) => t.id === ownerTicketId)).toBe(
-        true,
-      );
+      expect(Array.isArray(ticketList(res).items)).toBe(true);
+      expect(
+        ticketList(res).items.some(
+          (t: { id: string }) => t.id === ownerTicketId,
+        ),
+      ).toBe(true);
     });
 
     it('GET /api/v1/crm/service-tickets/stats — returns ticket-derived stats', async () => {
@@ -5170,6 +5206,223 @@ describe('SFA API (e2e)', () => {
         .expect(400);
     });
 
+    /*
+     * Pagination (PAC-98).
+     *
+     * The queue used to ship every ticket in scope and page in the browser.
+     * These pin the three properties that made moving it worthwhile and are
+     * silent when broken: that a page is actually bounded, that consecutive
+     * pages do not overlap or skip, and that the tab counts describe the whole
+     * filtered set rather than the page in hand.
+     */
+    describe('pagination', () => {
+      it('bounds the page and reports the totals around it', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=1')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).items).toHaveLength(1);
+        expect(ticketList(res).page).toBe(1);
+        expect(ticketList(res).pageSize).toBe(1);
+        expect(ticketList(res).total).toBeGreaterThan(1);
+        expect(ticketList(res).totalPages).toBe(ticketList(res).total);
+      });
+
+      it('walks pages without repeating or dropping a row', async () => {
+        const first = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=1&page=1')
+          .set(authHeader(ownerToken))
+          .expect(200);
+        const second = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=1&page=2')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        // The sort has a unique final tiebreak (`_id`) precisely so this holds;
+        // ordering by a non-unique key lets a row appear on both pages or
+        // neither, which no single-page assertion would catch.
+        expect(ticketList(first).items[0].id).not.toBe(
+          ticketList(second).items[0].id,
+        );
+      });
+
+      it('counts the filtered set, not the page', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=1')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).counts.all).toBe(ticketList(res).total);
+        expect(ticketList(res).counts.all).toBeGreaterThan(
+          ticketList(res).items.length,
+        );
+      });
+
+      it('narrows to a tab, and the totals follow it', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?tab=waiting&pageSize=100')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        for (const t of ticketList(res).items as { status: string }[]) {
+          expect([
+            'waiting',
+            'waiting_on_client',
+            'waiting_on_carrier',
+          ]).toContain(t.status);
+        }
+        // `total` tracks the tab; `counts` still describes all three.
+        expect(ticketList(res).total).toBe(ticketList(res).counts.waiting);
+      });
+
+      it('rejects a page size past the cap', async () => {
+        // The cap is what makes this pagination rather than a suggestion.
+        await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?pageSize=100000')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
+
+      it('searches the whole scope, not the page', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?search=zzz-no-such-client')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).items).toHaveLength(0);
+        expect(ticketList(res).total).toBe(0);
+      });
+
+      it('searches AND across tokens, OR across fields', async () => {
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Quillon Varga', category: 'Billing' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+
+        // Tokens split across two fields, in the "wrong" order — a single
+        // regex over one field could match neither.
+        const hit = await request(app.getHttpServer())
+          .get(
+            '/api/v1/crm/service-tickets?search=billing%20varga&pageSize=100',
+          )
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(hit).items.map((t) => t.id)).toContain(ticketId);
+
+        // Every token must land somewhere.
+        const miss = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?search=varga%20zzqx&pageSize=100')
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(miss).items.map((t) => t.id)).not.toContain(ticketId);
+      });
+
+      it('ORs a list of statuses', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?status=open,overdue&pageSize=100')
+          .set(authHeader(ownerToken))
+          .expect(200);
+
+        expect(ticketList(res).items.length).toBeGreaterThan(0);
+        for (const t of ticketList(res).items) {
+          expect(['open', 'overdue']).toContain(t.status);
+        }
+      });
+
+      it('keeps a resolved ticket out of an active-statuses request', async () => {
+        // What the Priority Ticket Queue sends. The list only excludes
+        // *archived* tickets, so without it a ticket resolved today would sit
+        // in the queue for the whole archive window.
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Resolved Today Client', category: 'Billing' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+        await request(app.getHttpServer())
+          .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+          .set(authHeader(ownerToken))
+          .send({ status: 'resolved' })
+          .expect(200);
+
+        const active = SERVICE_TICKET_ACTIVE_STATUSES.join(',');
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/crm/service-tickets?status=${active}&pageSize=100`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(res).items.map((t) => t.id)).not.toContain(ticketId);
+      });
+
+      it('keeps a tab and an explicit status both in force', async () => {
+        // The tab used to be spread over the filter, silently replacing
+        // `?status=` — so `counts` and `total` described different sets.
+        const res = await request(app.getHttpServer())
+          .get(
+            '/api/v1/crm/service-tickets?status=open&tab=overdue&pageSize=100',
+          )
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(ticketList(res).items).toHaveLength(0);
+        expect(ticketList(res).counts.overdue).toBe(0);
+      });
+
+      it('keeps a hand-picked status on a renewal call', async () => {
+        // The save hook re-derives a scheduled call's status unless
+        // `statusOverriddenAt` is stamped. It used to be stamped for onboarding
+        // only, so resolving a renewal call was undone inside the same save —
+        // `open` again, beside a fresh `resolvedAt`.
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/crm/service-tickets')
+          .set(authHeader(ownerToken))
+          .send({ clientName: 'Renewal Override Client', category: 'Other' })
+          .expect(201);
+        const ticketId = (created.body as { id: string }).id;
+        const hour = 60 * 60 * 1000;
+        const connection = app.get<Connection>(getConnectionToken());
+        await connection.collection('serviceTickets').updateOne(
+          { _id: new Types.ObjectId(ticketId) },
+          {
+            $set: {
+              renewal: {
+                renewalCycleId: new Types.ObjectId(),
+                stepKey: 'annual_review',
+                track: 'annual',
+                sequence: 1,
+                totalSteps: 2,
+                renewalDate: new Date(Date.now() + 60 * 24 * hour),
+                availableAt: new Date(Date.now() - hour),
+                dueAt: new Date(Date.now() + 24 * hour),
+                completedAt: null,
+              },
+            },
+          },
+        );
+
+        const res = await request(app.getHttpServer())
+          .patch(`/api/v1/crm/service-tickets/${ticketId}/status`)
+          .set(authHeader(ownerToken))
+          .send({ status: 'resolved' })
+          .expect(200);
+        expect((res.body as { status: string }).status).toBe('resolved');
+
+        const stored = await connection
+          .collection('serviceTickets')
+          .findOne({ _id: new Types.ObjectId(ticketId) });
+        expect(stored?.status).toBe('resolved');
+        expect(stored?.statusOverriddenAt).toBeInstanceOf(Date);
+      });
+
+      it('rejects a status outside the vocabulary', async () => {
+        await request(app.getHttpServer())
+          .get('/api/v1/crm/service-tickets?status=open,bogus')
+          .set(authHeader(ownerToken))
+          .expect(400);
+      });
+    });
+
     it('own-scope: CSR only sees their own tickets', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/v1/crm/service-tickets')
@@ -5179,11 +5432,11 @@ describe('SFA API (e2e)', () => {
       csrTicketId = created.body.id;
 
       const res = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
 
-      const ids = res.body.map((t: { id: string }) => t.id);
+      const ids = ticketList(res).items.map((t: { id: string }) => t.id);
       expect(ids).toContain(csrTicketId);
       // The owner's ticket is assigned to the owner — out of the CSR's own scope.
       expect(ids).not.toContain(ownerTicketId);
@@ -5198,11 +5451,11 @@ describe('SFA API (e2e)', () => {
 
     it('agency-scope: owner sees tickets created by others', async () => {
       const res = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
 
-      const ids = res.body.map((t: { id: string }) => t.id);
+      const ids = ticketList(res).items.map((t: { id: string }) => t.id);
       expect(ids).toContain(csrTicketId);
       expect(ids).toContain(ownerTicketId);
     });
@@ -5364,17 +5617,19 @@ describe('SFA API (e2e)', () => {
 
       // Freshly resolved: still in the active queue, not yet archived.
       const active = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
-        .set(authHeader(ownerToken))
-        .expect(200);
-      expect(active.body.map((t: { id: string }) => t.id)).toContain(ticketId);
-
-      const archivedBefore = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?archived=true')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
       expect(
-        archivedBefore.body.map((t: { id: string }) => t.id),
+        ticketList(active).items.map((t: { id: string }) => t.id),
+      ).toContain(ticketId);
+
+      const archivedBefore = await request(app.getHttpServer())
+        .get('/api/v1/crm/service-tickets?archived=true&pageSize=100')
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(
+        ticketList(archivedBefore).items.map((t: { id: string }) => t.id),
       ).not.toContain(ticketId);
 
       // Backdate the resolve past the window.
@@ -5392,18 +5647,18 @@ describe('SFA API (e2e)', () => {
       );
 
       const activeAfter = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
-      expect(activeAfter.body.map((t: { id: string }) => t.id)).not.toContain(
-        ticketId,
-      );
+      expect(
+        ticketList(activeAfter).items.map((t: { id: string }) => t.id),
+      ).not.toContain(ticketId);
 
       const archivedAfter = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?archived=true')
+        .get('/api/v1/crm/service-tickets?archived=true&pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
-      const archivedTicket = archivedAfter.body.find(
+      const archivedTicket = ticketList(archivedAfter).items.find(
         (t: { id: string }) => t.id === ticketId,
       );
       expect(archivedTicket).toBeDefined();
@@ -5419,12 +5674,12 @@ describe('SFA API (e2e)', () => {
       expect(reopened.body.isArchived).toBe(false);
 
       const queueAgain = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
-      expect(queueAgain.body.map((t: { id: string }) => t.id)).toContain(
-        ticketId,
-      );
+      expect(
+        ticketList(queueAgain).items.map((t: { id: string }) => t.id),
+      ).toContain(ticketId);
     });
   });
 
@@ -5477,7 +5732,9 @@ describe('SFA API (e2e)', () => {
       chain: ChainLink[];
     }
 
-    const ids = (body: { id: string }[]) => body.map((t) => t.id);
+    // The list is a paginated envelope since PAC-98.
+    const ids = (body: unknown) =>
+      (body as TicketListBody).items.map((t) => t.id);
 
     it('starts a chain with only the welcome call', async () => {
       const res = await request(app.getHttpServer())
@@ -5596,13 +5853,13 @@ describe('SFA API (e2e)', () => {
     /** The visibility rule the owner asked for: not on the plate until it opens. */
     it('hides a scheduled ticket from every list but serves it by id', async () => {
       const list = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
       expect(ids(list.body)).not.toContain(threeDayTicketId);
 
       const filtered = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets?category=Onboarding')
+        .get('/api/v1/crm/service-tickets?category=Onboarding&pageSize=100')
         .set(authHeader(csrToken))
         .expect(200);
       expect(ids(filtered.body)).not.toContain(threeDayTicketId);
@@ -5991,6 +6248,157 @@ describe('SFA API (e2e)', () => {
     });
   });
 
+  describe('Lead sources (PAC-135)', () => {
+    interface LeadSourcesBody {
+      leadSources: { id: string; name: string; slug: string }[];
+    }
+    let leadSourceModel: Model<LeadSource>;
+    const created: Types.ObjectId[] = [];
+
+    const listSources = async (token: string) => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/lead-sources')
+        .set(authHeader(token))
+        .expect(200);
+      return (res.body as LeadSourcesBody).leadSources;
+    };
+
+    beforeAll(async () => {
+      leadSourceModel = app.get<Model<LeadSource>>(
+        getModelToken(LeadSource.name),
+      );
+      const rows = await leadSourceModel.create([
+        // This agency's own vendor.
+        { agencyId: seed.agencyId, name: 'Waterstone', slug: 'waterstone' },
+        // Retired: stays on old records, leaves the picker.
+        {
+          agencyId: seed.agencyId,
+          name: 'Stride',
+          slug: 'stride',
+          active: false,
+        },
+        // Another tenant's row must never leak across.
+        { agencyId: seed.otherAgencyId, name: 'Soleo', slug: 'soleo' },
+        // Same slug as a platform row: the agency's wording wins.
+        { agencyId: seed.agencyId, name: 'Web Form', slug: 'web' },
+      ]);
+      created.push(...rows.map((row) => row._id));
+    });
+
+    // Removed rather than left behind: every later block lists sources through
+    // the same endpoint, and the "Web Form" override would rename theirs.
+    afterAll(async () => {
+      await leadSourceModel.deleteMany({ _id: { $in: created } });
+    });
+
+    it("orders platform sources, then the agency's own, then Other", async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      // `Web Form` overrides the platform `Web`, so it sorts as the agency's.
+      expect(names).toEqual([
+        'Mailer',
+        'Book of Business',
+        'Customer Referral',
+        'Facebook',
+        'Google',
+        'Walk-In',
+        'Waterstone',
+        'Web Form',
+        'Other',
+      ]);
+    });
+
+    it("adds the agency's own rows, and never another agency's", async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      expect(names).toContain('Waterstone');
+      expect(names).not.toContain('Soleo');
+    });
+
+    it('leaves an archived source out of the picker', async () => {
+      const names = (await listSources(producerToken)).map((s) => s.name);
+
+      expect(names).not.toContain('Stride');
+    });
+
+    it('lets an agency row shadow the platform row of the same slug', async () => {
+      const web = (await listSources(producerToken)).filter(
+        (s) => s.slug === 'web',
+      );
+
+      expect(web.map((s) => s.name)).toEqual(['Web Form']);
+    });
+
+    it("rejects an archived source, and another agency's, on a new lead (400)", async () => {
+      const body = (leadSourceId: string) => ({
+        primaryContact: {
+          firstName: 'Archie',
+          lastName: 'Sourceless',
+          dateOfBirth: '1980-01-01',
+          phone: '(555) 010-2030',
+          email: 'archie.sourceless@example.com',
+        },
+        address: {
+          street: '1 Sourceless Way',
+          city: 'Tulsa',
+          state: 'OK',
+          zip: '74101',
+        },
+        members: [],
+        leadSourceId,
+      });
+      const stride = await leadSourceModel.findOne({ slug: 'stride' });
+      const soleo = await leadSourceModel.findOne({ slug: 'soleo' });
+
+      for (const row of [stride, soleo]) {
+        await request(app.getHttpServer())
+          .post('/api/v1/leads')
+          .set(authHeader(producerToken))
+          .send(body(row!._id.toString()))
+          .expect(400);
+      }
+
+      // Refused before anything was written — no half-made lead left behind.
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      expect(await leadModel.countDocuments({ lastName: 'Sourceless' })).toBe(
+        0,
+      );
+    });
+
+    it('re-seeding creates nothing, and never undoes a curated row', async () => {
+      // A redeploy re-runs the core seed. Once a curation surface exists, a
+      // super admin renaming or archiving a platform source has made a decision,
+      // and the seed quietly reverting it would be the bug — hence
+      // `$setOnInsert` only.
+      const walkIn = { agencyId: null, slug: 'walk-in' };
+      await leadSourceModel.updateOne(walkIn, {
+        $set: { name: 'Walk-in (office)', active: false },
+      });
+
+      try {
+        const result = await seedLeadSources(leadSourceModel);
+        const row = await leadSourceModel.findOne(walkIn).lean();
+
+        expect(result.created).toBe(0);
+        expect(row!.name).toBe('Walk-in (office)');
+        expect(row!.active).toBe(false);
+      } finally {
+        // Every later block reads these rows.
+        await leadSourceModel.updateOne(walkIn, {
+          $set: { name: 'Walk-In', active: true },
+        });
+      }
+    });
+
+    it('is read-only — there is no curation surface yet', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/lead-sources')
+        .set(authHeader(ownerToken))
+        .send({ name: 'Billboard' })
+        .expect(404);
+    });
+  });
+
   describe('Leads (PAC-36 list)', () => {
     interface LeadRowBody {
       id: string;
@@ -6060,7 +6468,7 @@ describe('SFA API (e2e)', () => {
           // writes it — the API must normalize this to `Requote`.
           status: 'arW7O',
           temperature: 'Hot',
-          leadSource: { code: 'WCO7l', label: 'Mailer' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.mailer),
           primaryContactId: maria._id,
           quoteControlNumber: 'QCN-100001',
           producerId: producer!._id,
@@ -6073,7 +6481,7 @@ describe('SFA API (e2e)', () => {
           lastName: 'Smith',
           status: 'New',
           temperature: 'Cold',
-          leadSource: { code: 'X2Wrh', label: 'Facebook' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.facebook),
           primaryContactId: john._id,
           producerId: producer!._id,
           lastActivityAt: new Date(Date.now() - 86_400_000),
@@ -6086,7 +6494,7 @@ describe('SFA API (e2e)', () => {
           lastName: 'Else',
           status: 'New',
           temperature: 'Warm',
-          leadSource: { code: '30sDe', label: 'Google' },
+          leadSourceId: new Types.ObjectId(seed.leadSourceIds.google),
           producerId: owner!._id,
           lastActivityAt: new Date(),
           isTestRecord: false,
@@ -6097,7 +6505,6 @@ describe('SFA API (e2e)', () => {
           lastName: 'Record',
           status: 'New',
           temperature: 'Hot',
-          leadSource: { code: 'ENEJP', label: 'Test' },
           producerId: producer!._id,
           isTestRecord: true,
         },
@@ -6192,6 +6599,33 @@ describe('SFA API (e2e)', () => {
         .expect(400);
     });
 
+    it('leadSourceId narrows to one source, and the row renders its name', async () => {
+      const mailer = await listAs(
+        producerToken,
+        `?leadSourceId=${seed.leadSourceIds.mailer}`,
+      );
+
+      expect(mailer.total).toBe(1);
+      expect(mailer.items[0].name).toBe('Maria Rodriguez');
+      // Resolved through the `leadSources` row — the lead holds only the id.
+      expect(mailer.items[0].leadSource).toBe('Mailer');
+    });
+
+    it('search reaches a lead through its source name', async () => {
+      // The name lives on the `leadSources` row, not on the lead (PAC-135), so
+      // this only works if the search resolves matching source ids first.
+      const body = await listAs(producerToken, '?search=facebook');
+
+      expect(body.items.map((i) => i.name)).toEqual(['John Smith']);
+    });
+
+    it('rejects a malformed leadSourceId (400)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/leads?leadSourceId=Mailer')
+        .set(authHeader(producerToken))
+        .expect(400);
+    });
+
     it('rows expose only display fields', async () => {
       const body = await listAs(producerToken);
       const row = body.items[0] as unknown as Record<string, unknown>;
@@ -6277,7 +6711,7 @@ describe('SFA API (e2e)', () => {
         zip: '74101',
       },
       members: [],
-      leadSourceCode: 'WCO7l',
+      leadSourceId: seed.leadSourceIds.mailer,
       ...overrides,
     });
 
@@ -6308,7 +6742,7 @@ describe('SFA API (e2e)', () => {
       expect(lead).not.toBeNull();
       expect(lead!.status).toBe('New');
       expect(lead!.temperature).toBe('Hot');
-      expect(lead!.leadSource?.label).toBe('Mailer');
+      expect(lead!.leadSourceId?.toString()).toBe(seed.leadSourceIds.mailer);
       expect(lead!.householdId).toBeTruthy();
       expect(lead!.primaryContactId).toBeTruthy();
       expect(lead!.intakeSource?.channel).toBe('internal');
@@ -6507,13 +6941,13 @@ describe('SFA API (e2e)', () => {
       );
       await createAs(
         producerToken,
-        payload('Bad', { leadSourceCode: 'nope' }),
+        payload('Bad', { leadSourceId: 'nope' }),
         400,
       );
-      // `Test` must never be selectable at intake.
+      // Well-formed, but no such row — the shape check alone must not pass it.
       await createAs(
         producerToken,
-        payload('Bad', { leadSourceCode: 'ENEJP' }),
+        payload('Bad', { leadSourceId: new Types.ObjectId().toString() }),
         400,
       );
     });
@@ -7219,7 +7653,7 @@ describe('SFA API (e2e)', () => {
         // Raw SmartSuite code — the detail read must normalize it to `Requote`.
         status: 'arW7O',
         temperature: 'Hot',
-        leadSource: { code: 'WCO7l', label: 'Mailer' },
+        leadSourceId: new Types.ObjectId(seed.leadSourceIds.mailer),
         quoteControlNumber: 'QCN-380001',
         // `PYgez` is stored as the raw Quote Recaps choice code, to prove the
         // read path normalizes this field like every other policy type here.
@@ -7441,7 +7875,10 @@ describe('SFA API (e2e)', () => {
       // Stored as `arW7O`.
       expect(body.status).toBe('Requote');
       expect(body.temperature).toBe('Hot');
-      expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
+      expect(body.leadSource).toEqual({
+        id: seed.leadSourceIds.mailer,
+        label: 'Mailer',
+      });
       expect(body.quoteControlNumber).toBe('QCN-380001');
       // `PYgez` is the SmartSuite code for Auto — normalized on read. The
       // dwelling rides on the row that needs it (PAC-56 #14); a row without one
@@ -7706,7 +8143,6 @@ describe('SFA API (e2e)', () => {
         lastName: 'Patch',
         status: 'New',
         temperature: 'Unknown',
-        leadSource: { code: null, label: '' },
         producerId: producer!._id,
         lastActivityAt: new Date('2026-01-01T00:00:00.000Z'),
         intakeSource: { channel: 'share_link' },
@@ -7730,13 +8166,16 @@ describe('SFA API (e2e)', () => {
       const res = await patchAs(producerToken, leadId, {
         status: 'Contacted',
         temperature: 'Warm',
-        leadSourceCode: 'WCO7l',
+        leadSourceId: seed.leadSourceIds.mailer,
       }).expect(200);
 
       const body = res.body as UpdateLeadResult;
       expect(body.status).toBe('Contacted');
       expect(body.temperature).toBe('Warm');
-      expect(body.leadSource).toEqual({ code: 'WCO7l', label: 'Mailer' });
+      expect(body.leadSource).toEqual({
+        id: seed.leadSourceIds.mailer,
+        label: 'Mailer',
+      });
 
       // Only the patchable fields — not a whole LeadDetail.
       expect(body).not.toHaveProperty('household');
@@ -7766,14 +8205,17 @@ describe('SFA API (e2e)', () => {
 
     it('clears the source with __none__, and the lead matches the no-source filter', async () => {
       const res = await patchAs(producerToken, leadId, {
-        leadSourceCode: '__none__',
+        leadSourceId: '__none__',
       }).expect(200);
 
-      // The schema default shape, which is what the list filter matches.
-      expect((res.body as UpdateLeadResult).leadSource.code).toBeNull();
+      // Unset, which is what the list filter matches.
+      expect((res.body as UpdateLeadResult).leadSource).toEqual({
+        id: null,
+        label: '',
+      });
 
       const list = await request(app.getHttpServer())
-        .get('/api/v1/leads?leadSource=__none__')
+        .get('/api/v1/leads?leadSourceId=__none__')
         .set(authHeader(producerToken))
         .expect(200);
 
@@ -7790,9 +8232,9 @@ describe('SFA API (e2e)', () => {
         400,
       );
       await patchAs(producerToken, leadId, {}).expect(400);
-      // `Test` hides the record from every read path — never selectable.
+      // Well-formed, but no such row.
       await patchAs(producerToken, leadId, {
-        leadSourceCode: 'ENEJP',
+        leadSourceId: new Types.ObjectId().toString(),
       }).expect(400);
     });
 
@@ -7992,7 +8434,7 @@ describe('SFA API (e2e)', () => {
             zip: '74101',
           },
           members: [],
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
         })
         .expect(201);
       return res.body.id as string;
@@ -8106,13 +8548,16 @@ describe('SFA API (e2e)', () => {
         .expect(200);
       expect(one.body.leadStatus).toBe('New');
 
+      // Paged since PAC-98, so ask for a page big enough to hold the suite's
+      // tickets rather than relying on this one landing in the default eight.
       const list = await request(app.getHttpServer())
-        .get('/api/v1/crm/service-tickets')
+        .get('/api/v1/crm/service-tickets?pageSize=100')
         .set(authHeader(ownerToken))
         .expect(200);
-      const row = list.body.find(
+      const row = ticketList(list).items.find(
         (t: { id: string }) => t.id === ticket.body.id,
       );
+      expect(row).toBeDefined();
       expect(row.leadStatus).toBeNull();
       expect(row.isStatusLocked).toBe(true);
     });
@@ -9399,8 +9844,7 @@ describe('SFA API (e2e)', () => {
       expect(lead!.intakeSource?.channel).toBe('share_link');
       expect(lead!.intakeSource?.shareLinkId?.toString()).toBe(activeLinkId);
       // Left empty on purpose: nobody has said where this came from yet.
-      expect(lead!.leadSource?.code ?? null).toBeNull();
-      expect(lead!.leadSource?.label ?? '').toBe('');
+      expect(lead!.leadSourceId ?? null).toBeNull();
     });
 
     it('records the policies of interest submitted publicly (PAC-56 #2)', async () => {
@@ -9453,7 +9897,7 @@ describe('SFA API (e2e)', () => {
         .expect(201);
 
       const res = await request(app.getHttpServer())
-        .get('/api/v1/leads?leadSource=__none__&search=Okonjo')
+        .get('/api/v1/leads?leadSourceId=__none__&search=Okonjo')
         .set(authHeader(producerToken))
         .expect(200);
 
@@ -9476,7 +9920,7 @@ describe('SFA API (e2e)', () => {
           agencyId: 'attacker-agency',
           branchId: 'attacker-branch',
           producerId: owner!._id.toString(),
-          leadSourceCode: 'WCO7l',
+          leadSourceId: seed.leadSourceIds.mailer,
           isTestRecord: true,
         })
         .expect(201);
@@ -9484,7 +9928,7 @@ describe('SFA API (e2e)', () => {
       const lead = await leadModel.findOne({ lastName: 'Pemberton' });
       expect(lead!.agencyId).toBe(seed.agencyId);
       expect(lead!.producerId?.toString()).toBe(producer!._id.toString());
-      expect(lead!.leadSource?.label ?? '').toBe('');
+      expect(lead!.leadSourceId ?? null).toBeNull();
       expect(lead!.isTestRecord).toBe(false);
     });
 
@@ -13235,7 +13679,11 @@ describe('SFA API (e2e)', () => {
         it('moves soldDate and soldDateYmd together, and the sold timeline entry with them', async () => {
           const { created } = await bookAuto();
 
-          const res = await patchSoldDate(producerToken, created.id, '2026-01-20');
+          const res = await patchSoldDate(
+            producerToken,
+            created.id,
+            '2026-01-20',
+          );
           const view = res.body as SoldDealEditView;
           expect(view.soldDate).toBe('2026-01-20');
           // Nothing but the date moved.
@@ -13245,7 +13693,9 @@ describe('SFA API (e2e)', () => {
           const deal = await soldDealModel.findById(created.id);
           // The Sold scorecard's bucket key — the deal now reports in January.
           expect(deal!.soldDateYmd).toBe(20260120);
-          expect(deal!.soldDate?.toISOString()).toBe('2026-01-20T00:00:00.000Z');
+          expect(deal!.soldDate?.toISOString()).toBe(
+            '2026-01-20T00:00:00.000Z',
+          );
 
           const sold = await soldActivityModel.findOne({
             dealId: dealRef(created.id),
@@ -13288,7 +13738,11 @@ describe('SFA API (e2e)', () => {
             legacySmartSuiteId: 'legacy-deal-pac104-date',
           });
 
-          await patchSoldDate(producerToken, migrated._id.toString(), '2025-11-04');
+          await patchSoldDate(
+            producerToken,
+            migrated._id.toString(),
+            '2025-11-04',
+          );
 
           const after = await soldDealModel.findById(migrated._id);
           expect(after!.soldDateYmd).toBe(20251104);
@@ -13381,7 +13835,9 @@ describe('SFA API (e2e)', () => {
           expect(results.filter((result) => !result.replayed)).toHaveLength(1);
 
           expect(
-            await soldPolicyModel.countDocuments({ dealId: dealRef(created.id) }),
+            await soldPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
           ).toBe(3);
           expect(await changeRows(created.id)).toHaveLength(2);
         });
@@ -13420,7 +13876,9 @@ describe('SFA API (e2e)', () => {
           );
 
           expect(
-            await soldPolicyModel.countDocuments({ dealId: dealRef(created.id) }),
+            await soldPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
           ).toBe(1);
           expect(
             (await soldPolicyModel.findById(theirs!._id))!.dealId?.toString(),
@@ -13492,7 +13950,9 @@ describe('SFA API (e2e)', () => {
             autoHomeSameCarrier: 'No',
           });
           expect(
-            await priorPolicyModel.countDocuments({ dealId: dealRef(created.id) }),
+            await priorPolicyModel.countDocuments({
+              dealId: dealRef(created.id),
+            }),
           ).toBe(2);
         });
 

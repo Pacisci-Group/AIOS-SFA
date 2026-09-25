@@ -16,6 +16,7 @@ import { formatPhone, listLeads, type LeadRow } from "@/lib/leads-api";
 import { newSubmissionToken } from "@/lib/submission-token";
 import { cn } from "@/lib/utils";
 import { leadIntakeFromHousehold } from "./start-quote-prefill";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** Query key for this household's leads, shared with the invalidation below. */
 export function householdLeadsKey(householdId: string) {
@@ -99,7 +100,7 @@ export function StartQuoteLeadStep({
         // scopes that to the public one), and sending the unasked defaults
         // would record a choice the producer never made. Same as `NewLeadPage`
         // — and here the very next step asks what was quoted, with premiums.
-        leadSourceCode: values.leadSourceCode ?? "",
+        leadSourceId: values.leadSourceId ?? "",
         submissionToken: submissionToken.current,
         // The whole point of creating from here: the lead lands on the
         // household on screen, whatever the typed name would otherwise match.
@@ -236,7 +237,7 @@ export function StartQuoteLeadStep({
  */
 function LeadOption({ lead, selected }: { lead: LeadRow; selected: boolean }) {
   const contact = [formatPhone(lead.phone), lead.email]
-    .filter((part) => part && part !== "—")
+    .filter((part) => part && part !== NOT_AVAILABLE)
     .join(" · ");
 
   return (

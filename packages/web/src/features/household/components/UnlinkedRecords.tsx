@@ -19,6 +19,7 @@ import {
   type UnlinkedRecordsResponse,
 } from "@/lib/unlinked-api";
 import { formatUpdated, householdStatusClass } from "./household-filters";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 const PAGE_SIZE = 50;
 
@@ -192,12 +193,16 @@ export function UnlinkedRecords({
   );
 }
 
-/** `—` until the counts land, so the chip does not shift width twice. */
+/**
+ * An ellipsis until the counts land, so the chip does not shift width twice.
+ * Not `NOT_AVAILABLE`: this is *loading*, and "N/A" flashing up ahead of a real
+ * number would claim there is nothing to count.
+ */
 function countLabel(
   counts: UnlinkedCounts | undefined,
   kind: UnlinkedRecordKind,
 ): string {
-  return counts ? String(counts[kind]) : "—";
+  return counts ? String(counts[kind]) : "…";
 }
 
 function EmptyCard({ children }: { children: React.ReactNode }) {
@@ -330,13 +335,13 @@ function PolicyRow({
         </span>
       </span>
       <span className="text-sm text-muted-foreground truncate">
-        {row.policyType ?? "—"}
+        {row.policyType ?? NOT_AVAILABLE}
       </span>
       <span className="text-sm text-muted-foreground truncate">
-        {row.carrier ?? "—"}
+        {row.carrier ?? NOT_AVAILABLE}
       </span>
       <span className="text-sm text-muted-foreground tabular-nums">
-        {row.premium ? `$${row.premium.toLocaleString("en-US")}` : "—"}
+        {row.premium ? `$${row.premium.toLocaleString("en-US")}` : NOT_AVAILABLE}
       </span>
       <span className="text-sm text-muted-foreground tabular-nums">
         {formatUpdated(row.createdAt)}
@@ -429,7 +434,7 @@ function ContactRow({
         )}
       </span>
       <span className="text-sm text-muted-foreground truncate">
-        {row.email ?? "—"}
+        {row.email ?? NOT_AVAILABLE}
       </span>
       <span className="text-sm text-muted-foreground truncate">
         {formatPhone(row.phone)}
@@ -497,7 +502,7 @@ function HouseholdRow({
       </span>
 
       <span className="text-sm text-muted-foreground truncate">
-        {[row.city, row.state].filter(Boolean).join(", ") || "—"}
+        {[row.city, row.state].filter(Boolean).join(", ") || NOT_AVAILABLE}
       </span>
 
       <ChevronRight className="size-4 text-muted-foreground justify-self-end" />

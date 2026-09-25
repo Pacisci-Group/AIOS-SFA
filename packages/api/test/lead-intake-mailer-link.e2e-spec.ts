@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
-import { MAILER_LEAD_SOURCE_CODE, mailerControlNumberKeys } from '@sfa/shared';
+import { mailerControlNumberKeys } from '@sfa/shared';
 import { Model } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -85,7 +85,7 @@ describe('Lead intake → mailer link (e2e)', () => {
           phone: '9185550100',
           email: `rosa${caseNumber}@example.com`,
         },
-        leadSourceCode: MAILER_LEAD_SOURCE_CODE,
+        leadSourceId: seed.leadSourceIds.mailer,
         ...body,
       });
   }

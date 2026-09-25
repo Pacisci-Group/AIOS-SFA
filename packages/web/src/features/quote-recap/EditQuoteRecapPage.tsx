@@ -18,6 +18,7 @@ import {
   toUpdateQuoteRecapInput,
   type QuoteRecapFormState,
 } from "./components/quote-recap-schema";
+import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
 
@@ -66,6 +67,8 @@ export default function EditQuoteRecapPage() {
       void queryClient.invalidateQueries({ queryKey: ["leads"] });
       // The Quoted scorecard reads the recap totals this edit just changed.
       void queryClient.invalidateQueries({ queryKey: ["performance"] });
+      // The Owner dashboard sums the same sales and quotes (PAC-135).
+      void queryClient.invalidateQueries({ queryKey: ownerDashboardKey });
       void queryClient.invalidateQueries({ queryKey: quoteRecapEditKey(id) });
       toast.success("Quote recap updated");
       navigate(`/leads/${leadId}`, { replace: true });

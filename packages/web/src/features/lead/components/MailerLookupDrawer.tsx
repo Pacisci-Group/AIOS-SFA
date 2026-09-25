@@ -39,6 +39,7 @@ import {
 } from "./lead-display";
 import type { ContactDetailsFormValues } from "./lead-intake-schema";
 import { MAILER_CONTACT_FORM_ID, MailerContactStep } from "./MailerContactStep";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** The query key, exported so the mutation and the drawer cannot disagree. */
 export function mailerLookupKey(key: string) {
@@ -550,7 +551,7 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-base font-semibold tabular-nums">{value ?? "—"}</p>
+      <p className="text-base font-semibold tabular-nums">{value ?? NOT_AVAILABLE}</p>
     </div>
   );
 }

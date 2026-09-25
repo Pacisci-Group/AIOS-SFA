@@ -14,6 +14,7 @@ import {
   premiumTermSuffix,
   termExpirationDate,
 } from "@sfa/shared";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * The shape the policy cards render. Kept separate from the API's
@@ -42,7 +43,7 @@ export interface DisplayPolicy {
    * coverage run out if nobody renews it.
    *
    * Falls back to the stored value only when there is no anchor to count from,
-   * and to `"—"` when there is neither.
+   * and to `NOT_AVAILABLE` when there is neither.
    */
   expiration: string;
   /**
@@ -52,7 +53,7 @@ export interface DisplayPolicy {
    * derived from the effective date and maintained on every write and by the
    * renewal scan's roll-forward, so it is the one that is actually populated and
    * actually in the future; the stored expiration is blank on most migrated
-   * policies, which is the whole complaint this ticket came from. `"—"` when
+   * policies, which is the whole complaint this ticket came from. `NOT_AVAILABLE` when
    * neither exists, which is genuinely unknown rather than merely underived.
    */
   renewal: string;
@@ -171,7 +172,7 @@ function toCardStatus(policy: PolicySummary): DisplayPolicy["status"] {
 }
 
 function formatDate(iso: string | null) {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   return new Date(iso).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -184,7 +185,7 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
   return {
     id: policy.id,
     line: policy.policyType ?? "Policy",
-    policyNumber: policy.policyNumber ?? "—",
+    policyNumber: policy.policyNumber ?? NOT_AVAILABLE,
     premium: `$${policy.premium.toLocaleString()}`,
     // Auto is quoted on a 6-month term (2026-08-19 scrum), so the unit follows
     // the policy type rather than being hard-coded annual.
@@ -203,7 +204,7 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
     // `/6 mo` premium suffix both use, so the card cannot describe a term the
     // scheduler does not keep.
     term: `${policyTermMonths(policy.policyType)} months`,
-    carrier: policy.carrier ?? "—",
+    carrier: policy.carrier ?? NOT_AVAILABLE,
     deductible: undefined,
     ...style,
   };

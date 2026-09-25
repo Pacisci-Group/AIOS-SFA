@@ -18,6 +18,7 @@ import {
   AVATAR_MAX_BYTES,
   type AvatarUploadDto,
   type CommitAvatarDto,
+  type UpdateMyAvailabilityDto,
   type UpdateMyProfileDto,
 } from './dto/profile.dto';
 
@@ -46,6 +47,19 @@ export class ProfileService {
     if (dto.lastName !== undefined) {
       user.lastName = dto.lastName ?? undefined;
     }
+    await user.save();
+
+    return this.authService.me(userId);
+  }
+
+  /**
+   * Set own availability (PAC-139 §6). The only writer of
+   * `User.availability`: a manager does not set it for someone, and nothing
+   * flips it automatically — see `USER_AVAILABILITIES` for why.
+   */
+  async updateAvailability(userId: string, dto: UpdateMyAvailabilityDto) {
+    const user = await this.loadUser(userId);
+    user.availability = dto.availability;
     await user.save();
 
     return this.authService.me(userId);

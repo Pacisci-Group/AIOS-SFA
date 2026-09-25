@@ -161,7 +161,7 @@ export function makeLeadIntakeSchema(variant: LeadIntakeVariant) {
               .min(1, "Add at least one policy")
               .max(12, "At most 12 policies")
           : z.array(policyOfInterestSchema).max(12, "At most 12 policies"),
-        leadSourceCode: isPublic
+        leadSourceId: isPublic
           ? z.string().optional()
           : z.string().min(1, "Select a lead source"),
       })
@@ -209,7 +209,7 @@ export function emptyLeadIntake(): LeadIntakeFormValues {
     // never confirmed, and — on the internal form, where the section is not even
     // rendered — never saw. The public form's `.min(1)` is what insists.
     policiesOfInterest: [],
-    leadSourceCode: "",
+    leadSourceId: "",
   };
 }
 

@@ -1,4 +1,3 @@
-import { SELECTABLE_LEAD_SOURCE_OPTIONS } from "@sfa/shared";
 import { useMemo, useState } from "react";
 import { AddressFields } from "@/components/address/AddressFields";
 import { FormError, FormGrid, FormSection } from "@/components/form";
@@ -6,6 +5,7 @@ import { PolicyList } from "@/components/policies/PolicyList";
 import { Button } from "@/components/ui/button";
 import { ownsPath } from "@/lib/field-paths";
 import { useAppForm } from "@/hooks/form";
+import { useLeadSources } from "@/hooks/useLeadSources";
 import {
   HouseholdMembersShell,
   MemberRowGroup,
@@ -66,11 +66,6 @@ interface LeadIntakeFormProps {
   shareToken?: string;
 }
 
-const leadSourceOptions = SELECTABLE_LEAD_SOURCE_OPTIONS.map((o) => ({
-  value: o.code,
-  label: o.label,
-}));
-
 /**
  * Which policy the drawer is on. `index === null` means "adding"; the `key`
  * remounts the drawer's form so its `defaultValues` are re-read — without it,
@@ -103,6 +98,13 @@ export function LeadIntakeForm({
   shareToken,
 }: LeadIntakeFormProps) {
   const isPublic = variant === "public";
+  // The public form never shows the field and has no session to fetch it with.
+  const leadSources = useLeadSources({ enabled: !isPublic });
+  const leadSourceOptions = useMemo(
+    () =>
+      (leadSources.data ?? []).map((o) => ({ value: o.id, label: o.name })),
+    [leadSources.data],
+  );
   // One schema for the whole component: `validators` below and the per-step
   // checks both read it, and rebuilding it per render would hand the form a new
   // validator object on every keystroke.
@@ -290,12 +292,10 @@ export function LeadIntakeForm({
     ),
 
     leadSource: (
-      <form.AppField name="leadSourceCode">
+      <form.AppField name="leadSourceId">
         {(f) => (
           <f.SelectField
             label="Where did this lead come from?"
-            /* `Test` is excluded at the source — a lead created with it
-               would be silently hidden from every list. */
             options={leadSourceOptions}
             placeholder="Select a source"
             triggerClassName="w-full bg-card border-border"

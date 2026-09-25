@@ -1,12 +1,17 @@
 import { Transform } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsIn,
+  IsInt,
   IsMongoId,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 import {
@@ -15,14 +20,19 @@ import {
   SERVICE_TICKET_CATEGORIES,
   SERVICE_TICKET_NOTE_TYPES,
   SERVICE_TICKET_PRIORITIES,
+  SERVICE_TICKET_QUEUE_SORTS,
+  SERVICE_TICKET_QUEUE_TABS,
   SERVICE_TICKET_STATUSES,
 } from '@sfa/shared';
+import { multiValue } from '../../leads/dto/multi-value';
 import type {
   OnboardingEmailMilestoneKey,
   RenewalOutcome,
   ServiceTicketCategory,
   ServiceTicketNoteType,
   ServiceTicketPriority,
+  ServiceTicketQueueSort,
+  ServiceTicketQueueTab,
   ServiceTicketStatus,
 } from '@sfa/shared';
 
@@ -201,9 +211,20 @@ export class SetRenewalOutcomeDto {
 }
 
 export class ListTicketsQueryDto {
+  /**
+   * One status, or several ORed (`?status=open,overdue`, or repeated).
+   *
+   * A list since the PAC-98 review: the workspace's "Open" tab is `open` *or*
+   * `overdue`, and the Priority Ticket Queue asks for every non-terminal
+   * status. With a single value the first had to send nothing — which made
+   * "Open" identical to "All" — and the second could not be expressed at all.
+   */
   @IsOptional()
-  @IsIn(SERVICE_TICKET_STATUSES)
-  status?: ServiceTicketStatus;
+  @Transform(({ value }) => multiValue(value))
+  @IsArray()
+  @ArrayMaxSize(SERVICE_TICKET_STATUSES.length)
+  @IsIn(SERVICE_TICKET_STATUSES, { each: true })
+  status?: ServiceTicketStatus[];
 
   @IsOptional()
   @IsIn(SERVICE_TICKET_CATEGORIES)
@@ -218,4 +239,58 @@ export class ListTicketsQueryDto {
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   archived?: boolean;
+
+  /**
+   * Which of the queue's three tabs to return. Omitted means all.
+   *
+   * A server-side predicate since PAC-98: the queue used to fetch every ticket
+   * and filter in the browser, which is what made the dashboard's payload grow
+   * with the book.
+   */
+  @IsOptional()
+  @IsIn(SERVICE_TICKET_QUEUE_TABS)
+  tab?: ServiceTicketQueueTab;
+
+  /**
+   * The order inside each urgency band — see `SERVICE_TICKET_QUEUE_SORTS`.
+   * Omitted means `urgency`.
+   */
+  @IsOptional()
+  @IsIn(SERVICE_TICKET_QUEUE_SORTS)
+  sort?: ServiceTicketQueueSort;
+
+  /**
+   * Free text across the fields the ticket feed searches: client name, ticket
+   * number, category, policy number, phone.
+   *
+   * Server-side since PAC-98. The feed used to filter an array it already had;
+   * once the list pages, a client-side search would only ever find matches on
+   * the page in front of you — quietly, which is the worst way for a search to
+   * be wrong.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  /** 1-based. */
+  @IsOptional()
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  /**
+   * Capped so a client cannot ask for the collection back.
+   *
+   * The cap is what makes this pagination rather than a suggestion: without
+   * it `?pageSize=100000` reproduces exactly the unbounded read this replaced.
+   * 100 matches the Leads list.
+   */
+  @IsOptional()
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number;
 }

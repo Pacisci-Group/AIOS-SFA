@@ -6,6 +6,7 @@ import { SectionLabel } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
 import { listOnboardingsForHousehold } from "@/lib/service-tickets-api";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * The client's onboarding journey.
@@ -128,7 +129,7 @@ function ChainRow({ link }: { link: OnboardingChainStep }) {
 }
 
 function shortDate(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   return new Date(iso).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",

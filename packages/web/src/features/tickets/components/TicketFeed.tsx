@@ -1,4 +1,4 @@
-import { ArrowDownUp, Check, ListFilter, Search, X } from "lucide-react";
+import { ArrowDownUp, Check, ListFilter, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,7 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+import { TableSearchInput } from "@/components/common/TableSearchInput";
 import { FilterToggles } from "@/components/common/FilterToggles";
 import {
   DEFAULT_TICKET_QUEUE_SORT,
@@ -16,6 +16,7 @@ import {
   type TicketQueueSort,
   type TicketQueueTab,
 } from "@/lib/ticket-queue";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 import { cn } from "@/lib/utils";
 import type { TicketQueue } from "../useTicketQueue";
 import {
@@ -27,8 +28,8 @@ import {
 interface TicketFeedProps {
   /**
    * The queue this feed renders and drives: its filters, its ranking, and the
-   * rows they produce. Held in the URL by `useTicketQueue` so the view survives
-   * the trip from the Service Dashboard (and a refresh, and back).
+   * page of rows they produce. Held in the URL by `useTicketQueue` so the view
+   * survives the trip from the Service Dashboard (and a refresh, and back).
    */
   queue: TicketQueue;
   selectedId: string | null;
@@ -40,14 +41,16 @@ interface TicketFeedProps {
  * The queue on the left of the ticket workspace.
  *
  * Search, the status filters, the category filter and the sort go through
- * `Input`, `FilterToggles` and `DropdownMenu` rather than the hand-rolled
+ * `TableSearchInput`, `FilterToggles` and `DropdownMenu` rather than the hand-rolled
  * equivalents this had before — the previous search box drew its own focus ring
  * off `--ring`, the filter row was bare `<button>`s with no group semantics or
  * pressed state, and the category picker was a `fixed inset-0` click-away layer
  * with no escape handling and no `aria-expanded`.
  *
  * The state behind all four is the page's, not this component's: see
- * `useTicketQueue`.
+ * `useTicketQueue`. Since PAC-98 all four are request parameters, and the rows
+ * arrive narrowed and ranked — render them in the order given. Re-sorting would
+ * order one page against itself rather than against the pages either side.
  */
 export function TicketFeed({
   queue,
@@ -69,7 +72,11 @@ export function TicketFeed({
     setQuery,
     isFiltered,
     clearFilters,
+    page,
+    isFetching,
   } = queue;
+  // The whole filtered queue, not the page in hand.
+  const total = page?.total ?? rows.length;
 
   const sortLabel =
     TICKET_QUEUE_SORTS.find((option) => option.value === sort)?.label ?? "";
@@ -77,20 +84,13 @@ export function TicketFeed({
   return (
     <div className="flex h-full flex-col overflow-hidden border-border bg-card lg:border-r">
       <div className="space-y-3 border-b border-border px-4 py-3">
-        <div className="relative">
-          <Search
-            aria-hidden
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            type="search"
-            aria-label="Search tickets"
-            placeholder="Search name, policy, phone, ID…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="pl-9 bg-card border-border"
-          />
-        </div>
+        <TableSearchInput
+          value={query}
+          onValueChange={setQuery}
+          label="Search tickets"
+          placeholder="Search name, policy, phone, ID…"
+          busy={isFetching}
+        />
 
         {tabs.length > 0 && (
           <FilterToggles
@@ -107,7 +107,7 @@ export function TicketFeed({
 
       <div className="flex items-center justify-between gap-2 px-4 py-2">
         <span className="truncate text-sm text-muted-foreground">
-          {rows.length} ticket{rows.length !== 1 ? "s" : ""}
+          {total} ticket{total !== 1 ? "s" : ""}
           {type && <span className="text-foreground"> · {type}</span>}
         </span>
 
@@ -339,7 +339,7 @@ function FilterOption({
 }
 
 function shortDate(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   return new Date(iso).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",

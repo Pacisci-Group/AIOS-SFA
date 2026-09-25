@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Archive } from "lucide-react";
@@ -6,10 +6,12 @@ import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { KpiStrip } from "./components/KpiStrip";
+import { KpiStrip, type KpiCounts } from "./components/KpiStrip";
+import { TablePagination } from "@/components/common/TablePagination";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { useTicketQueue } from "./useTicketQueue";
+import { useSelectedTicket } from "./useSelectedTicket";
 import type { TicketStatus } from "./components/ticket-data";
 import {
   addServiceTicketNote,
@@ -26,6 +28,7 @@ import {
   type RenewalStepKey,
   type ServiceTicketNoteType,
 } from "@/lib/service-tickets-api";
+import { ticketQueueTabStatuses } from "@/lib/ticket-queue";
 import { ModuleKey } from "@sfa/shared";
 import { usePermissions } from "@/hooks/usePermissions";
 
@@ -35,6 +38,33 @@ const ONBOARDING_KEY = ["onboarding"];
 const HOUSEHOLD_ONBOARDINGS_KEY = ["household-onboardings"];
 const RENEWAL_CYCLE_KEY = ["renewal-cycle"];
 const RENEWAL_DESK_KEY = ["renewal-desk"];
+
+/**
+ * The KPI strip's four counts, over the whole active queue.
+ *
+ * Two one-row requests rather than a count of the feed: the feed holds one page
+ * (PAC-98). The active request's `counts` answers three of the four — its tab
+ * counts are taken before any tab narrows it — and the resolved band is the
+ * `total` of the second.
+ */
+async function fetchKpiCounts(): Promise<KpiCounts> {
+  const [active, resolved] = await Promise.all([
+    listServiceTickets({
+      status: ticketQueueTabStatuses("all"),
+      pageSize: 1,
+    }),
+    listServiceTickets({
+      status: ticketQueueTabStatuses("resolved"),
+      pageSize: 1,
+    }),
+  ]);
+  return {
+    open: active.counts.all,
+    overdue: active.counts.overdue,
+    waiting: active.counts.waiting,
+    resolved: resolved.total,
+  };
+}
 
 /**
  * `/crm/tickets` — the CSR's queue on the left, the selected ticket's workspace
@@ -62,37 +92,38 @@ export default function TicketWorkspacePage() {
     searchParams.get("ticket") ? "workspace" : "queue",
   );
 
-  const ticketsQuery = useQuery({
-    queryKey: TICKETS_KEY,
-    queryFn: () => listServiceTickets(),
-  });
-
-  const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
-
   /**
-   * The queue's filters, search and ranking — read from the URL, which is what
-   * carries them here from the Service Dashboard's Priority Ticket Queue.
+   * The queue's filters, search, ranking and page — read from the URL, which is
+   * what carries them here from the Service Dashboard's Priority Ticket Queue —
+   * and one page of it, from the server (PAC-98).
    */
-  const queue = useTicketQueue({ tickets, selectedId: selectedTicketId });
+  const queue = useTicketQueue();
+  const tickets = queue.rows;
+
+  const kpiQuery = useQuery({
+    queryKey: [...TICKETS_KEY, "kpis"],
+    queryFn: fetchKpiCounts,
+  });
 
   // Preselect from ?ticket=<id> (deep link from the Service Dashboard "Open",
   // the household activity feed, an onboarding chain row), otherwise fall back
-  // to the first row of the queue as filtered — not `tickets[0]`, which is the
-  // API's own order and routinely sits somewhere down the rendered list.
-  const { firstMatchId } = queue;
+  // to the first row of the page — which, now that the server ranks, is the
+  // first row the rep can see.
+  const requestedId = searchParams.get("ticket");
   useEffect(() => {
-    if (!tickets.length) return;
-    const requested = searchParams.get("ticket");
-    if (requested && tickets.some((t) => t.id === requested)) {
-      setSelectedTicketId(requested);
+    if (requestedId) {
+      setSelectedTicketId(requestedId);
       return;
     }
+    if (!tickets.length) return;
     setSelectedTicketId((current) =>
-      current && tickets.some((t) => t.id === current) ? current : firstMatchId,
+      current && tickets.some((t) => t.id === current)
+        ? current
+        : tickets[0].id,
     );
-  }, [tickets, searchParams, firstMatchId]);
+  }, [tickets, requestedId]);
 
-  const selectedTicket = tickets.find((t) => t.id === selectedTicketId) ?? null;
+  const selectedTicket = useSelectedTicket(selectedTicketId, tickets);
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: TicketStatus }) =>
@@ -187,6 +218,11 @@ export default function TicketWorkspacePage() {
     onSuccess: invalidateRenewal,
   });
 
+  // The whole filtered queue, not the page in hand; and the open queue, the
+  // same number as the strip's "Total open".
+  const queueTotal = queue.page?.total ?? 0;
+  const openTotal = kpiQuery.data?.open;
+
   const handleSelect = (id: string) => {
     setSelectedTicketId(id);
     setMobilePane("workspace");
@@ -219,15 +255,16 @@ export default function TicketWorkspacePage() {
               <h1 className="text-lg font-semibold tracking-tight">
                 Service tickets
               </h1>
-              {/* "3 of 41" while a filter is on, rather than a queue-wide 41
-                  above a list of 3 — the two disagreeing is what made the
-                  workspace look like a different queue from the dashboard. */}
+              {/* "3 matching · 41 open" while a filter is on, rather than a
+                  bare 41 above a list of 3 — the two disagreeing is what made
+                  the workspace look like a different queue from the dashboard.
+                  Not "3 of 41": the Resolved tab is not a subset of open work. */}
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {ticketsQuery.isLoading || ticketsQuery.isError
+                {queue.isLoading || queue.isError
                   ? " "
                   : queue.isFiltered
-                    ? `${queue.rows.length} of ${tickets.length} tickets in your queue`
-                    : `${tickets.length} ticket${tickets.length !== 1 ? "s" : ""} in your queue`}
+                    ? `${queueTotal} matching · ${openTotal ?? "…"} open in your queue`
+                    : `${queueTotal} ticket${queueTotal !== 1 ? "s" : ""} in your queue`}
               </p>
             </div>
           </div>
@@ -241,7 +278,7 @@ export default function TicketWorkspacePage() {
           </div>
         </header>
 
-        {ticketsQuery.isError ? (
+        {queue.isError ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
             <AlertCircle aria-hidden className="size-5 text-destructive" />
             <p className="text-sm text-muted-foreground">
@@ -250,14 +287,14 @@ export default function TicketWorkspacePage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void ticketsQuery.refetch()}
+              onClick={queue.refetch}
             >
               Retry
             </Button>
           </div>
         ) : (
           <>
-            <KpiStrip tickets={tickets} />
+            <KpiStrip counts={kpiQuery.data} />
 
             {/* Stacked below `lg`, 40/60 above it. */}
             <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -271,6 +308,16 @@ export default function TicketWorkspacePage() {
                   queue={queue}
                   selectedId={selectedTicketId}
                   onSelect={handleSelect}
+                />
+                <TablePagination
+                  page={queue.page?.page ?? queue.requestedPage}
+                  pageSize={queue.page?.pageSize ?? queue.pageSize}
+                  total={queue.page?.total ?? 0}
+                  totalPages={queue.page?.totalPages ?? 1}
+                  onPageChange={queue.setPage}
+                  busy={queue.isFetching}
+                  noun="tickets"
+                  className="border-t border-border px-4 py-3"
                 />
               </div>
 

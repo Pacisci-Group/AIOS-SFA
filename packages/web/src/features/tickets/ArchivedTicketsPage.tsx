@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, ChevronRight } from "lucide-react";
 import { ModuleKey, SERVICE_TICKET_ARCHIVE_AFTER_DAYS } from "@sfa/shared";
 import { AppShell } from "@/components/layout/AppShell";
@@ -8,19 +8,18 @@ import { MobileNav } from "@/components/layout/MobileNav";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
+import { TablePagination } from "@/components/common/TablePagination";
 import { TicketFeed } from "./components/TicketFeed";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { useTicketQueue } from "./useTicketQueue";
+import { useSelectedTicket } from "./useSelectedTicket";
 import type { TicketQueueTab } from "@/lib/ticket-queue";
 import type { TicketStatus } from "./components/ticket-data";
 import {
   addServiceTicketNote,
-  listServiceTickets,
   updateServiceTicketStatus,
   type ServiceTicketNoteType,
 } from "@/lib/service-tickets-api";
-
-const ARCHIVED_KEY = ["service-tickets", "archived"];
 
 /**
  * No status strip here: every ticket on this page is resolved or closed, so
@@ -49,38 +48,34 @@ export default function ArchivedTicketsPage() {
     searchParams.get("ticket") ? "workspace" : "queue",
   );
 
-  const ticketsQuery = useQuery({
-    queryKey: ARCHIVED_KEY,
-    queryFn: () => listServiceTickets({ archived: true }),
-  });
-
-  const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
-
-  const queue = useTicketQueue({
-    tickets,
-    tabs: NO_STATUS_TABS,
-    selectedId: selectedTicketId,
-  });
+  /**
+   * Paged by the server since PAC-98 — this list used to fetch every ticket in
+   * the caller's scope in one response. Same URL-held filters as the live
+   * workspace, on the other side of the archive window.
+   */
+  const queue = useTicketQueue({ archived: true, tabs: NO_STATUS_TABS });
+  const tickets = queue.rows;
 
   // Same rule as the live workspace: a `?ticket=` deep link wins, otherwise
   // open the first row the list actually shows.
-  const { firstMatchId } = queue;
+  const requestedId = searchParams.get("ticket");
   useEffect(() => {
+    if (requestedId) {
+      setSelectedTicketId(requestedId);
+      return;
+    }
     if (!tickets.length) {
       setSelectedTicketId(null);
       return;
     }
-    const requested = searchParams.get("ticket");
-    if (requested && tickets.some((t) => t.id === requested)) {
-      setSelectedTicketId(requested);
-      return;
-    }
     setSelectedTicketId((current) =>
-      current && tickets.some((t) => t.id === current) ? current : firstMatchId,
+      current && tickets.some((t) => t.id === current)
+        ? current
+        : tickets[0].id,
     );
-  }, [tickets, searchParams, firstMatchId]);
+  }, [tickets, requestedId]);
 
-  const selectedTicket = tickets.find((t) => t.id === selectedTicketId) ?? null;
+  const selectedTicket = useSelectedTicket(selectedTicketId, tickets);
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["service-tickets"] });
@@ -145,15 +140,15 @@ export default function ArchivedTicketsPage() {
                 Archived tickets
               </h1>
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {ticketsQuery.isLoading || ticketsQuery.isError
+                {queue.isLoading || queue.isError
                   ? " "
-                  : `${tickets.length} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
+                  : `${queue.page?.total ?? 0} resolved over ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days ago`}
               </p>
             </div>
           </div>
         </header>
 
-        {ticketsQuery.isError ? (
+        {queue.isError ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
             <AlertCircle aria-hidden className="size-5 text-destructive" />
             <p className="text-sm text-muted-foreground">
@@ -162,7 +157,7 @@ export default function ArchivedTicketsPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void ticketsQuery.refetch()}
+              onClick={queue.refetch}
             >
               Retry
             </Button>
@@ -180,6 +175,16 @@ export default function ArchivedTicketsPage() {
                 selectedId={selectedTicketId}
                 onSelect={handleSelect}
                 emptyLabel={`Nothing archived yet. Tickets land here ${SERVICE_TICKET_ARCHIVE_AFTER_DAYS} days after they are resolved.`}
+              />
+              <TablePagination
+                page={queue.page?.page ?? queue.requestedPage}
+                pageSize={queue.page?.pageSize ?? queue.pageSize}
+                total={queue.page?.total ?? 0}
+                totalPages={queue.page?.totalPages ?? 1}
+                onPageChange={queue.setPage}
+                busy={queue.isFetching}
+                noun="tickets"
+                className="border-t border-border px-4 py-3"
               />
             </div>
 

@@ -13,7 +13,6 @@ import {
   HouseholdDocument,
 } from '../../households/schemas/household.schema';
 import { Policy, PolicyDocument } from '../../policies/schemas/policy.schema';
-import type { NormalizedLeadSource } from '@sfa/shared';
 import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
 import { AdvanceLeadStep } from './advance-lead.step';
 import { InterestedPartiesStep } from './interested-parties.step';
@@ -78,16 +77,16 @@ export class SoldDealIntakeService {
   ) {}
 
   /**
-   * `leadSource` rather than the lead document: it is the only field of the
+   * `leadSourceId` rather than the lead document: it is the only field of the
    * lead this pipeline ever read, and taking the narrower input is what lets a
    * leadless policy transfer run the identical steps. A transfer passes
-   * `undefined`, which `resolveLeadSource` already renders as the empty source.
+   * `undefined`, and the deal simply carries no source.
    */
   async process(
     ctx: SoldIntakeContext,
     dto: SoldIntakeDto,
     access: AccessContext,
-    leadSource: NormalizedLeadSource | undefined,
+    leadSourceId: Types.ObjectId | undefined,
     /**
      * Extra work to commit **with** the deal, run after every step inside the
      * same transaction.
@@ -124,7 +123,7 @@ export class SoldDealIntakeService {
 
         const { dealId, aggregates } = await this.deals.run(
           dto,
-          leadSource,
+          leadSourceId,
           deps,
         );
         const policies = await this.policies.run(dto, dealId, access, deps);

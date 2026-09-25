@@ -13,6 +13,7 @@ import {
   SERVICE_TICKET_PRIORITIES,
   type ServiceTicketCategory,
   type ServiceTicketStatus,
+  type UserAvailability,
 } from '@sfa/shared';
 import {
   CORE_AUDIT_TEMPLATES,
@@ -34,6 +35,12 @@ export interface TeamMemberSpec {
   branch: BranchSlug;
   /** Monthly sold-premium goal (producers only) for the Motivation Hub. */
   monthlyGoal?: number;
+  /**
+   * Taking leads or not (PAC-139 §6). Omitted = `available`, the default;
+   * set on one producer so the Manager view's Status column and the Command
+   * Center's "assign to" picker have something to show besides one value.
+   */
+  availability?: UserAvailability;
 }
 
 /**
@@ -96,6 +103,7 @@ export const TEAM: TeamMemberSpec[] = [
     roleSlug: 'producer',
     branch: 'main',
     monthlyGoal: 70000,
+    availability: 'busy',
   },
   {
     key: 'producer-sam',
@@ -325,18 +333,25 @@ export const CARRIERS = [
   'Farmers',
 ] as const;
 
-/** Canonical lead-source choice codes (see `CANONICAL_LEAD_SOURCES` in @sfa/shared). */
-export const LEAD_SOURCE_CODES = [
-  'WCO7l', // Mailer
-  'GVCgc', // Book of Business
-  'UqEUq', // Allstate Lead Marketplace
-  'Eos2j', // Customer Referral
-  'oayGb', // Data Lot
-  'X2Wrh', // Facebook
-  '30sDe', // Google
-  'DmjDy', // Mail Referral
-  'xjtnZ', // Quotewizard
-  'ymZHL', // JYA
+/**
+ * Lead sources the demo agency's leads come from (PAC-135).
+ *
+ * Both kinds on purpose: the first six are platform rows
+ * (`PLATFORM_LEAD_SOURCES`), the last three are not, so the seed creates them as
+ * the demo agency's own — which is what exercises the "platform ∪ agency" read.
+ * `Mailer` is repeated to keep it the largest source, as it is in real data.
+ */
+export const DEMO_LEAD_SOURCE_NAMES = [
+  'Mailer',
+  'Mailer',
+  'Book of Business',
+  'Customer Referral',
+  'Facebook',
+  'Google',
+  'Web',
+  'Quotewizard',
+  'Data Lot',
+  'Allstate Lead Marketplace',
 ] as const;
 
 /**
@@ -407,6 +422,19 @@ export const POLICY_TYPE_SETS: string[][] = [
   ['Motorcycle'],
   ['Landlord'],
 ];
+
+/**
+ * Split a whole-dollar amount into `parts` whole-dollar shares that add back up
+ * to it exactly — the remainder goes on the last share. `splitAmount(1001, 2)`
+ * is `[500, 501]`, where a rounded equal share gives `501 + 501`.
+ */
+export function splitAmount(amount: number, parts: number): number[] {
+  const count = Math.max(parts, 1);
+  const share = Math.floor(amount / count);
+  return Array.from({ length: count }, (_, index) =>
+    index === count - 1 ? amount - share * (count - 1) : share,
+  );
+}
 
 export type AuditTemplateSpec = CoreAuditTemplateSpec;
 

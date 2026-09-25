@@ -11,6 +11,9 @@ import type {
   ServiceTicketCategory,
   ServiceTicketNoteType,
   ServiceTicketPriority,
+  ServiceTicketListResponse,
+  ServiceTicketQueueSort,
+  ServiceTicketQueueTab,
   ServiceTicketStats,
   ServiceTicketStatus,
   ServiceTicketView,
@@ -37,25 +40,57 @@ export type {
   ServiceTicketPriority,
   ServiceTicketStats,
   ServiceTicketStatus,
+  ServiceTicketListResponse,
+  ServiceTicketQueueSort,
+  ServiceTicketQueueTab,
   ServiceTicketView,
 } from '@sfa/shared';
 
 const BASE = '/crm/service-tickets';
 
 export interface ListServiceTicketsOptions {
-  status?: ServiceTicketStatus;
+  /** One status, or several ORed — `["open", "overdue"]` is the Open tab. */
+  status?: ServiceTicketStatus | readonly ServiceTicketStatus[];
   category?: ServiceTicketCategory;
+  /** Free text, matched server-side across the whole scope. */
+  search?: string;
   /**
    * When true, returns only archived tickets (resolved longer ago than the
    * archive window). Omitted returns the active queue, which excludes them.
    */
   archived?: boolean;
+  /** Which queue tab to return. Omitted means all. */
+  tab?: ServiceTicketQueueTab;
+  /** Order inside each urgency band. Omitted means `urgency`. */
+  sort?: ServiceTicketQueueSort;
+  /** 1-based. */
+  page?: number;
+  /** Capped server-side at 100; the API defaults to 8 if omitted. */
+  pageSize?: number;
 }
 
+/**
+ * One page of the ticket queue, with the tab counts for its header.
+ *
+ * Paged by the server since PAC-98. This used to return every ticket in the
+ * caller's scope and let the browser rank, slice and count them — which worked
+ * until a rep's queue reached several hundred and made the dashboard's first
+ * paint proportional to the size of the book.
+ *
+ * The ranking moved with it: rows arrive in urgency order and must be rendered
+ * in the order given. Re-sorting them client-side would reorder one page
+ * against the rest.
+ */
 export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   const params = new URLSearchParams();
-  if (options.status) {
-    params.set('status', options.status);
+  const statuses =
+    typeof options.status === 'string' ? [options.status] : options.status;
+  if (statuses?.length) {
+    params.set('status', statuses.join(','));
+  }
+  const search = options.search?.trim();
+  if (search) {
+    params.set('search', search);
   }
   if (options.category) {
     params.set('category', options.category);
@@ -63,8 +98,20 @@ export function listServiceTickets(options: ListServiceTicketsOptions = {}) {
   if (options.archived) {
     params.set('archived', 'true');
   }
+  if (options.tab && options.tab !== 'all') {
+    params.set('tab', options.tab);
+  }
+  if (options.sort && options.sort !== 'urgency') {
+    params.set('sort', options.sort);
+  }
+  if (options.page && options.page > 1) {
+    params.set('page', String(options.page));
+  }
+  if (options.pageSize) {
+    params.set('pageSize', String(options.pageSize));
+  }
   const qs = params.toString();
-  return apiFetch<ServiceTicketView[]>(`${BASE}${qs ? `?${qs}` : ''}`);
+  return apiFetch<ServiceTicketListResponse>(`${BASE}${qs ? `?${qs}` : ''}`);
 }
 
 export function getServiceTicketStats() {
