@@ -4,7 +4,6 @@ import {
   TableBody,
   TableCell,
   TableFooter,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -25,14 +24,21 @@ import { UserX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCount, formatMoney } from "../owner-format";
 import { DataPanel } from "@/components/common/DataPanel";
+import { ColumnHead } from "./ColumnHead";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** Pinned so the loading state is the height of a typical board. */
 const SKELETON_ROWS = 6;
 
 /**
- * The owner's producer leaderboard (PAC-135): quotes, items bound and premium,
- * ranked by premium, reacting to every filter.
+ * The owner's producer leaderboard (PAC-135): quotes written, items bound and
+ * bound premium, ranked by premium, reacting to every filter.
+ *
+ * Every header names the thing *and* the unit, and reuses the KPI cards' words
+ * ("Items bound", "Bound premium") so a column and the card it sums to share a
+ * name. The first cut said "Bound" and "Total premium", and the owner could not
+ * tell whether Bound was deals, policies or items — it is items — while "Total"
+ * on a per-producer row read as a sum of something.
  *
  * Not the Motivation Hub's `GET /leaderboard`. That one shows a producer their
  * rank and deliberately **never a colleague's dollars**; this is the view that
@@ -76,12 +82,33 @@ export function ProducerLeaderboard({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-12 pl-5">#</TableHead>
-              <TableHead>Producer</TableHead>
-              <TableHead className="text-right">Quotes</TableHead>
-              <TableHead className="text-right">Bound</TableHead>
-              <TableHead className="text-right">Total premium</TableHead>
-              <TableHead className="pr-5 text-right">Goal progress</TableHead>
+              <ColumnHead
+                label="Rank"
+                hint="Position by bound premium in this period."
+                className="w-16 pl-5"
+              />
+              <ColumnHead label="Producer" />
+              <ColumnHead
+                label="Quotes written"
+                hint="Quote recaps this producer wrote in this period."
+                align="right"
+              />
+              <ColumnHead
+                label="Items bound"
+                hint="Insured items — cars, homes and the like — across every policy this producer sold in this period. The Items Bound card is the sum of this column."
+                align="right"
+              />
+              <ColumnHead
+                label="Bound premium"
+                hint="Premium on new business this producer sold in this period. The Total Bound Premium card is the sum of this column."
+                align="right"
+              />
+              <ColumnHead
+                label="Goal progress"
+                hint="How far this producer is toward their premium goal. Goals aren’t set up yet."
+                align="right"
+                className="pr-5"
+              />
             </TableRow>
           </TableHeader>
           <TableBody>

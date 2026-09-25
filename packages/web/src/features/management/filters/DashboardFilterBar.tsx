@@ -37,7 +37,7 @@ const POLICY_TYPE_OPTIONS = POLICY_TYPES.map((type) => ({
  * survives a refresh and can be sent to someone.
  *
  * What each filter reaches is stated where it applies rather than here: on the
- * Owner view the lead-source table's Vol column cannot take a line-of-business
+ * Owner view the lead-source table's New leads column cannot take a line-of-business
  * filter; on the Manager view the producer filter narrows the alert cards but
  * never the Team Activity roster.
  */

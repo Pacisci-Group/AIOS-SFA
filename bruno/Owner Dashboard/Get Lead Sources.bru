@@ -62,8 +62,9 @@ tests {
 docs {
   # GET /owner-dashboard/lead-sources — the lead-source matrix (PAC-135)
 
-  Per lead source: **Conv %** · **Vol** · **Premium**, plus a total row, for the
-  selected window.
+  Per lead source: **Closing ratio** (`convPct`) · **New leads** (`volume`) ·
+  **Bound premium** (`premium`), plus a total row, for the selected window.
+  Those are the web's column names; the field names below are unchanged.
 
   - **Module / permission / scope / query:** identical to
     `GET /owner-dashboard/summary` — see that request's docs.
