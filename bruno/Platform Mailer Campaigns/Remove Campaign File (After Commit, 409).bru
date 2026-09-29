@@ -1,0 +1,51 @@
+meta {
+  name: Remove Campaign File (After Commit, 409)
+  type: http
+  seq: 27
+}
+
+delete {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/files/{{campaignVendorFileId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("says why", function () {
+    expect(res.getBody().message).to.contain("commit");
+  });
+}
+
+docs {
+  # DELETE /platform/mailer-campaigns/:campaignId/files/:fileId — remove a file
+
+  Takes a vendor file off a campaign that has **not** committed, and reads the
+  remaining files again (back to `uploaded`, `previewAttempt` bumped).
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  ## Why this request is the refusal
+
+  The collection reaches this point with a campaign that has committed twice,
+  and that is the case worth a standing assertion: once any commit has run, the
+  file list is the record of what was imported, and removing a file would not
+  remove its rows from `mailers`. The correction is to add a corrected file, or
+  an overwrite from a new campaign.
+
+  ## Errors
+  - `400 Bad Request` — it is the campaign's last file. Delete the campaign
+    instead.
+  - `404 Not Found` — no file with that id on this campaign.
+  - `409 Conflict` — the campaign is `processing` / `imported` / `superseded`,
+    or a commit has run (`commitAttempt > 0`).
+}

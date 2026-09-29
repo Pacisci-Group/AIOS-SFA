@@ -1,0 +1,45 @@
+meta {
+  name: Commit Campaign (Re-commit, Append)
+  type: http
+  seq: 24
+}
+
+post {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/commit
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "mode": "append"
+  }
+}
+
+tests {
+  test("returns 202 Accepted", function () {
+    expect(res.getStatus()).to.equal(202);
+  });
+
+  test("moves to processing again", function () {
+    expect(res.getBody().status).to.equal("processing");
+  });
+}
+
+docs {
+  # POST /platform/mailer-campaigns/:campaignId/commit — the second commit (Add records)
+
+  Same endpoint and gates as `Commit Campaign (Append)`. Nothing about the
+  request differs; what differs is what the worker does with a campaign whose
+  `firstImportedAt` is set: alongside the full output it writes `newRowsFile`,
+  holding only the rows whose control number no mailer carried before this
+  commit, and the completion email links **that** file.
+}

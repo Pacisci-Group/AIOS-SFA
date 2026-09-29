@@ -203,10 +203,11 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     ManagementDashboardModule,
     LeaderboardModule,
     ActivitiesModule,
-    // Super Admin mailer imports (PAC-73). Registers the `mailers` and
-    // `mailerImportRuns` models so their indexes build; it routes on
-    // `platform/mailers`, so it does not collide with the `mailers` module
-    // stub still served by FeatureModulesModule for the agency-facing page.
+    // Mailers and mailer campaigns (PAC-73, PAC-71). Registers the `mailers`,
+    // `mailerCampaigns` and `mailerZipMarkets` models so their indexes build;
+    // it routes on `platform/mailers` and `platform/mailer-campaigns`, so it
+    // does not collide with the `mailers` module stub still served by
+    // FeatureModulesModule for the agency-facing page.
     MailersModule,
     // "Report a bug" (reporter side) + the Super Admin queue that reads it.
     // Routes on `bug-reports` and `platform/bug-reports`, neither of which is

@@ -79,6 +79,67 @@ export async function readCampaignFile(
 }
 
 /**
+ * Read every file of a campaign into **one** table (PAC-142).
+ *
+ * The files are concatenated in upload order, so the transform, the dedupe, the
+ * presort and the import all see one week's mail regardless of how many pieces
+ * the vendor delivered it in. Each file after the first is re-ordered onto the
+ * first file's columns by normalized header name, so column order may differ
+ * between files; the column **set** may not — a file missing or adding a
+ * column is refused, naming the file, because silently filling a column with
+ * blanks for half the rows is how 10,000 pieces go out with no premium.
+ *
+ * ⚠ Both the preview and the commit read through here. They must agree on the
+ * rows exactly, which is the whole reason this module exists.
+ */
+export async function readCampaignFiles(
+  storage: CampaignStorage,
+  files: readonly CampaignFileRef[],
+): Promise<VendorFileTable> {
+  if (files.length === 0) {
+    throw new Error('This campaign has no uploaded file.');
+  }
+  const first = await readCampaignFile(storage, files[0]);
+  if (files.length === 1) return first;
+
+  const keys = first.headers.map((header) => normalizeHeader(header));
+  const rows: unknown[][] = [...first.rows];
+
+  for (const file of files.slice(1)) {
+    const table = await readCampaignFile(storage, file);
+    const theirKeys = table.headers.map((header) => normalizeHeader(header));
+    const missing = keys.filter((key) => !theirKeys.includes(key));
+    const extra = theirKeys.filter((key) => !keys.includes(key));
+    if (missing.length > 0 || extra.length > 0) {
+      const problems = [
+        missing.length > 0 ? `missing ${listColumns(missing)}` : null,
+        extra.length > 0 ? `extra ${listColumns(extra)}` : null,
+      ]
+        .filter(Boolean)
+        .join('; ');
+      throw new Error(
+        `File "${file.name}" does not have the same columns as "${files[0].name}": ${problems}. Every file in a campaign must carry the same columns.`,
+      );
+    }
+    const positions = keys.map((key) => theirKeys.indexOf(key));
+    for (const row of table.rows) {
+      rows.push(positions.map((index) => row[index]));
+    }
+  }
+
+  return { headers: first.headers, rows };
+}
+
+/**
+ * A few column names, then a count. A vendor file has 130-odd columns, and an
+ * export missing most of them would otherwise produce an error nobody reads.
+ */
+function listColumns(columns: readonly string[], limit = 8): string {
+  if (columns.length <= limit) return columns.join(', ');
+  return `${columns.slice(0, limit).join(', ')} and ${columns.length - limit} more`;
+}
+
+/**
  * Positional rows as the header-keyed records the import engine takes.
  *
  * A generator, not an array: `importMailerRows` consumes lazily and batches its

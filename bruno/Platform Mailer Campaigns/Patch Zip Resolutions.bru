@@ -72,6 +72,13 @@ docs {
 
   Legal only in `uploaded`, `previewed` or `failed` — a `409` otherwise.
 
+  ⚠ Once the campaign has imported (`firstImportedAt` set) and is re-opened by
+  Add records, the settings are **locked**: the body may carry `settings` and
+  nothing else, and every settings field except `zipResolutions` must equal the
+  stored snapshot — `409 "Settings are locked once a campaign has imported; only
+  ZIP resolutions can be added."` otherwise. The settings are the record of how
+  the mailers were priced.
+
   ## What a PATCH does beyond storing the change
 
   1. **Writes `zipResolutions` into the platform ZIP → market table** with
@@ -84,9 +91,9 @@ docs {
 
   ## What cannot be changed
 
-  `source` and the uploaded file. Both describe the object in storage, and
-  changing either would leave the campaign describing a file it no longer points
-  at — a different file is a different campaign.
+  `source`, and the files — those have their own endpoints (`Add Campaign
+  Files`, `Remove Campaign File`), because adding one is the one change that is
+  also legal on an imported campaign.
 
   ## Body
   A partial pick of `{name, carrierId, campaignNumber, assignment, settings}`.

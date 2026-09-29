@@ -1,0 +1,57 @@
+meta {
+  name: Get Campaign (Re-imported)
+  type: http
+  seq: 25
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:pre-request {
+  await new Promise((resolve) => setTimeout(resolve, 8000));
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("imported again", function () {
+    expect(res.getBody().status).to.equal("imported");
+  });
+
+  test("updated the rows it already held and created the new one", function () {
+    const counts = res.getBody().importCounts;
+    expect(counts.created).to.equal(1);
+    expect(counts.updated).to.equal(2);
+    expect(counts.skipped).to.equal(1);
+  });
+
+  test("wrote a new-rows file for the mail house", function () {
+    const body = res.getBody();
+    expect(body.newRowsFile.name).to.equal("SFA-QBP-new-rows.csv");
+    expect(body.newRowsFile.size).to.be.above(0);
+    expect(body.newRowsFile).to.not.have.property("storageKey");
+    // The full output still has every row.
+    expect(body.outputFile.name).to.equal("SFA-QBP.csv");
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/:campaignId — after Add records committed
+
+  Same endpoint as `Get Campaign (Imported)`; see there. The outcome half of a
+  **re-commit**: `importCounts` describes this commit (created = the rows it
+  added, updated = the rows it already held), and `newRowsFile` is the print
+  file of the created rows only. Download it with `Get New Rows File URL`.
+
+  There is deliberately no per-commit history: the counts are the last
+  commit's, and the full `outputFile` is regenerated each time.
+}

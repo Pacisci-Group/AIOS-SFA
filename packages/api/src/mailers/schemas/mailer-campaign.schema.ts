@@ -94,9 +94,18 @@ export const MailerCampaignSettingsDocSchema = SchemaFactory.createForClass(
   MailerCampaignSettingsDoc,
 );
 
-/** A file held in object storage. The key never leaves the server. */
-@Schema({ _id: false })
+/**
+ * A file held in object storage. The key never leaves the server.
+ *
+ * Carries its own `_id` (PAC-142) so a client can name one file among a
+ * campaign's several — `DELETE …/files/:fileId`, `GET …/files/:fileId/url` —
+ * without ever seeing the key. When the central `files` collection lands
+ * (PAC-84) that id becomes the `files` row's; the wire shape does not change.
+ */
+@Schema()
 export class MailerCampaignFileDoc {
+  _id?: Types.ObjectId;
+
   /**
    * ⚠ A capability, not an identifier. It must never reach a DTO — the download
    * endpoint mints a short-lived presigned URL on click instead.
@@ -146,6 +155,21 @@ export const MailerCampaignFileDocSchema = SchemaFactory.createForClass(
  * set of campaigns being replaced are all checked against the numbers the
  * operator actually saw. A count that moved in between is a 409 they must look
  * at, never a silent proceed.
+ *
+ * ## Re-opening an imported campaign (PAC-142)
+ *
+ * `imported` is not terminal. `POST …/:id/files` on an imported campaign
+ * appends to `files`, drops it back to `uploaded`, and the same preview → commit
+ * runs again over **every** file: rows already held are updated in place, new
+ * rows are created, and `newRowsFile` carries only the latter. Nothing else
+ * changes shape — no run entity, no per-commit history; `importCounts` and
+ * `rejections` describe the last commit.
+ *
+ * ⚠ While re-opened, the campaign is `uploaded` / `previewed` although it still
+ * owns thousands of mailers, so for those minutes it drops out of the
+ * `existingCampaigns` check (`status ∈ imported | processing`) another
+ * same-week preview runs. Accepted: the window is short and the alternative
+ * was a second status axis.
  */
 @Schema({ timestamps: true, collection: 'mailerCampaigns' })
 export class MailerCampaign {
@@ -212,12 +236,40 @@ export class MailerCampaign {
   @Prop({ type: MailerCampaignSettingsDocSchema, default: null })
   settings: MailerCampaignSettingsDoc | null;
 
-  @Prop({ type: MailerCampaignFileDocSchema, default: null })
-  vendorFile: MailerCampaignFileDoc | null;
+  /**
+   * The uploaded vendor files, in upload order (PAC-142). Concatenated before
+   * the transform, so every file must carry the first one's column set — the
+   * preview fails naming the file otherwise.
+   */
+  @Prop({ type: [MailerCampaignFileDocSchema], default: [] })
+  files: MailerCampaignFileDoc[];
 
-  /** The 132-column print CSV. Same object as the vendor file on `processed`. */
+  /**
+   * The 132-column print CSV over every file. The same object as the single
+   * vendor file on a one-file `processed` campaign that has never imported.
+   */
   @Prop({ type: MailerCampaignFileDocSchema, default: null })
   outputFile: MailerCampaignFileDoc | null;
+
+  /**
+   * Only the rows the last commit **created** — written when a campaign that
+   * had already imported is committed again (files were added). `null` on a
+   * first commit. This is what the completion email links after Add records,
+   * so the mail house never re-prints a row already mailed.
+   */
+  @Prop({ type: MailerCampaignFileDocSchema, default: null })
+  newRowsFile: MailerCampaignFileDoc | null;
+
+  /**
+   * When the campaign first reached `imported`. Set once in `finalize`, never
+   * cleared. `finishedAt` cannot serve — it is stamped on failure too.
+   *
+   * Everything about a re-opened campaign hangs off this: settings are locked
+   * (ZIP resolutions excepted), files may be added, files may not be removed,
+   * the record may not be deleted, and the commit writes `newRowsFile`.
+   */
+  @Prop({ type: Date, default: null })
+  firstImportedAt: Date | null;
 
   @Prop({ type: Object, default: null })
   stats: MailerCampaignStats | null;

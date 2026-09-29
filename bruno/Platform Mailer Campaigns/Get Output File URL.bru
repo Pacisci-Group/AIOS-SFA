@@ -30,9 +30,10 @@ tests {
 docs {
   # GET /platform/mailer-campaigns/:campaignId/files/:kind/url — download a file
 
-  `:kind` is `vendor` (what was uploaded) or `output` (the 132-column print
-  CSV). Both files are retained: the vendor file is the only way to re-import
-  after a mapping bug, and the output is what goes to print.
+  `:kind` is `output` (the full 132-column print CSV), `new-rows` (only the rows
+  the last commit created, after Add records), or a vendor file's `id` from
+  `files[]`. Every file is retained: the vendor files are the only way to
+  re-import after a mapping bug, and the outputs are what went to print.
 
   - **Module:** none (`@SkipModule()`)
   - **Permission:** `platform:mailers:read`
@@ -61,7 +62,8 @@ docs {
 
   ## Errors
   - `401` / `403` — missing token, or missing `platform:mailers:read`.
-  - `404 Not Found` — no such campaign, or that campaign has no file of that
-    kind (an `output` before the commit has run).
+  - `404 Not Found` — no such campaign, no file with that id, or that campaign
+    has no file of that kind (an `output` before the commit has run, or
+    `new-rows` on a campaign that has only committed once).
   - `503 Service Unavailable` — object storage is not configured.
 }

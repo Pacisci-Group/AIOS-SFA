@@ -2,10 +2,20 @@
  * Mailer campaigns (PAC-71).
  *
  * A **campaign** is one run of a vendor mail file: the operator uploads the
- * file the data/print vendor returned, we run the SFA-Processor transform
+ * file(s) the data/print vendor returned, we run the SFA-Processor transform
  * ourselves, write the resulting {@link MailerLookupView | mailers}, produce the
- * 132-column print CSV, and keep the whole thing — settings, stats, both files —
+ * 132-column print CSV, and keep the whole thing — settings, stats, every file —
  * on one record so the run is reproducible from its own document.
+ *
+ * ## Several files, and a second pass (PAC-142)
+ *
+ * A campaign holds a **list** of vendor files, concatenated before the
+ * transform. An `imported` campaign can be re-opened by adding files: it goes
+ * through preview and commit again over all of them, existing rows are updated
+ * in place, new rows are created, and the commit also writes a CSV of only the
+ * rows it created for the mail house. Settings are locked from the first import
+ * on (ZIP resolutions excepted). There is deliberately no per-commit history —
+ * `importCounts` describes the last commit.
  *
  * ## A campaign is run once and can serve many agencies
  *
@@ -69,6 +79,11 @@ export interface MailerDiscountRules {
  * terminal and is only ever set on a campaign an **overwrite** replaced — the
  * record is kept rather than deleted, because leads still point at it through
  * `Lead.mailer.campaignId`.
+ *
+ * `imported` is **not** terminal (PAC-142): adding files to an imported
+ * campaign takes it back to `uploaded`, and it is previewed and committed
+ * again over every file it holds. `firstImportedAt` records that it has been
+ * through a commit before, whatever its status says now.
  */
 export type MailerCampaignStatus =
   | 'uploaded'
@@ -170,8 +185,13 @@ export interface MailerCampaignSettings {
  *
  * ⚠ **Never carries the storage key.** A key is a capability: the download
  * endpoint mints a short-lived presigned URL on click instead.
+ *
+ * `id` is how a client names one file among a campaign's several — today the
+ * embedded subdocument's id, later the central `files` row (PAC-84). Naming it
+ * `id` now is what lets that swap happen without touching the web contract.
  */
 export interface MailerCampaignFile {
+  id: string;
   name: string;
   size: number;
   sha256?: string;
@@ -280,6 +300,19 @@ export interface MailerCampaignPreview {
   overlap: {
     /** Rows of this file that already exist under some other campaign. */
     existingInOtherCampaigns: number;
+    /**
+     * Rows of this file that **this** campaign already owns (PAC-142).
+     *
+     * Non-zero only on a re-opened campaign: the operator added files to an
+     * imported campaign, and these are the rows the new commit will *update*
+     * rather than create — and will leave out of the new-rows print file.
+     */
+    existingInThisCampaign: number;
+    /**
+     * Rows of this file held by no campaign at all — what the commit will
+     * create, and exactly what a re-commit's `newRowsFile` will contain.
+     */
+    newRows: number;
     /** Total mailers currently held by the campaigns an overwrite would replace. */
     replacedRecordCount: number;
     /**
@@ -324,8 +357,27 @@ export interface MailerCampaign {
   /** Distinct `agencyname` values, paired with the above for display. */
   carrierAgencyNames: string[];
   settings: MailerCampaignSettings | null;
-  vendorFile: MailerCampaignFile | null;
+  /**
+   * The uploaded vendor files, in upload order (PAC-142). One or more; they
+   * are concatenated before the transform, so they must share a column set.
+   */
+  files: MailerCampaignFile[];
+  /** The full print CSV over every file. */
   outputFile: MailerCampaignFile | null;
+  /**
+   * Only the rows the **last** commit created, written when a campaign that
+   * had already imported is committed again after files were added. `null`
+   * on a first commit — the full output *is* the new rows then. This is the
+   * file the mail house gets after "Add records", so nothing already mailed
+   * is printed twice.
+   */
+  newRowsFile: MailerCampaignFile | null;
+  /**
+   * When the campaign first reached `imported`. Set once, never cleared. This
+   * is what locks the settings, allows Add records, refuses delete, and tells
+   * the commit to write `newRowsFile`.
+   */
+  firstImportedAt: string | null;
   stats: MailerCampaignStats | null;
   preview: MailerCampaignPreview | null;
   importCounts: MailerCampaignImportCounts | null;

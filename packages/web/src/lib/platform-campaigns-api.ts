@@ -24,7 +24,10 @@ import { uploadToPresignedUrl } from '@/lib/presigned-upload';
  * `presign` → the browser `PUT`s the bytes straight to object storage →
  * `POST /platform/mailer-campaigns`. The file never passes through the API,
  * which is why nothing here posts a `FormData`. {@link createCampaign} runs the
- * whole chain so a caller cannot do two thirds of it.
+ * whole chain so a caller cannot do two thirds of it — for every file, since a
+ * campaign takes several (PAC-142). {@link addCampaignFiles} runs the same
+ * chain against an existing campaign, which on an imported one is **Add
+ * records**: the campaign re-opens and is previewed and committed again.
  */
 
 export type {
@@ -85,12 +88,48 @@ export function isCampaignWorking(status: MailerCampaignStatus): boolean {
  * Where a `PATCH` or a re-preview is still allowed — the mirror of the API's
  * `EDITABLE_STATUSES`.
  *
- * Nothing has been written yet in any of these, which is the whole rule: once a
- * commit has run, the settings that produced the mailers are the record of how
- * they were priced and must not move under them.
+ * A campaign that has imported once comes back through these states when files
+ * are added to it, but its settings are then the record of how its mailers were
+ * priced: the API refuses every change except a new ZIP resolution. Check
+ * {@link areSettingsLocked} before offering the settings form.
  */
 export function isCampaignEditable(status: MailerCampaignStatus): boolean {
   return status === 'uploaded' || status === 'previewed' || status === 'failed';
+}
+
+/** Settings are locked from the first import on (PAC-142). */
+export function areSettingsLocked(campaign: MailerCampaign): boolean {
+  return campaign.firstImportedAt !== null;
+}
+
+/**
+ * Whether more files may be added — the mirror of the API's `ADD_FILES_STATUSES`.
+ *
+ * The editable states plus `imported`, which is what makes this Add records.
+ * Never while the worker holds the file list (`processing`), never after an
+ * overwrite replaced it (`superseded`), and never on a campaign that was not an
+ * upload in the first place.
+ */
+export function canAddFiles(campaign: MailerCampaign): boolean {
+  return (
+    (isCampaignEditable(campaign.status) || campaign.status === 'imported') &&
+    (campaign.source === 'vendor' || campaign.source === 'processed')
+  );
+}
+
+/**
+ * Whether a file may still be taken off the campaign.
+ *
+ * Only before any commit: from then on the file list is the record of what was
+ * imported, and removing one would not remove its rows. `commitMode` is set by
+ * the first commit and never cleared, so it stands in for "a commit has run".
+ */
+export function canRemoveFiles(campaign: MailerCampaign): boolean {
+  return (
+    isCampaignEditable(campaign.status) &&
+    campaign.commitMode === null &&
+    campaign.files.length > 1
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -172,18 +211,21 @@ export function listCampaignRecords(
 }
 
 /**
- * Mint a short-lived download link for one of the campaign's two files.
+ * Which stored file a download names: the full print CSV, the rows the last
+ * commit created (after Add records), or an uploaded vendor file by its `id`.
+ */
+export type CampaignFileKind = 'output' | 'new-rows' | (string & {});
+
+/**
+ * Mint a short-lived download link for one of the campaign's files.
  *
  * Fetched **after** the click rather than rendered as an `href`, so the link is
  * never followed by something that prefetches the route. Pair it with
  * `openDocumentInNewTab`, which handles the popup blocker.
  */
-export function getCampaignFileUrl(
-  campaignId: string,
-  kind: 'vendor' | 'output',
-) {
+export function getCampaignFileUrl(campaignId: string, kind: CampaignFileKind) {
   return apiFetch<MailerCampaignFileUrl>(
-    `/platform/mailer-campaigns/${encodeURIComponent(campaignId)}/files/${kind}/url`,
+    `/platform/mailer-campaigns/${encodeURIComponent(campaignId)}/files/${encodeURIComponent(kind)}/url`,
   );
 }
 
@@ -199,7 +241,8 @@ interface PresignResponse {
 }
 
 export interface CreateCampaignInput {
-  file: File;
+  /** One or more vendor files with the same columns. Uploaded in this order. */
+  files: File[];
   name?: string;
   carrierId?: string;
   /** `vendor` runs the transform; `processed` imports the file as it stands. */
@@ -209,40 +252,91 @@ export interface CreateCampaignInput {
   settings: MailerCampaignSettings;
 }
 
+/** What `files[]` on the API takes for one uploaded object. */
+interface UploadedFileRef {
+  storageKey: string;
+  uploadedFilename: string;
+  size: number;
+}
+
+/**
+ * Presign and PUT each file, in order, and describe them the way `files[]`
+ * wants. Sequential on purpose: a 23 MB vendor file already saturates an
+ * office upload, and parallel PUTs would only make every one of them slower.
+ */
+async function uploadFiles(files: File[]): Promise<UploadedFileRef[]> {
+  const refs: UploadedFileRef[] = [];
+  for (const file of files) {
+    const presigned = await apiFetch<PresignResponse>(
+      '/platform/mailer-campaigns/presign',
+      {
+        method: 'POST',
+        body: JSON.stringify({ filename: file.name, size: file.size }),
+      },
+    );
+    await uploadToPresignedUrl(
+      presigned.uploadUrl,
+      presigned.requiredHeaders,
+      file,
+    );
+    refs.push({
+      storageKey: presigned.key,
+      uploadedFilename: file.name,
+      size: file.size,
+    });
+  }
+  return refs;
+}
+
 /**
  * Presign, upload the bytes, and record the campaign.
  *
  * Returns a campaign in `uploaded` with the preview job already dispatched.
  * Nothing is written to `mailers` by this or by the job it starts — the
- * operator sees what the file contains before deciding.
+ * operator sees what the files contain before deciding.
  */
 export async function createCampaign({
-  file,
+  files,
   ...rest
 }: CreateCampaignInput): Promise<MailerCampaign> {
-  const presigned = await apiFetch<PresignResponse>(
-    '/platform/mailer-campaigns/presign',
-    {
-      method: 'POST',
-      body: JSON.stringify({ filename: file.name, size: file.size }),
-    },
-  );
-
-  await uploadToPresignedUrl(
-    presigned.uploadUrl,
-    presigned.requiredHeaders,
-    file,
-  );
-
+  const uploaded = await uploadFiles(files);
   return apiFetch<MailerCampaign>('/platform/mailer-campaigns', {
     method: 'POST',
-    body: JSON.stringify({
-      ...rest,
-      storageKey: presigned.key,
-      uploadedFilename: file.name,
-      size: file.size,
-    }),
+    body: JSON.stringify({ ...rest, files: uploaded }),
   });
+}
+
+/**
+ * Upload more files onto an existing campaign (PAC-142).
+ *
+ * Before a commit this is "I forgot the second file". On an `imported`
+ * campaign it is **Add records**: the campaign drops back to `uploaded`, is
+ * previewed again over every file, and is committed again — rows already
+ * imported are updated in place, and the commit writes the rows it created to
+ * a separate print file for the mail house.
+ */
+export async function addCampaignFiles(
+  campaignId: string,
+  files: File[],
+): Promise<MailerCampaign> {
+  const uploaded = await uploadFiles(files);
+  return apiFetch<MailerCampaign>(
+    `/platform/mailer-campaigns/${encodeURIComponent(campaignId)}/files`,
+    { method: 'POST', body: JSON.stringify({ files: uploaded }) },
+  );
+}
+
+/**
+ * Take a file off a campaign that has not committed, and re-preview.
+ *
+ * Refused by the API once any commit has run, and for the last file — a
+ * campaign with no file is a campaign to delete. See {@link canRemoveFiles}.
+ */
+export function removeCampaignFile(campaignId: string, fileId: string) {
+  return apiFetch<MailerCampaign>(
+    `/platform/mailer-campaigns/${encodeURIComponent(campaignId)}/files/${encodeURIComponent(fileId)}`,
+    { method: 'DELETE' },
+  );
 }
 
 export interface UpdateCampaignInput {
@@ -308,10 +402,11 @@ export function emailCampaignOutput(
 }
 
 /**
- * Discard a campaign that never imported.
+ * Discard a campaign that never committed.
  *
- * Refused once a campaign is `imported`: `Lead.mailer.campaignId` points at it,
- * and attribution outliving the run is the whole reason the record exists.
+ * Refused once a commit has run, whatever the status: `Lead.mailer.campaignId`
+ * points at it, and attribution outliving the run is the whole reason the
+ * record exists.
  */
 export function deleteCampaign(campaignId: string) {
   return apiFetch<{ deleted: true }>(
