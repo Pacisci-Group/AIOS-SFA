@@ -98,31 +98,53 @@ describe('MailerCampaignPreviewFn (e2e)', () => {
     ...overrides,
   });
 
-  /** Put a file in storage and record a campaign pointing at it. */
-  const upload = async (
-    body: Buffer,
-    filename: string,
-    campaign: Record<string, unknown> = {},
-  ): Promise<MailerCampaignDocument> => {
+  /** Put a file in storage, as the campaign's `files[]` describes one. */
+  const stageFile = async (body: Buffer, filename: string) => {
     const key = storage.buildPlatformObjectKey({
       purpose: 'mailer-campaigns',
       filename,
       parts: ['vendor'],
     });
     await storage.putObject(key, body, 'text/csv');
+    return { storageKey: key, name: filename, size: body.byteLength };
+  };
+
+  /** Record a campaign holding several files. */
+  const uploadMany = async (
+    files: { body: Buffer; filename: string }[],
+    campaign: Record<string, unknown> = {},
+  ): Promise<MailerCampaignDocument> => {
+    const staged: { storageKey: string; name: string; size: number }[] = [];
+    for (const file of files) {
+      staged.push(await stageFile(file.body, file.filename));
+    }
     return campaigns.create({
       carrierId: allstateId,
-      name: `Preview ${filename}`,
+      name: `Preview ${files[0]?.filename ?? 'empty'}`,
       campaignNumber: 'Week_Number-29',
       year: 2026,
       status: 'uploaded',
       source: 'vendor',
       assignment: { mode: 'carrier_agency_id', agencyIds: [] },
       settings: settings(),
-      vendorFile: { storageKey: key, name: filename, size: body.byteLength },
+      files: staged,
       previewAttempt: 1,
       ...campaign,
     });
+  };
+
+  /** Put a file in storage and record a campaign pointing at it. */
+  const upload = (
+    body: Buffer,
+    filename: string,
+    campaign: Record<string, unknown> = {},
+  ): Promise<MailerCampaignDocument> =>
+    uploadMany([{ body, filename }], campaign);
+
+  /** The fixture's data rows `[from, to)` as a CSV under the fixture header. */
+  const slice = (from: number, to: number): Buffer => {
+    const lines = csv.toString('utf8').trim().split(/\r?\n/);
+    return Buffer.from([lines[0], ...lines.slice(from, to)].join('\n'), 'utf8');
   };
 
   const run = async (campaign: MailerCampaignDocument, attempt = 1) => {
@@ -330,6 +352,113 @@ describe('MailerCampaignPreviewFn (e2e)', () => {
     expect(preview.rejections[0].reason).toContain('A0B9049');
   });
 
+  it('reads several files as one campaign', async () => {
+    const whole = await run(await upload(csv, 'rtp-sample.csv'));
+    const lines = csv.toString('utf8').trim().split(/\r?\n/).length;
+
+    const split = await run(
+      await uploadMany([
+        { body: slice(1, 100), filename: 'part-1.csv' },
+        { body: slice(100, lines), filename: 'part-2.csv' },
+      ]),
+    );
+
+    expect(split?.status).toBe('previewed');
+    const a = whole?.preview as MailerCampaignPreview;
+    const b = split?.preview as MailerCampaignPreview;
+    // Two files, one week: the transform sees exactly the rows it would have
+    // seen in one file, in the same order.
+    expect(b.stats).toEqual(a.stats);
+    expect(b.assignment).toEqual(a.assignment);
+    expect(b.unmatchedZips).toEqual(a.unmatchedZips);
+  });
+
+  it('accepts a second file whose columns are in a different order', async () => {
+    const lines = csv.toString('utf8').trim().split(/\r?\n/);
+    const header = parseCsvLine(lines[0]);
+    const rows = lines.slice(100).map(parseCsvLine);
+    // Reverse every column of the second file.
+    const reversed = [
+      header.slice().reverse(),
+      ...rows.map((row) => row.slice().reverse()),
+    ]
+      .map((row) =>
+        row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(','),
+      )
+      .join('\n');
+
+    const whole = await run(await upload(csv, 'rtp-sample.csv'));
+    const split = await run(
+      await uploadMany([
+        { body: slice(1, 100), filename: 'part-1.csv' },
+        {
+          body: Buffer.from(reversed, 'utf8'),
+          filename: 'part-2-reversed.csv',
+        },
+      ]),
+    );
+
+    expect(split?.status).toBe('previewed');
+    expect((split?.preview as MailerCampaignPreview).stats).toEqual(
+      (whole?.preview as MailerCampaignPreview).stats,
+    );
+  });
+
+  it('fails naming the file whose columns do not match the first', async () => {
+    const campaign = await uploadMany([
+      { body: slice(1, 50), filename: 'good.csv' },
+      {
+        body: Buffer.from('controlno,firstname\n#z,Zed\n', 'utf8'),
+        filename: 'thin.csv',
+      },
+    ]);
+    // Rethrown after the record is marked, as every preview failure is: the
+    // record is what the operator sees, the throw is what makes Inngest retry.
+    await expect(run(campaign)).rejects.toThrow(/thin\.csv/);
+    const after = await campaigns.findById(campaign._id).lean();
+
+    // Silently filling a column with blanks for half the rows is how 10,000
+    // pieces go out with no premium, so the file is refused — and named.
+    expect(after?.status).toBe('failed');
+    expect(after?.error).toContain('thin.csv');
+    expect(after?.error).toContain('good.csv');
+    // A few names and a count, not 130 column names.
+    expect(after?.error).toMatch(/missing .* and \d+ more/);
+  });
+
+  it('separates rows this campaign already owns from rows that are new', async () => {
+    // A baseline over an empty collection: every keyed row is new.
+    const baseline = (await run(await upload(csv, 'rtp-sample.csv')))
+      ?.preview as MailerCampaignPreview;
+    expect(baseline.overlap.newRows).toBeGreaterThan(100);
+    expect(baseline.overlap.existingInThisCampaign).toBe(0);
+
+    // The same campaign re-opened by Add records: it already holds one of the
+    // file's rows.
+    const reopened = await upload(csv, 'rtp-sample.csv', {
+      firstImportedAt: new Date(),
+    });
+    const rows = csv.toString('utf8').split(/\r?\n/);
+    const owned = parseCsvLine(rows[1])[
+      rows[0].split(',').indexOf('controlno')
+    ];
+    await mailers.create({
+      campaignId: reopened._id.toString(),
+      visibleAgencyIds: null,
+      controlNumberKeys: [normalizeKey(owned)],
+      source: { system: 'spreadsheet' },
+    });
+
+    const preview = (await run(reopened))?.preview as MailerCampaignPreview;
+    expect(preview.overlap.existingInThisCampaign).toBe(1);
+    expect(preview.overlap.existingInOtherCampaigns).toBe(0);
+    // One fewer new row than the baseline: the owned row will be updated, not
+    // created, and stays out of the new-rows print file.
+    expect(preview.overlap.newRows).toBe(baseline.overlap.newRows - 1);
+    // A re-opened campaign is not "another campaign for this week".
+    expect(preview.existingCampaigns).toEqual([]);
+  });
+
   it('counts the overlap with a campaign already holding these rows', async () => {
     const existing = await campaigns.create({
       carrierId: allstateId,
@@ -370,6 +499,7 @@ describe('MailerCampaignPreviewFn (e2e)', () => {
       }),
     ]);
     expect(preview.overlap.existingInOtherCampaigns).toBe(1);
+    expect(preview.overlap.existingInThisCampaign).toBe(0);
     expect(preview.overlap.replacedRecordCount).toBe(2);
     // Only the row the new file does not carry would be deleted.
     expect(preview.overlap.deleteCountIfOverwrite).toBe(1);

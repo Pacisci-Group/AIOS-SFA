@@ -23,6 +23,14 @@ export interface MailerCampaignOutputData {
   outputRows: number;
   /** Mailers now searchable by control number — created plus updated. */
   recordCount: number;
+  /**
+   * The linked file holds **only the rows this commit added** (PAC-142): the
+   * campaign had already printed once, and the operator added the records it
+   * missed. The copy says so, because a printer who mails a "new rows" file as
+   * if it were the week's full run has under-mailed, and one who mails the full
+   * run twice has double-mailed.
+   */
+  newRowsOnly?: boolean;
   /** Time-limited presigned link. A bearer capability — see the class note. */
   downloadUrl: string;
   downloadExpiresAt: string;
@@ -101,19 +109,25 @@ export const mailerCampaignOutputTemplate: Template<MailerCampaignOutputData> =
   {
     key: 'mailerCampaignOutput',
 
-    subject: (data) => `Mail file ready: ${campaignLine(data)}`,
+    subject: (data) =>
+      data.newRowsOnly
+        ? `Mail file ready (new rows only): ${campaignLine(data)}`
+        : `Mail file ready: ${campaignLine(data)}`,
 
     render: (data) => {
       const expiry = formatExpiry(data.downloadExpiresAt);
       const heading = campaignLine(data);
+      const fileLine = data.newRowsOnly
+        ? `The print file ${data.fileName} contains only the ${count(data.outputRows)} new records added to this campaign since it last printed — nothing already mailed is in it. ${count(data.recordCount)} mailers are now searchable by control number in the agencies this campaign is visible to.`
+        : `The print file ${data.fileName} contains ${count(data.outputRows)} records, and ${count(data.recordCount)} mailers are now searchable by control number in the agencies this campaign is visible to.`;
 
       const html = layout({
-        preheader: `${count(data.outputRows)} records ready to print.`,
+        preheader: data.newRowsOnly
+          ? `${count(data.outputRows)} new records ready to print.`
+          : `${count(data.outputRows)} records ready to print.`,
         body: [
           paragraph(`${heading} has finished importing.`),
-          paragraph(
-            `The print file ${data.fileName} contains ${count(data.outputRows)} records, and ${count(data.recordCount)} mailers are now searchable by control number in the agencies this campaign is visible to.`,
-          ),
+          paragraph(fileLine),
           button('Download the print file', data.downloadUrl),
           muted(`This download link expires on ${expiry}.`),
           // Buttons are stripped or unclickable in a few clients, so the raw
@@ -133,9 +147,7 @@ export const mailerCampaignOutputTemplate: Template<MailerCampaignOutputData> =
       const text = [
         `${heading} has finished importing.`,
         '',
-        `The print file ${data.fileName} contains ${count(data.outputRows)} records,`,
-        `and ${count(data.recordCount)} mailers are now searchable by control number`,
-        'in the agencies this campaign is visible to.',
+        fileLine,
         '',
         'Download the print file:',
         data.downloadUrl,

@@ -51,7 +51,7 @@ import {
   columnIndex,
   failCampaign,
   loadZipMarkets,
-  readCampaignFile,
+  readCampaignFiles,
   rowsAsRecords,
   summarizeCarrierCodes,
   type StepLike,
@@ -182,13 +182,12 @@ export class MailerCampaignPreviewFn implements InngestFunctionProvider {
     campaign: MailerCampaignDocument,
   ): Promise<PreviewSummary> {
     const campaignId = campaign._id.toString();
-    if (!campaign.vendorFile) {
-      throw new Error('This campaign has no uploaded file.');
-    }
 
-    const { headers, rows } = await readCampaignFile(
+    // Every file, as one table. A file whose columns differ from the first is
+    // refused here, naming it — see `readCampaignFiles`.
+    const { headers, rows } = await readCampaignFiles(
       this.storage,
-      campaign.vendorFile,
+      campaign.files,
     );
 
     // --- Column contract ---------------------------------------------------
@@ -287,6 +286,8 @@ export class MailerCampaignPreviewFn implements InngestFunctionProvider {
       existingCampaigns: overlap.existingCampaigns,
       overlap: {
         existingInOtherCampaigns: overlap.existingInOtherCampaigns,
+        existingInThisCampaign: overlap.existingInThisCampaign,
+        newRows: overlap.newRows,
         replacedRecordCount: overlap.replacedRecordCount,
         deleteCountIfOverwrite: overlap.deleteCountIfOverwrite,
       },
@@ -321,18 +322,24 @@ export class MailerCampaignPreviewFn implements InngestFunctionProvider {
   /**
    * Which imported campaigns this file collides with, and by how much.
    *
-   * Two different questions, and the preview shows both:
+   * Four different questions, and the preview shows all of them:
    *
    * - `existingInOtherCampaigns` — rows of *this* file some other campaign
    *   already owns. On an append those rows move here and the other campaign's
    *   live count drops, which is worth seeing beforehand.
+   * - `existingInThisCampaign` — rows this campaign already owns (PAC-142).
+   *   Non-zero only on a re-opened campaign; these will be updated in place and
+   *   left out of the new-rows print file.
+   * - `newRows` — rows nobody owns: what the commit will create, and exactly
+   *   what a re-commit's `newRowsFile` will contain.
    * - `deleteCountIfOverwrite` — rows the *replaced* campaigns hold that this
    *   file does **not** contain. Those are what an overwrite deletes, and the
    *   number the operator has to confirm.
    *
    * ⚠ Keys are chunked rather than sent as one `$in`: a 20,000-row file carries
    * up to 40,000 keys, and one query built from all of them approaches the
-   * 16 MB command limit.
+   * 16 MB command limit. A mailer is counted once even when both of its keys
+   * land in different chunks.
    */
   private async measureOverlap(
     campaign: MailerCampaignDocument,
@@ -340,6 +347,8 @@ export class MailerCampaignPreviewFn implements InngestFunctionProvider {
   ): Promise<{
     existingCampaigns: MailerCampaignConflict[];
     existingInOtherCampaigns: number;
+    existingInThisCampaign: number;
+    newRows: number;
     replacedRecordCount: number;
     deleteCountIfOverwrite: number;
   }> {
@@ -360,38 +369,47 @@ export class MailerCampaignPreviewFn implements InngestFunctionProvider {
 
     const controlColumn = columnIndex(processed.headers, 'controlno');
     const shortColumn = columnIndex(processed.headers, 'newcontrolnumber');
-    const keys = new Set<string>();
-    for (const row of processed.rows) {
-      for (const key of mailerControlNumberKeys(
+    const rowKeys = processed.rows.map((row) =>
+      mailerControlNumberKeys(
         controlColumn >= 0 ? row[controlColumn] : undefined,
         shortColumn >= 0 ? row[shortColumn] : undefined,
-      )) {
-        keys.add(key);
-      }
-    }
+      ),
+    );
+    const keys = new Set<string>(rowKeys.flat());
 
-    // Rows of this file already held somewhere else, grouped by owner.
+    // Every mailer already holding one of this file's keys, by owner — and
+    // the keys themselves, so each row can be classified afterwards.
     const matchedByCampaign = new Map<string, number>();
+    const matchedKeys = new Set<string>();
+    const seenMailers = new Set<string>();
     for (const batch of chunk([...keys])) {
-      const groups = await this.mailerModel.aggregate<{
-        _id: string;
-        n: number;
-      }>([
-        {
-          $match: {
-            controlNumberKeys: { $in: batch, $type: 'string' },
-            campaignId: { $ne: campaignId },
-          },
-        },
-        { $group: { _id: '$campaignId', n: { $sum: 1 } } },
-      ]);
-      for (const group of groups) {
+      const inBatch = new Set(batch);
+      const held = await this.mailerModel
+        .find({ controlNumberKeys: { $in: batch, $type: 'string' } })
+        .select({ campaignId: 1, controlNumberKeys: 1 })
+        .lean();
+      for (const mailer of held) {
+        for (const key of mailer.controlNumberKeys ?? []) {
+          if (inBatch.has(key)) matchedKeys.add(key);
+        }
+        const id = mailer._id.toString();
+        if (seenMailers.has(id)) continue;
+        seenMailers.add(id);
         matchedByCampaign.set(
-          group._id,
-          (matchedByCampaign.get(group._id) ?? 0) + group.n,
+          mailer.campaignId,
+          (matchedByCampaign.get(mailer.campaignId) ?? 0) + 1,
         );
       }
     }
+
+    // This campaign's own rows are not "other", and are not new either.
+    const existingInThisCampaign = matchedByCampaign.get(campaignId) ?? 0;
+    matchedByCampaign.delete(campaignId);
+    // A row is new when it carries a key and none of its keys is held. Rows
+    // with no key are neither: the import rejects them.
+    const newRows = rowKeys.filter(
+      (row) => row.length > 0 && row.every((key) => !matchedKeys.has(key)),
+    ).length;
 
     const existingIds = existing.map((row) => row._id.toString());
     const counts = await this.mailerModel.aggregate<{ _id: string; n: number }>(
@@ -424,6 +442,8 @@ export class MailerCampaignPreviewFn implements InngestFunctionProvider {
         (total, n) => total + n,
         0,
       ),
+      existingInThisCampaign,
+      newRows,
       replacedRecordCount,
       // Rows the replaced campaigns hold that this file does not carry. Never
       // negative: `matchedInReplaced` counts a subset of `replacedRecordCount`.
@@ -458,6 +478,8 @@ export class MailerCampaignPreviewFn implements InngestFunctionProvider {
       existingCampaigns: [],
       overlap: {
         existingInOtherCampaigns: 0,
+        existingInThisCampaign: 0,
+        newRows: 0,
         replacedRecordCount: 0,
         deleteCountIfOverwrite: 0,
       },

@@ -12,6 +12,7 @@ import {
   mailerControlNumberKey,
   type MailerCampaign as MailerCampaignDto,
   type MailerCampaignDefaults,
+  type MailerCampaignFile,
   type MailerCampaignFileUrl,
   type MailerCampaignListItem,
   type MailerCampaignListResponse,
@@ -56,20 +57,24 @@ import { Lead, type LeadDocument } from '../leads/schemas/lead.schema';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
 import { StorageService } from '../storage/storage.service';
 import { User, type UserDocument } from '../users/schemas/user.schema';
-import type {
-  CampaignRecordsDto,
-  CommitCampaignDto,
-  CreateCampaignDto,
-  EmailOutputDto,
-  ListCampaignsDto,
-  PresignCampaignFileDto,
-  UpdateCampaignDto,
+import {
+  MAX_CAMPAIGN_FILES,
+  type AddCampaignFilesDto,
+  type CampaignFileDto,
+  type CampaignRecordsDto,
+  type CommitCampaignDto,
+  type CreateCampaignDto,
+  type EmailOutputDto,
+  type ListCampaignsDto,
+  type PresignCampaignFileDto,
+  type UpdateCampaignDto,
 } from './dto/mailer-campaign.dto';
 import { MailerZipMarketsService } from './mailer-zip-markets.service';
 import { Mailer, type MailerDocument } from './schemas/mailer.schema';
 import {
   MailerCampaign,
   type MailerCampaignDocument,
+  type MailerCampaignFileDoc,
 } from './schemas/mailer-campaign.schema';
 
 /**
@@ -96,6 +101,19 @@ const APEX_DEFAULT_SETTINGS: MailerCampaignSettings = {
 const EDITABLE_STATUSES = ['uploaded', 'previewed', 'failed'] as const;
 
 /**
+ * Statuses a file may be added in: the editable ones, plus `imported`.
+ *
+ * Adding a file to an imported campaign is **Add records** (PAC-142) — the one
+ * change that re-opens a finished run. `processing` is excluded because the
+ * worker is reading the file list right now, and `superseded` because its rows
+ * belong to the campaign that replaced it.
+ */
+const ADD_FILES_STATUSES = [...EDITABLE_STATUSES, 'imported'] as const;
+
+/** Sources whose files came through the upload flow, and can take more. */
+const UPLOADED_SOURCES = ['vendor', 'processed'] as const;
+
+/**
  * The request-bound half of mailer campaigns (PAC-71).
  *
  * Presign, record, gate, report. **Nothing here parses a file or writes a
@@ -103,6 +121,14 @@ const EDITABLE_STATUSES = ['uploaded', 'previewed', 'failed'] as const;
  * for, so the transform and the import run in the worker
  * (`worker/functions/mailer-campaign-*.fn.ts`) and this service dispatches to
  * them and re-checks what they produced.
+ *
+ * ## Files go through two doors (PAC-142, and PAC-84 to come)
+ *
+ * Every uploaded object enters through {@link verifyUploadedFiles} and leaves
+ * through {@link discardFileObjects} — `create`, `addFiles`, `removeFile` and
+ * `remove` all call those rather than touching storage themselves. That is
+ * deliberate: the central `files` collection (PAC-84) dual-writes a metadata
+ * row per object, and these two functions are the only places it has to.
  *
  * ## The gate is the point
  *
@@ -160,6 +186,33 @@ const EVERY_AGENCY_WORDS = new Set(['all', 'every', 'agency', 'agencies']);
 function byControlNumber(term: string): FilterQuery<MailerDocument> | null {
   const key = mailerControlNumberKey(term);
   return key ? { controlNumberKeys: key } : null;
+}
+
+/**
+ * A settings snapshot as a comparable string, **without** its ZIP resolutions.
+ *
+ * Key order is normalized so two snapshots that differ only in how the client
+ * happened to serialise them compare equal; the ZIP map is dropped because it
+ * is the one field a locked campaign may still change.
+ */
+function settingsFingerprint(settings: MailerCampaignSettings): string {
+  const { zipResolutions: _zips, ...rest } = settings;
+  void _zips;
+  return stableStringify(rest);
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 @Injectable()
@@ -257,10 +310,6 @@ export class MailerCampaignsService {
     dto: CreateCampaignDto,
     requestedBy: string,
   ): Promise<MailerCampaignDto> {
-    this.storage.assertPlatformKeyOwnership(dto.storageKey, {
-      purpose: MAILER_CAMPAIGN_PURPOSE,
-    });
-
     const carrier = dto.carrierId
       ? await this.carrierModel.findById(dto.carrierId).lean()
       : await this.defaultCarrier();
@@ -270,24 +319,7 @@ export class MailerCampaignsService {
       );
     }
     await this.assertAgenciesExist(dto.assignment.agencyIds);
-
-    // `HeadObject` is the only server-side evidence of what was really stored:
-    // a presigned PUT signs only `Content-Type`, so a declared size validates
-    // the client's claim rather than the object.
-    const stat = await this.storage.statObject(dto.storageKey);
-    if (!stat) {
-      throw new BadRequestException(
-        'The uploaded file was not found in storage. Please upload it again.',
-      );
-    }
-    if (stat.size === 0) {
-      throw new BadRequestException('The uploaded file is empty.');
-    }
-    if (stat.size !== dto.size) {
-      throw new BadRequestException(
-        `The uploaded file is ${stat.size} bytes, not the ${dto.size} declared. Please upload it again.`,
-      );
-    }
+    const files = await this.verifyUploadedFiles(dto.files, []);
 
     const campaignNumber = normalizeCampaignNumber(
       dto.campaignNumber ?? campaignNumberForDate(),
@@ -306,12 +338,7 @@ export class MailerCampaignsService {
         agencyIds: dto.assignment.agencyIds,
       },
       settings: dto.settings,
-      vendorFile: {
-        storageKey: dto.storageKey,
-        name: dto.uploadedFilename,
-        size: stat.size,
-        contentType: stat.contentType ?? dto.contentType,
-      },
+      files,
       previewAttempt: 1,
       requestedBy: new Types.ObjectId(requestedBy),
     });
@@ -334,6 +361,9 @@ export class MailerCampaignsService {
   ): Promise<MailerCampaignDto> {
     const campaign = await this.find(id);
     this.assertEditable(campaign);
+    if (campaign.firstImportedAt) {
+      this.assertOnlyZipResolutionsChange(campaign, dto);
+    }
 
     if (dto.assignment) {
       await this.assertAgenciesExist(dto.assignment.agencyIds);
@@ -390,6 +420,98 @@ export class MailerCampaignsService {
     campaign.error = null;
     campaign.previewAttempt += 1;
     await campaign.save();
+
+    await this.dispatchPreview(campaign, requestedBy);
+    return this.toDto(campaign);
+  }
+
+  /**
+   * Add files to a campaign — and, on an imported one, re-open it (PAC-142).
+   *
+   * Before a commit this is "I forgot the second file". After one it is **Add
+   * records**: the operator found rows the vendor file missed, and rather than
+   * running a second campaign for the same week (which splits the week, or
+   * re-prints it), the same campaign is previewed and committed again over
+   * every file it holds. Rows already imported are updated in place; the
+   * commit writes the rows it *created* to a separate print file.
+   *
+   * Back to `uploaded` either way: the stored preview described the old file
+   * list, and a commit must not gate against it.
+   */
+  async addFiles(
+    id: string,
+    dto: AddCampaignFilesDto,
+    requestedBy: string,
+  ): Promise<MailerCampaignDto> {
+    const campaign = await this.find(id);
+    if (!ADD_FILES_STATUSES.includes(campaign.status as 'uploaded')) {
+      throw new ConflictException(
+        `Files cannot be added while this campaign is "${campaign.status}".`,
+      );
+    }
+    if (!UPLOADED_SOURCES.includes(campaign.source as 'vendor')) {
+      // A `migration` or `demo` campaign describes a run that happened
+      // somewhere else; it has no settings to run a transform with.
+      throw new ConflictException(
+        'This campaign was not created from an upload, so files cannot be added to it.',
+      );
+    }
+    if (campaign.files.length + dto.files.length > MAX_CAMPAIGN_FILES) {
+      throw new BadRequestException(
+        `A campaign holds at most ${MAX_CAMPAIGN_FILES} files.`,
+      );
+    }
+
+    const files = await this.verifyUploadedFiles(dto.files, campaign.files);
+    campaign.files.push(...files);
+    campaign.status = 'uploaded';
+    campaign.error = null;
+    campaign.preview = null;
+    campaign.previewAttempt += 1;
+    await campaign.save();
+
+    await this.dispatchPreview(campaign, requestedBy);
+    return this.toDto(campaign);
+  }
+
+  /**
+   * Remove a file that has not been committed, and re-preview.
+   *
+   * Refused once any commit has run: from then on the file list is the record
+   * of what was imported, and taking a file off it would not take its rows
+   * out of `mailers`. The correction for a bad file after a commit is to add a
+   * corrected one — or, if the week is wrong wholesale, an overwrite from a new
+   * campaign.
+   */
+  async removeFile(
+    id: string,
+    fileId: string,
+    requestedBy: string,
+  ): Promise<MailerCampaignDto> {
+    const campaign = await this.find(id);
+    // The commit check comes first: an `imported` campaign fails both, and
+    // "once a commit has run" is the reason the operator can act on.
+    if (campaign.commitAttempt > 0) {
+      throw new ConflictException(
+        'Files cannot be removed once a commit has run. Add a corrected file instead.',
+      );
+    }
+    this.assertEditable(campaign);
+    const file = campaign.files.find((f) => f._id?.toString() === fileId);
+    if (!file) throw new NotFoundException('No such file on this campaign.');
+    if (campaign.files.length === 1) {
+      throw new BadRequestException(
+        'A campaign needs at least one file. Delete the campaign instead.',
+      );
+    }
+
+    campaign.files = campaign.files.filter((f) => f !== file);
+    campaign.status = 'uploaded';
+    campaign.error = null;
+    campaign.preview = null;
+    campaign.previewAttempt += 1;
+    await campaign.save();
+    await this.discardFileObjects([file]);
 
     await this.dispatchPreview(campaign, requestedBy);
     return this.toDto(campaign);
@@ -824,14 +946,23 @@ export class MailerCampaignsService {
    * detail page left open for ten minutes would otherwise hand out a dead one.
    * The storage key stays server-side: it is a capability, not an identifier.
    */
-  async fileUrl(
-    id: string,
-    kind: 'vendor' | 'output',
-  ): Promise<MailerCampaignFileUrl> {
+  async fileUrl(id: string, kind: string): Promise<MailerCampaignFileUrl> {
     const campaign = await this.find(id);
-    const file = kind === 'vendor' ? campaign.vendorFile : campaign.outputFile;
+    // `output` and `new-rows` name the worker-written files; anything else is
+    // the id of an uploaded one. The two namespaces cannot collide — an
+    // ObjectId is 24 hex characters and neither word is.
+    const file =
+      kind === 'output'
+        ? campaign.outputFile
+        : kind === 'new-rows'
+          ? campaign.newRowsFile
+          : (campaign.files.find((f) => f._id?.toString() === kind) ?? null);
     if (!file) {
-      throw new NotFoundException(`This campaign has no ${kind} file.`);
+      throw new NotFoundException(
+        kind === 'output' || kind === 'new-rows'
+          ? `This campaign has no ${kind} file.`
+          : 'No such file on this campaign.',
+      );
     }
     const url = await this.storage.createPresignedDownload(file.storageKey, {
       disposition: 'attachment',
@@ -874,32 +1005,32 @@ export class MailerCampaignsService {
   }
 
   /**
-   * Discard a campaign that never imported.
+   * Discard a campaign that never committed.
    *
-   * Only from a pre-commit state, and the vendor object goes with it. An
+   * Only from a pre-commit state, and the vendor objects go with it. An
    * `imported` campaign is never deletable: `Lead.mailer.campaignId` points at
    * it, and attribution outliving the run is the whole reason the record exists
    * — an overwrite marks the old one `superseded` rather than removing it.
+   *
+   * ⚠ The status alone is not enough. A commit that failed *after* its import
+   * step is `failed` with thousands of mailers already stamped with this id;
+   * deleting the record would orphan them. `commitAttempt` is the fact that a
+   * commit was ever started, whatever the status says now.
    */
   async remove(id: string): Promise<{ deleted: true }> {
     const campaign = await this.find(id);
-    if (!EDITABLE_STATUSES.includes(campaign.status as 'uploaded')) {
+    if (
+      !EDITABLE_STATUSES.includes(campaign.status as 'uploaded') ||
+      campaign.commitAttempt > 0
+    ) {
       throw new ConflictException(
-        `A campaign cannot be deleted while it is "${campaign.status}".`,
+        campaign.commitAttempt > 0
+          ? 'A campaign cannot be deleted once a commit has run — its mailers point at it.'
+          : `A campaign cannot be deleted while it is "${campaign.status}".`,
       );
     }
     await this.campaignModel.deleteOne({ _id: campaign._id });
-    if (campaign.vendorFile) {
-      // Best effort: the record is already gone, and a stranded object is a
-      // storage-lifecycle problem rather than a reason to fail the request.
-      await this.storage
-        .deleteObject(campaign.vendorFile.storageKey)
-        .catch((error: Error) =>
-          this.logger.warn(
-            `Could not delete ${campaign.vendorFile?.storageKey}: ${error.message}`,
-          ),
-        );
-    }
+    await this.discardFileObjects(campaign.files);
     return { deleted: true };
   }
 
@@ -922,6 +1053,117 @@ export class MailerCampaignsService {
         `This campaign cannot be changed while it is "${campaign.status}".`,
       );
     }
+  }
+
+  /**
+   * Once a campaign has imported, its settings are the record of how its
+   * mailers were priced and must not move under them (PAC-142).
+   *
+   * The one exception is a **new ZIP → market resolution**: it only affects
+   * rows whose ZIP the table did not know, it is written to the platform table
+   * either way, and the re-opened campaign's preview is exactly where such a
+   * ZIP surfaces. So a `PATCH` may carry `settings` and nothing else, and every
+   * settings field except `zipResolutions` must equal what is stored.
+   */
+  private assertOnlyZipResolutionsChange(
+    campaign: MailerCampaignDocument,
+    dto: UpdateCampaignDto,
+  ): void {
+    const locked =
+      'Settings are locked once a campaign has imported; only ZIP resolutions can be added.';
+    const otherKeys = Object.keys(dto).filter((key) => key !== 'settings');
+    if (otherKeys.length > 0 || !dto.settings) {
+      throw new ConflictException(locked);
+    }
+    const stored = plainSettings(campaign.settings);
+    if (
+      !stored ||
+      settingsFingerprint(stored) !== settingsFingerprint(dto.settings)
+    ) {
+      throw new ConflictException(locked);
+    }
+  }
+
+  /**
+   * Check every uploaded object and describe it for the record.
+   *
+   * The key must sit in the campaign namespace (a client hands back the key it
+   * was given, so without the prefix test it could hand back a tenant's
+   * document), and `HeadObject` must agree with the declared size — a
+   * presigned PUT signs only `Content-Type`, so the size is the client's claim
+   * until storage confirms it. Every path that records a file comes through
+   * here; see the class note on why.
+   */
+  private async verifyUploadedFiles(
+    dtoFiles: CampaignFileDto[],
+    existing: MailerCampaignFileDoc[],
+  ): Promise<MailerCampaignFileDoc[]> {
+    const seen = new Set(existing.map((file) => file.storageKey));
+    const files: MailerCampaignFileDoc[] = [];
+    for (const dto of dtoFiles) {
+      this.storage.assertPlatformKeyOwnership(dto.storageKey, {
+        purpose: MAILER_CAMPAIGN_PURPOSE,
+      });
+      if (seen.has(dto.storageKey)) {
+        throw new BadRequestException(
+          `"${dto.uploadedFilename}" is already on this campaign.`,
+        );
+      }
+      seen.add(dto.storageKey);
+
+      const stat = await this.storage.statObject(dto.storageKey);
+      if (!stat) {
+        throw new BadRequestException(
+          `"${dto.uploadedFilename}" was not found in storage. Please upload it again.`,
+        );
+      }
+      if (stat.size === 0) {
+        throw new BadRequestException(`"${dto.uploadedFilename}" is empty.`);
+      }
+      if (stat.size !== dto.size) {
+        throw new BadRequestException(
+          `"${dto.uploadedFilename}" is ${stat.size} bytes, not the ${dto.size} declared. Please upload it again.`,
+        );
+      }
+
+      files.push({
+        _id: new Types.ObjectId(),
+        storageKey: dto.storageKey,
+        name: dto.uploadedFilename,
+        size: stat.size,
+        contentType: stat.contentType ?? dto.contentType,
+      });
+    }
+    return files;
+  }
+
+  /**
+   * Remove objects the record no longer points at. Best effort: the record is
+   * already updated, and a stranded object is a storage-lifecycle problem
+   * (PAC-84's garbage collection) rather than a reason to fail the request.
+   */
+  private async discardFileObjects(
+    files: readonly MailerCampaignFileDoc[],
+  ): Promise<void> {
+    for (const file of files) {
+      await this.storage
+        .deleteObject(file.storageKey)
+        .catch((error: Error) =>
+          this.logger.warn(
+            `Could not delete ${file.storageKey}: ${error.message}`,
+          ),
+        );
+    }
+  }
+
+  /** Document → wire shape for one file. The key stays behind. */
+  private fileDto(file: MailerCampaignFileDoc): MailerCampaignFile {
+    return {
+      id: file._id?.toString() ?? '',
+      name: file.name,
+      size: file.size,
+      sha256: file.sha256,
+    };
   }
 
   private defaultCarrier() {
@@ -1053,19 +1295,13 @@ export class MailerCampaignsService {
       carrierAgencyIds: campaign.carrierAgencyIds,
       carrierAgencyNames: campaign.carrierAgencyNames,
       settings: plainSettings(campaign.settings),
-      vendorFile: campaign.vendorFile
-        ? {
-            name: campaign.vendorFile.name,
-            size: campaign.vendorFile.size,
-            sha256: campaign.vendorFile.sha256,
-          }
+      files: campaign.files.map((file) => this.fileDto(file)),
+      outputFile: campaign.outputFile ? this.fileDto(campaign.outputFile) : null,
+      newRowsFile: campaign.newRowsFile
+        ? this.fileDto(campaign.newRowsFile)
         : null,
-      outputFile: campaign.outputFile
-        ? {
-            name: campaign.outputFile.name,
-            size: campaign.outputFile.size,
-            sha256: campaign.outputFile.sha256,
-          }
+      firstImportedAt: campaign.firstImportedAt
+        ? campaign.firstImportedAt.toISOString()
         : null,
       stats: campaign.stats,
       preview: campaign.preview,

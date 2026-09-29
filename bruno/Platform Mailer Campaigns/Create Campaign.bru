@@ -22,9 +22,13 @@ body:json {
   {
     "name": "Bruno week 98",
     "source": "vendor",
-    "storageKey": "{{campaignFileKey}}",
-    "uploadedFilename": "SFA-QBP-week-98.csv",
-    "size": {{campaignFileSize}},
+    "files": [
+      {
+        "storageKey": "{{campaignFileKey}}",
+        "uploadedFilename": "SFA-QBP-week-98.csv",
+        "size": {{campaignFileSize}}
+      }
+    ],
     "campaignNumber": "98",
     "assignment": { "mode": "all" },
     "settings": {
@@ -74,11 +78,21 @@ tests {
     expect(body.outputFile).to.equal(null);
   });
 
-  test("never exposes a storage key", function () {
+  test("records the file list, never a storage key", function () {
     // A key is a capability, not an identifier: the download endpoint mints a
-    // short-lived presigned URL on click instead.
-    expect(res.getBody().vendorFile).to.not.have.property("storageKey");
-    expect(res.getBody().vendorFile.name).to.equal("SFA-QBP-week-98.csv");
+    // short-lived presigned URL on click instead. Files are named by `id`, so
+    // one of several can be removed or downloaded (PAC-142).
+    const files = res.getBody().files;
+    expect(files).to.have.lengthOf(1);
+    expect(files[0]).to.not.have.property("storageKey");
+    expect(files[0].id).to.match(/^[0-9a-f]{24}$/);
+    expect(files[0].name).to.equal("SFA-QBP-week-98.csv");
+    bru.setVar("campaignVendorFileId", files[0].id);
+  });
+
+  test("has not imported yet", function () {
+    expect(res.getBody().firstImportedAt).to.equal(null);
+    expect(res.getBody().newRowsFile).to.equal(null);
   });
 }
 
@@ -99,9 +113,10 @@ docs {
   | name | string | Optional; derived from the file name and week if omitted. |
   | carrierId | string | Optional 24-hex. Defaults to the global Allstate carrier. |
   | source | enum | `vendor` runs the transform; `processed` imports as-is (the old Add Mailers flow, kept as the recovery path). |
-  | storageKey | string | From `presign`. Its `platform/mailer-campaigns/` prefix is re-checked here. |
-  | uploadedFilename | string | 1–255 chars. |
-  | size | int | Must equal what `HeadObject` reports, or `400`. |
+  | files | array | 1–20 of `{storageKey, uploadedFilename, size, contentType?}` (PAC-142). Presign and PUT each first. Read together as one week, so every file must carry the first one's columns — the preview fails naming the file otherwise. |
+  | files[].storageKey | string | From `presign`. Its `platform/mailer-campaigns/` prefix is re-checked here. |
+  | files[].uploadedFilename | string | 1–255 chars. |
+  | files[].size | int | Must equal what `HeadObject` reports, or `400`. |
   | campaignNumber | string | Optional; normalized to `Week_Number-NN`, defaults to the current ISO week. |
   | assignment | object | `{mode: 'carrier_agency_id'}` \| `{mode: 'agencies', agencyIds: [...]}` \| `{mode: 'all'}`. |
   | settings | object | Every transform field **required**, no defaults — see below. |
@@ -129,10 +144,16 @@ docs {
   The campaign, `status: "uploaded"`, with the preview job queued. Poll
   `GET /platform/mailer-campaigns/:id` until it reaches `previewed`.
 
+  ## Adding more files later
+
+  `POST …/:id/files` takes the same `files` array and appends to the list —
+  before a commit, or on an **imported** campaign, which re-opens it (Add
+  records). See `Add Campaign Files`.
+
   ## Errors
   - `400 Bad Request` — key outside the platform namespace, object missing or
-    empty, size mismatch, unknown agency in an `agencies` assignment, or an
-    invalid settings block.
+    empty, size mismatch, the same key twice, unknown agency in an `agencies`
+    assignment, or an invalid settings block.
   - `401` / `403` — missing token, or missing `platform:mailers:write`.
   - `500` — the preview could not be queued. The campaign is marked `failed`
     rather than left spinning; re-dispatch with `POST …/:id/preview`.

@@ -92,8 +92,12 @@ export function implicitCampaignDoc(
     carrierAgencyIds: [],
     carrierAgencyNames: [],
     settings: null,
-    vendorFile: null,
+    files: [],
     outputFile: null,
+    newRowsFile: null,
+    // Never through a commit here, so nothing to lock: Add records is refused
+    // on `migration` / `demo` sources anyway (no settings to run with).
+    firstImportedAt: null,
     stats: null,
     preview: null,
     importCounts: null,

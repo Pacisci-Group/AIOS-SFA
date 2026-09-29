@@ -109,13 +109,27 @@ describe('MailerCampaignCommitFn (e2e)', () => {
     table[index][controlColumn].toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   /** A file carrying only the fixture's first `count` data rows. */
-  const subset = (count: number): Buffer =>
+  const subset = (count: number): Buffer => rows(1, count + 1);
+
+  /** A file carrying the fixture's data rows `[from, to)` (1-based). */
+  const rows = (from: number, to: number): Buffer =>
     Buffer.from(
-      [header, ...table.slice(1, count + 1)]
+      [header, ...table.slice(from, to)]
         .map((row) => row.map(quote).join(','))
         .join('\n'),
       'utf8',
     );
+
+  /** Put a file in storage, as `files[]` describes one. */
+  const stageFile = async (body: Buffer, name = 'rtp-sample.csv') => {
+    const key = storage.buildPlatformObjectKey({
+      purpose: 'mailer-campaigns',
+      filename: name,
+      parts: ['vendor'],
+    });
+    await storage.putObject(key, body, 'text/csv');
+    return { storageKey: key, name, size: body.byteLength };
+  };
 
   const settings = (
     overrides: Partial<MailerCampaignSettings> = {},
@@ -139,12 +153,7 @@ describe('MailerCampaignCommitFn (e2e)', () => {
     body: Buffer,
     campaign: Record<string, unknown> = {},
   ): Promise<MailerCampaignDocument> => {
-    const key = storage.buildPlatformObjectKey({
-      purpose: 'mailer-campaigns',
-      filename: 'rtp-sample.csv',
-      parts: ['vendor'],
-    });
-    await storage.putObject(key, body, 'text/csv');
+    const file = await stageFile(body);
     return campaigns.create({
       carrierId: allstateId,
       name: 'Week 29',
@@ -154,11 +163,7 @@ describe('MailerCampaignCommitFn (e2e)', () => {
       source: 'vendor',
       assignment: { mode: 'all', agencyIds: [] },
       settings: settings(),
-      vendorFile: {
-        storageKey: key,
-        name: 'rtp-sample.csv',
-        size: body.byteLength,
-      },
+      files: [file],
       commitMode: 'append',
       commitAttempt: 1,
       requestedBy: new Types.ObjectId(),
@@ -295,6 +300,10 @@ describe('MailerCampaignCommitFn (e2e)', () => {
 
     // The print file is stored, with the transform's own headers.
     expect(after?.outputFile?.name).toBe('SFA-QBP.csv');
+    // A first commit: the full output *is* the new rows, so no second file —
+    // and the moment of first import is recorded for everything that follows.
+    expect(after?.newRowsFile).toBeNull();
+    expect(after?.firstImportedAt).toBeInstanceOf(Date);
     const output = storage.objects.get(after!.outputFile!.storageKey)!;
     const outHeaders = (
       parse(output.body, { columns: false }) as string[][]
@@ -480,7 +489,9 @@ describe('MailerCampaignCommitFn (e2e)', () => {
     // Inngest replays a failed run from the start; every step is repeat-safe,
     // which is exactly what makes that sound. The import is an upsert on the
     // dedupe key, so the second pass updates rather than inserting.
-    const after = await run(await campaigns.findById(campaign._id));
+    const after = await run(
+      (await campaigns.findById(campaign._id)) as MailerCampaignDocument,
+    );
     expect(await mailers.countDocuments({})).toBe(5);
     expect(after?.status).toBe('imported');
     expect((after?.importCounts as MailerCampaignImportCounts).created).toBe(0);
@@ -495,8 +506,75 @@ describe('MailerCampaignCommitFn (e2e)', () => {
     // the output — running it again would discount `yearlyprem` twice, the
     // exact defect the ApexReports round trip has today.
     expect(after?.stats).toBeNull();
-    expect(after?.outputFile?.storageKey).toBe(after?.vendorFile?.storageKey);
+    expect(after?.outputFile?.storageKey).toBe(after?.files[0]?.storageKey);
     expect(await mailers.countDocuments({})).toBe(197);
+  });
+
+  it('reads several files as one week', async () => {
+    const campaign = await stage(rows(1, 6));
+    campaign.files.push(await stageFile(rows(6, 11), 'part-2.csv'));
+    await campaign.save();
+
+    const after = await run(campaign);
+    expect(after?.status).toBe('imported');
+    expect((after?.importCounts as MailerCampaignImportCounts).created).toBe(
+      10,
+    );
+    expect(await mailers.countDocuments({})).toBe(10);
+    // Provenance names every file the rows came from.
+    const sample = await mailers.findOne({}).lean();
+    expect(sample?.source?.uploadedFilename).toBe('rtp-sample.csv, part-2.csv');
+  });
+
+  it('a second commit after Add records prints only the rows it created', async () => {
+    const campaign = await stage(rows(1, 6));
+    const first = await run(campaign);
+    const firstImportedAt = first?.firstImportedAt as Date;
+    expect(await mailers.countDocuments({})).toBe(5);
+
+    // Add records: five more rows in a second file, and the same campaign is
+    // committed again over both files.
+    const reopened = (await campaigns.findById(
+      campaign._id,
+    )) as MailerCampaignDocument;
+    reopened.files.push(await stageFile(rows(6, 11), 'missed.csv'));
+    reopened.status = 'processing';
+    reopened.commitAttempt = 2;
+    await reopened.save();
+
+    const after = await run(reopened, inlineStep().step, 2);
+    expect(after?.status).toBe('imported');
+    const counts = after?.importCounts as MailerCampaignImportCounts;
+    // The five old rows are updated in place; the five new ones are created.
+    expect(counts.created).toBe(5);
+    expect(counts.updated).toBe(5);
+    expect(await mailers.countDocuments({})).toBe(10);
+
+    // The full output has every row; the new-rows file has exactly the five
+    // the mail house has not printed yet.
+    const full = parse(
+      storage.objects.get(after!.outputFile!.storageKey)!.body,
+      {
+        columns: false,
+      },
+    ) as string[][];
+    expect(full.length - 1).toBe(10);
+    expect(after?.newRowsFile?.name).toBe('SFA-QBP-new-rows.csv');
+    const fresh = parse(
+      storage.objects.get(after!.newRowsFile!.storageKey)!.body,
+      { columns: true },
+    ) as Record<string, string>[];
+    expect(fresh).toHaveLength(5);
+    const newKeys = new Set(
+      fresh.map((row) => row.controlno.toUpperCase().replace(/[^A-Z0-9]/g, '')),
+    );
+    for (let index = 6; index <= 10; index += 1) {
+      expect(newKeys.has(keyOfRow(index))).toBe(true);
+    }
+    expect(newKeys.has(keyOfRow(1))).toBe(false);
+
+    // First import stays where it was: it is a fact about the past.
+    expect(after?.firstImportedAt?.getTime()).toBe(firstImportedAt.getTime());
   });
 
   it('no-ops on a superseded dispatch rather than importing again', async () => {

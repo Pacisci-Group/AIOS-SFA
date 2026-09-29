@@ -1,0 +1,46 @@
+meta {
+  name: Get Vendor File URL
+  type: http
+  seq: 19
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/files/{{campaignVendorFileId}}/url
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("names the uploaded file, not the object key", function () {
+    const body = res.getBody();
+    expect(body.url).to.be.a("string");
+    expect(body.filename).to.equal("SFA-QBP-week-98.csv");
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/:campaignId/files/:fileId/url — one vendor file
+
+  The same endpoint as `Get Output File URL`, with a vendor file's `id` (from
+  `files[]` on the campaign) in place of `output` / `new-rows`. A campaign holds
+  several vendor files since PAC-142, so they are addressed by id rather than
+  by a fixed word.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:read`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  The `id` is the embedded file's id today and becomes the central `files`
+  row's id when PAC-84 lands; the URL shape does not change.
+
+  ## Errors
+  - `404 Not Found` — no such campaign, or no file with that id on it.
+}

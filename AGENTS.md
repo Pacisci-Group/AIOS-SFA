@@ -176,7 +176,13 @@ temperature/aging that aren't first-class in legacy payloads. See
   route, panel tile, endpoints and worker function): a mailer now belongs to a
   *campaign* rather than an agency. Its flow lives on as **Import a processed
   file** at `/admin/campaigns/new?source=processed`; mailers otherwise arrive
-  from a campaign run or the demo seed. Moving an existing database across:
+  from a campaign run or the demo seed. A campaign holds **several** vendor
+  files, and an imported one can be **re-opened by adding files** ("Add
+  records", PAC-142): it is previewed and committed again over every file, rows
+  already held are updated in place, and the commit writes a `newRowsFile` of
+  only the rows it created for the mail house. Settings lock at the first import
+  (`firstImportedAt`); there is deliberately no per-commit history. Moving an
+  existing database across:
   **stop the API and the worker**, run
   `npm run backfill:mailer-campaigns:dev -w @sfa/api` (`--dry-run` first) from
   the new build, *then* deploy — old code would insert un-stamped rows while it

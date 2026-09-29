@@ -127,6 +127,41 @@ export const campaignSettingsSchema = z.object({
 export type CampaignSettingsDto = z.infer<typeof campaignSettingsSchema>;
 
 // ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+/**
+ * One uploaded object, as the client describes it after the presigned `PUT`.
+ *
+ * `storageKey` is the key `presign` returned; its ownership is re-checked
+ * server-side, and `size` is compared against `HeadObject` — a presigned PUT
+ * signs only the content type, so the declared size validates the client's
+ * claim rather than the object. The type and size rules come from
+ * `mailer-file-types.ts`, which is what PAC-84's purpose registry replaces; do
+ * not restate them here.
+ */
+export const campaignFileSchema = z.object({
+  storageKey: z.string().trim().min(1).max(512),
+  uploadedFilename: z.string().trim().min(1).max(255),
+  size: z.coerce.number().int().positive().max(MAX_MAILER_FILE_BYTES),
+  contentType: z.enum(ALLOWED_MAILER_CONTENT_TYPES).optional(),
+});
+export type CampaignFileDto = z.infer<typeof campaignFileSchema>;
+
+/**
+ * How many vendor files one campaign may hold, in total.
+ *
+ * A week's mail is one or two vendor files, occasionally a correction or two
+ * on top. Twenty is a sanity bound on the request, not a product limit.
+ */
+export const MAX_CAMPAIGN_FILES = 20;
+
+const campaignFilesSchema = z
+  .array(campaignFileSchema)
+  .min(1)
+  .max(MAX_CAMPAIGN_FILES);
+
+// ---------------------------------------------------------------------------
 // Create / update
 // ---------------------------------------------------------------------------
 
@@ -139,11 +174,12 @@ export const createCampaignSchema = z.object({
    * the old Add Mailers flow, kept as the recovery path.
    */
   source: z.enum(['vendor', 'processed']),
-  /** The key `presign` returned. Ownership is re-checked server-side. */
-  storageKey: z.string().trim().min(1).max(512),
-  uploadedFilename: z.string().trim().min(1).max(255),
-  size: z.coerce.number().int().positive().max(MAX_MAILER_FILE_BYTES),
-  contentType: z.enum(ALLOWED_MAILER_CONTENT_TYPES).optional(),
+  /**
+   * One or more uploaded vendor files (PAC-142). They are concatenated before
+   * the transform, so every file must carry the first one's columns — the
+   * preview fails naming the file otherwise.
+   */
+  files: campaignFilesSchema,
   /** `Week_Number-NN`; normalized server-side. Defaults to the current week. */
   campaignNumber: z.string().trim().max(40).optional(),
   assignment: assignmentSchema,
@@ -152,11 +188,27 @@ export const createCampaignSchema = z.object({
 export type CreateCampaignDto = z.infer<typeof createCampaignSchema>;
 
 /**
+ * `POST /platform/mailer-campaigns/:id/files` — add files (PAC-142).
+ *
+ * The same shape before a commit ("I forgot the second file") and after one
+ * ("Add records": the campaign re-opens, is previewed again over every file,
+ * and committed again). `source` is fixed at create and never travels here: a
+ * processed file added to a vendor campaign would be transformed a second time.
+ */
+export const addCampaignFilesSchema = z.object({
+  files: campaignFilesSchema,
+});
+export type AddCampaignFilesDto = z.infer<typeof addCampaignFilesSchema>;
+
+/**
  * What may still be changed before a commit.
  *
- * Deliberately **not** `source` or the uploaded file: those describe the object
- * in storage, and changing either would leave the campaign describing a file it
- * no longer points at. A different file is a different campaign.
+ * Deliberately **not** `source`, and not the files either — those have their
+ * own endpoints (`POST …/files`, `DELETE …/files/:fileId`) because adding one
+ * has a different lifecycle from editing a setting: it is the one change that
+ * is legal on an *imported* campaign. Once a campaign has imported, the service
+ * refuses every settings change except new ZIP resolutions — the settings are
+ * the record of how the mailers were priced.
  */
 export const updateCampaignSchema = createCampaignSchema
   .pick({

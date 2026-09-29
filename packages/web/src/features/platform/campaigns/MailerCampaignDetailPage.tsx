@@ -4,8 +4,10 @@ import {
   AlertTriangle,
   ArrowLeft,
   Download,
+  FilePlus2,
   FileSpreadsheet,
   Loader2,
+  Lock,
   Mail,
   Play,
 } from "lucide-react";
@@ -27,10 +29,12 @@ import {
 import { openDocumentInNewTab } from "@/lib/open-document";
 import {
   campaignKey,
+  canAddFiles,
   emailCampaignOutput,
   getCampaign,
   getCampaignFileUrl,
   isCampaignSettled,
+  type CampaignFileKind,
 } from "@/lib/platform-campaigns-api";
 import { SuperAdminLayout } from "../SuperAdminLayout";
 import { CampaignStatusBadge } from "./CampaignStatusBadge";
@@ -59,6 +63,12 @@ const POLL_MS = 1500;
  * reproducible from its own document, and `Lead.mailer.campaignId` points here
  * for as long as the lead exists. That is also why a `superseded` campaign is
  * still a page — it lost its mailers to an overwrite, not its attribution.
+ *
+ * **Add records** (PAC-142) lives on the wizard, not here: the button hands an
+ * imported campaign back to `/admin/campaigns/new?campaignId=…`, whose outcome
+ * step takes more files and walks the campaign through preview and commit
+ * again. This page shows the result — every vendor file, the full output, and
+ * the new-rows file the last re-commit wrote for the mail house.
  */
 export default function MailerCampaignDetailPage() {
   const { campaignId = "" } = useParams();
@@ -238,6 +248,23 @@ export default function MailerCampaignDetailPage() {
           </Section>
 
           <div className="flex flex-wrap items-center gap-3">
+            {campaign.status === "imported" && canAddFiles(campaign) && (
+              <Button
+                className="gap-1"
+                onClick={() =>
+                  navigate(
+                    `/admin/campaigns/new?campaignId=${campaign.id}${
+                      campaign.source === "processed"
+                        ? "&source=processed"
+                        : ""
+                    }`,
+                  )
+                }
+              >
+                <FilePlus2 className="size-4" />
+                Add records
+              </Button>
+            )}
             {campaign.status === "imported" && campaign.outputFile && (
               <Button
                 variant="outline"
@@ -314,16 +341,34 @@ function Header({ campaign }: { campaign: MailerCampaign }) {
 }
 
 /**
- * Both stored files, each behind a click rather than an `href`.
+ * Every stored file, each behind a click rather than an `href`.
  *
  * The URL is a short-lived presigned GET minted on demand — a key is a
  * capability, so the campaign DTO never carries one and the link cannot be
  * followed by anything that happens to prefetch the route.
+ *
+ * Three kinds: the vendor files as uploaded (several, since PAC-142), the full
+ * print CSV over all of them, and — after Add records — the rows the last
+ * commit created, which is the file the mail house was sent.
  */
 function Files({ campaign }: { campaign: MailerCampaign }) {
-  const files = [
-    { kind: "vendor" as const, label: "Vendor file", file: campaign.vendorFile },
-    { kind: "output" as const, label: "Output file", file: campaign.outputFile },
+  const several = campaign.files.length > 1;
+  const files: { kind: CampaignFileKind; label: string; file: MailerCampaign["outputFile"] }[] = [
+    ...campaign.files.map((file, index) => ({
+      kind: file.id,
+      label: several ? `Vendor file ${index + 1}` : "Vendor file",
+      file,
+    })),
+    {
+      kind: "output",
+      label: campaign.newRowsFile ? "Output file · all rows" : "Output file",
+      file: campaign.outputFile,
+    },
+    {
+      kind: "new-rows",
+      label: "New rows · last commit",
+      file: campaign.newRowsFile,
+    },
   ].filter((entry) => entry.file);
 
   if (files.length === 0) return null;
@@ -434,6 +479,13 @@ function Settings({ campaign }: { campaign: MailerCampaign }) {
 
   return (
     <Section title="Settings this run used">
+      {campaign.firstImportedAt && (
+        <p className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Lock className="size-3.5" />
+          Locked since the first import on {formatDate(campaign.firstImportedAt)}.
+          Only ZIP resolutions can still be added when records are added.
+        </p>
+      )}
       <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
         <Detail label="Premium floor">{formatMoney(settings.premiumFloor)}</Detail>
         <Detail label="Run year">{settings.runYear}</Detail>

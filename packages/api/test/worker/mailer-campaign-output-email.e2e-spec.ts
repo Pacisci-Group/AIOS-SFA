@@ -252,6 +252,39 @@ describe('MailerCampaignOutputEmailFn (e2e)', () => {
     expect(message.text).toContain(url);
   });
 
+  it('links the new-rows file after Add records, and says so', async () => {
+    const NEW_KEY =
+      'platform/mailer-campaigns/2026/output/abc/2/sfa-qbp-new-rows.csv';
+    await storage.putObject(
+      NEW_KEY,
+      Buffer.from('firstname,lastname\nNew,Person\n', 'utf8'),
+      'text/csv',
+    );
+    const campaign = await stage({
+      newRowsFile: {
+        storageKey: NEW_KEY,
+        name: 'SFA-QBP-new-rows.csv',
+        size: 30,
+        contentType: 'text/csv',
+      },
+    });
+    await run(campaign, ['print@vendor.example']);
+
+    // The printer must never receive the full file twice: after a re-commit
+    // the link is the rows this commit created, and the copy says so.
+    expect(storage.downloads[0]).toMatchObject({
+      key: NEW_KEY,
+      filename: 'SFA-QBP-new-rows.csv',
+    });
+    const { message } = transport.sent[0];
+    expect(message.subject).toBe(
+      'Mail file ready (new rows only): Week 36 (Week_Number-36, 2026)',
+    );
+    // `importCounts.created`, not the transform's output row count.
+    expect(message.text).toContain('only the 190 new records');
+    expect(message.text).toContain('SFA-QBP-new-rows.csv');
+  });
+
   it('links back to the campaign page as the durable path', async () => {
     const campaign = await stage();
     await run(campaign, ['print@vendor.example']);
