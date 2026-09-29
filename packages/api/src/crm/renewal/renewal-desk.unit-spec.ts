@@ -1,17 +1,13 @@
 import { RENEWAL_DESK_PREVIEW_DAYS } from '@sfa/shared';
 import type { RenewalDeskRow } from '@sfa/shared';
-import {
-  compareRenewalDeskRows,
-  isScheduledDeskRow,
-  renewalPreviewCutoff,
-} from './renewal-desk';
+import { compareRenewalDeskRows, renewalPreviewCutoff } from './renewal-desk';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = new Date('2026-06-09T09:00:00.000Z');
 
 /**
- * A desk row with only the fields the ordering reads. `daysUntilAvailable`
- * null means the call is open — the same contract the wire type carries.
+ * A desk row with only the fields the ordering reads. Every desk row is a call
+ * that has not opened (PAC-143), so the defaults describe one.
  */
 const row = (
   over: Partial<RenewalDeskRow> & { cycleId: string },
@@ -30,9 +26,11 @@ const row = (
   daysUntilRenewal: 45,
   availableAt: null,
   dueAt: null,
-  daysUntilAvailable: null,
-  status: 'open',
-  isActionable: true,
+  daysUntilAvailable: 3,
+  assignedUserId: null,
+  assignedRep: '',
+  status: 'waiting',
+  isActionable: false,
   isOverdue: false,
   mergedFrom: [],
   outcome: null,
@@ -54,93 +52,39 @@ describe('renewalPreviewCutoff', () => {
   });
 });
 
-describe('isScheduledDeskRow', () => {
-  it('is a preview exactly when the call has not opened', () => {
-    expect(isScheduledDeskRow({ daysUntilAvailable: 5 })).toBe(true);
-    // Opening today still counts as scheduled — it is not startable yet.
-    expect(isScheduledDeskRow({ daysUntilAvailable: 0 })).toBe(true);
-    expect(isScheduledDeskRow({ daysUntilAvailable: null })).toBe(false);
-  });
-});
-
 describe('compareRenewalDeskRows', () => {
-  it('puts every actionable call above every previewed one', () => {
-    /*
-     * The load-bearing case. The preview renews sooner (14 days vs 80), so
-     * ordering on `daysUntilRenewal` alone would float a call nobody can make
-     * yet above one that is open.
-     */
-    const open = row({
-      cycleId: 'open',
-      daysUntilRenewal: 80,
-      isActionable: true,
-      daysUntilAvailable: null,
+  it('counts down by when each call opens', () => {
+    // `later` renews sooner, so this also pins that opening order wins.
+    const later = row({
+      cycleId: 'later',
+      daysUntilAvailable: 12,
+      daysUntilRenewal: 57,
     });
-    const preview = row({
-      cycleId: 'preview',
-      daysUntilRenewal: 14,
-      isActionable: false,
-      daysUntilAvailable: 3,
-      status: 'waiting',
+    const sooner = row({
+      cycleId: 'sooner',
+      daysUntilAvailable: 1,
+      daysUntilRenewal: 91,
     });
-    expect(order([preview, open])).toEqual(['open', 'preview']);
+    expect(order([later, sooner])).toEqual(['sooner', 'later']);
   });
 
-  it('leads with overdue calls', () => {
-    const overdue = row({
-      cycleId: 'overdue',
-      daysUntilRenewal: 40,
-      isOverdue: true,
+  it('breaks a tie on opening day by the sooner renewal', () => {
+    const far = row({
+      cycleId: 'far',
+      daysUntilAvailable: 4,
+      daysUntilRenewal: 94,
     });
-    const onTime = row({ cycleId: 'onTime', daysUntilRenewal: 5 });
-    expect(order([onTime, overdue])).toEqual(['overdue', 'onTime']);
-  });
-
-  it('orders the rest of the open calls by soonest renewal', () => {
-    const far = row({ cycleId: 'far', daysUntilRenewal: 60 });
-    const near = row({ cycleId: 'near', daysUntilRenewal: 7 });
+    const near = row({
+      cycleId: 'near',
+      daysUntilAvailable: 4,
+      daysUntilRenewal: 49,
+    });
     expect(order([far, near])).toEqual(['near', 'far']);
   });
 
-  it('counts the previewed calls down by when they open', () => {
-    const scheduled = (id: string, opensIn: number, renewalIn: number) =>
-      row({
-        cycleId: id,
-        isActionable: false,
-        status: 'waiting',
-        daysUntilAvailable: opensIn,
-        daysUntilRenewal: renewalIn,
-      });
-    // `later` renews sooner, so this also pins that opening order wins.
-    expect(
-      order([scheduled('later', 12, 20), scheduled('sooner', 1, 60)]),
-    ).toEqual(['sooner', 'later']);
-  });
-
-  it('orders a full desk: overdue, open, then the countdown', () => {
-    const rows = [
-      row({
-        cycleId: 'preview-late',
-        isActionable: false,
-        daysUntilAvailable: 11,
-        status: 'waiting',
-      }),
-      row({ cycleId: 'open-far', daysUntilRenewal: 70 }),
-      row({
-        cycleId: 'preview-soon',
-        isActionable: false,
-        daysUntilAvailable: 2,
-        status: 'waiting',
-      }),
-      row({ cycleId: 'overdue', daysUntilRenewal: 30, isOverdue: true }),
-      row({ cycleId: 'open-near', daysUntilRenewal: 9 }),
-    ];
-    expect(order(rows)).toEqual([
-      'overdue',
-      'open-near',
-      'open-far',
-      'preview-soon',
-      'preview-late',
-    ]);
+  it('puts a call opening later today first', () => {
+    const today = row({ cycleId: 'today', daysUntilAvailable: 0 });
+    const tomorrow = row({ cycleId: 'tomorrow', daysUntilAvailable: 1 });
+    expect(order([tomorrow, today])).toEqual(['today', 'tomorrow']);
   });
 });

@@ -89,6 +89,30 @@ export function computeRenewalStepTiming(
   };
 }
 
+/**
+ * How many days ahead of a renewal the scan must create its cycle.
+ *
+ * The earliest any call on any track opens, **plus** the desk's preview
+ * window (PAC-143). Without the preview on top, a cycle was created on the
+ * very day its first call opened — the scan's horizon and the annual review
+ * were both 90 days — so an annual renewal could never appear on the
+ * Proactive Renewal Outreach desk before it was already due.
+ *
+ * Derived from the definitions rather than written down, so moving an offset
+ * cannot leave the horizon behind it. With the shipped definitions and a
+ * 14-day preview this is 104.
+ */
+export function renewalScanHorizonDays(
+  definitions: readonly RenewalStepDefinition[],
+  previewDays: number,
+): number {
+  const leadMinutes = Math.max(
+    0,
+    ...definitions.map((definition) => -definition.offsetMinutes),
+  );
+  return Math.ceil((leadMinutes * MINUTE_MS) / DAY_MS) + previewDays;
+}
+
 export interface PlannedRenewalStep extends RenewalStepTiming {
   stepKey: RenewalStepKey;
   label: string;

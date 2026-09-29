@@ -37,37 +37,25 @@ tests {
       expect(row).to.have.property("renewalDate");
       expect(row).to.have.property("daysUntilRenewal");
       expect(row).to.have.property("daysUntilAvailable");
-      expect(row).to.have.property("isActionable");
-      expect(row).to.have.property("isOverdue");
+      expect(row).to.have.property("assignedUserId");
+      expect(row).to.have.property("assignedRep");
       expect(row.policies).to.be.an("array");
     }
   });
 
-  test("daysUntilAvailable is null exactly when the call is actionable", function () {
-    // The one invariant the UI depends on: it gates the Start button on this
-    // rather than comparing `availableAt` to the browser clock.
+  test("every row is a call that has not opened, inside the preview window", function () {
+    // PAC-143: an open call is in the ticket queue, never on the desk.
     for (const row of res.getBody()) {
-      expect(row.daysUntilAvailable === null).to.equal(row.isActionable);
-    }
-  });
-
-  test("previewed calls are within the preview window and not yet open", function () {
-    for (const row of res.getBody()) {
-      if (row.daysUntilAvailable === null) continue;
-      expect(row.daysUntilAvailable).to.be.at.most(14);
+      expect(row.daysUntilAvailable).to.be.a("number");
+      expect(row.daysUntilAvailable).to.be.within(0, 14);
       expect(row.isActionable).to.equal(false);
       expect(row.isOverdue).to.equal(false);
-      expect(row.status).to.equal("waiting");
     }
   });
 
-  test("actionable rows sort ahead of previewed ones", function () {
-    const rows = res.getBody();
-    let seenScheduled = false;
-    for (const row of rows) {
-      if (row.daysUntilAvailable !== null) seenScheduled = true;
-      else expect(seenScheduled).to.equal(false);
-    }
+  test("counts down by when each call opens", function () {
+    const opens = res.getBody().map((row) => row.daysUntilAvailable);
+    expect(opens).to.deep.equal(opens.slice().sort((a, b) => a - b));
   });
 
   test("one row per cycle", function () {
@@ -80,22 +68,32 @@ docs {
   # GET /crm/service-tickets/renewals/desk
 
   The **Proactive Renewal Outreach** desk on the Service Dashboard
-  (`/crm/service`): one row per open renewal cycle, flattened to the single call
-  that is on the CSR's plate — plus the calls about to land on it.
+  (`/crm/service`): renewals whose renewal period is about to start — one row
+  per cycle, for the `RENEWAL_DESK_PREVIEW_DAYS` (**14**) days before its
+  **first** call opens.
 
   - **Module:** `crm_service`
   - **Permission:** `crm_service:read`
-  - **Data scope:** applied as everywhere else. A cycle whose call is not
-    visible to the caller simply produces no row, so an `own`-scoped CSR sees
-    the calls assigned to them rather than the agency's whole book.
+  - **Data scope (PAC-146):** follows the caller's. An agency-scoped owner sees
+    the agency's renewals, a branch-scoped manager their branch's. An
+    `own`-scoped CSR is pinned to the calls assigned to them — *not* the branch
+    floor the ticket list gives them, because the desk is "my renewals".
 
-  ## ⚠ This read has a side effect
+  A pure read. Cycles and their call tickets are created by the worker's
+  renewal scan (PAC-99), which looks `90 + 14` days ahead so an annual cycle
+  exists before its T-90 review can be previewed.
 
-  Reading the desk runs the throttled renewal scan first
-  (`materializeRenewalCycles`), which is what creates cycles and their call
-  tickets. **There is no cron** — this request is what makes newly-due renewals
-  appear. A first call against a fresh database can therefore be slow and can
-  return rows that did not exist a moment earlier.
+  ## Which renewals (PAC-143)
+
+  A cycle is on the desk from T-104 to T-90 on the annual track and from T-59
+  to T-45 on auto, and **leaves it the moment its first call opens**. From then
+  on the renewal is work in hand and lives in the ticket queue (Agency Priority
+  Tickets), so no renewal is ever listed in both.
+
+  "First call" is `renewal.sequence === 1` — position in the track's full
+  plan. A cycle whose T-90 review was suppressed at the cutover holds only its
+  T-45 call (`sequence: 2`); its renewal period has already started, so it is
+  not previewed even though that call has not opened.
 
   ## Params
 
@@ -103,39 +101,18 @@ docs {
 
   ## Response
 
-  `RenewalDeskRow[]` — see `@sfa/shared` `service/renewal.ts`. Sorted:
-  actionable calls first (overdue ahead of the rest, then soonest renewal),
-  then previewed calls by how soon they open.
+  `RenewalDeskRow[]` — see `@sfa/shared` `service/renewal.ts`. Sorted soonest
+  to open first, then soonest renewal. Capped at 100 rows.
 
-  Capped at the 100 soonest-renewing incomplete cycles.
+  | field | value on every row |
+  |---|---|
+  | `daysUntilAvailable` | whole days until the call opens (`0` = later today) — never null |
+  | `isActionable` | `false` — `POST …/renewals/steps/:stepKey/complete` refuses a step before its `availableAt` |
+  | `isOverdue` | `false` |
+  | `assignedUserId` / `assignedRep` | whose call it is — an owner or manager sees other people's |
 
-  ### Previewed calls (the `daysUntilAvailable` field)
-
-  Every other list in the CRM hides a call until its `availableAt`
-  (`scheduledStepMatches` keeps them out of the queue and the KPI strip) — a
-  call that has not opened is not work. **This desk is the deliberate
-  exception:** it is the one surface whose job is the coming fortnight, and a
-  T-45 call first appearing on the morning it opens cannot be planned around.
-
-  Calls opening within `RENEWAL_DESK_PREVIEW_DAYS` (**14**) are returned with:
-
-  | field | previewed call | call on the plate |
-  |---|---|---|
-  | `daysUntilAvailable` | whole days until it opens (`0` = today) | `null` |
-  | `isActionable` | `false` | `true` |
-  | `status` | `waiting` | `open` / `overdue` |
-
-  `daysUntilAvailable` is the flag to gate UI on — computed against the
-  **server clock** and shipped as a number, for the same reason `isActionable`
-  is. A browser that re-derived it from `availableAt` could offer a Start
-  button that `POST …/renewals/steps/:stepKey/complete` then rejects with a
-  400, since that endpoint independently refuses a step before its
+  Computed against the **server clock**; a browser must not re-derive them from
   `availableAt`.
-
-  An **open call always wins its cycle's row.** Both calls of an annual cycle
-  can be in range at once — an annual review still open at T-50 beside a
-  renewal review opening at T-45 — and previewing the later one while the
-  earlier is unfinished would bury real work.
 
   ### What is deliberately absent
 

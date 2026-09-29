@@ -5,6 +5,7 @@ import {
   SERVICE_TICKET_STATUSES,
   urgencyRankFor,
   type ServiceTicketQueueSort,
+  type ServiceTicketScope,
   type ServiceTicketStatus,
 } from '@sfa/shared';
 
@@ -180,11 +181,18 @@ export const ALL_TICKET_TYPES = '__all__';
  * travel. `page` does not: the dashboard shows 8 rows a page and the workspace
  * feed 25, so page 3 of one is meaningless to the other. Nor does `q`, which
  * is the feed's own.
+ *
+ * `scope` is whose tickets the list beside the opened one should show
+ * (PAC-147). It is passed rather than read off `from` because the caller knows
+ * where the click came from and the URL does not: the dashboard's renewal desk
+ * shares a URL with the queue's My Tickets / Agency Tickets tabs, but its calls
+ * are always the rep's own.
  */
 export function ticketQueueLink(
   path: string,
   ticketId: string,
   from: URLSearchParams,
+  scope: ServiceTicketScope,
 ): string {
   const params = new URLSearchParams();
   params.set('ticket', ticketId);
@@ -192,5 +200,22 @@ export function ticketQueueLink(
     const value = from.get(key);
     if (value) params.set(key, value);
   }
+  const feedScope = workspaceScopeFor(scope);
+  // `own` is the workspace's default, so it stays out of the URL.
+  if (feedScope !== 'own') params.set('scope', feedScope);
   return `${path}?${params.toString()}`;
+}
+
+/**
+ * The workspace's Mine / Everyone for a dashboard scope.
+ *
+ * The two surfaces split tickets differently: the dashboard's Agency Tickets is
+ * everyone *else's* (`others`), so the two parent tabs never count a ticket
+ * twice, while the workspace's Everyone is the undivided `agency` view. Its
+ * toggle has no `others` option, so carrying `others` across verbatim would
+ * land on a list with neither option selected. Everyone is the closest view
+ * the toggle can show — it still lists the ticket that was clicked.
+ */
+function workspaceScopeFor(scope: ServiceTicketScope): ServiceTicketScope {
+  return scope === 'own' ? 'own' : 'agency';
 }
