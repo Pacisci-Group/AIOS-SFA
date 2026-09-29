@@ -43,7 +43,8 @@ const FALLBACK_STATS: ServiceTicketStats = {
  *
  * Sent explicitly rather than left to the API's default so the two cannot
  * drift: this number also decides the card's height, and a server that
- * silently returned a different count would leave the card half empty.
+ * silently returned a different count would leave the card half empty. The
+ * workspace row's minimum height below is sized to it (PAC-145).
  */
 const TICKET_PAGE_SIZE = 8;
 
@@ -144,9 +145,20 @@ export default function App() {
    *
    * Read off the location rather than passed up from the queue: the renewal
    * desk opens tickets too, and one filter context per page is the point.
+   *
+   * Whose tickets the list shows is the one thing that differs by origin
+   * (PAC-147): the queue's My Tickets / Agency Tickets tab travels with a
+   * ticket opened from it. The renewal desk is not governed by that tab, so a
+   * desk ticket opens on Mine when it is the rep's own call — whichever queue
+   * tab is selected — and on Everyone when it is a colleague's, which only an
+   * owner or manager can see there (PAC-146), so the list still contains it.
    */
   const openTicket = (id: string) =>
-    navigate(ticketQueueLink("/crm/tickets", id, searchParams));
+    navigate(ticketQueueLink("/crm/tickets", id, searchParams, scope));
+  const openRenewalTicket = (id: string, isMine: boolean) =>
+    navigate(
+      ticketQueueLink("/crm/tickets", id, searchParams, isMine ? "own" : "agency"),
+    );
 
   return (
     <AppShell>
@@ -220,9 +232,12 @@ export default function App() {
         </header>
 
         {/* Dashboard body */}
-        {/* The body itself does not scroll — the header and scorecard stay put and
-            the two workspace columns own their own scrollbars (see the grid below). */}
-        <main className="flex-1 flex flex-col min-h-0 overflow-hidden px-6 py-5 gap-5">
+        {/* The body scrolls only when the viewport is too short for the
+            workspace row's minimum (PAC-145); on a tall screen it still fits,
+            and the two workspace columns own their own scrollbars. It used to
+            be `overflow-hidden`, which let a laptop-height screen squeeze the
+            queue down to three or four rows under the scorecard. */}
+        <main className="flex-1 flex flex-col min-h-0 overflow-y-auto px-6 py-5 gap-5">
           <div className="flex items-center justify-between flex-shrink-0">
             <div>
               <h1 className="text-xl font-bold text-foreground tracking-tight">Service Dashboard</h1>
@@ -255,12 +270,17 @@ export default function App() {
             <ScorecardRow stats={scorecardStats} />
           </div>
 
-          {/* Row 2: 60/40 Workspace. `min-h-0` is what lets the row take a definite
-              height instead of growing to fit its content — without it the columns'
-              inner `overflow-y-auto` never clips and the whole page scrolls instead.
-              Both columns set `overflow-hidden`, so their grid auto-minimum is 0. */}
+          {/* Row 2: 60/40 Workspace. `flex-1` fills a tall screen; the explicit
+              minimum is what keeps it from being squeezed on a short one
+              (PAC-145). It is sized to one full page of the queue
+              (`TICKET_PAGE_SIZE` rows, ~84px each at the app's 15px root, plus
+              the card's header and pager), so a page of tickets never needs
+              the card's own scrollbar — below that height the body scrolls
+              instead. The row still has a definite height either way, so the
+              columns' inner `overflow-y-auto` keeps clipping. Change this
+              alongside `TICKET_PAGE_SIZE`. */}
           <div
-            className="grid gap-5 flex-1 min-h-0"
+            className="grid gap-5 flex-1 flex-shrink-0 min-h-[58rem]"
             style={{ gridTemplateColumns: "3fr 2fr" }}
           >
             <PriorityTicketQueue
@@ -270,7 +290,7 @@ export default function App() {
               onAddNote={(id, content) => noteMutation.mutate({ id, content })}
               onChangeStatus={(id, status) => statusMutation.mutate({ id, status })}
             />
-            <RenewalOutreachDesk onOpenTicket={openTicket} />
+            <RenewalOutreachDesk onOpenTicket={openRenewalTicket} />
           </div>
         </main>
       </div>

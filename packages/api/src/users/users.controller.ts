@@ -34,6 +34,10 @@ import {
   listAgencyUsersSchema,
   type ListAgencyUsersDto,
 } from './dto/list-users.dto';
+import {
+  listUserOptionsSchema,
+  type ListUserOptionsDto,
+} from './dto/list-user-options.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -73,8 +77,12 @@ export class UsersController {
    */
   @Get('options')
   @RequirePermissions(AgencyPermission.UsersRead)
-  options(@AgencyId() agencyId: string) {
-    return this.usersService.listOptions(agencyId);
+  options(
+    @AgencyId() agencyId: string,
+    @Query(new ZodValidationPipe(listUserOptionsSchema))
+    query: ListUserOptionsDto,
+  ) {
+    return this.usersService.listOptions(agencyId, query);
   }
 
   @Get(':userId')

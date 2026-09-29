@@ -1,0 +1,77 @@
+meta {
+  name: List User Options (available producers)
+  type: http
+  seq: 16
+}
+
+get {
+  url: {{baseUrl}}/users/options?role=producer&availability=available
+  auth: bearer
+}
+
+params:query {
+  role: producer
+  availability: available
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is a bare array", function () {
+    expect(res.getBody()).to.be.an("array");
+  });
+
+  test("everyone in it is available", function () {
+    res.getBody().forEach(function (row) {
+      expect(row.availability).to.equal("available");
+    });
+  });
+
+  test("the owner, who is not a producer, is not in it", function () {
+    const all = res.getBody().map(function (row) { return row.email; });
+    expect(all).to.not.include(bru.getEnvVar("ownerEmail"));
+  });
+}
+
+docs {
+  # GET /users/options?role=producer&availability=available — the lead picker (PAC-144)
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `agency:users:read`
+  - **Data scope:** the caller's agency.
+
+  The Command Center's Unclaimed Pool "Assign to…" picker. Before PAC-144 it
+  read the unfiltered option list and narrowed it in the browser to
+  `available` + `busy`, so every CSR, manager and the owner were offered as
+  producers.
+
+  ## Params
+  - `role` — role **slug**. `producer` is the default role template's slug,
+    the same one the Management dashboard's Team Activity roster keys on, so
+    an agency renaming the role does not empty the picker. An unknown slug
+    returns `[]`.
+  - `availability` — `available` | `busy` | `away`; repeatable or
+    comma-separated, ORed. The picker sends `available` only.
+
+  Everything else — active only, platform admins excluded, the sort — is as
+  `List User Options (for pickers).bru`.
+
+  ## Response `200`
+  ```json
+  [
+    { "_id": "665f…ac1", "email": "producer@demo.local",
+      "firstName": "Dana", "lastName": "Okafor", "availability": "available" }
+  ]
+  ```
+
+  ## Errors
+  - `400` — `role` is not a slug, or `availability` is outside the vocabulary.
+  - `401` — missing or expired bearer token.
+  - `403` — the caller lacks `agency:users:read`.
+}

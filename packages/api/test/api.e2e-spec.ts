@@ -925,9 +925,9 @@ describe('SFA API (e2e)', () => {
     });
 
     describe('GET /api/v1/users/options (PAC-101)', () => {
-      const options = async (token: string) => {
+      const options = async (token: string, qs = '') => {
         const res = await request(app.getHttpServer())
-          .get('/api/v1/users/options')
+          .get(`/api/v1/users/options${qs}`)
           .set(authHeader(token))
           .expect(200);
         return res.body as Array<{
@@ -990,6 +990,44 @@ describe('SFA API (e2e)', () => {
           .get('/api/v1/users/options')
           .set(authHeader(readOnlyToken))
           .expect(403);
+      });
+
+      describe('narrowed for the Command Center lead picker (PAC-144)', () => {
+        it('?role=producer lists producers and not the owner', async () => {
+          const emails = (await options(ownerToken, '?role=producer')).map(
+            (row) => row.email,
+          );
+          expect(emails).toContain(seed.producerEmail);
+          expect(emails).not.toContain(seed.ownerEmail);
+        });
+
+        it('?availability= filters on it', async () => {
+          const rows = await options(ownerToken, '?availability=available');
+          expect(rows.length).toBeGreaterThan(0);
+          expect(rows.every((row) => row.availability === 'available')).toBe(
+            true,
+          );
+          expect(await options(ownerToken, '?availability=away')).toEqual(
+            (await options(ownerToken)).filter(
+              (row) => (row.availability as string) === 'away',
+            ),
+          );
+        });
+
+        it('an unknown role matches nobody, never the whole roster', async () => {
+          expect(await options(ownerToken, '?role=no-such-role')).toEqual([]);
+        });
+
+        it('rejects values outside the vocabulary', async () => {
+          await request(app.getHttpServer())
+            .get('/api/v1/users/options?availability=asleep')
+            .set(authHeader(ownerToken))
+            .expect(400);
+          await request(app.getHttpServer())
+            .get('/api/v1/users/options?role=Agency%20Owner')
+            .set(authHeader(ownerToken))
+            .expect(400);
+        });
       });
     });
 

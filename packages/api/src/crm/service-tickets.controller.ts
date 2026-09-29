@@ -67,9 +67,9 @@ export class ServiceTicketsController {
    * ------------------------------------------------------------------ */
 
   /**
-   * The Proactive Renewal Outreach desk. Also the primary trigger for
-   * materializing cycles — there is no cron, so reading the desk is what makes
-   * renewals appear.
+   * The Proactive Renewal Outreach desk: renewals whose first call opens in the
+   * next two weeks (PAC-143), across the caller's data scope (PAC-146). A pure
+   * read — cycles are materialized by the worker's scan (PAC-99).
    */
   @Get('renewals/desk')
   renewalDesk(@Access() access: AccessContext) {

@@ -5,6 +5,7 @@ import type { RenewalStepKey, RenewalTrack } from '@sfa/shared';
 import {
   DEFAULT_RENEWAL_STEP_DEFINITIONS,
   RENEWAL_BACKLOG_GRACE_DAYS,
+  RENEWAL_DESK_PREVIEW_DAYS,
   RENEWAL_OUTREACH_CUTOVER,
   nextRenewalDate,
   renewalTrackFor,
@@ -29,6 +30,7 @@ import { User } from '../../users/schemas/user.schema';
 import {
   formatTermKey,
   renewalAnchorDate,
+  renewalScanHorizonDays,
   renewalStepsToOpen,
   scheduleRenewalSteps,
   type PlannedRenewalStep,
@@ -165,8 +167,12 @@ export class RenewalMaterializationService {
     }
 
     const now = new Date();
+    const horizonDays = renewalScanHorizonDays(
+      await this.resolveRenewalDefinitions(),
+      RENEWAL_DESK_PREVIEW_DAYS,
+    );
     const horizonStart = new Date(now.getTime() - RENEWAL_GRACE_DAYS * DAY_MS);
-    const horizonEnd = new Date(now.getTime() + RENEWAL_HORIZON_DAYS * DAY_MS);
+    const horizonEnd = new Date(now.getTime() + horizonDays * DAY_MS);
 
     // Side 0 — advance anchors that have gone by, and fill in missing ones.
     // Runs first so Side A sees a book whose dates are all in the future.
@@ -699,8 +705,6 @@ export class RenewalMaterializationService {
   }
 }
 
-/** How far ahead the scan looks — the widest lead time on any track. */
-const RENEWAL_HORIZON_DAYS = 90;
 /** How long after a renewal a cycle can still be closed out with an outcome. */
 const RENEWAL_GRACE_DAYS = 14;
 /**

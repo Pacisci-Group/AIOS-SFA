@@ -1,5 +1,6 @@
 import {
   DEFAULT_RENEWAL_STEP_DEFINITIONS,
+  RENEWAL_DESK_PREVIEW_DAYS,
   POLICY_TYPE_CODE_ALIASES,
   SEMIANNUAL_TERM_POLICY_TYPES,
   isSemiannualPolicyType,
@@ -15,6 +16,7 @@ import {
   daysUntil,
   formatTermKey,
   renewalAnchorDate,
+  renewalScanHorizonDays,
   renewalStepsToOpen,
   scheduleRenewalSteps,
   type PlannedRenewalStep,
@@ -527,5 +529,22 @@ describe('renewalStepsToOpen', () => {
 
   it('has nothing to open for an empty plan', () => {
     expect(renewalStepsToOpen([], none, CUTOVER, GRACE)).toEqual([]);
+  });
+});
+
+describe('renewalScanHorizonDays (PAC-143)', () => {
+  it('reaches past the earliest call by the desk preview window', () => {
+    // T-90 annual review + 14 days of preview: the cycle exists two weeks
+    // before its first call opens, which is what lets the desk show it.
+    expect(renewalScanHorizonDays(DEFS, RENEWAL_DESK_PREVIEW_DAYS)).toBe(104);
+  });
+
+  it('follows the definitions rather than a written-down number', () => {
+    const earlier = DEFS.map((d) =>
+      d.stepKey === 'annual_review'
+        ? { ...d, offsetMinutes: -120 * 24 * 60 }
+        : d,
+    );
+    expect(renewalScanHorizonDays(earlier, 14)).toBe(134);
   });
 });

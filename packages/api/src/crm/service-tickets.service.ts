@@ -1812,21 +1812,23 @@ export class ServiceTicketsService {
   }
 
   /**
-   * The Proactive Renewal Outreach desk: one row per cycle, showing the call
-   * that is actually on the CSR's plate — plus the ones about to land on it.
+   * The Proactive Renewal Outreach desk: one row per cycle whose renewal period
+   * is about to start — its **first** call opens within
+   * {@link RENEWAL_DESK_PREVIEW_DAYS} and has not opened yet (PAC-143).
    *
-   * Runs the throttled scan first, which is what makes renewals appear without
-   * a cron.
+   * Everywhere else a call that has not opened is not work and is filtered out
+   * (`scheduledStepMatches` keeps them out of the queue and the KPI strip). This
+   * desk is the mirror image: it shows *only* those, so a renewal is planned
+   * here and worked in the Agency Priority queue, and never sits in both. See
+   * `renewal/renewal-desk.ts` for why "first" is `renewal.sequence === 1`.
    *
-   * **Scheduled calls are previewed, not hidden.** Everywhere else a call that
-   * has not opened is not work and is filtered out (`scheduledStepMatches`
-   * keeps them out of the queue and the KPI strip). This desk is the exception,
-   * because it is the one surface whose job is the *next* fortnight rather than
-   * today: a T-45 call that first appears on the morning it opens cannot be
-   * planned around, which made a panel named "Proactive" reactive. Calls inside
-   * {@link RENEWAL_DESK_PREVIEW_DAYS} therefore come back carrying
-   * `daysUntilAvailable`, and stay non-actionable until they open —
-   * `completeRenewalStep` enforces that independently.
+   * Rows stay non-actionable — `completeRenewalStep` refuses a call before its
+   * `availableAt` independently of anything the desk says.
+   *
+   * Queried from the tickets side, then the cycles: the cycles are only there
+   * to describe a row, and loading "the first 100 open cycles" before
+   * narrowing let cycles whose renewal had already passed crowd every
+   * upcoming one out of the limit.
    */
   async renewalDesk(access: AccessContext): Promise<RenewalDeskRow[]> {
     if (!access.agencyId) {
@@ -1835,57 +1837,48 @@ export class ServiceTicketsService {
     const now = new Date();
     const previewUntil = renewalPreviewCutoff(now);
     const agencyId = new Types.ObjectId(access.agencyId);
-    const cycles = await this.cycleModel
-      .find({ agencyId, completedAt: null })
-      .sort({ renewalDate: 1 })
-      .limit(RENEWAL_DESK_LIMIT);
-    if (!cycles.length) {
-      return [];
-    }
 
-    const definitions =
-      await this.renewalMaterialization.resolveRenewalDefinitions();
     /*
-     * Pinned to the caller, explicitly — the desk is "my calls to make today",
-     * not a branch roster, and PAC-109 does not mention it. Passing `'own'`
-     * rather than relying on the default keeps it that way now that the
-     * default has moved to the branch floor: the desk's behaviour is a
-     * decision, not a leftover. Widening it is PAC-46's call to make.
+     * Whose renewals the desk shows follows the caller's data scope (PAC-146):
+     * an agency-scoped owner sees the agency's, a branch-scoped manager their
+     * branch's — the same reach the Agency Priority queue gives them.
      *
-     * A cycle whose call is not visible simply produces no row.
+     * An `own`-scoped rep is pinned to their own calls **explicitly**. Left to
+     * the default they would get the branch floor PAC-109 gave the ticket
+     * queue, and the desk is "my renewals" for the person who will make the
+     * calls, not a branch roster.
      */
     const tickets = await this.ticketModel
       .find({
-        ...this.scopeFilter(access, 'own'),
-        'renewal.renewalCycleId': { $in: cycles.map((c) => c._id) },
+        ...this.scopeFilter(
+          access,
+          access.dataScope === DataScope.Own ? 'own' : undefined,
+        ),
+        'renewal.sequence': 1,
         'renewal.completedAt': null,
-        // Open, or opening within the preview window.
-        'renewal.availableAt': { $ne: null, $lte: previewUntil },
+        'renewal.availableAt': { $gt: now, $lte: previewUntil },
       })
-      .sort({ 'renewal.dueAt': 1 })
+      .sort({ 'renewal.availableAt': 1 })
+      .limit(RENEWAL_DESK_LIMIT)
       .lean();
+    if (!tickets.length) {
+      return [];
+    }
+
+    const cycles = await this.cycleModel.find({
+      _id: { $in: tickets.map((t) => t.renewal!.renewalCycleId) },
+      agencyId,
+      completedAt: null,
+    });
+    const cycleById = new Map(cycles.map((c) => [String(c._id), c]));
+    const definitions =
+      await this.renewalMaterialization.resolveRenewalDefinitions();
 
     const rows: RenewalDeskRow[] = [];
-    for (const cycle of cycles) {
-      const forCycle = tickets.filter(
-        (t) => String(t.renewal?.renewalCycleId) === String(cycle._id),
-      );
-      /*
-       * One row per cycle, and an open call always wins it.
-       *
-       * Both calls of an annual cycle can match at once — an annual review
-       * still open at T-50 alongside a renewal review opening at T-45. The
-       * work in hand is the open one; previewing the later call while the
-       * earlier is unfinished would bury it. Explicit rather than leaning on
-       * the `dueAt` sort to imply the same thing.
-       */
-      const ticket =
-        forCycle.find(
-          (t) =>
-            t.renewal?.availableAt &&
-            new Date(t.renewal.availableAt).getTime() <= now.getTime(),
-        ) ?? forCycle[0];
-      if (!ticket?.renewal) continue;
+    for (const ticket of tickets) {
+      const cycle = cycleById.get(String(ticket.renewal?.renewalCycleId));
+      // A ticket whose cycle has been closed is not a renewal anyone will call.
+      if (!cycle || !ticket.renewal?.availableAt) continue;
 
       const step = serializeRenewalStep(ticket.renewal, definitions, now);
       rows.push({
@@ -1904,12 +1897,11 @@ export class ServiceTicketsService {
         daysUntilRenewal: step.daysUntilRenewal,
         availableAt: step.availableAt,
         dueAt: step.dueAt,
-        // Null once the call is open. `availableAt` is never null here — the
-        // query matched on `$ne: null` — so the countdown is always real.
-        daysUntilAvailable:
-          step.isActionable || !step.availableAt
-            ? null
-            : daysUntil(new Date(step.availableAt), now),
+        daysUntilAvailable: daysUntil(ticket.renewal.availableAt, now),
+        assignedUserId: ticket.assignedUserId
+          ? String(ticket.assignedUserId)
+          : null,
+        assignedRep: ticket.assignedRep ?? '',
         status: renewalStepStatus(ticket.renewal, now),
         isActionable: step.isActionable,
         isOverdue: step.isOverdue,
@@ -1929,9 +1921,11 @@ export class ServiceTicketsService {
 /**
  * Rows the desk will render.
  *
- * ⚠ A silent truncation: a CSR with more than this many open cycles never sees
- * the rest, and nothing on screen says so. Paginating the desk is the
- * follow-on to PAC-99 (plan PR4).
+ * ⚠ A silent truncation: a CSR with more than this many calls opening inside
+ * the preview window never sees the rest, and nothing on screen says so. The
+ * window is two weeks of first calls, so this is far less likely to bite than
+ * when it capped every open cycle; paginating the desk is still the follow-on
+ * to PAC-99 (plan PR4).
  */
 const RENEWAL_DESK_LIMIT = 100;
 

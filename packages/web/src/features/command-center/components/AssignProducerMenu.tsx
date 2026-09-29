@@ -7,17 +7,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { UserAvailability } from "@sfa/shared";
 import { reassignLead } from "@/lib/leads-api";
-import { agencyUserOptionsKey, listUserOptions } from "@/lib/users-api";
+import {
+  listUserOptionsWhere,
+  userOptionsKey,
+  type UserOptionsParams,
+} from "@/lib/users-api";
 
 /**
- * Who this picker lists. An allow-list, not "everyone except X": a status added
- * to `USER_AVAILABILITIES` later (`inactive` is on its way) stays out of the
- * picker until someone decides it belongs here, rather than slipping in.
+ * Who this picker lists: producers who are taking leads (PAC-144).
+ *
+ * Filtered by the server, not here — it used to be every active employee
+ * narrowed in the browser to `available` + `busy`, so CSRs, managers and the
+ * owner were all offered as producers. Availability is an allow-list, not
+ * "everyone except X": a status added to `USER_AVAILABILITIES` later stays out
+ * of the picker until someone decides it belongs here. `busy` is out on
+ * purpose — a busy producer is not taking new leads.
+ *
+ * `producer` is the role **slug**, the same one the Team Activity roster keys
+ * on, so renaming the role in an agency does not empty the picker.
  */
-const ASSIGNABLE_AVAILABILITIES: ReadonlySet<UserAvailability> =
-  new Set<UserAvailability>(["available", "busy"]);
+const ASSIGNABLE_PRODUCERS: UserOptionsParams = {
+  role: "producer",
+  availability: ["available"],
+};
 
 interface AssignProducerMenuProps {
   leadId: string;
@@ -60,9 +73,10 @@ export function AssignProducerMenu({
   const queryClient = useQueryClient();
 
   const users = useQuery({
-    queryKey: agencyUserOptionsKey,
-    queryFn: listUserOptions,
+    queryKey: userOptionsKey(ASSIGNABLE_PRODUCERS),
+    queryFn: () => listUserOptionsWhere(ASSIGNABLE_PRODUCERS),
   });
+  const producers = users.data ?? [];
 
   const assign = useMutation({
     mutationFn: (producerId: string) => reassignLead(leadId, producerId),
@@ -92,20 +106,23 @@ export function AssignProducerMenu({
           <SelectValue placeholder="Assign to…" />
         </SelectTrigger>
         <SelectContent>
-          {/* Deactivated accounts are excluded server-side by
-              `/users/options` — assigning to one is how a lead quietly reaches
-              nobody. Availability is filtered here because the other pickers
-              sharing that endpoint want everyone. */}
-          {(users.data ?? [])
-            .filter((user) => ASSIGNABLE_AVAILABILITIES.has(user.availability))
-            .map((user) => (
-              <SelectItem key={user._id} value={user._id}>
-                {[user.firstName, user.lastName]
-                  .filter(Boolean)
-                  .join(" ")
-                  .trim() || user.email}
-              </SelectItem>
-            ))}
+          {/* Deactivated accounts, non-producers and anyone not available are
+              all excluded server-side — see `ASSIGNABLE_PRODUCERS`. */}
+          {producers.map((user) => (
+            <SelectItem key={user._id} value={user._id}>
+              {[user.firstName, user.lastName]
+                .filter(Boolean)
+                .join(" ")
+                .trim() || user.email}
+            </SelectItem>
+          ))}
+          {/* A sentence, not an empty popover: with every producer busy or
+              away, a blank list reads as broken. */}
+          {users.isSuccess && producers.length === 0 && (
+            <p className="px-2 py-1.5 text-xs text-muted-foreground">
+              No producers available
+            </p>
+          )}
         </SelectContent>
       </Select>
 

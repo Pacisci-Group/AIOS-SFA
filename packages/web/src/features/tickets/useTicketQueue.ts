@@ -37,8 +37,9 @@ export const FEED_PAGE_SIZE = 25;
  *
  * `scope` is the Mine / Everyone toggle (PAC-109). Mine by default — a rep
  * opens the workspace to work their own plate, the opposite default to the
- * Leads list. It is not one of the shared params, so `ticketQueueLink` does not
- * carry the dashboard's `own` / `others` split across.
+ * Leads list. It is not one of the shared params: `ticketQueueLink` sets it
+ * from where the ticket was opened, mapping the dashboard's Agency Tickets
+ * (`others`) onto Everyone (`agency`) — PAC-147.
  */
 const URL_DEFAULTS = {
   ...TICKET_QUEUE_URL_DEFAULTS,

@@ -63,14 +63,22 @@ describe('Renewal materialization (e2e)', () => {
     roleIds: [],
   };
 
-  /** A household with one auto policy renewing `inDays` from now. */
-  async function seedBook(inDays: number, policyNumber: string) {
+  /**
+   * A household with one policy renewing `inDays` from now — Auto (the
+   * semiannual track, one merged call at T-45) unless told otherwise.
+   */
+  async function seedBook(
+    inDays: number,
+    policyNumber: string,
+    policyType = 'Auto',
+    assignedCrmId: Types.ObjectId = csrId,
+  ) {
     const renewalDate = new Date(Date.now() + inDays * DAY_MS);
     const household = await households.create({
       agencyId,
       branchId,
       name: 'Renewal Fixture Household',
-      assignedCrmId: csrId,
+      assignedCrmId,
       isTestRecord: true,
     } as unknown as Household);
 
@@ -79,7 +87,7 @@ describe('Renewal materialization (e2e)', () => {
       branchId,
       legacySmartSuiteId: `renewal-e2e:${policyNumber}`,
       policyNumber,
-      policyType: 'Auto',
+      policyType,
       carrier: 'Pacific Standard',
       active: true,
       policyStatus: 'Active',
@@ -233,5 +241,123 @@ describe('Renewal materialization (e2e)', () => {
     const built = await cycles.findOne({ agencyId }).lean();
     expect(built!.completedAt).not.toBeNull();
     expect(built!.closedReason).toBe('policy_ineligible');
+  });
+
+  /**
+   * The Proactive Renewal Outreach desk (PAC-143): a renewal is on it for the
+   * two weeks before its renewal period starts — T-104..T-90 annual,
+   * T-59..T-45 auto — and nowhere else, so it never sits on the desk and in
+   * the Agency Priority queue at once.
+   */
+  describe('Proactive Renewal Outreach desk (PAC-143)', () => {
+    const deskPolicies = async () =>
+      (await tickets.renewalDesk(access))
+        .map((row) => row.policies[0]?.policyNumber)
+        .sort();
+
+    it('previews first calls opening within two weeks, and nothing already open', async () => {
+      await seedBook(50, 'DESK-AUTO-SOON'); // T-45 call opens in 5 days
+      await seedBook(40, 'DESK-AUTO-OPEN'); // opened 5 days ago
+      await seedBook(70, 'DESK-AUTO-LATER'); // opens in 25 days
+      await seedBook(100, 'DESK-HOME-SOON', 'Home'); // T-90 opens in 10 days
+      await seedBook(80, 'DESK-HOME-OPEN', 'Home'); // T-90 opened 10 days ago
+
+      await tickets.materializeRenewalCycles(access);
+
+      expect(await deskPolicies()).toEqual([
+        'DESK-AUTO-SOON',
+        'DESK-HOME-SOON',
+      ]);
+    });
+
+    it('creates an annual cycle early enough to preview its T-90 review', async () => {
+      // 100 days out is past the old 90-day horizon: without the preview
+      // window on top, this cycle would not exist yet.
+      await seedBook(100, 'DESK-HOME-HORIZON', 'Home');
+
+      await tickets.materializeRenewalCycles(access);
+
+      expect(await cycles.countDocuments({ agencyId })).toBe(1);
+      const [row] = await tickets.renewalDesk(access);
+      expect(row.stepKey).toBe('annual_review');
+      expect(row.daysUntilAvailable).toBeGreaterThanOrEqual(9);
+      expect(row.isActionable).toBe(false);
+    });
+
+    it('does not preview a later call once the renewal period has started', async () => {
+      // An annual cycle whose T-90 review has no ticket — as at the cutover,
+      // where a stale warm-up is suppressed. Its T-45 call has not opened, but
+      // the renewal period it belongs to already has.
+      await seedBook(50, 'DESK-HOME-NO-WARMUP', 'Home');
+      await tickets.materializeRenewalCycles(access);
+      await ticketModel.deleteMany({
+        agencyId,
+        'renewal.stepKey': 'annual_review',
+      });
+
+      expect(await deskPolicies()).toEqual([]);
+    });
+
+    it('lists soonest-opening first', async () => {
+      await seedBook(58, 'DESK-AUTO-13'); // opens in 13 days
+      await seedBook(47, 'DESK-AUTO-2'); // opens in 2 days
+
+      await tickets.materializeRenewalCycles(access);
+
+      expect(
+        (await tickets.renewalDesk(access)).map(
+          (row) => row.policies[0]?.policyNumber,
+        ),
+      ).toEqual(['DESK-AUTO-2', 'DESK-AUTO-13']);
+    });
+
+    /**
+     * PAC-146: an owner or branch manager sees everyone's renewals on the
+     * desk; a rep sees only their own. Scope, not role name, decides.
+     */
+    describe('whose renewals (PAC-146)', () => {
+      const colleagueId = new Types.ObjectId();
+      const scoped = (dataScope: DataScope, branch = branchId) => ({
+        ...access,
+        dataScope,
+        branchId: branch.toHexString(),
+      });
+
+      beforeEach(async () => {
+        await seedBook(50, 'DESK-MINE');
+        await seedBook(51, 'DESK-COLLEAGUE', 'Auto', colleagueId);
+        await tickets.materializeRenewalCycles(access);
+      });
+
+      it('an agency-scoped owner sees every renewal, and whose each is', async () => {
+        const rows = await tickets.renewalDesk(scoped(DataScope.Agency));
+        expect(rows.map((r) => r.policies[0]?.policyNumber).sort()).toEqual([
+          'DESK-COLLEAGUE',
+          'DESK-MINE',
+        ]);
+        const colleagues = rows.find(
+          (r) => r.policies[0]?.policyNumber === 'DESK-COLLEAGUE',
+        );
+        expect(colleagues?.assignedUserId).toBe(colleagueId.toHexString());
+      });
+
+      it('a branch-scoped manager sees their branch, and no other', async () => {
+        expect(
+          await tickets.renewalDesk(scoped(DataScope.Branch)),
+        ).toHaveLength(2);
+        expect(
+          await tickets.renewalDesk(
+            scoped(DataScope.Branch, new Types.ObjectId()),
+          ),
+        ).toEqual([]);
+      });
+
+      it('an own-scoped rep sees only their own — not the branch floor', async () => {
+        const rows = await tickets.renewalDesk(scoped(DataScope.Own));
+        expect(rows.map((r) => r.policies[0]?.policyNumber)).toEqual([
+          'DESK-MINE',
+        ]);
+      });
+    });
   });
 });

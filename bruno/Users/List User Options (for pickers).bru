@@ -97,6 +97,19 @@ docs {
   "adams" does not sort after "Zimmer". `email` is the tiebreak because it is
   unique.
 
+  ## Optional query params (PAC-144)
+
+  Both are opt-in; without them the response is the whole active roster, as
+  above. See `List User Options (available producers).bru`.
+
+  - `role` — a role **slug** (`producer`), never a display name. Narrows to
+    holders of that role. A slug the agency has no role for returns `[]`,
+    never the unfiltered roster.
+  - `availability` — `available` | `busy` | `away`; repeatable or
+    comma-separated, ORed.
+
+  `400` if either is malformed.
+
   ## Response `200`
   ```json
   [
