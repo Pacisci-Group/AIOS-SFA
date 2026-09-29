@@ -554,7 +554,10 @@ describe('Mailer campaigns (e2e)', () => {
       ).toBe(409);
     });
 
-    it('refuses on a campaign that was never an upload', async () => {
+    it('takes files on a migrated campaign, which has none yet', async () => {
+      // Every real week in production came from the BigQuery backfill: no
+      // files, no settings. Those are exactly the campaigns records go
+      // missing from, so they must re-open too — imported as they stand.
       const implicit = await campaigns.create({
         carrierId: allstateId,
         name: 'Migrated week',
@@ -567,7 +570,11 @@ describe('Mailer campaigns (e2e)', () => {
         'controlno,firstname\n#b,Bo\n',
         'b.csv',
       );
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(200);
+      const body = res.body as MailerCampaignDto;
+      expect(body.status).toBe('uploaded');
+      expect(body.files.map((file) => file.name)).toEqual(['b.csv']);
+      expect(body.settings).toBeNull();
     });
 
     it('removes a file before the commit, but never the last one', async () => {

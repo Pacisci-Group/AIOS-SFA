@@ -239,7 +239,9 @@ export class MailerCampaign {
   /**
    * The uploaded vendor files, in upload order (PAC-142). Concatenated before
    * the transform, so every file must carry the first one's column set — the
-   * preview fails naming the file otherwise.
+   * preview fails naming the file otherwise. Empty on an implicit (`migration`
+   * / `demo`) campaign until somebody adds records to it; with `settings` null
+   * those files are imported as they stand, like a `processed` source.
    */
   @Prop({ type: [MailerCampaignFileDocSchema], default: [] })
   files: MailerCampaignFileDoc[];

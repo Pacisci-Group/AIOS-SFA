@@ -106,15 +106,21 @@ export function areSettingsLocked(campaign: MailerCampaign): boolean {
  * Whether more files may be added — the mirror of the API's `ADD_FILES_STATUSES`.
  *
  * The editable states plus `imported`, which is what makes this Add records.
- * Never while the worker holds the file list (`processing`), never after an
- * overwrite replaced it (`superseded`), and never on a campaign that was not an
- * upload in the first place.
+ * Never while the worker holds the file list (`processing`), and never after an
+ * overwrite replaced it (`superseded`). A migrated campaign qualifies too — it
+ * just has no settings, so its files are imported as they stand; see
+ * {@link importsAsIs}.
  */
 export function canAddFiles(campaign: MailerCampaign): boolean {
-  return (
-    (isCampaignEditable(campaign.status) || campaign.status === 'imported') &&
-    (campaign.source === 'vendor' || campaign.source === 'processed')
-  );
+  return isCampaignEditable(campaign.status) || campaign.status === 'imported';
+}
+
+/**
+ * Files on this campaign skip the transform and are imported as they stand:
+ * a `processed` source, or a migrated campaign that recorded no settings.
+ */
+export function importsAsIs(campaign: MailerCampaign): boolean {
+  return campaign.source === 'processed' || campaign.settings === null;
 }
 
 /**

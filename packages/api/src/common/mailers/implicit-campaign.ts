@@ -95,8 +95,8 @@ export function implicitCampaignDoc(
     files: [],
     outputFile: null,
     newRowsFile: null,
-    // Never through a commit here, so nothing to lock: Add records is refused
-    // on `migration` / `demo` sources anyway (no settings to run with).
+    // No commit ran here, so nothing to stamp. Add records still works on one
+    // of these: with `settings` null the files are imported as they stand.
     firstImportedAt: null,
     stats: null,
     preview: null,

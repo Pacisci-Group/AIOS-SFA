@@ -33,6 +33,7 @@ import {
   emailCampaignOutput,
   getCampaign,
   getCampaignFileUrl,
+  importsAsIs,
   isCampaignSettled,
   type CampaignFileKind,
 } from "@/lib/platform-campaigns-api";
@@ -254,9 +255,9 @@ export default function MailerCampaignDetailPage() {
                 onClick={() =>
                   navigate(
                     `/admin/campaigns/new?campaignId=${campaign.id}${
-                      campaign.source === "processed"
-                        ? "&source=processed"
-                        : ""
+                      // A migrated campaign has no settings, so its files are
+                      // imported as they stand — the wizard's processed copy.
+                      importsAsIs(campaign) ? "&source=processed" : ""
                     }`,
                   )
                 }

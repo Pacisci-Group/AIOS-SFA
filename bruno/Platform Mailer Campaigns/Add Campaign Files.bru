@@ -65,8 +65,12 @@ docs {
   - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
 
   Legal in `uploaded`, `previewed`, `failed` **and `imported`**; `409` while
-  `processing` (the worker holds the file list), after a supersede, or on a
-  `migration` / `demo` campaign (nothing to run a transform with).
+  `processing` (the worker holds the file list) or after a supersede.
+
+  A **migrated** campaign (`source: migration`, no settings — every real week
+  in production is one) takes files too. With no settings there is no
+  transform to run, so its files are imported **as they stand**, exactly like
+  a `processed` campaign; upload a processed file, not the raw vendor file.
 
   ## Body
   The same `files` array `Create Campaign` takes: 1–20 of
@@ -88,5 +92,5 @@ docs {
   - `400 Bad Request` — key outside the namespace, object missing or empty,
     size mismatch, the same object twice, or more than 20 files in total.
   - `401` / `403` — missing token, or missing `platform:mailers:write`.
-  - `409 Conflict` — wrong status or a non-upload source (see above).
+  - `409 Conflict` — `processing` or `superseded`.
 }

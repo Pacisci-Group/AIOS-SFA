@@ -12,6 +12,7 @@ import {
   canAddFiles,
   canRemoveFiles,
   getCampaignFileUrl,
+  importsAsIs,
 } from "@/lib/platform-campaigns-api";
 import { formatBytes } from "../campaign-format";
 
@@ -49,6 +50,10 @@ export function CampaignFilesCard({
   const removable = canRemoveFiles(campaign);
   const addable = canAddFiles(campaign);
   const reopens = campaign.status === "imported";
+  const asIs = importsAsIs(campaign);
+  // A migrated campaign: its mailers came from ApexReports' BigQuery tables,
+  // and nothing recorded what floor or discount table that run used.
+  const migrated = campaign.source === "migration" || campaign.source === "demo";
 
   return (
     <Card>
@@ -58,10 +63,11 @@ export function CampaignFilesCard({
             {title}
           </h3>
           <p className="text-xs text-muted-foreground">
-            {campaign.files.length === 1
-              ? "1 file"
-              : `${campaign.files.length} files`}
-            , read together as one week
+            {campaign.files.length === 0
+              ? "No files yet — this week was migrated"
+              : campaign.files.length === 1
+                ? "1 file, read together as one week"
+                : `${campaign.files.length} files, read together as one week`}
           </p>
         </div>
 
@@ -108,9 +114,13 @@ export function CampaignFilesCard({
         {addable && (
           <div className="flex flex-col gap-3 border-t border-border pt-3">
             <p className="text-xs text-muted-foreground">
-              {reopens
-                ? "Add the records the vendor file missed. The campaign is read again over every file; rows already here are updated, and only the new ones go in the print file."
-                : "Forgot a file? Add it here and the campaign is read again over all of them."}
+              {migrated
+                ? "This campaign was migrated and recorded no pricing settings, so files added here are imported as they stand — upload a processed file, not the raw vendor file. Rows already here are updated, and only the new ones go in the print file."
+                : reopens && asIs
+                  ? "Add the processed records the file missed. Files are imported as they stand; rows already here are updated, and only the new ones go in the print file."
+                  : reopens
+                    ? "Add the records the vendor file missed. The campaign is read again over every file; rows already here are updated, and only the new ones go in the print file."
+                    : "Forgot a file? Add it here and the campaign is read again over all of them."}
             </p>
             <FileDropzone
               multiple
@@ -119,7 +129,11 @@ export function CampaignFilesCard({
               maxBytes={MAX_CAMPAIGN_FILE_BYTES}
               files={pending}
               onSelectFiles={setPending}
-              hint="Same columns as the files above · XLSX or CSV up to 100MB"
+              hint={
+                campaign.files.length === 0
+                  ? "Processed XLSX or CSV, up to 100MB each"
+                  : "Same columns as the files above · XLSX or CSV up to 100MB"
+              }
               disabled={busy}
               aria-label="Add files to the campaign"
             />

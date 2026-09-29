@@ -110,9 +110,6 @@ const EDITABLE_STATUSES = ['uploaded', 'previewed', 'failed'] as const;
  */
 const ADD_FILES_STATUSES = [...EDITABLE_STATUSES, 'imported'] as const;
 
-/** Sources whose files came through the upload flow, and can take more. */
-const UPLOADED_SOURCES = ['vendor', 'processed'] as const;
-
 /**
  * The request-bound half of mailer campaigns (PAC-71).
  *
@@ -437,6 +434,13 @@ export class MailerCampaignsService {
    *
    * Back to `uploaded` either way: the stored preview described the old file
    * list, and a commit must not gate against it.
+   *
+   * ⚠ A **migrated** campaign (`source: migration`, no settings) takes files
+   * too — every real week in production is one, and they are exactly the
+   * campaigns David finds records missing from. With no settings there is no
+   * transform to run, so the worker imports the files **as they stand**, the
+   * same way a `processed` campaign does; the web says so where the files are
+   * added. `superseded` is refused through the status check.
    */
   async addFiles(
     id: string,
@@ -447,13 +451,6 @@ export class MailerCampaignsService {
     if (!ADD_FILES_STATUSES.includes(campaign.status as 'uploaded')) {
       throw new ConflictException(
         `Files cannot be added while this campaign is "${campaign.status}".`,
-      );
-    }
-    if (!UPLOADED_SOURCES.includes(campaign.source as 'vendor')) {
-      // A `migration` or `demo` campaign describes a run that happened
-      // somewhere else; it has no settings to run a transform with.
-      throw new ConflictException(
-        'This campaign was not created from an upload, so files cannot be added to it.',
       );
     }
     if (campaign.files.length + dto.files.length > MAX_CAMPAIGN_FILES) {
@@ -1296,7 +1293,9 @@ export class MailerCampaignsService {
       carrierAgencyNames: campaign.carrierAgencyNames,
       settings: plainSettings(campaign.settings),
       files: campaign.files.map((file) => this.fileDto(file)),
-      outputFile: campaign.outputFile ? this.fileDto(campaign.outputFile) : null,
+      outputFile: campaign.outputFile
+        ? this.fileDto(campaign.outputFile)
+        : null,
       newRowsFile: campaign.newRowsFile
         ? this.fileDto(campaign.newRowsFile)
         : null,
