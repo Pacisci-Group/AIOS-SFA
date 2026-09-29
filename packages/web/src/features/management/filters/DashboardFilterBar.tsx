@@ -24,6 +24,17 @@ interface DashboardFilterBarProps {
   activeCount: number;
 }
 
+/**
+ * Below `sm` a select grows to share its row (`flex-1`); `min-w-40` is what
+ * makes the row break two to a line on a phone, since a `flex-1` item's basis
+ * is zero and wrapping is decided on its minimum. From `sm` up each select is
+ * a fixed width again, sized to its placeholder.
+ */
+const SELECT_WIDTH = {
+  narrow: "min-w-40 flex-1 sm:w-44 sm:flex-none",
+  wide: "min-w-40 flex-1 sm:w-48 sm:flex-none",
+} as const;
+
 /** Line of business = policy type — exactly the Sold form's dropdown. */
 const POLICY_TYPE_OPTIONS = POLICY_TYPES.map((type) => ({
   value: type,
@@ -40,6 +51,12 @@ const POLICY_TYPE_OPTIONS = POLICY_TYPES.map((type) => ({
  * Owner view the lead-source table's New leads column cannot take a line-of-business
  * filter; on the Manager view the producer filter narrows the alert cards but
  * never the Team Activity roster.
+ *
+ * Layout: the period chips and the selects share one row while they fit, and
+ * the selects drop to a second row when they do not — it is `flex-wrap`, not a
+ * breakpoint, because the sidebar and the chip count both move where "fits"
+ * is. On a phone the selects fill the row, two to a line, rather than sitting
+ * at three fixed widths that leave a ragged gap on the right.
  */
 export function DashboardFilterBar({
   range,
@@ -88,14 +105,14 @@ export function DashboardFilterBar({
   );
 
   return (
-    <div className="flex flex-col gap-3 border-b border-border px-4 py-3 md:px-6 lg:flex-row lg:items-center lg:justify-between">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-border px-4 py-3 md:px-6">
       <RangeChips
         chips={DASHBOARD_RANGE_CHIPS}
         range={range}
         onChange={onRangeChange}
       />
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
         {canListUsers && (
           <MultiSelect
             options={producerOptions}
@@ -103,7 +120,7 @@ export function DashboardFilterBar({
             onChange={(next) => onFilterChange("producerIds", next)}
             placeholder="All producers"
             summarize={(count) => `${count} producers`}
-            className="w-44"
+            className={SELECT_WIDTH.narrow}
           />
         )}
         <MultiSelect
@@ -112,7 +129,7 @@ export function DashboardFilterBar({
           onChange={(next) => onFilterChange("leadSourceIds", next)}
           placeholder="All lead sources"
           summarize={(count) => `${count} lead sources`}
-          className="w-44"
+          className={SELECT_WIDTH.narrow}
         />
         <MultiSelect
           options={POLICY_TYPE_OPTIONS}
@@ -120,7 +137,7 @@ export function DashboardFilterBar({
           onChange={(next) => onFilterChange("policyTypes", next)}
           placeholder="All lines of business"
           summarize={(count) => `${count} lines of business`}
-          className="w-48"
+          className={SELECT_WIDTH.wide}
           align="end"
         />
         {activeCount > 0 && (

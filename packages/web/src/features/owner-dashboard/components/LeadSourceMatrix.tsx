@@ -73,6 +73,11 @@ function ConversionCell({ convPct, convGap }: Conversion) {
  *
  * The mockup's relative premium bar per row is dropped: next to a "No source"
  * row that dwarfs every real channel, it would draw every channel as a sliver.
+ *
+ * Narrow panels get a list, one source per row, for the reason and on the same
+ * `@container` terms as the producer leaderboard. The source name is the one
+ * column allowed to wrap in the table: "Allstate Lead Marketplace" on two lines
+ * is what lets the table fit its 40% beside the leaderboard.
  */
 export function LeadSourceMatrix({
   params,
@@ -108,71 +113,129 @@ export function LeadSourceMatrix({
       className={className}
     >
       {data && (
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <ColumnHead label="Lead source" className="pl-5" />
-              <ColumnHead
-                label="Closing ratio"
-                hint="Bound premium ÷ quoted premium for this source in this period — the Agency Closing Ratio card, per source. Can exceed 100% when a sale was quoted in an earlier period."
-                align="right"
-              />
-              <ColumnHead
-                label="New leads"
-                hint="Leads created from this source in this period, whatever they went on to buy."
-                align="right"
-              />
-              <ColumnHead
-                label="Bound premium"
-                hint="Premium on new business sold to this source’s leads in this period. The Total Bound Premium card is the sum of this column."
-                align="right"
-                className="pr-5"
-              />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
+        <div className="@container">
+          <div className="hidden @min-[30rem]:block">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <ColumnHead label="Lead source" className="pl-5" />
+                  <ColumnHead
+                    label="Closing ratio"
+                    hint="Bound premium ÷ quoted premium for this source in this period — the Agency Closing Ratio card, per source. Can exceed 100% when a sale was quoted in an earlier period."
+                    align="right"
+                  />
+                  <ColumnHead
+                    label="New leads"
+                    hint="Leads created from this source in this period, whatever they went on to buy."
+                    align="right"
+                  />
+                  <ColumnHead
+                    label="Bound premium"
+                    hint="Premium on new business sold to this source’s leads in this period. The Total Bound Premium card is the sum of this column."
+                    align="right"
+                    className="pr-5"
+                  />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.rows.map((row) => (
+                  <TableRow key={row.leadSourceId ?? "none"}>
+                    <TableCell
+                      className={cn(
+                        "pl-5 font-medium whitespace-normal",
+                        row.leadSourceId === null
+                          ? "text-muted-foreground"
+                          : "text-foreground",
+                      )}
+                    >
+                      {row.name}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <ConversionCell {...row} />
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCount(row.volume)}
+                    </TableCell>
+                    <TableCell className="pr-5 text-right font-semibold tabular-nums">
+                      {formatMoney(row.premium)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+              <TableFooter>
+                <TableRow className="hover:bg-transparent">
+                  <TableCell className="pl-5 font-medium whitespace-normal">
+                    Total across all sources
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <ConversionCell {...data.totals} />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCount(data.totals.volume)}
+                  </TableCell>
+                  <TableCell className="pr-5 text-right font-semibold tabular-nums">
+                    {formatMoney(data.totals.premium)}
+                  </TableCell>
+                </TableRow>
+              </TableFooter>
+            </Table>
+          </div>
+
+          <ul className="divide-y divide-border @min-[30rem]:hidden">
             {data.rows.map((row) => (
-              <TableRow key={row.leadSourceId ?? "none"}>
-                <TableCell
-                  className={cn(
-                    "pl-5 font-medium",
-                    row.leadSourceId === null
-                      ? "text-muted-foreground"
-                      : "text-foreground",
-                  )}
-                >
-                  {row.name}
-                </TableCell>
-                <TableCell className="text-right">
-                  <ConversionCell {...row} />
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatCount(row.volume)}
-                </TableCell>
-                <TableCell className="pr-5 text-right font-semibold tabular-nums">
-                  {formatMoney(row.premium)}
-                </TableCell>
-              </TableRow>
+              <LeadSourceItem
+                key={row.leadSourceId ?? "none"}
+                name={row.name}
+                muted={row.leadSourceId === null}
+                figures={row}
+              />
             ))}
-          </TableBody>
-          <TableFooter>
-            <TableRow className="hover:bg-transparent">
-              <TableCell className="pl-5 font-medium">
-                Total across all sources
-              </TableCell>
-              <TableCell className="text-right">
-                <ConversionCell {...data.totals} />
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatCount(data.totals.volume)}
-              </TableCell>
-              <TableCell className="pr-5 text-right font-semibold tabular-nums">
-                {formatMoney(data.totals.premium)}
-              </TableCell>
-            </TableRow>
-          </TableFooter>
-        </Table>
+            <LeadSourceItem
+              name="Total across all sources"
+              figures={data.totals}
+              className="rounded-b-xl bg-muted/50"
+            />
+          </ul>
+        </div>
       )}
     </DataPanel>
+  );
+}
+
+/** One source in the narrow-panel list: name and premium, then the rest. */
+function LeadSourceItem({
+  name,
+  muted = false,
+  figures,
+  className,
+}: {
+  name: string;
+  muted?: boolean;
+  figures: Conversion & Pick<OwnerLeadSourceRow, "volume" | "premium">;
+  className?: string;
+}) {
+  return (
+    <li className={cn("px-5 py-3 text-sm", className)}>
+      <div className="flex items-baseline justify-between gap-3">
+        <span
+          className={cn(
+            "min-w-0 font-medium break-words",
+            muted ? "text-muted-foreground" : "text-foreground",
+          )}
+        >
+          {name}
+        </span>
+        <span className="shrink-0 font-semibold tabular-nums">
+          {formatMoney(figures.premium)}
+        </span>
+      </div>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Closing ratio <ConversionCell {...figures} /> ·{" "}
+        <span className="tabular-nums">
+          {formatCount(figures.volume)}{" "}
+          {figures.volume === 1 ? "new lead" : "new leads"}
+        </span>
+      </p>
+    </li>
   );
 }
