@@ -25,8 +25,13 @@ interface RangeChipsProps<K extends string> {
  *
  * Extracted from the Producer dashboard's header when the Owner dashboard
  * (PAC-135) became the second strip: same control, a different set of periods.
- * The chips are wider than a phone, so the strip scrolls sideways and bleeds
- * into the page gutter to show that it does.
+ *
+ * The chips are wider than a phone, so the strip **wraps** onto a second line
+ * rather than scrolling sideways. It used to scroll, and that hid the last
+ * periods — Custom Date among them — behind a swipe nobody knew to make; on the
+ * Management dashboard the strip also scrolled on a laptop, where it shares a
+ * row with the filters and got squeezed. `max-w-full` is what lets it shrink to
+ * its row and wrap instead of pushing past it.
  */
 export function RangeChips<K extends string>({
   chips,
@@ -35,33 +40,36 @@ export function RangeChips<K extends string>({
   className,
 }: RangeChipsProps<K>) {
   return (
-    <div className={cn("-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0", className)}>
-      <div className="flex w-max items-center gap-1 rounded-lg bg-muted p-1">
-        {chips.map((chip) =>
-          chip.key === "custom" ? (
-            <DateRangePicker
-              key={chip.key}
-              range={range}
-              isActive={range.key === "custom"}
-              onApply={(from, to) => onChange({ key: "custom", from, to })}
-            />
-          ) : (
-            <button
-              key={chip.key}
-              type="button"
-              onClick={() => onChange({ key: chip.key })}
-              className={cn(
-                "rounded-md border px-3 py-1.5 text-xs whitespace-nowrap transition-all duration-150",
-                range.key === chip.key
-                  ? "border-primary/20 bg-background font-semibold text-primary"
-                  : "border-transparent bg-transparent text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {chip.label}
-            </button>
-          ),
-        )}
-      </div>
+    <div
+      className={cn(
+        "flex w-fit max-w-full flex-wrap items-center gap-1 rounded-lg bg-muted p-1",
+        className,
+      )}
+    >
+      {chips.map((chip) =>
+        chip.key === "custom" ? (
+          <DateRangePicker
+            key={chip.key}
+            range={range}
+            isActive={range.key === "custom"}
+            onApply={(from, to) => onChange({ key: "custom", from, to })}
+          />
+        ) : (
+          <button
+            key={chip.key}
+            type="button"
+            onClick={() => onChange({ key: chip.key })}
+            className={cn(
+              "rounded-md border px-3 py-1.5 text-xs whitespace-nowrap transition-all duration-150",
+              range.key === chip.key
+                ? "border-primary/20 bg-background font-semibold text-primary"
+                : "border-transparent bg-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {chip.label}
+          </button>
+        ),
+      )}
     </div>
   );
 }

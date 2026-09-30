@@ -39,12 +39,21 @@ export function OwnerDashboard() {
         <OwnerKpiRow params={params} />
 
         {/*
-         * 60/40, stacked below `xl` — the leaderboard needs its six columns.
+         * 60/40, stacked below `2xl`. Side by side, the leaderboard's table
+         * needs ~720px and the lead-source table ~480px; below `2xl` the sidebar
+         * leaves less than that, and each panel falls back to its stacked list
+         * at the width where its table stops fitting (see the `@container` in
+         * each). It was `xl`, where the pair needed ~1,280px of a ~1,000px row.
+         *
+         * `minmax(0, …)`, not a bare `3fr`: an `fr` track's minimum is `auto`,
+         * i.e. its content's width, so a wide table stretched its track past
+         * the grid and pushed the whole page off the right edge of the screen.
+         *
          * The two panels stretch to the taller one (grid's default): the row
          * counts differ and move with every filter, and two cards whose bottom
          * edges wander apart read as a layout bug rather than as data.
          */}
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[3fr_2fr]">
+        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
           <ProducerLeaderboard params={params} />
           <LeadSourceMatrix params={params} />
         </div>
