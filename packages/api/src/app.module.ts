@@ -34,6 +34,7 @@ import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
 import { CarriersModule } from './carriers/carriers.module';
+import { LeadSourcesModule } from './lead-sources/lead-sources.module';
 import { ClientsModule } from './clients/clients.module';
 import { CrmModule } from './crm/crm.module';
 import { ContactsModule } from './contacts/contacts.module';
@@ -42,6 +43,8 @@ import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { MailersModule } from './mailers/mailers.module';
 import { LeadsModule } from './leads/leads.module';
 import { PerformanceModule } from './performance/performance.module';
+import { OwnerDashboardModule } from './owner-dashboard/owner-dashboard.module';
+import { ManagementDashboardModule } from './management-dashboard/management-dashboard.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -187,14 +190,24 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // The Sold wizard's carrier vocabulary (PAC-56 #19). Also registers the
     // `carriers` model so its indexes build and the core seed can inject it.
     CarriersModule,
+    // Where a lead came from (PAC-135). Registers the `leadSources` model so its
+    // indexes build and the core seed can inject it.
+    LeadSourcesModule,
     SoldDealsModule,
     PerformanceModule,
+    // The Owner View dashboard (PAC-135) — replaces the `owner-dashboard` stub.
+    OwnerDashboardModule,
+    // The Manager View dashboard (PAC-139). Routes on `management-dashboard`,
+    // so it never collided with the `management` stub it replaces; the stub is
+    // gone anyway, since nothing served `GET /management` but a placeholder.
+    ManagementDashboardModule,
     LeaderboardModule,
     ActivitiesModule,
-    // Super Admin mailer imports (PAC-73). Registers the `mailers` and
-    // `mailerImportRuns` models so their indexes build; it routes on
-    // `platform/mailers`, so it does not collide with the `mailers` module
-    // stub still served by FeatureModulesModule for the agency-facing page.
+    // Mailers and mailer campaigns (PAC-73, PAC-71). Registers the `mailers`,
+    // `mailerCampaigns` and `mailerZipMarkets` models so their indexes build;
+    // it routes on `platform/mailers` and `platform/mailer-campaigns`, so it
+    // does not collide with the `mailers` module stub still served by
+    // FeatureModulesModule for the agency-facing page.
     MailersModule,
     // "Report a bug" (reporter side) + the Super Admin queue that reads it.
     // Routes on `bug-reports` and `platform/bug-reports`, neither of which is

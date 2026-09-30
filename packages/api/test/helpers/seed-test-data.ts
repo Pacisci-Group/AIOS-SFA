@@ -12,6 +12,8 @@ import { Household } from '../../src/households/schemas/household.schema';
 import { RoleAssignmentsService } from '../../src/permissions/role-assignments.service';
 import { Permission } from '../../src/permissions/schemas/permission.schema';
 import { seedPermissions } from '../../src/seed/permissions.seed';
+import { seedLeadSources } from '../../src/seed/lead-sources.seed';
+import { LeadSource } from '../../src/lead-sources/schemas/lead-source.schema';
 import { Agency } from '../../src/platform/schemas/agency.schema';
 import { Policy } from '../../src/policies/schemas/policy.schema';
 import { AgencyRole } from '../../src/roles/schemas/agency-role.schema';
@@ -62,6 +64,11 @@ export interface TestSeedContext {
   otherAgencyId: string;
   otherAgencyUserId: string;
   otherAgencyUserEmail: string;
+  /**
+   * Platform lead sources by slug (PAC-135) — `leadSourceIds.mailer` and so on.
+   * A lead is created with a `leadSources` row id, so a test needs a real one.
+   */
+  leadSourceIds: Record<string, string>;
 }
 
 export async function seedTestData(
@@ -92,6 +99,21 @@ export async function seedTestData(
   // loudly rather than producing roles that silently grant nothing. The core
   // seed orders these the same way.
   await seedPermissions(permissionModel);
+
+  // The platform lead sources, exactly as the core seed creates them: `POST
+  // /leads` validates its `leadSourceId` against these rows, and logging a
+  // mailer lead finds "Mailer" by slug.
+  const leadSourceModel = app.get<Model<LeadSource>>(
+    getModelToken(LeadSource.name),
+  );
+  await seedLeadSources(leadSourceModel);
+  const platformSources = await leadSourceModel
+    .find({ agencyId: null })
+    .select({ slug: 1 })
+    .lean();
+  const leadSourceIds = Object.fromEntries(
+    platformSources.map((row) => [row.slug, row._id.toString()]),
+  );
 
   await roleAssignments.seedDefaultRoles(agency._id);
 
@@ -464,5 +486,6 @@ export async function seedTestData(
     readOnlyEmail,
     csrUserId: csrUser._id.toString(),
     readOnlyUserId: readOnlyUser._id.toString(),
+    leadSourceIds,
   };
 }

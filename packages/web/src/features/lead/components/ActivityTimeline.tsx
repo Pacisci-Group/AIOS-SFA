@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { ActivityChanges } from "./ActivityChanges";
 import { ActivityComposer } from "./ActivityComposer";
 import { activityDisplay, activityLabel } from "./lead-display";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface ActivityTimelineProps {
   activities: LeadDetailActivity[];
@@ -14,9 +15,9 @@ interface ActivityTimelineProps {
 
 /** `Today, 10:42 AM` / `Yesterday, 4:30 PM` / `Jun 5, 8:00 AM`. */
 function formatWhen(value: string | null): string {
-  if (!value) return "—";
+  if (!value) return NOT_AVAILABLE;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return NOT_AVAILABLE;
 
   const time = date.toLocaleTimeString("en-US", {
     hour: "numeric",

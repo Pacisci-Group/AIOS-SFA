@@ -32,6 +32,8 @@ import {
   ALLOWED_CAMPAIGN_FILE_EXTENSIONS,
   ALLOWED_CAMPAIGN_FILE_TYPES,
   MAX_CAMPAIGN_FILE_BYTES,
+  addCampaignFiles,
+  areSettingsLocked,
   campaignDefaultsKey,
   campaignKey,
   campaignsKey,
@@ -44,9 +46,11 @@ import {
   isCampaignEditable,
   isCampaignSettled,
   previewCampaign,
+  removeCampaignFile,
   updateCampaign,
 } from "@/lib/platform-campaigns-api";
 import { SuperAdminLayout } from "../SuperAdminLayout";
+import { CampaignFilesCard } from "./components/CampaignFilesCard";
 import { CampaignPreviewReport } from "./components/CampaignPreviewReport";
 import { CampaignSettingsForm } from "./components/CampaignSettingsForm";
 import { EditCampaignSettings } from "./components/EditCampaignSettings";
@@ -89,7 +93,10 @@ const STEPS = ["Settings and file", "Preview", "Outcome"] as const;
  * `?source=processed` runs the same three steps over a file somebody else
  * already processed (the old Add Mailers flow, kept as the recovery path): the
  * transform is skipped, so the pricing controls are hidden and there are no
- * processor stats to show. `?campaignId=` resumes an existing run at step 2.
+ * processor stats to show. `?campaignId=` resumes an existing run at step 2 —
+ * or, on an imported campaign, opens step 3, where **Add records** lives
+ * (PAC-142): adding files there drops the campaign back to step 2, and it is
+ * previewed and committed again over every file.
  */
 export default function RunCampaignPage() {
   const [params] = useSearchParams();
@@ -99,7 +106,7 @@ export default function RunCampaignPage() {
   const source = params.get("source") === "processed" ? "processed" : "vendor";
   const resumeId = params.get("campaignId");
 
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [campaignId, setCampaignId] = useState<string | null>(resumeId);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -134,7 +141,7 @@ export default function RunCampaignPage() {
   const create = useMutation({
     mutationFn: (values: CampaignFormValues) =>
       createCampaign({
-        file: file as File,
+        files,
         // Both derived from the year and the week — the only two things step 1
         // collects for a campaign's identity.
         name: toCampaignName(values.campaignYear, values.campaignWeek),
@@ -213,6 +220,33 @@ export default function RunCampaignPage() {
   });
 
   /**
+   * Add files — and, on an imported campaign, re-open it (Add records).
+   *
+   * The server drops the campaign back to `uploaded` and re-previews over every
+   * file; the page's poll then walks it through step 2 again.
+   */
+  const addFiles = useMutation({
+    mutationFn: (picked: File[]) =>
+      addCampaignFiles(campaign?.id as string, picked),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(campaignKey(updated.id), updated);
+      void queryClient.invalidateQueries({ queryKey: campaignsKey });
+      toast.success("Added. Reading every file again…");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const removeFile = useMutation({
+    mutationFn: (fileId: string) =>
+      removeCampaignFile(campaign?.id as string, fileId),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(campaignKey(updated.id), updated);
+      toast.success("Removed. Reading the remaining files again…");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  /**
    * Re-run the preview with nothing changed.
    *
    * The preview's verdict is a snapshot, and the commit gate refuses on the
@@ -279,8 +313,8 @@ export default function RunCampaignPage() {
           <SetupStep
             agencies={agenciesQuery.data ?? []}
             source={source}
-            file={file}
-            onSelectFile={setFile}
+            files={files}
+            onSelectFiles={setFiles}
             error={submitError}
             submitting={create.isPending}
             onSubmit={(values) => {
@@ -292,10 +326,14 @@ export default function RunCampaignPage() {
           <OutcomeStep
             campaign={campaign}
             emailing={sendEmail.isPending}
+            addingFiles={addFiles.isPending}
             onEmail={() => sendEmail.mutate()}
+            onAddFiles={(picked) => addFiles.mutate(picked)}
             onDone={() => navigate(`/admin/campaigns/${campaign.id}`)}
           />
-        ) : editing && isCampaignEditable(campaign.status) ? (
+        ) : editing &&
+          isCampaignEditable(campaign.status) &&
+          !areSettingsLocked(campaign) ? (
           <EditCampaignSettings
             campaign={campaign}
             agencies={agenciesQuery.data ?? []}
@@ -309,10 +347,14 @@ export default function RunCampaignPage() {
             savingZips={resolveZips.isPending}
             committing={commit.isPending}
             rechecking={recheck.isPending}
+            addingFiles={addFiles.isPending}
+            removingFile={removeFile.isPending}
             onEdit={() => setEditing(true)}
             onRecheck={() => recheck.mutate()}
             onResolveZips={(values) => resolveZips.mutate(values)}
             onCommit={(request) => commit.mutate(request)}
+            onAddFiles={(picked) => addFiles.mutate(picked)}
+            onRemoveFile={(fileId) => removeFile.mutate(fileId)}
           />
         )}
       </div>
@@ -327,8 +369,8 @@ export default function RunCampaignPage() {
 interface SetupStepProps {
   agencies: readonly PlatformAgency[];
   source: "vendor" | "processed";
-  file: File | null;
-  onSelectFile: (file: File | null) => void;
+  files: File[];
+  onSelectFiles: (files: File[]) => void;
   error: string | null;
   submitting: boolean;
   onSubmit: (values: CampaignFormValues) => void;
@@ -393,8 +435,8 @@ const SettingsStep = withForm({
   props: {
     agencies: [] as readonly PlatformAgency[],
     source: "vendor" as "vendor" | "processed",
-    file: null as File | null,
-    onSelectFile: (_file: File | null) => {},
+    files: [] as File[],
+    onSelectFiles: (_files: File[]) => {},
     error: null as string | null,
     submitting: false,
   },
@@ -402,8 +444,8 @@ const SettingsStep = withForm({
     form,
     agencies,
     source,
-    file,
-    onSelectFile,
+    files,
+    onSelectFiles,
     error,
     submitting,
   }) {
@@ -418,22 +460,23 @@ const SettingsStep = withForm({
         <Card>
           <CardContent className="flex flex-col gap-2 px-5 py-4">
             <span className="text-[10px] tracking-widest text-muted-foreground uppercase">
-              {source === "processed" ? "Processed file" : "Vendor file"}
+              {source === "processed" ? "Processed files" : "Vendor files"}
             </span>
             <FileDropzone
+              multiple
               accept={ALLOWED_CAMPAIGN_FILE_TYPES}
               acceptExtensions={ALLOWED_CAMPAIGN_FILE_EXTENSIONS}
               maxBytes={MAX_CAMPAIGN_FILE_BYTES}
-              file={file}
-              onSelect={onSelectFile}
-              hint="XLSX or CSV up to 100MB"
+              files={files}
+              onSelectFiles={onSelectFiles}
+              hint="One or more XLSX or CSV files with the same columns, up to 100MB each"
               disabled={submitting}
-              aria-label="Upload the mail file"
+              aria-label="Upload the mail files"
             />
             <p className="text-xs text-muted-foreground">
               {source === "processed"
-                ? "A file already run through the processor. It is imported as it stands — no transform, no output file."
-                : "The presorted, mail-ready file the data/print vendor returned. We run the transform."}
+                ? "Files already run through the processor. They are imported as they stand — no transform."
+                : "The presorted, mail-ready file(s) the data/print vendor returned. Several files are read together as one week; we run the transform."}
             </p>
           </CardContent>
         </Card>
@@ -448,9 +491,13 @@ const SettingsStep = withForm({
         <FormError>{error}</FormError>
 
         <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
-          <Button type="submit" disabled={!file || submitting}>
+          <Button type="submit" disabled={files.length === 0 || submitting}>
             {submitting && <Loader2 className="size-4 animate-spin" />}
-            {submitting ? "Uploading…" : "Upload and preview"}
+            {submitting
+              ? "Uploading…"
+              : files.length > 1
+                ? `Upload ${files.length} files and preview`
+                : "Upload and preview"}
           </Button>
           <p className="text-sm text-muted-foreground">
             Step 1 of 3 — this writes no mailers.
@@ -470,20 +517,39 @@ function WorkingOrPreview({
   savingZips,
   committing,
   rechecking,
+  addingFiles,
+  removingFile,
   onEdit,
   onRecheck,
   onResolveZips,
   onCommit,
+  onAddFiles,
+  onRemoveFile,
 }: {
   campaign: MailerCampaign;
   savingZips: boolean;
   committing: boolean;
   rechecking: boolean;
+  addingFiles: boolean;
+  removingFile: boolean;
   onEdit: () => void;
   onRecheck: () => void;
   onResolveZips: (resolutions: Record<string, string>) => void;
   onCommit: (request: MailerCommitRequest) => void;
+  onAddFiles: (files: File[]) => void;
+  onRemoveFile: (fileId: string) => void;
 }) {
+  const locked = areSettingsLocked(campaign);
+  const filesCard = (
+    <CampaignFilesCard
+      campaign={campaign}
+      adding={addingFiles}
+      removing={removingFile}
+      onAdd={onAddFiles}
+      onRemove={onRemoveFile}
+    />
+  );
+
   if (campaign.status === "failed") {
     return (
       <div className="space-y-4">
@@ -496,10 +562,16 @@ function WorkingOrPreview({
         </Alert>
         <RunActions
           rechecking={rechecking}
+          settingsLocked={locked}
           onEdit={onEdit}
           onRecheck={onRecheck}
-          hint="Nothing was written. Fix what it names and read the file again."
+          hint={
+            locked
+              ? "The mailers already imported are untouched. Fix what it names — a file with different columns can be removed only before the first commit, so add a corrected one — and read the files again."
+              : "Nothing was written. Fix what it names and read the files again."
+          }
         />
+        {filesCard}
         <Button asChild variant="ghost" size="sm">
           <Link to={`/admin/campaigns/${campaign.id}`}>Open the campaign</Link>
         </Button>
@@ -529,10 +601,16 @@ function WorkingOrPreview({
     <div className="space-y-4">
       <RunActions
         rechecking={rechecking}
+        settingsLocked={locked}
         onEdit={onEdit}
         onRecheck={onRecheck}
-        hint="Nothing here is written yet. Both re-read the file and rebuild the report below."
+        hint={
+          locked
+            ? "Nothing here is written yet. Re-check re-reads every file and rebuilds the report below."
+            : "Nothing here is written yet. Both re-read the files and rebuild the report below."
+        }
       />
+      {filesCard}
       <CampaignPreviewReport
         campaign={campaign}
         savingZips={savingZips}
@@ -555,21 +633,31 @@ function WorkingOrPreview({
  */
 function RunActions({
   rechecking,
+  settingsLocked,
   onEdit,
   onRecheck,
   hint,
 }: {
   rechecking: boolean;
+  /** From the first import on the settings are the record of how the mailers were priced. */
+  settingsLocked: boolean;
   onEdit: () => void;
   onRecheck: () => void;
   hint: string;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button variant="outline" size="sm" onClick={onEdit} disabled={rechecking}>
-        <SlidersHorizontal className="size-4" />
-        Edit settings
-      </Button>
+      {!settingsLocked && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onEdit}
+          disabled={rechecking}
+        >
+          <SlidersHorizontal className="size-4" />
+          Edit settings
+        </Button>
+      )}
       <Button
         variant="outline"
         size="sm"
@@ -595,15 +683,20 @@ function RunActions({
 function OutcomeStep({
   campaign,
   emailing,
+  addingFiles,
   onEmail,
+  onAddFiles,
   onDone,
 }: {
   campaign: MailerCampaign;
   emailing: boolean;
+  addingFiles: boolean;
   onEmail: () => void;
+  onAddFiles: (files: File[]) => void;
   onDone: () => void;
 }) {
   const counts = campaign.importCounts;
+  const newRows = campaign.newRowsFile;
 
   return (
     <div className="flex flex-col gap-4">
@@ -611,6 +704,9 @@ function OutcomeStep({
         <CheckCircle2 className="size-4 text-success" />
         <AlertTitle>Import complete</AlertTitle>
         <AlertDescription>
+          {newRows
+            ? `Only the ${formatCount(counts?.created ?? 0)} ${counts?.created === 1 ? "row" : "rows"} this commit added ${counts?.created === 1 ? "is" : "are"} in the new-rows file — that is what the completion email links, so nothing already mailed goes out twice. The full output still has every row. `
+            : ""}
           Producers in every agency this campaign is visible to can now look
           these mailers up by either control-number form.
         </AlertDescription>
@@ -651,7 +747,30 @@ function OutcomeStep({
         total={counts?.skipped ?? null}
       />
 
+      <CampaignFilesCard
+        campaign={campaign}
+        adding={addingFiles}
+        removing={false}
+        onAdd={onAddFiles}
+        onRemove={() => {}}
+        title="Files · add records"
+      />
+
       <div className="flex flex-wrap items-center gap-3">
+        {newRows && (
+          <Button
+            variant="outline"
+            className="gap-1"
+            onClick={() =>
+              void openDocumentInNewTab(() =>
+                getCampaignFileUrl(campaign.id, "new-rows").then((r) => r.url),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Download new rows
+          </Button>
+        )}
         {campaign.outputFile && (
           <Button
             variant="outline"
@@ -663,7 +782,7 @@ function OutcomeStep({
             }
           >
             <Download className="size-4" />
-            Download output
+            {newRows ? "Download full output" : "Download output"}
           </Button>
         )}
         {campaign.outputFile && (

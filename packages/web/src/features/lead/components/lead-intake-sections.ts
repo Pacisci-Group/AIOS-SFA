@@ -59,7 +59,7 @@ const STEPS: readonly IntakeStep[] = [
   {
     id: "leadSource",
     title: "Lead source",
-    fields: ["leadSourceCode"],
+    fields: ["leadSourceId"],
     variants: ["internal"],
   },
   {

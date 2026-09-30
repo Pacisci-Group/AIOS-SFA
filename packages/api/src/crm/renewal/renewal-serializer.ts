@@ -11,10 +11,13 @@ import {
   deriveStepStatus,
   isStepActionable,
   isStepOverdue,
-} from '../scheduling/step-status';
+} from '../../common/scheduling/step-status';
 import type { RenewalCycle } from '../schemas/renewal-cycle.schema';
 import type { RenewalStepEntry } from '../schemas/service-ticket.schema';
-import { daysUntil, type PlannedRenewalStep } from './renewal-scheduling';
+import {
+  daysUntil,
+  type PlannedRenewalStep,
+} from '../../common/renewal/renewal-scheduling';
 
 /**
  * Wire serialization for renewal outreach, mirroring `onboarding-serializer.ts`.

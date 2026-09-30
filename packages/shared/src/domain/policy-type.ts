@@ -32,6 +32,12 @@ export const POLICY_TYPES = [
   'Life',
   'Valuable Item Protection',
   'Auto - Special',
+  // The three below are not in the Quote Recaps list this vocabulary started
+  // from, but the agency sold them in SmartSuite: they are choices on the
+  // Policies table that the table doc we built from never listed (PAC-135).
+  'Manufactured Home',
+  'RV',
+  'ATV / ORV',
 ] as const;
 
 export type PolicyType = (typeof POLICY_TYPES)[number];
@@ -71,18 +77,59 @@ export const POLICY_TYPE_CODE_ALIASES: Record<string, PolicyType> = {
   F3oxm: 'Renters',
   le1BC: 'Umbrella',
   gGKei: 'Motorcycle',
+  /*
+   * The rest of the Policies set (PAC-135). `docs/smartsuite-tables/The Policies
+   * Table.md` lists six choices; SmartSuite has thirteen, and the import read a
+   * choice's code while ignoring the hydrated label beside it — so these seven
+   * were stored as raw codes on 92 policies. (The import now falls back to the
+   * label; this map is what repairs the rows already stored.) Decoded by joining those
+   * policies to the labelled 2026-09-04 Policies export — every row agreed — and
+   * four of them independently confirmed by legacy's own lookup table in
+   * `SFA/app/api/admin/deal-audit-detail/route.ts`. They reach
+   * `deals.policyTypes` too, via the migration's rollup of a deal's policies.
+   */
+  BK08B: 'Boat Owners', // SmartSuite: "Boat"
+  ayKjZ: 'Valuable Item Protection', // SmartSuite: "Item Protection"
+  UrNOp: 'Condominium', // SmartSuite: "Condo"
+  HicyK: 'Life',
+  Tz3ny: 'Manufactured Home', // SmartSuite: "Manufactured Homes"
+  sTSOE: 'RV',
+  cgoHC: 'ATV / ORV', // SmartSuite: "ATVs / ORVs"
+  /*
+   * A Quote Recaps `products_quoted` choice the table doc does not list, on six
+   * migrated recaps. Confirmed from SmartSuite's own choice list (2026-09-21);
+   * the data agreed beforehand — five of the six leads went on to an `sTSOE`
+   * (RV) deal, four at the quoted premium to the dollar.
+   */
+  AP0VA: 'RV',
 };
 
 /**
- * Non-canonical **label** spellings already sitting in Mongo. Keys lowercased.
+ * Non-canonical **label** spellings, exactly as their source writes them.
  *
- * `deals.policyTypes` holds "Landlords" (via the migration's label map) and the
- * demo seed held "Condo", so a label alias map is needed on top of the code map.
+ * `deals.policyTypes` holds "Landlords" (via the migration's label map), the
+ * demo seed held "Condo", and the rest are SmartSuite's own wording for a type
+ * we name differently — what a labelled export or a hand-typed correction
+ * carries. Recorded in their **exact** case because a Mongo `$in` is
+ * case-sensitive: see {@link policyTypeQueryValues}.
  */
-export const POLICY_TYPE_LABEL_ALIASES: Record<string, PolicyType> = {
-  landlords: 'Landlord',
-  condo: 'Condominium',
+export const POLICY_TYPE_LEGACY_LABELS: Record<string, PolicyType> = {
+  Landlords: 'Landlord',
+  Condo: 'Condominium',
+  Boat: 'Boat Owners',
+  'Item Protection': 'Valuable Item Protection',
+  'Manufactured Homes': 'Manufactured Home',
+  'ATVs / ORVs': 'ATV / ORV',
 };
+
+/** {@link POLICY_TYPE_LEGACY_LABELS} keyed in lowercase, for the read path. */
+export const POLICY_TYPE_LABEL_ALIASES: Record<string, PolicyType> =
+  Object.fromEntries(
+    Object.entries(POLICY_TYPE_LEGACY_LABELS).map(([label, canonical]) => [
+      label.toLowerCase(),
+      canonical,
+    ]),
+  );
 
 const CANONICAL_BY_LOWER = new Map<string, PolicyType>(
   POLICY_TYPES.map((t) => [t.toLowerCase(), t]),
@@ -119,11 +166,14 @@ export function policyTypeQueryValues(label: string): string[] {
   const codes = Object.entries(POLICY_TYPE_CODE_ALIASES)
     .filter(([, mapped]) => mapped === canonical)
     .map(([code]) => code);
-  const labels = Object.entries(POLICY_TYPE_LABEL_ALIASES)
+  // Both the exact legacy spelling and its lowercase form: `$in` is
+  // case-sensitive, so the lowercase key alone (`landlords`) would never match
+  // the value it exists for (`Landlords`).
+  const labels = Object.entries(POLICY_TYPE_LEGACY_LABELS)
     .filter(([, mapped]) => mapped === canonical)
-    .map(([alias]) => alias);
+    .flatMap(([label]) => [label, label.toLowerCase()]);
 
-  return [canonical, ...codes, ...labels];
+  return [...new Set([canonical, ...codes, ...labels])];
 }
 
 /**
@@ -140,6 +190,9 @@ export const PROPERTY_POLICY_TYPES: readonly PolicyType[] = [
   'Renters',
   'Condominium',
   'Landlord',
+  // A dwelling like any other: it has an address, and a quote without one is
+  // the omission the Condominium note above is about (PAC-135).
+  'Manufactured Home',
 ];
 
 const PROPERTY_SET = new Set<string>(PROPERTY_POLICY_TYPES);
@@ -177,6 +230,34 @@ export function isCanonicalPolicyType(value?: string | null): boolean {
 }
 
 /**
+ * Vehicles that are **not** part of the auto family (PAC-135).
+ *
+ * An RV or a pair of ATVs is a countable fleet, so these ask "how many?" and
+ * say "vehicles". They are deliberately kept out of {@link AUTO_POLICY_TYPES}:
+ * that list drives the Sold form's Drivewise / Defensive Driver / Student
+ * discount branch and the `Drivers Verified` audit item, none of which legacy
+ * ever applied to them — and out of {@link SEMIANNUAL_TERM_POLICY_TYPES}, since
+ * David's six-month rule was about auto, and annual is the documented safe
+ * guess for anything else.
+ */
+export const RECREATIONAL_VEHICLE_POLICY_TYPES: readonly PolicyType[] = [
+  'RV',
+  'ATV / ORV',
+];
+
+const RECREATIONAL_VEHICLE_SET = new Set<string>(
+  RECREATIONAL_VEHICLE_POLICY_TYPES,
+);
+
+/** Is one "item" on this policy a vehicle — auto family or recreational? */
+function isVehiclePolicyType(value?: string | null): boolean {
+  return (
+    isAutoPolicyType(value) ||
+    RECREATIONAL_VEHICLE_SET.has(normalizePolicyType(value))
+  );
+}
+
+/**
  * Types where "how many?" is a real question — the only ones that ask for an
  * item count (PAC-65 #7 follow-up).
  *
@@ -196,6 +277,7 @@ export function isCanonicalPolicyType(value?: string | null): boolean {
 export const COUNTABLE_POLICY_TYPES: readonly PolicyType[] = [
   ...AUTO_POLICY_TYPES,
   'Boat Owners',
+  ...RECREATIONAL_VEHICLE_POLICY_TYPES,
 ];
 
 const COUNTABLE_SET = new Set<string>(COUNTABLE_POLICY_TYPES);
@@ -254,7 +336,7 @@ export function resolveItemCount(
  * is not what was asked for.
  */
 export function itemCountLabel(policyType?: string | null): string {
-  if (isAutoPolicyType(policyType)) return 'Number of Vehicles';
+  if (isVehiclePolicyType(policyType)) return 'Number of Vehicles';
   if (normalizePolicyType(policyType) === 'Boat Owners') return 'Number of Boats';
   return 'Item count';
 }
@@ -270,7 +352,7 @@ export function itemCountNoun(
   policyType: string | null | undefined,
   count: number,
 ): string {
-  const singular = isAutoPolicyType(policyType)
+  const singular = isVehiclePolicyType(policyType)
     ? 'vehicle'
     : normalizePolicyType(policyType) === 'Boat Owners'
       ? 'boat'
@@ -299,22 +381,33 @@ export const ANNUAL_TERM_MONTHS = 12;
 export const SEMIANNUAL_TERM_MONTHS = 6;
 
 /**
- * Types quoted on a 6-month term.
+ * Types quoted on a 6-month term. **Auto and Auto - Special only.**
  *
- * Seeded from {@link AUTO_POLICY_TYPES} because David confirmed the rule
- * applies to "any auto vehicle" — so Motorcycle is in, alongside Auto and
- * Auto - Special.
+ * Motorcycle was seeded in here from {@link AUTO_POLICY_TYPES} when the
+ * 2026-08-19 rule was read as "any auto vehicle", and was taken back out on
+ * 2026-09-11: motorcycle is written on a 12-month term, which is the case this
+ * file's own note predicted ("carriers write motorcycle annually more often
+ * than not").
  *
- * **Kept as its own array rather than calling {@link isAutoPolicyType}.**
- * "Renews every 6 months" and "is a motor vehicle" are two different facts that
- * happen to coincide today; carriers write motorcycle annually more often than
- * not, and a 6-month non-vehicle line is perfectly possible. When the term rule
- * changes, change *this* array — editing `AUTO_POLICY_TYPES` would silently
- * move the Sold form's discount branch and the `Drivers Verified` audit item
- * with it.
+ * **Its own array rather than a call to {@link isAutoPolicyType}, and this is
+ * the divergence that vindicates that.** "Renews every 6 months" and "is a
+ * motor vehicle" are two different facts, and Motorcycle now sits in the second
+ * set but not the first: it keeps the Sold form's Drivewise / defensive-driver
+ * / student branch and the `Drivers Verified` audit item, because those follow
+ * the *vehicle*, while its premium is labelled and its renewal scheduled
+ * annually. Expressing the term change by editing `AUTO_POLICY_TYPES` would
+ * have silently moved that discount branch and audit item with it.
+ *
+ * ⚠ `policies.renewalDate` is **derived and stored**, so changing this array
+ * does not reach rows already written — only the next write of each policy
+ * would. Moving a type between tracks therefore needs a migration to re-derive
+ * the anchor; this one's is
+ * `migrations/20260911154500-motorcycle_annual_renewal_anchors.js`.
  */
-export const SEMIANNUAL_TERM_POLICY_TYPES: readonly PolicyType[] =
-  AUTO_POLICY_TYPES;
+export const SEMIANNUAL_TERM_POLICY_TYPES: readonly PolicyType[] = [
+  'Auto',
+  'Auto - Special',
+];
 
 const SEMIANNUAL_TERM_SET = new Set<string>(SEMIANNUAL_TERM_POLICY_TYPES);
 

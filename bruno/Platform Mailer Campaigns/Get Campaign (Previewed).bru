@@ -73,6 +73,16 @@ tests {
     expect(res.getBody().importCounts).to.equal(null);
     expect(res.getBody().outputFile).to.equal(null);
   });
+
+  test("classifies the file's rows against what is already imported", function () {
+    // Two rows carry a control number; on a fresh database both are new. On a
+    // re-run of the collection the earlier week-98 campaign holds them, so
+    // they show under `existingInOtherCampaigns` instead — both are correct,
+    // which is why the assertion is on the sum.
+    const overlap = res.getBody().preview.overlap;
+    expect(overlap.existingInThisCampaign).to.equal(0);
+    expect(overlap.newRows + overlap.existingInOtherCampaigns).to.equal(2);
+  });
 }
 
 docs {
@@ -91,6 +101,15 @@ docs {
   a campaign an overwrite replaced. **Nothing reaches `mailers` until the
   commit** — a campaign left at `previewed` has changed nothing.
 
+  `imported` is not terminal (PAC-142): `Add Campaign Files` on an imported
+  campaign takes it back to `uploaded`, and it is previewed and committed again
+  over every file. `firstImportedAt` says whether that has ever happened.
+
+  ## Files
+  `files[]` is the uploaded vendor files (each with an `id`), `outputFile` the
+  full print CSV over all of them, and `newRowsFile` — after a re-commit — only
+  the rows that commit created. None of them carries a storage key.
+
   ## What `preview` carries
   | field | notes |
   |---|---|
@@ -102,7 +121,7 @@ docs {
   | `assignment.resolved` | One row per distinct carrier agency code: `"A0B9049 → Smith Family Agency, 20,024 rows"`. |
   | `assignment.unmatched` | Codes matching no agency. **Non-empty blocks the commit** with a `422`. |
   | `existingCampaigns` | Imported/processing campaigns for the same carrier, week and year. |
-  | `overlap` | `existingInOtherCampaigns` (rows of this file someone else already owns), `replacedRecordCount`, and `deleteCountIfOverwrite` — the number an overwrite must confirm. |
+  | `overlap` | `existingInOtherCampaigns` (rows of this file someone else already owns), `existingInThisCampaign` (rows this campaign already holds — non-zero only after Add records; they are updated, not printed), `newRows` (rows nobody holds — what a re-commit's new-rows file contains), `replacedRecordCount`, and `deleteCountIfOverwrite` — the number an overwrite must confirm. |
   | `rejections` | A capped **sample**; `importCounts.skipped` is the authoritative total. |
   | `inconsistentColumns` | Columns holding more than one value. **Informational** — several `agencyid` values is the normal multi-agency case, and the real week-36 file carries two `quotedate`s. |
 

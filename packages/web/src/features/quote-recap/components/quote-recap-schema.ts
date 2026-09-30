@@ -198,7 +198,7 @@ export function emptyQuoteRecap(): QuoteRecapFormState {
 /**
  * Stored recap → form state (PAC-56 #11).
  *
- * Mirrors `features/lead/components/policy-schema.ts`'s `toPolicyFormValues`:
+ * Mirrors `features/policy/components/policy-schema.ts`'s `toPolicyFormValues`:
  * numbers become strings because that is what the inputs hold, and nothing is
  * silently rewritten on the way in.
  */

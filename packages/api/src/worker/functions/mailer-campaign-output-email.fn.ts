@@ -45,6 +45,8 @@ interface CampaignBrief {
   fileName: string;
   outputRows: number;
   recordCount: number;
+  /** The linked file holds only the last commit's new rows (Add records). */
+  newRowsOnly: boolean;
   detailUrl: string;
 }
 
@@ -169,17 +171,24 @@ export class MailerCampaignOutputEmailFn implements InngestFunctionProvider {
     if (!campaign?.outputFile || campaign.status !== 'imported') return null;
 
     const counts = campaign.importCounts;
+    // After Add records the mail house must get only what it has not printed
+    // yet, so the new-rows file wins whenever the commit wrote one (PAC-142).
+    const file = campaign.newRowsFile ?? campaign.outputFile;
     return {
-      outputKey: campaign.outputFile.storageKey,
+      outputKey: file.storageKey,
       campaignName: campaign.name,
       campaignNumber: campaign.campaignNumber ?? null,
       year: campaign.year ?? null,
-      fileName: campaign.outputFile.name,
+      fileName: file.name,
+      // The new-rows file holds exactly what the import created. Otherwise
       // `stats` is null for a `processed` source — nothing was transformed, so
       // there are no transform stats — and the import's own read count is then
       // the honest row number.
-      outputRows: campaign.stats?.outputRows ?? counts?.read ?? 0,
+      outputRows: campaign.newRowsFile
+        ? (counts?.created ?? 0)
+        : (campaign.stats?.outputRows ?? counts?.read ?? 0),
       recordCount: (counts?.created ?? 0) + (counts?.updated ?? 0),
+      newRowsOnly: campaign.newRowsFile !== null,
       detailUrl: `${this.tenantUrls.platformBaseUrl()}/admin/campaigns/${campaignId}`,
     };
   }
@@ -221,6 +230,7 @@ export class MailerCampaignOutputEmailFn implements InngestFunctionProvider {
       fileName: brief.fileName,
       outputRows: brief.outputRows,
       recordCount: brief.recordCount,
+      newRowsOnly: brief.newRowsOnly,
       downloadUrl,
       downloadExpiresAt: new Date(Date.now() + ttl * 1_000).toISOString(),
       detailUrl: brief.detailUrl,

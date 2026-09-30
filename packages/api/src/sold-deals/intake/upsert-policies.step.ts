@@ -1,11 +1,17 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { DataScope, nextRenewalDate, resolveItemCount } from '@sfa/shared';
+import {
+  DataScope,
+  RETIRED_POLICY_STATUS,
+  nextRenewalDate,
+  resolveItemCount,
+} from '@sfa/shared';
 import type { AccessContext } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
@@ -140,16 +146,39 @@ export class UpsertPoliciesStep {
   }
 
   /**
-   * Retire the policy a transfer replaces.
+   * Retire the policy a transfer or a rewrite replaces.
    *
    * Deactivated rather than deleted: the client genuinely held it, and the
    * household's history — and any audit or ticket that referenced it — has to
    * survive the move. `active: false` is also what keeps the household's
    * premium total and active-policy count honest once the replacement lands.
    *
-   * The household check is the real gate. `fromPolicyId` comes straight from the
-   * client, and the transfer's only scope clamp is the *ticket*; without this a
-   * CSR could retire any policy in the agency by naming its id.
+   * The household check is the real gate: `fromPolicyId` is injected from the
+   * lead's stored intent (PAC-126), and the intent was written against the
+   * policy's own household, so a disagreement here means the lead has been
+   * moved — not something to retire across.
+   *
+   * ## Re-checked at the moment of retirement, not only at lead creation
+   *
+   * `LeadsService.resolveReplacement` refuses an inactive or already-replaced
+   * policy when the lead is created, and the lookup reports the same before the
+   * chain starts. Neither is enough on its own: the intent is stored, the rep
+   * can leave for a week, and the policy can change underneath it — cancelled
+   * from the household edit, or replaced by the *other* reason's lead (a
+   * rewrite and a transfer may each be open for one policy, because the
+   * resume lookup is keyed on reason). Without this check the second submit
+   * would re-stamp the policy, re-point `transferredToPolicyId` at a second
+   * replacement, and for a rewrite charge the producer back a second time.
+   * Inside the transaction, so a refusal costs nothing.
+   *
+   * ## The status it stamps
+   *
+   * Both flows used to write `'Cancelled'`, which was the only honest value
+   * available — `'Company Transfer'` and `'Cancel Rewrite'` did not exist until
+   * PAC-126. They do now, and `RETIRED_POLICY_STATUS` maps the reason to one, so
+   * a package change is no longer indistinguishable from a client actually
+   * cancelling. A caller that passes no reason keeps the old behaviour, which is
+   * what stops an unreasoned future caller from silently claiming a transfer.
    */
   private async retireTransferred(
     fromPolicyId: string,
@@ -174,9 +203,28 @@ export class UpsertPoliciesStep {
       );
     }
 
+    // Same two guards, same wording and same order, as
+    // `LeadsService.resolveReplacement`. Replaced first: a replaced policy is
+    // also inactive, and "already replaced" is the answer that tells the rep
+    // what to do next.
+    if (existing.transferredToPolicyId) {
+      throw new ConflictException(
+        'This policy has already been replaced. Replace its replacement instead.',
+      );
+    }
+    if (!existing.active) {
+      throw new ConflictException(
+        'This policy is not active, so it cannot be replaced.',
+      );
+    }
+
+    const policyStatus = ctx.replacementReason
+      ? RETIRED_POLICY_STATUS[ctx.replacementReason]
+      : 'Cancelled';
+
     await this.policyModel.updateOne(
       { _id: existing._id, agencyId: ctx.agencyId },
-      { $set: { active: false, policyStatus: 'Cancelled' } },
+      { $set: { active: false, policyStatus } },
       sessionOptions(deps.session),
     );
 

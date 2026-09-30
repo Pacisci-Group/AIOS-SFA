@@ -1,0 +1,115 @@
+meta {
+  name: Lead For Replacement
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{baseUrl}}/leads/for-replacement?policyId={{policyEditPolicyId}}&reason=cancel_rewrite
+  auth: inherit
+}
+
+params:query {
+  policyId: {{policyEditPolicyId}}
+  reason: cancel_rewrite
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("answers all three questions at once", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("leadId");
+    expect(body).to.have.property("householdId");
+    expect(body).to.have.property("blockedReason");
+  });
+
+  test("names the policy's household", function () {
+    // `policyEditPolicyId` is a policy that has a household (that is what
+    // `Find A Policy To Edit` selects for), so the household is always named.
+    // Whether it is *blocked* depends on the seed — the policy may be inactive
+    // or already replaced by an earlier run — so that is not asserted here.
+    expect(res.getBody().householdId).to.be.a("string");
+  });
+
+  test("captures the resume target, if the chain was already started", function () {
+    const leadId = res.getBody().leadId;
+    if (leadId) bru.setVar("replacementLeadId", leadId);
+  });
+}
+
+docs {
+  # GET /leads/for-replacement — where a replacement should start
+
+  Module `leads` (class-level), permission **`deal_audits:write`**. The
+  permission is the *flow's*, not `leads:read`: this is a read, but the only
+  thing it is for is deciding a write, and it is the same permission
+  `POST /sold-deals` requires — so a caller who passes this can finish the
+  chain. Scope is the **household** rule (`loadHouseholdPolicy`, the one
+  `PATCH /households/:id/policies/:policyId` uses): `own` collapses to branch,
+  because a replacement is an action on the client's book and the sales-record
+  clamp would 404 every migrated (deal-less) policy for a producer. Out of
+  scope 404s rather than 403s.
+
+  ## Why it exists
+
+  A **Cancel Rewrite** and a **Company Transfer** no longer have endpoints of
+  their own. Both run through the ordinary Sold pipeline, which is anchored on a
+  lead — so the flow is two forms:
+
+  ```
+  policy ─▶ POST /leads (stamped with replacementIntent) ─▶ POST /sold-deals
+  ```
+
+  The rep can leave between them. A lead created and then abandoned before the
+  Sold form is a real record with no sale on it, and asking again for the same
+  action on the same policy must land on *that* lead rather than opening a second
+  one beside it. Only the server can answer that, which is what this is for.
+
+  ## Params
+
+  | Param | Req | Notes |
+  |---|---|---|
+  | `policyId` | yes | The policy being replaced. 24-hex. |
+  | `reason` | yes | `cancel_rewrite` or `company_transfer`. **No default** — the two apply different money rules (one charges the full premium back, the other charges nothing), so resuming one into the other would be silently wrong. |
+
+  ## Response `200` — three answers, and the caller routes on which it got
+
+  | Shape | Meaning | Where the UI goes |
+  |---|---|---|
+  | `blockedReason` set | Cannot be replaced: inactive, already replaced, or no household | Nowhere; explain |
+  | `leadId` set | A lead was already created and abandoned | `/sold/new?leadId=…` |
+  | both null | Nothing started | `/leads/new?replacePolicyId=…&reason=…` |
+
+  ```json
+  { "leadId": null, "householdId": "665f…", "blockedReason": null }
+  ```
+
+  `blockedReason` is **returned, not thrown**: the caller is asking *whether* it
+  may act, and an exception is the wrong shape for "no, and here is why". The
+  same guards are enforced for real at lead creation and again at the Sold
+  submit — this is the courtesy copy so the chain never starts.
+
+  ## Errors
+
+  | Code | When |
+  |---|---|
+  | `400` | Missing or malformed `policyId`, or an unrecognised `reason`. |
+  | `403` | Caller lacks `deal_audits:write`, or the `leads` module is disabled for the agency. |
+  | `404` | No such policy, or it is outside the caller's data scope. |
+
+  ## Run order
+
+  Reads `policyEditPolicyId`, captured by **Households › Find A Policy To Edit**
+  — a policy that has a household. The CLI walks folders alphabetically, so
+  `Households` has run by the time `Leads` does; the Sold folder's
+  `soldPolicyId` has **not**, which is why this does not use it. Feeds the
+  replacement chain: `Create Lead` with a `replacementIntent`, then
+  `Create Sold Deal` on the lead it returns.
+}

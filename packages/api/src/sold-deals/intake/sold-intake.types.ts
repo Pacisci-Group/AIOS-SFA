@@ -1,4 +1,4 @@
-import type { BusinessType } from '@sfa/shared';
+import type { BusinessType, PolicyReplacementReason } from '@sfa/shared';
 import { ClientSession, Types } from 'mongoose';
 import type { CreatedRegistry } from '../../common/mongo/transaction.runner';
 import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
@@ -30,6 +30,20 @@ export interface SoldIntakeContext {
   ticketId?: Types.ObjectId;
   /** New business, or an intra-book company transfer. */
   businessType: BusinessType;
+  /**
+   * Why the policies named by `fromPolicyId` are being retired.
+   *
+   * Read only by `UpsertPoliciesStep`, and only for rows that name one — it
+   * decides the status the retired policy is stamped with. Absent on the plain
+   * sold path, which retires nothing.
+   *
+   * **Deliberately separate from `businessType`**, which they are tempting to
+   * collapse into one field because a transfer is `company_transfer` on both.
+   * A rewrite breaks the tie: its replacement is genuinely `new_business`, while
+   * the policy it replaced was retired for `cancel_rewrite`. One field records
+   * what the new deal *is*, the other what happened to the old policy.
+   */
+  replacementReason?: PolicyReplacementReason;
   householdId: Types.ObjectId;
   quoteRecapId?: Types.ObjectId;
   primaryContactId?: Types.ObjectId;

@@ -1,12 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, Lightbulb, PhoneCall, ChevronRight, Loader2 } from "lucide-react";
+import { CalendarClock, ChevronRight, Loader2 } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { RENEWAL_DESK_PREVIEW_DAYS } from "@sfa/shared";
+import { useAuth } from "@/contexts/auth-context";
 import { useUrlState } from "@/hooks/useUrlState";
 import { getRenewalDesk, type RenewalDeskRow } from "@/lib/service-tickets-api";
 
 interface RenewalOutreachDeskProps {
-  /** Opens the call's ticket in the workspace. */
-  onOpenTicket: (ticketId: string) => void;
+  /**
+   * Opens the call's ticket in the workspace — to read ahead, not to make the
+   * call: every row is one that has not opened, and the API refuses to
+   * complete a call before its `availableAt`.
+   *
+   * `isMine` is whether the viewer is the call's assignee. An owner or branch
+   * manager sees other people's renewals here (PAC-146), and the workspace
+   * list beside a colleague's ticket should be one that contains it.
+   */
+  onOpenTicket: (ticketId: string, isMine: boolean) => void;
 }
 
 /**
@@ -16,11 +26,11 @@ interface RenewalOutreachDeskProps {
  * queue is: everything around the rows needs the whole set. The header counts
  * Active and Opening-soon across the desk, and the rows arrive pre-ranked by
  * `compareRenewalDeskRows`. Paging on the server would mean porting that
- * ranking into Mongo and recounting per badge — and the set is already bounded
- * by the 90-day renewal horizon.
+ * ranking into Mongo — and the set is already bounded by the two-week preview
+ * window.
  *
- * Four, not the queue's eight: a renewal row is a client header, an optional
- * overdue banner, the call band and a full-width CTA — roughly three times the
+ * Four, not the queue's eight: a renewal row is a client header, the call band
+ * and a full-width CTA — roughly three times the
  * height of a ticket row — and this card sits in the narrower 40% column at the
  * same height as the queue.
  */
@@ -42,34 +52,12 @@ const URL_ALLOWED = {
   renewalPage: (value: string) => /^[1-9]\d*$/.test(value),
 } as const;
 
-const priorityConfig = {
-  high: { ring: "border-[#F59E0B]/30", badge: "bg-[#F59E0B]/10 text-[#F59E0B]", label: "High Priority" },
-  medium: { ring: "border-[#0076A8]/30", badge: "bg-[#0076A8]/10 text-[#0076A8]", label: "Review Soon" },
-  low: { ring: "border-white/8", badge: "bg-white/5 text-muted-foreground", label: "Monitor" },
-  scheduled: { ring: "border-white/8", badge: "bg-white/5 text-muted-foreground", label: "Scheduled" },
-};
-
-/** A call the server is previewing — it has not opened yet, so it cannot be made. */
-function isScheduled(row: RenewalDeskRow): boolean {
-  return row.daysUntilAvailable !== null;
-}
-
 /**
- * Urgency band for a row. Derived from the server's `isOverdue`,
- * `daysUntilAvailable` and `daysUntilRenewal` — never from the browser clock.
- *
- * A previewed call gets its own band rather than one of the three urgency
- * tiers: its renewal may well be inside 14 days, and badging it "High Priority"
- * beside calls a rep can actually make today is how a desk stops being
- * skimmable.
+ * Since PAC-143 every row on the desk is a renewal whose first call has not
+ * opened — the two weeks before its renewal period starts. Once the call
+ * opens it leaves the desk and is worked from the ticket queue, so there is
+ * no "start the call", "overdue" or "active" state here to render.
  */
-function priorityOf(row: RenewalDeskRow): keyof typeof priorityConfig {
-  if (isScheduled(row)) return "scheduled";
-  if (row.isOverdue || row.daysUntilRenewal <= 14) return "high";
-  if (row.daysUntilRenewal <= 30) return "medium";
-  return "low";
-}
-
 function opensLabel(days: number): string {
   if (days <= 0) return "opens today";
   return `opens in ${days} day${days === 1 ? "" : "s"}`;
@@ -95,21 +83,16 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
     allowed: URL_ALLOWED,
   });
   const page = Number(urlState.renewalPage) || 1;
+  const { user } = useAuth();
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Reading the desk is also what materializes renewal cycles — there is no
-  // cron, so this request is what makes newly-due renewals appear.
+  // Cycles are materialized by the worker's scan (PAC-99); this is a read.
   const deskQuery = useQuery({
     queryKey: ["renewal-desk"],
     queryFn: getRenewalDesk,
   });
 
   const rows = deskQuery.data ?? [];
-  // The badge counts work, not rows — and they count the whole desk, not the
-  // page. Previewed calls are listed but cannot be made, so folding them into
-  // "Active" would overstate the desk.
-  const activeCount = rows.filter((row) => !isScheduled(row)).length;
-  const scheduledCount = rows.length - activeCount;
 
   /*
    * Clamped while rendering, so the desk never paints a frame of "No policies
@@ -121,16 +104,6 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * PAGE_SIZE;
   const pageRows = rows.slice(pageStart, pageStart + PAGE_SIZE);
-
-  /*
-   * Where the previewed run starts **on this page**, not across the whole desk.
-   *
-   * Rows arrive actionable-first, so computed globally this would label only
-   * the page holding the transition: a later page made entirely of previewed
-   * calls would render a run of disabled rows with no explanation, which is the
-   * exact confusion the divider exists to prevent.
-   */
-  const firstScheduledId = pageRows.find(isScheduled)?.cycleId;
 
   const goToPage = (next: number) => {
     setUrlState({ renewalPage: next <= 1 ? "" : String(next) });
@@ -160,13 +133,13 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-foreground tracking-tight">Proactive Renewal Outreach</h2>
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#0076A8]/10 border border-[#0076A8]/20">
-            <div className="w-1.5 h-1.5 rounded-full bg-[#0076A8] animate-pulse" />
-            <span className="text-[10px] font-semibold text-[#0076A8]">{activeCount} Active</span>
+            <CalendarClock size={10} className="text-[#0076A8]" />
+            <span className="text-[10px] font-semibold text-[#0076A8]">{rows.length} Upcoming</span>
           </div>
         </div>
         <p className="text-xs text-muted-foreground mt-1">
-          Policies renewing soon — act before they call you
-          {scheduledCount > 0 && ` · ${scheduledCount} opening soon`}
+          Renewals starting in the next {RENEWAL_DESK_PREVIEW_DAYS} days — plan
+          ahead before the call opens
         </p>
       </div>
 
@@ -187,40 +160,21 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
 
         {!deskQuery.isPending && !deskQuery.isError && rows.length === 0 && (
           <div className="flex items-center justify-center h-32 text-sm text-muted-foreground text-center px-6">
-            No policies renewing in the next 90 days.
+            No renewals starting in the next {RENEWAL_DESK_PREVIEW_DAYS} days.
           </div>
         )}
 
         {pageRows.map((row) => {
-          const cfg = priorityConfig[priorityOf(row)];
           const isMerged = row.mergedFrom.length > 0;
-          const scheduled = isScheduled(row);
+          const isMine = row.assignedUserId === user?.id;
 
           return (
-            <div
-              key={row.cycleId}
-              className={`py-4 group ${scheduled ? "opacity-70" : ""}`}
-            >
-              {/* One divider where the previewed calls begin, so the run of
-                  disabled rows reads as a section rather than as rows that
-                  mysteriously cannot be started. */}
-              {row.cycleId === firstScheduledId && (
-                <div className="flex items-center gap-2 mb-3 -mt-1">
-                  <CalendarClock size={11} className="text-muted-foreground flex-shrink-0" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Opening soon
-                  </span>
-                  <span className="h-px flex-1 bg-white/8" />
-                </div>
-              )}
+            <div key={row.cycleId} className="py-4 group">
               {/* Top: client + renewal date */}
               <div className="flex items-start justify-between mb-2.5">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-sm font-semibold text-foreground truncate">{row.clientName}</span>
-                    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${cfg.badge}`}>
-                      {cfg.label}
-                    </span>
+                  <div className="mb-0.5">
+                    <span className="block text-sm font-semibold text-foreground truncate">{row.clientName}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground font-mono truncate">
@@ -231,76 +185,46 @@ export function RenewalOutreachDesk({ onOpenTicket }: RenewalOutreachDeskProps) 
                       {row.policyCount} polic{row.policyCount === 1 ? "y" : "ies"}
                     </span>
                   </div>
+                  {/* Only when it is someone else's: on a rep's own desk every
+                      row is theirs, and saying so each time is noise. */}
+                  {!isMine && (
+                    <div className="mt-0.5 text-[10px] text-muted-foreground truncate">
+                      Assigned to {row.assignedRep || "nobody"}
+                    </div>
+                  )}
                 </div>
                 <div className="text-right flex-shrink-0 ml-3">
-                  <div className={`text-xs font-semibold ${scheduled ? "text-muted-foreground" : "text-[#0076A8]"}`}>
+                  <div className="text-xs font-semibold text-[#0076A8]">
                     Renews {shortDate(row.renewalDate)}
                   </div>
                   <div className="text-[10px] text-muted-foreground">{daysLabel(row.daysUntilRenewal)}</div>
                 </div>
               </div>
 
-              {/* Overdue warning. Replaces the old premium-increase block: the
-                  system holds no premium history, so nothing could populate it. */}
-              {row.isOverdue && (
-                <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-[#F59E0B]/8 border border-[#F59E0B]/15 mb-2.5">
-                  <AlertTriangle size={13} className="text-[#F59E0B] flex-shrink-0 mt-0.5" />
-                  <div>
-                    <span className="text-xs font-semibold text-[#F59E0B]">{row.label} overdue</span>
-                    <div className="text-[10px] text-[#F59E0B]/60 mt-0.5">
-                      {row.daysUntilRenewal >= 0
-                        ? `Policy renews in ${row.daysUntilRenewal} days`
-                        : "Policy has already renewed"}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Which call this is, what it covers, and — when previewed —
-                  when it opens. */}
-              <div
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-3 ${
-                  scheduled
-                    ? "bg-white/[0.03] border border-white/8"
-                    : "bg-[#0076A8]/8 border border-[#0076A8]/15"
-                }`}
-              >
-                {scheduled ? (
-                  <CalendarClock size={12} className="text-muted-foreground flex-shrink-0" />
-                ) : (
-                  <Lightbulb size={12} className="text-[#0076A8] flex-shrink-0" />
-                )}
-                <span className={`text-[10px] font-semibold ${scheduled ? "text-muted-foreground" : "text-[#0076A8]"}`}>
-                  {row.label}
-                </span>
+              {/* Which call this is, what it covers, and when it opens. */}
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg mb-3 bg-[#0076A8]/8 border border-[#0076A8]/15">
+                <CalendarClock size={12} className="text-[#0076A8] flex-shrink-0" />
+                <span className="text-[10px] font-semibold text-[#0076A8]">{row.label}</span>
                 {isMerged && (
-                  <span className={`text-[10px] ${scheduled ? "text-muted-foreground/80" : "text-[#0076A8]/80"}`}>
-                    · annual review merged in
-                  </span>
+                  <span className="text-[10px] text-[#0076A8]/80">· annual review merged in</span>
                 )}
-                {scheduled && (
-                  <span className="ml-auto text-[10px] font-semibold text-muted-foreground">
-                    {opensLabel(row.daysUntilAvailable ?? 0)}
-                  </span>
-                )}
+                <span
+                  className="ml-auto text-[10px] font-semibold text-muted-foreground"
+                  title={row.availableAt ? `Opens ${shortDate(row.availableAt)}` : undefined}
+                >
+                  {opensLabel(row.daysUntilAvailable)}
+                </span>
               </div>
 
-              {/* CTA. Disabled while the call is only previewed — the API
-                  refuses to complete a step before its `availableAt`, so an
-                  enabled button here would be a promise the server breaks. */}
+              {/* CTA. Opens the ticket to read ahead; the call itself can only
+                  be completed once it opens, which the API enforces. */}
               <button
-                onClick={() => row.ticketId && onOpenTicket(row.ticketId)}
-                disabled={!row.ticketId || scheduled}
-                title={
-                  scheduled
-                    ? `This call opens ${shortDate(row.availableAt ?? row.renewalDate)} — it can't be started yet.`
-                    : undefined
-                }
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-[#0076A8]/15 border border-[#0076A8]/25 text-xs font-semibold text-[#0076A8] hover:bg-[#0076A8]/25 hover:border-[#0076A8]/40 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#0076A8]/15 disabled:hover:border-[#0076A8]/25 transition-all duration-150 group-hover:shadow-sm"
+                onClick={() => row.ticketId && onOpenTicket(row.ticketId, isMine)}
+                disabled={!row.ticketId}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg bg-[#0076A8]/15 border border-[#0076A8]/25 text-xs font-semibold text-[#0076A8] hover:bg-[#0076A8]/25 hover:border-[#0076A8]/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 group-hover:shadow-sm"
               >
-                <PhoneCall size={12} />
-                {scheduled ? `${row.label} — ${opensLabel(row.daysUntilAvailable ?? 0)}` : `Start ${row.label}`}
-                <ChevronRight size={12} className="ml-auto opacity-50" />
+                View ticket
+                <ChevronRight size={12} className="opacity-50" />
               </button>
             </div>
           );

@@ -9,6 +9,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatCount } from "../campaign-format";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * Rows the importer would not take, and why.
@@ -60,9 +61,9 @@ export function RejectionsTable({
               {rejections.map((rejection, index) => (
                 <TableRow key={`${rejection.row}-${index}`}>
                   <TableCell className="tabular-nums">
-                    {rejection.row > 0 ? rejection.row : "—"}
+                    {rejection.row > 0 ? rejection.row : NOT_AVAILABLE}
                   </TableCell>
-                  <TableCell>{rejection.controlNumber ?? "—"}</TableCell>
+                  <TableCell>{rejection.controlNumber ?? NOT_AVAILABLE}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {rejection.reason}
                   </TableCell>

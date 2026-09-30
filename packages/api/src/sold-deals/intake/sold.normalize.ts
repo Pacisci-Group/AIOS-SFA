@@ -8,7 +8,6 @@ import {
   resolveItemCount,
 } from '@sfa/shared';
 import type {
-  NormalizedLeadSource,
   SoldDocumentMeta,
   SoldPolicyDiscounts,
   SoldPolicyInput,
@@ -378,13 +377,6 @@ export function buildDealTitle(
 ): string {
   const name = clientName?.trim();
   return name ? `Deal - ${name}` : `Deal - ${fallbackId.slice(0, 8)}`;
-}
-
-/** Carried from the lead so the Sold scorecard can attribute by source. */
-export function resolveLeadSource(
-  leadSource: NormalizedLeadSource | undefined,
-): NormalizedLeadSource {
-  return leadSource ?? { code: null, label: '' };
 }
 
 /** Legacy stores these yes/no answers as strings, not booleans. */

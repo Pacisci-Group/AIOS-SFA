@@ -41,6 +41,7 @@ import { CampaignStatusBadge } from "../CampaignStatusBadge";
 import { RejectionsTable } from "./RejectionsTable";
 import { StatTile } from "./StatTile";
 import { UnmatchedZipsResolver } from "./UnmatchedZipsResolver";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * What the file contains, before anything is written (PAC-71).
@@ -76,6 +77,10 @@ export function CampaignPreviewReport({
   const existing = preview.existingCampaigns;
   const overlap = preview.overlap;
   const blocked = unmatchedCodes.length > 0;
+  // Add records: the campaign has imported before, so this commit updates the
+  // rows it already holds and prints only the new ones (PAC-142).
+  const reopened = campaign.firstImportedAt !== null;
+  const fileNames = campaign.files.map((file) => file.name).join(", ");
   // Suggestions for the ZIP resolver — the markets this run already knows about.
   const markets = [
     ...new Set(
@@ -140,7 +145,7 @@ export function CampaignPreviewReport({
           <CardContent className="flex flex-col gap-4 px-5 py-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-card-foreground">
-                {campaign.vendorFile?.name ?? campaign.name}
+                {fileNames || campaign.name}
               </h3>
               <CampaignStatusBadge status={campaign.status} />
             </div>
@@ -170,7 +175,7 @@ export function CampaignPreviewReport({
                 value={
                   stats.premium
                     ? `${formatMoney(stats.premium.min)} · ${formatMoney(stats.premium.avg)} · ${formatMoney(stats.premium.max)}`
-                    : "—"
+                    : NOT_AVAILABLE
                 }
               />
             </div>
@@ -188,6 +193,34 @@ export function CampaignPreviewReport({
                 covering several agencies or quote dates.
               </p>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* --- Add records: what is new and what is already here ------------- */}
+      {reopened && (
+        <Card>
+          <CardContent className="flex flex-col gap-3 px-5 py-4">
+            <h3 className="text-sm font-semibold text-card-foreground">
+              Adding records to an imported campaign
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <StatTile
+                label="New rows · will be printed"
+                value={formatCount(overlap.newRows)}
+              />
+              <StatTile
+                label="Already in this campaign · updated, not printed"
+                value={formatCount(overlap.existingInThisCampaign)}
+              />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Every file is read again together. Rows this campaign already
+              holds are updated in place and left out of the print file, so
+              nothing already mailed goes out twice; the new rows are written to
+              a separate file for the mail house. Settings are locked since the
+              first import — only ZIP resolutions can still be added.
+            </p>
           </CardContent>
         </Card>
       )}
@@ -382,6 +415,12 @@ export function CampaignPreviewReport({
             <>
               <Trash2 className="size-4" />
               Overwrite and import
+            </>
+          ) : reopened ? (
+            <>
+              <CheckCircle2 className="size-4" />
+              Add {formatCount(overlap.newRows)}{" "}
+              {overlap.newRows === 1 ? "new row" : "new rows"}
             </>
           ) : (
             <>

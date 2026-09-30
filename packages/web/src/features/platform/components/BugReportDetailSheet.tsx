@@ -34,6 +34,7 @@ import {
   formatSize,
   relativeTime,
 } from "./bug-report-display";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface BugReportDetailSheetProps {
   /** `null` closes the sheet. */
@@ -53,7 +54,7 @@ function ContextRow({
     <div className="flex gap-2 py-0.5">
       <dt className="w-24 shrink-0 text-xs text-muted-foreground">{label}</dt>
       <dd className="min-w-0 flex-1 break-words text-xs text-foreground">
-        {value ?? "—"}
+        {value ?? NOT_AVAILABLE}
       </dd>
     </div>
   );

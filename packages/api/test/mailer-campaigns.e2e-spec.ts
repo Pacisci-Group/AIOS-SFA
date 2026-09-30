@@ -77,30 +77,37 @@ describe('Mailer campaigns (e2e)', () => {
   });
 
   /**
-   * Upload a file and record the campaign, the way the browser does: presign,
-   * PUT the bytes straight to storage, then `POST` the key back.
+   * Upload one file the way the browser does — presign, then PUT the bytes
+   * straight to storage — and describe it the way `files[]` wants it.
    */
-  const uploadCampaign = async (
-    body: Record<string, unknown> = {},
+  const uploadFile = async (
     bytes = 'controlno,firstname\n#a,Ada\n',
-  ): Promise<MailerCampaignDto> => {
+    filename = 'SFA-QBP.csv',
+  ) => {
     const presign = await api()
       .post(`${base}/presign`)
       .set(authHeader(superAdminToken))
-      .send({ filename: 'SFA-QBP.csv', size: bytes.length })
+      .send({ filename, size: bytes.length })
       .expect(201);
 
     const key = (presign.body as { key: string }).key;
     await storage.putObject(key, Buffer.from(bytes, 'utf8'), 'text/csv');
+    return { storageKey: key, uploadedFilename: filename, size: bytes.length };
+  };
+
+  /** Upload a file and record the campaign, then `POST` the key back. */
+  const uploadCampaign = async (
+    body: Record<string, unknown> = {},
+    bytes = 'controlno,firstname\n#a,Ada\n',
+  ): Promise<MailerCampaignDto> => {
+    const file = await uploadFile(bytes);
 
     const created = await api()
       .post(base)
       .set(authHeader(superAdminToken))
       .send({
         source: 'vendor',
-        storageKey: key,
-        uploadedFilename: 'SFA-QBP.csv',
-        size: bytes.length,
+        files: [file],
         campaignNumber: '36',
         assignment: { mode: 'carrier_agency_id' },
         settings: settings(),
@@ -133,6 +140,8 @@ describe('Mailer campaigns (e2e)', () => {
     existingCampaigns: [],
     overlap: {
       existingInOtherCampaigns: 0,
+      existingInThisCampaign: 0,
+      newRows: 2,
       replacedRecordCount: 0,
       deleteCountIfOverwrite: 0,
     },
@@ -255,10 +264,48 @@ describe('Mailer campaigns (e2e)', () => {
       expect(campaign.carrierName).toBe('Allstate');
       expect(campaign.campaignNumber).toBe('Week_Number-36');
       expect(campaign.weekNumber).toBe(36);
-      expect(campaign.vendorFile?.name).toBe('SFA-QBP.csv');
+      expect(campaign.files).toHaveLength(1);
+      expect(campaign.files[0].name).toBe('SFA-QBP.csv');
+      // Named by id so a client can remove or download one of several.
+      expect(campaign.files[0].id).toMatch(/^[0-9a-f]{24}$/);
       expect(storage.presigned[0]).toMatch(/^platform\/mailer-campaigns\//);
       // ⚠ The storage key is a capability and must never reach a client.
-      expect(campaign.vendorFile).not.toHaveProperty('storageKey');
+      expect(campaign.files[0]).not.toHaveProperty('storageKey');
+      expect(campaign.newRowsFile).toBeNull();
+      expect(campaign.firstImportedAt).toBeNull();
+    });
+
+    it('records several files, in upload order', async () => {
+      const first = await uploadFile('controlno,firstname\n#a,Ada\n', 'a.csv');
+      const second = await uploadFile('controlno,firstname\n#b,Bo\n', 'b.csv');
+
+      const res = await api()
+        .post(base)
+        .set(authHeader(superAdminToken))
+        .send({
+          source: 'vendor',
+          files: [first, second],
+          assignment: { mode: 'all' },
+          settings: settings(),
+        })
+        .expect(201);
+
+      const body = res.body as MailerCampaignDto;
+      expect(body.files.map((file) => file.name)).toEqual(['a.csv', 'b.csv']);
+    });
+
+    it('refuses the same object twice in one campaign', async () => {
+      const file = await uploadFile();
+      await api()
+        .post(base)
+        .set(authHeader(superAdminToken))
+        .send({
+          source: 'vendor',
+          files: [file, file],
+          assignment: { mode: 'all' },
+          settings: settings(),
+        })
+        .expect(400);
     });
 
     it('refuses a key from outside the campaign namespace', async () => {
@@ -274,9 +321,9 @@ describe('Mailer campaigns (e2e)', () => {
         .set(authHeader(superAdminToken))
         .send({
           source: 'vendor',
-          storageKey: key,
-          uploadedFilename: 'private.pdf',
-          size: 1,
+          files: [
+            { storageKey: key, uploadedFilename: 'private.pdf', size: 1 },
+          ],
           assignment: { mode: 'all' },
           settings: settings(),
         })
@@ -299,9 +346,9 @@ describe('Mailer campaigns (e2e)', () => {
         .set(authHeader(superAdminToken))
         .send({
           source: 'vendor',
-          storageKey: key,
-          uploadedFilename: 'SFA-QBP.csv',
-          size: 999,
+          files: [
+            { storageKey: key, uploadedFilename: 'SFA-QBP.csv', size: 999 },
+          ],
           assignment: { mode: 'all' },
           settings: settings(),
         })
@@ -314,9 +361,13 @@ describe('Mailer campaigns (e2e)', () => {
         .set(authHeader(superAdminToken))
         .send({
           source: 'vendor',
-          storageKey: 'platform/mailer-campaigns/2026/vendor/x.csv',
-          uploadedFilename: 'x.csv',
-          size: 1,
+          files: [
+            {
+              storageKey: 'platform/mailer-campaigns/2026/vendor/x.csv',
+              uploadedFilename: 'x.csv',
+              size: 1,
+            },
+          ],
           assignment: { mode: 'agencies', agencyIds: [] },
           settings: settings(),
         })
@@ -335,9 +386,7 @@ describe('Mailer campaigns (e2e)', () => {
         .set(authHeader(superAdminToken))
         .send({
           source: 'vendor',
-          storageKey: key,
-          uploadedFilename: 'x.csv',
-          size: 4,
+          files: [{ storageKey: key, uploadedFilename: 'x.csv', size: 4 }],
           assignment: {
             mode: 'agencies',
             agencyIds: ['507f1f77bcf86cd799439011'],
@@ -384,6 +433,186 @@ describe('Mailer campaigns (e2e)', () => {
         .set(authHeader(superAdminToken))
         .send({ name: 'Renamed' })
         .expect(409);
+    });
+
+    describe('once the campaign has imported (re-opened by Add records)', () => {
+      const reopen = async () => {
+        const campaign = await uploadCampaign({ assignment: { mode: 'all' } });
+        // Imported once, then re-opened: `previewed` again, but the settings
+        // are the record of how its mailers were priced.
+        await forceState(campaign.id, {
+          status: 'previewed',
+          commitAttempt: 1,
+          firstImportedAt: new Date(),
+        });
+        return campaign;
+      };
+
+      it('still takes a new ZIP resolution', async () => {
+        const campaign = await reopen();
+        const res = await api()
+          .patch(`${base}/${campaign.id}`)
+          .set(authHeader(superAdminToken))
+          .send({
+            settings: settings({ zipResolutions: { '74133': 'Tulsa' } }),
+          })
+          .expect(200);
+        expect((res.body as MailerCampaignDto).status).toBe('uploaded');
+      });
+
+      it('refuses any other settings change', async () => {
+        const campaign = await reopen();
+        const res = await api()
+          .patch(`${base}/${campaign.id}`)
+          .set(authHeader(superAdminToken))
+          .send({ settings: settings({ premiumFloor: 1 }) })
+          .expect(409);
+        expect((res.body as { message: string }).message).toContain('locked');
+      });
+
+      it('refuses a rename or a new assignment', async () => {
+        const campaign = await reopen();
+        await api()
+          .patch(`${base}/${campaign.id}`)
+          .set(authHeader(superAdminToken))
+          .send({ name: 'Renamed' })
+          .expect(409);
+        await api()
+          .patch(`${base}/${campaign.id}`)
+          .set(authHeader(superAdminToken))
+          .send({ assignment: { mode: 'all' }, settings: settings() })
+          .expect(409);
+      });
+    });
+  });
+
+  describe('files', () => {
+    const addFile = (campaignId: string, bytes: string, name: string) =>
+      uploadFile(bytes, name).then((file) =>
+        api()
+          .post(`${base}/${campaignId}/files`)
+          .set(authHeader(superAdminToken))
+          .send({ files: [file] }),
+      );
+
+    it('adds a file before the commit and reads the campaign again', async () => {
+      const campaign = await uploadCampaign();
+      await forceState(campaign.id, { status: 'previewed' });
+
+      const res = await addFile(
+        campaign.id,
+        'controlno,firstname\n#b,Bo\n',
+        'b.csv',
+      );
+      expect(res.status).toBe(200);
+      const body = res.body as MailerCampaignDto;
+      expect(body.files.map((file) => file.name)).toEqual([
+        'SFA-QBP.csv',
+        'b.csv',
+      ]);
+      // Back to `uploaded` with a bumped attempt: the stored preview described
+      // the old file list.
+      expect(body.status).toBe('uploaded');
+      expect(body.preview).toBeNull();
+    });
+
+    it('re-opens an imported campaign — this is Add records', async () => {
+      const campaign = await uploadCampaign();
+      const imported = new Date('2026-09-01T00:00:00Z');
+      await forceState(campaign.id, {
+        status: 'imported',
+        commitAttempt: 1,
+        firstImportedAt: imported,
+      });
+
+      const res = await addFile(
+        campaign.id,
+        'controlno,firstname\n#b,Bo\n',
+        'more.csv',
+      );
+      expect(res.status).toBe(200);
+      const body = res.body as MailerCampaignDto;
+      expect(body.status).toBe('uploaded');
+      expect(body.files).toHaveLength(2);
+      // The fact that it imported once survives the re-open — it is what makes
+      // the next commit write the new-rows file.
+      expect(body.firstImportedAt).toBe(imported.toISOString());
+    });
+
+    it('refuses while the worker holds the file list, or after a supersede', async () => {
+      const campaign = await uploadCampaign();
+      await forceState(campaign.id, { status: 'processing' });
+      expect(
+        (await addFile(campaign.id, 'controlno,firstname\n#b,Bo\n', 'b.csv'))
+          .status,
+      ).toBe(409);
+
+      await forceState(campaign.id, { status: 'superseded' });
+      expect(
+        (await addFile(campaign.id, 'controlno,firstname\n#c,Cy\n', 'c.csv'))
+          .status,
+      ).toBe(409);
+    });
+
+    it('refuses on a campaign that was never an upload', async () => {
+      const implicit = await campaigns.create({
+        carrierId: allstateId,
+        name: 'Migrated week',
+        status: 'imported',
+        source: 'migration',
+        assignment: { mode: 'agencies', agencyIds: [ctx.agencyId] },
+      });
+      const res = await addFile(
+        implicit._id.toString(),
+        'controlno,firstname\n#b,Bo\n',
+        'b.csv',
+      );
+      expect(res.status).toBe(409);
+    });
+
+    it('removes a file before the commit, but never the last one', async () => {
+      const campaign = await uploadCampaign();
+      const added = await addFile(
+        campaign.id,
+        'controlno,firstname\n#b,Bo\n',
+        'b.csv',
+      );
+      const [, second] = (added.body as MailerCampaignDto).files;
+      const secondKey = storage.presigned[storage.presigned.length - 1];
+
+      const res = await api()
+        .delete(`${base}/${campaign.id}/files/${second.id}`)
+        .set(authHeader(superAdminToken))
+        .expect(200);
+      const body = res.body as MailerCampaignDto;
+      expect(body.files.map((file) => file.name)).toEqual(['SFA-QBP.csv']);
+      expect(body.status).toBe('uploaded');
+      expect(storage.objects.has(secondKey)).toBe(false);
+
+      await api()
+        .delete(`${base}/${campaign.id}/files/${body.files[0].id}`)
+        .set(authHeader(superAdminToken))
+        .expect(400);
+    });
+
+    it('refuses to remove a file once a commit has run', async () => {
+      const campaign = await uploadCampaign();
+      await forceState(campaign.id, {
+        status: 'failed',
+        commitAttempt: 1,
+      });
+      await api()
+        .delete(`${base}/${campaign.id}/files/${campaign.files[0].id}`)
+        .set(authHeader(superAdminToken))
+        .expect(409);
+    });
+
+    it('404s a file id the campaign does not hold', async () => {
+      const campaign = await uploadCampaign();
+      await api()
+        .delete(`${base}/${campaign.id}/files/507f1f77bcf86cd799439011`)
+        .set(authHeader(superAdminToken))
+        .expect(404);
     });
   });
 
@@ -805,15 +1034,40 @@ describe('Mailer campaigns (e2e)', () => {
       const campaign = await uploadCampaign();
 
       const res = await api()
-        .get(`${base}/${campaign.id}/files/vendor/url`)
+        .get(`${base}/${campaign.id}/files/${campaign.files[0].id}/url`)
         .set(authHeader(superAdminToken))
         .expect(200);
       expect((res.body as { url: string }).url).toContain('signed=1');
+      expect((res.body as { filename: string }).filename).toBe('SFA-QBP.csv');
 
       await api()
         .get(`${base}/${campaign.id}/files/output/url`)
         .set(authHeader(superAdminToken))
         .expect(404);
+      await api()
+        .get(`${base}/${campaign.id}/files/new-rows/url`)
+        .set(authHeader(superAdminToken))
+        .expect(404);
+      await api()
+        .get(`${base}/${campaign.id}/files/507f1f77bcf86cd799439011/url`)
+        .set(authHeader(superAdminToken))
+        .expect(404);
+
+      await forceState(campaign.id, {
+        newRowsFile: {
+          storageKey:
+            'platform/mailer-campaigns/2026/output/x/2/SFA-QBP-new-rows.csv',
+          name: 'SFA-QBP-new-rows.csv',
+          size: 10,
+        },
+      });
+      const fresh = await api()
+        .get(`${base}/${campaign.id}/files/new-rows/url`)
+        .set(authHeader(superAdminToken))
+        .expect(200);
+      expect((fresh.body as { filename: string }).filename).toBe(
+        'SFA-QBP-new-rows.csv',
+      );
     });
 
     it('404s an unknown campaign rather than casting a bad id', async () => {
@@ -849,6 +1103,19 @@ describe('Mailer campaigns (e2e)', () => {
         .delete(`${base}/${campaign.id}`)
         .set(authHeader(superAdminToken))
         .expect(409);
+    });
+
+    it('refuses to delete a failed campaign whose commit had started', async () => {
+      const campaign = await uploadCampaign();
+      // A commit that died after its import step: `failed`, but thousands of
+      // mailers already carry this id. Deleting the record would orphan them.
+      await forceState(campaign.id, { status: 'failed', commitAttempt: 1 });
+
+      const res = await api()
+        .delete(`${base}/${campaign.id}`)
+        .set(authHeader(superAdminToken))
+        .expect(409);
+      expect((res.body as { message: string }).message).toContain('commit');
     });
 
     it('refuses to email an output that does not exist yet', async () => {

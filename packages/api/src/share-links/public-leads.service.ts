@@ -52,7 +52,7 @@ export class PublicLeadsService {
       shareLinkId: link._id,
       // No lead source. A producer sets it afterwards; guessing one would record
       // an assumption as fact, and nothing later could tell it from a real answer.
-      leadSource: null,
+      leadSourceId: null,
       actorUserId: null,
     };
 

@@ -1,0 +1,57 @@
+meta {
+  name: Login as Manager
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{resetProbeEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("managementDashboardToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the branch manager holds management:read", function () {
+    // From the Branch Manager template (PAC-139), or — on a database seeded
+    // before this ticket — from the `management_read_for_branch_managers`
+    // migration the API applied at boot. Either way this is the proof.
+    expect(res.getBody().user.permissions).to.include("management:read");
+  });
+}
+
+docs {
+  # Sign in as the branch manager
+
+  The Manager view is the page built for the **Branch Manager** persona, so this
+  folder runs as one: `manager@demoagency.local` (the env's `resetProbeEmail`,
+  which the Auth folder already uses for the reset probe). The collection's
+  default token belongs to the producer, who holds no `management:read`.
+
+  A Branch Manager's `DataScope` is **branch** — every count in this folder is
+  the demo agency's *main* branch, not the whole agency. Sign in as the owner
+  for the agency-wide figures.
+
+  Captured as `managementDashboardToken`, its own variable, so this folder
+  works in any run order.
+}

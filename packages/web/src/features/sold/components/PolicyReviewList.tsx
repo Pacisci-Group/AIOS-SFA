@@ -8,6 +8,7 @@ import { FormSubPanel } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { SoldPolicyFormValues } from "./sold-deal-schema";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface PolicyReviewListProps {
   policies: SoldPolicyFormValues[];
@@ -28,7 +29,7 @@ const formatDate = (value: string) =>
     month: "short",
     day: "numeric",
     year: "numeric",
-  }) : "—";
+  }) : NOT_AVAILABLE;
 
 /**
  * Everything about to be booked, in full (PAC-56 #25).
@@ -158,8 +159,8 @@ function DocumentRow({
 
 function carrierName(policy: SoldPolicyFormValues): string {
   return policy.carrier === CARRIER_OTHER
-    ? (policy.carrierOther?.trim() ?? "—")
-    : policy.carrier || "—";
+    ? (policy.carrierOther?.trim() ?? NOT_AVAILABLE)
+    : policy.carrier || NOT_AVAILABLE;
 }
 
 function priorInsuranceSummary(policy: SoldPolicyFormValues): string {

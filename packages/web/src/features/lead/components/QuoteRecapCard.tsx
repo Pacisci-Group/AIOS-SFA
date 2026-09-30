@@ -27,6 +27,7 @@ import {
   formatDate,
   statusBadgeClass,
 } from "./lead-display";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface QuoteRecapCardProps {
   latest: LeadDetailQuoteRecap;
@@ -86,7 +87,7 @@ function QuoteNotes({ recap }: { recap: LeadDetailQuoteRecap }) {
   if (!recap.notes) return null;
 
   const attribution = [recap.producerName, formatDate(recap.createdAt)]
-    .filter((part) => part && part !== "—")
+    .filter((part) => part && part !== NOT_AVAILABLE)
     .join(" · ");
 
   return (

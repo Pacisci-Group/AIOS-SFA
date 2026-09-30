@@ -185,16 +185,10 @@ function FeedRow({ item, isLast }: { item: FeedItem; isLast: boolean }) {
           <span className="text-xs tabular-nums text-muted-foreground">
             {item.timestamp}
           </span>
+          {/* No priority badge: it read off `ticket.priority`, which nothing in
+              the app can set, and its red now belongs to the overdue status
+              badge above — see the note in `tickets/components/ticket-data.ts`. */}
           <span className="flex shrink-0 items-center gap-1.5">
-            {item.isHighPriority && (
-              <Badge
-                size="sm"
-                variant="ghost"
-                className="bg-red-500/12 text-red-600 dark:text-red-400"
-              >
-                High
-              </Badge>
-            )}
             {item.agent && (
               <Badge size="sm" variant="ghost" className="bg-muted text-muted-foreground">
                 {item.agent}
@@ -238,7 +232,6 @@ interface FeedItem {
   timestamp: string;
   status: ServiceTicketStatus;
   agent?: string;
-  isHighPriority?: boolean;
 }
 
 const FILTERS = ["All", "Open", "Overdue", "Resolved"] as const;
@@ -269,7 +262,6 @@ function toFeedItem(ticket: ServiceTicketView): FeedItem {
     timestamp: formatStamp(ticket.lastActivityAt),
     status: ticket.status,
     agent: ticket.assignedRep || undefined,
-    isHighPriority: ticket.priority === "high",
   };
 }
 
@@ -301,7 +293,6 @@ const DEMO_ITEMS: FeedItem[] = [
     timestamp: "Jun 9, 2026 · 10:14 AM",
     status: "open",
     agent: "M. Torres",
-    isHighPriority: true,
   },
   {
     id: "a2",
@@ -342,7 +333,6 @@ const DEMO_ITEMS: FeedItem[] = [
     timestamp: "May 10, 2026 · 9:00 AM",
     status: "resolved",
     agent: "Allstate Claims",
-    isHighPriority: true,
   },
   {
     id: "a6",

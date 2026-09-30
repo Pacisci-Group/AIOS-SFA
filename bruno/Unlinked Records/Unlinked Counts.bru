@@ -15,13 +15,14 @@ headers {
 }
 
 script:post-response {
-  // The three totals, so the list requests below can assert they agree.
+  // The four totals, so the list requests below can assert they agree.
   // Runtime-only vars (never persisted to disk).
   if (res.getStatus() === 200) {
     const body = res.getBody();
     bru.setVar("unlinkedPolicyCount", body.policies);
     bru.setVar("unlinkedContactCount", body.contacts);
     bru.setVar("unlinkedHouseholdCount", body.households);
+    bru.setVar("unanchoredPolicyCount", body.unanchored);
   }
 }
 
@@ -30,21 +31,23 @@ tests {
     expect(res.getStatus()).to.equal(200);
   });
 
-  test("returns exactly the three numbers the chips show", function () {
+  test("returns exactly the numbers the chips show", function () {
     const body = res.getBody();
     expect(Object.keys(body).sort()).to.eql([
       "contacts",
       "households",
       "policies",
+      "unanchored",
     ]);
     expect(body.policies).to.be.a("number");
     expect(body.contacts).to.be.a("number");
     expect(body.households).to.be.a("number");
+    expect(body.unanchored).to.be.a("number");
   });
 
   test("counts are never negative", function () {
     const body = res.getBody();
-    for (const key of ["policies", "contacts", "households"]) {
+    for (const key of ["policies", "contacts", "households", "unanchored"]) {
       expect(body[key]).to.be.at.least(0);
     }
   });
@@ -53,8 +56,8 @@ tests {
 docs {
   # GET /clients/unlinked/counts
 
-  The three numbers behind the **Unlinked** tab's filter chips on the Clients
-  page (PAC-91 §10).
+  The numbers behind the **Unlinked** tab's filter chips on the Clients page
+  (PAC-91 §10, fourth chip added by PAC-126).
 
   - **Module:** `clients`
   - **Permission:** `clients:read` — **not** the `clients:read` OR
@@ -67,7 +70,7 @@ docs {
 
   ## Response
   ```json
-  { "policies": 135, "contacts": 280, "households": 59 }
+  { "policies": 135, "contacts": 280, "households": 59, "unanchored": 42 }
   ```
 
   Each number is the `total` of the matching `GET /clients/unlinked?kind=…`
@@ -75,10 +78,10 @@ docs {
   list behind it.
 
   ## Why a separate endpoint rather than `?kind=summary`
-  The page shows all three counts whichever list is open, so they are a
-  different question with a different cache lifetime — and a paginated envelope
-  with no `items` would have made every field of the response shape optional for
-  the three real kinds.
+  The page shows every count whichever list is open, so they are a different
+  question with a different cache lifetime — and a paginated envelope with no
+  `items` would have made every field of the response shape optional for the
+  real kinds.
 
   ## What each number means
   | Field | Predicate |
@@ -86,8 +89,17 @@ docs {
   | `policies` | `policies` with no `householdId` |
   | `contacts` | `contacts` with no **current** row in `householdMembers` (`endedAt: null`) |
   | `households` | `households` with no `primaryContactId` |
+  | `unanchored` | **active** `policies` with no `renewalDate`, `effectiveDate` **and** no `expirationDate` |
 
-  All three exclude `isTestRecord` rows — the agency's Sample/Test records were
+  `unanchored` is a missing *date* rather than a missing *link*, and is filed
+  here because it is the same job for the same people. Its predicate mirrors the
+  renewal scan's own fallback chain (`renewalDate ?? effectiveDate ??
+  expirationDate`) so a row leaves this list exactly when outreach starts seeing
+  it — not the 2026-09-08 backfill's `effectiveDate ?? deal.soldDate`, which
+  would disagree with the runtime. Restricted to `active` because an inactive
+  policy gets no outreach, so a missing anchor on one is not work.
+
+  All of them exclude `isTestRecord` rows — the agency's Sample/Test records were
   flagged in PAC-91 Phase 1 and must never be presented as work.
 
   ## Errors

@@ -1,0 +1,241 @@
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  getOwnerLeadSources,
+  ownerDashboardKey,
+} from "@/lib/owner-dashboard-api";
+import type {
+  OwnerDashboardParams,
+  OwnerLeadSourceRow,
+} from "@/lib/owner-dashboard-api";
+import { cn } from "@/lib/utils";
+import { formatCount, formatMoney, formatPct } from "../owner-format";
+import { DataPanel } from "@/components/common/DataPanel";
+import { ColumnHead } from "./ColumnHead";
+import { NOT_AVAILABLE } from "@/lib/not-available";
+
+const SKELETON_ROWS = 6;
+
+type Conversion = Pick<OwnerLeadSourceRow, "convPct" | "convGap">;
+
+const GAP_COPY: Record<NonNullable<OwnerLeadSourceRow["convGap"]>, string> = {
+  no_quotes: "No quotes recorded for this source in this period.",
+  too_few_quotes:
+    "Too few quotes recorded against these sales to give a meaningful rate.",
+};
+
+/** A rate, or a dash that says why there isn't one. */
+function ConversionCell({ convPct, convGap }: Conversion) {
+  if (convPct !== null || convGap === null) {
+    return <span className="tabular-nums">{formatPct(convPct)}</span>;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help text-muted-foreground">{NOT_AVAILABLE}</span>
+      </TooltipTrigger>
+      <TooltipContent>{GAP_COPY[convGap]}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * Closing ratio · New leads · Bound premium per lead source (PAC-135).
+ *
+ * The mockup titles this an "ROI matrix". Nothing in the system records what a
+ * lead source *costs*, so there is no return to compute — this is lead-source
+ * performance, and the title says so rather than promising a number we cannot
+ * produce.
+ *
+ * - **Closing ratio** is premium-based, sold ÷ quoted, the same rule as the
+ *   closing ratio card — and refuses a rate on the same grounds that card does.
+ *   It was first labelled "Conv %", which the owner read as leads converted; it
+ *   now carries the card's name because it is the card's formula.
+ * - **New leads** (once "Vol") is leads received. The line-of-business filter
+ *   cannot apply to it: a lead is not a policy. The sub heading says so whenever
+ *   that filter is on, because a column that silently ignores a filter looks
+ *   like a bug.
+ * - **No source** is kept, last. On migrated data it is large — about two thirds
+ *   of historic deals carry no source — and hiding it would make this table's
+ *   total disagree with the card above.
+ *
+ * The mockup's relative premium bar per row is dropped: next to a "No source"
+ * row that dwarfs every real channel, it would draw every channel as a sliver.
+ *
+ * Narrow panels get a list, one source per row, for the reason and on the same
+ * `@container` terms as the producer leaderboard. The source name is the one
+ * column allowed to wrap in the table: "Allstate Lead Marketplace" on two lines
+ * is what lets the table fit its 40% beside the leaderboard.
+ */
+export function LeadSourceMatrix({
+  params,
+  className,
+}: {
+  params: OwnerDashboardParams;
+  className?: string;
+}) {
+  const { data, isPending, isError, refetch } = useQuery({
+    queryKey: [...ownerDashboardKey, "lead-sources", params],
+    queryFn: () => getOwnerLeadSources(params),
+    placeholderData: keepPreviousData,
+  });
+
+  return (
+    <DataPanel
+      title="Lead source performance"
+      subheading={
+        params.policyTypes.length > 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            New leads counts every lead received — a lead has no line of
+            business.
+          </p>
+        )
+      }
+      isPending={isPending}
+      isError={isError}
+      isEmpty={data?.rows.length === 0}
+      emptyMessage="No leads, quotes or sales in this period."
+      errorMessage="Couldn’t load the lead sources."
+      onRetry={() => void refetch()}
+      skeletonRows={SKELETON_ROWS}
+      className={className}
+    >
+      {data && (
+        <div className="@container">
+          <div className="hidden @min-[30rem]:block">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <ColumnHead label="Lead source" className="pl-5" />
+                  <ColumnHead
+                    label="Closing ratio"
+                    hint="Bound premium ÷ quoted premium for this source in this period — the Agency Closing Ratio card, per source. Can exceed 100% when a sale was quoted in an earlier period."
+                    align="right"
+                  />
+                  <ColumnHead
+                    label="New leads"
+                    hint="Leads created from this source in this period, whatever they went on to buy."
+                    align="right"
+                  />
+                  <ColumnHead
+                    label="Bound premium"
+                    hint="Premium on new business sold to this source’s leads in this period. The Total Bound Premium card is the sum of this column."
+                    align="right"
+                    className="pr-5"
+                  />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.rows.map((row) => (
+                  <TableRow key={row.leadSourceId ?? "none"}>
+                    <TableCell
+                      className={cn(
+                        "pl-5 font-medium whitespace-normal",
+                        row.leadSourceId === null
+                          ? "text-muted-foreground"
+                          : "text-foreground",
+                      )}
+                    >
+                      {row.name}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <ConversionCell {...row} />
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCount(row.volume)}
+                    </TableCell>
+                    <TableCell className="pr-5 text-right font-semibold tabular-nums">
+                      {formatMoney(row.premium)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+              <TableFooter>
+                <TableRow className="hover:bg-transparent">
+                  <TableCell className="pl-5 font-medium whitespace-normal">
+                    Total across all sources
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <ConversionCell {...data.totals} />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCount(data.totals.volume)}
+                  </TableCell>
+                  <TableCell className="pr-5 text-right font-semibold tabular-nums">
+                    {formatMoney(data.totals.premium)}
+                  </TableCell>
+                </TableRow>
+              </TableFooter>
+            </Table>
+          </div>
+
+          <ul className="divide-y divide-border @min-[30rem]:hidden">
+            {data.rows.map((row) => (
+              <LeadSourceItem
+                key={row.leadSourceId ?? "none"}
+                name={row.name}
+                muted={row.leadSourceId === null}
+                figures={row}
+              />
+            ))}
+            <LeadSourceItem
+              name="Total across all sources"
+              figures={data.totals}
+              className="rounded-b-xl bg-muted/50"
+            />
+          </ul>
+        </div>
+      )}
+    </DataPanel>
+  );
+}
+
+/** One source in the narrow-panel list: name and premium, then the rest. */
+function LeadSourceItem({
+  name,
+  muted = false,
+  figures,
+  className,
+}: {
+  name: string;
+  muted?: boolean;
+  figures: Conversion & Pick<OwnerLeadSourceRow, "volume" | "premium">;
+  className?: string;
+}) {
+  return (
+    <li className={cn("px-5 py-3 text-sm", className)}>
+      <div className="flex items-baseline justify-between gap-3">
+        <span
+          className={cn(
+            "min-w-0 font-medium break-words",
+            muted ? "text-muted-foreground" : "text-foreground",
+          )}
+        >
+          {name}
+        </span>
+        <span className="shrink-0 font-semibold tabular-nums">
+          {formatMoney(figures.premium)}
+        </span>
+      </div>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Closing ratio <ConversionCell {...figures} /> ·{" "}
+        <span className="tabular-nums">
+          {formatCount(figures.volume)}{" "}
+          {figures.volume === 1 ? "new lead" : "new leads"}
+        </span>
+      </p>
+    </li>
+  );
+}

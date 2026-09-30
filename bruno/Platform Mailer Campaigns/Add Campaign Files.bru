@@ -1,0 +1,92 @@
+meta {
+  name: Add Campaign Files
+  type: http
+  seq: 22
+}
+
+post {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}/files
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "files": [
+      {
+        "storageKey": "{{campaignSecondFileKey}}",
+        "uploadedFilename": "SFA-QBP-week-98-missed.csv",
+        "size": {{campaignSecondFileSize}}
+      }
+    ]
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    // 200, not 201: the campaign already exists and this starts work on it.
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("re-opens the imported campaign — this is Add records", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("uploaded");
+    expect(body.preview).to.equal(null);
+    expect(body.files).to.have.lengthOf(2);
+    expect(body.files[1].name).to.equal("SFA-QBP-week-98-missed.csv");
+  });
+
+  test("keeps the fact that it imported once", function () {
+    // This is what makes the next commit write only the new rows.
+    expect(res.getBody().firstImportedAt).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /platform/mailer-campaigns/:campaignId/files — add files, or re-open (PAC-142)
+
+  Appends uploaded files to the campaign and reads **every** file again. Before
+  a commit this is "I forgot the second file". On an `imported` campaign it is
+  **Add records**: the campaign drops back to `uploaded`, is previewed again
+  over all its files, and is committed again — rows already imported are
+  updated in place, new rows are created, and the commit writes the rows it
+  created to a separate print file (`newRowsFile`) for the mail house.
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** `platform:mailers:write`
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`)
+
+  Legal in `uploaded`, `previewed`, `failed` **and `imported`**; `409` while
+  `processing` (the worker holds the file list), after a supersede, or on a
+  `migration` / `demo` campaign (nothing to run a transform with).
+
+  ## Body
+  The same `files` array `Create Campaign` takes: 1–20 of
+  `{storageKey, uploadedFilename, size, contentType?}`, each presigned and PUT
+  first (`Presign Campaign File` / `Upload Campaign File`). The campaign holds at
+  most 20 files in total. Every file must carry the same columns as the first;
+  a mismatch fails the preview naming the file.
+
+  ## What a re-opened campaign may still change
+  Only ZIP resolutions (`Patch Zip Resolutions`). Every other setting is locked
+  from the first import on — the settings are the record of how the mailers
+  were priced. Files cannot be removed either once a commit has run.
+
+  ## Response `200`
+  The campaign at `status: "uploaded"` with the preview job queued. Poll
+  `GET …/:campaignId` until `previewed`, then `Commit Campaign` again.
+
+  ## Errors
+  - `400 Bad Request` — key outside the namespace, object missing or empty,
+    size mismatch, the same object twice, or more than 20 files in total.
+  - `401` / `403` — missing token, or missing `platform:mailers:write`.
+  - `409 Conflict` — wrong status or a non-upload source (see above).
+}

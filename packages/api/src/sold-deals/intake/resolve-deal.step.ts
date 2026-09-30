@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import type { NormalizedLeadSource } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { Deal, DealDocument } from '../../deals/schemas/deal.schema';
 import type { SoldIntakeDto } from '../dto/create-sold-deal.dto';
@@ -9,7 +8,6 @@ import {
   deriveAuditTriggers,
   deriveDealAggregates,
   deriveMortgagee,
-  resolveLeadSource,
 } from './sold.normalize';
 import { SoldStepDeps, sessionOptions } from './sold-intake.types';
 
@@ -29,7 +27,7 @@ export class ResolveDealStep {
 
   async run(
     dto: SoldIntakeDto,
-    leadSource: NormalizedLeadSource | undefined,
+    leadSourceId: Types.ObjectId | undefined,
     deps: SoldStepDeps,
   ): Promise<{
     dealId: Types.ObjectId;
@@ -61,7 +59,9 @@ export class ResolveDealStep {
           dealType: aggregates.dealType,
           isBundle: aggregates.isBundle,
           policyTypes: aggregates.policyTypes,
-          leadSource: resolveLeadSource(leadSource),
+          // The fallback attribution — analytics prefer the lead's own source
+          // whenever `leadId` is set. See `Deal.leadSourceId`.
+          leadSourceId,
           clientName: ctx.clientName,
           producerId: ctx.producerId,
           // Both null on a policy transfer, which is anchored on the household

@@ -2,24 +2,10 @@ import {
   LEAD_SOURCE_NONE,
   LEAD_STATUSES,
   LEAD_TEMPERATURE_OPTIONS,
-  SELECTABLE_LEAD_SOURCE_OPTIONS,
 } from '@sfa/shared';
 import type { LeadTemperature } from '@sfa/shared';
 import { z } from 'zod';
-
-/**
- * `Test` (ENEJP) is excluded for the same reason as `create-lead.dto.ts`: the
- * `isTestRecord` heuristic hides any record it flags from every read path, so
- * letting a producer select it would silently make a real lead disappear.
- *
- * `LEAD_SOURCE_NONE` is accepted alongside the codes so a source can be
- * *cleared* as well as set — a mis-attributed lead has to be correctable back
- * to "not known yet", not just to a different wrong answer.
- */
-const LEAD_SOURCE_VALUES: [string, ...string[]] = [
-  LEAD_SOURCE_NONE,
-  ...SELECTABLE_LEAD_SOURCE_OPTIONS.map((option) => option.code),
-];
+import { leadSourceIdField } from './create-lead.dto';
 
 /**
  * `PATCH /leads/:id` — the Lead Detail inline edits (PAC-38).
@@ -42,13 +28,17 @@ export const updateLeadSchema = z
       .enum(LEAD_TEMPERATURE_OPTIONS as [LeadTemperature, ...LeadTemperature[]])
       .optional(),
     /**
-     * A **code**, not a label — the same vocabulary `POST /leads` takes, so the
-     * two write paths cannot disagree about what a source is.
+     * A `leadSources` row id — the same thing `POST /leads` takes, so the two
+     * write paths cannot disagree about what a source is — or
+     * `LEAD_SOURCE_NONE` to **clear** it: a mis-attributed lead has to be
+     * correctable back to "not known yet", not just to a different wrong answer.
      *
      * This control exists because PAC-37 share-link leads arrive with no source
      * at all; without it those leads could never be corrected.
      */
-    leadSourceCode: z.enum(LEAD_SOURCE_VALUES).optional(),
+    leadSourceId: z
+      .union([z.literal(LEAD_SOURCE_NONE), leadSourceIdField])
+      .optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: 'Provide at least one field to update.',

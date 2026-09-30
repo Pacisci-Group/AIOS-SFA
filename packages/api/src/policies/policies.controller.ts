@@ -13,6 +13,7 @@ import type { CheckPolicyDto } from './dto/check-policy.dto';
 import { updatePolicySchema } from './dto/update-policy.dto';
 import type { UpdatePolicyDto } from './dto/update-policy.dto';
 import { PoliciesService } from './policies.service';
+import { PolicyRewritesService } from './policy-rewrites.service';
 
 /**
  * Policies — the Sold wizard's duplicate check (PAC-40) and the Lead Detail
@@ -56,7 +57,10 @@ import { PoliciesService } from './policies.service';
   modulePermission(ModuleKey.CrmService, 'read'),
 )
 export class PoliciesController {
-  constructor(private readonly policiesService: PoliciesService) {}
+  constructor(
+    private readonly policiesService: PoliciesService,
+    private readonly rewritesService: PolicyRewritesService,
+  ) {}
 
   // Static segment first: Nest matches in declaration order, so any future
   // `@Get(':id')` must come after this or it will swallow `/check`.
@@ -91,5 +95,21 @@ export class PoliciesController {
     @Body(new ZodValidationPipe(updatePolicySchema)) body: UpdatePolicyDto,
   ) {
     return this.policiesService.update(access, branchId, id, body);
+  }
+
+  /**
+   * The policy's full replacement history — every policy that led to it and
+   * every one that came after, oldest first, with what each cancellation cost.
+   *
+   * Read-only, so it rides the controller's OR gate rather than the write one: a
+   * CSR looking at a transferred policy has the same question as a producer
+   * looking at a rewritten one. Returns a single-entry chain for a policy that
+   * has never been replaced, which is what lets the UI render it unconditionally.
+   */
+  @Get(':id/history')
+  history(@Access() access: AccessContext, @Param('id') id: string) {
+    // Household-scoped (`loadHouseholdPolicy`), so the branch header plays no
+    // part: the clamp reads the caller's own branch off their access context.
+    return this.rewritesService.replacementChain(access, id);
   }
 }

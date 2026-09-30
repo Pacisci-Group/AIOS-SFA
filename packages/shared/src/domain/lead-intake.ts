@@ -16,7 +16,7 @@ import type { PolicyType } from './policy-type';
  *
  * `mailer` is a lead logged from a direct-mail piece through the Mailers drawer
  * (PAC-61). It records **provenance, not attribution** — the lead source is
- * always `WCO7l` (Mailer), set server-side, and lives on `leads.leadSource`.
+ * always Mailer, set server-side, and lives on `leads.leadSourceId`.
  * The two answer different questions: the channel says which surface wrote the
  * record, the source says where the prospect came from.
  */
@@ -91,11 +91,11 @@ export interface LeadIntakeInput {
    */
   policiesOfInterest?: LeadPolicyOfInterestInput[];
   /**
-   * Canonical lead-source code. Required on the authenticated form; **absent on
+   * A `leadSources` row id. Required on the authenticated form; **absent on
    * public submissions**, which store no source until a producer sets one
    * (PAC-38 inline edits).
    */
-  leadSourceCode?: string;
+  leadSourceId?: string;
   quoteControlNumber?: string;
   /**
    * Client-generated per-form-session idempotency key. The server namespaces it

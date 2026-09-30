@@ -3,9 +3,10 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { parse } from 'csv-parse';
 import { Types, type Model } from 'mongoose';
-import type {
-  MailerCampaignImportCounts,
-  MailerCampaignStats,
+import {
+  mailerControlNumberKeys,
+  type MailerCampaignImportCounts,
+  type MailerCampaignStats,
 } from '@sfa/shared';
 import {
   resolveAssignment,
@@ -63,9 +64,10 @@ import {
 import { StorageService } from '../../storage/storage.service';
 import {
   chunk,
+  columnIndex,
   failCampaign,
   loadZipMarkets,
-  readCampaignFile,
+  readCampaignFiles,
   summarizeCarrierCodes,
   type StepLike,
 } from './mailer-campaign.support';
@@ -82,6 +84,8 @@ interface AssignmentResult {
 interface ProcessResult {
   outputKey: string;
   outputRows: number;
+  /** Rows the new-rows print file carries; `null` when none was written. */
+  newRows: number | null;
 }
 interface ImportResult {
   read: number;
@@ -115,6 +119,17 @@ interface ImportResult {
  * platform will carry. `process` therefore writes the output CSV to storage and
  * returns its **key**; `import` re-streams it. Reconcile walks the *leads* with
  * a pending key rather than the 20,000 keys the import just wrote.
+ *
+ * ## A second commit prints only what it adds (PAC-142)
+ *
+ * An imported campaign re-opened with more files is committed again over
+ * **every** file. The import is an upsert, so rows already held are updated in
+ * place — but the mail house must not receive them twice. `process` therefore
+ * writes a second CSV, `newRowsFile`, holding only the rows whose control
+ * number no mailer carried yet, and that is the file the completion email
+ * links. It is computed *before* the import step from the live collection,
+ * which is sound because this function runs one commit at a time platform-wide
+ * (see `concurrency`) and `process` is memoized once it succeeds.
  *
  * ## Import boundary
  *
@@ -336,25 +351,35 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
    *
    * A `processed` source skips the transform entirely — running it twice
    * discounts `yearlyprem` a second time, which is exactly the defect the Apex
-   * round trip has today. Its CSV is used as the output as it stands; an XLSX
-   * is rewritten as CSV so the import step can stream it.
+   * round trip has today. A single processed CSV that has never imported is
+   * used as the output as it stands; anything else (an XLSX, several files, or
+   * a re-opened campaign that needs a new-rows file) is rewritten as CSV so the
+   * import step can stream it.
+   *
+   * On a campaign that has imported before, a second file is written holding
+   * only the rows no mailer carries yet — see the class note.
    */
   private async process(
     campaignId: string,
     attempt: number,
   ): Promise<ProcessResult> {
     const campaign = await this.mustFind(campaignId);
-    if (!campaign.vendorFile) throw new Error('This campaign has no file.');
+    if (campaign.files.length === 0) {
+      throw new Error('This campaign has no file.');
+    }
 
     const settings = plainSettings(campaign.settings);
     const isProcessed = campaign.source === 'processed' || !settings;
-    const kind = detectVendorFileKind({
-      filename: campaign.vendorFile.name,
-      contentType: campaign.vendorFile.contentType ?? null,
-    });
+    const reopened = campaign.firstImportedAt !== null;
+    const single = campaign.files.length === 1 ? campaign.files[0] : null;
+    const kind = single
+      ? detectVendorFileKind({
+          filename: single.name,
+          contentType: single.contentType ?? null,
+        })
+      : null;
 
-    if (isProcessed && kind === 'csv') {
-      const file = campaign.vendorFile;
+    if (isProcessed && single && kind === 'csv' && !reopened) {
       await this.campaignModel.updateOne(
         { _id: campaignId },
         {
@@ -362,22 +387,24 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
             // The same object serves as both files — nothing was transformed,
             // so there is no second artifact to store or to download.
             outputFile: {
-              storageKey: file.storageKey,
-              name: file.name,
-              size: file.size,
-              sha256: file.sha256,
-              contentType: file.contentType,
+              _id: new Types.ObjectId(),
+              storageKey: single.storageKey,
+              name: single.name,
+              size: single.size,
+              sha256: single.sha256,
+              contentType: single.contentType,
             },
+            newRowsFile: null,
             stats: null,
           },
         },
       );
-      return { outputKey: file.storageKey, outputRows: 0 };
+      return { outputKey: single.storageKey, outputRows: 0, newRows: null };
     }
 
-    const { headers, rows } = await readCampaignFile(
+    const { headers, rows } = await readCampaignFiles(
       this.storage,
-      campaign.vendorFile,
+      campaign.files,
     );
 
     let outHeaders = headers;
@@ -401,11 +428,11 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
       codes = summarizeCarrierCodes(outHeaders, outRows);
     }
 
-    const body = writeVendorCsv(outHeaders, outRows);
-    const name = `${settings?.fileName || campaign.name}.csv`.replace(
+    const baseName = `${settings?.fileName || campaign.name}`.replace(
       /\s+/g,
       '-',
     );
+    const name = `${baseName}.csv`;
     const outputKey = this.storage.buildPlatformObjectKey({
       purpose: MAILER_CAMPAIGN_PURPOSE,
       filename: name,
@@ -414,20 +441,50 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
     });
     const stored = await this.storage.putObject(
       outputKey,
-      body,
+      writeVendorCsv(outHeaders, outRows),
       CSV_CONTENT_TYPE,
     );
+
+    // Only on a re-opened campaign: the rows this commit will create, for the
+    // mail house. A first commit's full output *is* the new rows.
+    let newRowsFile: Record<string, unknown> | null = null;
+    let newRows: number | null = null;
+    if (reopened) {
+      const fresh = await this.selectNewRows(outHeaders, outRows);
+      const newName = `${baseName}-new-rows.csv`;
+      const newKey = this.storage.buildPlatformObjectKey({
+        purpose: MAILER_CAMPAIGN_PURPOSE,
+        filename: newName,
+        parts: ['output', campaignId, String(attempt)],
+        unique: false,
+      });
+      const storedNew = await this.storage.putObject(
+        newKey,
+        writeVendorCsv(outHeaders, fresh),
+        CSV_CONTENT_TYPE,
+      );
+      newRowsFile = {
+        _id: new Types.ObjectId(),
+        storageKey: storedNew.key,
+        name: newName,
+        size: storedNew.size,
+        contentType: CSV_CONTENT_TYPE,
+      };
+      newRows = fresh.length;
+    }
 
     await this.campaignModel.updateOne(
       { _id: campaignId },
       {
         $set: {
           outputFile: {
+            _id: new Types.ObjectId(),
             storageKey: stored.key,
             name,
             size: stored.size,
             contentType: CSV_CONTENT_TYPE,
           },
+          newRowsFile,
           stats,
           carrierAgencyIds: codes.carrierAgencyIds,
           carrierAgencyNames: codes.carrierAgencyNames,
@@ -435,7 +492,49 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
       },
     );
 
-    return { outputKey: stored.key, outputRows: outRows.length };
+    return { outputKey: stored.key, outputRows: outRows.length, newRows };
+  }
+
+  /**
+   * The rows whose control number no mailer carries yet.
+   *
+   * Looked up against the live collection in chunks (same `$type: 'string'`
+   * rule as everywhere else, so the dedupe index is used). A row with no key
+   * at all is excluded — the import rejects it, so it was never going to be
+   * created. Runs inside the commit's platform-wide concurrency of one, so
+   * nothing can import between this lookup and the import step.
+   */
+  private async selectNewRows(
+    headers: readonly string[],
+    rows: readonly unknown[][],
+  ): Promise<unknown[][]> {
+    const controlColumn = columnIndex(headers, 'controlno');
+    const shortColumn = columnIndex(headers, 'newcontrolnumber');
+    const rowKeys = rows.map((row) =>
+      mailerControlNumberKeys(
+        controlColumn >= 0 ? row[controlColumn] : undefined,
+        shortColumn >= 0 ? row[shortColumn] : undefined,
+      ),
+    );
+
+    const held = new Set<string>();
+    for (const batch of chunk([...new Set(rowKeys.flat())])) {
+      const inBatch = new Set(batch);
+      const found = await this.mailerModel
+        .find({ controlNumberKeys: { $in: batch, $type: 'string' } })
+        .select({ controlNumberKeys: 1 })
+        .lean();
+      for (const mailer of found) {
+        for (const key of mailer.controlNumberKeys ?? []) {
+          if (inBatch.has(key)) held.add(key);
+        }
+      }
+    }
+
+    return rows.filter((_, index) => {
+      const keys = rowKeys[index];
+      return keys.length > 0 && keys.every((key) => !held.has(key));
+    });
   }
 
   /**
@@ -491,7 +590,7 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
         ),
         system: 'spreadsheet',
         runId: `${campaignId}:${attempt}`,
-        uploadedFilename: campaign.vendorFile?.name,
+        uploadedFilename: campaign.files.map((file) => file.name).join(', '),
         storageKey: outputKey,
         uploadedAt: new Date(),
         updatedBy: campaign.requestedBy?.toString(),
@@ -667,6 +766,7 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
     campaignId: string,
     counts: MailerCampaignImportCounts,
   ): Promise<{ imported: true }> {
+    const now = new Date();
     await this.campaignModel.updateOne(
       { _id: campaignId },
       {
@@ -674,9 +774,15 @@ export class MailerCampaignCommitFn implements InngestFunctionProvider {
           status: 'imported',
           importCounts: counts,
           error: null,
-          finishedAt: new Date(),
+          finishedAt: now,
         },
       },
+    );
+    // Set once, never moved: this is the fact "a commit has succeeded before"
+    // that locks the settings and turns the next commit into Add records.
+    await this.campaignModel.updateOne(
+      { _id: campaignId, firstImportedAt: null },
+      { $set: { firstImportedAt: now } },
     );
     return { imported: true };
   }

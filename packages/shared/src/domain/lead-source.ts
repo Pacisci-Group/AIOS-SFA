@@ -1,11 +1,111 @@
 /**
- * Canonical lead-source vocabulary.
+ * Lead sources.
  *
- * Shared (not API-local) because three consumers need the same list: the
- * SmartSuite migration writes normalized sources, the demo seed generates them,
- * and the Leads page renders the filter dropdown from it (PAC-36).
+ * ## A collection, not a constant (PAC-135)
+ *
+ * Where a lead came from is data an agency curates, so it lives in the
+ * `leadSources` collection and leads/deals reference a row by `leadSourceId`.
+ * The hard-coded list below was already wrong about production: real leads carry
+ * Web, Walk-In, Other and Live Call Transfer, none of which are in it, and the
+ * same source sits under several SmartSuite codes (`Mail` on 380 leads, `WCO7l`
+ * on 14) because choice codes are per-field.
+ *
+ * Two kinds of row, the `Carrier` pattern: `agencyId: null` is a platform source
+ * every agency sees, a string is that agency's own. Only seeded today — the
+ * super-admin and agency-settings curation surfaces are deliberately not built.
+ *
+ * ## What is left of the old vocabulary
+ *
+ * {@link normalizeLeadSource} and the code maps survive **only for the SmartSuite
+ * import**, which still has to turn a choice code into a name before it can find
+ * or create a row. Nothing else should reach for them.
  */
 
+/** A lead source as a record renders it. `id: null` = nobody has said yet. */
+export interface LeadSourceRef {
+  id: string | null;
+  label: string;
+}
+
+/** One selectable lead source, as `GET /lead-sources` returns it. */
+export interface LeadSourceOption {
+  id: string;
+  name: string;
+  /** Stable key. Code identifies a source by this, never by its name. */
+  slug: string;
+}
+
+export interface LeadSourceListResponse {
+  leadSources: LeadSourceOption[];
+}
+
+/**
+ * The platform sources every agency starts with, in display order.
+ *
+ * Deliberately short. Waterstone, Stride, Soleo, JYA and Data Lot look universal
+ * in the legacy list but are one agency's vendors; they become that agency's own
+ * rows instead.
+ */
+export const PLATFORM_LEAD_SOURCES: readonly string[] = [
+  'Mailer',
+  'Book of Business',
+  'Customer Referral',
+  'Facebook',
+  'Google',
+  'Web',
+  'Walk-In',
+  'Other',
+];
+
+/**
+ * Where a row sits in a picker, ascending, ties broken by name.
+ *
+ * Platform rows take their index in {@link PLATFORM_LEAD_SOURCES}; a row with no
+ * `displayOrder` — every agency-owned row today — takes
+ * {@link LEAD_SOURCE_DEFAULT_ORDER}; and `Other` is pinned to
+ * {@link LEAD_SOURCE_LAST_ORDER}. The result reads: the common sources, then the
+ * agency's own alphabetically, then the catch-all at the very bottom, where a
+ * producer looks for it only after failing to find the real one.
+ *
+ * ⚠ Resolved in application code, not by a Mongo `$sort`: Mongo orders a missing
+ * field *before* every number, which would put an agency's vendors above Mailer.
+ */
+export const LEAD_SOURCE_DEFAULT_ORDER = 500;
+export const LEAD_SOURCE_LAST_ORDER = 1000;
+
+/** The display order a platform source is seeded with. */
+export function platformLeadSourceOrder(name: string): number {
+  if (leadSourceSlug(name) === 'other') return LEAD_SOURCE_LAST_ORDER;
+  return PLATFORM_LEAD_SOURCES.indexOf(name);
+}
+
+/**
+ * Mailer (PAC-61). Every lead logged from a direct-mail piece carries this
+ * source, set server-side and never read from the request — so it is found by
+ * slug, which a rename cannot break.
+ */
+export const MAILER_LEAD_SOURCE_SLUG = 'mailer';
+
+/** The dedupe key for a lead source: `Walk-In` and `walk in` are one row. */
+export function leadSourceSlug(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Labels the import produces that are *not* a source: an absent value, the
+ * importer's own placeholder, and the legacy `Test` choice (those records are
+ * already `isTestRecord`). They leave `leadSourceId` unset.
+ */
+export function isLeadSourcePlaceholder(label: string | null | undefined): boolean {
+  const slug = leadSourceSlug(label ?? '');
+  return slug === '' || slug === 'unknown' || slug === 'test';
+}
+
+/** The legacy embedded shape. Import-only — see the module note. */
 export interface NormalizedLeadSource {
   code: string | null;
   label: string;
@@ -31,18 +131,6 @@ export const CANONICAL_LEAD_SOURCES: Record<string, string> = {
   ENEJP: 'Test',
   ymZHL: 'JYA',
 };
-
-/**
- * Mailer (PAC-61). Every lead logged from a direct-mail piece carries this,
- * set server-side and never read from the request.
- *
- * Legacy branched on `Campaign_Number.startsWith('JYA')` to pick `ymZHL`
- * instead. No `Campaign_Number` in this data can match — every value is
- * `Week_Number-NN` — and Carl confirms JYA had separate logic and arrived
- * through a different bulk upload, so the branch is unreachable and is not
- * ported.
- */
-export const MAILER_LEAD_SOURCE_CODE = 'WCO7l';
 
 /**
  * Extra Deal "Fillout Lead Source" (s989aa45e7) codes that are not in the canonical
@@ -80,40 +168,12 @@ const LABEL_ALIASES: Record<string, string> = {
 const CANONICAL_LABELS = new Set(Object.values(CANONICAL_LEAD_SOURCES));
 
 /**
- * The canonical sources as `{ code, label }`, sorted by label — what a filter
- * dropdown renders. `Test` is included; callers that exclude test records
- * (every dashboard read path) should filter it out of the options they show.
- */
-export const LEAD_SOURCE_OPTIONS: ReadonlyArray<{ code: string; label: string }> =
-  Object.entries(CANONICAL_LEAD_SOURCES)
-    .map(([code, label]) => ({ code, label }))
-    .sort((a, b) => a.label.localeCompare(b.label));
-
-/** Canonical labels only, sorted — for a filter that matches on `leadSource.label`. */
-export const LEAD_SOURCE_LABELS: readonly string[] = [
-  ...new Set(LEAD_SOURCE_OPTIONS.map((o) => o.label)),
-];
-
-/**
- * The sources a human may pick on an intake form — `Test` (ENEJP) removed.
- *
- * This is what lets the intake pipeline write `isTestRecord: false`
- * unconditionally instead of calling `isTestRecord()`: that helper flags any
- * label containing test/sample/demo, so a real prospect named Demopoulos would
- * be created invisible (every read path filters `isTestRecord: { $ne: true }`)
- * with no feedback to the producer.
- */
-export const SELECTABLE_LEAD_SOURCE_OPTIONS: ReadonlyArray<{
-  code: string;
-  label: string;
-}> = LEAD_SOURCE_OPTIONS.filter((o) => o.code !== 'ENEJP');
-
-/**
  * Sentinel for "no lead source recorded" in the Leads-page filter (PAC-37).
  *
- * Leads created through a public share link store `{ code: null, label: '' }` —
- * nobody has said where they came from yet. Producers need to isolate them to
- * correct them, and an empty string can't be a query param value.
+ * Leads created through a public share link carry no `leadSourceId` — nobody
+ * has said where they came from yet. Producers need to isolate them to correct
+ * them, and an empty string can't be a query param value. Also what
+ * `PATCH /leads/:id` takes to *clear* a source.
  */
 export const LEAD_SOURCE_NONE = '__none__';
 

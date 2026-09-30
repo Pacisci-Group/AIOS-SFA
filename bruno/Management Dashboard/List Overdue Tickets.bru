@@ -1,0 +1,94 @@
+meta {
+  name: List Overdue Tickets
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/management-dashboard/alerts/overdue-tickets?range=ytd
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: ytd
+  ~page: 1
+  ~pageSize: 50
+  ~producerIds:
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto
+}
+
+auth:bearer {
+  token: {{managementDashboardToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the total is the card's number", function () {
+    expect(res.getBody().total).to.equal(bru.getVar("managementOverdueTickets"));
+  });
+
+  test("a due date, when there is one, is in the past", function () {
+    for (const row of res.getBody().items) {
+      expect(row.ticketNumber).to.be.a("string");
+      if (row.dueAt !== null) {
+        expect(Date.parse(row.dueAt)).to.be.below(Date.now());
+        expect(row.daysOverdue).to.be.at.least(0);
+      } else {
+        expect(row.daysOverdue).to.equal(null);
+      }
+    }
+  });
+}
+
+docs {
+  # GET /management-dashboard/alerts/overdue-tickets — the Overdue Tickets drawer (PAC-139)
+
+  The Service dashboard's tickets that have breached their SLA, opened in the
+  window, oldest first. Each row opens `/crm/tickets?ticket=<ticketId>`.
+
+  - **Module / permission / filter / paging:** as `List Stalled Leads`.
+  - **Scope:** the CRM's own tenancy rule — `serviceTickets` stores its
+    `agencyId`/`branchId` as ObjectIds — so a branch manager sees their branch
+    and an `own`-scoped holder only tickets assigned to them.
+  - **Person filter:** `producerIds` lands on `assignedUserId`, the CSR working
+    the ticket. The filter bar lists every active user, so picking a service
+    rep narrows this card the way picking a producer narrows the other two.
+  - **`total`** equals the card's `overdueTickets` under the same query.
+
+  ## What "overdue" is
+  Partly derived. An onboarding or renewal call carries a scheduled step and is
+  overdue when the step's `dueAt` has passed and it is not complete — whatever
+  its stored `status` — unless a CSR pinned the status by hand. Every other
+  ticket is overdue only when a CSR marked it so. The same predicate now feeds
+  the Service dashboard's "needs action today" KPI, which used to read the
+  stored field alone and missed every derived one.
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "ytd", "current": { "from": "2026-01-01", "to": "2026-09-23" }, "previous": { "from": "2025-01-01", "to": "2025-09-23" } },
+    "page": 1, "pageSize": 50, "total": 3, "totalPages": 1,
+    "items": [
+      {
+        "ticketId": "66f0…e5", "ticketNumber": "BILL-103", "clientName": "Dana Whitfield",
+        "category": "Billing", "assignedUserId": "66f0…22", "assignedRep": "Casey Kim",
+        "householdId": "66f0…b2", "dueAt": null,
+        "openedAt": "2026-09-13T14:02:11.000Z", "daysOverdue": null
+      }
+    ]
+  }
+  ```
+
+  | field | notes |
+  |---|---|
+  | dueAt | the step's due instant; `null` for a hand-marked overdue ticket |
+  | daysOverdue | whole days past `dueAt`; `null` when there is no due date to measure |
+
+  ## Errors
+  As `Get Alerts`.
+}

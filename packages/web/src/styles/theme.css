@@ -155,8 +155,8 @@
    * Without this, Tailwind's `font-sans` utility resolves to its *stock*
    * system stack and silently overrides the `font-family: 'Inter'` that
    * `index.css` sets on `<html>` — so any element carrying `font-sans` opted
-   * out of the app's typeface. (`ManagementDashboardAltPage` works around it
-   * with an inline `style`; that workaround is now unnecessary.)
+   * out of the app's typeface. (The old `management-alt` prototype worked
+   * around it with an inline `style`; this is why no page needs to.)
    */
   --font-sans: 'Inter Variable', 'Inter', system-ui, sans-serif;
   --color-background: var(--background);

@@ -169,15 +169,6 @@ const soldPolicyShape = z
       .max(60, "Too long"),
     /** Set when the producer confirmed the duplicate check's match. */
     existingPolicyId: z.string().optional(),
-    /**
-     * The policy this one replaces — **transfer variant only**, where the
-     * `transferFrom` card requires it (see `buildSoldPolicySchema`).
-     *
-     * Optional in the shape because the sale variant never shows that card and
-     * a required field nobody can fill would block Continue with no message
-     * anywhere on screen.
-     */
-    fromPolicyId: z.string().optional(),
     // Strings in form state; see `numericString` for why not coercion.
     premium: numericString({
       required: "Enter the premium",
@@ -247,17 +238,6 @@ export function buildSoldPolicySchema(
   const bySlug = new Map(carriers.map((c) => [carrierSlug(c.name), c]));
 
   return soldPolicyShape.superRefine((policy, ctx) => {
-    // Required on a transfer and meaningless on a sale, so it is enforced here
-    // rather than in the shape — the sale variant never renders the card that
-    // would let anyone satisfy it.
-    if (variant === "transfer" && !policy.fromPolicyId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Choose the policy being replaced.",
-        path: ["fromPolicyId"],
-      });
-    }
-
     if (policy.carrier === CARRIER_OTHER && !policy.carrierOther?.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -284,110 +264,127 @@ export function buildSoldPolicySchema(
       }
     }
 
-    if (!policy.priorInsurance.none) {
-      if (!policy.priorInsurance.carrier?.trim()) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Name the prior carrier, or tick "no prior insurance".',
-          path: ["priorInsurance", "carrier"],
-        });
-      } else if (
-        policy.priorInsurance.carrier === CARRIER_OTHER &&
-        !policy.priorInsurance.carrierOther?.trim()
+    /*
+     * ⚠ **None of the prior-insurance rules apply on a variant that replaces our
+     * own policy.** Those variants drop the prior-insurance card entirely — the
+     * policy being replaced is already in our book, so there is no other
+     * carrier to name — and a rule that can only be satisfied on a card the
+     * variant never shows is a dead end, not validation.
+     *
+     * That dead end was real (PAC-126): the discounts card's "Prior insurance"
+     * checkbox flips `priorInsurance.none` off, expecting the prior-insurance
+     * card to follow. On a transfer it never did, and the "Add another policy?"
+     * step — which validates every field — demanded a prior carrier and agent
+     * that no card could supply. The checkbox is hidden on those variants now
+     * (`DiscountsCard`), and this guard is what makes the schema agree with the
+     * cards rather than trusting them to.
+     */
+    if (!replacesOwnPolicy(variant)) {
+      if (!policy.priorInsurance.none) {
+        if (!policy.priorInsurance.carrier?.trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Name the prior carrier, or tick "no prior insurance".',
+            path: ["priorInsurance", "carrier"],
+          });
+        } else if (
+          policy.priorInsurance.carrier === CARRIER_OTHER &&
+          !policy.priorInsurance.carrierOther?.trim()
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Name the prior carrier.",
+            path: ["priorInsurance", "carrierOther"],
+          });
+        }
+      }
+
+      // Only asked when prior insurance exists (PAC-56 #24), so a `none` policy
+      // can never reach this. `toPolicyInput` collapses the pair regardless.
+      if (
+        !policy.priorInsurance.none &&
+        policy.cancellation.cancelled &&
+        !policy.cancellation.effectiveDate
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "Name the prior carrier.",
-          path: ["priorInsurance", "carrierOther"],
+          message: "Enter the cancellation effective date.",
+          path: ["cancellation", "effectiveDate"],
         });
       }
-    }
 
-    // Only asked when prior insurance exists (PAC-56 #24), so a `none` policy
-    // can never reach this. `toPolicyInput` collapses the pair regardless.
-    if (
-      !policy.priorInsurance.none &&
-      policy.cancellation.cancelled &&
-      !policy.cancellation.effectiveDate
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Enter the cancellation effective date.",
-        path: ["cancellation", "effectiveDate"],
-      });
-    }
+      // Who cancelled it (PAC-65 #11) — required whenever there *was* a
+      // cancellation. A dropdown nobody has to answer is one nobody answers, and
+      // the point is knowing who to ask about it later.
+      if (
+        !policy.priorInsurance.none &&
+        policy.cancellation.cancelled &&
+        !policy.cancellation.cancelledBy
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Say who cancelled the prior insurance.",
+          path: ["cancellation", "cancelledBy"],
+        });
+      }
+      if (
+        !policy.priorInsurance.none &&
+        policy.cancellation.cancelledBy === "SFA staff" &&
+        !policy.cancellation.cancelledByUserId
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Name the staff member who cancelled it.",
+          path: ["cancellation", "cancelledByUserId"],
+        });
+      }
 
-    // Who cancelled it (PAC-65 #11) — required whenever there *was* a
-    // cancellation. A dropdown nobody has to answer is one nobody answers, and
-    // the point is knowing who to ask about it later.
-    if (
-      !policy.priorInsurance.none &&
-      policy.cancellation.cancelled &&
-      !policy.cancellation.cancelledBy
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Say who cancelled the prior insurance.",
-        path: ["cancellation", "cancelledBy"],
-      });
-    }
-    if (
-      !policy.priorInsurance.none &&
-      policy.cancellation.cancelledBy === "SFA staff" &&
-      !policy.cancellation.cancelledByUserId
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Name the staff member who cancelled it.",
-        path: ["cancellation", "cancelledByUserId"],
-      });
-    }
+      // The prior agent (PAC-65 #10). Required now — the service team calls this
+      // person to chase the cancellation and the declarations page, so "Optional"
+      // was costing them the one contact that makes the rest actionable.
+      if (
+        !policy.priorInsurance.none &&
+        !policy.priorInsurance.agentName?.trim()
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Name the prior agent.",
+          path: ["priorInsurance", "agentName"],
+        });
+      }
+      /*
+       * The cross-card invariant (PAC-65 #18), mirroring the server. Reported at
+       * `priorInsurance.none` rather than at the discounts checkbox because that
+       * is the control the producer is looking at when they hit it — the
+       * discounts card is several steps back by then.
+       *
+       * The toggle is rendered disabled, so this should be unreachable; it is
+       * here because "should be unreachable" is not the same as "is", and the
+       * server rejects the pair outright.
+       */
+      if (policy.discounts.priorInsuranceDiscount && policy.priorInsurance.none) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'Prior insurance was claimed on the discounts card. Untick it there, or untick "no prior insurance" here.',
+          path: ["priorInsurance", "none"],
+        });
+      }
 
-    // The prior agent (PAC-65 #10). Required now — the service team calls this
-    // person to chase the cancellation and the declarations page, so "Optional"
-    // was costing them the one contact that makes the rest actionable.
-    if (
-      !policy.priorInsurance.none &&
-      !policy.priorInsurance.agentName?.trim()
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Name the prior agent.",
-        path: ["priorInsurance", "agentName"],
-      });
-    }
-    /*
-     * The cross-card invariant (PAC-65 #18), mirroring the server. Reported at
-     * `priorInsurance.none` rather than at the discounts checkbox because that
-     * is the control the producer is looking at when they hit it — the
-     * discounts card is several steps back by then.
-     *
-     * The toggle is rendered disabled, so this should be unreachable; it is
-     * here because "should be unreachable" is not the same as "is", and the
-     * server rejects the pair outright.
-     */
-    if (policy.discounts.priorInsuranceDiscount && policy.priorInsurance.none) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          'Prior insurance was claimed on the discounts card. Untick it there, or untick "no prior insurance" here.',
-        path: ["priorInsurance", "none"],
-      });
-    }
-
-    // ⚠ The one **required** upload on this form (PAC-65 #18). Every discount
-    // proof became optional; the declarations page did not, because failing to
-    // supply it in time gets the policy cancelled or repriced.
-    if (
-      policy.discounts.priorInsuranceDiscount &&
-      !policy.priorInsurance.none &&
-      !policy.priorInsurance.attachment
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Attach the proof of insurance (the declarations page).",
-        path: ["priorInsurance", "attachment"],
-      });
+      // ⚠ The one **required** upload on this form (PAC-65 #18). Every discount
+      // proof became optional; the declarations page did not, because failing to
+      // supply it in time gets the policy cancelled or repriced.
+      if (
+        policy.discounts.priorInsuranceDiscount &&
+        !policy.priorInsurance.none &&
+        !policy.priorInsurance.attachment
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Attach the proof of insurance (the declarations page).",
+          path: ["priorInsurance", "attachment"],
+        });
+      }
     }
 
     // Ticking escrow is what makes its sub-card required: the audit item it
@@ -446,12 +443,11 @@ export function emptyPolicy(
     itemCount: "1",
     newBusinessApplication: undefined,
     discounts: emptyDiscounts(),
-    fromPolicyId: "",
     priorInsurance: {
-      // A transfer never shows the prior-insurance card, so it defaults to the
-      // answer that card would have produced: the policy being replaced is
-      // already ours, so there is no prior coverage at another carrier.
-      none: variant === "transfer",
+      // Neither a transfer nor a rewrite shows the prior-insurance card, so it
+      // defaults to the answer that card would have produced: the policy being
+      // replaced is already ours, so there is no prior coverage elsewhere.
+      none: replacesOwnPolicy(variant),
       carrier: "",
       carrierOther: "",
       agentName: "",
@@ -575,9 +571,6 @@ export function emptyDiscounts(): SoldPolicyFormValues["discounts"] {
  * Say "the Discounts card".
  */
 export const WIZARD_CARDS = [
-  // Transfer variant only, and first: you say which policy is being replaced
-  // before describing its replacement.
-  "transferFrom",
   "policyType",
   "policyDetails",
   "financials",
@@ -595,30 +588,46 @@ export type WizardCard = (typeof WIZARD_CARDS)[number];
 /**
  * Which flow the wizard is running.
  *
- * A `transfer` is the same form recording the same information — a policy needs
- * the same fields to exist however it came about — with two differences:
- *   - it asks which policy each new one **replaces** (`transferFrom`);
- *   - it does **not** ask for prior insurance, because the policy being
- *     replaced is already in our own book. There is no other carrier to name
- *     and nothing to cancel.
+ * Both record the same information, because a policy needs the same fields to
+ * exist however it came about. They differ in one card:
+ *
+ *   - **`sale`** — the full form. Asks for prior insurance; replaces nothing.
+ *   - **`replacement`** — a Cancel Rewrite *or* a Company Transfer, run
+ *     through the ordinary Sold form on a lead created for it (PAC-126). Never
+ *     asks for prior insurance: the policy being replaced is already in our own
+ *     book, so there is no other carrier to name and nothing to cancel. It is
+ *     not picked here either — it is stamped on the lead's `replacementIntent`
+ *     and injected server-side, so the rep cannot replace a different policy
+ *     than the one they started from.
+ *
+ * Until PAC-126 there was a third, `transfer`, anchored on a CRM ticket with a
+ * from-policy picker of its own. Retired with its endpoint.
  */
-export type WizardVariant = "sale" | "transfer";
+export type WizardVariant = "sale" | "replacement";
+
+/** Flows where the replaced policy is already ours, so prior insurance is moot. */
+export function replacesOwnPolicy(variant: WizardVariant): boolean {
+  return variant === "replacement";
+}
 
 /**
  * The ordered cards for a variant.
  *
  * The `WizardCard` **union stays whole** so `CARD_TITLES` and `CARD_FIELDS`
  * remain exhaustive — only the ordered array differs, which is what keeps a new
- * card from silently skipping validation in either flow.
+ * card from silently skipping validation in any flow.
  */
 export function cardsFor(variant: WizardVariant): readonly WizardCard[] {
-  return variant === "transfer"
-    ? WIZARD_CARDS.filter((card) => card !== "priorInsurance")
-    : WIZARD_CARDS.filter((card) => card !== "transferFrom");
+  if (variant === "replacement") {
+    // The policy being replaced is already ours, so there is no other
+    // carrier's coverage to record — and it is named on the lead's intent and
+    // injected server-side, so there is nothing to pick here either.
+    return WIZARD_CARDS.filter((card) => card !== "priorInsurance");
+  }
+  return WIZARD_CARDS;
 }
 
 export const CARD_TITLES: Record<WizardCard, string> = {
-  transferFrom: "Policy being replaced",
   policyType: "Policy type",
   policyDetails: "Policy details",
   financials: "Financials",
@@ -647,7 +656,6 @@ export const CARD_FIELDS: Record<
   WizardCard,
   Array<DeepKeys<SoldPolicyFormValues>>
 > = {
-  transferFrom: ["fromPolicyId"],
   policyType: ["policyType"],
   // `carrierOther` must be listed explicitly: `owns()` matches a root exactly or
   // followed by `.`/`[`, so `"carrier"` does **not** own `"carrierOther"`, and a
@@ -745,9 +753,6 @@ export function toPolicyInput(values: SoldPolicyFormValues): SoldPolicyInput {
     carrier: resolveCarrier(values.carrier, values.carrierOther),
     policyNumber: values.policyNumber,
     existingPolicyId: values.existingPolicyId || undefined,
-    // Transfer only; the transfer endpoint requires it and the sold one ignores
-    // it, so an empty string must not be sent as a malformed id either way.
-    fromPolicyId: values.fromPolicyId || undefined,
     premium: Number(values.premium),
     // 1 for every type the Financials card does not ask about — see
     // `resolveItemCount`.

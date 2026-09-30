@@ -27,6 +27,7 @@ import {
   type ProfileFormValues,
 } from './profile-schema';
 import { SettingsPage } from './SettingsPage';
+import { NOT_AVAILABLE } from '@/lib/not-available';
 
 /**
  * The signed-in user's own profile (PAC-81): photo, name, email (read-only),
@@ -76,7 +77,7 @@ export default function ProfilePage() {
 
         <DetailCard title="Account" icon={UserRound}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <DataRow label="Role" value={user.roles.join(', ') || '—'} />
+            <DataRow label="Role" value={user.roles.join(', ') || NOT_AVAILABLE} />
             <DataRow label="Agency" value={branding.name} />
           </div>
         </DetailCard>

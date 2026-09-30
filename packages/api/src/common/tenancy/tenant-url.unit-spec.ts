@@ -39,6 +39,17 @@ function service(
   return new TenantUrlService(modelReturning(domain, captured), config);
 }
 
+/** A service reading a specific env pair, for the platform-host cases below. */
+function serviceWithEnv(
+  env: { APP_BASE_URL?: string; PLATFORM_HOST?: string },
+  domain: { hostname: string } | null = null,
+) {
+  const config = {
+    get: (key: string) => env[key as keyof typeof env],
+  } as unknown as ConfigService;
+  return new TenantUrlService(modelReturning(domain), config);
+}
+
 describe('TenantUrlService', () => {
   it('uses the agency’s own host', async () => {
     const url = await service({ hostname: 'texasholdings.com' }).baseUrlFor(
@@ -108,6 +119,39 @@ describe('TenantUrlService', () => {
     const captured: { sort?: unknown } = {};
     await service({ hostname: 'a.com' }, captured).baseUrlFor(AGENCY_ID);
     expect(captured.sort).toEqual({ isPrimary: -1, createdAt: 1 });
+  });
+
+  /**
+   * The local default, and the bug this pair was written for: `PLATFORM_HOST`
+   * is the only host `HostTenantResolver` answers as `platform`, so a fallback
+   * link built on `APP_BASE_URL`'s `localhost` lands where `HostTenantGuard`
+   * 404s. The impersonation handoff *navigates* there (PAC-70), so it broke
+   * loudest.
+   */
+  it('falls back to the platform host, not to APP_BASE_URL’s host', async () => {
+    const svc = serviceWithEnv({
+      APP_BASE_URL: 'http://localhost:5173',
+      PLATFORM_HOST: 'app.sfa.local',
+    });
+    expect(await svc.baseUrlFor(AGENCY_ID)).toBe('http://app.sfa.local:5173');
+    expect(svc.platformBaseUrl()).toBe('http://app.sfa.local:5173');
+  });
+
+  it('keeps APP_BASE_URL’s scheme and port when swapping in the platform host', async () => {
+    // `APP_BASE_URL` stays the only place a scheme or port is written down —
+    // `PLATFORM_HOST` is a bare hostname and carries neither.
+    const svc = serviceWithEnv({
+      APP_BASE_URL: 'https://app.smithfamily.agency',
+      PLATFORM_HOST: 'admin.example.com',
+    });
+    expect(svc.platformBaseUrl()).toBe('https://admin.example.com');
+  });
+
+  it('is unchanged for a deployment that sets only APP_BASE_URL', async () => {
+    // The production shape. `platformHost()` falls back to APP_BASE_URL's own
+    // host, so this must stay byte-identical to the pre-change behaviour.
+    const svc = serviceWithEnv({ APP_BASE_URL: PLATFORM });
+    expect(svc.platformBaseUrl()).toBe(PLATFORM);
   });
 
   it('strips a trailing slash from the configured base', async () => {

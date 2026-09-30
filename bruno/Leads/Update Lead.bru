@@ -19,7 +19,7 @@ body:json {
   {
     "status": "Contacted",
     "temperature": "Warm",
-    "leadSourceCode": "WCO7l"
+    "leadSourceId": "{{mailerLeadSourceId}}"
   }
 }
 
@@ -34,7 +34,7 @@ tests {
     expect(body.status).to.equal("Contacted");
     expect(body.temperature).to.equal("Warm");
     expect(body.leadSource.label).to.equal("Mailer");
-    expect(body.leadSource.code).to.equal("WCO7l");
+    expect(body.leadSource.id).to.equal(bru.getVar("mailerLeadSourceId"));
   });
 
   test("bumps lastActivityAt", function () {
@@ -72,22 +72,22 @@ docs {
   |----------------|--------|--------------------------------------------------------------|
   | status         | enum   | a canonical `LEAD_STATUSES` label — raw codes are rejected   |
   | temperature    | enum   | `Hot` \| `Warm` \| `Cold`. **`Unknown` is not accepted.**    |
-  | leadSourceCode | string | a selectable source **code**, or `__none__` to clear it      |
+  | leadSourceId   | string | a row id from `GET /lead-sources`, or `__none__` to clear it |
 
   At least one must be present; `{}` is a `400`.
 
   ## Behaviour worth knowing
 
-  **`leadSourceCode` is the point of this endpoint.** Leads that arrive through
-  a public share link (PAC-37) store `{ code: null, label: "" }` — nobody has
-  said where they came from yet. Without this control those leads could never be
-  corrected. Sending `__none__` writes that empty shape back, so a
-  mis-attributed lead can be returned to "not known yet" and will again match
-  the `GET /leads?leadSource=__none__` filter.
+  **`leadSourceId` is the point of this endpoint.** Leads that arrive through a
+  public share link (PAC-37) carry no source — nobody has said where they came
+  from yet. Without this control those leads could never be corrected. Sending
+  `__none__` unsets it again, so a mis-attributed lead can be returned to "not
+  known yet" and will again match the `GET /leads?leadSourceId=__none__` filter.
 
-  **`Test` (ENEJP) is not selectable**, matching `POST /leads`. The
-  `isTestRecord` heuristic hides any record it flags from every read path, so
-  allowing it would silently make a real lead disappear.
+  **Only an active source this agency can see is accepted**, matching
+  `POST /leads`: a well-formed id that is archived, belongs to another agency,
+  or does not exist is a `400`. An archived source stays on the records that
+  already carry it — it just cannot be picked again.
 
   **`Unknown` temperature is not selectable.** It is the display state of a lead
   nobody has assessed, not a choice — mirroring `LEAD_TEMPERATURE_OPTIONS`.
@@ -111,7 +111,7 @@ docs {
     "id": "665f...ac1",
     "status": "Contacted",
     "temperature": "Warm",
-    "leadSource": { "code": "WCO7l", "label": "Mailer" },
+    "leadSource": { "id": "66f0…a1", "label": "Mailer" },
     "lastActivityAt": "2026-08-04T09:15:44.120Z"
   }
   ```

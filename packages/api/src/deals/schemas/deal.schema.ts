@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE } from '@sfa/shared';
-import type { BusinessType, NormalizedLeadSource } from '@sfa/shared';
+import type { BusinessType } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
 import {
@@ -101,6 +101,32 @@ export class Deal extends TenantRecord {
   @Prop({ default: 'none' })
   premiumSource: PremiumSource;
 
+  /**
+   * Clawed-back premium on this deal — **negative or zero**, accumulated.
+   *
+   * Written only by the Cancel Rewrite flow, and only when the cancellation
+   * falls inside the one-month window (`rewriteFinancialOutcome`). The
+   * producer's sold figure is `premium + chargebackAdjustment`; see
+   * `PerformanceService.aggregate`.
+   *
+   * ## Why this is not just a smaller `premium`
+   *
+   * `premium` is **recomputed from the deal's policies** by
+   * `PoliciesService.recomputeDealTotals` on every policy edit, and
+   * `derivePersistedDealAggregates` sums every policy row on the deal whether or
+   * not it is still active. So subtracting the clawback from `premium` directly
+   * would survive exactly until the next unrelated premium correction on any
+   * policy of the same deal, and then silently reappear as credit. Keeping the
+   * two apart means the recompute stays free to own `premium` — "what was sold"
+   * — while this holds "what came back", which nothing recomputes.
+   *
+   * ⚠ **Accumulated with `$inc`, never assigned.** A deal can have more than one
+   * policy rewritten inside the window. The `chargebacks` ledger is the record
+   * of what makes this number up, and the two must agree: one row per `$inc`.
+   */
+  @Prop({ default: 0 })
+  chargebackAdjustment: number;
+
   @Prop({ default: 0 })
   itemCount: number;
 
@@ -152,8 +178,16 @@ export class Deal extends TenantRecord {
   @Prop({ type: [String], default: [] })
   policyTypes: string[];
 
-  @Prop({ type: Object, default: { code: null, label: '' } })
-  leadSource: NormalizedLeadSource;
+  /**
+   * The source this sale was attributed to **when it has no lead** (PAC-135).
+   *
+   * Stamped from the lead at sale time, and the only source a migrated deal with
+   * no lead link has. Analytics prefer `lead.leadSourceId` whenever `leadId` is
+   * set, so a corrected lead moves its quotes *and* its sale together — read
+   * this field directly only as that fallback.
+   */
+  @Prop({ type: ObjectIdType, ref: 'LeadSource' })
+  leadSourceId?: Types.ObjectId;
 
   @Prop({ trim: true })
   clientName?: string;

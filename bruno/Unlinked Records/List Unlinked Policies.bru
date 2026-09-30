@@ -86,14 +86,18 @@ docs {
   ## Query params
   | Param | Default | Notes |
   |---|---|---|
-  | `kind` | — | **Required.** `policies` · `contacts` · `households` |
+  | `kind` | — | **Required.** `policies` · `contacts` · `households` · `unanchored` |
   | `page` | 1 | 1-based |
   | `pageSize` | 50 | max 100 |
 
-  `kind` has no default on purpose: the three lists carry three different row
-  shapes, so a request that forgot to say which one it wants is a 400 rather
-  than a guess. The response repeats it as a **discriminant**, so a client
-  narrows the row type from what it received rather than from what it asked for.
+  `kind` has no default on purpose: each list carries a different row shape, so a
+  request that forgot to say which one it wants is a 400 rather than a guess. The
+  response repeats it as a **discriminant**, so a client narrows the row type
+  from what it received rather than from what it asked for.
+
+  ⚠ Two kinds list policies. This one reports a missing **household**;
+  `kind=unanchored` (PAC-126) reports a missing **renewal date**, and carries a
+  different row shape. A policy can legitimately be in both.
 
   ## Response
   `{ kind, page, pageSize, total, totalPages, items: UnlinkedPolicyRow[] }`

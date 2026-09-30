@@ -161,8 +161,10 @@ export default function HouseholdDetailsPage() {
         // `min-h-screen`, so it grows with its content rather than pinning the
         // viewport. The three columns scroll independently above `xl`, which
         // needs a definite height to measure against — `h-full` would collapse
-        // to auto and every column would grow the page instead.
-        <div className="flex h-screen min-h-0 flex-1 flex-col overflow-hidden">
+        // to auto and every column would grow the page instead. No `flex-1`,
+        // for the reason written up on `TicketWorkspacePage`: its
+        // `flex-basis: 0%` would override `h-screen` and do exactly that.
+        <div className="flex h-screen flex-col overflow-hidden">
           <HouseholdHeader
             householdName={household.name ?? "Unnamed household"}
             recordLabel={`HH-${household.id.slice(-6).toUpperCase()}`}
@@ -211,7 +213,13 @@ export default function HouseholdDetailsPage() {
 
             {/* Middle — Policy portfolio (50%) */}
             <div className="flex min-h-0 shrink-0 flex-col border-b border-border xl:flex-1 xl:shrink xl:overflow-hidden xl:border-b-0 xl:border-r">
-              <PolicyPortfolio policies={household.policies} isDemo={isDemo} />
+              <PolicyPortfolio
+                policies={household.policies}
+                // No record to write against on the demo household, so the
+                // cards stay read-only there (PAC-126).
+                householdId={isDemo ? null : household.id}
+                isDemo={isDemo}
+              />
             </div>
 
             {/* Right — Onboarding + activity feed (25%) */}

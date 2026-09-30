@@ -7,6 +7,10 @@ import {
 import { CarriersModule } from '../../carriers/carriers.module';
 import { Deal, DealSchema } from '../../deals/schemas/deal.schema';
 import {
+  Household,
+  HouseholdSchema,
+} from '../../households/schemas/household.schema';
+import {
   InterestedParty,
   InterestedPartySchema,
 } from '../../interested-parties/schemas/interested-party.schema';
@@ -46,6 +50,9 @@ import { UpsertPoliciesStep } from './upsert-policies.step';
     MongooseModule.forFeature([
       { name: Deal.name, schema: DealSchema },
       { name: Policy.name, schema: PolicySchema },
+      // `Household.totalActivePolicies` is recounted after every deal this
+      // pipeline books — see `SoldDealIntakeService.recountHouseholdPolicies`.
+      { name: Household.name, schema: HouseholdSchema },
       { name: PriorInsurance.name, schema: PriorInsuranceSchema },
       { name: PriorPolicy.name, schema: PriorPolicySchema },
       { name: InterestedParty.name, schema: InterestedPartySchema },

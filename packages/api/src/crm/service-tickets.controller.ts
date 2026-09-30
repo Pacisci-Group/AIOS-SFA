@@ -15,15 +15,6 @@ import {
   RequireWrite,
 } from '../common/decorators/access.decorators';
 import { Access } from '../common/decorators/user.decorators';
-import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
-import {
-  presignTransferDocumentSchema,
-  type PresignTransferDocumentDto,
-} from '../sold-deals/dto/presign-sold-document.dto';
-import {
-  createPolicyTransferSchema,
-  type CreatePolicyTransferDto,
-} from './dto/policy-transfer.dto';
 import {
   AddNoteDto,
   CompleteRenewalStepDto,
@@ -76,9 +67,9 @@ export class ServiceTicketsController {
    * ------------------------------------------------------------------ */
 
   /**
-   * The Proactive Renewal Outreach desk. Also the primary trigger for
-   * materializing cycles — there is no cron, so reading the desk is what makes
-   * renewals appear.
+   * The Proactive Renewal Outreach desk: renewals whose first call opens in the
+   * next two weeks (PAC-143), across the caller's data scope (PAC-146). A pure
+   * read — cycles are materialized by the worker's scan (PAC-99).
    */
   @Get('renewals/desk')
   renewalDesk(@Access() access: AccessContext) {
@@ -203,43 +194,6 @@ export class ServiceTicketsController {
     @Param('householdId') householdId: string,
   ) {
     return this.ticketsService.listOnboardingsForHousehold(access, householdId);
-  }
-
-  /**
-   * A presigned PUT for a document on an in-progress policy transfer.
-   *
-   * Household-anchored rather than lead-anchored (`POST /sold-deals/documents`
-   * is the sibling): a transfer has no lead, and the key prefix *is* the
-   * ownership check that `record` later re-asserts.
-   */
-  @Post(':id/policy-transfer/presign')
-  @RequireWrite(ModuleKey.CrmService)
-  presignPolicyTransferDocument(
-    @Access() access: AccessContext,
-    @Param('id') id: string,
-    @Body(new ZodValidationPipe(presignTransferDocumentSchema))
-    body: PresignTransferDocumentDto,
-  ) {
-    return this.ticketsService.presignPolicyTransferDocument(access, id, body);
-  }
-
-  /**
-   * Record the client's move from one package to another.
-   *
-   * Books a `Deal` with `businessType: 'company_transfer'` plus its policies,
-   * retires the policies being replaced, and generates the hand-off checklist —
-   * the Sold pipeline, minus the lead, labelled so it never counts as new
-   * business. One per ticket.
-   */
-  @Post(':id/policy-transfer')
-  @RequireWrite(ModuleKey.CrmService)
-  recordPolicyTransfer(
-    @Access() access: AccessContext,
-    @Param('id') id: string,
-    @Body(new ZodValidationPipe(createPolicyTransferSchema))
-    body: CreatePolicyTransferDto,
-  ) {
-    return this.ticketsService.recordPolicyTransfer(access, id, body);
   }
 
   @Post(':id/onboarding/steps/:stepKey/complete')

@@ -1,5 +1,10 @@
-import { LEAD_STATUSES, LEAD_TEMPERATURES } from '@sfa/shared';
+import {
+  LEAD_SOURCE_NONE,
+  LEAD_STATUSES,
+  LEAD_TEMPERATURES,
+} from '@sfa/shared';
 import { z } from 'zod';
+import { leadSourceIdField } from './create-lead.dto';
 import { multiValue } from './multi-value';
 
 /**
@@ -30,8 +35,10 @@ export const listLeadsSchema = z.object({
     multiValue,
     z.array(z.enum(LEAD_TEMPERATURES)).max(LEAD_TEMPERATURES.length).optional(),
   ),
-  /** Canonical lead-source label, e.g. `Mailer`. */
-  leadSource: z.string().trim().max(80).optional(),
+  /** A `leadSources` row id, or `LEAD_SOURCE_NONE` for leads with none set. */
+  leadSourceId: z
+    .union([z.literal(LEAD_SOURCE_NONE), leadSourceIdField])
+    .optional(),
   /** Narrow to one producer. Ignored for `own` scope; clamped otherwise. */
   producerId: z.string().trim().optional(),
   /**

@@ -1,5 +1,6 @@
 import type { LeaderboardEntry } from "@/lib/leaderboard-api";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * Gold / silver / bronze, then neutral. Tailwind classes rather than the
@@ -62,7 +63,7 @@ export function LeaderboardRow({ entry }: LeaderboardRowProps) {
           <span className="shrink-0 text-xs text-muted-foreground">
             {/* An em dash, never `0%` — no goal means unknown attainment, and
                 an empty bar next to real sales reads as failure. */}
-            {hasGoal ? `${entry.attainmentPct}%` : "—"}
+            {hasGoal ? `${entry.attainmentPct}%` : NOT_AVAILABLE}
           </span>
         </div>
 

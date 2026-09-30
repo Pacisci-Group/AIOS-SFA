@@ -1,3 +1,4 @@
+import { USER_AVAILABILITIES } from '@sfa/shared';
 import { z } from 'zod';
 import { clearable, trimmedText } from '../../common/dto/clearable';
 
@@ -23,6 +24,17 @@ export const updateMyProfileSchema = z.object({
   lastName: clearable(trimmedText(60)),
 });
 export type UpdateMyProfileDto = z.infer<typeof updateMyProfileSchema>;
+
+/**
+ * Set own availability (PAC-139 §6). Not `clearable`: there is no "unset"
+ * state — a user is either taking leads or not — so `null` is a 400.
+ */
+export const updateMyAvailabilitySchema = z.object({
+  availability: z.enum(USER_AVAILABILITIES),
+});
+export type UpdateMyAvailabilityDto = z.infer<
+  typeof updateMyAvailabilitySchema
+>;
 
 export const avatarUploadSchema = z.object({
   filename: z.string().trim().min(1).max(200),

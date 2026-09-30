@@ -90,6 +90,19 @@ export function allLinkedIds(value: unknown): string[] {
   return [];
 }
 
+/**
+ * Single-select: the human **label** SmartSuite sends beside the code.
+ *
+ * The client asks for `hydrated: true` on every list call, so a select arrives
+ * as `{ value, label }` rather than a bare code. `undefined` for an un-hydrated
+ * value (a bare string) — there is no label to read, only the code.
+ */
+export function selectLabel(value: unknown): string | undefined {
+  if (Array.isArray(value)) return selectLabel(value[0]);
+  if (!isDict(value)) return undefined;
+  return asString(value.label) ?? asString(value.display_value);
+}
+
 /** Single-select: return the raw choice *value* (code), not the label. */
 export function selectCode(value: unknown): string | undefined {
   if (value === null || value === undefined || value === '') return undefined;

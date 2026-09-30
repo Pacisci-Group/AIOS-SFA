@@ -11,9 +11,11 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
   avatarUploadSchema,
   commitAvatarSchema,
+  updateMyAvailabilitySchema,
   updateMyProfileSchema,
   type AvatarUploadDto,
   type CommitAvatarDto,
+  type UpdateMyAvailabilityDto,
   type UpdateMyProfileDto,
 } from './dto/profile.dto';
 import { ProfileService } from './profile.service';
@@ -43,6 +45,19 @@ export class ProfileController {
     body: UpdateMyProfileDto,
   ) {
     return this.profileService.updateProfile(user.sub, body);
+  }
+
+  /**
+   * Set own availability — taking leads or not (PAC-139 §6). Returns the
+   * auth-user blob so the sidebar control and the stored copy agree at once.
+   */
+  @Patch('availability')
+  updateAvailability(
+    @CurrentUser() user: JwtPayload,
+    @Body(new ZodValidationPipe(updateMyAvailabilitySchema))
+    body: UpdateMyAvailabilityDto,
+  ) {
+    return this.profileService.updateAvailability(user.sub, body);
   }
 
   /** Presign a direct-to-storage PUT for a profile photo. */

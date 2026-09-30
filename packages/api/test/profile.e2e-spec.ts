@@ -16,6 +16,7 @@ interface AuthUserBody {
   firstName: string | null;
   lastName: string | null;
   avatarUrl: string | null;
+  availability: 'available' | 'busy';
 }
 
 /**
@@ -42,6 +43,11 @@ describe('Profile (PAC-81, e2e)', () => {
   const patchAvatar = (token: string, body: Record<string, unknown>) =>
     http()
       .patch('/api/v1/me/avatar')
+      .set('Authorization', `Bearer ${token}`)
+      .send(body);
+  const patchAvailability = (token: string, body: Record<string, unknown>) =>
+    http()
+      .patch('/api/v1/me/availability')
       .set('Authorization', `Bearer ${token}`)
       .send(body);
 
@@ -124,6 +130,39 @@ describe('Profile (PAC-81, e2e)', () => {
     }).expect(400);
   });
 
+  // PAC-139 §6 — availability.
+
+  it('starts every user as available', async () => {
+    const res = await me(producerToken).expect(200);
+    expect((res.body as AuthUserBody).availability).toBe('available');
+  });
+
+  it('sets own availability and reflects it in GET /auth/me', async () => {
+    const res = await patchAvailability(producerToken, {
+      availability: 'busy',
+    }).expect(200);
+    expect((res.body as AuthUserBody).availability).toBe('busy');
+    // Same blob as /auth/me, so the sidebar's stored copy can be overwritten.
+    expect(res.body as AuthUserBody).toHaveProperty('permissions');
+
+    const meRes = await me(producerToken).expect(200);
+    expect((meRes.body as AuthUserBody).availability).toBe('busy');
+
+    const back = await patchAvailability(producerToken, {
+      availability: 'available',
+    }).expect(200);
+    expect((back.body as AuthUserBody).availability).toBe('available');
+  });
+
+  it('rejects an availability outside the vocabulary', async () => {
+    await patchAvailability(producerToken, { availability: 'idle' }).expect(
+      400,
+    );
+    // There is no "unset" state, so null is not a clear here.
+    await patchAvailability(producerToken, { availability: null }).expect(400);
+    await patchAvailability(producerToken, {}).expect(400);
+  });
+
   it('refuses to commit a key this user did not mint', async () => {
     // `assertKeyOwnership` runs before any storage call, so this holds even
     // with STORAGE_ENDPOINT unset. Keys are namespaced per *user*, so another
@@ -165,6 +204,10 @@ describe('Profile (PAC-81, e2e)', () => {
   it('requires authentication on every /me route', async () => {
     await http().patch('/api/v1/me/profile').send({}).expect(401);
     await http().patch('/api/v1/me/avatar').send({ key: null }).expect(401);
+    await http()
+      .patch('/api/v1/me/availability')
+      .send({ availability: 'busy' })
+      .expect(401);
     await http().get('/api/v1/me/avatar').expect(401);
     await http()
       .post('/api/v1/me/avatar/uploads')

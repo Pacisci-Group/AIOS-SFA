@@ -48,6 +48,14 @@ tests {
     expect(body.outputFile).to.not.have.property("storageKey");
   });
 
+  test("records the first import; a first commit has no new-rows file", function () {
+    const body = res.getBody();
+    expect(body.firstImportedAt).to.be.a("string");
+    // The full output *is* the new rows on a first commit. `Add Campaign
+    // Files` below is what makes the next commit write one.
+    expect(body.newRowsFile).to.equal(null);
+  });
+
   test("kept the transform's own numbers", function () {
     // Three, not two. The transform never rejects a row — it *prices* every
     // one, including the control-number-less one, because the print file is
@@ -72,7 +80,9 @@ docs {
   | field | notes |
   |---|---|
   | `status` | `imported`. |
-  | `outputFile` | The 132-column print CSV, written to storage under a **deterministic** key (`…/<campaignId>/<attempt>/…`) so a retry overwrites its own partial write rather than littering storage. |
+  | `outputFile` | The 132-column print CSV over every file, written to storage under a **deterministic** key (`…/<campaignId>/<attempt>/…`) so a retry overwrites its own partial write rather than littering storage. |
+  | `newRowsFile` | `null` on a first commit. After Add records, only the rows the re-commit **created** — what the completion email links, so the mail house never re-prints a row already mailed. |
+  | `firstImportedAt` | Set once, the first time the campaign reaches `imported`. Locks the settings and allows Add records. |
   | `stats` | The transform's own numbers, stored verbatim rather than re-shaped — a second shape over the same numbers is how a stat on the detail page drifts from the one the run produced. |
   | `importCounts` | `read`/`mapped`/`created`/`updated`/`skipped` from the shared import engine, plus `deleted`, `leadsLinked` and `leadsConflicted`, which only a campaign commit can report. |
   | `rejections` | A capped sample; `importCounts.skipped` is the authoritative total. |

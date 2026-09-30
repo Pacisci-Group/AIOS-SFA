@@ -67,7 +67,7 @@ Dev "Screen Navigator" at `/` (`src/pages/DevNavPage.tsx`) links all 7. Routes i
 |---|---|---|---|---|
 | 1 | **Producer Dashboard** | `/dashboard/producer` | Sales producer | Sidebar+header (⌘K search, Add Lead, time filters), 3 scorecards (Sold/Quoted/Leaderboard), 60/40: Deals Pending Service Hand-off + Hot Leads. **← current focus** |
 | 2 | **Lead Details** | `/leads/:id` | Producer | **Built (PAC-38.)** Lead+contact with inline status/temperature/source edits, Prior Insurance (only when sold), Quote Summary, Household card + Activity timeline. Embodies Lead→Quote→Sold. Two documented divergences from the mockup: no current-vs-proposed coverage table and no per-member policy icons — neither is derivable from what the system stores. `/leads/demo` was removed; the page uses real data now. |
-| 3 | **Management v1** | `/dashboard/management` | Owner + Manager toggle | Owner Strategy Hub (KPIs, leaderboard, Lead Source ROI) / Manager Action Hub (alerts, Team Activity Monitor + drawer). Global filter bar. |
+| 3 | **Management v1** | `/dashboard/management` | Owner + Manager tabs | **Owner view built (PAC-135)** — `features/owner-dashboard`, live API, behind `owner_dashboard:read`; see §14. The **Manager** Action Hub (alerts, Team Activity Monitor + drawer) is still the Figma prototype, quarantined in `ManagerPrototype`; PAC-106 replaces it. |
 | 4 | **Management v2** | `/dashboard/management-alt` | ⚠ mislabeled | Actually an **"Agency Command Center" / lead-distribution board** (Unclaimed Leads Pool, claim via call/text, Mailer QCN sidecar). Not analytics. Clarify intent. |
 | 5 | **Service Dashboard** | `/crm/service` | Service rep | 4 scorecards (Active Load, Retention Window, Daily Velocity, Book Health), 60/40: Priority Ticket Queue + Proactive Renewal Outreach. |
 | 6 | **Ticket Workspace** | `/crm/tickets` | CRM/service | KPI strip + 40/60 ticket feed + workspace panel w/ timeline. Rich Ticket model in `features/tickets/components/ticket-data.ts`. |
@@ -778,3 +778,167 @@ Verified: `build -w @sfa/api` + `tsc -p packages/api` clean, **855** unit
 (5 new), **854** e2e in 26 suites. `lint -w @sfa/api` on its exact baseline
 (same 7 files, 140 problems). Bruno not re-run — this commit changes no API
 surface, the same reason Phase 1 gave.
+
+---
+
+## 14. PAC-135 — Owner View dashboard (handoff, 2026-09-21)
+
+Three stacked PRs against `dev`, **merge in order**: **#114** lead sources → **#115** owner
+dashboard API → **#116** web. CI green on all three. Fixes go on the lowest branch that owns them
+and are carried up with merge commits, never force-pushes.
+
+### What exists now
+- **`leadSources` collection** (`src/lead-sources/`, the `Carrier` pattern: `agencyId: null` =
+  platform row, a string = that agency's own; archive, never delete). Leads and deals hold
+  `leadSourceId`. Find a source in code by **`slug`** (`MAILER_LEAD_SOURCE_SLUG`), never by name.
+  `GET /lead-sources` is gated on `leads:read` **or** `owner_dashboard:read`. No curation UI —
+  seeded only; super-admin and agency-settings CRUD are future work. Migration
+  `20260921133113-lead_sources_backfill` (rehearsed on the prod dump: 1,123/1,130 leads and
+  573/1,707 deals linked, 0 mismatches).
+- **`GET /owner-dashboard/{summary,producers,lead-sources}`** (`src/owner-dashboard/`), one query
+  schema and one pipeline prefix (`linesPrefix`) for all three, so
+  **leaderboard total = lead-source total = Total Bound Premium** under any filter (e2e asserts it
+  under seven combinations). Live, no rollup: 30–140 ms for all three on the prod dump.
+- **`features/owner-dashboard`** on the web. Filters live in the URL; one query per unit that must
+  agree internally. Shared with the Producer dashboard: `components/common/DateRangePicker`,
+  `components/common/RangeChips`, `lib/date-range`.
+
+### Decisions that override the ticket text — do not re-litigate
+- **LOB = policy type, summed from `policies` rows by `dealId`, not the deal total.** Auto $1,200 +
+  Home $1,800 filtered to Auto is $1,200. A record with no lines (10 migrated deals, every migrated
+  quote recap) counts in full with no LOB filter and, under one, when its own type list *contains*
+  a selected type — so LOB-filtered **quoted** premium is approximate on historic data.
+- **Trend windows** (`resolveComparison`): presets compare the same elapsed part of the previous
+  calendar unit (Sep 1–21 → Aug 1–21); only `custom` uses the preceding equal span.
+- **The lead owns the lead source.** Sales and quotes resolve it through their lead; a deal's own
+  `leadSourceId` is the fallback (no lead, or a lead with no source).
+- **No prior data is a state, never a number**, and a closing ratio needs ≥ 1 quote recap per 10
+  sales (`MIN_QUOTES_PER_SALE`, David confirmed) — the prod dump otherwise gives 5,978% for 2025.
+- "Last 3 Months" = three complete calendar months (David confirmed).
+
+### Policy types
+92 policies showed a raw SmartSuite code. Not a PAC-80 regression: the alias map was built from a
+table doc listing 6 of 13 choices, **and the import read a choice's code while discarding the label
+beside it** — `SmartSuiteClient` asks for `hydrated: true`, so every select arrives as
+`{ value, label }`. (An earlier note here claimed the API never sends labels. That was wrong.)
+`resolvePolicyType` now falls back to the hydrated label, so an unknown choice is stored by name.
+The seven already stored were decoded by joining to `temp/Policies 9_4_2026.csv` on `Record ID`. Three became new
+`POLICY_TYPES`: **Manufactured Home** (a dwelling), **RV** and **ATV / ORV** (countable vehicles,
+deliberately *not* in `AUTO_POLICY_TYPES` and *not* semiannual). **`docs/smartsuite-tables/*.md`
+choice lists are stale snapshots — never treat them as exhaustive.** The import now prints
+`unmappedChoices` per collection.
+
+### Still open
+- ⚠ **Not yet checked in a browser** (needs a signed-in session): light + dark, each period, each
+  filter. Bruno (`Lead Sources`, `Owner Dashboard` folders) not run.
+- **For David:** confirm the three new types' behaviour; `AP0VA` on 6 quote recaps needs a Quote
+  Recaps CSV export to decode; ticket Q4, Q5, Q7–Q11 (built on the stated assumptions).
+- **Data gap, not a bug:** 1,131 of 1,679 historic deals have no source and no lead link → the
+  "No source" row. A repair with the Smith Family Agency team.
+- **The embedded `leadSource` is dropped in the same release** by
+  `20260921161115-drop_embedded_lead_source` (Asad ships dev → prod as one release, so both
+  migrations apply in one boot, in filename order). It refuses to run unless the backfill
+  demonstrably finished — any record naming a real source with no `leadSourceId` makes it throw and
+  change nothing. Its `down` rebuilds `{ code: null, label }` from `leadSourceId`, so the pair can
+  still be unwound; only the raw SmartSuite code is gone, which nothing read.
+- `recharts` is unused in `packages/web` since the mock was deleted.
+
+---
+
+## 15. PAC-139 — Manager View dashboard (handoff, 2026-09-23)
+
+One PR against `dev` on `asad/pac-139-manager-view-dashboard`, after PR #121 (availability status)
+which was PAC-139 §6. Plan: `docs/plans/pac-139-manager-view-implementation-plan.md`.
+
+### What exists now
+- **`GET /management-dashboard/{alerts, alerts/stalled-leads, alerts/aging-audits, alerts/overdue-tickets,
+  team, producers/:producerId}`** (`src/management-dashboard/`), `ModuleKey.Management` + `management:read`,
+  the Owner view's query schema (`common/dashboard/dashboard-filter-query.dto.ts`, extracted so both views
+  compose one field map). The `management` stub is de-registered. Bruno: `bruno/Management Dashboard/`
+  (runs as `manager@demoagency.local`, branch scope).
+- **Shared with the Owner view, not forked:** `common/sales-metrics/sales-pipelines.ts` (moved from
+  `owner-dashboard.pipelines.ts`), `sales-matches.ts` (`resolvePeriod`, `salesScope`, `soldMatch`,
+  `quotedMatch` lifted out of `OwnerDashboardService`), `common/domain/user-names.ts`.
+- **`common/dates/business-days.ts`** — US federal holidays by rule (observed days), `businessDaysBetween`,
+  `agingCutoff`. First business-day code in the repo.
+- **`crm/service-ticket-queries.ts`** — `overdueTicketMatch(now)` (the derived meaning: stored `overdue`, or
+  an onboarding/renewal step past `dueAt` and not pinned) and `ticketTenantFilter`. `ServiceTicketsService.stats()`
+  now counts "needs action today" with it — it used to read the stored field alone and missed every
+  derived overdue (prod has 0 stored `overdue` and 1,134 open renewal steps).
+- **Web:** `features/management/` rewritten (`ManagerDashboard`, `AlertCards`, `AlertDrawer`,
+  `TeamActivityTable`, `ProducerDrawer`); the Owner filter bar/hook/range moved to
+  `features/management/filters/` as `DashboardFilterBar` / `useDashboardFilters` / `dashboard-range.ts`
+  (one bar for both tabs); `components/common/AvailabilityBadge.tsx`; drawers in the URL
+  (`?drawer=stalled|aging|overdue`, `?producer=<id>`). The three prototype files are deleted.
+- **Migration `20260923185801-management_read_for_branch_managers`** upserts the `rolePermissions` row for
+  every `branch_manager` role (template updated too). Dev databases: `npm run api:sync:roles:dev` also
+  works. A running API's Redis permission cache clears on its TTL or the manager's next login.
+- **Demo seed** pins fixtures (`DEMO_CONFIG.stalledLeads / agingAudits / overdueTickets`) as
+  post-draw overrides, so the RNG sequence is unchanged and no card reads zero on a fresh seed.
+
+### Decisions that override the ticket text (Asad, 23 Sep) — do not re-litigate
+- **Stalled = `lastActivityAt`**, not `updatedAt` (the migration stamped `updatedAt` with the import
+  time; the demo seed re-stamps it on every reseed; nothing indexes it), **terminal statuses excluded**
+  via `terminalLeadStatusValues()`. On the prod dump all 1,129 leads are >48h old, 266 of them Sold.
+- **Aging = `auditStatus != 'Pass'`** (Not Submitted, Pending, Fail), new-business deal sold in the period,
+  more than 5 business days ago. A deal with no audit row is not aging.
+- **Open Audit Items is an all-time backlog** — the one figure the period chips do not move (the table's
+  sub-heading says so). The producer drawer's list is the same set.
+- Producer filter narrows the cards and the producer drawer, never the Team roster. On tickets it lands
+  on `assignedUserId` (the CSR). Lead source reaches tickets only through `leadId` (most have none).
+- Audit rows open the **household** until PAC-106 ships the Deal Audit page; `dealAuditId`/`dealId` are
+  already on the rows for it.
+
+### Verified
+`build -w @sfa/shared` · `tsc -p packages/api` (only pre-existing errors in untouched files) · unit
+97 (4 suites) · `management-dashboard.e2e-spec.ts` 32/32 · web `lint` · Bruno and the browser check:
+see the PR description.
+
+### Still open for David
+~~Q1 status vocabulary~~ (settled 25 Sep, see §15a) · Q2 "open" audit = anything not Pass · Q4 person filter on
+tickets = assigned CSR · Q7 "Live" pill dropped, no auto-refresh · Q8 active pipeline = every non-terminal
+status, $ = latest quoted premium · Q9 roster = active producers + anyone with activity.
+
+---
+
+## 15a. PAC-139 §6a — nightly Away status (handoff, 2026-09-25)
+
+A second PR **stacked on PR #122** — branch `asad/pac-139-nightly-away-status`, base
+`asad/pac-139-manager-view-dashboard`. Merge #122 first, then retarget this one at `dev` (GitHub does
+that automatically when the base branch is deleted after merge).
+
+### What David asked for (relayed by Asad, 25 Sep)
+- Statuses **Available / Busy / Away**; the sidebar menu shows the three names and **no sub-text**.
+- **Every active user of every role, the owner included, is set Away at 8 PM in the agency's timezone.**
+- **No morning reset** — each person sets themself Available when they start work.
+- Agencies get a stored timezone, defaulted to Oklahoma / US Central.
+
+### What exists now
+- **`@sfa/shared` `USER_AVAILABILITIES = ['available', 'busy', 'away']`**, `END_OF_DAY_USER_AVAILABILITY`,
+  `USER_AVAILABILITY_DESCRIPTIONS` deleted. The PATCH body, the badge (`away` = `bg-muted-foreground`),
+  the demo seed (`sam.torres` starts `away`) and Bruno all derive from the list.
+- **`Agency.timezone`** (IANA, default `America/Chicago`, validated by `isIanaTimeZone`) and
+  **`Agency.availabilitySweep { lastAwayDate, lastAwayAt }`** — the "done tonight" marker.
+  Migration **`20260924233638-agency_timezone_backfill`** sets the default where missing.
+- **`common/dates/time-zones.ts`** (`DEFAULT_AGENCY_TIME_ZONE`, `isIanaTimeZone`, `localClock`) and
+  **`common/dates/end-of-day.ts`** (`END_OF_DAY_LOCAL_HOUR = 20`, `endOfDaySweepDate`). Both unit-tested,
+  DST and half-hour zones included.
+- **`worker/functions/set-users-away.fn.ts`** — Inngest cron `*/30 * * * *` (UTC), `forEachAgency`,
+  per agency: local clock ≥ 20:00 and marker ≠ today's local date → **claim the marker with a
+  conditional `updateOne`, then `updateMany` users** (`isActive`, not platform admin, not already `away`).
+  Claim-first is deliberate: a crash between the two skips a night rather than re-flipping someone who
+  came back after 8 PM. e2e: `test/worker/set-users-away.e2e-spec.ts` (8 cases, fixture-scoped, all
+  instants in 2025 so the marker it leaves on non-fixture agencies never blocks a real evening).
+
+### Deliberately not done
+- **`performance.range.ts`'s `AGENCY_TIME_ZONE` is still a constant.** Rewiring the dashboards' Chicago
+  calendar onto `Agency.timezone` touches every date window in the app — its own ticket.
+- No timezone picker in the onboarding wizard or settings; the validator is there for when one lands.
+- Not a `TZ=`-prefixed cron: that pins one zone for every tenant, which is what the field exists to avoid.
+
+### Verified
+`build -w @sfa/shared` · `build -w @sfa/api` · web `lint` (tsc) · eslint on every touched API file ·
+unit 15/15 (2 new suites) · e2e `set-users-away` 8/8, `profile` + `management-dashboard` still green
+(52/52 across the three) · Bruno `Auth` + `Profile` + `Management Dashboard` + `Users` 38/39 — the one
+failure is `Get Alerts` "the demo seed guarantees something on every card", a stale dev seed, not this
+change. **Not done: the browser check of the sidebar menu** (needs a signed-in session).

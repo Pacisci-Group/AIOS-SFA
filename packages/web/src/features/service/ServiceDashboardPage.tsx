@@ -1,12 +1,21 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Search, ChevronDown, Archive, Plus } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
+import {
+  SERVICE_TICKET_ACTIVE_STATUSES,
+  type ServiceTicketCategory,
+  type ServiceTicketQueueTab,
+  type ServiceTicketScope,
+} from "@sfa/shared";
 import { CreateTicketDialog } from "./components/CreateTicketDialog";
 import { ScorecardRow } from "./components/ScorecardRow";
-import { PriorityTicketQueue } from "./components/PriorityTicketQueue";
+import {
+  PriorityTicketQueue,
+  QUEUE_SCOPES,
+} from "./components/PriorityTicketQueue";
 import { RenewalOutreachDesk } from "./components/RenewalOutreachDesk";
 import {
   addServiceTicketNote,
@@ -16,6 +25,7 @@ import {
   type ServiceTicketStats,
   type ServiceTicketStatus,
 } from "@/lib/service-tickets-api";
+import { ticketQueueLink } from "@/lib/ticket-queue";
 
 const FALLBACK_STATS: ServiceTicketStats = {
   openTickets: 0,
@@ -28,15 +38,72 @@ const FALLBACK_STATS: ServiceTicketStats = {
   avgLobDensity: 0,
 };
 
+/**
+ * Rows per page of the Priority Ticket Queue.
+ *
+ * Sent explicitly rather than left to the API's default so the two cannot
+ * drift: this number also decides the card's height, and a server that
+ * silently returned a different count would leave the card half empty. The
+ * workspace row's minimum height below is sized to it (PAC-145).
+ */
+const TICKET_PAGE_SIZE = 8;
+
 export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  /*
+   * The queue's tab, page, type and sort live in the URL — `PriorityTicketQueue`
+   * owns writing them — and since PAC-98 they are query parameters on the
+   * request rather than a client-side filter. Read them here so the fetch and
+   * the query key move together: a key that ignored them would serve page 1's
+   * rows for page 3.
+   */
+  const [searchParams] = useSearchParams();
+  const tab = (searchParams.get("tab") ?? "all") as ServiceTicketQueueTab;
+  const page = Number(searchParams.get("page")) || 1;
+  const category = searchParams.get("type") ?? undefined;
+  const sort =
+    searchParams.get("sort") === "activity" ? "activity" : "urgency";
+
+  /*
+   * The queue's parent tab — My Tickets / Agency Tickets (PAC-109).
+   *
+   * Read here because this is where the request is built, and written by
+   * `PriorityTicketQueue`, which owns the tab strip. Both go through the same
+   * URL params, the way `tab`/`page`/`type` already do.
+   *
+   * Defaults to `own`: the dashboard opens on the rep's own plate. Validated
+   * against the vocabulary rather than trusted, so a hand-edited `?scope=`
+   * renders the default view instead of taking a 400 from the API.
+   */
+  const scope = (
+    QUEUE_SCOPES as readonly ServiceTicketScope[]
+  ).includes(searchParams.get("scope") as ServiceTicketScope)
+    ? (searchParams.get("scope") as ServiceTicketScope)
+    : "own";
+
   const ticketsQuery = useQuery({
-    queryKey: ["service-tickets"],
-    queryFn: () => listServiceTickets(),
+    queryKey: ["service-tickets", { tab, page, category, scope, sort }],
+    queryFn: () =>
+      listServiceTickets({
+        tab,
+        sort,
+        page,
+        pageSize: TICKET_PAGE_SIZE,
+        category: category as ServiceTicketCategory | undefined,
+        scope,
+        // A priority queue is work still to do. The list endpoint drops
+        // resolved and closed tickets by default since PAC-109; asking for the
+        // active statuses keeps that true here even if the default changes.
+        status: SERVICE_TICKET_ACTIVE_STATUSES,
+      }),
+    // Keep the previous page on screen while the next one loads. Without it
+    // every page turn blanks the list and collapses the card's height, which
+    // reads as a bug rather than a fetch.
+    placeholderData: (previous) => previous,
   });
   const statsQuery = useQuery({
     queryKey: ["service-tickets", "stats"],
@@ -63,14 +130,41 @@ export default function App() {
     },
   });
 
-  const tickets = ticketsQuery.data ?? [];
+  const ticketPage = ticketsQuery.data;
   const scorecardStats = statsQuery.data ?? FALLBACK_STATS;
 
-  const openTicket = (id: string) => navigate(`/crm/tickets?ticket=${id}`);
+  /**
+   * Opening a ticket takes the queue's view with it.
+   *
+   * The Priority Ticket Queue keeps its tab, type filter and sort in the URL,
+   * and the workspace's feed reads the same param names
+   * (`lib/ticket-queue.ts`), so forwarding them means the list beside the
+   * opened ticket is the list the rep clicked in. Without this the workspace
+   * loaded its own unfiltered, differently-tabbed queue and the tickets beside
+   * the one they opened looked like somebody else's.
+   *
+   * Read off the location rather than passed up from the queue: the renewal
+   * desk opens tickets too, and one filter context per page is the point.
+   *
+   * Whose tickets the list shows is the one thing that differs by origin
+   * (PAC-147): the queue's My Tickets / Agency Tickets tab travels with a
+   * ticket opened from it. The renewal desk is not governed by that tab, so a
+   * desk ticket opens on Mine when it is the rep's own call — whichever queue
+   * tab is selected — and on Everyone when it is a colleague's, which only an
+   * owner or manager can see there (PAC-146), so the list still contains it.
+   */
+  const openTicket = (id: string) =>
+    navigate(ticketQueueLink("/crm/tickets", id, searchParams, scope));
+  const openRenewalTicket = (id: string, isMine: boolean) =>
+    navigate(
+      ticketQueueLink("/crm/tickets", id, searchParams, isMine ? "own" : "agency"),
+    );
 
   return (
     <AppShell>
-      <div className="flex-1 flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
+      {/* No `flex-1` beside `h-screen` — see `TicketWorkspacePage` for why
+          the two cannot coexist inside `AppShell`. */}
+      <div className="flex flex-col min-w-0 h-screen bg-background text-foreground overflow-hidden">
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
@@ -138,9 +232,12 @@ export default function App() {
         </header>
 
         {/* Dashboard body */}
-        {/* The body itself does not scroll — the header and scorecard stay put and
-            the two workspace columns own their own scrollbars (see the grid below). */}
-        <main className="flex-1 flex flex-col min-h-0 overflow-hidden px-6 py-5 gap-5">
+        {/* The body scrolls only when the viewport is too short for the
+            workspace row's minimum (PAC-145); on a tall screen it still fits,
+            and the two workspace columns own their own scrollbars. It used to
+            be `overflow-hidden`, which let a laptop-height screen squeeze the
+            queue down to three or four rows under the scorecard. */}
+        <main className="flex-1 flex flex-col min-h-0 overflow-y-auto px-6 py-5 gap-5">
           <div className="flex items-center justify-between flex-shrink-0">
             <div>
               <h1 className="text-xl font-bold text-foreground tracking-tight">Service Dashboard</h1>
@@ -173,21 +270,27 @@ export default function App() {
             <ScorecardRow stats={scorecardStats} />
           </div>
 
-          {/* Row 2: 60/40 Workspace. `min-h-0` is what lets the row take a definite
-              height instead of growing to fit its content — without it the columns'
-              inner `overflow-y-auto` never clips and the whole page scrolls instead.
-              Both columns set `overflow-hidden`, so their grid auto-minimum is 0. */}
+          {/* Row 2: 60/40 Workspace. `flex-1` fills a tall screen; the explicit
+              minimum is what keeps it from being squeezed on a short one
+              (PAC-145). It is sized to one full page of the queue
+              (`TICKET_PAGE_SIZE` rows, ~84px each at the app's 15px root, plus
+              the card's header and pager), so a page of tickets never needs
+              the card's own scrollbar — below that height the body scrolls
+              instead. The row still has a definite height either way, so the
+              columns' inner `overflow-y-auto` keeps clipping. Change this
+              alongside `TICKET_PAGE_SIZE`. */}
           <div
-            className="grid gap-5 flex-1 min-h-0"
+            className="grid gap-5 flex-1 flex-shrink-0 min-h-[58rem]"
             style={{ gridTemplateColumns: "3fr 2fr" }}
           >
             <PriorityTicketQueue
-              tickets={tickets}
+              page={ticketPage}
+              busy={ticketsQuery.isFetching}
               onOpen={openTicket}
               onAddNote={(id, content) => noteMutation.mutate({ id, content })}
               onChangeStatus={(id, status) => statusMutation.mutate({ id, status })}
             />
-            <RenewalOutreachDesk onOpenTicket={openTicket} />
+            <RenewalOutreachDesk onOpenTicket={openRenewalTicket} />
           </div>
         </main>
       </div>

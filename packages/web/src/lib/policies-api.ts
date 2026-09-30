@@ -1,5 +1,7 @@
 import type {
+  PolicyReplacementChain,
   PolicySearchResult,
+  PolicySummary,
   PolicyView,
   UpdatePolicyInput,
   UpdatePolicyResult,
@@ -7,7 +9,9 @@ import type {
 import { apiFetch } from '@/lib/api-client';
 
 export type {
+  PolicyReplacementChain,
   PolicySearchResult,
+  PolicySummary,
   PolicyView,
   UpdatePolicyInput,
   UpdatePolicyResult,
@@ -54,4 +58,40 @@ export function updatePolicy(policyId: string, input: UpdatePolicyInput) {
     `${BASE}/${encodeURIComponent(policyId)}`,
     { method: 'PATCH', body: JSON.stringify(input) },
   );
+}
+
+/**
+ * `PATCH /households/:id/policies/:policyId` — the household policy card's
+ * edit (PAC-126).
+ *
+ * The same patch body as {@link updatePolicy} against a different route, and
+ * that is the whole point: the endpoint above gates on `deal_audits:write` and
+ * resolves `own` scope through the policy's *deal*, so a CSR gets a 403 and a
+ * migrated policy with no deal reads as 404 — between them, exactly the people
+ * and exactly the records this ticket is about. Nested under the household, the
+ * household supplies both the permission and the scope.
+ *
+ * Returns a `PolicySummary`, not an `UpdatePolicyResult`: it carries
+ * `renewalDate`, which the household card leads with and which the server
+ * re-derives whenever the effective date or the policy type changes.
+ */
+export function updateHouseholdPolicy(
+  householdId: string,
+  policyId: string,
+  input: UpdatePolicyInput,
+) {
+  return apiFetch<PolicySummary>(
+    `/households/${encodeURIComponent(householdId)}/policies/${encodeURIComponent(policyId)}`,
+    { method: 'PATCH', body: JSON.stringify(input) },
+  );
+}
+
+/**
+ * Every policy in this one's replacement chain, oldest first.
+ *
+ * Returns a single-entry chain for a policy that has never been replaced, so
+ * the caller can render it without a "has history?" branch.
+ */
+export function getPolicyHistory(policyId: string) {
+  return apiFetch<PolicyReplacementChain>(`${BASE}/${policyId}/history`);
 }

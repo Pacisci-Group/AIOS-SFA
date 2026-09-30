@@ -22,7 +22,7 @@ import type { StructuredAddress } from './address';
 import type { ActivityChange, ActivityOrigin, ActivityType } from './activity';
 import type { ContactDetail } from './contact';
 import type { IntakeChannel } from './lead-intake';
-import type { NormalizedLeadSource } from './lead-source';
+import type { LeadSourceRef } from './lead-source';
 import type { LeadTemperature } from './lead-temperature';
 
 /**
@@ -279,11 +279,11 @@ export interface LeadDetailActivity {
 /**
  * `GET /leads/:id` — the whole 360° view in one round trip.
  *
- * The one deliberate exception to "no raw codes" is `leadSource.code`. That is
- * not a display value leaking: it is the stable vocabulary key that both
- * `POST /leads` (`leadSourceCode`) and `PATCH /leads/:id` accept, and the
- * inline Select needs it to round-trip a selection. `leadSource.label` is what
- * is rendered.
+ * `leadSource` is a reference plus its rendered name (PAC-135):
+ * `leadSource.id` is the `leadSources` row both `POST /leads` and
+ * `PATCH /leads/:id` accept as `leadSourceId`, which the inline Select needs to
+ * round-trip a selection; `leadSource.label` is what is rendered.
+ * `{ id: null, label: '' }` = nobody has said where this lead came from yet.
  */
 export interface LeadDetail {
   id: string;
@@ -294,7 +294,7 @@ export interface LeadDetail {
   /** Canonical status label — `arW7O` is normalized to `Requote`. */
   status: string;
   temperature: LeadTemperature;
-  leadSource: NormalizedLeadSource;
+  leadSource: LeadSourceRef;
   /*
    * ⚠ No `emails` / `phones` here. The lead used to carry a denormalised copy
    * of its primary contact's details, which the migration filled from the
@@ -385,13 +385,13 @@ export interface UpdateLeadInput {
   /** `Unknown` is display-only and never selectable — see `LEAD_TEMPERATURE_OPTIONS`. */
   temperature?: LeadTemperature;
   /**
-   * A `SELECTABLE_LEAD_SOURCE_OPTIONS` code, or `LEAD_SOURCE_NONE` to clear it.
-   * Codes, not labels — the same vocabulary `POST /leads` takes.
+   * A `leadSources` row id (from `GET /lead-sources`), or `LEAD_SOURCE_NONE` to
+   * clear it — the same thing `POST /leads` takes.
    *
    * This control exists because PAC-37 share-link leads arrive with no source at
    * all; without it those leads could never be corrected.
    */
-  leadSourceCode?: string;
+  leadSourceId?: string;
 }
 
 /**
@@ -406,7 +406,7 @@ export interface UpdateLeadResult {
   id: string;
   status: string;
   temperature: LeadTemperature;
-  leadSource: NormalizedLeadSource;
+  leadSource: LeadSourceRef;
   /** Always bumped — the Leads list sorts on it, and an edit is activity. */
   lastActivityAt: string;
 }

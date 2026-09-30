@@ -1,3 +1,5 @@
+import type { UserAvailability } from '@sfa/shared';
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 export class ApiError extends Error {
@@ -106,6 +108,11 @@ export interface AuthUser {
    * — fetch it with {@link apiFetchBlob}, never point an `<img src>` at it.
    */
   avatarUrl: string | null;
+  /**
+   * Taking new leads or not (PAC-139 §6). The user's own switch, set from the
+   * sidebar (`AvailabilityToggle`) — nothing computes it.
+   */
+  availability: UserAvailability;
   /** Human-readable role names (e.g. ["Owner"]). For display only. */
   roles: string[];
   agencyId: string | null;

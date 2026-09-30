@@ -67,6 +67,7 @@ import {
   type AgencyUserStatus,
   type ListAgencyUsersDto,
 } from './dto/list-users.dto';
+import { type ListUserOptionsDto } from './dto/list-user-options.dto';
 import { buildSearchFilter, tokenRegex } from '../common/mongo/search-filter';
 import { USER_SEARCH_FIELDS, idsMatching } from './user-search';
 
@@ -131,15 +132,37 @@ export class UsersService {
    * Sorted the way a person scans a list, with the same collation the directory
    * uses so "adams" does not sort after "Zimmer"; `email` is the tiebreak
    * because it is unique.
+   *
+   * `role` and `availability` narrow it for a picker that wants less than
+   * everyone (PAC-144) — the Command Center's lead picker lists only producers
+   * who are taking leads. A role slug this agency does not have matches nobody,
+   * rather than being ignored: a picker that asked for producers must never
+   * fall back to the whole roster.
    */
-  async listOptions(agencyId: string): Promise<AgencyUserOption[]> {
+  async listOptions(
+    agencyId: string,
+    query: ListUserOptionsDto = {},
+  ): Promise<AgencyUserOption[]> {
+    const agencyObjectId = new Types.ObjectId(agencyId);
+    const filter: FilterQuery<UserDocument> = {
+      agencyId: agencyObjectId,
+      isPlatformAdmin: { $ne: true },
+      isActive: true,
+    };
+    if (query.role) {
+      const role = await this.roleModel
+        .findOne({ agencyId: agencyObjectId, slug: query.role })
+        .select({ _id: 1 })
+        .lean<{ _id: Types.ObjectId } | null>();
+      if (!role) return [];
+      filter._id = { $in: await this.roleAssignments.roleUserIds(role._id) };
+    }
+    if (query.availability?.length) {
+      filter.availability = { $in: query.availability };
+    }
     return this.userModel
-      .find({
-        agencyId: new Types.ObjectId(agencyId),
-        isPlatformAdmin: { $ne: true },
-        isActive: true,
-      })
-      .select('email firstName lastName')
+      .find(filter)
+      .select('email firstName lastName availability')
       .collation({ locale: 'en', strength: 2 })
       .sort({ lastName: 1, firstName: 1, email: 1 })
       .lean<AgencyUserOption[]>();

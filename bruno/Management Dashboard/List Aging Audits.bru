@@ -1,0 +1,87 @@
+meta {
+  name: List Aging Audits
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/management-dashboard/alerts/aging-audits?range=ytd
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: ytd
+  ~page: 1
+  ~pageSize: 50
+  ~producerIds:
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto
+}
+
+auth:bearer {
+  token: {{managementDashboardToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the total is the card's number", function () {
+    expect(res.getBody().total).to.equal(bru.getVar("managementAgingAudits"));
+  });
+
+  test("every row is past the SLA and not Pass", function () {
+    for (const row of res.getBody().items) {
+      expect(row.auditStatus).to.not.equal("Pass");
+      expect(row.businessDaysOpen).to.be.above(5);
+      expect(row.soldDate).to.be.a("string");
+    }
+  });
+
+  test("oldest sale first", function () {
+    const dates = res.getBody().items.map((row) => Date.parse(row.soldDate));
+    for (let i = 1; i < dates.length; i++) {
+      expect(dates[i - 1]).to.be.at.most(dates[i]);
+    }
+  });
+}
+
+docs {
+  # GET /management-dashboard/alerts/aging-audits — the Aging Audits drawer (PAC-139)
+
+  One row per **deal** (never per audit item), oldest sale first. "You have
+  five business days once a deal is sold to complete the audit. Any deal that
+  is not completed by that time, that's aging" (David, 22 Sep 00:25:26).
+
+  - **Module / permission / scope / filter / paging:** as `List Stalled Leads`.
+  - **`total`** equals the card's `agingAudits` under the same query.
+  - The clock is **business days from the sold date**: weekends and the eleven
+    US federal holidays (observed days) are skipped, on the Chicago calendar.
+    A deal sold on a Friday has had one business day by Monday.
+  - **Open** means `auditStatus` is anything but `Pass` — Not Submitted,
+    Pending and Fail all count. A deal with no audit record is not aging.
+
+  The web opens each row on the household (`/clients/:householdId`) until the
+  Deal Audit page ships (PAC-106); `dealAuditId` and `dealId` are here for it.
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "ytd", "current": { "from": "2026-01-01", "to": "2026-09-23" }, "previous": { "from": "2025-01-01", "to": "2025-09-23" } },
+    "page": 1, "pageSize": 50, "total": 3, "totalPages": 1,
+    "items": [
+      {
+        "dealAuditId": "66f0…c3", "dealId": "66f0…d4", "householdId": "66f0…b2",
+        "clientName": "Dana Whitfield", "producerId": "66f0…11", "producerName": "Pat Producer",
+        "auditStatus": "Not Submitted", "openFailedCount": 1,
+        "soldDate": "2026-09-11T05:00:00.000Z", "businessDaysOpen": 8
+      }
+    ]
+  }
+  ```
+
+  ## Errors
+  As `Get Alerts`.
+}

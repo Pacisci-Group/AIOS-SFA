@@ -1,4 +1,4 @@
-import type { PageLevelOverride } from '@sfa/shared';
+import type { PageLevelOverride, UserAvailability } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
 
 export interface AgencyUserRole {
@@ -14,6 +14,8 @@ export interface AgencyUser {
   email: string;
   firstName?: string;
   lastName?: string;
+  /** Taking leads or not (PAC-139 §6). Set by the user, never from the directory. */
+  availability: UserAvailability;
   isActive: boolean;
   /**
    * ISO-8601 when the user was removed from the agency; null otherwise.
@@ -146,14 +148,51 @@ export interface AgencyUserOption {
   email: string;
   firstName?: string;
   lastName?: string;
+  /**
+   * Taking leads or not (PAC-139 §6). Here so a *lead* picker (PAC-138) can
+   * list only the available people; the other pickers ignore it.
+   */
+  availability: UserAvailability;
+}
+
+/**
+ * Narrowing for a picker that wants less than everyone (PAC-144). `role` is a
+ * role **slug** — `producer`, never the display name an agency can rename.
+ */
+export interface UserOptionsParams {
+  role?: string;
+  availability?: UserAvailability[];
 }
 
 /**
  * Everyone who can be assigned work. **Unpaginated on purpose** — see
  * `AgencyUserOption`; a picker showing page 1 of 3 is a bug.
+ *
+ * Takes no arguments on purpose: callers pass it straight to `queryFn`, which
+ * hands it React Query's context object.
  */
 export function listUserOptions() {
-  return apiFetch<AgencyUserOption[]>('/users/options');
+  return listUserOptionsWhere({});
+}
+
+/** {@link listUserOptions}, narrowed — see {@link UserOptionsParams}. */
+export function listUserOptionsWhere(params: UserOptionsParams) {
+  const search = new URLSearchParams();
+  if (params.role) search.set('role', params.role);
+  for (const availability of params.availability ?? []) {
+    search.append('availability', availability);
+  }
+  const qs = search.toString();
+  return apiFetch<AgencyUserOption[]>(`/users/options${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * The cache key for a narrowed option list. Nested under
+ * {@link agencyUserOptionsKey}, so invalidating that prefix — which every
+ * roster change already does — refreshes these too.
+ */
+export function userOptionsKey(params: UserOptionsParams) {
+  return [...agencyUserOptionsKey, params] as const;
 }
 
 /**

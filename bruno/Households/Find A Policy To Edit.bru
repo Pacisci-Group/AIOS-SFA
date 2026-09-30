@@ -1,0 +1,71 @@
+meta {
+  name: Find A Policy To Edit
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/policies/search?q=&limit=50
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~q:
+  limit: 50
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  /*
+   * Set-up for `Update Household Policy` (PAC-126): a policy that actually has
+   * a household, plus that household and the policy's **current** premium.
+   *
+   * Not captured from `Get Household` above, which would be the obvious place:
+   * `householdId` there is whichever household sorted first, and in the demo
+   * seed that one has no policies at all — so the edit would run against
+   * `/policies/null` and 404. This asks the question directly instead.
+   *
+   * The premium rides along so the edit can write it straight back: the request
+   * exercises the endpoint without changing a stored value, which is the same
+   * "leave the household as we found it" rule the primary-contact capture
+   * follows. Premium and not the effective date on purpose — clearing an
+   * effective date clears the derived renewal anchor with it, so a policy the
+   * seed left undated would come out of a run worse than it went in.
+   *
+   * Runtime-only vars (never persisted to disk).
+   */
+  if (res.getStatus() === 200) {
+    const linked = (res.getBody() || []).find((p) => p.householdId);
+    bru.setVar("policyEditPolicyId", linked ? linked.id : null);
+    bru.setVar("policyEditHouseholdId", linked ? linked.householdId : null);
+    bru.setVar("policyEditPremium", linked ? linked.premium : 0);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("found a policy that belongs to a household", function () {
+    // If this fails the seed has no linked policy and `Update Household Policy`
+    // below cannot run — a fixture problem, not an API one.
+    expect(bru.getVar("policyEditPolicyId")).to.be.a("string");
+    expect(bru.getVar("policyEditHouseholdId")).to.be.a("string");
+  });
+}
+
+docs {
+  # GET /policies/search — fixture set-up
+
+  Not a documented endpoint in its own right (see **Policies › Search Policies**
+  for that). This exists only to hand **Update Household Policy** a policy that
+  has a household, because the household `Get Household` captures is whichever
+  one sorts first and the demo seed leaves that one without policies.
+
+  Captures `policyEditPolicyId`, `policyEditHouseholdId` and `policyEditPremium`.
+}

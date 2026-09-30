@@ -1,0 +1,52 @@
+meta {
+  name: Get Campaign (Re-opened Preview)
+  type: http
+  seq: 23
+}
+
+get {
+  url: {{baseUrl}}/platform/mailer-campaigns/{{campaignId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+script:pre-request {
+  // The re-preview `Add Campaign Files` queued is a job, not a synchronous
+  // recompute — same reason as `Get Campaign (Previewed)`.
+  await new Promise((resolve) => setTimeout(resolve, 6000));
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("previewed again over both files", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("previewed");
+    // 3 rows in the first file + 2 in the second, read as one week.
+    expect(body.preview.stats.inputRows).to.equal(5);
+  });
+
+  test("tells the operator what is new and what is already here", function () {
+    // `…ee01` and `…ee02` came in with the first commit; `…ee03` is new.
+    // (`…ee01` appears in both files — the transform's own dedupe collapses
+    // it, so it is counted once.)
+    const overlap = res.getBody().preview.overlap;
+    expect(overlap.existingInThisCampaign).to.equal(2);
+    expect(overlap.newRows).to.equal(1);
+  });
+}
+
+docs {
+  # GET /platform/mailer-campaigns/:campaignId — after Add records, before the re-commit
+
+  Same endpoint as `Get Campaign (Previewed)`; see there for the full contract.
+  This request stands for the one number Add records exists to show: how many
+  of the file's rows are **new** and how many the campaign already holds. The
+  re-commit updates the latter in place and prints only the former.
+}

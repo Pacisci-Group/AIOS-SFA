@@ -228,7 +228,7 @@ docs {
   ## Derived server-side — never trusted from the client
   `premium` (summed and rounded to cents), `itemCount`, `policyCount`,
   `policyTypes`, `isBundle`, `dealType`, `soldDateYmd`, `clientName` and
-  `leadSource`. Legacy received these pre-aggregated from Fillout because
+  `leadSourceId` (stamped from the lead). Legacy received these pre-aggregated from Fillout because
   SmartSuite maintained them as rollups; Mongo has none, so they are computed
   here — and a client-supplied total would corrupt the Sold scorecard (PAC-11).
 
@@ -335,6 +335,34 @@ docs {
     generates **no audit item at all**.
   - Attachment `contentType`/`size` are **re-derived from storage** via
     `HeadObject`; the declared values are ignored.
+
+  ## Replacements — Cancel Rewrite and Company Transfer (PAC-126)
+
+  Neither has an endpoint of its own. Both run **this** request on a lead
+  created for them — `POST /leads` with a `replacementIntent`, found or resumed
+  through `GET /leads/for-replacement` — and the sale reads the stamp off the
+  lead. The body is the ordinary sold body; nothing about it says "replacement",
+  which is deliberate: letting the client declare one would let anyone retire
+  any policy their scope can reach.
+
+  When the lead carries an unconsumed intent, one transaction does all of:
+
+  | | rewrite | transfer |
+  |---|---|---|
+  | `fromPolicyId` injected on the **first** row | yes | yes |
+  | old policy retired, pair linked both ways | `Cancel Rewrite` | `Company Transfer` |
+  | `Deal.businessType` | `new_business` | `company_transfer` |
+  | chargeback row + original deal's `chargebackAdjustment` | full premium; credit reversed inside 1 calendar month of the original sale | none |
+  | intent stamped `consumedAt` / `consumedByDealId` | yes | yes |
+
+  The stamp is read on **every** submit for that lead, so a replacement lead
+  opened from the Leads page and sold "normally" still becomes the replacement —
+  the safe direction. A consumed intent reads as an ordinary sale, which is what
+  stops a double submit retiring an already-retired policy.
+
+  Extra rows are new policies on the same deal (an Auto becoming Auto +
+  Motorcycle); only the first replaces anything. Prior insurance is not asked
+  on a replacement — the policy being replaced is already ours.
 
   ## Idempotency
   Replaying `submissionToken` returns the **same deal id** and creates nothing

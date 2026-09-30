@@ -168,6 +168,77 @@ describe('buildScopeFilter', () => {
     });
   });
 
+  // PAC-135: the Owner dashboard's multi-select producer filter.
+  describe('producerIds', () => {
+    const agencyAccess = access({
+      dataScope: DataScope.Agency,
+      scope: AccessScope.Agency,
+    });
+    const ids = (filter: Record<string, unknown>): string[] =>
+      (filter.producerId as { $in: Types.ObjectId[] }).$in.map((id) =>
+        id.toString(),
+      );
+
+    it('narrows an agency-scoped caller to the selected producers', () => {
+      const filter = buildScopeFilter(agencyAccess, BRANCH_ID, {
+        producerIds: [USER_ID, OTHER_USER_ID],
+      });
+
+      expect(ids(filter)).toEqual([USER_ID, OTHER_USER_ID]);
+      expect(filter.agencyId).toBe(AGENCY_ID);
+    });
+
+    it('cannot widen an own-scoped caller past themselves', () => {
+      const filter = buildScopeFilter(access(), BRANCH_ID, {
+        producerIds: [OTHER_USER_ID],
+      });
+
+      expect((filter.producerId as Types.ObjectId).toString()).toBe(USER_ID);
+    });
+
+    it('applies within the branch clamp, not instead of it', () => {
+      const filter = buildScopeFilter(
+        access({ dataScope: DataScope.Branch }),
+        BRANCH_ID,
+        { producerIds: [OTHER_USER_ID] },
+      );
+
+      expect(filter.branchId).toBe(BRANCH_ID);
+      expect(ids(filter)).toEqual([OTHER_USER_ID]);
+    });
+
+    it('drops malformed ids, and matches nothing when none survive', () => {
+      const mixed = buildScopeFilter(agencyAccess, BRANCH_ID, {
+        producerIds: ['not-an-id', OTHER_USER_ID],
+      });
+      const allBad = buildScopeFilter(agencyAccess, BRANCH_ID, {
+        producerIds: ['not-an-id'],
+      });
+
+      expect(ids(mixed)).toEqual([OTHER_USER_ID]);
+      // `$in: []` matches no document. Falling back to "everyone" would turn a
+      // selection the caller made into no selection at all.
+      expect(ids(allBad)).toEqual([]);
+    });
+
+    it('leaves the filter alone for an empty list', () => {
+      const filter = buildScopeFilter(agencyAccess, BRANCH_ID, {
+        producerIds: [],
+      });
+
+      expect(filter).not.toHaveProperty('producerId');
+    });
+
+    it('yields to a single producerId when both are given', () => {
+      const filter = buildScopeFilter(agencyAccess, BRANCH_ID, {
+        producerId: USER_ID,
+        producerIds: [OTHER_USER_ID],
+      });
+
+      expect((filter.producerId as Types.ObjectId).toString()).toBe(USER_ID);
+    });
+  });
+
   describe('producerField override', () => {
     it('pins the named field instead of producerId', () => {
       const filter = buildScopeFilter(access(), BRANCH_ID, {

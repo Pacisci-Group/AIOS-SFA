@@ -72,6 +72,7 @@ import {
   AuditTemplateSchema,
 } from '../audit-templates/schemas/audit-template.schema';
 import { PermissionsModule } from '../permissions/permissions.module';
+import { LeadSourcesModule } from '../lead-sources/lead-sources.module';
 import {
   AgencyRole,
   AgencyRoleSchema,
@@ -102,6 +103,9 @@ import { MigrationService } from './migration.service';
     // for `seedDefaultRoles`. Same standalone-module trick `DemoSeedModule`
     // uses. It creates no users beyond the ones SmartSuite supplies.
     PermissionsModule,
+    // Imported leads and deals reference a `leadSources` row (PAC-135). The
+    // module depends on nothing, so it is safe in this standalone graph.
+    LeadSourcesModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       // Resolves the global carrier the tenant's appointment is with (PAC-93).

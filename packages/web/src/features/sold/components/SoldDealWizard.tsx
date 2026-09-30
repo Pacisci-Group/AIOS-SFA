@@ -5,7 +5,7 @@ import type {
   SoldStaffOption,
 } from "@sfa/shared";
 import { Loader2, Plus, Send } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FormError, FormSection } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { localTodayYmd } from "@/lib/dates";
@@ -28,9 +28,9 @@ interface SoldDealWizardProps {
   /**
    * Agency staff for the "Cancelled by" picker (PAC-65 #11).
    *
-   * Optional because `cardsFor` drops the prior-insurance card on the transfer
-   * variant entirely — a transfer replaces a policy already in our own book, so
-   * there is no prior carrier to cancel and no picker to fill.
+   * Optional because `cardsFor` drops the prior-insurance card on the
+   * replacement variant entirely — it replaces a policy already in our own
+   * book, so there is no prior carrier to cancel and no picker to fill.
    */
   staff?: SoldStaffOption[];
   submitting: boolean;
@@ -40,18 +40,25 @@ interface SoldDealWizardProps {
    * Which flow this is. Defaults to `sale`, so every existing caller is
    * unchanged.
    *
-   * A `transfer` records the same information against a household and a CRM
-   * ticket instead of a lead: it asks which policy each new one replaces, and
-   * skips prior insurance entirely.
+   * A `replacement` records the same information for a policy that replaces
+   * one already in our book, so it skips prior insurance entirely; the policy
+   * being replaced is stamped on the lead and injected server-side.
    */
   variant?: WizardVariant;
   /**
-   * The household whose policies the from-policy picker searches. Required by
-   * the transfer variant and unused by the sale.
+   * Where in-progress documents are uploaded.
+   *
+   * Anchored on the lead, whose key prefix is the server's ownership check, so
+   * the scope travels with the upload rather than being inferred.
+   *
+   * ⚠ **Passed in, not derived here.** It used to be computed from the variant,
+   * and when a third variant arrived it fell through to
+   * `{ kind: "lead", leadId: "" }` — every upload failed the presign, and
+   * because the New Business Application is required, the whole flow was
+   * unsubmittable. The flow that owns the anchor is the only thing that
+   * reliably knows it.
    */
-  householdId?: string | null;
-  /** The ticket a transfer is recorded from; also its upload anchor. */
-  ticketId?: string;
+  uploadScope: UploadScope;
 }
 
 /** One opening of the policy steps. */
@@ -96,8 +103,7 @@ export function SoldDealWizard({
   errorMessage,
   onSubmit,
   variant = "sale",
-  householdId,
-  ticketId,
+  uploadScope,
 }: SoldDealWizardProps) {
   /**
    * Today, in the producer's own time zone — see `localTodayYmd` for why not
@@ -115,21 +121,6 @@ export function SoldDealWizard({
     editingIndex: null,
   });
   const [draftDirty, setDraftDirty] = useState(false);
-
-  /**
-   * Where in-progress documents are uploaded.
-   *
-   * The two flows anchor keys differently on the server — a sale on its lead, a
-   * transfer on the ticket's household — and that prefix is the ownership
-   * check, so the scope travels with the upload rather than being inferred.
-   */
-  const uploadScope: UploadScope = useMemo(
-    () =>
-      variant === "transfer" && ticketId
-        ? { kind: "ticket", ticketId }
-        : { kind: "lead", leadId: context.leadId },
-    [variant, ticketId, context.leadId],
-  );
 
   const dirty =
     soldDate !== initialSoldDate || policies.length > 0 || draftDirty;
@@ -232,7 +223,6 @@ export function SoldDealWizard({
           carriers={carriers}
           staff={staff}
           uploadScope={uploadScope}
-          householdId={householdId}
           initialValues={
             editingIndex !== null ? policies[editingIndex] : undefined
           }

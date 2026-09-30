@@ -1,8 +1,8 @@
 import type { PremiumSource } from '../../deals/schemas/deal.schema';
 import type { LeadTemperature } from '@sfa/shared';
-import { normalizePolicyType } from '@sfa/shared';
+import { isCanonicalPolicyType, normalizePolicyType } from '@sfa/shared';
 import { CONTACT_FIELDS } from '../smartsuite/field-ids';
-import { allLinkedIds, selectCode, toNumber } from './value-utils';
+import { allLinkedIds, selectCode, selectLabel, toNumber } from './value-utils';
 
 // Moved to `common/domain/` so the live Sold write path does not import the
 // migration module. Re-exported here so existing call sites keep working.
@@ -35,23 +35,52 @@ export function resolvePremium(
  * `Landlord Mortgagee`, …), so one stray plural silently produces a deal with
  * no landlord audit items at all.
  *
- * Uncatalogued codes still pass through verbatim, so nothing is dropped.
+ * Nothing is dropped: see {@link resolvePolicyType} for what an uncatalogued
+ * choice becomes.
  */
 export function policyTypeLabels(value: unknown): string[] {
-  const codes = new Set<string>();
+  const labels = new Set<string>();
   const walk = (v: unknown) => {
     if (v === null || v === undefined) return;
     if (Array.isArray(v)) {
       v.forEach(walk);
       return;
     }
-    const code = selectCode(v);
-    if (code) codes.add(code);
+    // Deduped after resolving: `mCt4m` and `AiFB5` both mean "Landlord", and a
+    // deal linking policies from both code sets would otherwise list it twice.
+    const label = resolvePolicyType(v);
+    if (label) labels.add(label);
   };
   walk(value);
-  // Deduped again after normalizing: `mCt4m` and `AiFB5` both mean "Landlord",
-  // and a deal linking policies from both code sets would otherwise list it twice.
-  return [...new Set([...codes].map((c) => normalizePolicyType(c)))];
+  return [...labels];
+}
+
+/**
+ * One SmartSuite policy-type choice → the value we store.
+ *
+ * 1. The **code**, through our alias map — the stable route, and the one every
+ *    known choice takes.
+ * 2. Failing that, the **hydrated label** SmartSuite sent beside the code, run
+ *    through the same map (so "Manufactured Homes" still lands on our
+ *    "Manufactured Home").
+ * 3. Failing that, the label as SmartSuite wrote it; and only with no label at
+ *    all, the raw code.
+ *
+ * Steps 2–3 are PAC-135. The import used to read the code alone and throw the
+ * label away, so a choice added in SmartSuite after our map was written was
+ * stored as `Tz3ny` when "Manufactured Homes" was sitting in the same payload —
+ * 92 policies' worth. A readable name we have not catalogued beats an opaque
+ * code we have not catalogued, and it tells whoever reads it what to add.
+ */
+export function resolvePolicyType(value: unknown): string {
+  const byCode = normalizePolicyType(selectCode(value));
+  if (isCanonicalPolicyType(byCode)) return byCode;
+
+  const label = selectLabel(value)?.trim();
+  if (!label) return byCode;
+
+  const byLabel = normalizePolicyType(label);
+  return isCanonicalPolicyType(byLabel) ? byLabel : label;
 }
 
 const TEMPERATURES: Record<string, LeadTemperature> = {

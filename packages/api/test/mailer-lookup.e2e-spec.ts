@@ -385,7 +385,7 @@ describe('Mailer lookup + log lead (e2e)', () => {
       expect(lead!.firstName).toBe('Dana');
       expect(lead!.lastName).toBe('Whitfield');
       // Always Mailer, set server-side. The legacy JYA branch is not ported.
-      expect(lead!.leadSource?.code).toBe('WCO7l');
+      expect(lead!.leadSourceId?.toString()).toBe(seed.leadSourceIds.mailer);
       // The LONG form: it is searchable by either, and the short form is only
       // 48 bits of a truncated UUID.
       expect(lead!.quoteControlNumber).toBe(LONG);

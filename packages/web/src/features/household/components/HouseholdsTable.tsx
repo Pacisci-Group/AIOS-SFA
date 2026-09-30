@@ -10,6 +10,7 @@ import {
   householdStatusClass,
   matchLabel,
 } from "./household-filters";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** Household · Status · Policies · Contact · Location · Updated · chevron */
 const GRID_COLS = "1.9fr 100px 90px 1.5fr 1fr 90px 24px";
@@ -136,13 +137,13 @@ export function HouseholdsTable({
                     {formatPhone(household.primaryPhone)}
                   </span>
                   <span className="block truncate text-xs">
-                    {household.primaryEmail ?? "—"}
+                    {household.primaryEmail ?? NOT_AVAILABLE}
                   </span>
                 </span>
 
                 <span className="text-sm text-muted-foreground truncate">
                   {[household.city, household.state].filter(Boolean).join(", ") ||
-                    "—"}
+                    NOT_AVAILABLE}
                 </span>
 
                 <span className="text-sm text-muted-foreground tabular-nums">

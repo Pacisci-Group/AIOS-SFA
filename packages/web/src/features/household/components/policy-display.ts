@@ -9,7 +9,12 @@ import {
 } from "lucide-react";
 import type { PolicySummary } from "@sfa/shared";
 import { normalizePolicyStatus } from "@sfa/shared";
-import { premiumTermSuffix } from "@sfa/shared";
+import {
+  policyTermMonths,
+  premiumTermSuffix,
+  termExpirationDate,
+} from "@sfa/shared";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * The shape the policy cards render. Kept separate from the API's
@@ -24,9 +29,47 @@ export interface DisplayPolicy {
   premiumFreq: string;
   /** Numeric premium, for totals. */
   premiumValue: number;
-  status: "Active" | "Pending" | "Lapsed";
+  status: "Active" | "Pending" | "Cancelled" | "Lapsed";
   effective: string;
+  /**
+   * The last day the current term covers — **derived**, one day before the
+   * renewal (PAC-126).
+   *
+   * The stored `expirationDate` is blank on most migrated policies, which is
+   * literally the em dash David was looking at, and where it *is* set it
+   * describes whichever term was current when the import ran rather than the
+   * one the household is in now. Counting back from the maintained renewal
+   * anchor answers the question the card is actually asking: when does this
+   * coverage run out if nobody renews it.
+   *
+   * Falls back to the stored value only when there is no anchor to count from,
+   * and to `NOT_AVAILABLE` when there is neither.
+   */
   expiration: string;
+  /**
+   * When the current term runs out — the date the card leads with (PAC-126).
+   *
+   * `renewalDate` first, `expirationDate` only as a fallback. The anchor is
+   * derived from the effective date and maintained on every write and by the
+   * renewal scan's roll-forward, so it is the one that is actually populated and
+   * actually in the future; the stored expiration is blank on most migrated
+   * policies, which is the whole complaint this ticket came from. `NOT_AVAILABLE` when
+   * neither exists, which is genuinely unknown rather than merely underived.
+   */
+  renewal: string;
+  /**
+   * How long one term runs — "6 months" for the auto family, "12 months"
+   * otherwise.
+   *
+   * On the card because without it the dates read as a contradiction. An auto
+   * policy effective 2025-09-15 shows a renewal of 2026-09-15: correct, because
+   * the 2026-03-15 renewal has already gone by and this is the *next* one — but
+   * a 12-month gap beside a 6-month policy looks like the term is simply wrong,
+   * and that is exactly how it was read in review. The effective date is
+   * inception, not the start of the current term, and nothing on the card said
+   * so.
+   */
+  term: string;
   icon: LucideIcon;
   /** Foreground class for {@link DisplayPolicy.icon}. */
   iconTone: string;
@@ -48,6 +91,10 @@ export interface DisplayPolicy {
 export const statusColors: Record<DisplayPolicy["status"], string> = {
   Active: "bg-success/12 text-success",
   Pending: "bg-amber-500/15 text-amber-700 dark:text-amber-500",
+  // Cancelled and Lapsed share a treatment on purpose: both mean the policy is
+  // off the books, which is the thing the pill's colour is there to say. The
+  // word carries the difference between them.
+  Cancelled: "bg-red-500/12 text-red-600 dark:text-red-400",
   Lapsed: "bg-red-500/12 text-red-600 dark:text-red-400",
 };
 
@@ -91,7 +138,7 @@ const DEFAULT_STYLE = {
 
 /**
  * Normalize the free-text `policyStatus` from the migrated records into the
- * three buckets the cards can render. Unknown values fall back to the policy's
+ * four buckets the cards can render. Unknown values fall back to the policy's
  * `active` flag.
  *
  * Runs `normalizePolicyStatus` first (PAC-80): the substring tests below were
@@ -99,17 +146,33 @@ const DEFAULT_STYLE = {
  * every one of them fell straight through to the `active` flag. `Quoted` still
  * falls through, deliberately — the cards have no bucket for it and the flag is
  * the better answer than inventing one.
+ *
+ * **Cancelled is its own bucket, and the ordering of the tests is what puts
+ * things in it.** There used to be three buckets, so `'Cancelled'`,
+ * `'Cancel Rewrite'` and `'Company Transfer'` all reached a CSR as *Lapsed* —
+ * the first two on the `cancel` substring, the third by falling through to the
+ * `active` flag. That is the wrong word for all three: a lapse is the client
+ * letting coverage drop, while these are cancellations, and the two flow-only
+ * statuses are cancellations *with a replacement policy behind them* (see
+ * `FLOW_ONLY_POLICY_STATUSES` — neither can exist without one). Calling a
+ * rewrite or a carrier transfer a lapse reads as lost business on a household
+ * that never left. The `transfer` test is what catches `'Company Transfer'`,
+ * and it has to sit above the `active`-flag fallback rather than beside it.
  */
 function toCardStatus(policy: PolicySummary): DisplayPolicy["status"] {
   const raw = normalizePolicyStatus(policy.policyStatus).toLowerCase();
   if (raw.includes("pending")) return "Pending";
-  if (raw.includes("laps") || raw.includes("cancel")) return "Lapsed";
+  if (raw.includes("cancel") || raw.includes("transfer")) return "Cancelled";
+  if (raw.includes("laps")) return "Lapsed";
   if (raw.includes("active")) return "Active";
+  // An inactive policy whose status nobody catalogued: it is off the books, but
+  // nothing says *how*, so it keeps the weaker claim rather than being called a
+  // cancellation on no evidence.
   return policy.active ? "Active" : "Lapsed";
 }
 
 function formatDate(iso: string | null) {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   return new Date(iso).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -122,7 +185,7 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
   return {
     id: policy.id,
     line: policy.policyType ?? "Policy",
-    policyNumber: policy.policyNumber ?? "—",
+    policyNumber: policy.policyNumber ?? NOT_AVAILABLE,
     premium: `$${policy.premium.toLocaleString()}`,
     // Auto is quoted on a 6-month term (2026-08-19 scrum), so the unit follows
     // the policy type rather than being hard-coded annual.
@@ -130,8 +193,18 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
     premiumValue: policy.premium,
     status: toCardStatus(policy),
     effective: formatDate(policy.effectiveDate),
-    expiration: formatDate(policy.expirationDate),
-    carrier: policy.carrier ?? "—",
+    // Derived from the anchor, so it tracks the term the household is in now;
+    // the stored date is the fallback for a policy with no anchor at all.
+    expiration: formatDate(
+      termExpirationDate(policy.renewalDate)?.toISOString() ??
+        policy.expirationDate,
+    ),
+    renewal: formatDate(policy.renewalDate ?? policy.expirationDate),
+    // `policyTermMonths` is the same authority the renewal derivation and the
+    // `/6 mo` premium suffix both use, so the card cannot describe a term the
+    // scheduler does not keep.
+    term: `${policyTermMonths(policy.policyType)} months`,
+    carrier: policy.carrier ?? NOT_AVAILABLE,
     deductible: undefined,
     ...style,
   };

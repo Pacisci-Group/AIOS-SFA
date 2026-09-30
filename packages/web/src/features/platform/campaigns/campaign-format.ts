@@ -2,6 +2,7 @@ import type {
   MailerCampaignAssignment,
   MailerCampaignStatus,
 } from "@sfa/shared";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
  * Display helpers shared by the campaigns list, the run wizard and the detail
@@ -53,12 +54,12 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatCount(value: number | null | undefined): string {
-  return value == null ? "—" : value.toLocaleString();
+  return value == null ? NOT_AVAILABLE : value.toLocaleString();
 }
 
 /** Money as the offer is written: two decimals, thousands separated. */
 export function formatMoney(value: number | null | undefined): string {
-  if (value == null) return "—";
+  if (value == null) return NOT_AVAILABLE;
   return value.toLocaleString(undefined, {
     style: "currency",
     currency: "USD",
@@ -74,21 +75,21 @@ export function formatMoney(value: number | null | undefined): string {
  * movement between two runs is a fraction of a point.
  */
 export function formatRate(value: number | null | undefined): string {
-  if (value == null) return "—";
+  if (value == null) return NOT_AVAILABLE;
   return `${(value * 100).toFixed(1)}%`;
 }
 
 /** An ISO date (or datetime) as a plain local date. Never a time. */
 export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString();
+  return Number.isNaN(date.getTime()) ? NOT_AVAILABLE : date.toLocaleDateString();
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return NOT_AVAILABLE;
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? NOT_AVAILABLE : date.toLocaleString();
 }
 
 /**
@@ -108,7 +109,7 @@ export function describeAudience(names: string[] | null): string {
 export function formatCampaignNumber(
   campaignNumber: string | null | undefined,
 ): string {
-  if (!campaignNumber) return "—";
+  if (!campaignNumber) return NOT_AVAILABLE;
   const match = /^Week_Number-(\d+)$/i.exec(campaignNumber);
   return match ? `Week ${Number(match[1])}` : campaignNumber;
 }

@@ -13,6 +13,17 @@ export interface ScopeFilterOptions {
   producerId?: string;
 
   /**
+   * Narrow to **several** producers — the Owner dashboard's multi-select
+   * (PAC-135). Same rule as {@link producerId}: applied within the caller's
+   * clamp, ignored outright under `own` scope. Malformed ids are dropped; if
+   * none survive, the filter matches nothing rather than silently widening back
+   * to everyone. Scalar producer refs only — not {@link ownerField}.
+   *
+   * `producerId` wins when both are given.
+   */
+  producerIds?: readonly string[];
+
+  /**
    * The owning-user field on the collection. Defaults to `producerId`; every
    * collection this serves today uses that name.
    */
@@ -99,6 +110,7 @@ export function buildScopeFilter<T>(
   const {
     requestedScope,
     producerId,
+    producerIds,
     producerField = 'producerId',
     ownerField,
     excludeTestRecords = true,
@@ -164,6 +176,15 @@ export function buildScopeFilter<T>(
     // Kept alongside the branch clamp above, so a branch-scoped caller cannot
     // reach a producer outside their branch.
     pinToUser(filter, producerId);
+  } else if (producerIds?.length && !ownerField) {
+    // Alongside the branch clamp, exactly like `producerId`. An all-malformed
+    // list becomes `$in: []`, which matches nothing: a selection the caller made
+    // must never read as "no selection".
+    filter[producerField] = {
+      $in: producerIds
+        .filter((id) => Types.ObjectId.isValid(id))
+        .map((id) => new Types.ObjectId(id)),
+    };
   }
 
   return filter;

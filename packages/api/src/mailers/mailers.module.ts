@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
 import { InngestModule } from '../inngest/inngest.module';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
+import { LeadSourcesModule } from '../lead-sources/lead-sources.module';
 import { LeadsModule } from '../leads/leads.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
@@ -72,6 +73,8 @@ import {
     ]),
     InngestModule,
     LeadsModule,
+    // Finds the "Mailer" source by slug for every lead logged here (PAC-135).
+    LeadSourcesModule,
   ],
   controllers: [
     MailersController,

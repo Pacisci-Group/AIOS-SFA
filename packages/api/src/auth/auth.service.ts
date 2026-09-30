@@ -12,7 +12,12 @@ import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { Model } from 'mongoose';
-import { AccessContext, AgencyPermission, JwtPayload } from '@sfa/shared';
+import {
+  AccessContext,
+  AgencyPermission,
+  DEFAULT_USER_AVAILABILITY,
+  JwtPayload,
+} from '@sfa/shared';
 import { hashResetToken } from '../common/crypto/reset-token';
 import {
   HostTenantResolver,
@@ -436,6 +441,12 @@ export class AuthService {
       avatarUrl: user.avatarKey
         ? `/me/avatar?v=${createHash('sha1').update(user.avatarKey).digest('hex').slice(0, 8)}`
         : null,
+      /**
+       * Taking leads or not (PAC-139 §6). The schema default covers a row
+       * created before the field existed, but this blob is the contract the
+       * sidebar renders from, so it is pinned here rather than trusted.
+       */
+      availability: user.availability ?? DEFAULT_USER_AVAILABILITY,
       roles,
       agencyId: access.agencyId,
       branchId: access.branchId,

@@ -4,6 +4,7 @@ import { FormGrid, FormSection } from "@/components/form";
 import { statusBadgeClass } from "@/features/lead/components/lead-display";
 import { formatAddress } from "@/lib/format-address";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface LeadContextHeaderProps {
   context: QuoteRecapLeadContext;
@@ -44,11 +45,11 @@ export function LeadContextHeader({ context }: LeadContextHeaderProps) {
     >
       <FormGrid>
         <Field label="Primary contact" value={context.primaryContactName} />
-        <Field label="Household" value={context.householdName ?? "—"} />
+        <Field label="Household" value={context.householdName ?? NOT_AVAILABLE} />
         <div className="sm:col-span-2">
           <Field
             label="Household address"
-            value={formatAddress(context.householdAddress) ?? "—"}
+            value={formatAddress(context.householdAddress) ?? NOT_AVAILABLE}
           />
         </div>
       </FormGrid>

@@ -9,9 +9,12 @@ import {
   DataScope,
   carrierPolicyNumberMatches,
   carrierSlug,
+  isFlowOnlyPolicyStatus,
   nextRenewalDate,
   normalizeCarrier,
+  normalizePolicyStatus,
   normalizePolicyType,
+  policyActiveForStatus,
   policyTypeQueryValues,
   resolveItemCount,
 } from '@sfa/shared';
@@ -35,6 +38,7 @@ import {
   snapshot,
 } from '../activities/change-log';
 import { CarriersService } from '../carriers/carriers.service';
+import { clientScopeFilter } from '../clients/client-scope';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { loadPrimaryContacts } from '../households/primary-contact';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
@@ -126,9 +130,13 @@ const POLICY_CHANGE_FIELDS: ChangeFieldSpec<PolicyDocument>[] = [
     field: 'policyStatus',
     label: 'Status',
     kind: 'text',
-    // Free text — the platform has no canonical policy-status vocabulary, so
-    // there is nothing to normalize against, only length to bound.
-    read: (policy) => changeText(policy.policyStatus),
+    // Normalized like every other code-backed field above. The comment here used
+    // to say there was no vocabulary to normalize against; PAC-80 built one and
+    // this outlived it, so a migrated policy's `QsrnM` was snapshotted raw and
+    // preserved in the log for good — the one read path that never gets a second
+    // chance to normalize. `changeText` maps the empty string back to null, so an
+    // absent status still reads as absent.
+    read: (policy) => changeText(normalizePolicyStatus(policy.policyStatus)),
   },
 ];
 
@@ -266,6 +274,41 @@ export class PoliciesService {
       policyId,
     );
 
+    await this.applyUpdate(access, policy, dto, leadId);
+    return toLeadDetailPolicy(policy);
+  }
+
+  /**
+   * The correction itself, with **no scope check of its own** — the caller has
+   * already decided this policy is theirs to write.
+   *
+   * Split out of {@link update} for PAC-126, which added a second way in:
+   * `PATCH /households/:id/policies/:policyId`, where the service team corrects
+   * a policy from the household page. The two differ only in how they *find* the
+   * policy — ownership off the deal's producer here, membership of a household
+   * there — and agree on everything that happens once they have it.
+   *
+   * That agreement is the reason this is one method rather than two. A second
+   * copy would drift on the parts that are easy to forget and invisible when
+   * missing: the renewal re-derivation below, the item-count normalization, the
+   * `policyNumberKey` that keeps the duplicate check working, and the edit-log
+   * snapshot — which has to be taken *before* the assignments and written
+   * *after* the save.
+   *
+   * ⚠ Mutates and saves `policy` in place; callers render from the same document.
+   *
+   * `leadId` is the edit log's link to the Lead Detail timeline. Pass it when
+   * the deal is already in hand — {@link update} loads it for the scope check
+   * anyway — and **omit it** otherwise: `undefined` means "resolve it", whereas
+   * `null` asserts there is no lead and skips the read. A household-side caller
+   * has no reason to have touched the deal, so it omits.
+   */
+  async applyUpdate(
+    access: AccessContext,
+    policy: PolicyDocument,
+    dto: UpdatePolicyDto,
+    leadId?: Types.ObjectId | null,
+  ): Promise<PolicyDocument> {
     // Before the assignment block below overwrites the stored values.
     const before = snapshot(POLICY_CHANGE_FIELDS, policy);
 
@@ -333,12 +376,68 @@ export class PoliciesService {
         undefined;
     }
 
-    if (dto.status !== undefined) policy.policyStatus = dto.status ?? undefined;
+    /*
+     * Status, and the `active` flag that has to move with it (PAC-126).
+     *
+     * Two rules, both new:
+     *
+     * 1. **`Cancel Rewrite` and `Company Transfer` are refused here.** Neither
+     *    is a status an operator can simply choose: each means "replaced by
+     *    *that* policy", and the replacement is written by the flow that sets
+     *    it. Allowing it on a field patch would produce a cancelled policy
+     *    pointing at nothing — and, for a rewrite, no chargeback. The way in
+     *    is the replacement chain: a lead stamped with `replacementIntent`,
+     *    then `POST /sold-deals` on it (PAC-126).
+     *
+     * 2. **A terminal status deactivates the policy, and `Active` reinstates
+     *    it.** `Policy.active` is what every count, total and renewal scan
+     *    actually reads, and this path used to set only the label — so a policy
+     *    could read "Cancelled" while still inflating the household's active
+     *    total and being scheduled for renewal calls. `policyActiveForStatus`
+     *    returns null for the statuses that genuinely do not decide the flag
+     *    (`Quoted`, `Pending`, any uncatalogued migrated code), which is why
+     *    this is a null check and not a boolean.
+     */
+    if (dto.status !== undefined) {
+      if (isFlowOnlyPolicyStatus(dto.status)) {
+        throw new BadRequestException(
+          `"${normalizePolicyStatus(dto.status)}" is set by cancelling and rewriting the policy, not by editing its status.`,
+        );
+      }
+      policy.policyStatus = dto.status ?? undefined;
+
+      const active = policyActiveForStatus(dto.status);
+      if (active !== null) policy.active = active;
+    }
 
     await policy.save();
     await this.recomputeDealTotals(policy);
-    await this.recordFieldChanges(access, policy, leadId, before);
-    return toLeadDetailPolicy(policy);
+    await this.recordFieldChanges(
+      access,
+      policy,
+      leadId === undefined ? await this.leadIdForPolicy(policy) : leadId,
+      before,
+    );
+    return policy;
+  }
+
+  /**
+   * The deal's lead, or `null` — for a caller that did not have to load the deal.
+   *
+   * Three real cases return `null` and none is an error: a policy with no deal
+   * (migrated, or household-only), a deal imported before the migration resolved
+   * its refs, and a CRM policy transfer. {@link recordFieldChanges} explains why
+   * the log row is still written without it.
+   */
+  async leadIdForPolicy(
+    policy: PolicyDocument,
+  ): Promise<Types.ObjectId | null> {
+    if (!policy.dealId) return null;
+    const deal = await this.dealModel
+      .findById(policy.dealId)
+      .select('leadId')
+      .lean<{ leadId?: Types.ObjectId }>();
+    return deal?.leadId ?? null;
   }
 
   /**
@@ -518,8 +617,13 @@ export class PoliciesService {
    *
    * Returns the deal's `leadId` alongside the policy — `null` when the policy
    * has no deal, or the deal no lead. See {@link recordFieldChanges}.
+   *
+   * **This is the *sales-record* clamp.** A replacement (Cancel Rewrite,
+   * Company Transfer) and the policy history read are household actions and
+   * use {@link loadHouseholdPolicy} instead — see there for why the `own` rule
+   * above is the wrong one for them.
    */
-  private async loadOwnedPolicy(
+  async loadOwnedPolicy(
     access: AccessContext,
     branchId: string | null,
     policyId: string,
@@ -549,6 +653,39 @@ export class PoliciesService {
     // #9) needs it, this is the only read of the deal on the path, and it is
     // already loaded for the scope check.
     return { policy, leadId: deal?.leadId ?? null };
+  }
+
+  /**
+   * Load a policy as a **household record**, clamped to the caller's client
+   * scope — the rule `PATCH /households/:id/policies/:policyId` uses.
+   *
+   * {@link loadOwnedPolicy} resolves `own` scope through the policy's deal,
+   * which is right for a producer correcting their own sale and wrong for a
+   * replacement: a migrated policy has no deal, so under `own` scope every one
+   * of them is a 404 — and the household card was offering Cancel & rewrite on
+   * exactly those, to a Producer who then got "Policy not found" on the click
+   * while the Edit button beside it worked. A replacement is an action on the
+   * household's book, not on somebody's sale, so it takes the household rule:
+   * `own` collapses to branch, because client records are shared and have no
+   * assigned user to key on (`clientScopeFilter`).
+   *
+   * The sale that *finishes* the chain is still `own`-scoped — it is anchored
+   * on a lead the caller created, and `POST /sold-deals` clamps on that.
+   */
+  async loadHouseholdPolicy(
+    access: AccessContext,
+    policyId: string,
+  ): Promise<PolicyDocument> {
+    if (!Types.ObjectId.isValid(policyId)) {
+      throw new NotFoundException('Policy not found.');
+    }
+    const policy = await this.policyModel.findOne({
+      ...clientScopeFilter(access),
+      _id: new Types.ObjectId(policyId),
+      isTestRecord: { $ne: true },
+    });
+    if (!policy) throw new NotFoundException('Policy not found.');
+    return policy;
   }
 
   /**

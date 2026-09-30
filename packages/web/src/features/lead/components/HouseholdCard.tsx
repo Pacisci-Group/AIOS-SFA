@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { formatCurrency, formatDate, initials } from "./lead-display";
 import { PolicyRow } from "./PolicyRow";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface HouseholdCardProps {
   household: LeadDetailHousehold | null;
@@ -95,7 +96,7 @@ export function HouseholdCard({ household }: HouseholdCardProps) {
                         : null,
                     ]
                       .filter(Boolean)
-                      .join(" · ") || "—"}
+                      .join(" · ") || NOT_AVAILABLE}
                   </p>
                 </div>
               </li>

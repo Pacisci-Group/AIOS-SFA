@@ -78,10 +78,41 @@ export class LeadAssignmentService {
     }
 
     const previousName = await this.displayName(previousId);
+    const movedAt = new Date();
 
+    /*
+     * Compare-and-swap on the owner we read, rather than `lead.save()`.
+     *
+     * The Command Center's unclaimed pool (PAC-138) put two managers in front
+     * of the same unowned lead for the first time. A read-modify-save lets both
+     * succeed: each reads `producerId: null`, each writes its own target, and
+     * the second silently overwrites the first — two people are told the lead
+     * is theirs, one timeline says it moved twice, and nothing says a race
+     * happened. Guarding the update on the previous owner makes "the owner I
+     * saw is the owner I am replacing" a database invariant.
+     *
+     * Same technique as `CrmAssignmentService`'s conditional claim and
+     * `LeadIntakeService.assignProducer`; the guard differs only in that
+     * reassignment is legal here, so it pins the *expected* owner rather than
+     * requiring none. `$in: [null, undefined]` for an unowned lead, because
+     * intake writes both shapes.
+     */
+    const claim = await this.leadModel.updateOne(
+      {
+        _id: lead._id,
+        producerId: previousId ?? { $in: [null, undefined] },
+      },
+      { $set: { producerId: next._id, lastActivityAt: movedAt } },
+    );
+
+    if (claim.modifiedCount === 0) {
+      return this.reportLostRace(lead._id);
+    }
+
+    // The write has landed; bring the in-memory document in step so the
+    // activity entry and the result read the values that were stored.
     lead.producerId = next._id;
-    lead.lastActivityAt = new Date();
-    await lead.save();
+    lead.lastActivityAt = movedAt;
 
     await this.recordActivity(
       access,
@@ -91,6 +122,30 @@ export class LeadAssignmentService {
     );
 
     return this.result(lead, next);
+  }
+
+  /**
+   * Somebody else moved this lead between our read and our write.
+   *
+   * A 409 naming the winner, deliberately — **not** the winner's result with a
+   * 200. Returning success would tell a manager who picked Alice that the lead
+   * is now Bob's while their own action did nothing, which reads as a bug in
+   * the picker. `CrmAssignmentService` adopts the winner instead because it is
+   * a background rotation with nobody watching; here a person is waiting for an
+   * answer, and the honest answer is that their click lost.
+   */
+  private async reportLostRace(leadId: Types.ObjectId): Promise<never> {
+    const current = await this.leadModel
+      .findById(leadId)
+      .select('producerId')
+      .lean<{ producerId?: Types.ObjectId | null }>();
+
+    const winner = await this.displayName(current?.producerId ?? null);
+    throw new ConflictException(
+      winner
+        ? `This lead was just assigned to ${winner}. Refresh to see where it went.`
+        : 'This lead was just changed by someone else. Refresh and try again.',
+    );
   }
 
   /**

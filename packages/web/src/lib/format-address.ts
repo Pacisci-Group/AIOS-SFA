@@ -14,7 +14,7 @@ export type AddressLike = Partial<Record<AddressField, string>>;
  * `4821 Maple Grove Dr, Austin TX 78745`, skipping whatever is missing.
  *
  * Returns **`null`** rather than an em-dash when there is nothing to show, so a
- * caller can choose between rendering a placeholder (`?? "—"`) and omitting the
+ * caller can choose between rendering a placeholder (`?? "N/A"`) and omitting the
  * row entirely — the per-policy address lists do the latter, since a permanent
  * dash beside a non-property policy reads as missing data rather than as a
  * question that was never asked.

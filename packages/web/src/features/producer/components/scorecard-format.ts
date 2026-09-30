@@ -1,3 +1,4 @@
+import { NOT_AVAILABLE } from "@/lib/not-available";
 /**
  * Formatting for the scorecards (PAC-10 / PAC-11).
  *
@@ -18,14 +19,14 @@ export function formatCurrency(value: number): string {
   return CURRENCY.format(value);
 }
 
-/** `$1,328`, or `—` when there is nothing to average. */
+/** `$1,328`, or `N/A` when there is nothing to average. */
 export function formatCurrencyOrDash(value: number | null): string {
-  return value === null ? '—' : CURRENCY.format(value);
+  return value === null ? NOT_AVAILABLE : CURRENCY.format(value);
 }
 
-/** `2.1`, or `—`. One decimal, matching the mockup's items-per-household. */
+/** `2.1`, or `N/A`. One decimal, matching the mockup's items-per-household. */
 export function formatDecimalOrDash(value: number | null): string {
-  return value === null ? '—' : value.toFixed(1);
+  return value === null ? NOT_AVAILABLE : value.toFixed(1);
 }
 
 /** `1 Item` / `12 Items`. */

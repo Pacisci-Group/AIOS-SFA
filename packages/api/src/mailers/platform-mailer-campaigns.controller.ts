@@ -21,6 +21,7 @@ import { CurrentUser } from '../common/decorators/user.decorators';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
+  addCampaignFilesSchema,
   campaignRecordsSchema,
   commitCampaignSchema,
   createCampaignSchema,
@@ -28,6 +29,7 @@ import {
   listCampaignsSchema,
   presignCampaignFileSchema,
   updateCampaignSchema,
+  type AddCampaignFilesDto,
   type CampaignRecordsDto,
   type CommitCampaignDto,
   type CreateCampaignDto,
@@ -61,7 +63,10 @@ import { MailerCampaignsService } from './mailer-campaigns.service';
  * `presign` → the browser `PUT`s the bytes straight to object storage →
  * `POST /platform/mailer-campaigns`. The file never passes through the API,
  * which is why there is no multer or `FileInterceptor` anywhere in this
- * codebase and why none should be introduced.
+ * codebase and why none should be introduced. A campaign takes **several**
+ * files (PAC-142): presign and PUT each, then send the keys together — or add
+ * more later with `POST …/:id/files`, which is also how an imported campaign is
+ * re-opened to take the records it missed.
  *
  * ## ⚠ Route order is load-bearing
  *
@@ -164,7 +169,40 @@ export class PlatformMailerCampaignsController {
   }
 
   /**
-   * Mint a download link for one of the campaign's two files.
+   * Add files — before a commit, or to re-open an imported campaign (PAC-142).
+   *
+   * 200, not 201: the campaign already exists and this starts work on it (a
+   * fresh preview over every file); the response is that record with a new
+   * status. Same reasoning as `preview`.
+   */
+  @Post(':campaignId/files')
+  @HttpCode(200)
+  @RequirePermissions(PlatformPermission.MailersWrite)
+  addFiles(
+    @Param('campaignId') campaignId: string,
+    @Body(new ZodValidationPipe(addCampaignFilesSchema))
+    body: AddCampaignFilesDto,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.service.addFiles(campaignId, body, user.sub);
+  }
+
+  /** Remove a file that has not been committed yet, and re-preview. */
+  @Delete(':campaignId/files/:fileId')
+  @RequirePermissions(PlatformPermission.MailersWrite)
+  removeFile(
+    @Param('campaignId') campaignId: string,
+    @Param('fileId') fileId: string,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.service.removeFile(campaignId, fileId, user.sub);
+  }
+
+  /**
+   * Mint a download link for one of the campaign's files.
+   *
+   * `:kind` is `output` (the full print CSV), `new-rows` (the rows the last
+   * commit created, after Add records), or a vendor file's `id`.
    *
    * A `GET` that returns a URL rather than a redirect, so the client can decide
    * how to present the download and so the link is not followed by anything
@@ -176,10 +214,7 @@ export class PlatformMailerCampaignsController {
     @Param('campaignId') campaignId: string,
     @Param('kind') kind: string,
   ) {
-    return this.service.fileUrl(
-      campaignId,
-      kind === 'output' ? 'output' : 'vendor',
-    );
+    return this.service.fileUrl(campaignId, kind);
   }
 
   @Post(':campaignId/email')

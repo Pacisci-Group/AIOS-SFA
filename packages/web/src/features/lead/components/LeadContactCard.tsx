@@ -16,6 +16,7 @@ import { DetailCard, SectionLabel } from "@/components/common/DetailCard";
 import { EditContactDialog } from "./EditContactDialog";
 import { LeadSourceSelect } from "./lead-inline-selects";
 import { formatAddress, formatDate } from "./lead-display";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface LeadContactCardProps {
   lead: LeadDetail;
@@ -107,7 +108,7 @@ export function LeadContactCard({
         <Field
           icon={Mail}
           label="Email"
-          value={contact?.email ?? "—"}
+          value={contact?.email ?? NOT_AVAILABLE}
         />
         <Field
           icon={Phone}
@@ -123,7 +124,7 @@ export function LeadContactCard({
         )}
         {/*
           * Omitted rather than shown empty — every migrated lead and every one
-          * submitted before PAC-56 #2 has none, and a permanent "—" would read
+          * submitted before PAC-56 #2 has none, and a permanent "N/A" would read
           * as "they wanted nothing" instead of "we never asked".
           */}
         {lead.policiesOfInterest.length > 0 && (

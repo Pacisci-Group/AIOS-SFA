@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import type { PerformanceRangeKey } from '@sfa/shared';
 import { useUrlState } from '@/hooks/useUrlState';
+import { parseUrlRange, toUrlRange } from '@/lib/date-range';
 import { DEFAULT_RANGE_KEY, RANGE_KEYS } from './dashboard-range';
 
 export interface DashboardRange {
@@ -9,8 +10,6 @@ export interface DashboardRange {
   from?: string;
   to?: string;
 }
-
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Frozen so `useUrlState`'s memo dependencies stay stable across renders. */
 const DEFAULTS = {
@@ -46,30 +45,13 @@ export function useDashboardRange(): {
     allowed: ALLOWED,
   });
 
-  const range = useMemo<DashboardRange>(() => {
-    const key = values.range as PerformanceRangeKey;
-    if (key !== 'custom') return { key };
-
-    const usable =
-      ISO_DATE.test(values.from) &&
-      ISO_DATE.test(values.to) &&
-      values.from <= values.to;
-
-    return usable
-      ? { key: 'custom', from: values.from, to: values.to }
-      : { key: DEFAULT_RANGE_KEY };
-  }, [values.range, values.from, values.to]);
+  const range = useMemo<DashboardRange>(
+    () => parseUrlRange(values, DEFAULT_RANGE_KEY),
+    [values],
+  );
 
   const setRange = useCallback(
-    (next: DashboardRange) => {
-      setValues({
-        range: next.key,
-        // Cleared when leaving custom, so switching to a preset and reloading
-        // cannot resurrect a window the user moved off.
-        from: next.key === 'custom' ? (next.from ?? '') : '',
-        to: next.key === 'custom' ? (next.to ?? '') : '',
-      });
-    },
+    (next: DashboardRange) => setValues(toUrlRange(next)),
     [setValues],
   );
 

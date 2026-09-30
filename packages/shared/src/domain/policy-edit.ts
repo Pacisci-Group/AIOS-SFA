@@ -46,12 +46,18 @@ export interface UpdatePolicyInput {
   effectiveDate?: string | null;
   expirationDate?: string | null;
   /**
-   * Free text, not a vocabulary.
+   * One of `POLICY_STATUSES`, healed on the way in.
    *
-   * There is no canonical policy-status list anywhere in the platform: migrated
-   * policies carry raw SmartSuite values and nothing has ever written one from
-   * the app. Constraining it here would reject the values already in the
-   * collection.
+   * Was free text, on the argument that no canonical list existed anywhere in
+   * the platform. PAC-80 built one and this note outlived it; PAC-126 closed the
+   * gap, because David asked for staff to *select* a status and a select whose
+   * endpoint accepts anything is how a book grows a sixth spelling of
+   * "Cancelled".
+   *
+   * The server normalizes before validating, so a label in any casing and a raw
+   * SmartSuite code both land as the canonical label. An uncatalogued code is
+   * rejected rather than stored again — send `status` only when the operator
+   * actually picked one.
    */
   status?: string | null;
 }

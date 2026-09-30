@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PlatformUserRow } from "@/lib/platform-users-api";
 import { cn } from "@/lib/utils";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /** User · Agency · Branch · Roles · Status · Action */
 const GRID_COLS = "1.6fr 1.1fr 0.9fr 1.3fr 96px 128px";
@@ -92,7 +93,7 @@ export function PlatformUsersTable({
 
                   <div className="min-w-0">
                     <p className="truncate text-sm text-foreground">
-                      {user.agency?.name ?? "—"}
+                      {user.agency?.name ?? NOT_AVAILABLE}
                     </p>
                     {user.agency && (
                       <p className="truncate text-xs text-muted-foreground">
@@ -102,12 +103,12 @@ export function PlatformUsersTable({
                   </div>
 
                   <span className="truncate text-sm text-muted-foreground">
-                    {user.branch?.name ?? "—"}
+                    {user.branch?.name ?? NOT_AVAILABLE}
                   </span>
 
                   <div className="flex flex-wrap gap-1">
                     {user.roles.length === 0 ? (
-                      <span className="text-sm text-muted-foreground">—</span>
+                      <span className="text-sm text-muted-foreground">{NOT_AVAILABLE}</span>
                     ) : (
                       user.roles.map((role) => (
                         <Badge key={role.slug} size="sm" variant="secondary">

@@ -1,3 +1,4 @@
+import type { UserAvailability } from '@sfa/shared';
 import {
   apiFetch,
   setStoredUser,
@@ -32,6 +33,22 @@ export async function updateMyProfile(input: {
   const user = await apiFetch<AuthUser>('/me/profile', {
     method: 'PATCH',
     body: JSON.stringify(input),
+  });
+  setStoredUser(user);
+  return user;
+}
+
+/**
+ * Set own availability — taking leads or not (PAC-139 §6). Same contract as
+ * the other mutations here: the API answers with the auth-user blob and it is
+ * re-stored before returning.
+ */
+export async function updateMyAvailability(
+  availability: UserAvailability,
+): Promise<AuthUser> {
+  const user = await apiFetch<AuthUser>('/me/availability', {
+    method: 'PATCH',
+    body: JSON.stringify({ availability }),
   });
   setStoredUser(user);
   return user;

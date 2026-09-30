@@ -57,7 +57,7 @@ body:json {
         }
       }
     ],
-    "leadSourceCode": "WCO7l",
+    "leadSourceId": "{{mailerLeadSourceId}}",
     "submissionToken": "{{$guid}}"
   }
 }
@@ -113,8 +113,9 @@ docs {
   | policiesOfInterest[].itemCount  | number | yes | integer 1–99 — **stored as sent only for `Auto` / `Auto - Special` / `Motorcycle` / `Boat Owners`; every other type is stored as `1`** (nothing on a Home or Umbrella policy is countable, so the form no longer asks) |
   | policiesOfInterest[].sameAsHousehold | bool | no | defaults `true`; property rows only. When set, `address` is copied onto **this row** |
   | policiesOfInterest[].propertyAddress | object | cond. | required when the row is a property type **and** `sameAsHousehold` is false |
-  | leadSourceCode          | string | yes      | canonical code; `ENEJP` (Test) is rejected   |
+  | leadSourceId            | string | yes      | a row id from `GET /lead-sources`; an archived or foreign id is a 400 |
   | householdId             | string | no       | ObjectId (24 hex); pins the lead to an existing household — see below |
+  | replacementIntent       | object | no       | `{ policyId, reason }` — create this lead to replace a policy. See below |
   | quoteControlNumber      | string | no       | dedupe signal 2                              |
   | submissionToken         | string | no       | 8–200 chars; per-form-session idempotency key |
 
@@ -179,6 +180,31 @@ docs {
   > the household, a second "new" lead for a household that already has an open
   > one at the same address dedupes onto it and returns its id. That is the
   > intended answer — the dialog lists those leads first — not a failure.
+
+  **Replacing a policy (`replacementIntent`).** A Cancel Rewrite and a Company
+  Transfer run through the ordinary Sold pipeline, which is anchored on a lead —
+  so one is created here and stamped with what it is for. `POST /sold-deals`
+  then reads the stamp and applies it: the business type
+  (`company_transfer` for a transfer), the replacement reason, the
+  `fromPolicyId` on the first policy row, and the chargeback on a rewrite.
+
+  - The **policy** is named, not the household: the household is derived from it
+    server-side, so a caller cannot aim a replacement at a book it does not own.
+    A `householdId` sent alongside must agree, or it is a 400.
+  - The replaceable guards run here too (active, unreplaced, has a household),
+    so a policy that changed while the rep was filling in the form fails at this
+    step rather than two forms later.
+  - ⚠ **Address dedupe (signal 3) is skipped** when this is present. A
+    replacement is created against a household that already exists at an address
+    that already exists, so signal 3 would match an unrelated open lead almost
+    every time there is one — and the intent is written on create only, so a
+    deduped lead would come back *without* it and the Sold form would book an
+    ordinary sale that never retires the policy. Duplicate protection for
+    replacements is keyed on the intent instead: see
+    `GET /leads/for-replacement`.
+  - Absent from `POST /public/leads/:token`, like `householdId` and for a
+    stronger version of the same reason: an outside submitter naming a policy
+    would be queueing a cancellation on somebody's coverage.
 
   **Policies of interest (PAC-56 #2).** What the submitter wants quoted — the
   Quote Recap's policy rows **minus premium**, since no quote exists yet. Same

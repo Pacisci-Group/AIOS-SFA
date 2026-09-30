@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { formatPhone } from "@/lib/leads-api";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface Member {
   id: string;
@@ -178,7 +179,7 @@ export function HouseholdProfile({
    * of these values — the household stores no copy of them, so there is no
    * stale name left to fall back past.
    */
-  const contactName = household.primaryContactName ?? "—";
+  const contactName = household.primaryContactName ?? NOT_AVAILABLE;
   const phone = household.primaryPhone;
   const email = household.primaryEmail;
   const members = toMembers(household);
@@ -306,7 +307,7 @@ export function HouseholdProfile({
           <ContactRow
             icon={Mail}
             iconTone="text-success"
-            value={email ?? "—"}
+            value={email ?? NOT_AVAILABLE}
             caption={
               primaryDeceased
                 ? "On file for this record — do not email"
@@ -323,10 +324,10 @@ export function HouseholdProfile({
             />
             <span className="min-w-0">
               <span className="block text-sm font-medium text-foreground">
-                {address?.street || "—"}
+                {address?.street || NOT_AVAILABLE}
               </span>
               <span className="block text-xs text-muted-foreground">
-                {cityLine || "—"}
+                {cityLine || NOT_AVAILABLE}
               </span>
             </span>
           </div>

@@ -1,3 +1,5 @@
+import type { UserAvailability } from '@sfa/shared';
+
 /**
  * `POST /users/invite` and `POST /users/:userId/invite/resend` response.
  *
@@ -50,6 +52,8 @@ export interface AgencyUserListItem {
   firstName?: string;
   lastName?: string;
   isActive: boolean;
+  /** Taking leads or not (PAC-139 §6). Set by the user, never from here. */
+  availability: UserAvailability;
   deactivatedAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
@@ -79,6 +83,13 @@ export interface AgencyUserOption {
   email: string;
   firstName?: string;
   lastName?: string;
+  /**
+   * Taking leads or not (PAC-139 §6). Carried so a lead-assignment picker
+   * (PAC-138) can list only the available people, or grey out the busy ones —
+   * the option list itself is **not** filtered on it, because the pickers that
+   * assign audits, tickets and CRMs are not about leads.
+   */
+  availability: UserAvailability;
 }
 
 /** One page of the agency directory (PAC-101). */

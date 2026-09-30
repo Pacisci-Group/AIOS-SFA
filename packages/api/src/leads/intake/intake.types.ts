@@ -3,7 +3,7 @@ import type {
   IntakeChannel,
   LeadMailerMatchedBy,
   LeadPolicyOfInterestInput,
-  NormalizedLeadSource,
+  PolicyReplacementReason,
 } from '@sfa/shared';
 import { ClientSession, Types } from 'mongoose';
 import type { CreatedRegistry } from '../../common/mongo/transaction.runner';
@@ -33,11 +33,11 @@ export interface IntakeContext {
   /** Provenance — present only for `share_link`. */
   shareLinkId?: Types.ObjectId;
   /**
-   * Already normalised. **Null on the public path**: a share-link lead records
-   * no source, because guessing one would write an assumption down as fact and
-   * nothing afterwards could distinguish it from a real answer.
+   * A validated `leadSources` row. **Null on the public path**: a share-link
+   * lead records no source, because guessing one would write an assumption down
+   * as fact and nothing afterwards could distinguish it from a real answer.
    */
-  leadSource: NormalizedLeadSource | null;
+  leadSourceId: Types.ObjectId | null;
   /** Activity attribution. Null on the public path — there is no actor. */
   actorUserId: Types.ObjectId | null;
 }
@@ -112,6 +112,25 @@ export interface IntakeInput {
    *    same street in a different household is not returned as this one.
    */
   householdId?: string;
+  /**
+   * Stamp this lead as existing to replace a policy (PAC-126).
+   *
+   * **Already validated** by the time it reaches the pipeline: `LeadsService`
+   * resolves the policy through the caller's data scope, checks it is still
+   * replaceable, and derives {@link householdId} from it — so the steps take
+   * this as settled fact and only write it.
+   *
+   * Authenticated path only, like `householdId` and for a stronger version of
+   * the same reason: a share-link submitter naming a policy would be queueing a
+   * cancellation on coverage that is not theirs.
+   */
+  replacementIntent?: IntakeReplacementIntent;
+}
+
+/** The validated intent, as the pipeline receives it. */
+export interface IntakeReplacementIntent {
+  policyId: Types.ObjectId;
+  reason: PolicyReplacementReason;
 }
 
 /** Threaded through every step so they share one session and one registry. */

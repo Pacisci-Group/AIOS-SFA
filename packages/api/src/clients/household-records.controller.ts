@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -17,6 +18,8 @@ import {
 } from '../common/decorators/access.decorators';
 import { Access } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import { updatePolicySchema } from '../policies/dto/update-policy.dto';
+import type { UpdatePolicyDto } from '../policies/dto/update-policy.dto';
 import { ClientsService } from './clients.service';
 import { addHouseholdMemberSchema } from './dto/add-household-member.dto';
 import type { AddHouseholdMemberDto } from './dto/add-household-member.dto';
@@ -158,5 +161,64 @@ export class HouseholdRecordsController {
     @Param('contactId') contactId: string,
   ) {
     return this.clientsService.endHouseholdMembership(access, id, contactId);
+  }
+
+  /**
+   * Correct one of the household's policies — the policy card's edit (PAC-126).
+   *
+   * Nested under the household because the household **is** the authorisation:
+   * it is what puts this record in the service team's remit, what supplies the
+   * data scope, and what the service re-checks the policy against. A bare
+   * `PATCH /policies/:id` already exists for the Sold card and deliberately
+   * answers differently — see `ClientsService.updateHouseholdPolicy` for why one
+   * endpoint cannot serve both, and `PoliciesService.applyUpdate` for the
+   * mutation they share.
+   *
+   * ## The gate is an OR, and `@RequireWrite` could not express it
+   *
+   * Every other write here is `@RequireWrite(ModuleKey.Clients)`, which sets the
+   * AND-set: `clients:write` is required outright. That is exactly wrong for
+   * this one. A **CSR holds no `clients` permission at all** — their template is
+   * `crm_service` plus leads and quote recaps — so requiring `clients:write`
+   * would 403 the service reps David asked for by name, while the class-level
+   * OR-set already lets them read the page they are standing on.
+   *
+   * So: either page's write grants it, matching how the class-level read gate is
+   * already an OR. Managers and CRM reach it through `clients:write`, CSRs
+   * through `crm_service:write`.
+   *
+   * ⚠ Unlike `@RequireWrite`, this **replaces** the class-level OR-set rather
+   * than composing with it — metadata is overridden per key, and both of these
+   * are `REQUIRE_ANY_PERMISSIONS_KEY`. That is still a narrowing, not a hole:
+   * `resolvePermissions` re-adds `{module}:read` for every `{module}:write` it
+   * keeps, so anyone satisfying this gate satisfies the read gate it displaced.
+   *
+   * Producers also hold `clients:write` (PAC-38 gave them contact editing) and
+   * therefore reach this too. Deliberate: every other write on this controller —
+   * add member, name the primary, end a membership — is already open to them
+   * under the same branch-collapsed scope, so this adds no class of access the
+   * household page did not already grant.
+   *
+   * Returns the saved policy as the `PolicySummary` the household page already
+   * renders, `renewalDate` included, so the card swaps the row in place rather
+   * than refetching the whole household for a one-field correction.
+   */
+  @Patch(':id/policies/:policyId')
+  @RequireAnyPermission(
+    modulePermission(ModuleKey.Clients, 'write'),
+    modulePermission(ModuleKey.CrmService, 'write'),
+  )
+  updatePolicy(
+    @Access() access: AccessContext,
+    @Param('id') id: string,
+    @Param('policyId') policyId: string,
+    @Body(new ZodValidationPipe(updatePolicySchema)) body: UpdatePolicyDto,
+  ) {
+    return this.clientsService.updateHouseholdPolicy(
+      access,
+      id,
+      policyId,
+      body,
+    );
   }
 }

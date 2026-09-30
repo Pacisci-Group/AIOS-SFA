@@ -1,0 +1,117 @@
+meta {
+  name: Get Alerts
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/management-dashboard/alerts?range=ytd
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: ytd
+  ~from: 2026-09-01
+  ~to: 2026-09-23
+  ~producerIds:
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto,Home
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+auth:bearer {
+  token: {{managementDashboardToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const body = res.getBody();
+    bru.setVar("managementStalledLeads", body.stalledLeads);
+    bru.setVar("managementAgingAudits", body.agingAudits);
+    bru.setVar("managementOverdueTickets", body.overdueTickets);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes the resolved window", function () {
+    const { period } = res.getBody();
+    expect(period.key).to.equal("ytd");
+    expect(period.current.from).to.match(/^\d{4}-01-01$/);
+  });
+
+  test("three whole-number counts", function () {
+    const body = res.getBody();
+    for (const key of ["stalledLeads", "agingAudits", "overdueTickets"]) {
+      expect(body[key]).to.be.a("number");
+      expect(Number.isInteger(body[key])).to.equal(true);
+      expect(body[key]).to.be.at.least(0);
+    }
+  });
+
+  test("the demo seed guarantees something on every card", function () {
+    // `stalledLeads`, `agingAudits` and `overdueTickets` in `DEMO_CONFIG`
+    // pin fixtures onto the seed so a fresh tenant never shows three zeroes.
+    const body = res.getBody();
+    expect(body.stalledLeads).to.be.at.least(1);
+    expect(body.agingAudits).to.be.at.least(1);
+    expect(body.overdueTickets).to.be.at.least(1);
+  });
+}
+
+docs {
+  # GET /management-dashboard/alerts — the three alert cards (PAC-139)
+
+  The Manager view's top row: **Stalled Leads**, **Aging Audits**, **Overdue
+  Tickets**. Each number is the row count of the matching drawer list below
+  (`List Stalled Leads`, …) under the same query — the count and the list run
+  the same pipeline prefix, so they cannot disagree.
+
+  - **Module:** `management`
+  - **Permission:** `management:read` — Agency Owner (all modules), Branch
+    Manager (since PAC-139), Data Team.
+  - **Scope:** `buildScopeFilter` — an owner sees the agency, a branch manager
+    their branch. The producer multi-select narrows within that, never wider.
+
+  ## Query — the Owner view's filter, from the same filter bar
+  | param | type | default | notes |
+  |---|---|---|---|
+  | `range` | `mtd` · `lastMonth` · `last3Months` · `ytd` · `lastYear` · `custom` | `mtd` | Chicago calendar windows. `today`/`week` are the producer dashboard's and 400 here. |
+  | `from`, `to` | `YYYY-MM-DD` | — | required with `custom`; `to` inclusive; ≤ 366 days |
+  | `producerIds` | id list | — | narrows the three cards (for tickets: the assigned CSR). Never the Team table. |
+  | `leadSourceIds` | id list, `__none__` allowed | — | leads by their own source; deals through their lead; tickets through their lead (most have none) |
+  | `policyTypes` | `POLICY_TYPES` list | — | leads: `policiesOfInterest`; deals: `policyTypes`; tickets: `policyType` |
+
+  Lists accept repeated, comma-separated or single values.
+
+  ## What each card counts
+  | card | definition |
+  |---|---|
+  | `stalledLeads` | leads **created in the window** whose `lastActivityAt` is more than 48 hours ago (or missing), status not terminal (Sold, Converted, Not Qualified, Lost, Closed). Not `updatedAt` — the migration stamped that with the import time on every historic lead. |
+  | `agingAudits` | new-business deals **sold in the window** more than **5 business days** ago (weekends and US federal holidays excluded, Chicago calendar) whose audit is not `Pass`. A deal with no audit row is not aging. |
+  | `overdueTickets` | service tickets **opened in the window** that are overdue right now: a hand-marked `overdue`, or an onboarding/renewal call past its step's `dueAt` and not complete (the Service dashboard's derived meaning). |
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "ytd", "current": { "from": "2026-01-01", "to": "2026-09-23" }, "previous": { "from": "2025-01-01", "to": "2025-09-23" } },
+    "stalledLeads": 6,
+    "agingAudits": 3,
+    "overdueTickets": 3
+  }
+  ```
+
+  ## Errors
+  | status | when |
+  |---|---|
+  | 400 | unknown `range`, a producer-dashboard range, `custom` without both bounds, reversed or impossible dates, > 366 days, malformed ids, a policy type not on the Sold form |
+  | 401 | no / expired token |
+  | 403 | no `management:read` — a producer or CSR |
+}

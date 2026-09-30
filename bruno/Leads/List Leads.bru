@@ -16,7 +16,7 @@ params:query {
   ~search: rodriguez
   ~status: New,Requote
   ~temperature: Hot,Warm
-  ~leadSource: Mailer
+  ~leadSourceId: {{mailerLeadSourceId}}
   ~producerId: {{producerId}}
   ~householdId: {{householdId}}
   ~dateFrom: 2026-01-01
@@ -106,7 +106,7 @@ docs {
   | search      | string  | —       | max 120 chars; interpreted by shape (see below)   |
   | status      | multi   | —       | canonical labels, e.g. `New`, `Requote`; max 10   |
   | temperature | multi   | —       | `Hot` \| `Warm` \| `Cold` \| `Unknown`; max 4     |
-  | leadSource  | string  | —       | canonical label, e.g. `Mailer`                    |
+  | leadSourceId | string | —       | a row id from `GET /lead-sources`, or `__none__` for leads with no source |
   | producerId  | string  | —       | ObjectId; ignored for `own` scope                 |
   | householdId | string  | —       | ObjectId (24 hex); narrows to one household       |
   | dateFrom    | date    | —       | filters `createdDate` (inclusive)                 |
@@ -150,7 +150,7 @@ docs {
   | Field | Note |
   |---|---|
   | `firstName`, `lastName` | a bare surname reaches `lastName: "ANN SMITH"` |
-  | `leadSource.label` | normalized label, never a raw choice code |
+  | lead source **name** | resolved to matching `leadSources` ids first — the lead holds a reference, not the name (PAC-135) |
   | `quoteControlNumber` | |
   | `address.*` | the living address intake writes (street/city/state/zip) |
   | `propertyAddress.*` | the lead-level address only migrated leads carry |
@@ -229,7 +229,7 @@ docs {
   |-------------|----------------|----------------------------------------------------------|
   | id          | string         | record id — the only identifier exposed                  |
   | name        | string         | `first last`, or `"Unknown Lead"` when both are empty    |
-  | leadSource  | string         | normalized label, never a raw choice code                |
+  | leadSource  | string         | the source's name, or `"Unknown"` when none is set      |
   | status      | string         | canonical label — `arW7O` is normalized to `Requote`     |
   | temperature | enum           | `Hot` \| `Warm` \| `Cold` \| `Unknown`                   |
   | phone       | string \| null | first phone as stored; the client formats it             |

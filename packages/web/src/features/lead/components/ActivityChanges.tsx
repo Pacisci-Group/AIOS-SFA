@@ -1,6 +1,7 @@
 import type { ActivityChange } from "@sfa/shared";
 import { ArrowRight } from "lucide-react";
 import { formatCurrencyExact, formatDate } from "./lead-display";
+import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface ActivityChangesProps {
   changes: ActivityChange[];
@@ -59,7 +60,7 @@ export function ActivityChanges({ changes }: ActivityChangesProps) {
  */
 function formatValue(change: ActivityChange, side: "from" | "to" = "from") {
   const value = side === "from" ? change.from : change.to;
-  if (value === null) return "—";
+  if (value === null) return NOT_AVAILABLE;
 
   switch (change.kind) {
     case "currency":
@@ -72,7 +73,7 @@ function formatValue(change: ActivityChange, side: "from" | "to" = "from") {
       // keeps an effective date off the previous day.
       return typeof value === "string" ? formatDate(value) : String(value);
     case "list":
-      return Array.isArray(value) ? value.join(", ") || "—" : String(value);
+      return Array.isArray(value) ? value.join(", ") || NOT_AVAILABLE : String(value);
     case "number":
     case "text":
     default:

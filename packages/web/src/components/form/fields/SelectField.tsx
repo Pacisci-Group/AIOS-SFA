@@ -61,8 +61,8 @@ const optionTriggerLabel = <V extends string>(
  *
  * The union option type covers all three shapes in use without forcing a `.map`
  * at every site: `POLICY_TYPE_OPTIONS` and `HOUSEHOLD_MEMBER_ROLES` are plain
- * string arrays, while `SELECTABLE_LEAD_SOURCE_OPTIONS` is `{code,label}` and
- * needs one rename at its single call site.
+ * string arrays, while the lead sources arrive from `GET /lead-sources` as
+ * `{id,name}` and need one rename at their single call site.
  *
  * Note only the **trigger** carries the field wiring. Radix renders the content
  * in a portal, so putting the aria/id plumbing on the wrapper would attach it to

@@ -1,0 +1,34 @@
+meta {
+  name: Get Summary (Invalid Range)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/owner-dashboard/summary?range=week
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: week
+}
+
+auth:bearer {
+  token: {{ownerDashboardToken}}
+}
+
+tests {
+  test("rejects a range that belongs to the producer dashboard", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # GET /owner-dashboard/summary — a range it does not offer
+
+  `today` and `week` are the **producer** dashboard's chips. Each endpoint accepts
+  only its own, so the owner's reads never run a window their page cannot show.
+  Also `400`: `custom` without both bounds, reversed, an impossible date
+  (`2026-02-31`), or more than 366 days.
+}

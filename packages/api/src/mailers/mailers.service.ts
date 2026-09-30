@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -8,16 +9,16 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
   LogMailerLeadResponse,
-  MAILER_LEAD_SOURCE_CODE,
+  MAILER_LEAD_SOURCE_SLUG,
   MailerLookupView,
   mailerControlNumberKey,
-  normalizeLeadSource,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
 import { resolveCountyName } from '../common/mailers/county-names';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { IntakeContext, IntakePerson } from '../leads/intake/intake.types';
+import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { LeadIntakeService } from '../leads/intake/lead-intake.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { LogMailerLeadDto } from './dto/log-mailer-lead.dto';
@@ -81,6 +82,7 @@ export class MailersService {
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
     private readonly tenancy: TenantContextResolver,
     private readonly intake: LeadIntakeService,
+    private readonly leadSources: LeadSourcesService,
   ) {}
 
   /**
@@ -150,7 +152,18 @@ export class MailersService {
     }
 
     const userId = new Types.ObjectId(access.userId);
-    const source = normalizeLeadSource(MAILER_LEAD_SOURCE_CODE);
+    // Found by slug, which a rename cannot break. Missing means the platform
+    // sources were never seeded — fail loudly rather than log a mailer lead
+    // with no source, which is the one thing about it we always know.
+    const leadSourceId = await this.leadSources.idForSlug(
+      tenant.agencyId,
+      MAILER_LEAD_SOURCE_SLUG,
+    );
+    if (!leadSourceId) {
+      throw new InternalServerErrorException(
+        'The "Mailer" lead source is missing. Run the core seed.',
+      );
+    }
     const ctx: IntakeContext = {
       agencyId: tenant.agencyId,
       branchId: tenant.branchId,
@@ -159,7 +172,7 @@ export class MailersService {
       // Always Mailer, set here and never read from the request. Legacy
       // branched to JYA on `Campaign_Number.startsWith('JYA')`; no campaign
       // number in this data can match, so the branch is not ported.
-      leadSource: { code: source.code, label: source.label },
+      leadSourceId,
       actorUserId: userId,
     };
 

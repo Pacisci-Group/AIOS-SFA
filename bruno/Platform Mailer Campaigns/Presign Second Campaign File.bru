@@ -1,0 +1,47 @@
+meta {
+  name: Presign Second Campaign File
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{baseUrl}}/platform/mailer-campaigns/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{platformAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "SFA-QBP-week-98-missed.csv",
+    "size": 4096
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("campaignSecondFileKey", res.getBody().key);
+    bru.setVar("campaignSecondUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /platform/mailer-campaigns/presign — a second file for Add records
+
+  Same endpoint and contract as `Presign Campaign File`; this one mints the key
+  for the file `Add Campaign Files` appends to the imported campaign. See that
+  request's docs.
+}
