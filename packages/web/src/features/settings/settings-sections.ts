@@ -2,6 +2,7 @@ import { AgencyPermission } from "@sfa/shared";
 import {
   AtSign,
   BadgeCheck,
+  Clock,
   Globe,
   KeyRound,
   Palette,
@@ -54,6 +55,16 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: "What each role can see and do, page by page.",
     icon: KeyRound,
     permission: AgencyPermission.RolesRead,
+  },
+  {
+    to: "/settings/agency",
+    label: "Agency",
+    description:
+      "The time zone your dashboards, aging rules and end-of-day run keep.",
+    icon: Clock,
+    // Reuses the branding pair, like the API behind it (PAC-141). Listed twice
+    // in `SETTINGS_PERMISSIONS` as a result, which `anyOf` does not mind.
+    permission: AgencyPermission.BrandingRead,
   },
   {
     to: "/settings/branding",

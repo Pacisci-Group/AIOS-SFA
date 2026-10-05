@@ -1,6 +1,6 @@
 import { LEAD_SOURCE_NONE, policyTypeQueryValues } from '@sfa/shared';
 import { PipelineStage, Types } from 'mongoose';
-import { AGENCY_TIME_ZONE } from '../../performance/performance.range';
+import { requireTimeZone } from '../dates/time-zones';
 import type { YmdRange } from '../../performance/performance.range';
 
 /**
@@ -259,31 +259,41 @@ export function linesPrefix(
  *
  * Leads carry an instant, not a calendar day, and the instant has two
  * provenances: the app writes a real one, while the migration wrote SmartSuite's
- * **date-only** value as UTC midnight. Reading a UTC-midnight value in Chicago
- * lands it on the previous day — the same trap `quoteDateYmd` documents in
+ * **date-only** value as UTC midnight. Reading a UTC-midnight value in a US
+ * zone lands it on the previous day — the same trap `quoteDateYmd` documents in
  * `quote.normalize.ts`, solved the same way: exactly-midnight-UTC is read as a
- * UTC date, anything else as a Chicago one.
+ * UTC date, anything else on the agency's calendar (`timeZone`).
+ *
+ * Unlike `quoteDateYmd`, this is computed at **read** time, so a change to the
+ * agency's zone re-buckets lead history on the next request while stored quote
+ * and sale days stay where they were filed. Documented on `Agency.timezone`.
+ *
+ * The zone is also validated on write (`assertMongoKnowsTimeZone`): a name
+ * Node accepts but Mongo's zone table does not would make this stage throw,
+ * and that is a 500 on every Owner and Manager page.
  */
-export const LEAD_CREATED_YMD_EXPR = {
-  $let: {
-    vars: { created: { $ifNull: ['$createdDate', '$createdAt'] } },
-    in: {
-      $toInt: {
-        $dateToString: {
-          date: '$$created',
-          format: '%Y%m%d',
-          timezone: {
-            $cond: [
-              { $eq: [{ $mod: [{ $toLong: '$$created' }, 86_400_000] }, 0] },
-              'UTC',
-              AGENCY_TIME_ZONE,
-            ],
+export function leadCreatedYmdExpr(timeZone: string) {
+  return {
+    $let: {
+      vars: { created: { $ifNull: ['$createdDate', '$createdAt'] } },
+      in: {
+        $toInt: {
+          $dateToString: {
+            date: '$$created',
+            format: '%Y%m%d',
+            timezone: {
+              $cond: [
+                { $eq: [{ $mod: [{ $toLong: '$$created' }, 86_400_000] }, 0] },
+                'UTC',
+                requireTimeZone(timeZone),
+              ],
+            },
           },
         },
       },
     },
-  },
-} as const;
+  } as const;
+}
 
 /** The half-open Ymd window as a `$match` clause on `field`. */
 export function ymdWindow(

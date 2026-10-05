@@ -126,6 +126,8 @@ export type DemoSeedSummary = {
 interface Ctx {
   agencyId: string;
   agencyObjectId: Types.ObjectId;
+  /** `Agency.timezone` — the calendar `quoteDateYmd` files recaps on. */
+  timeZone: string;
   branchIdBySlug: Record<BranchSlug, string>;
   branchObjectIdBySlug: Record<BranchSlug, Types.ObjectId>;
   defaultBranchId: string;
@@ -421,6 +423,9 @@ export class DemoSeedService {
       ctx: {
         agencyId: agencyObjectId.toString(),
         agencyObjectId,
+        // Never `$set` above: a re-seed must not clobber a zone the owner has
+        // chosen through Workspace Settings. A fresh tenant gets the default.
+        timeZone: agency.timezone,
         branchIdBySlug,
         branchObjectIdBySlug,
         defaultBranchId: branchIdBySlug.main,
@@ -960,7 +965,7 @@ export class DemoSeedService {
             quoteDate,
             // Written here so a fresh demo tenant drives the Quoted scorecard
             // (PAC-10) without anyone having to run the backfill first.
-            quoteDateYmd: quoteDateYmd(quoteDate),
+            quoteDateYmd: quoteDateYmd(quoteDate, ctx.timeZone),
             premium,
             // Summed the way a real recap's rows sum: a vehicle line can
             // carry several, every other line carries exactly one.

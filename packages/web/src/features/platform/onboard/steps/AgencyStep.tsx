@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-form";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { FormGrid, FormSection } from "@/components/form";
 import { withForm } from "@/hooks/form";
 import {
   getPlatformCarriers,
   platformCarriersKey,
 } from "@/lib/carriers-api";
+import { timeZoneOptions } from "@/lib/time-zones";
 import {
   CarrierAppointmentRowGroup,
   CarrierAppointmentsShell,
@@ -35,6 +36,8 @@ export const AgencyStep = withForm({
     const ticker = useStore(form.store, (s) => s.values.agency.ticker);
     const slugAvailable = useAvailability("slug", slug);
     const tickerAvailable = useAvailability("ticker", ticker);
+    // Module-cached, but the array identity should still be stable per mount.
+    const timeZones = useMemo(() => timeZoneOptions(), []);
 
     // Globals only, and reachable without an agency — see `getPlatformCarriers`.
     const { data: carriers = [] } = useQuery({
@@ -139,6 +142,20 @@ export const AgencyStep = withForm({
                 placeholder="1234567"
                 autoComplete="off"
                 inputClassName="bg-card border-border font-mono"
+              />
+            )}
+          </form.AppField>
+
+          <form.AppField name="agency.timezone">
+            {(f) => (
+              <f.ComboboxField
+                label="Time zone"
+                description="Their working day: dashboard date windows and the 8 PM end-of-day Away run follow it. The owner can change it later."
+                options={timeZones}
+                searchPlaceholder="Search by city or zone…"
+                emptyText="No zone matches."
+                className="sm:col-span-2"
+                triggerClassName="bg-card border-border"
               />
             )}
           </form.AppField>

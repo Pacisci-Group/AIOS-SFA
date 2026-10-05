@@ -79,8 +79,12 @@ docs {
   | scope | enum | —       | `own` \| `agency`. A *request*, clamped to the caller's `DataScope` — it can only ever narrow |
 
   ### Windows
-  All boundaries are **America/Chicago calendar days**, compared as `YYYYMMDD`
-  integers against the indexed `deals.soldDateYmd` / `quoteRecaps.quoteDateYmd`.
+  All boundaries are **calendar days in the agency's time zone**
+  (`Agency.timezone`, default `America/Chicago` — see **Update Agency
+  Profile**), compared as `YYYYMMDD` integers against the indexed
+  `deals.soldDateYmd` / `quoteRecaps.quoteDateYmd`. "Today" is resolved once
+  per request from the caller's agency, never from the browser or the server
+  clock.
 
   | range | window |
   |-------|--------|

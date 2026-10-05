@@ -15,10 +15,7 @@ import {
   ProducerGoalDocument,
 } from '../producer-goals/schemas/producer-goal.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import {
-  currentChicagoMonth,
-  resolveRange,
-} from '../performance/performance.range';
+import { currentMonthIn, customRange } from '../performance/performance.range';
 import { GetLeaderboardDto } from './dto/get-leaderboard.dto';
 import { initialsFrom } from '../common/domain/initials';
 import { LeaderboardRow, attainment, rankRows } from './leaderboard.normalize';
@@ -75,7 +72,7 @@ export class LeaderboardService {
     access: AccessContext,
     query: GetLeaderboardDto,
   ): Promise<LeaderboardResponse> {
-    const month = query.month ?? currentChicagoMonth();
+    const month = query.month ?? currentMonthIn(access.timeZone);
     const range = this.monthRange(month);
     const agencyId = access.agencyId;
 
@@ -184,11 +181,12 @@ export class LeaderboardService {
     const [year, monthPart] = month.split('-');
     const first = `${year}-${monthPart}-01`;
     // The last day of the month, found by stepping back from the 1st of the
-    // next one — `resolveRange('lastMonth')` does the same walk.
+    // next one — `resolveRange('lastMonth')` does the same walk. No zone is
+    // involved: the month is already a pair of calendar dates.
     const nextMonth = new Date(Date.UTC(Number(year), Number(monthPart), 1));
     const lastDay = new Date(nextMonth.getTime() - 86_400_000);
     const to = lastDay.toISOString().slice(0, 10);
-    return resolveRange('custom', { from: first, to });
+    return customRange(first, to);
   }
 
   private pipeline(

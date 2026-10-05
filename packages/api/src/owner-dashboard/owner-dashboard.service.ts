@@ -31,7 +31,7 @@ import {
   toTrend,
 } from './owner-dashboard.normalize';
 import {
-  LEAD_CREATED_YMD_EXPR,
+  leadCreatedYmdExpr,
   QUOTED_LINES,
   SOLD_LINES,
   linesPrefix,
@@ -126,7 +126,7 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerDashboardSummary> {
-    const { period, current, previous } = resolvePeriod(query);
+    const { period, current, previous } = resolvePeriod(query, access.timeZone);
 
     const [sold, quoted, priorSold, priorQuoted] = await Promise.all([
       this.soldWindow(access, branchId, query, current),
@@ -175,7 +175,7 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerProducersResponse> {
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const [sold, quoted] = await Promise.all([
       this.soldBy(access, branchId, query, current, '$producerId', false),
@@ -233,7 +233,7 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerLeadSourcesResponse> {
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const [sold, quoted, volume, labels] = await Promise.all([
       this.soldBy(access, branchId, query, current, '$sourceId', true),
@@ -467,7 +467,7 @@ export class OwnerDashboardService {
     }>([
       { $match: salesScope<LeadDocument>(access, branchId, query.producerIds) },
       ...sourceMatch(query.leadSourceIds, 'leadSourceId'),
-      { $addFields: { createdYmd: LEAD_CREATED_YMD_EXPR } },
+      { $addFields: { createdYmd: leadCreatedYmdExpr(access.timeZone) } },
       { $match: ymdWindow('createdYmd', range) },
       {
         $group: {

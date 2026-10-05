@@ -1,7 +1,7 @@
 /**
- * Chicago calendar-day windows for the Producer Dashboard (PAC-9).
+ * Calendar-day windows on the agency's own clock (PAC-9, PAC-141).
  *
- * Every range-driven read on the dashboard compares against a `YYYYMMDD`
+ * Every range-driven read on the dashboards compares against a `YYYYMMDD`
  * integer — `Deal.soldDateYmd` and `QuoteRecap.quoteDateYmd` — so this module's
  * only job is turning a range key into a half-open `[startYmd, endYmd)` pair.
  *
@@ -9,7 +9,18 @@
  * `{year, month, day}` triple via a UTC anchor, which is what makes it
  * DST-immune: there is no 05:00Z-vs-06:00Z offset to get wrong, because no
  * offset is ever applied. The timezone is consulted exactly once, to ask "what
- * is today's date in Chicago?".
+ * is today's date *here*?" — and "here" is `Agency.timezone`, passed in by the
+ * caller as a **required** argument. It used to be a module constant
+ * (`AGENCY_TIME_ZONE = 'America/Chicago'`); the constant is gone rather than
+ * demoted to a default, because a default is how it would have survived.
+ *
+ * ## Stored day labels do not move with the zone
+ *
+ * `Deal.soldDateYmd`, `QuoteRecap.quoteDateYmd` and `ProducerGoal.month` are
+ * written once, on the agency's calendar *at the time of writing*. Changing an
+ * agency's zone later does not rewrite them — history keeps the day it was
+ * filed on, and only windows resolved from now on move. Rows the SmartSuite
+ * migration imported carry the day SmartSuite stated, whatever the zone.
  *
  * Ported from `SFA/app/api/leaderboard/route.ts` (`getChicagoParts` /
  * `getMtdChicagoYyyymmddRange`), which is the cleanest of the three date
@@ -19,8 +30,7 @@
  */
 
 import type { OwnerDashboardRangeKey } from '@sfa/shared';
-
-export const AGENCY_TIME_ZONE = 'America/Chicago';
+import { requireTimeZone } from '../common/dates/time-zones';
 
 export const RANGE_KEYS = [
   'today',
@@ -68,14 +78,32 @@ export interface YmdRange {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** What calendar date is it in Chicago at this instant? */
-export function chicagoParts(at: Date): CalendarDate {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: AGENCY_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(at);
+/**
+ * One formatter per zone, built on first use. `Intl.DateTimeFormat` is
+ * expensive to construct and cheap to call, and {@link zonedDayStart} calls it
+ * a few dozen times per answer. Bounded by the number of distinct zones the
+ * process ever sees.
+ */
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function dateFormatter(timeZone: string): Intl.DateTimeFormat {
+  const zone = requireTimeZone(timeZone);
+  let formatter = dateFormatters.get(zone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    dateFormatters.set(zone, formatter);
+  }
+  return formatter;
+}
+
+/** What calendar date is it in `timeZone` at this instant? */
+export function zonedDate(at: Date, timeZone: string): CalendarDate {
+  const parts = dateFormatter(timeZone).formatToParts(at);
 
   const get = (type: string) =>
     Number(parts.find((part) => part.type === type)?.value ?? '0');
@@ -135,14 +163,17 @@ export function spanDays(from: string, to: string): number {
   return Math.floor((endMs - startMs) / 86_400_000) + 1;
 }
 
-/** The current goal month in Chicago, `YYYY-MM`. */
-export function currentChicagoMonth(now: Date = new Date()): string {
-  const today = chicagoParts(now);
+/** The current goal month in `timeZone`, `YYYY-MM`. */
+export function currentMonthIn(
+  timeZone: string,
+  now: Date = new Date(),
+): string {
+  const today = zonedDate(now, timeZone);
   return `${today.year}-${String(today.month).padStart(2, '0')}`;
 }
 
 /**
- * The last `count` goal months in Chicago, newest first, including this one.
+ * The last `count` goal months in `timeZone`, newest first, including this one.
  *
  * The migration writes a producer goal per month across this window (PAC-80).
  * SmartSuite stores a single standing "Monthly Goal" with no month dimension,
@@ -150,11 +181,12 @@ export function currentChicagoMonth(now: Date = new Date()): string {
  * leaderboard's `?month=` is answerable for one month and blank for the rest,
  * and the current month's goals expire silently at the rollover.
  */
-export function recentChicagoMonths(
+export function recentMonthsIn(
   count: number,
+  timeZone: string,
   now: Date = new Date(),
 ): string[] {
-  const today = chicagoParts(now);
+  const today = zonedDate(now, timeZone);
   const months: string[] = [];
   for (let back = 0; back < count; back++) {
     // Step back through the 1st of each month; `Date.UTC` normalizes the
@@ -168,8 +200,10 @@ export function recentChicagoMonths(
 
 /**
  * Resolve a range key into the half-open window every dashboard read uses.
+ * `T` is today on the agency's calendar — {@link zonedDate} of `now` in
+ * `timeZone`.
  *
- * | key | window (Chicago calendar days) |
+ * | key | window (agency calendar days) |
  * |---|---|
  * | `today` | `[T, T+1)` |
  * | `week` | `[T-6, T+1)` — rolling trailing 7 days **including today**, not a calendar week |
@@ -185,22 +219,30 @@ export function recentChicagoMonths(
  * `soldDate` on the Sold form, and "month to date" that counts next week's
  * sales is not month to date.
  *
- * `now` is injectable so the windows can be unit-tested against fixed instants
- * (the `daysSince` convention in `common/domain/deal-derive`).
+ * `timeZone` comes second, ahead of the optional arguments, so that a call
+ * written against the old `(key, custom, now)` shape is a type error rather
+ * than a window cut on the wrong calendar. `now` is injectable so the windows
+ * can be unit-tested against fixed instants (the `daysSince` convention in
+ * `common/domain/deal-derive`).
  */
 export function resolveRange(
   key: AnyRangeKey,
+  timeZone: string,
   custom: { from?: string; to?: string } = {},
   now: Date = new Date(),
 ): YmdRange {
-  const today = chicagoParts(now);
+  // Checked even for `custom`, which never reads it: a stale call site is a
+  // bug on every key, and this is the one branch that would otherwise hide it.
+  requireTimeZone(timeZone);
 
   if (key === 'custom') {
     if (!custom.from || !custom.to) {
       throw new Error('A custom range needs both from and to.');
     }
-    return build(parseIsoDate(custom.from), parseIsoDate(custom.to));
+    return customRange(custom.from, custom.to);
   }
+
+  const today = zonedDate(now, timeZone);
 
   switch (key) {
     case 'today':
@@ -218,6 +260,16 @@ export function resolveRange(
     case 'lastYear':
       return wholeYear(today.year - 1);
   }
+}
+
+/**
+ * The window for two inclusive `YYYY-MM-DD` bounds. No zone is involved: the
+ * caller already named the days. This is what `custom` resolves to, and what a
+ * caller that has a fixed calendar month in hand (the leaderboard) uses rather
+ * than asking {@link resolveRange} for a zone it would ignore.
+ */
+export function customRange(from: string, to: string): YmdRange {
+  return build(parseIsoDate(from), parseIsoDate(to));
 }
 
 /**
@@ -247,10 +299,11 @@ export function resolveRange(
  */
 export function resolveComparison(
   key: AnyRangeKey,
+  timeZone: string,
   custom: { from?: string; to?: string } = {},
   now: Date = new Date(),
 ): YmdRange {
-  const today = chicagoParts(now);
+  const today = zonedDate(now, timeZone);
 
   switch (key) {
     case 'mtd': {
@@ -272,7 +325,7 @@ export function resolveComparison(
       return wholeYear(today.year - 2);
     default: {
       // `today`, `week` and `custom`: the span itself is the unit.
-      const current = resolveRange(key, custom, now);
+      const current = resolveRange(key, timeZone, custom, now);
       const from = parseIsoDate(current.from);
       const days = spanDays(current.from, current.to);
       return build(addDays(from, -days), addDays(from, -1));
@@ -331,21 +384,42 @@ export function fromYmd(ymd: number): CalendarDate {
   };
 }
 
+/** No zone is further than this from UTC: Pacific/Kiritimati is UTC+14. */
+const MAX_AHEAD_OF_UTC_MS = 15 * 3_600_000;
+/** …and Etc/GMT+12 / Baker Island is UTC−12. */
+const MAX_BEHIND_UTC_MS = 13 * 3_600_000;
+
 /**
- * The UTC instant at which `date` begins in Chicago — for windowing a
+ * The UTC instant at which `date` begins in `timeZone` — for windowing a
  * collection that stores real instants (`serviceTickets.openedAt`) rather than
  * a `YYYYMMDD` integer.
  *
- * Found by walking back an hour at a time from noon UTC until the Chicago
- * calendar date changes. Chicago's offset is a whole number of hours in both
- * halves of the year, so an hourly walk lands exactly on midnight, and asking
- * `chicagoParts` for each step is what makes DST somebody else's problem.
+ * A binary search for the first instant whose {@link zonedDate} is on or after
+ * `date`, bracketed by the widest offsets any zone has. The local calendar
+ * date never runs backwards as the instant advances, so the predicate is
+ * monotone and the search is exact to the millisecond — no offset is assumed
+ * anywhere, which is what makes it right for half-hour zones (Asia/Kolkata
+ * starts its day at 18:30Z), quarter-hour ones (Asia/Kathmandu), zones past
+ * UTC+12, and a DST change that falls on midnight itself (Africa/Cairo springs
+ * forward from 00:00 to 01:00, so the day's first instant *is* 01:00 local).
+ *
+ * The previous implementation walked back an hour at a time from noon UTC. It
+ * was right for Chicago, which is all it was ever asked about, and wrong by
+ * thirty minutes for Kolkata and by a whole day for Kiritimati.
  */
-export function chicagoDayStart(date: CalendarDate): Date {
+export function zonedDayStart(date: CalendarDate, timeZone: string): Date {
   const ymd = toYmd(date);
-  let instant = Date.UTC(date.year, date.month - 1, date.day, 12);
-  while (toYmd(chicagoParts(new Date(instant - 3_600_000))) === ymd) {
-    instant -= 3_600_000;
+  const midnightUtc = Date.UTC(date.year, date.month - 1, date.day);
+  // Invariant: `lo` is still on the day before, `hi` is on `date` or later.
+  let lo = midnightUtc - MAX_AHEAD_OF_UTC_MS;
+  let hi = midnightUtc + MAX_BEHIND_UTC_MS;
+  while (hi - lo > 1) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (toYmd(zonedDate(new Date(mid), timeZone)) >= ymd) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
   }
-  return new Date(instant);
+  return new Date(hi);
 }

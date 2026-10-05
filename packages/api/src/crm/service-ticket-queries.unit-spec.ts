@@ -16,6 +16,7 @@ describe('ticketTenantFilter', () => {
     dataScope,
     permissions: [],
     roleIds: [],
+    timeZone: 'America/Chicago',
   });
 
   it('pins the agency as an ObjectId, never a string', () => {

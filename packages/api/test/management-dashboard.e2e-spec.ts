@@ -21,10 +21,10 @@ import { Household } from '../src/households/schemas/household.schema';
 import { Lead } from '../src/leads/schemas/lead.schema';
 import {
   addDays,
-  chicagoDayStart,
-  chicagoParts,
   toIsoDate,
   toYmd,
+  zonedDate,
+  zonedDayStart,
 } from '../src/performance/performance.range';
 import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import { QuoteRecap } from '../src/quote-recaps/schemas/quote-recap.schema';
@@ -116,18 +116,25 @@ describe('Management dashboard (PAC-139) (e2e)', () => {
   const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000);
   const hoursAgo = (hours: number) =>
     new Date(now.getTime() - hours * 3_600_000);
-  const today = chicagoParts(now);
-  /** A sale on the Chicago calendar day `n` business days back. */
+  /**
+   * The seeded agency keeps the schema default, so this is the calendar the
+   * API cuts every window on for these fixtures.
+   */
+  const TIME_ZONE = 'America/Chicago';
+  const today = zonedDate(now, TIME_ZONE);
+  /** A sale on the agency's calendar day `n` business days back. */
   const soldBusinessDaysAgo = (n: number) => {
     const day = addBusinessDays(today, -n);
     return {
-      soldDate: new Date(chicagoDayStart(day).getTime() + 12 * 3_600_000),
+      soldDate: new Date(
+        zonedDayStart(day, TIME_ZONE).getTime() + 12 * 3_600_000,
+      ),
       soldDateYmd: toYmd(day),
     };
   };
   const soldDaysAgo = (n: number) => ({
     soldDate: daysAgo(n),
-    soldDateYmd: toYmd(chicagoParts(daysAgo(n))),
+    soldDateYmd: toYmd(zonedDate(daysAgo(n), TIME_ZONE)),
   });
 
   const get = async <T>(path: string, query: string, token = ownerToken) => {
@@ -439,7 +446,7 @@ describe('Management dashboard (PAC-139) (e2e)', () => {
       });
     const quoted = (n: number) => ({
       quoteDate: daysAgo(n),
-      quoteDateYmd: toYmd(chicagoParts(daysAgo(n))),
+      quoteDateYmd: toYmd(zonedDate(daysAgo(n), TIME_ZONE)),
     });
     await recap({
       householdId: d1.householdId,

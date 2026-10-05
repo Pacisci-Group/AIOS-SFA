@@ -111,8 +111,9 @@ docs {
   on to buy.
 
   A migrated lead's creation date is date-only, stored as UTC midnight. It is
-  read as that calendar day — not as the Chicago evening before it — the same
-  provenance rule `quoteDateYmd` applies.
+  read as that calendar day — not as the evening before it in the agency's
+  zone — the same provenance rule `quoteDateYmd` applies. Every other lead is
+  bucketed on the agency's calendar (`Agency.timezone`, PAC-141), at read time.
 
   ## Response `200`
   ```json

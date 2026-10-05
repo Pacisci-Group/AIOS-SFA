@@ -19,13 +19,20 @@ const RANGE: YmdRange = {
 };
 
 const NOW = new Date('2026-09-23T12:00:00.000Z');
+const TIME_ZONE = 'America/Chicago';
 
 const match = (stages: unknown[], index = 0) =>
   (stages[index] as { $match: Record<string, unknown> }).$match;
 
 describe('stalledLeadsPrefix', () => {
   it('excludes every stored form of a terminal status and keeps untouched leads', () => {
-    const stages = stalledLeadsPrefix({ agencyId: 'a' }, {}, RANGE, NOW);
+    const stages = stalledLeadsPrefix(
+      { agencyId: 'a' },
+      {},
+      RANGE,
+      NOW,
+      TIME_ZONE,
+    );
     const first = match(stages);
 
     const nin = (first.status as { $nin: string[] }).$nin;
@@ -42,13 +49,29 @@ describe('stalledLeadsPrefix', () => {
     });
   });
 
+  it('buckets the lead on the agency calendar it is given (PAC-141)', () => {
+    const stages = stalledLeadsPrefix({}, {}, RANGE, NOW, 'Asia/Kolkata');
+    // The `$addFields` just before the window match carries the zone into
+    // Mongo's `$dateToString`; a UTC-midnight (migrated) value stays UTC.
+    const added = (
+      stages[stages.length - 2] as { $addFields: { createdYmd: unknown } }
+    ).$addFields.createdYmd;
+    expect(JSON.stringify(added)).toContain('"Asia/Kolkata"');
+    expect(JSON.stringify(added)).toContain('"UTC"');
+    expect(JSON.stringify(added)).not.toContain('Chicago');
+    expect(() => stalledLeadsPrefix({}, {}, RANGE, NOW, '')).toThrow(
+      /time zone is required/i,
+    );
+  });
+
   it('adds the source and line-of-business matches only when asked', () => {
-    const bare = stalledLeadsPrefix({}, {}, RANGE, NOW);
+    const bare = stalledLeadsPrefix({}, {}, RANGE, NOW, TIME_ZONE);
     const filtered = stalledLeadsPrefix(
       {},
       { leadSourceIds: ['__none__'], policyTypes: ['Auto'] },
       RANGE,
       NOW,
+      TIME_ZONE,
     );
     expect(filtered).toHaveLength(bare.length + 2);
     expect(match(filtered, 1)).toEqual({ leadSourceId: { $in: [null] } });

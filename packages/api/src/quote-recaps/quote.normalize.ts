@@ -1,4 +1,4 @@
-import { chicagoParts, toYmd } from '../performance/performance.range';
+import { toYmd, zonedDate } from '../performance/performance.range';
 
 /**
  * Pure derivations for the Quote Recap write path.
@@ -18,11 +18,13 @@ import { chicagoParts, toYmd } from '../performance/performance.range';
  * - **App-written recaps** (`quote-recaps.service.ts` sets `new Date()`) carry a
  *   true instant. A recap saved at 19:00 CT on the 5th is 01:00Z on the *6th* —
  *   deriving from UTC parts would file it on tomorrow's scorecard. So these
- *   derive from **Chicago** parts.
+ *   derive from the **agency's calendar** — `timeZone`, the caller's
+ *   `access.timeZone` (PAC-141).
  * - **Migrated recaps** carry a SmartSuite date-only value, stored at exactly
  *   UTC midnight. The source system already said which day it was; deriving
- *   from Chicago parts would read 00:00Z as 18:00 or 19:00 the *previous* day
- *   and shift every migrated recap back one. So these derive from **UTC** parts.
+ *   from a US zone's parts would read 00:00Z as 18:00 or 19:00 the *previous*
+ *   day and shift every migrated recap back one. So these derive from **UTC**
+ *   parts, whatever the zone.
  *
  * Exact UTC midnight is the discriminator. It is not a heuristic in the loose
  * sense: `parseFormDate` in `sold.normalize.ts` deliberately pins date-only
@@ -30,8 +32,14 @@ import { chicagoParts, toYmd } from '../performance/performance.range';
  * on an exact millisecond-zero UTC midnight would be a 1-in-86.4-million
  * coincidence that also resolves to the same answer roughly two-thirds of the
  * time. The cost of being wrong is one day on one recap.
+ *
+ * The label is **stored, never recomputed**: an agency that changes its zone
+ * keeps every recap on the day it was filed.
  */
-export function quoteDateYmd(quoteDate: Date): number | undefined {
+export function quoteDateYmd(
+  quoteDate: Date,
+  timeZone: string,
+): number | undefined {
   if (Number.isNaN(quoteDate.getTime())) return undefined;
 
   if (isUtcMidnight(quoteDate)) {
@@ -42,7 +50,7 @@ export function quoteDateYmd(quoteDate: Date): number | undefined {
     );
   }
 
-  return toYmd(chicagoParts(quoteDate));
+  return toYmd(zonedDate(quoteDate, timeZone));
 }
 
 /** A date-only value, as stored by the migration and by `parseFormDate`. */

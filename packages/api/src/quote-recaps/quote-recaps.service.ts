@@ -534,7 +534,7 @@ export class QuoteRecapsService {
 
     // Opportunistic, never recomputed — see the docblock.
     if (recap.quoteDate && recap.quoteDateYmd == null) {
-      recap.quoteDateYmd = quoteDateYmd(recap.quoteDate);
+      recap.quoteDateYmd = quoteDateYmd(recap.quoteDate, access.timeZone);
     }
 
     await recap.save();
@@ -746,7 +746,7 @@ export class QuoteRecapsService {
         // The indexed calendar-day label the Quoted scorecard buckets by
         // (PAC-10). Derived here rather than at read time so the scorecard is a
         // plain integer range — the same reason `Deal.soldDateYmd` is persisted.
-        quoteDateYmd: quoteDateYmd(quoteDate),
+        quoteDateYmd: quoteDateYmd(quoteDate, access.timeZone),
         // Derived server-side and never taken from the client: these three back
         // the Quoted scorecard, so a client-supplied total would corrupt it.
         ...deriveTotals(policies),

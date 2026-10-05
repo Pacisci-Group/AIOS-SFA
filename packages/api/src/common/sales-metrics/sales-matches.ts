@@ -29,12 +29,14 @@ export interface ResolvedPeriod {
   previous: YmdRange;
 }
 
+/** `timeZone` is the caller's `access.timeZone` — the agency's calendar. */
 export function resolvePeriod(
   query: Pick<DashboardFilterQuery, 'range' | 'from' | 'to'>,
+  timeZone: string,
 ): ResolvedPeriod {
   const custom = { from: query.from, to: query.to };
-  const current = resolveRange(query.range, custom);
-  const previous = resolveComparison(query.range, custom);
+  const current = resolveRange(query.range, timeZone, custom);
+  const previous = resolveComparison(query.range, timeZone, custom);
   return {
     current,
     previous,

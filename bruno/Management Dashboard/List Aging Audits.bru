@@ -58,7 +58,8 @@ docs {
   - **Module / permission / scope / filter / paging:** as `List Stalled Leads`.
   - **`total`** equals the card's `agingAudits` under the same query.
   - The clock is **business days from the sold date**: weekends and the eleven
-    US federal holidays (observed days) are skipped, on the Chicago calendar.
+    US federal holidays (observed days) are skipped, on the agency's calendar
+    (`Agency.timezone`, PAC-141).
     A deal sold on a Friday has had one business day by Monday.
   - **Open** means `auditStatus` is anything but `Pass` — Not Submitted,
     Pending and Fail all count. A deal with no audit record is not aging.

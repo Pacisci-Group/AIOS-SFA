@@ -208,8 +208,9 @@ export class QuoteRecap extends TenantRecord {
    * Lets the Quoted scorecard (PAC-10) run the same indexed integer range
    * comparison the Sold scorecard uses, rather than a second `Date`-bounded
    * code path with its own timezone edge cases. Derived by `quoteDateYmd` in
-   * `../quote.normalize`, which reads Chicago or UTC parts depending on the
-   * recap's provenance — see that docblock.
+   * `../quote.normalize`, which reads the agency's calendar or UTC parts
+   * depending on the recap's provenance — see that docblock. Written once:
+   * a later change to `Agency.timezone` does not move it.
    *
    * Optional only for recaps written before PAC-9; the migration has set it
    * on every import since.

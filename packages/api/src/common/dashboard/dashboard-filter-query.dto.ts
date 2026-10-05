@@ -31,7 +31,7 @@ const MAX_SELECTED = 50;
  */
 export const dashboardFilterFields = {
   range: z.enum(OWNER_DASHBOARD_RANGE_KEYS).default('mtd'),
-  /** `YYYY-MM-DD`, Chicago calendar dates. `to` is inclusive. */
+  /** `YYYY-MM-DD`, calendar dates in the agency's timezone. `to` is inclusive. */
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
   /** Narrows within the caller's data scope; can never widen it. */

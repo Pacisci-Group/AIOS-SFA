@@ -1,0 +1,89 @@
+meta {
+  name: Update Agency Profile
+  type: http
+  seq: 17
+}
+
+patch {
+  url: {{baseUrl}}/agency/profile
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "timezone": "America/Chicago"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes the stored zone", function () {
+    expect(res.getBody().timezone).to.equal("America/Chicago");
+  });
+}
+
+docs {
+  # PATCH /agency/profile — change the agency's time zone (PAC-141)
+
+  **Module** — none. **Permission** — `agency:branding:write` (see **Get
+  Agency Profile** for why the branding pair is reused).
+
+  **Body**
+  | field    | type   | rules |
+  |----------|--------|-------|
+  | timezone | string | an IANA zone name, e.g. `America/Chicago`, `America/New_York`, `Asia/Kolkata`. Required. |
+
+  The request here sends `America/Chicago` — the default — so repeated runs of
+  the collection leave the demo tenant where they found it.
+
+  ## Validated twice, on purpose
+  1. **The runtime** (`Intl.DateTimeFormat`) must resolve the name, and it must
+     look like a zone (`Area/Location` or a single word): a raw offset such as
+     `+05:30` is refused even though Node would format with it.
+  2. **MongoDB** must know it too: the Owner and Manager dashboards bucket lead
+     creation dates *inside* Mongo (`$dateToString`), whose zone table is not
+     Node's. The service runs a one-document probe aggregate before saving, so
+     a name only one side knows is a `400` here rather than a `500` on every
+     dashboard later.
+
+  ## What changing it does
+  - **Future date windows move.** `today`, `mtd`, business-day aging and the
+    leaderboard's default month are resolved on the new calendar from the next
+    request on — the agency's cached access contexts are invalidated after the
+    write (`AccessResolverService.invalidateAgency`), the same as a module
+    toggle.
+  - **Lead history re-buckets; sold and quoted history does not.** A lead's
+    creation day is computed at read time; `Deal.soldDateYmd`,
+    `QuoteRecap.quoteDateYmd` and producer-goal months are **stored** on the
+    calendar in force when they were written and are not rewritten. An agency
+    that moves zones keeps every past sale and quote on the day it was filed.
+  - **The nightly Away sweep follows the new clock from the next 8 PM.** The
+    sweep's marker (`Agency.availabilitySweep.lastAwayDate`) is a local date on
+    the *old* clock; left alone, moving east to a zone already past 8 PM would
+    set the whole office Away within thirty minutes, and moving west after
+    tonight's sweep would skip tonight. The same write re-stamps it: tonight's
+    date if it is already 8 PM or later in the new zone, otherwise cleared.
+    Only when the zone actually changes — an unchanged save touches nothing.
+
+  **Response `200`** — the same shape as **Get Agency Profile**, reflecting
+  the stored value.
+
+  **Errors**
+  - `400` — not a zone name, unknown to the runtime, or unknown to MongoDB
+    (`errors.fieldErrors.timezone` names which).
+  - `403` — caller lacks `agency:branding:write`. Platform accounts hold no
+    `agency:*` permission: a super admin changes a zone after onboarding by
+    impersonating the owner.
+}

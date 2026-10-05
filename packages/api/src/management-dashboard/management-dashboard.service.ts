@@ -57,10 +57,10 @@ import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import {
   YmdRange,
-  chicagoDayStart,
-  chicagoParts,
   fromYmd,
   toYmd,
+  zonedDate,
+  zonedDayStart,
 } from '../performance/performance.range';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import {
@@ -257,7 +257,7 @@ export class ManagementDashboardService {
     query: ManagementDashboardQueryDto,
   ): Promise<ManagementAlerts> {
     const now = new Date();
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const [stalledLeads, agingAudits, overdueTickets] = await Promise.all([
       this.count(
@@ -283,7 +283,7 @@ export class ManagementDashboardService {
     query: ManagementAlertListQueryDto,
   ): Promise<ManagementAlertList<StalledLeadRow>> {
     const now = new Date();
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const { total, items } = await this.page<StalledLeadLean>(
       this.leadModel,
@@ -325,8 +325,8 @@ export class ManagementDashboardService {
     query: ManagementAlertListQueryDto,
   ): Promise<ManagementAlertList<AgingAuditRow>> {
     const now = new Date();
-    const today = chicagoParts(now);
-    const { period, current } = resolvePeriod(query);
+    const today = zonedDate(now, access.timeZone);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const { total, items } = await this.page<AgingDealLean>(
       this.dealModel,
@@ -368,7 +368,7 @@ export class ManagementDashboardService {
     // `now` is for the row's `daysOverdue` only; the match reads the stored
     // status and needs no clock.
     const now = new Date();
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const { total, items } = await this.page<OverdueTicketLean>(
       this.ticketModel,
@@ -403,7 +403,7 @@ export class ManagementDashboardService {
     branchId: string | null,
     query: ManagementDashboardQueryDto,
   ): Promise<TeamActivityResponse> {
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     // No producer multi-select here, by design: the table *is* the team.
     const [sold, quoted, open, roster] = await Promise.all([
@@ -483,7 +483,7 @@ export class ManagementDashboardService {
     }
 
     const now = new Date();
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
     const pinned = [producerId];
 
     const [sold, quoted, open, pipeline, items] = await Promise.all([
@@ -495,6 +495,7 @@ export class ManagementDashboardService {
           salesScope<LeadDocument>(access, branchId, pinned),
           query,
           current,
+          access.timeZone,
         ),
         // Most recently worked first; `_id` keeps the order stable.
         { $sort: { lastActivityAt: -1, _id: -1 } },
@@ -576,6 +577,7 @@ export class ManagementDashboardService {
       query,
       range,
       now,
+      access.timeZone,
     );
   }
 
@@ -591,7 +593,10 @@ export class ManagementDashboardService {
     now: Date,
   ): PipelineStage[] {
     const cutoffYmd = toYmd(
-      agingCutoff(chicagoParts(now), MANAGEMENT_AUDIT_SLA_BUSINESS_DAYS),
+      agingCutoff(
+        zonedDate(now, access.timeZone),
+        MANAGEMENT_AUDIT_SLA_BUSINESS_DAYS,
+      ),
     );
     const aged: YmdRange = {
       ...range,
@@ -609,11 +614,11 @@ export class ManagementDashboardService {
     query: ManagementDashboardQueryDto,
     range: YmdRange,
   ): PipelineStage[] {
-    // `openedAt` is a real instant, so the Chicago calendar window has to be
+    // `openedAt` is a real instant, so the agency's calendar window has to be
     // turned into two instants; `endYmd` is exclusive already.
     const window = {
-      from: chicagoDayStart(fromYmd(range.startYmd)),
-      to: chicagoDayStart(fromYmd(range.endYmd)),
+      from: zonedDayStart(fromYmd(range.startYmd), access.timeZone),
+      to: zonedDayStart(fromYmd(range.endYmd), access.timeZone),
     };
     return overdueTicketsPrefix(ticketTenantFilter(access), query, window);
   }

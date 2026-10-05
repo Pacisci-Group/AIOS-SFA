@@ -22,7 +22,8 @@ body:json {
   {
     "agency": {
       "name": "PAC-69 Test Agency",
-      "slug": "{{onboardSlug}}"
+      "slug": "{{onboardSlug}}",
+      "timezone": "America/Chicago"
     },
     "branch": {
       "name": "Main",
@@ -112,6 +113,7 @@ docs {
   {
     "agency": { "name": "Acme Insurance", "slug": "acme-insurance",
                 "ticker": "ACM", "npn": "8675309",
+                "timezone": "America/Chicago",
                 "carrierAppointments": [
                   { "carrierId": "<global carrier _id>",
                     "carrierAgencyCode": "A0B9049" }
@@ -139,6 +141,15 @@ docs {
   claim is a `409` naming the holder. Check one ahead of time with **Check
   Availability**. ⚠ Deactivating an appointment does *not* release its code —
   only removing it does.
+
+  `agency.timezone` (PAC-141) is the IANA zone the agency keeps its working
+  day in — every dashboard date window, the 8 PM end-of-day Away sweep and the
+  day a quote recap is filed on follow it. Optional; omitted, the schema
+  default `America/Chicago` applies, which is what the wizard pre-selects.
+  Validated against the runtime *and* probed against MongoDB (whose zone table
+  is its own) before anything is written, so a name only one side knows is a
+  `400` here, not a `500` on the Owner dashboard later. The owner can change
+  it afterwards under **Update Agency Profile**.
 
   `branch.name` defaults to `Main` and its address is optional.
   `modules` is the enabled set — anything omitted is created disabled, not
@@ -177,7 +188,7 @@ docs {
 
   ## Errors
   - `400 Bad Request` — malformed slug, missing owner name, invalid email,
-    unknown module key.
+    unknown module key, or a `timezone` the runtime or MongoDB does not know.
   - `409 Conflict` — the slug or ticker belongs to another agency, or the owner
     address already belongs to an account (the message distinguishes an existing
     member from a pending invite).

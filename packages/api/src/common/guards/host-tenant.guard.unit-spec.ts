@@ -25,6 +25,7 @@ function access(overrides: Partial<AccessContext> = {}): AccessContext {
     dataScope: DataScope.Agency,
     permissions: [],
     roleIds: [],
+    timeZone: 'America/Chicago',
     ...overrides,
   };
 }
