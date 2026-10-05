@@ -1,5 +1,6 @@
 import { Readable } from 'stream';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { DEFAULT_MAILER_DISCOUNTS } from './mailer-processor';
 import { processMailerFile } from './mailer-processor';
 import type { MailerProcessorSettings } from './mailer-processor';
@@ -141,6 +142,32 @@ async function xlsxBytes(): Promise<Buffer> {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
+const SPREADSHEETML =
+  'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+
+/**
+ * The same workbook as .NET's OpenXML SDK writes it: the SpreadsheetML
+ * namespace bound to `x:` instead of the default, so every tag is `<x:row>`,
+ * `<x:c>`, `<x:si>`. Valid OOXML — and, before the reader learned to unprefix
+ * it, a vendor file that read as "empty". Tags already in another namespace
+ * (`mc:`, `x14ac:`) keep their own prefix, as they do in the real file.
+ */
+async function prefixedXlsxBytes(): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(await xlsxBytes());
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir || !entry.name.endsWith('.xml')) continue;
+    const xml = await entry.async('string');
+    if (!xml.includes(`xmlns="${SPREADSHEETML}"`)) continue;
+    zip.file(
+      entry.name,
+      xml
+        .replace(`xmlns="${SPREADSHEETML}"`, `xmlns:x="${SPREADSHEETML}"`)
+        .replace(/<(\/?)([A-Za-z]\w*)(?=[\s/>])/g, '<$1x:$2'),
+    );
+  }
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 describe('detectVendorFileKind', () => {
   it('trusts magic bytes over the filename and the content type', () => {
     const zipHead = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
@@ -200,6 +227,25 @@ describe('readVendorFile', () => {
       'xlsx',
     );
     expect(table.headers).toEqual(HEADERS);
+  });
+
+  it('reads a namespace-prefixed XLSX exactly as Excel’s own', async () => {
+    const prefixed = await prefixedXlsxBytes();
+    // Guard the fixture: it must really carry the prefix it claims to.
+    const sheet = await (
+      await JSZip.loadAsync(prefixed)
+    )
+      .file('xl/worksheets/sheet1.xml')!
+      .async('string');
+    expect(sheet).toContain('<x:row');
+
+    const fromPrefixed = await readVendorFile(Readable.from(prefixed), 'xlsx');
+    const fromExcel = await readVendorFile(
+      Readable.from(await xlsxBytes()),
+      'xlsx',
+    );
+    expect(fromPrefixed).toEqual(fromExcel);
+    expect(fromPrefixed.rows).toHaveLength(2);
   });
 
   it('refuses an empty file rather than importing nothing', async () => {

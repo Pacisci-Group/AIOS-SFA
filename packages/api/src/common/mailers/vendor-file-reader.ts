@@ -1,12 +1,15 @@
 import { createWriteStream } from 'fs';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { Readable } from 'stream';
+import { Readable, Transform } from 'stream';
+import type { TransformCallback } from 'stream';
 import { pipeline } from 'stream/promises';
+import { StringDecoder } from 'string_decoder';
 import { parse } from 'csv-parse';
 import { stringify } from 'csv-stringify/sync';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { dateToExcelSerial } from './mailer-parse';
 
 /**
@@ -177,9 +180,13 @@ export async function readVendorFile(
  */
 async function readXlsx(body: Readable): Promise<VendorFileTable> {
   const dir = await mkdtemp(join(tmpdir(), 'sfa-vendor-'));
-  const path = join(dir, 'vendor.xlsx');
+  const original = join(dir, 'vendor.xlsx');
   try {
-    await pipeline(body, createWriteStream(path));
+    await pipeline(body, createWriteStream(original));
+    const path = await unprefixWorkbook(
+      original,
+      join(dir, 'vendor-unprefixed.xlsx'),
+    );
     try {
       return await readXlsxStreaming(path);
     } catch (error) {
@@ -192,6 +199,133 @@ async function readXlsx(body: Readable): Promise<VendorFileTable> {
     }
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Rewrite a workbook whose XML is namespace-*prefixed* into the unprefixed form
+ * ExcelJS can read, and return the path to read from.
+ *
+ * ⚠ **This is why a real vendor file once failed as "empty".** Excel writes
+ * `<row><c>…`, with the SpreadsheetML namespace as the default. Writers built on
+ * .NET's OpenXML SDK (the one the vendor's `SFA-QBP.xlsx` came from, recognisable
+ * by its `package/services/metadata/…psmdcp` entry) bind the same namespace to a
+ * prefix instead, and write `<x:row><x:c>…`. Both are valid OOXML and Excel opens
+ * either. ExcelJS does not: its SAX handlers switch on the raw tag name
+ * (`case 'row'`), so every `x:row` is passed over and the sheet reads as zero
+ * rows. The buffered reader fares worse and throws on `this.model.sheets`.
+ *
+ * The rewrite is per part, keyed on that part's **root element**: if the root
+ * is prefixed, that prefix is dropped from every element tag in the part.
+ * Elements in other namespaces (`mc:`, `x14ac:`) keep theirs, exactly as Excel
+ * writes them. The `xmlns:x` declaration is left in place, unused: renaming it
+ * to a default `xmlns` could collide with one already on the root, and ExcelJS
+ * does not read namespaces anyway.
+ *
+ * A workbook with no prefixed part (anything Excel saved) is not rewritten at
+ * all, and takes exactly the path it always took. Only `xl/workbook.xml` is
+ * inflated to decide that, so the check costs one small zip entry.
+ *
+ * Entry order is preserved, since the streaming reader is sensitive to it (see
+ * {@link UnresolvedSharedStringsError}).
+ */
+async function unprefixWorkbook(path: string, out: string): Promise<string> {
+  const zip = await JSZip.loadAsync(await readFile(path));
+  const workbook = zip.file('xl/workbook.xml');
+  if (!workbook) return path;
+  if (rootElementPrefix(await workbook.async('string')) === null) return path;
+
+  const parts = Object.values(zip.files).filter(
+    (entry) => !entry.dir && /\.(xml|rels)$/i.test(entry.name),
+  );
+  for (const entry of parts) {
+    zip.file(
+      entry.name,
+      entry.nodeStream('nodebuffer').pipe(new UnprefixXml()),
+    );
+  }
+
+  await pipeline(
+    zip.generateNodeStream({
+      type: 'nodebuffer',
+      streamFiles: true,
+      compression: 'DEFLATE',
+      // Read once, by us, moments later: speed matters, size does not.
+      compressionOptions: { level: 1 },
+    }),
+    createWriteStream(out),
+  );
+  return out;
+}
+
+/**
+ * The prefix on an XML document's root element, or `null` when it has none.
+ *
+ * `null` too when the root start tag has not been seen in full yet, which the
+ * caller tells apart by whether the text is still growing.
+ */
+function rootElementPrefix(xml: string): string | null {
+  // The first tag that is not a declaration (`<?xml`) or comment/doctype (`<!`).
+  const root = /<(?![?!])([^\s/>]+)/.exec(xml);
+  if (!root) return null;
+  const colon = root[1].indexOf(':');
+  return colon === -1 ? null : root[1].slice(0, colon);
+}
+
+/** Longest prefix of a part we will hold back looking for its root element. */
+const ROOT_SCAN_LIMIT = 64 * 1024;
+
+/**
+ * Streams one XML part with its root element's prefix dropped from every tag.
+ *
+ * Streaming, because a worksheet part is the bulk of the file — 68 MB inflated
+ * for the 16k-row vendor sheet. `<` cannot appear raw in text or attribute
+ * values, so every `<x:` / `</x:` in the text is a tag; the only care needed is
+ * a match split across two chunks, handled by holding back a trailing `<…`
+ * fragment until the next chunk completes it.
+ */
+class UnprefixXml extends Transform {
+  private readonly decoder = new StringDecoder('utf8');
+  /** Text not yet emitted: the root scan, then any split tag fragment. */
+  private pending = '';
+  /** `undefined` until the root is seen; `null` means pass through untouched. */
+  private open: RegExp | null | undefined;
+
+  _transform(chunk: Buffer, _encoding: string, done: TransformCallback): void {
+    this.pending += this.decoder.write(chunk);
+    this.drain(false);
+    done();
+  }
+
+  _flush(done: TransformCallback): void {
+    this.pending += this.decoder.end();
+    this.drain(true);
+    done();
+  }
+
+  private drain(final: boolean): void {
+    if (this.open === undefined) {
+      const rootSeen = /<(?![?!])[^>]*>/.test(this.pending);
+      if (!rootSeen && !final && this.pending.length < ROOT_SCAN_LIMIT) return;
+      const prefix = rootSeen ? rootElementPrefix(this.pending) : null;
+      this.open =
+        prefix === null
+          ? null
+          : new RegExp(`<(/?)${prefix.replace(/[.-]/g, '\\$&')}:`, 'g');
+    }
+
+    let text = this.pending;
+    this.pending = '';
+    if (this.open && !final) {
+      // Hold back a `<` too close to the end to have been matched whole.
+      const lt = text.lastIndexOf('<');
+      if (lt !== -1 && !text.slice(lt).includes('>')) {
+        this.pending = text.slice(lt);
+        text = text.slice(0, lt);
+      }
+    }
+    if (this.open) text = text.replace(this.open, '<$1');
+    if (text) this.push(Buffer.from(text, 'utf8'));
   }
 }
 
