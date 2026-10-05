@@ -57,10 +57,7 @@ export default function AgencyProfilePage() {
       caption="The clock your working day is kept on"
       icon={Clock}
     >
-      <DetailCard
-        title="Time zone"
-        subheading="Dashboard date windows, business-day aging and the 8 PM end-of-day run all follow it."
-      >
+      <DetailCard title="Time zone">
         {query.isPending ? (
           <Skeleton className="h-28 w-full rounded-xl" />
         ) : query.isError ? (
@@ -132,12 +129,6 @@ function ProfileForm({
             />
           )}
         </form.AppField>
-
-        <p className="text-xs text-muted-foreground">
-          Changing it moves today's and every future date window. Sales and
-          quotes already filed keep the day they were filed on, and the
-          end-of-day Away run follows the new clock from its next 8 PM.
-        </p>
 
         {canWrite && (
           <form.Subscribe selector={(state) => state.isDirty}>

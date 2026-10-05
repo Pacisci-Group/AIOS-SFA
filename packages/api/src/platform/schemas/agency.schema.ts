@@ -387,8 +387,7 @@ export class Agency {
    * `ProducerGoal.month` are **stored** on the calendar in force when they were
    * written and are not rewritten — an agency that moves zones keeps every past
    * sale and quote on the day it was filed. Rows the SmartSuite migration
-   * imported carry the day SmartSuite stated regardless. The settings page
-   * says so next to the field.
+   * imported carry the day SmartSuite stated regardless.
    *
    * The validator keeps a typo out of the row; the write paths additionally
    * probe MongoDB (`assertMongoKnowsTimeZone`), whose zone table is not the

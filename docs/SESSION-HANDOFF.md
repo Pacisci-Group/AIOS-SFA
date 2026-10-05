@@ -960,7 +960,8 @@ One PR, branch `asad/pac-141-agency-timezone`, base `dev`. Plan file:
   and only when the zone actually changes. Written up on `AgencyAvailabilitySweep`.
 - **A zone change is half retroactive:** lead `createdYmd` is computed at read time (re-buckets);
   `soldDateYmd`, `quoteDateYmd`, `ProducerGoal.month` are stored and stay put. Said on
-  `Agency.timezone`, in the settings copy and in Bruno. No re-derive job.
+  `Agency.timezone` and in Bruno — deliberately **not** on the settings page (Asad: it confused
+  users). No re-derive job.
 
 ### What exists now
 - `performance.range.ts`: `AGENCY_TIME_ZONE` **deleted**. `zonedDate(at, tz)`, `currentMonthIn(tz)`,
