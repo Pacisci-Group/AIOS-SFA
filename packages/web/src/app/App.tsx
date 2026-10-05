@@ -72,6 +72,9 @@ const RolePermissionsPage = lazy(
 );
 const UsersPage = lazy(() => import('@/features/admin/UsersPage'));
 const BrandingPage = lazy(() => import('@/features/settings/BrandingPage'));
+const AgencyProfilePage = lazy(
+  () => import('@/features/settings/AgencyProfilePage'),
+);
 const DomainsPage = lazy(() => import('@/features/settings/DomainsPage'));
 const EmailSenderPage = lazy(
   () => import('@/features/settings/EmailSenderPage'),
@@ -603,6 +606,16 @@ export function App() {
                   element={
                     <LazyPage>
                       <BrandingPage />
+                    </LazyPage>
+                  }
+                />
+                {/* The agency's own time zone (PAC-141) — same gate as the
+                    API behind it, which reuses the branding pair. */}
+                <Route
+                  path="/settings/agency"
+                  element={
+                    <LazyPage>
+                      <AgencyProfilePage />
                     </LazyPage>
                   }
                 />

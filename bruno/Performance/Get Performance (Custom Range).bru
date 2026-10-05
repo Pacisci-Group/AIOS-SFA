@@ -47,8 +47,8 @@ docs {
   cosmetic: the aggregation accumulates distinct households with `$addToSet`,
   and the span is what bounds that set.
 
-  Dates are **America/Chicago calendar days**, not instants — no timezone
-  conversion is applied to what you send.
+  Dates are **calendar days in the agency's time zone**, not instants — no
+  timezone conversion is applied to what you send.
 
   ## Response `200`
   Identical to `Get Performance (This Month)`; only `range.key` differs.

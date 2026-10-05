@@ -6,6 +6,7 @@ import { Model, Types } from 'mongoose';
 import { AppModule } from '../app.module';
 import { AuditGenerationService } from '../audit-generation/audit-generation.service';
 import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
+import { DEFAULT_AGENCY_TIME_ZONE } from '../common/dates/time-zones';
 import { Onboarding } from '../crm/schemas/onboarding.schema';
 import { ServiceTicket } from '../crm/schemas/service-ticket.schema';
 import { ServiceTicketsService } from '../crm/service-tickets.service';
@@ -348,6 +349,9 @@ function producerAccess(
     // service directly, not resolved from a user's roles. Nothing the fixture
     // calls reads role-assigned ownership.
     roleIds: [],
+    // Nothing the fixture calls cuts a date window either; filled so the
+    // context is whole, not because `resolveItem` reads it.
+    timeZone: DEFAULT_AGENCY_TIME_ZONE,
   };
 }
 

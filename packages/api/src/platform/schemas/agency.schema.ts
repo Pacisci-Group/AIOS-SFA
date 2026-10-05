@@ -261,6 +261,16 @@ export const CarrierAppointmentSchema =
  *
  * Absent on every agency until its first sweep — readers must treat a missing
  * sub-document as "never", which `$ne` on the marker already does.
+ *
+ * ## When the zone changes (PAC-141)
+ *
+ * The marker is a date on the *old* clock, and comparing it on the new one
+ * can fire the sweep in the middle of a workday (moving east to a zone where
+ * it is already past 8 PM) or skip tonight's (moving west after it ran).
+ * `AgencyProfileService.update` therefore re-stamps it in the same write that
+ * changes the zone: tonight's date if it is already 8 PM or later in the new
+ * zone, otherwise `null`. Either way the next sweep is the next 8 PM on the
+ * new clock. `lastAwayAt` is left alone — it records a sweep that did run.
  */
 @Schema({ _id: false })
 export class AgencyAvailabilitySweep {
@@ -358,19 +368,31 @@ export class Agency {
   /**
    * IANA zone the agency keeps its working day in, e.g. `America/Chicago`
    * (PAC-139 §6a). Defaults to US Central because every agency on the platform
-   * today is in Oklahoma, which has no zone of its own. Backfilled onto rows
-   * that predate it by the `agency_timezone_backfill` migration, so a raw or
-   * `.lean()` read can rely on the field being there — the sweep still
-   * defaults in code, for a database that has not migrated yet.
+   * when the field was added is in Oklahoma, which has no zone of its own.
+   * Backfilled onto rows that predate it by the `agency_timezone_backfill`
+   * migration, so a raw or `.lean()` read can rely on the field being there —
+   * the sweep still defaults in code, for a database that has not migrated yet.
    *
-   * Read today by one job: the worker's end-of-day Away sweep. The dashboards'
-   * Chicago calendar (`performance.range.ts`'s `AGENCY_TIME_ZONE`) is still a
-   * constant and deliberately not rewired here — that is a change to every
-   * date window in the app, and it gets its own ticket.
+   * Set in the Super Admin onboarding wizard and by the owner at
+   * `PATCH /agency/profile` (PAC-141). Read by: the worker's end-of-day Away
+   * sweep; `PermissionsService`, which copies it onto `AccessContext.timeZone`
+   * once per request, from where every dashboard window ("today", MTD,
+   * business-day aging, the leaderboard's month) is cut; and the quote-recap
+   * write path, which files a recap on this calendar.
    *
-   * Nothing lets an operator set it yet (no wizard step, no settings field);
-   * the validator is for the day something does, so a typo cannot be stored
-   * and later throw inside the cron.
+   * ## A change is only half retroactive
+   *
+   * Lead creation days are computed at read time, so lead history re-buckets
+   * on the next request. `Deal.soldDateYmd`, `QuoteRecap.quoteDateYmd` and
+   * `ProducerGoal.month` are **stored** on the calendar in force when they were
+   * written and are not rewritten — an agency that moves zones keeps every past
+   * sale and quote on the day it was filed. Rows the SmartSuite migration
+   * imported carry the day SmartSuite stated regardless. The settings page
+   * says so next to the field.
+   *
+   * The validator keeps a typo out of the row; the write paths additionally
+   * probe MongoDB (`assertMongoKnowsTimeZone`), whose zone table is not the
+   * runtime's, before accepting a name.
    */
   @Prop({
     type: String,

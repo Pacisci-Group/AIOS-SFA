@@ -120,7 +120,7 @@ docs {
   | param | type | default | notes |
   |---|---|---|---|
   | range | enum | `mtd` | `mtd` · `lastMonth` · `last3Months` · `ytd` · `lastYear` · `custom` |
-  | from, to | `YYYY-MM-DD` | — | required with `custom`; Chicago calendar days, `to` inclusive, ≤ 366 days |
+  | from, to | `YYYY-MM-DD` | — | required with `custom`; calendar days in the agency's time zone, `to` inclusive, ≤ 366 days |
   | producerIds | id[] | — | user ids; narrow-only |
   | leadSourceIds | id[] | — | from `GET /lead-sources`, and/or `__none__` for "no source" |
   | policyTypes | enum[] | — | line of business = the Sold form's Policy Type options |

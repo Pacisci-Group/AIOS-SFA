@@ -931,9 +931,9 @@ that automatically when the base branch is deleted after merge).
   instants in 2025 so the marker it leaves on non-fixture agencies never blocks a real evening).
 
 ### Deliberately not done
-- **`performance.range.ts`'s `AGENCY_TIME_ZONE` is still a constant.** Rewiring the dashboards' Chicago
-  calendar onto `Agency.timezone` touches every date window in the app — its own ticket.
-- No timezone picker in the onboarding wizard or settings; the validator is there for when one lands.
+- ~~**`performance.range.ts`'s `AGENCY_TIME_ZONE` is still a constant.**~~ Done in §16 (PAC-141): the
+  constant is gone and every window is cut on `AccessContext.timeZone`.
+- ~~No timezone picker in the onboarding wizard or settings.~~ Done in §16 (PAC-141).
 - Not a `TZ=`-prefixed cron: that pins one zone for every tenant, which is what the field exists to avoid.
 
 ### Verified
@@ -942,3 +942,55 @@ unit 15/15 (2 new suites) · e2e `set-users-away` 8/8, `profile` + `management-d
 (52/52 across the three) · Bruno `Auth` + `Profile` + `Management Dashboard` + `Users` 38/39 — the one
 failure is `Get Alerts` "the demo seed guarantees something on every card", a stale dev seed, not this
 change. **Not done: the browser check of the sidebar menu** (needs a signed-in session).
+
+## 16. PAC-141 — agency timezone: editable, and the dashboards' calendar (handoff, 2026-10-05)
+
+One PR, branch `asad/pac-141-agency-timezone`, base `dev`. Plan file:
+`~/.claude/plans/linear-ticket-pac-141-ticket-deep-toucan.md`.
+
+### Decisions (Asad, 2 Oct) — do not re-litigate
+- **Settings home:** `/settings/agency` ("Agency" card on the hub) backed by **`GET/PATCH /agency/profile`**,
+  reusing **`agency:branding:read/write`** — same argument as `agency/setup`. No new permission string,
+  no `api:sync:roles`. `/settings/profile` is the *personal* profile; keep the names apart.
+- **Zone resolution:** a required **`AccessContext.timeZone`**, filled by `PermissionsService` from the
+  agency read it already does (validated fallback `DEFAULT_AGENCY_TIME_ZONE`). **Redis prefix bumped
+  `sfa:perm:v4:` → `v5:`.** `PATCH /agency/profile` invalidates the agency after the write.
+- **Away marker on a zone change:** re-stamped in the same `updateOne` so the next sweep is the next
+  8 PM on the new clock (`sweepMarkerAfterZoneChange`: tonight's date if ≥ 20:00 there, else `null`),
+  and only when the zone actually changes. Written up on `AgencyAvailabilitySweep`.
+- **A zone change is half retroactive:** lead `createdYmd` is computed at read time (re-buckets);
+  `soldDateYmd`, `quoteDateYmd`, `ProducerGoal.month` are stored and stay put. Said on
+  `Agency.timezone`, in the settings copy and in Bruno. No re-derive job.
+
+### What exists now
+- `performance.range.ts`: `AGENCY_TIME_ZONE` **deleted**. `zonedDate(at, tz)`, `currentMonthIn(tz)`,
+  `recentMonthsIn(n, tz)`, `resolveRange(key, tz, custom?, now?)`, `resolveComparison(…)`,
+  `zonedDayStart(date, tz)` (binary search — the hourly walk was wrong for half-hour zones and past
+  UTC+12), `customRange(from, to)` (zone-free, the leaderboard's month). `requireTimeZone` throws on a
+  missing zone because specs are not type-checked (`isolatedModules`) — a stale call would otherwise
+  fall back to the host zone silently.
+- `leadCreatedYmdExpr(tz)` replaces the `LEAD_CREATED_YMD_EXPR` constant; `resolvePeriod(query, tz)`;
+  `quoteDateYmd(date, tz)`. Migration and demo seed read the tenant's zone from `provisionTenant`
+  (`TenantCtx.timeZone`, `Ctx.timeZone`) — no Central literal outside the schema default.
+- `DEFAULT_AGENCY_TIME_ZONE` moved to `@sfa/shared` (`domain/agency-time-zone.ts`, with
+  `AgencyProfileView`); `common/dates/time-zones.ts` re-exports it. **Build shared before API unit
+  tests too.**
+- Two validators on every write: `timeZoneSchema` (zod: shape + runtime) and
+  `assertMongoKnowsTimeZone` (a `$documents` + `$dateToString` probe — Mongo's zone table is not
+  ICU's; a name only Node knows would 500 the Owner/Manager dashboards).
+- Onboarding: `agency.timezone` optional in the DTO, written on create; wizard `ComboboxField`
+  defaulting to Central, Review step echoes it.
+- Web: `components/form/fields/ComboboxField.tsx` (Popover + Command, client-side filter, registered
+  on `useAppForm`), `lib/time-zones.ts` (`Intl.supportedValuesOf`, US first, labels like
+  `America/Chicago (Central Time, UTC−5)`), `features/settings/AgencyProfilePage.tsx`,
+  `lib/agency-profile-api.ts`.
+- Bruno: `White Label/Get Agency Profile`, `Update Agency Profile` (sends Central so runs stay
+  idempotent); `Onboard Agency` body + docs; seven dashboard docs reworded off "Chicago".
+- e2e: `test/agency-profile.e2e-spec.ts` (permissions, 400s, marker re-stamp, unchanged-save no-op,
+  Kiritimati→Etc/GMT+12 zone flow through `GET /performance?range=today`); onboarding gains a stored-zone
+  case and two 400s.
+
+### Follow-ups noted, not done
+- `service-tickets.service.ts` host-local midnight; demo seed `ymd()`/`monthKey()` host-local dates.
+- No Super Admin agency *edit* page (the Agencies tile is still "Coming soon"): a platform account
+  changes a zone post-onboarding by impersonating the owner.

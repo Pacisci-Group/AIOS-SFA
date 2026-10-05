@@ -5,7 +5,7 @@ import {
 import { FilterQuery, PipelineStage, Types } from 'mongoose';
 import { HOUSEHOLD_KEY_EXPR } from '../common/sales-metrics/household-key';
 import {
-  LEAD_CREATED_YMD_EXPR,
+  leadCreatedYmdExpr,
   OwnerFilterClauses,
   policyTypeValues,
   sourceMatch,
@@ -52,6 +52,7 @@ export function stalledLeadsPrefix(
   filter: OwnerFilterClauses,
   range: YmdRange,
   now: Date,
+  timeZone: string,
 ): PipelineStage[] {
   const cutoff = new Date(now.getTime() - MANAGEMENT_STALLED_HOURS * 3_600_000);
   return [
@@ -67,7 +68,7 @@ export function stalledLeadsPrefix(
     // under a line-of-business filter history drops out — the same honest
     // limit the Owner view's quoted premium has.
     ...lobMatch('policiesOfInterest.policyType', filter.policyTypes),
-    { $addFields: { createdYmd: LEAD_CREATED_YMD_EXPR } },
+    { $addFields: { createdYmd: leadCreatedYmdExpr(timeZone) } },
     { $match: ymdWindow('createdYmd', range) },
   ];
 }
@@ -80,12 +81,13 @@ export function activePipelinePrefix(
   match: Record<string, unknown>,
   filter: OwnerFilterClauses,
   range: YmdRange,
+  timeZone: string,
 ): PipelineStage[] {
   return [
     { $match: { ...match, status: { $nin: terminalLeadStatusValues() } } },
     ...sourceMatch(filter.leadSourceIds, 'leadSourceId'),
     ...lobMatch('policiesOfInterest.policyType', filter.policyTypes),
-    { $addFields: { createdYmd: LEAD_CREATED_YMD_EXPR } },
+    { $addFields: { createdYmd: leadCreatedYmdExpr(timeZone) } },
     { $match: ymdWindow('createdYmd', range) },
   ];
 }

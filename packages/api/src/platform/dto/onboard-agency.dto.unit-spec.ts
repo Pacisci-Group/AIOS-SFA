@@ -146,6 +146,44 @@ describe('toBranchSlug', () => {
   });
 });
 
+describe('onboardAgencySchema — timezone (PAC-141)', () => {
+  const valid = {
+    agency: { name: 'Acme Insurance', slug: 'acme-insurance' },
+    branch: { name: 'Main', address: {} },
+    modules: ['leads'],
+    owner: { firstName: 'Ada', lastName: 'Owner', email: 'ada@acme.test' },
+  };
+  const withZone = (timezone: unknown) =>
+    onboardAgencySchema.safeParse({
+      ...valid,
+      agency: { ...valid.agency, timezone },
+    });
+
+  it('is optional — omitted, the schema default applies', () => {
+    const parsed = onboardAgencySchema.parse(valid);
+    expect(parsed.agency.timezone).toBeUndefined();
+  });
+
+  it.each([
+    'America/Chicago',
+    'Asia/Kolkata',
+    'UTC',
+    'America/Argentina/Buenos_Aires',
+  ])('accepts %s', (timezone) => {
+    const result = withZone(timezone);
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ['a made-up zone', 'Mars/Olympus'],
+    ['a raw offset', '+05:30'],
+    ['an empty string', ''],
+    ['a number', 5],
+  ])('rejects %s', (_label, timezone) => {
+    expect(withZone(timezone).success).toBe(false);
+  });
+});
+
 describe('agencyAvailabilitySchema — carrier appointment (PAC-93)', () => {
   const carrierId = 'a'.repeat(24);
 

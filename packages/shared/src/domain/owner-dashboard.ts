@@ -39,7 +39,7 @@ export const OWNER_DASHBOARD_RANGE_KEYS = [
 export type OwnerDashboardRangeKey =
   (typeof OWNER_DASHBOARD_RANGE_KEYS)[number];
 
-/** Chicago calendar dates, `YYYY-MM-DD`. **`to` is inclusive.** */
+/** Calendar dates in the agency's timezone, `YYYY-MM-DD`. **`to` is inclusive.** */
 export interface OwnerDashboardWindow {
   from: string;
   to: string;

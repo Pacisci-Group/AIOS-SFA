@@ -40,7 +40,7 @@ export class PerformanceService {
     branchId: string | null,
     query: GetPerformanceDto,
   ): Promise<PerformanceResponse> {
-    const range = resolveRange(query.range, {
+    const range = resolveRange(query.range, access.timeZone, {
       from: query.from,
       to: query.to,
     });

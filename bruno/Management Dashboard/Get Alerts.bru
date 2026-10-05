@@ -83,7 +83,7 @@ docs {
   ## Query — the Owner view's filter, from the same filter bar
   | param | type | default | notes |
   |---|---|---|---|
-  | `range` | `mtd` · `lastMonth` · `last3Months` · `ytd` · `lastYear` · `custom` | `mtd` | Chicago calendar windows. `today`/`week` are the producer dashboard's and 400 here. |
+  | `range` | `mtd` · `lastMonth` · `last3Months` · `ytd` · `lastYear` · `custom` | `mtd` | Calendar windows in the agency's time zone (`Agency.timezone`). `today`/`week` are the producer dashboard's and 400 here. |
   | `from`, `to` | `YYYY-MM-DD` | — | required with `custom`; `to` inclusive; ≤ 366 days |
   | `producerIds` | id list | — | narrows the three cards (for tickets: the assigned CSR). Never the Team table. |
   | `leadSourceIds` | id list, `__none__` allowed | — | leads by their own source; deals through their lead; tickets through their lead (most have none) |
@@ -95,7 +95,7 @@ docs {
   | card | definition |
   |---|---|
   | `stalledLeads` | leads **created in the window** whose `lastActivityAt` is more than 48 hours ago (or missing), status not terminal (Sold, Converted, Not Qualified, Lost, Closed). Not `updatedAt` — the migration stamped that with the import time on every historic lead. |
-  | `agingAudits` | new-business deals **sold in the window** more than **5 business days** ago (weekends and US federal holidays excluded, Chicago calendar) whose audit is not `Pass`. A deal with no audit row is not aging. |
+  | `agingAudits` | new-business deals **sold in the window** more than **5 business days** ago (weekends and US federal holidays excluded, on the agency's calendar) whose audit is not `Pass`. A deal with no audit row is not aging. |
   | `overdueTickets` | service tickets **opened in the window** that are overdue right now: a hand-marked `overdue`, or an onboarding/renewal call past its step's `dueAt` and not complete (the Service dashboard's derived meaning). |
 
   ## Response `200`

@@ -34,3 +34,31 @@ export function endOfDaySweepDate(
   if (lastAwayDate === clock.date) return null;
   return clock.date;
 }
+
+/**
+ * What `Agency.availabilitySweep.lastAwayDate` should become when the agency
+ * moves to `timeZone` at `now` (PAC-141).
+ *
+ * The marker is a local date on the *old* clock, and read against the new one
+ * it misleads in both directions: an agency moving east to a zone where it is
+ * already past 8 PM would be swept within thirty minutes, in the middle of its
+ * workday; one moving west after tonight's sweep ran would be skipped tonight,
+ * because the old marker already names today. Re-stamping makes the rule "the
+ * next sweep is the next 8 PM on the new clock":
+ *
+ * - already 8 PM or later in the new zone → tonight is done (`today`);
+ * - earlier → `null`, so tonight's 8 PM in the new zone runs as normal — even
+ *   if the old zone's sweep ran an hour ago, since a second pass only touches
+ *   people who have set themselves Available since, which at that hour is
+ *   nobody.
+ *
+ * Only called when the zone actually changes; an unchanged save must not
+ * clear a marker the worker is about to catch up on.
+ */
+export function sweepMarkerAfterZoneChange(
+  now: Date,
+  timeZone: string,
+): string | null {
+  const clock = localClock(now, timeZone);
+  return clock.hour >= END_OF_DAY_LOCAL_HOUR ? clock.date : null;
+}

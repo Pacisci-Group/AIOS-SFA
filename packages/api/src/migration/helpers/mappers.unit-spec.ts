@@ -131,9 +131,9 @@ describe('deal type derivation', () => {
   describe('a choice our map has never seen', () => {
     it('is stored by the label SmartSuite sent, not as an opaque code', () => {
       // A line of business someone adds to SmartSuite next year.
-      expect(resolvePolicyType({ value: 'zzNEW', label: 'Pet Insurance' })).toBe(
-        'Pet Insurance',
-      );
+      expect(
+        resolvePolicyType({ value: 'zzNEW', label: 'Pet Insurance' }),
+      ).toBe('Pet Insurance');
     });
 
     it("maps SmartSuite's wording onto ours when the label is one we know", () => {

@@ -3,6 +3,7 @@ import { METHOD_METADATA } from '@nestjs/common/constants';
 import { AgencyPermission } from '@sfa/shared';
 import { AgencyDomainsController } from '../../src/agency-domains/agency-domains.controller';
 import { AgencyEmailController } from '../../src/agency-email/agency-email.controller';
+import { AgencyProfileController } from '../../src/agency-profile/agency-profile.controller';
 import {
   IS_PUBLIC_KEY,
   REQUIRE_PERMISSIONS_KEY,
@@ -13,8 +14,9 @@ import { AgencyBrandingController } from '../../src/tenant-branding/tenant-brand
  * PAC-133. `PermissionsGuard` admits a route that declares no permission, so a
  * forgotten decorator is not a 403 — it is an open door. That is how
  * `DELETE /agency/domains/:domainId` shipped callable by every user in the
- * agency. These three controllers are `@SkipModule`, so no module gate stands
- * behind them either: the permission is the only check.
+ * agency. These controllers are `@SkipModule`, so no module gate stands
+ * behind them either: the permission is the only check. The agency profile
+ * (PAC-141) reuses the branding pair rather than minting its own.
  *
  * Read off the decorator metadata rather than through HTTP, so a new route
  * added to any of them is covered without anyone remembering to write a test.
@@ -38,6 +40,12 @@ describe('white-label settings controllers', () => {
       prototype: AgencyEmailController.prototype as object,
       read: AgencyPermission.EmailRead,
       write: AgencyPermission.EmailWrite,
+    },
+    {
+      name: AgencyProfileController.name,
+      prototype: AgencyProfileController.prototype as object,
+      read: AgencyPermission.BrandingRead,
+      write: AgencyPermission.BrandingWrite,
     },
   ];
 

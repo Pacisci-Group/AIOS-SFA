@@ -19,8 +19,11 @@ import { PermissionCache } from './permission-cache';
  *        collections instead of arrays on the user and role documents.
  * `v4` = `tokenVersion` added so a password reset can end live sessions
  *        (PAC-79).
+ * `v5` = `timeZone` added, the agency's calendar for every dashboard window
+ *        (PAC-141). A `v4` entry would deserialize without it and throw in the
+ *        first date helper.
  */
-const KEY_PREFIX = 'sfa:perm:v4:';
+const KEY_PREFIX = 'sfa:perm:v5:';
 
 /**
  * Redis-backed cache for resolved access contexts. Entries carry a safety TTL

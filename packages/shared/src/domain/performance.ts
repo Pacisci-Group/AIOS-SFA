@@ -25,7 +25,7 @@ export type PerformanceRangeKey = (typeof PERFORMANCE_RANGE_KEYS)[number];
  */
 export interface PerformanceRange {
   key: PerformanceRangeKey;
-  /** Chicago calendar dates, `YYYY-MM-DD`. **`to` is inclusive.** */
+  /** Calendar dates in the agency's timezone, `YYYY-MM-DD`. **`to` is inclusive.** */
   from: string;
   to: string;
 }

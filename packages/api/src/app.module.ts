@@ -57,6 +57,7 @@ import { ShareLinksModule } from './share-links/share-links.module';
 import { SoldDealsModule } from './sold-deals/sold-deals.module';
 import { StorageModule } from './storage/storage.module';
 import { AgencySetupModule } from './agency-setup/agency-setup.module';
+import { AgencyProfileModule } from './agency-profile/agency-profile.module';
 import { AgencyCarrierAppointmentsModule } from './agency-carrier-appointments/agency-carrier-appointments.module';
 import { TenantBrandingModule } from './tenant-branding/tenant-branding.module';
 import { UsersModule } from './users/users.module';
@@ -142,6 +143,9 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // modules because that is the wizard it gates, and routes under its own
     // `agency/setup` prefix.
     AgencySetupModule,
+    // The agency's own profile — its time zone (PAC-141). Same shape, own
+    // `agency/profile` prefix, gated on the branding pair like the setup flag.
+    AgencyProfileModule,
     // The agency's carrier appointments (PAC-93). Same shape as the modules
     // above — its own `agency/carrier-appointments` prefix, its own
     // `agency:carrier_appointments:*` gate, no module entitlement.
