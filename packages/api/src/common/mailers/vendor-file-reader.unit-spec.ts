@@ -1,5 +1,6 @@
 import { Readable } from 'stream';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { DEFAULT_MAILER_DISCOUNTS } from './mailer-processor';
 import { processMailerFile } from './mailer-processor';
 import type { MailerProcessorSettings } from './mailer-processor';
@@ -141,6 +142,34 @@ async function xlsxBytes(): Promise<Buffer> {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
+const SPREADSHEETML =
+  'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+
+/**
+ * The same workbook as .NET's OpenXML SDK writes it: the SpreadsheetML
+ * namespace bound to `x:` instead of the default, so every tag is `<x:row>`,
+ * `<x:c>`, `<x:si>`. Valid OOXML — and the form that read as "empty" under
+ * ExcelJS, which is why the reader is SheetJS (PAC-150). Tags already in
+ * another namespace (`mc:`, `x14ac:`) keep their own prefix, as they do in
+ * the real file. The fixture is still *built* with ExcelJS, which writes the
+ * Excel form; this rewrites it into the OpenXML-SDK form.
+ */
+async function prefixedXlsxBytes(): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(await xlsxBytes());
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir || !entry.name.endsWith('.xml')) continue;
+    const xml = await entry.async('string');
+    if (!xml.includes(`xmlns="${SPREADSHEETML}"`)) continue;
+    zip.file(
+      entry.name,
+      xml
+        .replace(`xmlns="${SPREADSHEETML}"`, `xmlns:x="${SPREADSHEETML}"`)
+        .replace(/<(\/?)([A-Za-z]\w*)(?=[\s/>])/g, '<$1x:$2'),
+    );
+  }
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 describe('detectVendorFileKind', () => {
   it('trusts magic bytes over the filename and the content type', () => {
     const zipHead = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
@@ -168,21 +197,23 @@ describe('detectVendorFileKind', () => {
 
 describe('cellToPrimitive', () => {
   it('turns a Date back into the Excel serial the CSV path carries', () => {
-    expect(cellToPrimitive(QUOTE_DATE)).toBe(QUOTE_SERIAL);
+    expect(cellToPrimitive({ t: 'd', v: QUOTE_DATE })).toBe(QUOTE_SERIAL);
   });
 
-  it('flattens rich text, formulas, hyperlinks and errors', () => {
-    expect(
-      cellToPrimitive({ richText: [{ text: 'Okla' }, { text: 'homa' }] }),
-    ).toBe('Oklahoma');
-    expect(cellToPrimitive({ formula: 'A1+A2', result: 42 })).toBe(42);
-    // Never recalculated: an empty cell, not a zero.
-    expect(cellToPrimitive({ formula: 'A1+A2' })).toBe('');
-    expect(
-      cellToPrimitive({ text: 'Visit', hyperlink: 'https://example.com' }),
-    ).toBe('Visit');
-    expect(cellToPrimitive({ error: '#N/A' })).toBe('');
-    expect(cellToPrimitive(null)).toBe('');
+  it('passes strings, numbers and booleans through untouched', () => {
+    expect(cellToPrimitive({ t: 's', v: 'Oklahoma' })).toBe('Oklahoma');
+    expect(cellToPrimitive({ t: 'n', v: 42 })).toBe(42);
+    expect(cellToPrimitive({ t: 'b', v: true })).toBe(true);
+    // A formula cell is its cached result; the formula text is not data.
+    expect(cellToPrimitive({ t: 'n', v: 42, f: 'A1+A2' })).toBe(42);
+  });
+
+  it('reads an error, a blank stub and a missing cell as empty', () => {
+    // SheetJS carries the error as a numeric code with `#N/A` in `w`; neither
+    // is a value a mail piece can carry.
+    expect(cellToPrimitive({ t: 'e', v: 42, w: '#N/A' })).toBe('');
+    expect(cellToPrimitive({ t: 'z' })).toBe('');
+    expect(cellToPrimitive(undefined)).toBe('');
   });
 });
 
@@ -200,6 +231,25 @@ describe('readVendorFile', () => {
       'xlsx',
     );
     expect(table.headers).toEqual(HEADERS);
+  });
+
+  it('reads a namespace-prefixed XLSX exactly as Excel’s own', async () => {
+    const prefixed = await prefixedXlsxBytes();
+    // Guard the fixture: it must really carry the prefix it claims to.
+    const sheet = await (
+      await JSZip.loadAsync(prefixed)
+    )
+      .file('xl/worksheets/sheet1.xml')!
+      .async('string');
+    expect(sheet).toContain('<x:row');
+
+    const fromPrefixed = await readVendorFile(Readable.from(prefixed), 'xlsx');
+    const fromExcel = await readVendorFile(
+      Readable.from(await xlsxBytes()),
+      'xlsx',
+    );
+    expect(fromPrefixed).toEqual(fromExcel);
+    expect(fromPrefixed.rows).toHaveLength(2);
   });
 
   it('refuses an empty file rather than importing nothing', async () => {
