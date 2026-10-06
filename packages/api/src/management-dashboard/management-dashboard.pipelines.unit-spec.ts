@@ -1,10 +1,11 @@
-import { Types } from 'mongoose';
+import { Types, type PipelineStage } from 'mongoose';
 import { HOUSEHOLD_KEY_EXPR } from '../common/sales-metrics/household-key';
 import type { YmdRange } from '../performance/performance.range';
 import {
   agingAuditsPrefix,
   householdsByProducer,
   lobMatch,
+  AUDIT_OWNER_FIELD,
   openAuditItemsByProducer,
   overdueTicketsPrefix,
   pagedFacet,
@@ -83,6 +84,13 @@ describe('stalledLeadsPrefix', () => {
 });
 
 describe('agingAuditsPrefix', () => {
+  const joinsLeads = (stages: PipelineStage[]) =>
+    stages.some(
+      (stage) =>
+        '$lookup' in stage &&
+        (stage as { $lookup: { from: string } }).$lookup.from === 'leads',
+    );
+
   it('joins the newest non-Pass audit and drops deals without one', () => {
     const stages = agingAuditsPrefix({ agencyId: 'a' }, {});
     const lookup = stages.find((stage) => '$lookup' in stage) as {
@@ -93,20 +101,44 @@ describe('agingAuditsPrefix', () => {
       isTestRecord: { $ne: true },
       auditStatus: { $ne: 'Pass' },
     });
-    expect(stages[stages.length - 1]).toEqual({
+    expect(stages).toContainEqual({
       $match: { '_audit.0': { $exists: true } },
     });
   });
 
   it('resolves the source through the lead only under a source filter', () => {
+    expect(joinsLeads(agingAuditsPrefix({}, {}))).toBe(false);
     expect(
-      agingAuditsPrefix({}, {}).some((stage) => '$addFields' in stage),
-    ).toBe(false);
-    expect(
-      agingAuditsPrefix({}, { leadSourceIds: ['__none__'] }).some(
-        (stage) => '$addFields' in stage,
-      ),
+      joinsLeads(agingAuditsPrefix({}, { leadSourceIds: ['__none__'] })),
     ).toBe(true);
+  });
+
+  /**
+   * PAC-136: the producer filter narrows by who is responsible for the audit,
+   * so it agrees with the team table and drawer after a work transfer.
+   */
+  it('computes the responsible owner and applies the producer pin to it', () => {
+    const pin = { [AUDIT_OWNER_FIELD]: { $in: ['p'] } };
+    const stages = agingAuditsPrefix({ agencyId: 'a' }, {}, pin);
+    expect(stages[stages.length - 1]).toEqual({ $match: pin });
+    const owner = stages.find(
+      (stage) => '$addFields' in stage && AUDIT_OWNER_FIELD in stage.$addFields,
+    ) as {
+      $addFields: Record<string, { $switch: { branches: { then: string }[] } }>;
+    };
+    // User assignee first, else the seller on the deal itself.
+    expect(
+      owner.$addFields[AUDIT_OWNER_FIELD].$switch.branches.map((b) => b.then),
+    ).toEqual(['$_agingAudit.auditAssignee.id', '$producerId']);
+  });
+
+  it('adds no owner pin without a producer selection', () => {
+    const stages = agingAuditsPrefix({ agencyId: 'a' }, {});
+    expect(
+      stages.some(
+        (stage) => '$match' in stage && AUDIT_OWNER_FIELD in stage.$match,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -182,15 +214,36 @@ describe('householdsByProducer', () => {
 });
 
 describe('openAuditItemsByProducer', () => {
-  it('starts from audits with open items and attributes through the deal', () => {
-    const stages = openAuditItemsByProducer('agency', { producerId: 'p' });
+  it('starts from audits with open items and groups by the responsible owner', () => {
+    const stages = openAuditItemsByProducer('agency', { _owner: 'p' });
     expect(match(stages)).toEqual({
       agencyId: 'agency',
       isTestRecord: { $ne: true },
       openFailedCount: { $gt: 0 },
     });
-    const lookup = stages[1] as { $lookup: { pipeline: unknown[] } };
-    expect(match(lookup.$lookup.pipeline)).toEqual({ producerId: 'p' });
+    // The clamp applies to the computed owner, not to the deal's seller —
+    // a transferred audit counts against the successor (PAC-136).
+    expect(match(stages, 4)).toEqual({ _owner: 'p' });
+    expect((stages[5] as { $group: { _id: string } }).$group._id).toBe(
+      `$${AUDIT_OWNER_FIELD}`,
+    );
+  });
+
+  it('owns a user-assigned audit by its assignee, an unassigned one by the seller, a role-owned one by nobody', () => {
+    const stages = openAuditItemsByProducer('agency', {});
+    const owner = (
+      stages[3] as {
+        $addFields: Record<
+          string,
+          { $switch: { branches: { then: string }[]; default: unknown } }
+        >;
+      }
+    ).$addFields[AUDIT_OWNER_FIELD].$switch;
+    expect(owner.branches.map((b) => b.then)).toEqual([
+      '$$ROOT.auditAssignee.id',
+      '$_deal.producerId',
+    ]);
+    expect(owner.default).toBeNull();
   });
 });
 

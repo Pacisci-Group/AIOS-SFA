@@ -135,6 +135,24 @@ export const AgencyPermission = {
    */
   CarrierAppointmentsRead: 'agency:carrier_appointments:read',
   CarrierAppointmentsWrite: 'agency:carrier_appointments:write',
+  /**
+   * Hand a person's open work — tickets, clients, leads, audits, rotation
+   * slots, share links — to a named colleague (PAC-136). The departing-
+   * employee case: what is still to be done moves, what was done stays
+   * credited to whoever did it.
+   *
+   * Its own permission rather than `agency:users:write`: the product owner
+   * wants it delegable on its own, and reassigning a whole book of clients is
+   * a different blast radius from inviting someone. It is still granted per
+   * role, but only an **agency-wide** role can use it — a branch- or own-scoped
+   * holder is refused by the service (product owner, 2026-10-05) — and work
+   * never crosses from one branch to another.
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, and
+   * the same ⚠: it reaches existing owners only through the role-template
+   * migration that shipped with it.
+   */
+  WorkTransfer: 'agency:work_transfer:write',
 } as const;
 
 export type ModuleAction = 'read' | 'write';

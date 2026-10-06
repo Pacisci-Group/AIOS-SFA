@@ -105,6 +105,25 @@ export function TeamActivityTable({
               </TableCell>
               <TableCell className="pr-5" />
             </TableRow>
+            {/* Audits owned by a role are a queue, not a person, so they sit in
+                no producer's row and not in the total above — but their
+                backlog still has to show. Hidden at zero, where the line would
+                only be noise. */}
+            {data.roleAssignedOpenAuditItems > 0 && (
+              <TableRow className="hover:bg-transparent">
+                <TableCell className="pl-5 text-muted-foreground">
+                  Assigned to a role
+                </TableCell>
+                <TableCell />
+                <TableCell />
+                <TableCell />
+                <TableCell />
+                <TableCell className="text-right tabular-nums">
+                  {formatCount(data.roleAssignedOpenAuditItems)}
+                </TableCell>
+                <TableCell className="pr-5" />
+              </TableRow>
+            )}
           </TableFooter>
         </Table>
       )}

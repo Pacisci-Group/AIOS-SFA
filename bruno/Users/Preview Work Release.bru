@@ -1,0 +1,47 @@
+meta {
+  name: Preview Work Release
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{baseUrl}}/users/{{activeUserId}}/work-release/preview
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("counts what removal would release", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("ticketsUnassigned");
+    expect(body).to.have.property("onboardingsUnassigned");
+    expect(body).to.have.property("renewalCyclesUnassigned");
+    expect(body).to.have.property("householdsUnassigned");
+    expect(body).to.have.property("leadsUnassigned");
+    expect(body).to.have.property("rotationsDeactivated");
+  });
+}
+
+docs {
+  # GET /users/:userId/work-release/preview
+
+  What `DELETE /users/:userId` **without** a successor would put back in the
+  unassigned queue. Read-only — counts the same filters the release uses. Feeds
+  the remove dialog's confirmation copy.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:users:write` (the
+  same as removal itself).
+
+  **Response `200`** — `{ ticketsUnassigned, rotationsDeactivated,
+  onboardingsUnassigned, renewalCyclesUnassigned, householdsUnassigned,
+  leadsUnassigned }`. See **Deactivate User** for what each release does.
+
+  **Errors** — `403` caller lacks `agency:users:write`.
+}

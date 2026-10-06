@@ -4,9 +4,14 @@ import * as bcrypt from 'bcrypt';
 import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { Activity } from '../src/activities/schemas/activity.schema';
+import { Onboarding } from '../src/crm/schemas/onboarding.schema';
+import { RenewalCycle } from '../src/crm/schemas/renewal-cycle.schema';
 import { ServiceTicket } from '../src/crm/schemas/service-ticket.schema';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
 import { Deal } from '../src/deals/schemas/deal.schema';
+import { Household } from '../src/households/schemas/household.schema';
+import { Lead } from '../src/leads/schemas/lead.schema';
 import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import { User } from '../src/users/schemas/user.schema';
 import { login, authHeader } from './helpers/auth.helper';
@@ -27,6 +32,11 @@ describe('User removal (e2e)', () => {
   let ownerToken: string;
   let users: Model<User>;
   let tickets: Model<ServiceTicket>;
+  let onboardings: Model<Onboarding>;
+  let cycles: Model<RenewalCycle>;
+  let households: Model<Household>;
+  let leads: Model<Lead>;
+  let activities: Model<Activity>;
   let rotations: Model<CrmRotation>;
   let deals: Model<Deal>;
   let roleAssignments: RoleAssignmentsService;
@@ -39,6 +49,11 @@ describe('User removal (e2e)', () => {
 
     users = app.get<Model<User>>(getModelToken(User.name));
     tickets = app.get<Model<ServiceTicket>>(getModelToken(ServiceTicket.name));
+    onboardings = app.get<Model<Onboarding>>(getModelToken(Onboarding.name));
+    cycles = app.get<Model<RenewalCycle>>(getModelToken(RenewalCycle.name));
+    households = app.get<Model<Household>>(getModelToken(Household.name));
+    leads = app.get<Model<Lead>>(getModelToken(Lead.name));
+    activities = app.get<Model<Activity>>(getModelToken(Activity.name));
     rotations = app.get<Model<CrmRotation>>(getModelToken(CrmRotation.name));
     deals = app.get<Model<Deal>>(getModelToken(Deal.name));
     roleAssignments = app.get(RoleAssignmentsService);
@@ -71,6 +86,9 @@ describe('User removal (e2e)', () => {
       tickets.deleteMany({}),
       rotations.deleteMany({}),
       deals.deleteMany({}),
+      onboardings.deleteMany({}),
+      cycles.deleteMany({}),
+      leads.deleteMany({}),
     ]);
   });
 
@@ -247,6 +265,98 @@ describe('User removal (e2e)', () => {
      * assignment. Sweeping it into the release would silently rewrite the
      * leaderboard and every "produced by" column.
      */
+    /**
+     * PAC-136: releasing the tickets alone undid itself — the next onboarding
+     * or renewal call, and every new cycle, was minted from a field still
+     * naming the removed user. Each seed is cleared so that work opens
+     * unassigned and reaches the queue.
+     */
+    it('releases the seeds of future work, leaving finished work alone', async () => {
+      const agencyOid = new Types.ObjectId(ctx.agencyId);
+      const me = new Types.ObjectId(producerId);
+      const chain = {
+        agencyId: agencyOid,
+        householdId: new Types.ObjectId(ctx.householdId),
+        clientName: 'Test Client',
+        startedAt: new Date(),
+        assignedCsrId: me,
+      };
+      const live = await onboardings.create(chain);
+      const done = await onboardings.create({
+        ...chain,
+        completedAt: new Date(),
+        currentStepKey: null,
+      });
+      const cycle = await cycles.create({
+        agencyId: agencyOid,
+        groupKey: 'g',
+        termKey: 't',
+        renewalDate: new Date(),
+        track: 'annual',
+        assignedCsrId: me,
+      });
+      await households.updateOne(
+        { _id: new Types.ObjectId(ctx.householdId) },
+        { $set: { assignedCrmId: me } },
+      );
+      const tenant = { agencyId: ctx.agencyId, branchId: ctx.branchId };
+      const open = await leads.create({
+        ...tenant,
+        status: 'New',
+        producerId: me,
+      });
+      const sold = await leads.create({
+        ...tenant,
+        status: 'Sold',
+        producerId: me,
+      });
+
+      const preview = await api()
+        .get(`/api/v1/users/${producerId}/work-release/preview`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const expected = {
+        onboardingsUnassigned: 1,
+        renewalCyclesUnassigned: 1,
+        householdsUnassigned: 1,
+        leadsUnassigned: 1,
+      };
+      expect(preview.body).toMatchObject(expected);
+
+      const res = await api()
+        .delete(`/api/v1/users/${producerId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(res.body).toMatchObject(expected);
+
+      expect((await onboardings.findById(live._id).lean())?.assignedCsrId).toBe(
+        null,
+      );
+      // A finished chain mints nothing more; its CSR is history.
+      expect(
+        (
+          await onboardings.findById(done._id).lean()
+        )?.assignedCsrId?.toString(),
+      ).toBe(producerId);
+      expect((await cycles.findById(cycle._id).lean())?.assignedCsrId).toBe(
+        null,
+      );
+      expect(
+        (await households.findById(ctx.householdId).lean())?.assignedCrmId,
+      ).toBeUndefined();
+
+      // The open lead is back in the unclaimed pool, with a reason on its
+      // timeline; the sold one still records who sold it.
+      expect((await leads.findById(open._id).lean())?.producerId).toBe(null);
+      expect(
+        (await leads.findById(sold._id).lean())?.producerId?.toString(),
+      ).toBe(producerId);
+      const note = await activities
+        .findOne({ leadId: open._id, type: 'lead_reassigned' })
+        .lean();
+      expect(note?.summary).toContain('unclaimed pool');
+    });
+
     it('never touches attribution on deals', async () => {
       const deal = await deals.create({
         agencyId: new Types.ObjectId(ctx.agencyId),

@@ -84,7 +84,9 @@ docs {
   | value | the latest quote recap's premium, or `null` when none was written |
 
   ## Open audit items
-  One row per failed, unresolved item on the producer's deals — all time, the
+  One row per failed, unresolved item on audits this person is responsible for
+  (user assignee, or the seller when unassigned — so a successor sees a
+  departed producer's transferred items, PAC-136) — all time, the
   set `stats.openAuditItems` counts — oldest first, capped at 200. Each opens
   the household until the Deal Audit page ships (PAC-106).
 

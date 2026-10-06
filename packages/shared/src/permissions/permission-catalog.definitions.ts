@@ -171,6 +171,11 @@ const ADMIN_COPY: Record<string, { label: string; description: string }> = {
     description:
       'Add and remove carrier appointments, set the primary one, and change their codes.',
   },
+  [AgencyPermission.WorkTransfer]: {
+    label: 'Transfer work',
+    description:
+      'Hand a person’s open tickets, clients, leads and audits to a colleague — typically when someone leaves. Completed work stays credited to whoever did it.',
+  },
 };
 
 function moduleDefinitions(): PermissionDefinition[] {
