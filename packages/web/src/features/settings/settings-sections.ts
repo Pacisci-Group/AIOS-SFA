@@ -60,11 +60,9 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     to: "/settings/agency",
     label: "Agency",
     description:
-      "The time zone your dashboards, aging rules and end-of-day run keep.",
+      "Your time zone, and the hour your team is set Away each evening.",
     icon: Clock,
-    // Reuses the branding pair, like the API behind it (PAC-141). Listed twice
-    // in `SETTINGS_PERMISSIONS` as a result, which `anyOf` does not mind.
-    permission: AgencyPermission.BrandingRead,
+    permission: AgencyPermission.SettingsRead,
   },
   {
     to: "/settings/branding",

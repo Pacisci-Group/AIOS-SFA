@@ -143,8 +143,9 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // modules because that is the wizard it gates, and routes under its own
     // `agency/setup` prefix.
     AgencySetupModule,
-    // The agency's own profile — its time zone (PAC-141). Same shape, own
-    // `agency/profile` prefix, gated on the branding pair like the setup flag.
+    // The agency's own profile — its working day: time zone and end-of-day
+    // hour (PAC-141, PAC-149). Same shape, own `agency/profile` prefix, gated
+    // on its own `agency:settings:*` pair.
     AgencyProfileModule,
     // The agency's carrier appointments (PAC-93). Same shape as the modules
     // above — its own `agency/carrier-appointments` prefix, its own

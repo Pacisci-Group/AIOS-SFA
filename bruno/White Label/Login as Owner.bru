@@ -40,6 +40,10 @@ tests {
     expect(perms).to.include("agency:branding:write");
     expect(perms).to.include("agency:domains:write");
     expect(perms).to.include("agency:email:write");
+    // `/settings/agency` (PAC-149) — granted to existing owners by the
+    // `agency_settings_permission_grant` migration.
+    expect(perms).to.include("agency:settings:read");
+    expect(perms).to.include("agency:settings:write");
   });
 }
 

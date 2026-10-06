@@ -39,8 +39,8 @@ export interface TeamMemberSpec {
    * Presence (PAC-139 §6, §6a). Omitted = `available`, the default; one
    * producer is `busy` and one `away` so the Manager view's Status column
    * shows all three dots and the Command Center's "assign to" picker has
-   * someone to leave out. (The worker sets everyone `away` at 8 PM agency
-   * time; the seed re-stamps these on every run.)
+   * someone to leave out. (The worker sets everyone `away` at the agency's
+   * end-of-day hour, 8 PM by default; the seed re-stamps these on every run.)
    */
   availability?: UserAvailability;
 }

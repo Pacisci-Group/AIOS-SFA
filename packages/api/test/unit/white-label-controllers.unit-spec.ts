@@ -16,7 +16,7 @@ import { AgencyBrandingController } from '../../src/tenant-branding/tenant-brand
  * `DELETE /agency/domains/:domainId` shipped callable by every user in the
  * agency. These controllers are `@SkipModule`, so no module gate stands
  * behind them either: the permission is the only check. The agency profile
- * (PAC-141) reuses the branding pair rather than minting its own.
+ * (PAC-141) sits here too, on its own `agency:settings:*` pair since PAC-149.
  *
  * Read off the decorator metadata rather than through HTTP, so a new route
  * added to any of them is covered without anyone remembering to write a test.
@@ -44,8 +44,9 @@ describe('white-label settings controllers', () => {
     {
       name: AgencyProfileController.name,
       prototype: AgencyProfileController.prototype as object,
-      read: AgencyPermission.BrandingRead,
-      write: AgencyPermission.BrandingWrite,
+      // Its own pair since PAC-149 — not branding's (see the controller).
+      read: AgencyPermission.SettingsRead,
+      write: AgencyPermission.SettingsWrite,
     },
   ];
 
