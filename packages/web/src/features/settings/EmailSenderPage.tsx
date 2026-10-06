@@ -49,12 +49,21 @@ export default function EmailSenderPage() {
   const [localPart, setLocalPart] = useState('');
   const [domain, setDomain] = useState('');
 
+  // One effect per field, keyed on that field's saved value: the two cards save
+  // independently, and saving one must not wipe an unsaved edit in the other.
+  const saved = query.data;
   useEffect(() => {
-    if (!query.data) return;
-    setFromName(query.data.fromName ?? '');
-    setReplyTo(query.data.replyTo ?? '');
-    setLocalPart(query.data.fromLocalPart ?? '');
-  }, [query.data]);
+    if (saved) setFromName(saved.fromName ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved?.fromName]);
+  useEffect(() => {
+    if (saved) setReplyTo(saved.replyTo ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved?.replyTo]);
+  useEffect(() => {
+    if (saved) setLocalPart(saved.fromLocalPart ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved?.fromLocalPart]);
 
   function onSaved(next: AgencyEmailSettings) {
     queryClient.setQueryData(['agency-email'], next);
@@ -65,7 +74,6 @@ export default function EmailSenderPage() {
       updateEmailSettings({
         fromName: fromName.trim() || null,
         replyTo: replyTo.trim() || null,
-        fromLocalPart: localPart.trim() || null,
       }),
     onSuccess: (next) => {
       toast.success('Email settings saved');
@@ -73,6 +81,18 @@ export default function EmailSenderPage() {
     },
     onError: (err) => toast.error(errorMessage(err)),
   });
+
+  const saveMailbox = useMutation({
+    mutationFn: () =>
+      updateEmailSettings({ fromLocalPart: localPart.trim() || null }),
+    onSuccess: (next) => {
+      toast.success('Mailbox saved');
+      onSaved(next);
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+  const mailboxDirty =
+    localPart.trim() !== (query.data?.fromLocalPart ?? '');
 
   const addDomain = useMutation({
     mutationFn: () => setSendingDomain(domain.trim()),
@@ -236,6 +256,14 @@ export default function EmailSenderPage() {
                       <span className="font-mono text-sm text-muted-foreground">
                         @{data.sendingDomain}
                       </span>
+                      <Button
+                        variant="brand"
+                        size="sm"
+                        disabled={!mailboxDirty || saveMailbox.isPending}
+                        onClick={() => saveMailbox.mutate()}
+                      >
+                        {saveMailbox.isPending ? 'Saving…' : 'Save'}
+                      </Button>
                     </div>
                   </div>
 
