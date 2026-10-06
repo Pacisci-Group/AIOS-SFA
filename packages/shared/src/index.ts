@@ -1,6 +1,6 @@
 export * from './domain/activity';
 export * from './domain/agency-onboarding';
-export * from './domain/agency-time-zone';
+export * from './domain/agency-profile';
 export * from './domain/subdomain';
 export * from './domain/address';
 export * from './domain/bug-report';

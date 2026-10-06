@@ -6,7 +6,8 @@
  * which lists only people who are `available`.
  *
  * One job writes it besides the user: the worker's `SetUsersAwayFn` flips
- * every active user of an agency to `away` at 8 PM in the agency's timezone
+ * every active user of an agency to `away` at the agency's end-of-day hour
+ * (`Agency.endOfDayHour`, default 8 PM — PAC-149) in its timezone
  * (`Agency.timezone`, §6a). Nobody is flipped back — each person sets
  * themself `available` again when they start work. That is the *only*
  * automatic write: there is still no "idle" derived from inactivity and no

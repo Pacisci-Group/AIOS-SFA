@@ -1,6 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { END_OF_DAY_USER_AVAILABILITY } from '@sfa/shared';
+import {
+  DEFAULT_AGENCY_END_OF_DAY_HOUR,
+  END_OF_DAY_USER_AVAILABILITY,
+} from '@sfa/shared';
 import { cron } from 'inngest';
 import { Model, Types } from 'mongoose';
 import {
@@ -36,12 +39,14 @@ export interface SetUsersAwayResult {
 /** What a lean read of the agency yields — defaults do not apply on `.lean()`. */
 type AgencySweepLean = {
   timezone?: string;
+  endOfDayHour?: number;
   availabilitySweep?: { lastAwayDate?: string | null };
 };
 
 /**
  * Sets every active user of an agency to Away at the end of its working day
- * (PAC-139 §6a).
+ * (PAC-139 §6a) — at `Agency.endOfDayHour` on its own clock, 8 PM unless the
+ * owner has changed it (PAC-149).
  *
  * ## Why this exists
  *
@@ -52,16 +57,17 @@ type AgencySweepLean = {
  * themself Available when they start work, which is the point — the morning
  * click is the person saying "I'm here".
  *
- * ## One cron, every agency's own 8 PM
+ * ## One cron, every agency's own end-of-day hour
  *
  * There is no cron per agency and no `TZ=` prefix on the schedule. A single
  * trigger pinned to Central time would be right only while every tenant is in
  * Oklahoma, which is exactly the assumption `Agency.timezone` exists to
- * remove. Instead this ticks every thirty minutes in UTC and asks, per agency,
- * what its own clock says. Thirty minutes rather than an hour so a half-hour
- * zone (India, Newfoundland) still lands on its 8 PM; the only zones a
+ * remove — and since PAC-149 the hour differs per agency too. Instead this
+ * ticks every thirty minutes in UTC and asks, per agency, what its own clock
+ * says against its own hour. Thirty minutes rather than an hour so a half-hour
+ * zone (India, Newfoundland) still lands on its hour; the only zones a
  * half-hour grid misses are the two quarter-hour ones, which are noted and
- * accepted.
+ * accepted. It is also why `endOfDayHour` is a whole hour rather than `HH:mm`.
  *
  * ## The date marker is what makes a tick safe to miss or to repeat
  *
@@ -69,8 +75,8 @@ type AgencySweepLean = {
  * zone and `availabilitySweep.lastAwayDate`. A tick the worker slept through
  * is caught up by the next one that evening; a tick that fires twice, or a
  * second worker replica, finds the date already claimed and does nothing.
- * Without it a `hour === 20` match would quietly skip any night the worker
- * happened to be deploying.
+ * Without it a `hour === endOfDayHour` match would quietly skip any night the
+ * worker happened to be deploying.
  *
  * ## Claim first, then flip
  *
@@ -79,9 +85,9 @@ type AgencySweepLean = {
  * to accept: a crash between the two writes skips that agency's night (and
  * says so in the log on the next tick, since nothing flipped), rather than
  * re-flipping — on a later tick — someone who had already come back to
- * Available after 8 PM. "Whatever you set after 8 PM sticks" is the rule a
- * person can rely on; the other ordering would break it exactly when it is
- * hardest to notice.
+ * Available after the hour. "Whatever you set after the end of the day
+ * sticks" is the rule a person can rely on; the other ordering would break it
+ * exactly when it is hardest to notice.
  *
  * ## What it does not touch
  *
@@ -114,9 +120,10 @@ export class SetUsersAwayFn implements InngestFunctionProvider {
         name: 'Set users Away at the end of the working day',
 
         /**
-         * Every thirty minutes, in UTC. Which tick is *the* 8 PM tick differs
-         * per agency and per season (DST), and the handler works that out; the
-         * schedule just has to land on every zone's top and bottom of the hour.
+         * Every thirty minutes, in UTC. Which tick is *the* end-of-day tick
+         * differs per agency, per hour setting and per season (DST), and the
+         * handler works that out; the schedule just has to land on every
+         * zone's top and bottom of the hour.
          */
         triggers: [cron('*/30 * * * *')],
 
@@ -193,16 +200,18 @@ export class SetUsersAwayFn implements InngestFunctionProvider {
   ): Promise<number | null> {
     const agency = await this.agencyModel
       .findById(agencyId)
-      .select('timezone availabilitySweep')
+      .select('timezone endOfDayHour availabilitySweep')
       .lean<AgencySweepLean | null>();
     if (!agency) return null;
 
-    // `.lean()` applies no schema defaults, and an agency created before the
-    // field existed reads `undefined` until the backfill migration has run.
+    // `.lean()` applies no schema defaults, and an agency created before
+    // either field existed reads `undefined` until its backfill has run.
     const timeZone = agency.timezone ?? DEFAULT_AGENCY_TIME_ZONE;
+    const endOfDayHour = agency.endOfDayHour ?? DEFAULT_AGENCY_END_OF_DAY_HOUR;
     const localDate = endOfDaySweepDate(
       now,
       timeZone,
+      endOfDayHour,
       agency.availabilitySweep?.lastAwayDate,
     );
     if (localDate === null) return null;

@@ -609,8 +609,13 @@ export function App() {
                     </LazyPage>
                   }
                 />
-                {/* The agency's own time zone (PAC-141) — same gate as the
-                    API behind it, which reuses the branding pair. */}
+              </Route>
+              {/* The agency's working day — time zone and end-of-day hour
+                  (PAC-141, PAC-149). Its own pair, not branding's: the page
+                  sets the whole office Away each night. */}
+              <Route
+                element={<RequirePermission permission="agency:settings:read" />}
+              >
                 <Route
                   path="/settings/agency"
                   element={

@@ -135,6 +135,30 @@ export const AgencyPermission = {
    */
   CarrierAppointmentsRead: 'agency:carrier_appointments:read',
   CarrierAppointmentsWrite: 'agency:carrier_appointments:write',
+  /**
+   * Agency settings — how the agency's working day runs: its time zone and the
+   * hour everyone is set Away (`/settings/agency`, PAC-149).
+   *
+   * PAC-141 put the time zone behind the branding pair, which was defensible
+   * for one rarely-touched field. With the end-of-day hour beside it, the page
+   * now does something to every user every night, and an owner delegating
+   * "branding" on the role matrix would unknowingly hand over the clock that
+   * puts the office Away. Its blast radius is its own — the rule the four
+   * pairs above follow. PAC-148's working-days calendar and agency holidays
+   * belong here too.
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, for
+   * the same three reasons written up there.
+   *
+   * ⚠ Existing owners received this pair from the
+   * `agency_settings_permission_grant` migration, not from
+   * `DEFAULT_ROLE_TEMPLATES` — the template only reaches an agency when it is
+   * created. Without that migration every owner would have lost the page the
+   * moment it shipped (the PAC-133 lock-out), and onboarding a new agency
+   * would have failed on a key with no catalog row.
+   */
+  SettingsRead: 'agency:settings:read',
+  SettingsWrite: 'agency:settings:write',
 } as const;
 
 export type ModuleAction = 'read' | 'write';
