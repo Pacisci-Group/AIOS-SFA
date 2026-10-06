@@ -1,15 +1,8 @@
-import { createWriteStream } from 'fs';
-import { mkdtemp, readFile, rm } from 'fs/promises';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { Readable, Transform } from 'stream';
-import type { TransformCallback } from 'stream';
+import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
-import { StringDecoder } from 'string_decoder';
 import { parse } from 'csv-parse';
 import { stringify } from 'csv-stringify/sync';
-import ExcelJS from 'exceljs';
-import JSZip from 'jszip';
+import * as XLSX from 'xlsx';
 import { dateToExcelSerial } from './mailer-parse';
 
 /**
@@ -18,7 +11,7 @@ import { dateToExcelSerial } from './mailer-parse';
  * The importer was CSV-only, because the file PAC-73 took was ApexReports'
  * *output* — a CSV somebody had already downloaded. PAC-71 takes the file one
  * stage earlier and the vendor's own file is **XLSX** (`SFA-QBP.xlsx`, one
- * sheet, 20,024 rows × 124 columns). CSV stays supported: it is what "Import a
+ * sheet, ~20,000 rows × 124 columns). CSV stays supported: it is what "Import a
  * processed file" takes, and what the committed fixture is.
  *
  * ## One shape out, whatever went in
@@ -31,14 +24,35 @@ import { dateToExcelSerial } from './mailer-parse';
  * that reads differently out of XLSX than out of CSV is a mail piece with the
  * wrong number on it.
  *
- * ## Why rows are collected in memory
+ * ## Why XLSX is read by SheetJS, and in memory (PAC-150)
  *
- * The *parse* streams; the result does not. `processMailerFile` sorts on
- * `pst_seq` and dedupes across the whole file, so it cannot start until every
- * row is read — there is no streaming formulation of it. 20,024 rows take
- * 179 ms and a few hundred MB peak, inside a worker job with no request
- * attached. Streaming the parse still matters: it is what keeps the *zip
- * inflation* off the heap all at once.
+ * The reader was ExcelJS's streaming `WorkbookReader`, chosen for constant
+ * memory. It then failed on the first vendor file production ever saw. That
+ * file was written by .NET's OpenXML SDK, which binds the SpreadsheetML
+ * namespace to a prefix — `<x:row>`, `<x:c>`, `<x:si>` — where Excel writes
+ * the default namespace. Both are valid OOXML; ExcelJS switches on raw tag
+ * names and read the sheet as **zero rows**, which surfaced as "the file is
+ * empty". The streaming reader also needed two workarounds for its own
+ * defects (unresolved shared strings on small files, a crash when the sheet
+ * part precedes the workbook part). SheetJS parses the prefixed form natively
+ * and needed neither.
+ *
+ * The price is memory: SheetJS has no streaming parser, so the workbook is
+ * read whole. Measured on the two real files to hand (PAC-150), each in a
+ * fresh process: 16,339 and 20,024 rows both read in ~2.4 s at 450–500 MB
+ * RSS, ~650 MB once `processMailerFile` has run — against ~250 MB streaming.
+ * That is acceptable because the file is read inside a **worker job**, never
+ * a request, and `processMailerFile` sorts on `pst_seq` and dedupes across
+ * the whole file, so every row had to be held in memory before the transform
+ * could start anyway. A vendor file is ~20,000 rows a week by design; the
+ * cost scales with rows, not with the week. The production app droplet is
+ * 2 GB, shared with the API and web containers — if the vendor's file ever
+ * grows several-fold, revisit this before the worker does.
+ *
+ * ⚠ **`xlsx` is not the npm registry package.** The registry copy is frozen
+ * at 0.18.5 with published advisories; the maintained release is installed
+ * from `cdn.sheetjs.com` as a URL dependency, pinned by integrity hash in the
+ * lockfile. `npm ci` in the API image build fetches it from there.
  *
  * ## Import boundary
  *
@@ -101,47 +115,29 @@ export function detectVendorFileKind(input: {
 /**
  * One XLSX cell as the value the CSV path would have produced.
  *
- * ExcelJS returns a *model* per cell — rich text as a run array, a formula as
- * `{formula, result}`, a hyperlink as `{text, hyperlink}`, an error as
- * `{error}`. None of those are data the transform can price, and every one of
- * them stringifies to `[object Object]` if passed through, which reads as a
- * blank column rather than as a fault.
+ * SheetJS hands back a cell object whose `t` says what `v` is: `s` string,
+ * `n` number, `b` boolean, `d` Date, `e` error, `z` blank stub. Rich text and
+ * formulas are not separate shapes — a rich-text cell's `v` is its plain
+ * concatenated text, and a formula cell's `v` is the cached result Excel
+ * wrote — so both already read as the value the CSV carries.
  *
  * ⚠ **`Date` → Excel serial is the load-bearing case.** Everything downstream —
  * `parseSourceDate`, and the print file itself — expects `quotedate` in the
- * serial form the CSV carries. See {@link dateToExcelSerial}.
+ * serial form the CSV carries. The workbook is read with `cellDates: false`,
+ * so a date-formatted number normally arrives as the raw serial and never
+ * becomes a `Date` at all; this branch is belt and braces for a workbook
+ * that stores a true ISO date cell (`t: 'd'`). See {@link dateToExcelSerial}.
  *
  * Empty is `''`, not `null`, because that is what `csv-parse` yields for a
- * blank cell and the whole point of this function is that the two agree.
+ * blank cell and the whole point of this function is that the two agree. An
+ * error cell (`#N/A`, `#DIV/0!`) is not a value either: `''`, never its code.
  */
-export function cellToPrimitive(value: unknown): string | number | boolean {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return value;
-  if (value instanceof Date) return dateToExcelSerial(value);
-
-  const model = value as {
-    richText?: { text?: string }[];
-    result?: unknown;
-    formula?: unknown;
-    text?: unknown;
-    hyperlink?: unknown;
-    error?: unknown;
-  };
-
-  if (Array.isArray(model.richText)) {
-    return model.richText.map((run) => run.text ?? '').join('');
-  }
-  // A formula's *result* — a cached value written by Excel. `undefined` when
-  // the workbook was never recalculated, which is an empty cell, not a zero.
-  if (model.formula !== undefined) {
-    return model.result === undefined ? '' : cellToPrimitive(model.result);
-  }
-  if (model.hyperlink !== undefined) {
-    return typeof model.text === 'string' ? model.text : '';
-  }
-  // `{ error: '#N/A' }` and anything unrecognised. An error cell is not a value.
-  return '';
+export function cellToPrimitive(
+  cell: XLSX.CellObject | undefined,
+): string | number | boolean {
+  if (cell === undefined || cell.v === undefined || cell.t === 'e') return '';
+  if (cell.v instanceof Date) return dateToExcelSerial(cell.v);
+  return cell.v;
 }
 
 /**
@@ -168,299 +164,58 @@ export async function readVendorFile(
 }
 
 /**
- * An XLSX worksheet's rows, with a fallback for the case ExcelJS gets wrong.
+ * The first worksheet, as positional rows.
  *
- * ## Why a temp file rather than the stream we were handed
- *
- * The bytes are read **twice** in the fallback case, and the stream from object
- * storage can only be read once. Spooling to disk first keeps memory flat
- * (nothing is buffered) and makes the fallback free — no second download.
- * ExcelJS is handed the path, which is also the shape its streaming reader is
- * least fragile with; see below.
+ * Only the first sheet is read: real vendor files carry one. Rows with no
+ * cells at all are skipped, which is what `skip_empty_lines` does on the CSV
+ * path — a blank line in the middle of a file is not a mailer.
  */
 async function readXlsx(body: Readable): Promise<VendorFileTable> {
-  const dir = await mkdtemp(join(tmpdir(), 'sfa-vendor-'));
-  const original = join(dir, 'vendor.xlsx');
-  try {
-    await pipeline(body, createWriteStream(original));
-    const path = await unprefixWorkbook(
-      original,
-      join(dir, 'vendor-unprefixed.xlsx'),
-    );
-    try {
-      return await readXlsxStreaming(path);
-    } catch (error) {
-      if (!(error instanceof UnresolvedSharedStringsError)) throw error;
-      // Measured, not defensive: a 19 MB / 20k-row workbook streams in 3.6 s at
-      // ~250 MB, while the buffered read of the same file takes 6.1 s at ~1 GB.
-      // The fallback only ever fires on files small enough for that not to
-      // matter — see the error's own note.
-      return readXlsxBuffered(path);
-    }
-  } finally {
-    await rm(dir, { recursive: true, force: true });
+  const chunks: Buffer[] = [];
+  for await (const chunk of body as AsyncIterable<Buffer | string>) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8'));
   }
-}
+  const bytes: Buffer = Buffer.concat(chunks);
 
-/**
- * Rewrite a workbook whose XML is namespace-*prefixed* into the unprefixed form
- * ExcelJS can read, and return the path to read from.
- *
- * ⚠ **This is why a real vendor file once failed as "empty".** Excel writes
- * `<row><c>…`, with the SpreadsheetML namespace as the default. Writers built on
- * .NET's OpenXML SDK (the one the vendor's `SFA-QBP.xlsx` came from, recognisable
- * by its `package/services/metadata/…psmdcp` entry) bind the same namespace to a
- * prefix instead, and write `<x:row><x:c>…`. Both are valid OOXML and Excel opens
- * either. ExcelJS does not: its SAX handlers switch on the raw tag name
- * (`case 'row'`), so every `x:row` is passed over and the sheet reads as zero
- * rows. The buffered reader fares worse and throws on `this.model.sheets`.
- *
- * The rewrite is per part, keyed on that part's **root element**: if the root
- * is prefixed, that prefix is dropped from every element tag in the part.
- * Elements in other namespaces (`mc:`, `x14ac:`) keep theirs, exactly as Excel
- * writes them. The `xmlns:x` declaration is left in place, unused: renaming it
- * to a default `xmlns` could collide with one already on the root, and ExcelJS
- * does not read namespaces anyway.
- *
- * A workbook with no prefixed part (anything Excel saved) is not rewritten at
- * all, and takes exactly the path it always took. Only `xl/workbook.xml` is
- * inflated to decide that, so the check costs one small zip entry.
- *
- * Entry order is preserved, since the streaming reader is sensitive to it (see
- * {@link UnresolvedSharedStringsError}).
- */
-async function unprefixWorkbook(path: string, out: string): Promise<string> {
-  const zip = await JSZip.loadAsync(await readFile(path));
-  const workbook = zip.file('xl/workbook.xml');
-  if (!workbook) return path;
-  if (rootElementPrefix(await workbook.async('string')) === null) return path;
-
-  const parts = Object.values(zip.files).filter(
-    (entry) => !entry.dir && /\.(xml|rels)$/i.test(entry.name),
-  );
-  for (const entry of parts) {
-    zip.file(
-      entry.name,
-      entry.nodeStream('nodebuffer').pipe(new UnprefixXml()),
-    );
-  }
-
-  await pipeline(
-    zip.generateNodeStream({
-      type: 'nodebuffer',
-      streamFiles: true,
-      compression: 'DEFLATE',
-      // Read once, by us, moments later: speed matters, size does not.
-      compressionOptions: { level: 1 },
-    }),
-    createWriteStream(out),
-  );
-  return out;
-}
-
-/**
- * The prefix on an XML document's root element, or `null` when it has none.
- *
- * `null` too when the root start tag has not been seen in full yet, which the
- * caller tells apart by whether the text is still growing.
- */
-function rootElementPrefix(xml: string): string | null {
-  // The first tag that is not a declaration (`<?xml`) or comment/doctype (`<!`).
-  const root = /<(?![?!])([^\s/>]+)/.exec(xml);
-  if (!root) return null;
-  const colon = root[1].indexOf(':');
-  return colon === -1 ? null : root[1].slice(0, colon);
-}
-
-/** Longest prefix of a part we will hold back looking for its root element. */
-const ROOT_SCAN_LIMIT = 64 * 1024;
-
-/**
- * Streams one XML part with its root element's prefix dropped from every tag.
- *
- * Streaming, because a worksheet part is the bulk of the file — 68 MB inflated
- * for the 16k-row vendor sheet. `<` cannot appear raw in text or attribute
- * values, so every `<x:` / `</x:` in the text is a tag; the only care needed is
- * a match split across two chunks, handled by holding back a trailing `<…`
- * fragment until the next chunk completes it.
- */
-class UnprefixXml extends Transform {
-  private readonly decoder = new StringDecoder('utf8');
-  /** Text not yet emitted: the root scan, then any split tag fragment. */
-  private pending = '';
-  /** `undefined` until the root is seen; `null` means pass through untouched. */
-  private open: RegExp | null | undefined;
-
-  _transform(chunk: Buffer, _encoding: string, done: TransformCallback): void {
-    this.pending += this.decoder.write(chunk);
-    this.drain(false);
-    done();
-  }
-
-  _flush(done: TransformCallback): void {
-    this.pending += this.decoder.end();
-    this.drain(true);
-    done();
-  }
-
-  private drain(final: boolean): void {
-    if (this.open === undefined) {
-      const rootSeen = /<(?![?!])[^>]*>/.test(this.pending);
-      if (!rootSeen && !final && this.pending.length < ROOT_SCAN_LIMIT) return;
-      const prefix = rootSeen ? rootElementPrefix(this.pending) : null;
-      this.open =
-        prefix === null
-          ? null
-          : new RegExp(`<(/?)${prefix.replace(/[.-]/g, '\\$&')}:`, 'g');
-    }
-
-    let text = this.pending;
-    this.pending = '';
-    if (this.open && !final) {
-      // Hold back a `<` too close to the end to have been matched whole.
-      const lt = text.lastIndexOf('<');
-      if (lt !== -1 && !text.slice(lt).includes('>')) {
-        this.pending = text.slice(lt);
-        text = text.slice(0, lt);
-      }
-    }
-    if (this.open) text = text.replace(this.open, '<$1');
-    if (text) this.push(Buffer.from(text, 'utf8'));
-  }
-}
-
-/**
- * Thrown when the streaming reader hands back shared-string **indices**.
- *
- * ⚠ This is a real ExcelJS defect, and the reason this module does not simply
- * trust its streaming reader. In an XLSX every repeated string lives in one
- * table (`xl/sharedStrings.xml`) and each cell holds an index into it. ExcelJS
- * buffers zip entries through a `data` listener while unzipper drains the ones
- * nobody has consumed yet, so when the whole archive arrives faster than the
- * reader walks it — which is exactly what happens with a *small* file — the
- * shared-string part is passed over and never parsed. Every text cell then
- * comes back as `{ sharedString: 7 }`.
- *
- * What makes it dangerous is the failure mode: an unrecognised object flattens
- * to `''`, so the import would succeed and write 20,000 mailers with **every
- * name and address blank**. Detecting it and re-reading is the difference
- * between a slower import and a silently wrong mail drop.
- *
- * Deterministic by size in every run measured — small files always fail, the
- * 19 MB reference file always succeeds — so the fallback path is cheap by
- * construction.
- */
-class UnresolvedSharedStringsError extends Error {
-  constructor() {
-    super('ExcelJS returned unresolved shared strings.');
-  }
-}
-
-/** `{ sharedString: n }` — an index ExcelJS never got round to resolving. */
-function isUnresolvedSharedString(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'sharedString' in (value as Record<string, unknown>)
-  );
-}
-
-/** The fast path: one forward pass over the zip, constant memory. */
-async function readXlsxStreaming(path: string): Promise<VendorFileTable> {
-  const reader = new ExcelJS.stream.xlsx.WorkbookReader(path, {
-    // Shared strings must be cached — see `UnresolvedSharedStringsError`.
-    sharedStrings: 'cache',
-    // Neither is data. Ignoring styles also means a date-formatted number
-    // arrives as the raw serial, which is both what we want and what the CSV
-    // path carries — and, unlike the cached-styles path, it is stable across
-    // timezones. `cellToPrimitive` still normalizes a real `Date`.
-    hyperlinks: 'ignore',
-    styles: 'ignore',
-    worksheets: 'emit',
-    entries: 'ignore',
+  const workbook = XLSX.read(bytes, {
+    type: 'buffer',
+    // Cells in `!data[row][col]` rather than keyed by `A1` — the only shape
+    // SheetJS recommends for a sheet this size, and the one we walk below.
+    dense: true,
+    // A date-formatted number stays the raw serial, which is both what we
+    // want and what the CSV path carries. `cellToPrimitive` still normalizes
+    // a true `Date` if one ever arrives.
+    cellDates: false,
+    // None of these are data. Formula *text* is skipped; the cached result
+    // still lands in `v`. Number formats, styles and HTML/text renderings
+    // would only cost memory on a 124-column sheet.
+    cellFormula: false,
+    cellNF: false,
+    cellStyles: false,
+    cellHTML: false,
+    cellText: false,
   });
 
-  // ⚠ Works around a second ExcelJS crash, and must not be removed as dead code.
-  //
-  // `_parseWorksheet` dereferences `this.model.sheets`, which is only assigned
-  // once `xl/workbook.xml` has gone past. Any writer that puts the sheet before
-  // the workbook part — ExcelJS's own does exactly that — therefore throws
-  // `Cannot read properties of undefined (reading 'sheets')` before a single
-  // row is read. Seeding an empty model makes that lookup miss instead of
-  // throw; the only thing it costs is the worksheet's *name*, which nothing
-  // here reads. A real model, when one arrives, simply overwrites this.
-  const seeded = reader as unknown as { model?: { sheets?: unknown[] } };
-  seeded.model ??= { sheets: [] };
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const data = sheet?.['!data'] ?? [];
 
   let headers: string[] = [];
   const rows: unknown[][] = [];
-  let sheetIndex = 0;
-
-  for await (const worksheet of reader) {
-    sheetIndex += 1;
-    // ⚠ Every worksheet is iterated even though only the first is kept, and the
-    // loop is never `break`-ed out of. The workbook reader is a single forward
-    // pass over the zip: abandoning it mid-file leaves the underlying stream
-    // unconsumed, which in a worker is a job that hangs rather than one that
-    // fails. Real vendor files carry one sheet, so this costs nothing.
-    for await (const row of worksheet) {
-      if (sheetIndex > 1) continue;
-      const values: unknown[] = Array.isArray(row.values) ? row.values : [];
-      // Checked on the raw values, before flattening: `cellToPrimitive` would
-      // turn the marker into `''` and hide the very thing we are looking for.
-      if (values.some(isUnresolvedSharedString)) {
-        throw new UnresolvedSharedStringsError();
-      }
-      if (headers.length === 0) {
-        headers = readHeaderRow(values);
-        continue;
-      }
-      rows.push(readDataRow(values, headers.length));
-    }
-  }
-
-  return { headers, rows };
-}
-
-/** The correct-but-heavier path. Only reached for files small enough to afford it. */
-async function readXlsxBuffered(path: string): Promise<VendorFileTable> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(path);
-
-  const worksheet = workbook.worksheets[0];
-  let headers: string[] = [];
-  const rows: unknown[][] = [];
-  if (!worksheet) return { headers, rows };
-
-  worksheet.eachRow((row) => {
-    const values: unknown[] = Array.isArray(row.values) ? row.values : [];
+  for (const cells of data) {
+    if (!cells || cells.length === 0) continue;
     if (headers.length === 0) {
-      headers = readHeaderRow(values);
-      return;
+      headers = trimTrailingEmpty(
+        Array.from(cells, (cell) => String(cellToPrimitive(cell))),
+      );
+      continue;
     }
-    rows.push(readDataRow(values, headers.length));
-  });
+    const width = Math.max(headers.length, cells.length);
+    const row: unknown[] = [];
+    for (let i = 0; i < width; i += 1) row.push(cellToPrimitive(cells[i]));
+    rows.push(row);
+  }
 
   return { headers, rows };
-}
-
-/**
- * `row.values` is 1-based with a hole at index 0 — an ExcelJS quirk, so that
- * `values[n]` is column n.
- */
-function readHeaderRow(values: unknown[]): string[] {
-  return trimTrailingEmpty(
-    values.slice(1).map((cell) => String(cellToPrimitive(cell))),
-  );
-}
-
-function readDataRow(values: unknown[], width: number): unknown[] {
-  const cells: unknown[] = [];
-  const end = Math.max(width, values.length - 1);
-  for (let i = 1; i <= end; i += 1) {
-    cells.push(cellToPrimitive(values[i]));
-  }
-  return cells;
 }
 
 /** The same CSV wiring the import engine uses, minus the header mapping. */

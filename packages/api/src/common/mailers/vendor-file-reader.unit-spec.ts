@@ -148,9 +148,11 @@ const SPREADSHEETML =
 /**
  * The same workbook as .NET's OpenXML SDK writes it: the SpreadsheetML
  * namespace bound to `x:` instead of the default, so every tag is `<x:row>`,
- * `<x:c>`, `<x:si>`. Valid OOXML — and, before the reader learned to unprefix
- * it, a vendor file that read as "empty". Tags already in another namespace
- * (`mc:`, `x14ac:`) keep their own prefix, as they do in the real file.
+ * `<x:c>`, `<x:si>`. Valid OOXML — and the form that read as "empty" under
+ * ExcelJS, which is why the reader is SheetJS (PAC-150). Tags already in
+ * another namespace (`mc:`, `x14ac:`) keep their own prefix, as they do in
+ * the real file. The fixture is still *built* with ExcelJS, which writes the
+ * Excel form; this rewrites it into the OpenXML-SDK form.
  */
 async function prefixedXlsxBytes(): Promise<Buffer> {
   const zip = await JSZip.loadAsync(await xlsxBytes());
@@ -195,21 +197,23 @@ describe('detectVendorFileKind', () => {
 
 describe('cellToPrimitive', () => {
   it('turns a Date back into the Excel serial the CSV path carries', () => {
-    expect(cellToPrimitive(QUOTE_DATE)).toBe(QUOTE_SERIAL);
+    expect(cellToPrimitive({ t: 'd', v: QUOTE_DATE })).toBe(QUOTE_SERIAL);
   });
 
-  it('flattens rich text, formulas, hyperlinks and errors', () => {
-    expect(
-      cellToPrimitive({ richText: [{ text: 'Okla' }, { text: 'homa' }] }),
-    ).toBe('Oklahoma');
-    expect(cellToPrimitive({ formula: 'A1+A2', result: 42 })).toBe(42);
-    // Never recalculated: an empty cell, not a zero.
-    expect(cellToPrimitive({ formula: 'A1+A2' })).toBe('');
-    expect(
-      cellToPrimitive({ text: 'Visit', hyperlink: 'https://example.com' }),
-    ).toBe('Visit');
-    expect(cellToPrimitive({ error: '#N/A' })).toBe('');
-    expect(cellToPrimitive(null)).toBe('');
+  it('passes strings, numbers and booleans through untouched', () => {
+    expect(cellToPrimitive({ t: 's', v: 'Oklahoma' })).toBe('Oklahoma');
+    expect(cellToPrimitive({ t: 'n', v: 42 })).toBe(42);
+    expect(cellToPrimitive({ t: 'b', v: true })).toBe(true);
+    // A formula cell is its cached result; the formula text is not data.
+    expect(cellToPrimitive({ t: 'n', v: 42, f: 'A1+A2' })).toBe(42);
+  });
+
+  it('reads an error, a blank stub and a missing cell as empty', () => {
+    // SheetJS carries the error as a numeric code with `#N/A` in `w`; neither
+    // is a value a mail piece can carry.
+    expect(cellToPrimitive({ t: 'e', v: 42, w: '#N/A' })).toBe('');
+    expect(cellToPrimitive({ t: 'z' })).toBe('');
+    expect(cellToPrimitive(undefined)).toBe('');
   });
 });
 
