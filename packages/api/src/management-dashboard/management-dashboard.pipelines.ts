@@ -116,10 +116,17 @@ export const LATEST_QUOTE_LOOKUP: PipelineStage = {
  * One row per **deal**: a legacy re-audit can leave two `dealAudits` rows on
  * one deal (the index is deliberately not unique), and the newest is the one
  * whose status counts.
+ *
+ * Each row carries {@link AUDIT_OWNER_FIELD} — who is responsible for that
+ * audit, by the same rule as the open-audit backlog — and the producer filter
+ * (`ownerPin`) applies to **it**, not to the seller. Otherwise filtering by a
+ * successor would show their backlog in the team table and none of it here
+ * (PAC-136). `match` must therefore carry no producer narrowing of its own.
  */
 export function agingAuditsPrefix(
   match: Record<string, unknown>,
   filter: OwnerFilterClauses,
+  ownerPin?: Record<string, unknown>,
 ): PipelineStage[] {
   return [
     { $match: match },
@@ -143,12 +150,28 @@ export function agingAuditsPrefix(
           },
           { $sort: { createdAt: -1 } },
           { $limit: 1 },
-          { $project: { _id: 1, auditStatus: 1, openFailedCount: 1 } },
+          {
+            $project: {
+              _id: 1,
+              auditStatus: 1,
+              openFailedCount: 1,
+              auditAssignee: 1,
+            },
+          },
         ],
         as: '_audit',
       },
     },
     { $match: { '_audit.0': { $exists: true } } },
+    // Two stages: a field cannot read a sibling set in the same `$addFields`.
+    { $addFields: { _agingAudit: { $arrayElemAt: ['$_audit', 0] } } },
+    {
+      $addFields: {
+        [AUDIT_OWNER_FIELD]: auditOwnerExpr('$_agingAudit', '$producerId'),
+      },
+    },
+    { $unset: '_agingAudit' },
+    ...(ownerPin ? [{ $match: ownerPin }] : []),
   ];
 }
 
@@ -241,18 +264,59 @@ export function householdsByProducer(prefix: PipelineStage[]): PipelineStage[] {
 }
 
 /**
- * Open audit items per producer — the **all-time backlog**, not the period:
- * every audit with something outstanding, attributed through its deal.
+ * The computed field an open audit's **responsible person** lands in, for the
+ * owner clamp to pin on (`buildScopeFilter`'s `producerField`).
+ */
+export const AUDIT_OWNER_FIELD = '_owner';
+
+/**
+ * Who is responsible for an audit, as an aggregation expression over a stage
+ * holding the audit at `auditPath` and its deal at `_deal`:
+ *
+ * - assigned to a **user** → that user;
+ * - assigned to nobody → the selling producer, which is what assignment
+ *   defaults to (`reconcileDealAudits`) — so a legacy audit is not orphaned;
+ * - assigned to a **role** → nobody. A role is a queue, not a person, and no
+ *   producer's row should carry its backlog.
+ *
+ * Keyed on the assignee rather than the seller since PAC-136: when a producer
+ * leaves, a work transfer hands their open audits to the successor, and the
+ * backlog has to follow the person now chasing it. Who *sold* the deal is
+ * still `deals.producerId`, and still drives every sales number here.
+ */
+function auditOwnerExpr(auditPath: string, sellerPath = '$_deal.producerId') {
+  const assignee = `${auditPath}.auditAssignee`;
+  return {
+    $switch: {
+      branches: [
+        {
+          case: { $eq: [`${assignee}.type`, 'user'] },
+          then: `${assignee}.id`,
+        },
+        {
+          case: { $eq: [{ $ifNull: [assignee, null] }, null] },
+          then: sellerPath,
+        },
+      ],
+      default: null,
+    },
+  };
+}
+
+/**
+ * Open audit items per responsible person — the **all-time backlog**, not the
+ * period: every audit with something outstanding, attributed to whoever owns
+ * it (see {@link auditOwnerExpr}).
  *
  * Starts from `dealAudits` rather than `deals` because the audits with open
  * items are the small side (a few hundred on the real book) and the deal is
- * one primary-key lookup away. `dealScope` is the deals clamp (tenancy, branch
- * and — for the drawer — one producer); the audit's own `agencyId` keeps the
- * first stage on the tenant.
+ * one primary-key lookup away. `ownerScope` is the audit clamp — tenancy,
+ * branch and, for the drawer, one person — built over
+ * {@link AUDIT_OWNER_FIELD}.
  */
 export function openAuditItemsByProducer(
   agencyId: string,
-  dealScope: Record<string, unknown>,
+  ownerScope: Record<string, unknown>,
 ): PipelineStage[] {
   return [
     {
@@ -267,17 +331,53 @@ export function openAuditItemsByProducer(
         from: 'deals',
         localField: 'dealId',
         foreignField: '_id',
-        pipeline: [{ $match: dealScope }, { $project: { producerId: 1 } }],
+        pipeline: [{ $project: { producerId: 1 } }],
         as: '_deal',
       },
     },
     { $unwind: '$_deal' },
+    { $addFields: { [AUDIT_OWNER_FIELD]: auditOwnerExpr('$$ROOT') } },
+    { $match: ownerScope },
     {
       $group: {
-        _id: { $ifNull: ['$_deal.producerId', null] },
+        _id: `$${AUDIT_OWNER_FIELD}`,
         openAuditItems: { $sum: '$openFailedCount' },
       },
     },
+  ];
+}
+
+/**
+ * Open audit items on audits owned by a **role** — the backlog
+ * {@link openAuditItemsByProducer} attributes to nobody. Same base set (an open
+ * audit on a real deal), so the two never double-count or drop an audit
+ * between them. `scope` is the tenancy and branch clamp on the audit.
+ */
+export function roleOwnedOpenAuditItems(
+  agencyId: string,
+  scope: Record<string, unknown>,
+): PipelineStage[] {
+  return [
+    {
+      $match: {
+        agencyId,
+        isTestRecord: { $ne: true },
+        openFailedCount: { $gt: 0 },
+        'auditAssignee.type': 'role',
+      },
+    },
+    {
+      $lookup: {
+        from: 'deals',
+        localField: 'dealId',
+        foreignField: '_id',
+        pipeline: [{ $project: { _id: 1 } }],
+        as: '_deal',
+      },
+    },
+    { $unwind: '$_deal' },
+    { $match: scope },
+    { $group: { _id: null, openAuditItems: { $sum: '$openFailedCount' } } },
   ];
 }
 
@@ -285,13 +385,14 @@ export function openAuditItemsByProducer(
 export const MAX_OPEN_AUDIT_ITEMS = 200;
 
 /**
- * One row per outstanding audit item on the producer's deals, oldest first —
- * the items `openAuditItemsByProducer` counts, so the two agree by construction
- * as long as the counters are in step (`syncAuditCounters`).
+ * One row per outstanding audit item on the audits a person is responsible
+ * for, oldest first — the items `openAuditItemsByProducer` counts, so the two
+ * agree by construction as long as the counters are in step
+ * (`syncAuditCounters`).
  */
 export function producerOpenAuditItems(
   agencyId: string,
-  dealScope: Record<string, unknown>,
+  ownerScope: Record<string, unknown>,
 ): PipelineStage[] {
   return [
     {
@@ -308,13 +409,38 @@ export function producerOpenAuditItems(
         localField: 'dealId',
         foreignField: '_id',
         pipeline: [
-          { $match: dealScope },
-          { $project: { clientName: 1, householdId: 1, soldDate: 1 } },
+          {
+            $project: {
+              clientName: 1,
+              householdId: 1,
+              soldDate: 1,
+              producerId: 1,
+            },
+          },
         ],
         as: '_deal',
       },
     },
     { $unwind: '$_deal' },
+    {
+      // By the item's own link, never by `dealId`: a deal can carry more than
+      // one audit row (`agingAuditsPrefix` sorts and takes one), and joining on
+      // the deal would repeat every item once per row — the list would stop
+      // matching `openAuditItemsByProducer`'s count. `_id` is unique, so this
+      // yields at most one audit.
+      $lookup: {
+        from: 'dealAudits',
+        localField: 'dealAuditId',
+        foreignField: '_id',
+        pipeline: [{ $project: { auditAssignee: 1 } }],
+        as: '_audit',
+      },
+    },
+    // Kept when missing: an item not yet linked to an audit falls back to the
+    // seller, exactly as an unassigned audit does.
+    { $unwind: { path: '$_audit', preserveNullAndEmptyArrays: true } },
+    { $addFields: { [AUDIT_OWNER_FIELD]: auditOwnerExpr('$_audit') } },
+    { $match: ownerScope },
     {
       $addFields: { raisedAt: { $ifNull: ['$firstCreatedAt', '$createdAt'] } },
     },

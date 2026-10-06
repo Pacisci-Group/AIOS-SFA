@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowRightLeft,
   KeyRound,
   Loader2,
   MoreHorizontal,
@@ -30,43 +31,27 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { AgencyPermission } from "@sfa/shared";
 import { useAuth } from "@/contexts/auth-context";
 import { usePermissions } from "@/hooks/usePermissions";
 import { ApiError } from "@/lib/api-client";
 import {
-  deactivateUser,
   reactivateUser,
   resendInvite,
   revokeInvite,
   sendPasswordReset,
   userStatus,
   type AgencyUser,
-  type ReleasedWork,
   agencyUserOptionsKey,
 } from "@/lib/users-api";
 import { ChangeRoleDialog } from "./ChangeRoleDialog";
+import { TransferWorkDialog } from "./TransferWorkDialog";
 
 /** Which confirmation is open. `null` closes the dialog. */
-type Confirmation = "revoke" | "remove" | "reset";
+type Confirmation = "revoke" | "reset";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
-}
-
-/** "3 open tickets and 1 rotation entry", or null when nothing was freed. */
-function releasedSummary(released: ReleasedWork): string | null {
-  const parts: string[] = [];
-  if (released.ticketsUnassigned > 0) {
-    parts.push(
-      `${released.ticketsUnassigned} open ticket${released.ticketsUnassigned === 1 ? "" : "s"}`,
-    );
-  }
-  if (released.rotationsDeactivated > 0) {
-    parts.push(
-      `${released.rotationsDeactivated} rotation entr${released.rotationsDeactivated === 1 ? "y" : "ies"}`,
-    );
-  }
-  return parts.length ? parts.join(" and ") : null;
 }
 
 /**
@@ -98,6 +83,10 @@ function releasedSummary(released: ReleasedWork): string | null {
  *   blocked), Send password reset, Remove (never on your own row — self-removal
  *   400s, so offering it would only teach the error by clicking it).
  * * **deactivated** → Reactivate.
+ * * **Transfer work…** (PAC-136) on active and removed rows, for holders of
+ *   `agency:work_transfer:write` + `agency:users:read` **in an agency-wide
+ *   role** — a separate grant from `agency:users:write`.
+ *   "Remove from agency" opens the same dialog with an optional successor.
  * * Everything above also needs `agency:users:write`; a platform admin's row
  *   gets none of it.
  * * **Permissions** needs `agency:roles:read` — the permission its *route*
@@ -112,12 +101,16 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
+  const [workDialog, setWorkDialog] = useState<"transfer" | "remove" | null>(
+    null,
+  );
 
-  const invalidateUsers = () =>
+  const invalidateUsers = () => {
     void queryClient.invalidateQueries({ queryKey: ["users"] });
     // Deactivating or reactivating changes who is assignable, and the
     // pickers key on `agency-users` rather than `users`.
     void queryClient.invalidateQueries({ queryKey: agencyUserOptionsKey });
+  };
 
   const resend = useMutation({
     mutationFn: () => resendInvite(user._id),
@@ -163,24 +156,6 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
       toast.error(errorMessage(error, "Could not send the password reset.")),
   });
 
-  const deactivate = useMutation({
-    mutationFn: () => deactivateUser(user._id),
-    onSuccess: (released) => {
-      invalidateUsers();
-      const freed = releasedSummary(released);
-      toast.success("User removed", {
-        description: freed
-          ? `They can no longer sign in. ${freed} went back to the unassigned queue.`
-          : "They can no longer sign in. Their history stays on record.",
-      });
-      setConfirm(null);
-    },
-    // Covers the last-owner (409) and self-removal (400) guards as well as
-    // transport failures; the server's message names the reason.
-    onError: (error) =>
-      toast.error(errorMessage(error, "Could not remove this user.")),
-  });
-
   const reactivate = useMutation({
     mutationFn: () => reactivateUser(user._id),
     onSuccess: () => {
@@ -199,12 +174,19 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
   const mayManage =
     can("agency:users:write") && !user.isPlatformAdmin;
   const mayEditPermissions = can("agency:roles:read");
+  // The permission alone is not enough: only an agency-wide role may transfer
+  // (the API refuses a branch- or own-scoped holder with a 403).
+  const canTransfer =
+    can(AgencyPermission.WorkTransfer) &&
+    can(AgencyPermission.UsersRead) &&
+    (currentUser?.dataScope === "agency" || !!currentUser?.isPlatformAdmin);
+  const mayTransfer =
+    canTransfer && !user.isPlatformAdmin && status !== "invited";
 
   const busy =
     resend.isPending ||
     revoke.isPending ||
     reset.isPending ||
-    deactivate.isPending ||
     reactivate.isPending;
 
   /** Close the menu ourselves, then open whatever the item asked for. */
@@ -231,14 +213,6 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
       pending: revoke.isPending,
       run: () => revoke.mutate(),
     },
-    remove: {
-      title: `Remove ${user.email}?`,
-      description:
-        "They are signed out immediately and can no longer access the agency. Their past work stays on record under their name, and any open tickets they hold go back to the unassigned queue for someone else to pick up. You can reactivate them later.",
-      action: "Remove user",
-      pending: deactivate.isPending,
-      run: () => deactivate.mutate(),
-    },
     /*
      * A confirmation where "Resend invite" has none, deliberately. Resending an
      * invite re-sends something the recipient was already expecting; this mails
@@ -258,7 +232,7 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
   // Nothing to offer: a reader with neither write access nor the permissions
   // page renders no trigger at all rather than an empty menu.
-  if (!mayManage && !mayEditPermissions) return null;
+  if (!mayManage && !mayEditPermissions && !mayTransfer) return null;
 
   return (
     <>
@@ -332,7 +306,7 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
                   <DropdownMenuItem
                     variant="destructive"
                     disabled={busy}
-                    onSelect={choose(() => setConfirm("remove"))}
+                    onSelect={choose(() => setWorkDialog("remove"))}
                   >
                     <Trash2 className="size-4" />
                     Remove from agency
@@ -354,8 +328,30 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
               </DropdownMenuItem>
             </>
           )}
+          {mayTransfer && (
+            <>
+              {/* Only when something sits above it — a removed row for a
+                  transfer-only holder would otherwise open on a rule. */}
+              {(mayManage || mayEditPermissions) && <DropdownMenuSeparator />}
+              <DropdownMenuItem
+                disabled={busy}
+                onSelect={choose(() => setWorkDialog("transfer"))}
+              >
+                <ArrowRightLeft className="size-4" />
+                Transfer work…
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <TransferWorkDialog
+        user={user}
+        open={workDialog !== null}
+        onOpenChange={(next) => !next && setWorkDialog(null)}
+        mode={workDialog ?? "transfer"}
+        canTransfer={canTransfer}
+      />
 
       <ChangeRoleDialog
         user={user}

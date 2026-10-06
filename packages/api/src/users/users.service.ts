@@ -48,6 +48,10 @@ import {
   UserWorkReleaseService,
   type ReleasedWork,
 } from './user-work-release.service';
+import {
+  WorkTransferService,
+  type WorkTransferResult,
+} from './work-transfer.service';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import {
   ActingUser,
@@ -117,6 +121,7 @@ export class UsersService {
     private mailService: MailService,
     private configService: ConfigService,
     private workRelease: UserWorkReleaseService,
+    private workTransfer: WorkTransferService,
     private tenantUrls: TenantUrlService,
     private tenantBranding: TenantBrandingService,
     private hostResolver: HostTenantResolver,
@@ -472,12 +477,26 @@ export class UsersService {
    * for one on **every request** — so an already-issued JWT stops working as
    * soon as the cached context is dropped, which is the `invalidateUser` call at
    * the end. Without that call the old token keeps working until it expires.
+   *
+   * ## Where the open work goes — and why it goes first
+   * With no `successorId` it is released to the queue (PAC-76). With one, it is
+   * handed to that colleague (PAC-137).
+   *
+   * The work moves **before** the account is deactivated. The other order left
+   * a failed transfer (an aborted transaction, a refused successor) with the
+   * person already removed and their work stranded on an inactive account — and
+   * a retry then 409s on "already removed". This way round a failure leaves
+   * them fully active and the request simply retryable: moving work is
+   * idempotent, so a second attempt finds nothing left and deactivates. The
+   * window in which the still-active person could pick up something new is the
+   * length of one request.
    */
   async deactivateUser(
-    actor: ActingUser,
+    actor: AccessContext,
     agencyId: string,
     userId: string,
-  ): Promise<ReleasedWork> {
+    successorId?: string,
+  ): Promise<ReleasedWork | WorkTransferResult> {
     const actorUserId = actor.userId;
     if (!Types.ObjectId.isValid(userId)) {
       throw new NotFoundException('User not found');
@@ -521,6 +540,11 @@ export class UsersService {
     // OwnerProtectionService so RolesService enforces the identical rules.
     await this.ownerProtection.assertMayDeactivate(actor, agencyId, userId);
 
+    // First — see the docblock. `transfer` validates the successor itself.
+    const released = successorId
+      ? await this.workTransfer.transfer(actor, agencyId, userId, successorId)
+      : await this.workRelease.release(agencyId, userId);
+
     user.isActive = false;
     user.deactivatedAt = new Date();
     user.deactivatedByUserId =
@@ -534,8 +558,6 @@ export class UsersService {
     user.passwordResetToken = undefined;
     user.passwordResetExpiresAt = undefined;
     await user.save();
-
-    const released = await this.workRelease.release(agencyId, userId);
 
     // Last, and load-bearing — see the docblock. Their next request re-resolves
     // from Mongo, finds `isActive: false`, and gets nothing.

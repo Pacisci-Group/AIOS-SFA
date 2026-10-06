@@ -559,6 +559,9 @@ describe('Management dashboard (PAC-139) (e2e)', () => {
   });
 
   afterAll(async () => {
+    // And after: suites share one database, and a suite that seeds without
+    // dropping first would otherwise collide with these fixtures.
+    await dropTestDatabase(app);
     await closeTestApp(app);
   });
 

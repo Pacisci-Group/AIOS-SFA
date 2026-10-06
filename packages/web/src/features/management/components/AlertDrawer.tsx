@@ -257,7 +257,12 @@ function AgingAuditItem({ row }: { row: AgingAuditRow }) {
           {row.clientName}
         </RecordName>
         <Meta>
-          {row.producerName ?? "Unassigned"} · sold {shortDate(row.soldDate)}
+          {/* The person to chase, not necessarily who sold it — the two part
+              ways once a departed producer's work is transferred. */}
+          {row.assigneeName ?? "Unassigned"} · sold {shortDate(row.soldDate)}
+          {row.producerName && row.producerName !== row.assigneeName
+            ? ` by ${row.producerName}`
+            : ""}
         </Meta>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">

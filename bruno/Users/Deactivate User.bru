@@ -50,15 +50,44 @@ docs {
     them new tickets. `CrmAssignmentService` builds its pool from
     `activeForProducer` and never checks whether the user still exists, so
     without this the work would leak straight back.
+  - **The seeds of future work are released too (PAC-136)**, or fresh work
+    kept landing on the removed account:
+    - in-progress onboardings and renewal cycles lose their CSR, so their next
+      calls open **unassigned** and reach the queue;
+    - households (and their deal mirror) lose their CSR, so the next sale to
+      that client picks one by round-robin and new renewal cycles open
+      unassigned;
+    - open leads go back to the **unclaimed pool**, each with a timeline entry.
+  - **Not released:** open deal audits (an unassigned audit falls back to its
+    seller — the person leaving — so they stay assigned and visible to
+    managers) and share links (already dead once the producer is inactive).
+    Send a `successorId` to hand those over as well.
 
-  **Attribution is never touched.** `deals.producerId`, `leads.producerId` and
-  `quoteRecaps.producerId` record who did the work and stay exactly as they are.
+  **Attribution is never touched.** `deals.producerId`, sold or lost leads,
+  `quoteRecaps.producerId` and completed chains record who did the work and
+  stay exactly as they are.
 
-  **Response `200`** — `{ ticketsUnassigned, rotationsDeactivated }`.
+  **The work moves first, then the account is deactivated.** A failure part-way
+  leaves the person fully active, and the request is safe to retry.
+
+  **Response `200`** — `{ ticketsUnassigned, rotationsDeactivated,
+  onboardingsUnassigned, renewalCyclesUnassigned, householdsUnassigned,
+  leadsUnassigned }`.
+
+  ## Or handed to a named colleague (PAC-137)
+  Optional JSON body `{ "successorId": "<userId>" }`. With it, the open work is
+  **transferred** to that colleague instead of released — exactly what
+  `POST /users/:userId/work-transfer` does (see **Transfer Work**), and the
+  response is that endpoint's result (it carries `toUserId`). Needs
+  `agency:work_transfer:write` on top of `agency:users:write` (`403` otherwise).
+  The work moves **before** the deactivation, so a refused successor (`404`,
+  `409` deactivated or different role, `403` other branch) or a failed
+  transfer leaves the person active.
 
   **Errors**
   - `400` — you cannot remove your own account (it would be unrecoverable).
-  - `403` — caller lacks `agency:users:write`.
+  - `403` — caller lacks `agency:users:write`, or sent `successorId` without
+    `agency:work_transfer:write`.
   - `404` — no such user in this agency, or the target is a platform admin.
   - `409` — already removed; **or** the target is a pending invite, in which case
     use `DELETE /users/:userId/invite` instead.

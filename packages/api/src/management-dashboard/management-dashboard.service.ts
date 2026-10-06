@@ -76,7 +76,9 @@ import type {
   ManagementAlertListQueryDto,
   ManagementDashboardQueryDto,
 } from './dto/management-dashboard-query.dto';
+import { buildScopeFilter } from '../common/access/scope-filter';
 import {
+  AUDIT_OWNER_FIELD,
   COUNT_STAGE,
   LATEST_QUOTE_LOOKUP,
   activePipelinePrefix,
@@ -86,8 +88,45 @@ import {
   overdueTicketsPrefix,
   pagedFacet,
   producerOpenAuditItems,
+  roleOwnedOpenAuditItems,
   stalledLeadsPrefix,
 } from './management-dashboard.pipelines';
+
+/**
+ * The clamp for open-audit backlogs: tenancy and branch as usual, with the
+ * person pinned on the audit's **responsible owner** (the pipelines compute it
+ * into {@link AUDIT_OWNER_FIELD}) rather than on who sold the deal. A producer
+ * who has left and had their work transferred carries no backlog; their
+ * successor carries it (PAC-136).
+ */
+function auditOwnerScope(
+  access: AccessContext,
+  branchId: string | null,
+  producerIds: readonly string[] | undefined,
+): Record<string, unknown> {
+  return buildScopeFilter(access, branchId, {
+    producerIds,
+    producerField: AUDIT_OWNER_FIELD,
+  });
+}
+
+/**
+ * `{ _owner: { $in: [...] } }` for a producer selection, or nothing without one.
+ * An all-malformed selection becomes `$in: []` and matches nothing, the same
+ * rule `buildScopeFilter` applies — a selection must never read as "none".
+ */
+function ownerPinFor(
+  producerIds: readonly string[] | undefined,
+): Record<string, unknown> | undefined {
+  if (!producerIds?.length) return undefined;
+  return {
+    [AUDIT_OWNER_FIELD]: {
+      $in: producerIds
+        .filter((id) => Types.ObjectId.isValid(id))
+        .map((id) => new Types.ObjectId(id)),
+    },
+  };
+}
 
 /** The role slug whose holders make up the Team Activity roster. */
 const PRODUCER_ROLE_SLUG = 'producer';
@@ -132,7 +171,10 @@ interface AgingDealLean {
     _id: Types.ObjectId;
     auditStatus?: string;
     openFailedCount?: number;
+    auditAssignee?: { type: string; id: Types.ObjectId } | null;
   }[];
+  /** Who is responsible for the audit — computed by `agingAuditsPrefix`. */
+  _owner?: Types.ObjectId | null;
 }
 
 interface OverdueTicketLean {
@@ -336,13 +378,19 @@ export class ManagementDashboardService {
       query,
     );
 
+    const ownerOf = (deal: AgingDealLean): string => key(deal._owner);
     const names = await displayNamesFor(
       this.userModel,
-      [...new Set(items.map((deal) => key(deal.producerId)))].filter(Boolean),
+      [
+        ...new Set(
+          items.flatMap((deal) => [key(deal.producerId), ownerOf(deal)]),
+        ),
+      ].filter(Boolean),
     );
 
     return this.list(period, query, total, items, (deal) => {
       const audit = deal._audit[0];
+      const owner = ownerOf(deal);
       return {
         dealAuditId: audit._id.toString(),
         dealId: deal._id.toString(),
@@ -350,6 +398,8 @@ export class ManagementDashboardService {
         clientName: deal.clientName?.trim() || 'Unknown client',
         producerId: key(deal.producerId) || null,
         producerName: names.get(key(deal.producerId)) ?? null,
+        assigneeId: owner || null,
+        assigneeName: names.get(owner) ?? null,
         auditStatus: audit.auditStatus ?? 'Not Submitted',
         openFailedCount: audit.openFailedCount ?? 0,
         soldDate: iso(deal.soldDate),
@@ -406,11 +456,12 @@ export class ManagementDashboardService {
     const { period, current } = resolvePeriod(query, access.timeZone);
 
     // No producer multi-select here, by design: the table *is* the team.
-    const [sold, quoted, open, roster] = await Promise.all([
+    const [sold, quoted, open, roster, roleAssigned] = await Promise.all([
       this.householdsSoldBy(access, branchId, undefined, query, current),
       this.householdsQuotedBy(access, branchId, undefined, query, current),
       this.openItemsBy(access, branchId, undefined),
       this.roster(access, branchId),
+      this.roleOwnedOpenItems(access, branchId),
     ]);
 
     const ids = new Set<string>([
@@ -454,7 +505,12 @@ export class ManagementDashboardService {
         a.name.localeCompare(b.name),
     );
 
-    return { period, rows, totals: this.totalsOf(rows) };
+    return {
+      period,
+      rows,
+      totals: this.totalsOf(rows),
+      roleAssignedOpenAuditItems: roleAssigned,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -505,7 +561,7 @@ export class ManagementDashboardService {
       this.dealAuditItemModel.aggregate<OpenItemLean>(
         producerOpenAuditItems(
           access.agencyId ?? '',
-          salesScope<DealDocument>(access, branchId, pinned),
+          auditOwnerScope(access, branchId, pinned),
         ),
       ),
     ]);
@@ -602,9 +658,12 @@ export class ManagementDashboardService {
       ...range,
       endYmd: Math.min(range.endYmd, cutoffYmd),
     };
+    // The producer filter is applied to the audit's responsible owner inside
+    // the pipeline, so the deal match carries none — see `agingAuditsPrefix`.
     return agingAuditsPrefix(
-      soldMatch(access, branchId, query.producerIds, aged),
+      soldMatch(access, branchId, undefined, aged),
       query,
+      ownerPinFor(query.producerIds),
     );
   }
 
@@ -672,10 +731,29 @@ export class ManagementDashboardService {
     const rows = await this.dealAuditModel.aggregate<KeyedOpenItems>(
       openAuditItemsByProducer(
         access.agencyId ?? '',
-        salesScope<DealDocument>(access, branchId, producerIds),
+        auditOwnerScope(access, branchId, producerIds),
       ),
     );
     return new Map(rows.map((row) => [key(row._id), row.openAuditItems]));
+  }
+
+  /** Open audit items on role-owned audits — see `roleAssignedOpenAuditItems`. */
+  private async roleOwnedOpenItems(
+    access: AccessContext,
+    branchId: string | null,
+  ): Promise<number> {
+    const [row] = await this.dealAuditModel.aggregate<{
+      openAuditItems: number;
+    }>(
+      roleOwnedOpenAuditItems(
+        access.agencyId ?? '',
+        // Tenancy and branch only. An own-scoped caller's pin lands on a
+        // field audits do not have and matches nothing — a role's queue is
+        // nobody's *own* backlog.
+        buildScopeFilter(access, branchId),
+      ),
+    );
+    return row?.openAuditItems ?? 0;
   }
 
   // ---------------------------------------------------------------------------

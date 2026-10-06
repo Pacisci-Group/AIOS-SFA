@@ -57,6 +57,7 @@ describe('Address (PAC-60)', () => {
   });
 
   afterAll(async () => {
+    // Not dropped here: the second describe below reuses this seed.
     await closeTestApp(app);
   });
 
@@ -207,6 +208,9 @@ describe('Address resolve with a stubbed Google client (PAC-60)', () => {
   });
 
   afterAll(async () => {
+    // Drop on the way out — suites share one database, and the next suite
+    // may seed without dropping first.
+    await dropTestDatabase(app);
     await closeTestApp(app);
   });
 

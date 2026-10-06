@@ -85,7 +85,7 @@ docs {
   |---|---|---|---|
   | `range` | `mtd` · `lastMonth` · `last3Months` · `ytd` · `lastYear` · `custom` | `mtd` | Calendar windows in the agency's time zone (`Agency.timezone`). `today`/`week` are the producer dashboard's and 400 here. |
   | `from`, `to` | `YYYY-MM-DD` | — | required with `custom`; `to` inclusive; ≤ 366 days |
-  | `producerIds` | id list | — | narrows the three cards (for tickets: the assigned CSR). Never the Team table. |
+  | `producerIds` | id list | — | narrows the three cards (for tickets: the assigned CSR; for aging audits: the person **responsible** for the audit — its user assignee, or the seller when unassigned — PAC-136). Never the Team table. |
   | `leadSourceIds` | id list, `__none__` allowed | — | leads by their own source; deals through their lead; tickets through their lead (most have none) |
   | `policyTypes` | `POLICY_TYPES` list | — | leads: `policiesOfInterest`; deals: `policyTypes`; tickets: `policyType` |
 
