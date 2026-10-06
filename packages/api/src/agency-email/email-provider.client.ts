@@ -20,11 +20,13 @@ export interface SendingDnsRecord {
 /**
  * Provider-side verification state, normalised to our four values.
  *
- * Resend reports `not_started`, `pending`, `verified`, `failed` and
- * `temporary_failure`. We collapse the first two to `pending` and both failure
- * modes to `failed`, because the only decision anything downstream makes is
- * "may we send from this domain?" — and for every value except `verified` the
- * answer is no.
+ * Resend reports `not_started`, `pending`, `verified`, `partially_verified`,
+ * `failed` and `temporary_failure`. We collapse the first two to `pending`,
+ * `partially_verified` to `verified`, and both failure modes to `failed`,
+ * because the only decision anything downstream makes is "may we send from
+ * this domain?" — and `partially_verified` means Resend already sends from it
+ * (only a fallback record is still outstanding), while for every other value
+ * the answer is no.
  */
 export type SendingDomainStatus = 'pending' | 'verified' | 'failed';
 
@@ -109,14 +111,19 @@ export class ResendEmailProvider extends EmailProviderClient {
   }
 
   /**
-   * Trigger a re-check, then read the result back.
+   * Read the current state, and trigger a re-check only if it is not verified.
    *
-   * Two calls on purpose: **`domains.verify` is asynchronous** and its response
-   * does not carry the outcome. Reporting its return value as the status would
-   * tell an owner "still pending" forever, even once DNS was correct — the
-   * follow-up `get` is what actually observes the transition.
+   * **`domains.verify` is asynchronous and resets the domain to `pending`
+   * regardless of its current status.** Triggering first and reading straight
+   * after therefore always read `pending` — and every press restarted the
+   * check, discarding the outcome of the one the previous press started, so a
+   * domain with correct DNS could never be seen as verified. Reading first
+   * observes that outcome; the trigger only runs while it is still unverified.
    */
   async verifyDomain(providerDomainId: string): Promise<SendingDomain> {
+    const current = await this.getDomain(providerDomainId);
+    if (current.status === 'verified') return current;
+
     const { error } = await this.resend.domains.verify(providerDomainId);
     if (error) {
       throw new ServiceUnavailableException(
@@ -157,9 +164,9 @@ export class ResendEmailProvider extends EmailProviderClient {
   }
 }
 
-/** See {@link SendingDomainStatus} for why five values collapse to three. */
-function normalizeStatus(raw: string | undefined): SendingDomainStatus {
-  if (raw === 'verified') return 'verified';
+/** See {@link SendingDomainStatus} for why six values collapse to three. */
+export function normalizeStatus(raw: string | undefined): SendingDomainStatus {
+  if (raw === 'verified' || raw === 'partially_verified') return 'verified';
   if (raw === 'failed' || raw === 'temporary_failure') return 'failed';
   return 'pending';
 }

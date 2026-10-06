@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,6 +19,7 @@ import type {
 import {
   EmailProviderClient,
   type SendingDnsRecord,
+  type SendingDomain,
 } from './email-provider.client';
 
 /** Mirrors the worker's fallback so `effectiveFrom` is never a guess. */
@@ -25,6 +27,8 @@ const DEFAULT_FROM = 'AgencyOps <onboarding@resend.dev>';
 
 @Injectable()
 export class AgencyEmailService {
+  private readonly logger = new Logger(AgencyEmailService.name);
+
   constructor(
     @InjectModel(Agency.name)
     private readonly agencyModel: Model<AgencyDocument>,
@@ -32,8 +36,31 @@ export class AgencyEmailService {
     private readonly config: ConfigService,
   ) {}
 
+  /**
+   * While `pending`, re-read the provider so a check that finished since the
+   * last Verify press shows up on page load. A read only — it never triggers a
+   * new check (see `verifyDomain` for why that matters). If the provider is
+   * unreachable the stored state is still correct, just possibly stale, so it
+   * is served as-is rather than failing the whole settings page.
+   */
   async get(agencyId: string): Promise<AgencyEmailView> {
     const agency = await this.loadAgency(agencyId);
+    const providerDomainId = agency.email?.providerDomainId;
+
+    if (agency.email?.sendingStatus === 'pending' && providerDomainId) {
+      try {
+        const result = await this.provider.getDomain(providerDomainId);
+        if (result.status !== 'pending') {
+          this.applyProviderState(agency, result);
+          await agency.save();
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Could not refresh sending domain status for agency ${agencyId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
     return this.toView(agency, this.cachedRecords(agency));
   }
 
@@ -145,20 +172,37 @@ export class AgencyEmailService {
 
     const result = await this.provider.verifyDomain(providerDomainId);
 
-    agency.email.sendingStatus =
-      result.status === 'verified' ? 'verified' : result.status;
-    agency.email.verifiedAt =
-      result.status === 'verified' ? new Date() : agency.email.verifiedAt;
-    agency.email.lastError =
-      result.status === 'verified'
-        ? null
+    this.applyProviderState(agency, result);
+    await agency.save();
+
+    return this.toView(agency, result.records);
+  }
+
+  /**
+   * Store what the provider reports. Mutates only — the caller saves.
+   *
+   * `pending` means the provider is still checking, not that DNS is wrong, so
+   * it gets its own message: telling an owner whose records are correct that
+   * they "are not visible" sends them off to debug DNS that is fine.
+   */
+  private applyProviderState(
+    agency: AgencyDocument,
+    result: SendingDomain,
+  ): void {
+    const verified = result.status === 'verified';
+    const becameVerified =
+      verified && agency.email.sendingStatus !== 'verified';
+
+    agency.email.sendingStatus = result.status;
+    if (becameVerified) agency.email.verifiedAt = new Date();
+    agency.email.lastError = verified
+      ? null
+      : result.status === 'pending'
+        ? 'Checking your DNS records. This usually takes a few minutes — press Verify again shortly.'
         : 'DNS records are not visible yet. They can take up to 72 hours to publish — check them and try again.';
 
     this.cacheRecords(agency, result.records);
     agency.markModified('email');
-    await agency.save();
-
-    return this.toView(agency, result.records);
   }
 
   /**
