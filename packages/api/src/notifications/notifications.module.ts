@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { RedisModule } from '../common/redis/redis.module';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
+import { NotificationStreamRegistry } from './stream/notification-stream.registry';
 import {
   Notification,
   NotificationSchema,
@@ -16,15 +18,21 @@ import {
  * `src/worker/functions/deliver-notification.fn.ts`, which reaches the
  * collection through the schema — the one thing the worker boundary lets
  * across — and never through this module.
+ *
+ * The live half (PR2): `RedisModule` supplies the `NotificationBus` the
+ * worker publishes on, and `NotificationStreamRegistry` turns its nudges into
+ * frames on the SSE streams this node holds. Imported by name rather than
+ * made global so the standalone worker resolves the same module on its own.
  */
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Notification.name, schema: NotificationSchema },
     ]),
+    RedisModule,
   ],
   controllers: [NotificationsController],
-  providers: [NotificationsService],
+  providers: [NotificationsService, NotificationStreamRegistry],
   exports: [NotificationsService, MongooseModule],
 })
 export class NotificationsModule {}

@@ -65,6 +65,7 @@ import {
   Notification,
   NotificationSchema,
 } from '../notifications/schemas/notification.schema';
+import { RedisModule } from '../common/redis/redis.module';
 import { StorageModule } from '../storage/storage.module';
 import {
   AcmeAccount,
@@ -161,6 +162,10 @@ import {
     // `StorageService` the first time a file needed reading. The mailer campaign
     // jobs (PAC-71) are the next thing that will need it.
     StorageModule,
+    // The notification bus (PAC-154 PR2). Same reasoning as `StorageModule`
+    // above: not global, so the standalone worker must name it. The worker
+    // only publishes on it; subscribing is the API tier's job.
+    RedisModule,
   ],
   providers: [
     WorkerIndexesService,

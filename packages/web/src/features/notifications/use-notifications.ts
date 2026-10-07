@@ -11,12 +11,15 @@ import {
   markNotificationRead,
   notificationsKey,
 } from '@/lib/notifications-api';
+import { useNotificationStreamConnected } from './notification-stream-status';
 
 /**
- * How often the badge re-asks the server while nothing live is connected.
+ * How often the badge re-asks the server while this tab has no live stream.
  *
- * PR1 ships polling only; PR2's SSE stream turns this into the fallback for a
- * tab whose stream is down, and invalidates the same queries on each event.
+ * The fallback, not the mechanism: with the SSE stream open (PR2) every event
+ * invalidates these queries and polling is switched off. It comes back the
+ * moment the stream drops, so a tab behind a proxy that cannot hold a stream
+ * open still sees the badge move — just a minute late.
  */
 export const UNREAD_COUNT_POLL_MS = 60_000;
 
@@ -42,11 +45,12 @@ export function useNotificationsList(unread: boolean) {
  * mark-read elsewhere and reconnect gaps all drift.
  */
 export function useUnreadCount(enabled = true) {
+  const connected = useNotificationStreamConnected();
   return useQuery({
     queryKey: [...notificationsKey, 'unread-count'],
     queryFn: getUnreadCount,
     enabled,
-    refetchInterval: UNREAD_COUNT_POLL_MS,
+    refetchInterval: connected ? false : UNREAD_COUNT_POLL_MS,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
   });

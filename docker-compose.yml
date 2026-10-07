@@ -98,10 +98,13 @@ services:
       "
     restart: "no"
 
-  # Permission cache (OPTIONAL at runtime). The API only uses Redis when
-  # REDIS_URL is set — unset, it resolves permissions from MongoDB on every
-  # request (see permissions/cache/permission-cache.provider.ts). The container
-  # runs regardless so the cached path is one uncommented line away in .env.
+  # Permission cache + notification pub/sub (OPTIONAL at runtime). The app only
+  # uses Redis when REDIS_URL is set — unset, it resolves permissions from
+  # MongoDB on every request (permissions/cache/permission-cache.provider.ts)
+  # and fans notifications out in-process (common/redis/redis.module.ts),
+  # which is correct for the host dev loop where the worker runs inline. The
+  # container runs regardless so the cached path is one uncommented line away
+  # in .env — and `make up`, where the worker is its own container, needs it.
   #
   # Deliberately no volume: this is a pure cache, and persisting it across
   # `docker compose down` would resurrect stale permission sets after a role
@@ -273,6 +276,12 @@ services:
     environment:
       WORKER_PORT: 4001
       MONGODB_URI: mongodb://mongo:27017/sfa?directConnection=true
+      # Same rewrite as the `api` service, and it is not optional here: the
+      # worker PUBLISHes the notification nudges the api SUBSCRIBEs to
+      # (PAC-154). Left to inherit `.env`'s localhost:6379, `localhost` is
+      # this container and the publish goes nowhere — with the api logging
+      # itself happily subscribed to the real Redis.
+      REDIS_URL: ${REDIS_URL:+redis://redis:6379}
       INNGEST_DEV: "1"
       INNGEST_BASE_URL: http://inngest:8288
       STORAGE_ENDPOINT: http://minio:9000

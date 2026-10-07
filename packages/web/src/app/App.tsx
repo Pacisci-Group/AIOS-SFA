@@ -13,6 +13,7 @@ import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { ReportBugWidget } from '@/features/bug-report/ReportBugWidget';
+import { NotificationStream } from '@/features/notifications/NotificationStream';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -958,6 +959,9 @@ export function App() {
               router context to record which page a report came from. It renders
               nothing when signed out. */}
           <ReportBugWidget />
+          {/* Same placement, same reasons: one live notification stream per
+              signed-in tab, whose toast action needs `useNavigate` (PAC-154). */}
+          <NotificationStream />
           </BrowserRouter>
           {/* `sonner` was installed but never mounted, so `toast()` silently
               no-opped. Used by the share-link dialog's copy action. */}

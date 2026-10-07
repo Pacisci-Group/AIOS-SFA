@@ -53,6 +53,14 @@ export interface JwtPayload {
    * genuinely present, not because anything authorizes off it.
    */
   iat?: number;
+  /**
+   * Expiry, in seconds since the epoch. Added by `jsonwebtoken` from
+   * `JWT_ACCESS_EXPIRES` and passed through like `iat`. The one consumer is
+   * the notification SSE stream (PAC-154), which closes itself at this instant
+   * so a stream never outlives the token it was opened with — `tokenVersion`
+   * is checked once at connect, so `exp` is the bound on that window.
+   */
+  exp?: number;
 }
 
 /**

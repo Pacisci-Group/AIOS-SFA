@@ -1114,3 +1114,77 @@ eslint clean on every touched API file · e2e `notifications` 10/10 + `worker/de
 SSE + Redis + terraform (PR2) · email channel (PR3) · push + PWA shell + update toast (PR4) ·
 every trigger but bug reports (PAC-127) · a per-report URL on `/admin/bugs`.
 
+## 19. PAC-154 — Notifications, PR2 of 4: live (handoff, 2026-10-07)
+
+Branch `asad/pac-154-pr2-live-sse-redis`, stacked on PR1's branch
+(`asad/pac-154-notifications-in-app-notification-centre-web-push`, PR #138, base
+`dev`) — same pattern as PAC-139's #124 on #122. Rebase onto `dev` once #138
+merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md` §2.
+
+### Decisions — do not re-litigate
+- Everything in §18, plus:
+- **`@Header('Cache-Control')` / `@Header('X-Accel-Buffering')` are deliberately
+  not on the SSE handler.** Nest 11's `SseStream` writes both (and `no-transform`,
+  `Connection: keep-alive`) when it commits headers via `writeHead`, which would
+  override a decorator's value anyway. The e2e asserts the headers arrive.
+- **`ping` is a named event, not an SSE comment.** Nest's `MessageEvent` cannot
+  emit `: ping`; the client ignores the event. Same effect on idle timeouts.
+- **The nudge carries ids only** (`{ recipientId, notificationId }`); the API
+  node re-reads the row. The `insert` step now returns `{ rows: [{ id,
+  recipientId }] }` so `publish` knows who each row is for.
+- **Terraform admits the Valkey cluster the way it admits Mongo** (id for a
+  single droplet, tag for the pool) and pins it to the environment VPC via
+  `private_network_uuid`; `redis_uri` is the **private** `rediss://` URI. Engine
+  is `valkey` 8 (`redis` is retired for new DO clusters), `allkeys_lru` because
+  nothing durable lives there. `terraform` is not installed on this machine, so
+  `fmt`/`validate` were **not** run — run them before the first apply.
+- **Reconnect backoff is exponential** (1 s doubling to 30 s, reset on open),
+  not the plan's flat 3 s; the server's `retry: 3000` only applies when
+  `onerror` returns nothing.
+- **`connected` is a `useSyncExternalStore` module store**, not React context:
+  `NotificationStream` is a sibling of `Routes` (beside `ReportBugWidget`) and a
+  sibling cannot provide context to them.
+
+### What exists now
+- `api/src/common/redis/`: `REDIS_CLIENT` (`Redis | null`; `error` log in
+  production when unset), abstract `NotificationBus` + `isNotificationNudge`,
+  `RedisNotificationBus` (channel `sfa:notify:v1`, lazy `duplicate()` subscriber,
+  errors logged and swallowed), `LocalNotificationBus` (EventEmitter), and a
+  **non-global** `RedisModule` imported by `NotificationsModule` and
+  `WorkerModule` (it closes both connections on destroy).
+- `api/src/notifications/stream/notification-stream.registry.ts`:
+  `Map<userId, Set<Subject>>`, `open()` is a `defer` + `finalize` so bookkeeping
+  follows the subscription; one bus subscription per process. Unit spec 6/6.
+- `GET /notifications/stream` (`@Sse`, `@SkipThrottle`): `ready` (retry 3 s) →
+  `ping` every 25 s → `notification` frames (`id:` = row id); `takeUntil(timer)`
+  at the token's `exp` minus 1 s. `JwtPayload.exp` is now declared in shared.
+  `Last-Event-ID` added to CORS `allowedHeaders`.
+- `deliver-notification.fn.ts`: step `publish` after `insert`, one nudge per
+  row, result `{ published }`.
+- Infra: `infra/terraform/modules/managed_redis/`, `module "redis"` in
+  `stacks/sfa/main.tf` (+ project resources, `redis_size`,
+  `redis_allowed_ip_addresses`, `redis_uri`/`redis_host` outputs, re-exported in
+  dev/production/_template, presets carry `redis_size`); deploy preflight env +
+  unconditional `required=` + `app.env` line; `DEPLOYMENT.md` secrets row +
+  "Notifications" subsection; compose `worker` gets `REDIS_URL:
+  ${REDIS_URL:+redis://redis:6379}`; `.env.example`; `test/setup-env.ts` pins
+  `REDIS_URL=''`; `web/nginx.conf` `location = /api/v1/notifications/stream`
+  (buffering off, 1 h read timeout, `Connection ""`).
+- Web: `getAccessToken` exported, `refreshAccessToken` exported and
+  **single-flight**; `@microsoft/fetch-event-source`;
+  `features/notifications/use-notification-stream.ts` (fetch override injects
+  the Bearer on every attempt, `onopen` 401 → refresh → retry, `onclose` throws
+  retriable, invalidates `notificationsKey` on every open and every
+  `notification`, sonner toast with a View action), `NotificationStream.tsx`
+  mounted beside `ReportBugWidget`, `notification-stream-status.ts`;
+  `useUnreadCount` polls only while `connected` is false.
+- Bruno: the stream is **not** in the collection (the CLI cannot consume SSE);
+  `bruno/README.md` says so and gives the `curl -N` recipe.
+- ⚠ `.claude/skills/running-the-stack/SKILL.md` still describes Redis as the
+  permission cache only — the sandbox could not write there. One paragraph to
+  update (see `.env.example`'s Redis section for the wording).
+
+### Not in PR2 (per the plan)
+Email channel (PR3) · push + PWA shell + update toast (PR4) · sharing the Redis
+client with the permission cache · `BroadcastChannel` multi-tab dedupe.
+

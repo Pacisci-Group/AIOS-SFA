@@ -4,6 +4,8 @@ spaces_region    = "nyc3"
 droplet_size     = "s-2vcpu-4gb"
 mongo_size       = "db-s-1vcpu-2gb"
 mongo_node_count = 1
+# Permission cache + notification pub/sub (PAC-154). Nothing durable lives in it.
+redis_size       = "db-s-1vcpu-1gb"
 
 domain_root   = "example.com"
 dns_subdomain = "staging"
