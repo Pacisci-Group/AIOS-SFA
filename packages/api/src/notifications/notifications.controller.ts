@@ -1,5 +1,7 @@
 import {
+  Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Logger,
@@ -7,6 +9,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Sse,
 } from '@nestjs/common';
@@ -16,6 +19,7 @@ import type {
   MarkAllNotificationsReadResponse,
   NotificationListResponse,
   NotificationRecord,
+  PushSubscriptionResponse,
   UnreadCountResponse,
 } from '@sfa/shared';
 import {
@@ -44,7 +48,14 @@ import {
   listNotificationsSchema,
   type ListNotificationsDto,
 } from './dto/notifications.dto';
+import {
+  pushSubscriptionSchema,
+  removePushSubscriptionSchema,
+  type PushSubscriptionDto,
+  type RemovePushSubscriptionDto,
+} from './dto/push-subscriptions.dto';
 import { NotificationsService } from './notifications.service';
+import { PushSubscriptionsService } from './push-subscriptions.service';
 import { NotificationStreamRegistry } from './stream/notification-stream.registry';
 
 /**
@@ -92,6 +103,7 @@ export class NotificationsController {
   constructor(
     private readonly service: NotificationsService,
     private readonly registry: NotificationStreamRegistry,
+    private readonly pushSubscriptions: PushSubscriptionsService,
   ) {}
 
   /**
@@ -229,5 +241,39 @@ export class NotificationsController {
     @Access() access: AccessContext,
   ): Promise<MarkAllNotificationsReadResponse> {
     return this.service.markAllRead(access.userId);
+  }
+
+  /**
+   * Register this browser for web push (PAC-154, PR4). `PUT`, because the
+   * body *is* the resource: the same endpoint sent twice is one row, and the
+   * second call refreshes it. A device that was soft-deleted after a 410 and
+   * subscribes again lands here with a new endpoint — or the same one, which
+   * the partial unique index admits.
+   */
+  @Put('push-subscriptions')
+  @HttpCode(200)
+  registerPushSubscription(
+    @Access() access: AccessContext,
+    @Body(new ZodValidationPipe(pushSubscriptionSchema))
+    body: PushSubscriptionDto,
+  ): Promise<PushSubscriptionResponse> {
+    return this.pushSubscriptions.upsert(access.userId, body);
+  }
+
+  /**
+   * Withdraw this browser's subscription. The endpoint is in the **body**, not
+   * the path: it is a long URL with `/` and `%` in it, and nginx's
+   * `proxy_pass` with a URI part re-normalises encoded slashes — the path
+   * form would arrive mangled behind the production proxy. Somebody else's
+   * endpoint is a 404.
+   */
+  @Delete('push-subscriptions')
+  @HttpCode(204)
+  async removePushSubscription(
+    @Access() access: AccessContext,
+    @Body(new ZodValidationPipe(removePushSubscriptionSchema))
+    body: RemovePushSubscriptionDto,
+  ): Promise<void> {
+    await this.pushSubscriptions.remove(access.userId, body);
   }
 }

@@ -1,0 +1,49 @@
+meta {
+  name: Get VAPID Public Key (Public)
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/public/push/vapid-public-key
+  body: none
+  auth: none
+}
+
+tests {
+  test("answers without any Authorization header: 200 when push is configured, 404 when it is not", function () {
+    expect([200, 404]).to.include(res.getStatus());
+  });
+
+  test("a 200 carries exactly the public key", function () {
+    if (res.getStatus() !== 200) return;
+    expect(Object.keys(res.getBody())).to.eql(["publicKey"]);
+    expect(res.getBody().publicKey).to.be.a("string").with.length.above(60);
+  });
+}
+
+docs {
+  # GET /public/push/vapid-public-key — the key a browser subscribes with (PAC-154 PR4)
+
+  **Public** (`@Public()`): no JWT, no `AccessContext`, every global guard
+  bypassed. Its own controller (`public-notifications.controller.ts`), as
+  `PublicDomainsController` is — a `@Public()` route never sits in a class of
+  authenticated handlers.
+
+  The web app reads this before `pushManager.subscribe({ applicationServerKey })`.
+  The key is public by definition (it is embedded in every subscription the
+  browser creates), so there is nothing to protect; what matters is that the
+  app can read it with no session.
+
+  ## Response `200`
+  ```json
+  { "publicKey": "BFVw…pPg" }
+  ```
+
+  ## Response `404`
+  `VAPID_PUBLIC_KEY` is not set in this environment. The opt-in switch on
+  `/settings/profile` hides itself on this answer, so an environment without
+  push has no switch rather than a switch that fails. The deploy preflight
+  requires all three `VAPID_*` secrets, so a deployed environment never
+  answers 404; a local stack without them in `.env` does.
+}

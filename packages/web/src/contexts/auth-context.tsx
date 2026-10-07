@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { forgetPushSubscriptionOnSignOut } from '@/features/notifications/push-subscription';
 import {
   clearTokens,
   fetchMe,
@@ -99,12 +100,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // React Query cache is keyed by resource, not by user — so leftover
       // entries would render the previous user's records to the new one.
       queryClient.clear();
-      setUser(nextUser);
+      // Same for this browser's push subscription: it was the previous
+      // user's, and would keep delivering their notifications to whoever
+      // just took the seat (PAC-154 PR4). The new tokens are already stored
+      // by now, so the server row is not deleted here — the local
+      // unsubscribe is what stops the pushes, and the row dies on its 410.
+      setUser((previous) => {
+        if (previous && previous.id !== nextUser.id) {
+          forgetPushSubscriptionOnSignOut();
+        }
+        return nextUser;
+      });
     },
     [queryClient],
   );
 
   const logout = useCallback(() => {
+    // This browser's push subscription first, while the token still exists
+    // to withdraw it with (PAC-154 PR4). Best-effort and not awaited —
+    // signing out must not wait on the network.
+    forgetPushSubscriptionOnSignOut();
     // Nuke persisted storage (tokens, user, branch) and the in-memory
     // React Query cache so no stale session data survives into the next login.
     clearTokens();

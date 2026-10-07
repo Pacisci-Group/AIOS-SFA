@@ -13,6 +13,12 @@
       "runtimeArgs": ["run", "web:dev"],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "web-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "preview", "-w", "@sfa/web", "--", "--port", "4173", "--strictPort"],
+      "port": 4173
     }
   ]
 }

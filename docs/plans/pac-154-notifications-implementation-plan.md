@@ -211,6 +211,11 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - The function-sync deploy check only asserts `functionCount > 0`; confirm the new functions appear in the Inngest dashboard (`ssh -L 8288:localhost:8288 deploy@<inngest-ip>`) after the first deploy.
 - `lint -w @sfa/api` is eslint only; `build -w @sfa/api` + `tsc -p packages/api/tsconfig.json` catch type errors. Rebuild `@sfa/shared` before e2e, Bruno and API unit tests.
 - Every new env var goes to `.env.example`, the preflight `env:` map, `required=`, the `app.env` heredoc, `DEPLOYMENT.md`, and `test/setup-env.ts`.
+- `tsconfig.sw.json` extends the web `tsconfig.json`, which excludes `src/sw.ts` — the child must re-declare `"exclude": []` or tsc finds no inputs. `lint` and `build` run both configs.
+- `vite-plugin-pwa` 2.0 + TS 5.7: `pushManager.subscribe()` wants `Uint8Array<ArrayBuffer>`; build the key bytes over `new ArrayBuffer(n)`, not `new Uint8Array(n)`.
+- `navigator.serviceWorker.ready` never resolves when no worker is coming (the `vite` dev server); read `getRegistration()` instead and treat `null` as "not available here".
+- The embedded browser pane denies `Notification` permission, so the subscribe path cannot be walked there; use a real Chrome against `vite preview` (`web-preview` in `.claude/launch.json`). The update toast *can* be proven in the pane: rebuild with a marker, `registration.update()`, Reload.
+- No image tooling in the sandbox (`qlmanage`, headless Chrome, ImageMagick all refused); the platform icons were rendered by a throwaway Node PNG writer. Re-render the same way if the mark changes.
 
 ### Found in review (Abu Bakar, #139 / #141, 2026-10-08) — each shipped once before it was caught
 

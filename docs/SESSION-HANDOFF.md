@@ -1320,3 +1320,162 @@ is wrapped in `AllowlistedMailTransport` and reaches only
 nothing is sent and the API logs an error. **Deferred to its own ticket:**
 `MailDeliveryService.record` atomicity (upsert `emailMessages` on the
 idempotency key; the invite function shares the shape).
+
+## 21. PAC-154 — Notifications, PR4 of 4: push + PWA shell (handoff, 2026-10-08)
+
+Branch `asad/pac-154-pr4-push-pwa-shell`, stacked on PR3's branch
+(`asad/pac-154-pr3-email-channel`, PR #141 → #139 → #138 → `dev`). Rebase onto
+`dev` as the stack merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md`
+§4 (PR4). PAC-153 §1 (plugin, service worker, platform manifest, icons) is
+folded in here per ticket decision 5.
+
+### Decisions — do not re-litigate
+- Everything in §18–§20, plus:
+- **The VAPID public key is served from `GET /public/push/vapid-public-key`**
+  (the ticket's path), on its own `PublicNotificationsController` — the
+  `PublicDomainsController` precedent: a `@Public()` route never shares a
+  class with authenticated handlers. The plan's `public/notifications` prefix
+  was not used. `404` when `VAPID_PUBLIC_KEY` is unset; the opt-in switch
+  hides itself on that answer.
+- **`DELETE /notifications/push-subscriptions` takes `{ endpoint }` in the
+  body**, not a path param (plan: nginx `proxy_pass` re-normalises encoded
+  slashes). Documented in Bruno as the deliberate deviation from the ticket's
+  table. The endpoint must be `https:` (zod) — the worker would otherwise
+  POST an encrypted payload at whatever host a client named.
+- **Upsert is keyed on the live row for the endpoint, whoever owns it.** A
+  shared machine signing in as someone else moves the row to the new user;
+  on sign-out and on `adoptSession` to a different user the browser also
+  `unsubscribe()`s locally (no token needed — the server row then dies on its
+  next 410), and `logout` additionally fires a `keepalive` `DELETE` with the
+  token captured *before* `clearTokens()`.
+- **`WebPushService.sendToUser` never throws; the `push` step records the
+  outcome and moves on.** Outcome → `delivery.push.status`: `sent` (≥1
+  subscription accepted), `failed` (every live one refused), `skipped`
+  (push unconfigured, no live subscription, or every subscription had
+  expired). A 404/410 soft-deletes the row (`deletedAt`, PAC-155); any other
+  error leaves it live. Only `delivery.push` is ever written (PAC-148 FR-H4),
+  asserted by the e2e.
+- **The `push` step re-reads the stored rows** for title/body/href, and
+  the icon is the agency favicon → logo → `/icon-192.png`, made absolute on
+  the row's tenant host via `TenantUrlService.baseUrlFor` (never
+  `APP_BASE_URL`). Platform rows (`agencyId: null`) get the platform icon on
+  the platform host. Payload `{ id, title, body, href, icon }`, `tag`/`topic`
+  = row id, `TTL` 3600, `urgency: normal`.
+- **The transport is a seam (`WebPushTransport`), same shape as
+  `MailTransport`**: `WebPushLibTransport` wraps `web-push`,
+  `DisabledWebPushTransport` is what an unconfigured environment runs
+  (`error` log in production — the `mail-transport.provider.ts` temperament).
+  A *malformed* key is logged and disabled rather than crashing the worker,
+  which would also stop email and the campaign jobs.
+- **`notificationclick` with a window open posts `{ type: 'NOTIFICATION_CLICK',
+  id, href }` and the SPA marks read + navigates** (`usePushClick`, mounted in
+  `NotificationStream`). With nothing open it `openWindow(href)` and the row
+  is **not** marked read on that path — the worker has no session. Accepted.
+- **The web `tsconfig.json` excludes `src/sw.ts`; `tsconfig.sw.json` checks it
+  with the `WebWorker` lib.** `lint` and `build` run both. The child config
+  must re-declare `"exclude": []` or it inherits the parent's exclusion of
+  its only input and tsc reports "No inputs were found".
+- **No favicon `<link>` was added** for the platform: the pre-paint tenant
+  script in `index.html` appends the agency's, and a second `rel=icon` would
+  compete with it. Only `apple-touch-icon` is linked.
+- **The platform icons are a hand-rolled PNG render** (shield on `--primary`,
+  matching `BrandMark`'s fallback), produced by a throwaway Node script —
+  `qlmanage`, headless Chrome and ImageMagick are all unavailable in the
+  sandbox. Per-agency icons are PAC-153 §2.
+
+### What exists now
+- `@sfa/shared` `notifications/types.ts`: `PushSubscriptionInput`,
+  `RemovePushSubscriptionInput`, `PushSubscriptionResponse` (never the keys),
+  `VapidPublicKeyResponse`.
+- `api/src/notifications/`: `schemas/push-subscription.schema.ts`
+  (`pushSubscriptions`; `userId`, `endpoint`, `keys { p256dh, auth }`,
+  `userAgent`, `lastSuccessAt`, `deletedAt` — explicit nulls; **unique
+  `{ endpoint }` partial on `deletedAt: { $type: 'null' }`**, plus
+  `{ userId, deletedAt }`), `push-subscriptions.service.ts` (`upsert`,
+  `remove` → 404 when not the caller's live row), `dto/push-subscriptions.dto.ts`,
+  `PUT`/`DELETE /notifications/push-subscriptions` on the existing controller,
+  `public-notifications.controller.ts`. Module registers the schema (API owns
+  the indexes), the service and the public controller.
+- `api/src/worker/push/`: `web-push.transport.ts` (seam + lib + disabled),
+  `web-push.provider.ts` (VAPID from config, loud when missing),
+  `web-push.service.ts` (`sendToUser`). `WorkerModule` registers
+  `PushSubscription` (not in `WorkerIndexesService`), the provider and the
+  service. **Not** under `worker/notifications/` — `FEATURE_DIRS` name.
+- `deliver-notification.fn.ts`: step `push` after `email`
+  (`insert → publish → email → push`), result
+  `{ pushed, sent, failed, skipped }`. Injects `WebPushService`,
+  `TenantBrandingService`, `TenantUrlService`.
+- Env: `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` in
+  `.env.example`, `.env.prod.example`, the deploy preflight `env:` map +
+  **unconditional `required=`**, the `app.env` heredoc, `DEPLOYMENT.md`
+  (secrets row + "Web push" subsection), `test/setup-env.ts` (pinned empty).
+  The local `.env` carries a dev pair generated 2026-10-08.
+- Web: `vite-plugin-pwa` 2.0 (`injectManifest`, `registerType: 'prompt'`,
+  `injectRegister: false`, `devOptions.enabled: false`, platform manifest,
+  `maximumFileSizeToCacheInBytes` 6 MiB — the main chunk is ~0.9 MB);
+  `src/sw.ts` (precache + `NavigationRoute` with `/api/` denylist, **no
+  runtime route** — that absence is the network-only guarantee; `push`
+  suppressed when any window is `focused`; `notificationclick`;
+  `SKIP_WAITING`); `public/icon-192.png`, `icon-512.png`,
+  `icon-maskable-512.png`, `apple-touch-icon.png`; `index.html` theme-color
+  (light/dark) + Apple metas; `nginx.conf` `location = /sw.js` and
+  `/manifest.webmanifest` → `Cache-Control: no-cache` (+ the manifest MIME
+  type, which stock nginx lacks); `lib/notifications-api.ts`
+  (`getVapidPublicKey` via `publicFetch`, `registerPushSubscription`,
+  `removePushSubscription`); `features/notifications/push-subscription.ts`
+  (support check, `getRegistration` — never `ready`, which hangs with no
+  worker — subscribe/unsubscribe, `forgetPushSubscriptionOnSignOut`,
+  `urlBase64ToUint8Array`), `PushOptIn.tsx` on `/settings/profile` (replaces
+  the "coming soon" card; hidden when unsupported or the key 404s; disabled
+  with a reason when no worker is registered or permission is denied),
+  `PwaUpdateToast.tsx` (mounted beside `NotificationStream`; hourly
+  `registration.update()`), `use-push-click.ts`. `auth-context` calls
+  `forgetPushSubscriptionOnSignOut()` on `logout` and on `adoptSession` to a
+  different user.
+- Bruno `Notifications/`: `Register Push Subscription` (seq 10, captures
+  `pushEndpoint`), `Remove Push Subscription` (11), `Get VAPID Public Key
+  (Public)` (12; accepts 200 or 404). README rows added.
+- `.claude/launch.json` gains `web-preview` (`vite preview` on 4173 serving
+  `dist/`, proxying `/api/v1` to 4000) — push and the update toast can only be
+  seen against a production build.
+
+### Verified
+`build -w @sfa/shared` · shared jest 286/286 · `build -w @sfa/api` ·
+`tsc -p packages/api` (no errors in touched files; baseline unchanged) ·
+eslint clean on every touched API file and both test files · e2e
+`worker/deliver-notification` 16/16 (`ran` is now
+`['insert','publish','email','push']`; one push per live subscription, dead
+one skipped, payload shape + `< 4 KB` + absolute icon, `TTL`/`urgency`/`topic`,
+`delivery.push: sent` and `lastSuccessAt`; 410 soft-deletes and the rest still
+send; 404 = 410; 503 → `failed` on the row with everything else byte-identical
+and the subscription still live; no subscription → `skipped`; push off in the
+catalog → nothing sent, `delivery.push` null) + `push-subscriptions` 12/12
+(partial index declared as `{ $type: 'null' }`; 401s; upsert echoes without
+keys and stores an explicit null; same endpoint twice = one row refreshed;
+shared device moves to the new user; re-subscribe after soft delete = a second
+live-then-dead pair, no E11000; several devices per user; `http:` and missing
+keys → 400; body-param delete soft-deletes; other user / already withdrawn →
+404; public key 404 while unset) · web `tsc` (main + sw) · `vite build` emits
+`sw.js` (190 precache entries, none under `/api/`), `manifest.webmanifest`,
+the four icons · Bruno `Auth` + `Notifications/{Login as Super Admin, Register
+Push Subscription, Remove Push Subscription, Get VAPID Public Key}` 10/10
+requests, 19/19 tests against `api:dev` (**File Bug Report was deliberately
+not run** — it emails every platform admin through the real Resend key in
+`.env`) · browser against `vite preview` + `api:dev`: worker `activated` and
+controlling, one `workbox-precache` cache with 186 entries and **zero `/api/`
+keys**, manifest linked, both theme-colors present; the Notifications card
+renders disabled with "Blocked for this site in your browser settings" (the
+embedded browser denies `Notification` permission, so **subscribe → OS
+notification → click was not exercised in a browser**; the worker→push-service
+path is the e2e's); rebuilt with a marker → `registration.update()` → the
+"New version available — Reload" toast appeared with a worker `waiting:
+installed` → Reload → `waiting: null`, the page runs the new build, toast
+gone.
+
+### Not in PR4 (per the plan and the ticket)
+Per-agency manifest and icons (PAC-153 §2) · install / Lighthouse /
+double-deploy QA pass (PAC-153 §3) · `BroadcastChannel` multi-tab dedupe ·
+per-user / per-type / per-channel preferences (decision 4) · digests · marking
+a row read on a cold-start `openWindow` click · every trigger but bug reports
+(PAC-127).
+

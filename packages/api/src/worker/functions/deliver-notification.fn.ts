@@ -10,6 +10,7 @@ import {
 import { NonRetriableError } from 'inngest';
 import { Model, Types } from 'mongoose';
 import { NotificationBus } from '../../common/redis/notification-bus';
+import { TenantUrlService } from '../../common/tenancy/tenant-url.service';
 import {
   notificationEmailRequested,
   notificationRequested,
@@ -30,7 +31,10 @@ import {
 import {
   Notification,
   NotificationDocument,
+  type NotificationChannelDeliverySubdoc,
 } from '../../notifications/schemas/notification.schema';
+import { TenantBrandingService } from '../../tenant-branding/tenant-branding.service';
+import { WebPushService, type PushPayload } from '../push/web-push.service';
 
 /**
  * The sole writer of the `notifications` collection (PAC-154, decision 1).
@@ -38,9 +42,9 @@ import {
  * Every producer — an API feature service or another worker function — emits
  * `notification/requested.v1` and this function does the rest: render the text
  * once, insert one row per recipient, then fan out to the secondary channels.
- * The channels arrive one PR at a time as further steps: `publish` (SSE nudge,
- * PR2), `email` (PR3, below), `push` (PR4). Each is its own `step.run` so a
- * crash in one never re-runs the ones before it.
+ * The channels arrived one PR at a time as further steps: `publish` (SSE nudge,
+ * PR2), `email` (PR3), `push` (PR4). Each is its own `step.run` so a crash in
+ * one never re-runs the ones before it.
  *
  * ## The nudge carries ids only
  *
@@ -60,6 +64,16 @@ import {
  * goes through `InngestService`, so the outbox row exists before the send and
  * the sweeper replays a stranded one; a replayed step re-emits, and the mail
  * function's `idempotency: 'event.data.notificationId'` collapses that.
+ *
+ * ## Push is a send, but a best-effort one
+ *
+ * `push` is the one channel this function delivers itself: `WebPushService`
+ * sends to every live subscription of the recipient and the outcome lands on
+ * the row as `delivery.push`. It is best-effort by construction — the service
+ * never throws, a dead device is soft-deleted and the rest are still tried —
+ * so a push failure can neither fail the run nor touch anything but
+ * `delivery.push` (PAC-148 FR-H4). The step re-reads the stored rows for the
+ * words, so the OS notification says exactly what the list does.
  *
  * ## Exactly once, twice over
  *
@@ -81,6 +95,9 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     @InjectModel(Notification.name)
     private readonly notificationModel: Model<NotificationDocument>,
     private readonly bus: NotificationBus,
+    private readonly webPush: WebPushService,
+    private readonly branding: TenantBrandingService,
+    private readonly tenantUrls: TenantUrlService,
   ) {}
 
   build() {
@@ -129,6 +146,13 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     // A hand-off to the mail function, never a send — see the class note.
     await step.run('email', () =>
       this.requestEmails(event.data.type, event.data.agencyId, inserted.rows),
+    );
+
+    // Delivered here, best-effort: the service never throws, and only
+    // `delivery.push` is ever written. Last so a push-service hang can delay
+    // nothing but itself.
+    await step.run('push', () =>
+      this.pushRows(event.data.type, event.data.agencyId, inserted.rows),
     );
 
     return { notificationIds: inserted.rows.map((row) => row.id) };
@@ -247,6 +271,100 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     return { requested: rows.length };
   }
 
+  /**
+   * Web push for every row, for a type whose defaults include the channel.
+   *
+   * The payload is built from the **stored** row — title, body and path as the
+   * list shows them — plus an absolute icon on the row's tenant host
+   * (`TenantUrlService.baseUrlFor`, never `APP_BASE_URL`: a service worker
+   * fetches the icon with no session, and only the tenant host serves the
+   * agency's files). Returns counts so the step result is plain JSON.
+   */
+  async pushRows(
+    type: NotificationType,
+    agencyId: string | null,
+    rows: InsertedRow[],
+  ): Promise<{
+    pushed: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+  }> {
+    const summary = { pushed: 0, sent: 0, failed: 0, skipped: 0 };
+    if (!NOTIFICATION_TYPES[type].defaultChannels.push || rows.length === 0) {
+      return summary;
+    }
+
+    const stored = await this.notificationModel
+      .find({ _id: { $in: rows.map((row) => new Types.ObjectId(row.id)) } })
+      .select({ _id: 1, recipientId: 1, title: 1, body: 1, href: 1 })
+      .lean<
+        Array<{
+          _id: Types.ObjectId;
+          recipientId: Types.ObjectId;
+          title: string;
+          body: string;
+          href: string;
+        }>
+      >();
+
+    const icon = await this.iconFor(agencyId);
+
+    for (const row of stored) {
+      const payload: PushPayload = {
+        id: row._id.toHexString(),
+        title: row.title,
+        body: row.body,
+        href: row.href,
+        icon,
+      };
+      let delivery: NotificationChannelDeliverySubdoc;
+      try {
+        const outcome = await this.webPush.sendToUser(
+          row.recipientId.toHexString(),
+          payload,
+        );
+        delivery = {
+          status: outcome.status,
+          at: new Date(),
+          error: outcome.error,
+          emailMessageId: null,
+        };
+      } catch (err) {
+        // The service promises not to throw; this is the belt to that brace.
+        delivery = {
+          status: 'failed',
+          at: new Date(),
+          error: err instanceof Error ? err.message : String(err),
+          emailMessageId: null,
+        };
+      }
+      summary.pushed += 1;
+      summary[delivery.status] += 1;
+      await this.notificationModel.updateOne(
+        { _id: row._id },
+        { $set: { 'delivery.push': delivery } },
+      );
+    }
+    return summary;
+  }
+
+  /**
+   * The agency's favicon, else its logo, else the platform icon — made absolute
+   * on the row's tenant host. The same rule as the email masthead.
+   */
+  private async iconFor(agencyId: string | null): Promise<string> {
+    const baseUrl = await this.tenantUrls.baseUrlFor(agencyId);
+    const branding = agencyId
+      ? await this.branding.forAgency(agencyId)
+      : this.branding.platformBranding();
+    const path =
+      branding.kind === 'agency'
+        ? (branding.faviconUrl ?? branding.logoUrl ?? PLATFORM_ICON_PATH)
+        : PLATFORM_ICON_PATH;
+    return `${baseUrl}${path}`;
+  }
+
   private render(data: NotificationRequestedData): RenderedNotification {
     try {
       return renderNotification(data.type, data.data);
@@ -260,6 +378,13 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     }
   }
 }
+
+/**
+ * The platform mark the web app ships in `packages/web/public/` (PAC-153 §1).
+ * Served on every host by nginx, so it is a safe fallback for an agency with
+ * no favicon of its own; per-agency icons are PAC-153 §2.
+ */
+const PLATFORM_ICON_PATH = '/icon-192.png';
 
 /**
  * E11000 from an unordered `insertMany`: either the top-level code, or every

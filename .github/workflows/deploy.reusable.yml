@@ -208,6 +208,12 @@ jobs:
           # reaches a stream held by that same process — which is never, so
           # live updates silently stop and the badge falls back to polling.
           REDIS_URL: ${{ secrets.REDIS_URL }}
+          # Web push (PAC-154 PR4). Same failure shape as RESEND_API_KEY:
+          # unset, the worker records every push as `skipped`, the opt-in
+          # switch hides itself, and every check stays green.
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
           INNGEST_ENABLED: ${{ vars.INNGEST_ENABLED }}
           # TLS. Required only where the platform issues its own certificates.
           # CERT_ENCRYPTION_KEY unset means every issuance throws and every
@@ -232,7 +238,8 @@ jobs:
                     GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION
                     STORAGE_BUCKET STORAGE_ACCESS_KEY_ID
                     STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL
-                    PLATFORM_HOST REDIS_URL"
+                    PLATFORM_HOST REDIS_URL
+                    VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT"
 
           # The async secrets are required only where Inngest is turned on, so
           # an environment that predates async work keeps deploying unchanged.
@@ -427,6 +434,14 @@ jobs:
           # forwards to the SSE streams it holds (PAC-154). Also switches on
           # the Redis permission cache, which was dormant without it.
           REDIS_URL=${{ secrets.REDIS_URL }}
+
+          # Web push (PAC-154 PR4). Read by both containers: the api serves the
+          # public key, the worker signs every push with the private one.
+          # `npx web-push generate-vapid-keys`, once per environment; rotating
+          # the pair invalidates every subscription.
+          VAPID_PUBLIC_KEY=${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT=${{ secrets.VAPID_SUBJECT }}
 
           # TLS certificates. The platform issues its own, for the platform
           # host and for every agency domain, and stores them in MongoDB so
