@@ -1,12 +1,15 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { AccessContext, BugReportReceipt } from '@sfa/shared';
-import { MAX_BUG_SCREENSHOTS } from '@sfa/shared';
+import { bugReportSummary, MAX_BUG_SCREENSHOTS } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { notificationRequested } from '../inngest/events';
+import { InngestService } from '../inngest/inngest.service';
 import {
   StorageService,
   type PresignedUpload,
@@ -54,12 +57,15 @@ function keyAgencySegment(access: AccessContext): string {
  */
 @Injectable()
 export class BugReportsService {
+  private readonly logger = new Logger(BugReportsService.name);
+
   constructor(
     @InjectModel(BugReport.name)
     private readonly bugReportModel: Model<BugReportDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
     private readonly storage: StorageService,
+    private readonly inngest: InngestService,
   ) {}
 
   /** Presigned PUT for one screenshot. The bytes never pass through the API. */
@@ -117,10 +123,70 @@ export class BugReportsService {
       status: 'new',
     });
 
+    await this.notifyPlatformAdmins(
+      created._id.toString(),
+      access,
+      name || null,
+      dto,
+    );
+
     return {
       id: created._id.toString(),
       createdAt: (created.createdAt ?? new Date()).toISOString(),
     };
+  }
+
+  /**
+   * Tell every platform admin a report landed (PAC-154's first real producer;
+   * PAC-127 lists it as "the queue exists, nothing is sent yet").
+   *
+   * Best-effort from this method's point of view: the report is already
+   * written, and a notification that arrives late is better than a report that
+   * was refused because Inngest was briefly unreachable. `InngestService.send`
+   * records the event in the outbox before sending, so the sweep replays a
+   * failed emit — a throw here is logged and swallowed, never surfaced as a
+   * failed submission.
+   *
+   * The reporter is excluded when they are themselves a platform admin: being
+   * told about your own report is noise.
+   */
+  private async notifyPlatformAdmins(
+    bugReportId: string,
+    access: AccessContext,
+    reporterName: string | null,
+    dto: CreateBugReportDto,
+  ): Promise<void> {
+    try {
+      const admins = await this.userModel
+        .find({
+          isPlatformAdmin: true,
+          isActive: true,
+          _id: { $ne: new Types.ObjectId(access.userId) },
+        })
+        .select({ _id: 1 })
+        .lean<Array<{ _id: Types.ObjectId }>>();
+      if (admins.length === 0) return;
+
+      await this.inngest.send(notificationRequested, {
+        type: 'bug_report.filed',
+        recipientIds: admins.map((admin) => admin._id.toHexString()),
+        agencyId: null,
+        actorId: access.userId,
+        entity: { kind: 'bugReport', id: bugReportId },
+        data: {
+          bugReportId,
+          summary: bugReportSummary(dto.description),
+          severity: dto.severity,
+          reporterName,
+          agencyId: access.agencyId,
+        },
+        dedupeKey: `bug_report.filed:${bugReportId}`,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Could not request the bug-report notification for ${bugReportId}: ${String(err)}`,
+      );
+    }
   }
 
   /**

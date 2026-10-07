@@ -51,6 +51,7 @@ export * from './domain/sold-deal';
 export * from './domain/time-off';
 export * from './domain/unclaimed-lead';
 export * from './domain/user-availability';
+export * from './notifications';
 export * from './enums/module-key.enum';
 export * from './enums/scope.enum';
 export * from './permissions/permission.constants';

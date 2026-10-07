@@ -116,6 +116,9 @@ const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
 const ProfilePage = lazy(() => import('@/features/settings/ProfilePage'));
+const NotificationsPage = lazy(
+  () => import('@/features/notifications/NotificationsPage'),
+);
 const WorkspaceSettingsPage = lazy(
   () => import('@/features/settings/WorkspaceSettingsPage'),
 );
@@ -561,6 +564,20 @@ export function App() {
                 element={
                   <LazyPage>
                     <ProfilePage />
+                  </LazyPage>
+                }
+              />
+
+              {/*
+                The notification centre (PAC-154). Ungated for the same reason
+                as the profile: a notification is addressed to you, and the
+                page each one opens keeps its own `RequirePermission`.
+              */}
+              <Route
+                path="/notifications"
+                element={
+                  <LazyPage>
+                    <NotificationsPage />
                   </LazyPage>
                 }
               />

@@ -1,0 +1,38 @@
+meta {
+  name: List Unread (Empty After Read All)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/notifications?unread=1
+  body: none
+  auth: bearer
+}
+
+params:query {
+  unread: 1
+}
+
+auth:bearer {
+  token: {{notifAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("nothing is unread any more", function () {
+    const body = res.getBody();
+    expect(body.items).to.deep.equal([]);
+    expect(body.nextCursor).to.equal(null);
+  });
+}
+
+docs {
+  # GET /notifications?unread=1 — the Unread tab, after Mark All Read
+
+  Deterministic across runs: however many rows earlier runs left behind,
+  `Mark All Read` has just cleared them, so this is always empty.
+}

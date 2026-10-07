@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Bell,
   Home,
   LayoutDashboard,
   SlidersHorizontal,
@@ -10,6 +11,7 @@ import {
 } from "lucide-react";
 import { ModuleKey } from "@sfa/shared";
 import { SETTINGS_PERMISSIONS } from "@/features/settings/settings-sections";
+import { NOTIFICATIONS_PATH } from "@/lib/notifications-api";
 
 export type NavItem = {
   to: string;
@@ -130,6 +132,13 @@ export const NAV_SECTIONS: NavSection[] = [
      */
     title: "Workspace",
     items: [
+      // No gate (PAC-154): a notification is addressed to you, whatever you
+      // may do. The row carries the unread badge — see `SidebarNavItem`.
+      {
+        to: NOTIFICATIONS_PATH,
+        label: "Notifications",
+        icon: Bell,
+      },
       {
         to: "/settings",
         label: "Workspace Settings",

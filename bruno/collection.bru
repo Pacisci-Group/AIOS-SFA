@@ -99,6 +99,13 @@ docs {
     that requires **no permission at all**; see `Presign Screenshot`'s docs for
     why, and `Platform Bug Reports/List Bug Reports (Producer Rejected)` for the
     other half of that trade.
+  - **Notifications** — the caller's own notification centre (PAC-154): list
+    (keyset-paged), unread count, mark read, mark all read — the only other
+    authenticated surface that needs **no permission**, because a notification
+    is addressed to you. Self-contained: logs in as the super admin under its
+    own variable, has the producer file a bug report, and reads the
+    notification that produces. ⚠ **Needs the Inngest dev server + worker** —
+    the row is written by `deliver-notification.fn`, not in the request path.
   - **CRM Service** — the service desk: the household ticket feed, the renewal
     outreach desk, and the full company-transfer chain (find a client → its
     active policy → open a ticket → presign → upload → book the transfer). The

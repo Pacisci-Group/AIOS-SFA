@@ -11,6 +11,7 @@ import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
 import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
 import { SetUsersAwayFn } from './functions/set-users-away.fn';
+import { DeliverNotificationFn } from './functions/deliver-notification.fn';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { AcmeAccountService } from './acme/acme-account.service';
@@ -60,6 +61,10 @@ import {
 } from '../households/schemas/household.schema';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import {
+  Notification,
+  NotificationSchema,
+} from '../notifications/schemas/notification.schema';
 import { StorageModule } from '../storage/storage.module';
 import {
   AcmeAccount,
@@ -136,6 +141,12 @@ import {
       { name: Household.name, schema: HouseholdSchema },
       { name: Contact.name, schema: ContactSchema },
       { name: User.name, schema: UserSchema },
+      // Owned by the API (`NotificationsModule` builds its indexes); the worker
+      // is its sole *writer* (PAC-154). Registered here so
+      // `DeliverNotificationFn` can insert, through the schema and nothing
+      // else. Do not add it to `WorkerIndexesService` — `syncIndexes()` would
+      // drop the API's indexes on it.
+      { name: Notification.name, schema: NotificationSchema },
       // TLS certificate lifecycle. Owned by `src/tls/`, registered here
       // because the worker is what runs ACME — schemas are the one thing
       // the worker boundary lets across, and the issuer needs all three.
@@ -188,6 +199,9 @@ import {
     // End-of-day Away sweep (PAC-139 §6a). Reads `Agency` and `User`, both
     // registered above.
     SetUsersAwayFn,
+    // The one writer of `notifications` rows (PAC-154). Every channel is a
+    // later step of the same function.
+    DeliverNotificationFn,
     // Declared here as well as in `CrmModule`: the standalone worker does not
     // import `AppModule`, so without these it would boot and then fail to
     // resolve them on the first renewal tick. Same reasoning as the explicit
