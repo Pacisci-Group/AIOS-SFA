@@ -58,7 +58,7 @@ dev infra:
 	@echo "Backing services are running:"
 	@echo "  Mongo: mongodb://localhost:27017/sfa"
 	@echo "  MinIO: http://localhost:9000  (console http://localhost:9001)"
-	@echo "  Redis: redis://localhost:6379  (used only if REDIS_URL is set in .env)"
+	@echo "  Redis: redis://localhost:6379  (required: notification fan-out + permission cache; keep REDIS_URL set in .env)"
 	@echo "  Inngest: http://localhost:8288  (dev server; dashboard for async runs)"
 	@echo ""
 	@echo "Now run the app on the host, in two terminals:"

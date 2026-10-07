@@ -1180,9 +1180,10 @@ merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md` §2.
   `useUnreadCount` polls only while `connected` is false.
 - Bruno: the stream is **not** in the collection (the CLI cannot consume SSE);
   `bruno/README.md` says so and gives the `curl -N` recipe.
-- ⚠ `.claude/skills/running-the-stack/SKILL.md` still describes Redis as the
-  permission cache only — the sandbox could not write there. One paragraph to
-  update (see `.env.example`'s Redis section for the wording).
+- **Redis is documented as required, not optional** (Asad, 2026-10-07):
+  `.env.example` ships with `REDIS_URL` set, `.env.prod.example` carries it,
+  and the compose / Makefile / `running-the-stack` wording says so. The code's
+  in-process fallback stays for e2e only.
 
 ### Not in PR2 (per the plan)
 Email channel (PR3) · push + PWA shell + update toast (PR4) · sharing the Redis

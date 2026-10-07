@@ -98,13 +98,14 @@ services:
       "
     restart: "no"
 
-  # Permission cache + notification pub/sub (OPTIONAL at runtime). The app only
-  # uses Redis when REDIS_URL is set — unset, it resolves permissions from
-  # MongoDB on every request (permissions/cache/permission-cache.provider.ts)
-  # and fans notifications out in-process (common/redis/redis.module.ts),
-  # which is correct for the host dev loop where the worker runs inline. The
-  # container runs regardless so the cached path is one uncommented line away
-  # in .env — and `make up`, where the worker is its own container, needs it.
+  # Notification pub/sub + permission cache — REQUIRED (PAC-154). The worker
+  # PUBLISHes a nudge for every notification it writes and every API node
+  # SUBSCRIBEs (common/redis/redis.module.ts); resolved permission sets are
+  # cached here too (permissions/cache/permission-cache.provider.ts). The code
+  # falls back to an in-process bus and MongoDB-per-request when REDIS_URL is
+  # unset, but that fallback only delivers live notifications while the worker
+  # runs inside the API process — so `.env` keeps REDIS_URL set, and both app
+  # services below rewrite it onto the compose network.
   #
   # Deliberately no volume: this is a pure cache, and persisting it across
   # `docker compose down` would resurrect stale permission sets after a role
@@ -200,12 +201,11 @@ services:
       STORAGE_ACCESS_KEY_ID: minioadmin
       STORAGE_SECRET_ACCESS_KEY: minioadmin
       STORAGE_FORCE_PATH_STYLE: "true"
-      # Mirrors whatever .env decided, translated to the compose network: expands
-      # to the redis:6379 address only when REDIS_URL is set and non-empty in
-      # .env, and to nothing when it is commented out. The rewrite is required —
-      # .env holds the host-mode value (localhost:6379), and `localhost` inside
-      # this container is the API itself. Keeps both run modes on the same
-      # caching behaviour from a single switch.
+      # .env's value, translated to the compose network: .env holds the
+      # host-mode address (localhost:6379), and `localhost` inside this
+      # container is the API itself. `:+` keeps the variable empty if someone
+      # has blanked it in .env rather than inventing a value — the API then
+      # logs that fan-out is in-process, which is the clue.
       REDIS_URL: ${REDIS_URL:+redis://redis:6379}
       # Inngest, translated to the compose network. `.env` holds the host-mode
       # value (or none at all, since the SDK finds a local dev server itself),
