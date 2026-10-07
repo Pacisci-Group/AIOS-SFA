@@ -1,14 +1,17 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
+  NOTIFICATION_TYPES,
   NotificationRenderError,
   renderNotification,
+  type NotificationType,
   type RenderedNotification,
 } from '@sfa/shared';
 import { NonRetriableError } from 'inngest';
 import { Model, Types } from 'mongoose';
 import { NotificationBus } from '../../common/redis/notification-bus';
 import {
+  notificationEmailRequested,
   notificationRequested,
   type NotificationRequestedData,
 } from '../../inngest/events';
@@ -16,6 +19,7 @@ import {
   INNGEST_CLIENT,
   type InngestClient,
 } from '../../inngest/inngest.client';
+import { InngestService } from '../../inngest/inngest.service';
 import {
   InngestFunction,
   type InngestFunctionProvider,
@@ -32,7 +36,7 @@ import {
  * `notification/requested.v1` and this function does the rest: render the text
  * once, insert one row per recipient, then fan out to the secondary channels.
  * The channels arrive one PR at a time as further steps: `publish` (SSE nudge,
- * PR2, below), `email` (PR3), `push` (PR4). Each is its own `step.run` so a
+ * PR2), `email` (PR3, below), `push` (PR4). Each is its own `step.run` so a
  * crash in one never re-runs the ones before it.
  *
  * ## The nudge carries ids only
@@ -41,6 +45,18 @@ import {
  * else; whichever node holds the recipient's stream re-reads the row before
  * writing the frame. A replayed step re-nudges, and the client invalidates
  * rather than appends, so a duplicate nudge is harmless by construction.
+ *
+ * ## Email is a hand-off, not a send
+ *
+ * `email` emits one `notification/email.requested.v1` per row whose catalog
+ * type has the channel on (no user preferences yet — ticket decision 4) and
+ * `SendNotificationEmailFn` does the mailing. A separate function for the same
+ * reason the campaign commit mails from one: a mail provider outage must never
+ * fail, or retry, a notification that is already stored and already live.
+ * Emitting from inside a step is the `MailerCampaignCommitFn` precedent — it
+ * goes through `InngestService`, so the outbox row exists before the send and
+ * the sweeper replays a stranded one; a replayed step re-emits, and the mail
+ * function's `idempotency: 'event.data.notificationId'` collapses that.
  *
  * ## Exactly once, twice over
  *
@@ -57,6 +73,8 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
 
   constructor(
     @Inject(INNGEST_CLIENT) private readonly inngest: InngestClient,
+    /** The outbox-backed sender — for events emitted *by* this function. */
+    private readonly events: InngestService,
     @InjectModel(Notification.name)
     private readonly notificationModel: Model<NotificationDocument>,
     private readonly bus: NotificationBus,
@@ -104,6 +122,11 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     // step cannot fail the run; it is a step at all so a retry of a later
     // channel does not nudge every tab a second time.
     await step.run('publish', () => this.publish(inserted.rows));
+
+    // A hand-off to the mail function, never a send — see the class note.
+    await step.run('email', () =>
+      this.requestEmails(event.data.type, event.data.agencyId, inserted.rows),
+    );
 
     return { notificationIds: inserted.rows.map((row) => row.id) };
   }
@@ -178,6 +201,31 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
       ),
     );
     return { published: rows.length };
+  }
+
+  /**
+   * One email request per row, for a type whose defaults include the channel.
+   *
+   * The decision is the catalog's alone until per-user preferences exist
+   * (ticket decision 4); when they land they filter this list, they do not
+   * replace it. Returns a count so the step result is plain JSON.
+   */
+  async requestEmails(
+    type: NotificationType,
+    agencyId: string | null,
+    rows: InsertedRow[],
+  ): Promise<{ requested: number }> {
+    if (!NOTIFICATION_TYPES[type].defaultChannels.email) {
+      return { requested: 0 };
+    }
+    for (const row of rows) {
+      await this.events.send(notificationEmailRequested, {
+        notificationId: row.id,
+        recipientId: row.recipientId,
+        agencyId,
+      });
+    }
+    return { requested: rows.length };
   }
 
   private render(data: NotificationRequestedData): RenderedNotification {

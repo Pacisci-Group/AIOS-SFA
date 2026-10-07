@@ -4,6 +4,10 @@ import {
   mailerCampaignOutputTemplate,
   type MailerCampaignOutputData,
 } from './mailer-campaign-output.template';
+import {
+  notificationTemplate,
+  type NotificationEmailData,
+} from './notification.template';
 import { passwordResetTemplate } from './password-reset.template';
 import type {
   InviteRequestedData,
@@ -74,6 +78,20 @@ function mailerCampaignOutputData(
   };
 }
 
+/** A stored notification row, as the generic email sees it (PAC-154). */
+function notificationData(
+  overrides: Partial<NotificationEmailData> = {},
+): NotificationEmailData {
+  return {
+    to: 'admin@example.com',
+    recipientName: "Pat O'Brien",
+    title: 'New bug report',
+    body: 'Dana Owner: The leaderboard still shows last month',
+    href: 'https://texasholdings.com/admin/bugs',
+    ...overrides,
+  };
+}
+
 const ALL_KEYS = Object.keys(EMAIL_TEMPLATES) as TemplateKey[];
 
 /**
@@ -90,6 +108,7 @@ describe('email template registry', () => {
     invite: inviteData(),
     passwordReset: passwordResetData(),
     mailerCampaignOutput: mailerCampaignOutputData(),
+    notification: notificationData(),
   };
 
   it('has a fixture for every registered template', () => {
@@ -408,5 +427,73 @@ describe('mailer campaign output template', () => {
 
     expect(html).toContain('<title>AgencyOps</title>');
     expect(text).toContain('automated message from AgencyOps');
+  });
+});
+
+describe('notification template', () => {
+  it('uses the stored title as the subject', () => {
+    // The inbox row and the bell must agree: the subject is the row's title,
+    // never a re-rendering of it.
+    expect(notificationTemplate.subject(notificationData())).toBe(
+      'New bug report',
+    );
+  });
+
+  it('carries the absolute link in both parts', () => {
+    const data = notificationData();
+    const { html, text } = notificationTemplate.render(data);
+
+    expect(html).toContain(data.href);
+    expect(text).toContain(data.href);
+  });
+
+  it('renders the stored body verbatim', () => {
+    const { text } = notificationTemplate.render(notificationData());
+    expect(text).toContain(
+      'Dana Owner: The leaderboard still shows last month',
+    );
+  });
+
+  it('escapes markup in the body', () => {
+    // The body carries user-supplied text (a bug report summary, a lead's
+    // name) straight from the row.
+    const { html } = notificationTemplate.render(
+      notificationData({ body: '<script>alert(1)</script>' }),
+    );
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('falls back rather than rendering "null" at the reader', () => {
+    const { text } = notificationTemplate.render(
+      notificationData({ recipientName: null }),
+    );
+    expect(text).not.toContain('null');
+    expect(text).toContain('Hi there,');
+  });
+
+  it('keeps the preheader to one inbox line', () => {
+    const { html } = notificationTemplate.render(
+      notificationData({ body: 'x'.repeat(400) }),
+    );
+    // The hidden preheader div is cut; the body paragraph below it is not.
+    expect(html).toContain(`${'x'.repeat(117)}…</div>`);
+  });
+
+  it('renders the agency brand when there is one, the platform when not', () => {
+    const branded = notificationTemplate.render(
+      notificationData({
+        brand: {
+          name: 'Texas Holdings',
+          logoUrl: 'https://texasholdings.com/api/v1/public/tenant/logo',
+        },
+      }),
+    );
+    expect(branded.html).toContain('alt="Texas Holdings"');
+    expect(branded.text).toContain('automated message from Texas Holdings');
+
+    const platform = notificationTemplate.render(notificationData());
+    expect(platform.html).toContain('<title>AgencyOps</title>');
+    expect(platform.text).toContain('automated message from AgencyOps');
   });
 });

@@ -19,7 +19,7 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Bug Reports | Create Bug Report (Too Short) | `POST /bug-reports` | The 10-char description floor (400). |
 | Bug Reports | Create Bug Report (Foreign Screenshot Key) | `POST /bug-reports` | The key-ownership check: a key from another user's namespace must 400. |
 | Notifications | Login as Super Admin | `POST /auth/login` | Its own token: the admin is who a filed bug report notifies (PAC-154 PR1). ⚠ The folder needs the Inngest dev server + worker. |
-| Notifications | File Bug Report (as Producer) | `POST /bug-reports` | The trigger — emits `notification/requested.v1` to every platform admin. |
+| Notifications | File Bug Report (as Producer) | `POST /bug-reports` | The trigger — emits `notification/requested.v1` to every platform admin. ⚠ Since PR3 the worker also **emails** each of them (`bug_report.filed` has email on): with `RESEND_API_KEY` set locally that is a real email to every platform admin's address; unset, `LoggingMailTransport` logs it. Either way the row's `delivery.email` and an `emailMessages` row (`templateKey: notification`) appear a few seconds later. |
 | Notifications | List Notifications | `GET /notifications` | The caller's own rows, keyset-paged on `(createdAt, _id)`. **No permission.** Waits ~3 s for the worker, then captures `notificationId`. |
 | Notifications | Unread Count | `GET /notifications/unread-count` | The sidebar badge's number. |
 | Notifications | Mark Read | `PATCH /notifications/:id/read` | Idempotent; returns the row. |

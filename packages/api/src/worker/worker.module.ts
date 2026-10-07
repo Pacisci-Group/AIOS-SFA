@@ -12,6 +12,7 @@ import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
 import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
 import { SetUsersAwayFn } from './functions/set-users-away.fn';
 import { DeliverNotificationFn } from './functions/deliver-notification.fn';
+import { SendNotificationEmailFn } from './functions/send-notification-email.fn';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { AcmeAccountService } from './acme/acme-account.service';
@@ -26,6 +27,7 @@ import {
 } from './email/schemas/email-message.schema';
 import { WorkerIndexesService } from './worker-indexes.service';
 import { TenantUrlService } from '../common/tenancy/tenant-url.service';
+import { TenantBrandingService } from '../tenant-branding/tenant-branding.service';
 import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import {
@@ -182,6 +184,11 @@ import {
     // `common/` helper whose only dependencies are `ConfigService` and the
     // `AgencyDomain` schema, so the worker boundary is intact.
     TenantUrlService,
+    // The email masthead's identity (PAC-154 PR3). Declared here for the same
+    // reason `TenantUrlService` is: `TenantBrandingModule` is the API's. It
+    // depends only on the `Agency` model, registered above, and
+    // `tenant-branding/` is not a feature directory in the eslint boundary.
+    TenantBrandingService,
     // Certificate issuance. Lives in `src/worker/acme/` rather than
     // `src/worker/tls/`: these patterns match the import *string*, and
     // `tls` is a feature directory, so a worker subdirectory sharing that
@@ -207,6 +214,9 @@ import {
     // The one writer of `notifications` rows (PAC-154). Every channel is a
     // later step of the same function.
     DeliverNotificationFn,
+    // Mails one stored row when the catalog says so (PAC-154 PR3). Reads
+    // `Notification`, `User` and `Agency`, all registered above.
+    SendNotificationEmailFn,
     // Declared here as well as in `CrmModule`: the standalone worker does not
     // import `AppModule`, so without these it would boot and then fail to
     // resolve them on the first renewal tick. Same reasoning as the explicit

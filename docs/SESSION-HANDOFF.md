@@ -1189,3 +1189,94 @@ merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md` §2.
 Email channel (PR3) · push + PWA shell + update toast (PR4) · sharing the Redis
 client with the permission cache · `BroadcastChannel` multi-tab dedupe.
 
+
+## 20. PAC-154 — Notifications, PR3 of 4: email channel (handoff, 2026-10-07)
+
+Branch `asad/pac-154-pr3-email-channel`, stacked on PR2's branch
+(`asad/pac-154-pr2-live-sse-redis`, PR #139 → PR #138 → `dev`). Rebase onto
+`dev` as the stack merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md`
+§3 (PR3).
+
+### Decisions — do not re-litigate
+- Everything in §18 and §19, plus:
+- **`bug_report.filed` now has `email: true`.** It was off in PR1. Flipped
+  because a platform admin is rarely in the app when a report lands, the queue
+  has no other way to reach them, and it is the only producer wired today — so
+  it is what exercises the channel end to end (the ticket's acceptance
+  criterion needs a type with email on). One boolean in
+  `shared/src/notifications/catalog.ts` reverts it. ⚠ Consequence: filing a bug
+  report in any environment with `RESEND_API_KEY` set emails every active
+  platform admin — including the Bruno `Notifications` folder against the
+  local stack.
+- **The `email` step emits through `InngestService`, not the raw client.**
+  The plan wrote `this.inngest.send(...)` but cites the outbox as the reason
+  the replay is safe; `InngestService` *is* the outbox (`MailerCampaignCommitFn`
+  precedent). The raw client stays injected for `createFunction`.
+- **The mail function re-reads the row and checks `delivery.email.status`
+  before sending.** Inngest's `idempotency: 'event.data.notificationId'` is
+  24-hour scoped; a row already `sent` is the durable guard past it (a sweeper
+  replaying an old event, a re-run by hand). `already-sent` is a no-op result,
+  not an error.
+- **A failed send is written to the row as `failed` *before* the rethrow**,
+  so a row whose mail never left reads `failed` rather than nothing, and a
+  later successful attempt overwrites it with `sent`. Only `delivery.email` is
+  ever written by this function (PAC-148 FR-H4); the e2e asserts every other
+  field is byte-identical after a failure.
+- **A recipient with no mailable address is `skipped`, recorded, and done** —
+  not four retries and a red run. Deactivated (`isActive: false`) or missing
+  user → `delivery.email = { status: 'skipped', error }`.
+- **Brand and host come from the row's `agencyId`** (`TenantBrandingService.forAgency`
+  + `TenantUrlService.baseUrlFor`), per the plan; `null` → platform brand on
+  `platformBaseUrl()`. The recipient's own agency is not consulted — today
+  every agency-scoped type's row carries the recipient's agency, and the one
+  platform type carries `null`.
+- **`MailDeliveryService.record` now returns `{ emailMessageId }`**; the four
+  existing callers ignore it.
+
+### What exists now
+- `api/src/inngest/events/notification.events.ts`:
+  `notification/email.requested.v1` — `{ notificationId, recipientId,
+  agencyId|null }`, ids only.
+- `deliver-notification.fn.ts`: step `email` after `publish` — one event per
+  inserted row when `NOTIFICATION_TYPES[type].defaultChannels.email` is on
+  (no user preferences, decision 4); result `{ requested }`.
+- `api/src/worker/functions/send-notification-email.fn.ts`
+  (`idempotency: 'event.data.notificationId'`, `retries: 4`, `concurrency 5`):
+  steps `load` (row + `User` + branding + base URL → plain-JSON
+  `NotificationEmailData`, or `missing` / `already-sent` / `skipped`) →
+  `send` (`MailDeliveryService.send('notification', data,
+  'notification:<id>', agencyId)`; on throw writes `failed` and rethrows) →
+  `record` (`mail.record` + `delivery.email = { status: 'sent', at,
+  emailMessageId }`).
+- `api/src/worker/email/templates/notification.template.ts`: key
+  `notification` (stored in `emailMessages.templateKey` — permanent). Subject
+  **is** the row's title; body = greeting, title, body, one "View in the app"
+  button on the absolute `href`, raw-URL fallback; preheader is the body cut
+  to 120 chars. Registered in `registry.ts`; fixture + spec in
+  `templates.unit-spec.ts`.
+- `WorkerModule` gains `TenantBrandingService` (depends only on the `Agency`
+  model, already registered; `tenant-branding/` is not a `FEATURE_DIRS` entry)
+  and `SendNotificationEmailFn`.
+- `bruno/README.md`: the File Bug Report row says it now also emails. No new
+  HTTP endpoint, so no new request.
+
+### Verified
+`build -w @sfa/shared` · shared jest 286/286 · `build -w @sfa/api` ·
+`tsc -p packages/api` (no errors in touched files; test-file baseline
+unchanged) · eslint clean on every touched file · unit `templates` 53/53 ·
+e2e `worker/send-notification-email` 8/8 + `worker/deliver-notification`
+10/10 (tenant host in every link and in the logo `src`, `localhost` nowhere;
+platform row on `127.0.0.1:5173` under AgencyOps; `delivery.email` ↔
+`emailMessages._id`; re-run → `already-sent`, one mail; failure → `failed` on
+the row, no `emailMessages` row, rest untouched; deactivated → `skipped`) ·
+Bruno `Auth` + `Notifications` 15/15 requests, 29/29 tests against the running
+`api:dev` + Inngest dev server, after which both new rows read
+`delivery.email.status: 'sent'` with matching `emailMessages` rows
+(`templateKey: notification`, `eventType: notification/email.requested.v1`)
+and both `eventLog` rows `succeeded`. ⚠ That run went through **real Resend**
+(the local `.env` has `RESEND_API_KEY`), so it mailed the two platform admins.
+
+### Not in PR3 (per the plan)
+Digests · per-user opt-out / preferences (decision 4) · "only if still unread
+after N minutes" · push + PWA shell + update toast (PR4) · every trigger but
+bug reports (PAC-127).

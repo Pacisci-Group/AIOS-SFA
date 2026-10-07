@@ -94,13 +94,18 @@ export class MailDeliveryService {
     };
   }
 
-  /** Write the delivery record. Never throws in a way that un-sends anything. */
+  /**
+   * Write the delivery record. Never throws in a way that un-sends anything.
+   *
+   * Returns the row's id so a caller that keeps its own per-channel status —
+   * `notifications.delivery.email.emailMessageId` (PAC-154) — can point at it.
+   */
   async record(
     context: DeliveryContext,
     sent: SentEmail,
     status: EmailStatus = 'sent',
-  ): Promise<void> {
-    await this.messages.create({
+  ): Promise<{ emailMessageId: string }> {
+    const row = await this.messages.create({
       agencyId: context.agencyId,
       branchId: context.branchId,
       eventId: context.eventId,
@@ -119,5 +124,6 @@ export class MailDeliveryService {
     this.logger.log(
       `Recorded ${status} email template=${sent.templateKey} provider=${sent.providerMessageId}`,
     );
+    return { emailMessageId: row._id.toHexString() };
   }
 }

@@ -50,3 +50,35 @@ export const notificationRequested = eventType('notification/requested.v1', {
 export type NotificationRequestedData = z.infer<
   typeof notificationRequestedSchema
 >;
+
+/**
+ * "Email this stored notification" (PAC-154, PR3).
+ *
+ * Emitted by `deliver-notification.fn.ts`'s `email` step for every inserted
+ * row whose catalog type has the email channel on by default, and consumed by
+ * `send-notification-email.fn.ts`. Ids only: the mail renders from the
+ * **stored row** — the same words the in-app list shows — so the two cannot
+ * drift, and a replayed event re-reads rather than re-renders.
+ *
+ * `notificationId` is the consumer's idempotency key, so one row is mailed at
+ * most once in 24 hours whatever happens to this event; the row's own
+ * `delivery.email` is the durable guard past that window.
+ */
+const notificationEmailRequestedSchema = z.object({
+  ...eventEnvelope,
+  /** The `notifications` row to mail. */
+  notificationId: objectId,
+  /** The row's recipient — the `User` whose address and name the mail uses. */
+  recipientId: objectId,
+  /** The row's context agency: the brand and the host its link lands on. */
+  agencyId: objectId.nullable(),
+});
+
+export const notificationEmailRequested = eventType(
+  'notification/email.requested.v1',
+  { schema: notificationEmailRequestedSchema },
+);
+
+export type NotificationEmailRequestedData = z.infer<
+  typeof notificationEmailRequestedSchema
+>;
