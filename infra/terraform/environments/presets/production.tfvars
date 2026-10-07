@@ -23,7 +23,7 @@ droplet_size     = "s-1vcpu-2gb"
 mongo_size       = "db-s-1vcpu-1gb"
 mongo_node_count = 1
 # Permission cache + notification pub/sub (PAC-154). Nothing durable lives in it.
-redis_size       = "db-s-1vcpu-1gb"
+redis_size = "db-s-1vcpu-1gb"
 
 # Deliberately empty, unlike dev. Every entry here is a standing hole in the
 # database's network perimeter, and this cluster holds real client data. Add a
