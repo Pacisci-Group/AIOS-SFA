@@ -1,3 +1,4 @@
+import { dataExportReadyTemplate } from './data-export-ready.template';
 import { inviteTemplate } from './invite.template';
 import { mailerCampaignOutputTemplate } from './mailer-campaign-output.template';
 import { passwordResetTemplate } from './password-reset.template';
@@ -18,6 +19,7 @@ export const EMAIL_TEMPLATES = {
   invite: inviteTemplate,
   passwordReset: passwordResetTemplate,
   mailerCampaignOutput: mailerCampaignOutputTemplate,
+  dataExportReady: dataExportReadyTemplate,
 } satisfies Record<string, Template<never>>;
 
 export type TemplateKey = keyof typeof EMAIL_TEMPLATES;

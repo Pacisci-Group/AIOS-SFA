@@ -1,4 +1,7 @@
+import { contactDisplayName } from '../common/domain/contact-names';
 import { toDateKey } from '../leads/intake/intake.normalize';
+
+export { contactDisplayName };
 
 /**
  * Reading a contact's display details through a reference, in one query.
@@ -52,19 +55,6 @@ export interface ContactDetailSource {
   email?: string | null;
   phone?: string | null;
   deceasedAt?: Date | string | null;
-}
-
-/** `null` when there is no name to show, so a caller's `??` chain continues. */
-export function contactDisplayName(
-  contact: Pick<ContactDetailSource, 'firstName' | 'lastName'> | null,
-): string | null {
-  if (!contact) return null;
-  return (
-    [contact.firstName, contact.lastName]
-      .map((part) => part?.trim())
-      .filter(Boolean)
-      .join(' ') || null
-  );
 }
 
 export function toContactDetails(

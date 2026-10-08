@@ -95,6 +95,24 @@ export function normalizeCarrier(raw?: string | null): string {
 }
 
 /**
+ * Every stored spelling of a carrier, for an `$in` — the display name plus each
+ * SmartSuite code that maps to it (PAC-152, part 2). Mirrors
+ * `policyTypeQueryValues`: a filter on "Allstate" must also match the 1,700
+ * migrated policies that still hold `B4tEH`.
+ *
+ * A name with no alias is returned as itself, trimmed, so a carrier typed
+ * through "Other" can still be filtered on.
+ */
+export function carrierQueryValues(name: string): string[] {
+  const canonical = normalizeCarrier(name);
+  if (!canonical) return [];
+  const codes = Object.entries(CARRIER_CODE_ALIASES)
+    .filter(([, mapped]) => mapped === canonical)
+    .map(([code]) => code);
+  return [...new Set([canonical, ...codes])];
+}
+
+/**
  * Does `normalizedPolicyNumber` satisfy this carrier's format rule?
  *
  * Two things this deliberately does:

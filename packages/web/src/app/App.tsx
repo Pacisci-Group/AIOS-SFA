@@ -22,6 +22,10 @@ const ProducerDashboardPage = lazy(
 const ManagementDashboardPage = lazy(
   () => import('@/features/management/ManagementDashboardPage'),
 );
+const AnalyticsPage = lazy(() => import('@/features/analytics/AnalyticsPage'));
+const DataExportPage = lazy(
+  () => import('@/features/data-export/DataExportPage'),
+);
 const CommandCenterPage = lazy(
   () => import('@/features/command-center/CommandCenterPage'),
 );
@@ -358,6 +362,42 @@ export function App() {
                   element={
                     <LazyPage>
                       <CommandCenterPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* The Data Export page (PAC-152). Its own module, so the owner
+                  grants it from the role matrix like any page; the Data Team
+                  role holds it by default. */}
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.DataExport}:read`} />
+                }
+              >
+                <Route
+                  path="/data-export"
+                  element={
+                    <LazyPage>
+                      <DataExportPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* The Analytics page (PAC-152, part 2). The owner holds it
+                  through enabled modules, the Branch Manager by template; the
+                  owner grants it to anyone else from the role matrix. */}
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.Analytics}:read`} />
+                }
+              >
+                <Route
+                  path="/analytics"
+                  element={
+                    <LazyPage>
+                      <AnalyticsPage />
                     </LazyPage>
                   }
                 />

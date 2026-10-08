@@ -1,0 +1,45 @@
+meta {
+  name: Get Sales Breakdown (Carrier)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/analytics/sales/breakdown?range=last3Months&groupBy=carrier
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+  groupBy: carrier
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("has no quote side — a quote records no carrier", function () {
+    const body = res.getBody();
+    expect(body.unavailable).to.include.members(["quotes", "quotedPremium", "closingPct", "netPremium"]);
+    for (const row of body.rows) expect(row.metrics.quotes).to.equal(null);
+  });
+
+  test("still adds up to the summary", function () {
+    const premium = res.getBody().rows.reduce((sum, row) => sum + row.metrics.premium, 0);
+    expect(Math.round(premium * 100) / 100).to.equal(Number(bru.getVar("analyticsPremium")));
+  });
+}
+
+docs {
+  # GET /analytics/sales/breakdown?groupBy=carrier
+
+  Premium by the carrier of each **policy** in a sale. Carriers are free text:
+  SmartSuite alias codes fold into their carrier, spelling variants do not.
+  Quotes and net premium are `null` (see `unavailable`).
+}

@@ -356,6 +356,13 @@ describe('resolveRange — owner presets', () => {
     });
   });
 
+  it('last12Months is the twelve complete months before this one', () => {
+    expect(window('last12Months')).toEqual({
+      from: '2025-09-01',
+      to: '2026-08-31',
+    });
+  });
+
   it('last3Months crosses a year boundary', () => {
     expect(window('last3Months', new Date('2026-02-10T17:00:00.000Z'))).toEqual(
       { from: '2025-11-01', to: '2026-01-31' },
@@ -450,6 +457,13 @@ describe('resolveComparison', () => {
     ).toEqual({ from: '2026-01-01', to: '2026-01-31' });
   });
 
+  it('last12Months compares with the twelve months before those', () => {
+    expect(compare('last12Months')).toEqual({
+      from: '2024-09-01',
+      to: '2025-08-31',
+    });
+  });
+
   it('last3Months compares with the three months before those', () => {
     expect(compare('last3Months')).toEqual({
       from: '2026-03-01',
@@ -498,6 +512,7 @@ describe('resolveComparison', () => {
       'mtd',
       'lastMonth',
       'last3Months',
+      'last12Months',
       'ytd',
       'lastYear',
     ] as const) {

@@ -89,6 +89,18 @@ export const PAGES: PageDefinition[] = [
     label: 'Leaderboard',
     description: 'Office leaderboard and motivation hub.',
   },
+  {
+    moduleKey: ModuleKey.DataExport,
+    label: 'Data Export',
+    description:
+      'Download report-ready datasets (leads, quotes, sold deals, policies, households, contacts) as CSV or Excel. View is all the page needs; Edit grants nothing further.',
+  },
+  {
+    moduleKey: ModuleKey.Analytics,
+    label: 'Analytics',
+    description:
+      'Sales and service analytics: breakdowns by producer, lead source, line, carrier, branch, ZIP and CSR, trends over time and goal pacing. View is all the page needs; Edit grants nothing further.',
+  },
 ];
 
 export interface PageLevelOverride {

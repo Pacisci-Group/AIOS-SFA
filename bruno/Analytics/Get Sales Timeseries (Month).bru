@@ -1,0 +1,58 @@
+meta {
+  name: Get Sales Timeseries (Month)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/analytics/sales/timeseries?range=last3Months&interval=month
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+  interval: month
+  ~segmentBy: carrier
+  ~compare: true
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("three zero-filled month buckets", function () {
+    const buckets = res.getBody().buckets;
+    expect(buckets).to.have.length(3);
+    for (const b of buckets) expect(b.key).to.match(/^\d{4}-\d{2}$/);
+  });
+
+  test("buckets add up to the summary", function () {
+    const premium = res.getBody().buckets.reduce((sum, b) => sum + b.metrics.premium, 0);
+    expect(Math.round(premium * 100) / 100).to.equal(Number(bru.getVar("analyticsPremium")));
+  });
+}
+
+docs {
+  # GET /analytics/sales/timeseries — sales and quotes over time
+
+  - **Module:** `analytics`
+  - **Permission:** `analytics:read` (Agency Owner via enabled modules, Branch Manager by template; grantable to anyone)
+  - **Data scope:** sales use the dashboards' clamp — agency sees the agency, branch sees their branch, own sees their own sales. `branchId` narrows an **agency-scope** caller to one office; a branch- or own-scope caller may name only their own branch, and `BranchGuard` refuses any other with a `403`.
+
+  ## Query (plus the filter)
+  | Param | Notes |
+  |---|---|
+  | `interval` | `day` · `week` (keyed by its Monday) · `month` (default) |
+  | `segmentBy` | Optional: per-bucket `segments` keyed by series key (`""` = the null bucket), with `series` in display order |
+  | `compare` | `true` adds `previous`: the comparison window bucketed the same way, aligned **by position** |
+
+  Sales bucket by sold date, quotes by quote date, both on the agency's
+  calendar. Every bucket in the window is present (zero-filled); `from`/`to`
+  are clamped to the window. Quote figures are `null` under a carrier filter.
+}

@@ -12,13 +12,18 @@ import { cn } from "@/lib/utils";
 import { formatRangeLabel } from "@/lib/date-range";
 
 /** Mirrors `MAX_CUSTOM_SPAN_DAYS` on the API, which rejects anything larger. */
-const MAX_SPAN_DAYS = 366;
+const DEFAULT_MAX_SPAN_DAYS = 366;
 
 interface DateRangePickerProps {
   /** The applied window, if any — only its `from`/`to` are read. */
   range: { from?: string; to?: string };
   onApply: (from: string, to: string) => void;
   isActive: boolean;
+  /**
+   * The longest window the caller's API accepts. Defaults to the dashboards'
+   * 366 days; the Data Export page has no span limit and passes `Infinity`.
+   */
+  maxSpanDays?: number;
 }
 
 /** A local `Date` → `YYYY-MM-DD`, using the calendar day the user clicked. */
@@ -56,6 +61,7 @@ export function DateRangePicker({
   range,
   onApply,
   isActive,
+  maxSpanDays = DEFAULT_MAX_SPAN_DAYS,
 }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<DateRange | undefined>();
@@ -73,7 +79,7 @@ export function DateRangePicker({
   const from = draft?.from;
   const to = draft?.to;
   const span = from && to ? spanDays(from, to) : 0;
-  const tooLong = span > MAX_SPAN_DAYS;
+  const tooLong = span > maxSpanDays;
   const canApply = Boolean(from && to) && !tooLong;
 
   const label =
@@ -115,7 +121,7 @@ export function DateRangePicker({
             )}
           >
             {tooLong
-              ? `Pick at most ${MAX_SPAN_DAYS} days.`
+              ? `Pick at most ${maxSpanDays} days.`
               : from && to
                 ? `${span} day${span === 1 ? "" : "s"}`
                 : "Pick a start and end date."}

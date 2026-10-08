@@ -1,0 +1,56 @@
+meta {
+  name: Login as Data Team
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{dataTeamEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("dataExportToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the Data Team holds data_export:read", function () {
+    // From the Data Team template on a fresh seed, and from the
+    // `data_export_module` migration on a database that predates PAC-152.
+    expect(res.getBody().user.permissions).to.include("data_export:read");
+  });
+}
+
+docs {
+  # Sign in as the Data Team (PAC-152)
+
+  The collection's default token belongs to the **producer**, who does not
+  hold `data_export:read` — so every request in this folder uses the token
+  captured here (`dataExportToken`) instead of `auth: inherit`.
+
+  `dana.park@demoagency.local` is the demo seed's Data Team member
+  (`seed/demo/demo-data.ts`).
+
+  If the permission assertion fails on an older local database, the migration
+  has not run: start the API once (it applies pending migrations at boot), or
+  run `npm run db:migrate`. `npm run api:sync:roles` grants the role but does
+  **not** enable the module on an existing agency.
+}

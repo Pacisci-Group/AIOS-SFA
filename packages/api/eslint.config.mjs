@@ -30,13 +30,13 @@ import tseslint from 'typescript-eslint';
  */
 const FEATURE_DIRS = [
   'activities', 'audit-generation', 'audit-templates', 'auth', 'branches',
-  'carriers', 'clients', 'contacts', 'crm', 'crm-rotations', 'deal-audit-items',
-  'deal-audits', 'deals', 'feature-modules', 'households', 'interested-parties',
-  'leaderboard', 'leads', 'mail', 'mailers', 'performance', 'permissions',
-  'platform', 'policies', 'prior-insurance', 'prior-policies',
-  'producer-assignments', 'producer-goals', 'quote-recaps', 'roles',
-  'service-tickets', 'share-links', 'sold-deals', 'time-off-requests', 'tls',
-  'users',
+  'carriers', 'clients', 'contacts', 'crm', 'crm-rotations', 'data-export',
+  'deal-audit-items', 'deal-audits', 'deals', 'feature-modules', 'households',
+  'interested-parties', 'leaderboard', 'lead-sources', 'leads', 'mail',
+  'mailers', 'performance', 'permissions', 'platform', 'policies',
+  'prior-insurance', 'prior-policies', 'producer-assignments', 'producer-goals',
+  'quote-recaps', 'roles', 'service-tickets', 'share-links', 'sold-deals',
+  'time-off-requests', 'tls', 'users',
 ];
 
 const WORKER_IS_PRIVATE =

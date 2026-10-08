@@ -45,6 +45,8 @@ import { LeadsModule } from './leads/leads.module';
 import { PerformanceModule } from './performance/performance.module';
 import { OwnerDashboardModule } from './owner-dashboard/owner-dashboard.module';
 import { ManagementDashboardModule } from './management-dashboard/management-dashboard.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { DataExportModule } from './data-export/data-export.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -206,6 +208,8 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // so it never collided with the `management` stub it replaces; the stub is
     // gone anyway, since nothing served `GET /management` but a placeholder.
     ManagementDashboardModule,
+    DataExportModule,
+    AnalyticsModule,
     LeaderboardModule,
     ActivitiesModule,
     // Mailers and mailer campaigns (PAC-73, PAC-71). Registers the `mailers`,

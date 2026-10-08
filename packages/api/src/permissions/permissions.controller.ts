@@ -14,7 +14,7 @@ import { Permission } from './schemas/permission.schema';
  *
  * What makes a role editor possible for the 13 `agency:*` / `platform:*`
  * capabilities that have no UI at all today — the web's matrix is driven by the
- * static `PAGES` list, which only covers the 26 page permissions.
+ * static `PAGES` list, which only covers the page permissions.
  *
  * `@SkipModule()` for the same reason as `RolesController`: administering
  * permissions cannot depend on which pages the agency has switched on.

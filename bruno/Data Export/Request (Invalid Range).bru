@@ -1,0 +1,35 @@
+meta {
+  name: Request (Invalid Range)
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/data-export/leads/exports
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+body:json {
+  {
+    "from": "2026-05-31",
+    "to": "2026-05-01"
+  }
+}
+
+tests {
+  test("to before from is a 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /data-export/leads/exports — `to` before `from`
+
+  Both bounds are inclusive calendar dates; a window that ends before it
+  starts is a `400`, and nothing is queued.
+}

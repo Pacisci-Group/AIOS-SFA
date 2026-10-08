@@ -1,0 +1,52 @@
+meta {
+  name: Get Sales Breakdown (Producer x Line, compare)
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/analytics/sales/breakdown?range=last3Months&groupBy=producer&segmentBy=policyType&compare=true
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+  groupBy: producer
+  segmentBy: policyType
+  compare: true
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("each row's segments add up to the row", function () {
+    for (const row of res.getBody().rows) {
+      const parts = row.segments.reduce((sum, s) => sum + s.metrics.premium, 0);
+      expect(Math.round(parts * 100) / 100).to.equal(row.metrics.premium);
+    }
+  });
+
+  test("carries the comparison window", function () {
+    const body = res.getBody();
+    expect(body.previousTotals).to.be.an("object");
+    for (const row of body.rows) {
+      expect(row).to.have.property("previous");
+      expect(row).to.have.property("change");
+    }
+  });
+}
+
+docs {
+  # GET /analytics/sales/breakdown — multi-line by producer, with the prior period
+
+  Each producer's premium split by line (`segments`), and every row's
+  `previous` / `change` against the comparison window. See
+  **Get Sales Breakdown (Producer)** for the parameters.
+}

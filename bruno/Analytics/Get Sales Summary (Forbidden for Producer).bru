@@ -1,0 +1,27 @@
+meta {
+  name: Get Sales Summary (Forbidden for Producer)
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/analytics/sales/summary
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{analyticsProducerToken}}
+}
+
+tests {
+  test("a producer without the grant is refused", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /analytics/sales/summary — without `analytics:read`
+
+  The Producer template does not hold the permission.
+}

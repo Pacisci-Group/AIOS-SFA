@@ -1,0 +1,48 @@
+meta {
+  name: Request Leads Export (XLSX)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/data-export/leads/exports
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+body:json {
+  {
+    "format": "xlsx"
+  }
+}
+
+tests {
+  test("returns 202 Accepted", function () {
+    expect(res.getStatus()).to.equal(202);
+  });
+
+  test("is a queued .xlsx export", function () {
+    const row = res.getBody().export;
+    expect(row.status).to.equal("queued");
+    expect(row.format).to.equal("xlsx");
+    expect(row.filename).to.match(/_leads_all_all\.xlsx$/);
+  });
+}
+
+docs {
+  # POST /data-export/leads/exports — `format: "xlsx"`
+
+  The same request as **Request Sold Deals Export (CSV)**, for an Excel
+  workbook: one sheet, a bold frozen header row, and **typed cells** — dates
+  are date cells (UTC; Excel has no zone), numbers are numbers, ids and policy
+  numbers are text so a leading zero survives.
+
+  Leads carry their primary contact's name, email, phone and date of birth,
+  their source, producer and household, and their outcome rolled up: whether
+  quoted (latest quote date and premium) and whether sold (first deal, sold
+  date, premium).
+}

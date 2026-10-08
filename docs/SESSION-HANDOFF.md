@@ -1052,3 +1052,148 @@ Plan file: `~/.claude/plans/create-an-implementation-plan-humming-codd.md`.
 - Per-user / per-branch hours; a morning reset (§6a); weekend/holiday skipping (PAC-148).
 - The Super Admin onboarding wizard does not ask for the hour — new agencies start at 8 PM.
 
+---
+
+## 18. PAC-152 — Data Export page (handoff, 2026-10-06)
+
+Plan: `docs/plans/pac-152-data-export-implementation-plan.md`. Three PRs. **PR1 (API) and
+PR2 (web page) are built**, uncommitted, on `awaris/pac-152-data-export-api`; their file
+sets are disjoint apart from the docs, so they can be committed as two PRs. PR3 (deal audits,
+audit items, activities, service tickets, chargebacks) edits the same API files as PR1 and
+should start once PR1 is committed.
+
+Web (PR2): `features/data-export/` (`DataExportPage`, `DatasetList`, `ExportPanel`,
+`ColumnPreview`, `RecentExports`), `lib/data-export-api.ts`, `DateRangePicker`/`RangeChips`
+gained `maxSpanDays`, route `/data-export`, nav section "Data".
+
+**Background exports (user decision, 6 Oct, same day).** Downloads are no longer
+synchronous. *Request export* queues the export and toasts that the user will be emailed;
+the worker writes the file to object storage; Recent exports polls while a row is
+`Queued`/`Preparing` and offers **Download** once it is `Ready`. See "Background exports"
+below.
+
+### Decisions (user, 6 Oct) — do not re-litigate
+- **Curated joined datasets**, not raw table dumps: one row per entity, labels resolved, child
+  rollups computed, ids kept beside every label. Shaped after `docs/smartsuite-tables/`.
+- **CSV + XLSX**, one column model; each column's `type` decides the encoding.
+- **PII included** (contact name, phone, email, DOB, notes). Never storage keys or tokens.
+- **New module key `data_export`**; `data_export:read` is the whole gate, held by Data Team.
+
+### What exists now
+- **Engine** in `packages/api/src/common/data-export/` (in `common/` so the worker may import
+  it): `engine/` (types, date windows, cells, batched `ExportLookups`, registry +
+  `modelFor`), `writers/export-writer.ts` (streaming CSV with BOM, streaming XLSX),
+  `datasets/*.dataset.ts` (leads, quote recaps, sold deals, policies, households, contacts),
+  `plan.ts` (`planExport` — pure; validates and builds the pipeline) and `run.ts`
+  (`runExport` — cursor → lookups → writer → any `Writable`).
+- **API** in `packages/api/src/data-export/`: service (dictionary, options, `request`),
+  history service (`create`, `list`, `fileUrl`), controller. Routes:
+  `GET /data-export/datasets`, `/options`, `/history`,
+  `POST /data-export/:dataset/exports` (202, queued), `GET /data-export/exports/:id/url`
+  (presigned link; 409 while preparing, 410 once expired, 404 if not visible).
+- **Worker**: `DataExportGenerateFn` (`data-export/export.requested.v1`: claim → generate →
+  notify) and `DataExportExpireFn` (hourly cron).
+- Migration `20261006111528-data_export_module.js`: catalog rows, **module enabled on every
+  existing agency** (only where the key is absent), Data Team grant. Rehearsed up/down/up.
+- `dataExports` collection = the job and the audit trail (refusals included; the row
+  outlives its file).
+- Tests: unit specs beside the engine (`plan.unit-spec.ts` included) and the
+  `dataExportReady` template; e2e `test/worker/data-export.e2e-spec.ts` drives the real
+  request endpoint and then the worker function against `FakeStorage` and a capturing mail
+  transport. Bruno `Data Export/` (10 requests).
+
+### Background exports — how it works
+- `POST …/exports` plans and counts the export (over `DATA_EXPORT_MAX_ROWS` → immediate
+  `400 EXPORT_TOO_LARGE`, logged `failed`), writes a `queued` row carrying the filter echo
+  **and a scope snapshot** (user, branch, `X-Branch-Id`, data scope, role ids, timezone),
+  and sends the event through the outbox. It also resolves the agency's email brand (the
+  worker cannot import `TenantBrandingService`) and carries it on the event.
+- The worker **re-plans** from the row: a pipeline cannot be stored (`$` keys), so it rebuilds
+  an `AccessContext` from the snapshot and runs the same `planExport`. The file holds what the
+  requester could see when they asked.
+- File goes to a temp file, then `StorageService.putObjectFromFile` at
+  `agencies/<agencyId>/data-exports/<year>/<exportId>/<filename>` — deterministic, so a retry
+  overwrites itself (`buildObjectKey` gained `parts`/`unique`).
+- `claim` admits `queued`, or `failed` only when the job itself had started — a cap refusal
+  is never run. A replayed event is a no-op.
+- The email (`dataExportReady`) links to `/data-export` on the agency's host — **never** a
+  presigned link; the file is PII in bulk. A mail failure is recorded on
+  `notification.error` and never fails the export.
+- Statuses: `queued → processing → ready | failed → expired`. `truncated` is now a boolean.
+  Retention: `DATA_EXPORT_RETENTION_DAYS` (default 7, 1–30).
+- `data-export` and `lead-sources` were added to the worker boundary's `FEATURE_DIRS`;
+  `client-scope.ts` moved to `common/access/` (re-exported from `clients/`) and
+  `contactDisplayName` to `common/domain/contact-names.ts` (re-exported) so the engine has
+  no feature imports. `ExportLookups` reads the `LeadSource` model directly.
+- **Local end to end needs the Inngest dev server** pointed at the API (compose `inngest`
+  targets `:4000`). Without it a request stays `Queued`; Bruno's `Get Export File URL`
+  accepts `409` for that reason.
+- Removed with the synchronous path: `GET :dataset/download`, `apiFetchDownload`/`saveBlob`
+  (the API client is back to `HEAD`), CORS `exposedHeaders`, `common/http/`.
+
+### Gotchas
+- The scope clamps ignore `X-Branch-Id` at agency scope, so the export takes an explicit
+  `branchId` body field (agency scope only).
+- `csv-stringify` writes booleans as `1` / empty by default — `cells.ts` writes words.
+- Some list columns are **aligned** (household member ids/names/roles); blanks are kept.
+- Bruno against a local API needs `PLATFORM_HOST` to match the host Bruno calls.
+
+### Open for David / Carl (on the ticket)
+Net vs gross premium; audit item `days_open` anchor; over-cap refusals in history; CSV has no
+formula escaping (Excel users take XLSX).
+
+## 19. PAC-152, part 2 — Analytics page (handoff, 2026-10-07)
+
+Plan: `docs/plans/pac-152-analytics-implementation-plan.md` (decisions B1–B14 plus an
+"As built" table of where the build departed from it). Tracked on PAC-152 at the user's
+request. Uncommitted, on the same branch as the Data Export work.
+
+### Decisions (user, 7 Oct) — do not re-litigate
+- **New module key `analytics`**; `analytics:read` is the gate. Branch Manager by template
+  (and the `analytics_module` migration for existing agencies), Agency Owner via enabled
+  modules, anyone else by grant. Data Team is *not* granted by default.
+- **Sales and Service tabs** in v1.
+- **Headline = bound premium** (the Owner dashboard's definition), net of chargebacks beside it.
+
+### What exists now
+- **API** `packages/api/src/analytics/`: `GET /analytics/options`,
+  `sales/{summary,breakdown,timeseries}`, `service/{summary,breakdown,timeseries}`.
+  - Sales go through `soldMatch` + `linesPrefix` — the Owner dashboard's pipeline — so the
+    summary equals `/owner-dashboard/summary` for the same filters (asserted in e2e).
+  - `sales-dimensions.ts` is the registry: producer, leadSource (through the lead),
+    policyType and carrier (**per policy**, `$unwind lines`), branch, zip and csr (one
+    `$lookup households`). `segmentBy` splits rows by a second dimension in the same `$facet`.
+  - `time-buckets.ts`: day / Monday-week / month keys from the `YYYYMMDD` ints (no zone) and
+    from ticket instants (agency zone); zero-filled.
+  - `goal-pacing.ts`: month windows starting on the 1st, no line/source/carrier filter,
+    goals from `producerGoals` under the sales clamp.
+  - `linesPrefix` gained `LinesOptions { carrier, carriers }`; default stages unchanged
+    (unit-tested). `shared/domain/carrier.ts` gained `carrierQueryValues`.
+  - `OWNER_DASHBOARD_RANGE_KEYS` gained `last12Months`; the Owner/Manager chip guard is now
+    their own chip list.
+  - `common/access/filter-options.ts`: Data Export's branch/producer options, shared.
+- **Migration** `20261007085957-analytics_module.js` (catalog 140/141, enable where absent,
+  Branch Manager grant). Rehearsed up → down → up on a scratch DB.
+- **Web** `features/analytics/`: page with Sales | Service tabs, filter bar (period incl.
+  Last 12 Months, branch for agency scope, producers/assignees from `/analytics/options`,
+  lead sources, lines, carriers), KPI rows (goal pacing meter), breakdown panel (group by,
+  split by, measure, compare, Download CSV), trend panel (day/week/month). First charts in
+  the app: shadcn `chart` + `recharts@3.8`. Nav item under Management; route `/analytics`.
+  `KpiCard` and `TrendBadge` promoted to `components/common/`.
+- **Tests:** unit specs beside the engine; e2e `test/analytics.e2e-spec.ts` (41); Bruno
+  `Analytics/` (15 requests, re-runnable). Whole suites green: API unit 1,278, e2e 1,215,
+  shared 296.
+
+### Gotchas
+- `BranchGuard` 403s a `branchId` query param outside a branch- or own-scope caller's branch.
+- Tickets' `own` scope collapses to branch (CRM rule); sales' `own` pins to self.
+- Carrier is free text: alias codes (`B4tEH`) fold into their name, spelling variants don't.
+- Under a carrier filter, quote figures and the closing ratio are N/A, never 0.
+- Recharts sorts legend items by data key unless `itemSorter={null}`.
+- The dark `--chart-*` tokens were re-stepped to pass the palette validator on `--card`.
+
+### Open for David
+1. "Completed" tickets = `resolvedAt` in the window; `closed` tickets carry no timestamp.
+2. Canonicalise carrier spellings through the carrier catalog?
+3. Goal pacing reads `producerGoals`; until PAC-116 ships most months say "No goals set".
+4. Should Data Team hold `analytics:read` by default?

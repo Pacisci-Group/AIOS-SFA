@@ -1,0 +1,36 @@
+meta {
+  name: Get Sales Summary (Branch Manager)
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/analytics/sales/summary?range=last3Months
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+}
+
+auth:bearer {
+  token: {{analyticsManagerToken}}
+}
+
+tests {
+  test("the branch manager reads their branch", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("never more than the owner sees", function () {
+    expect(res.getBody().premium.current).to.be.at.most(Number(bru.getVar("analyticsPremium")));
+  });
+}
+
+docs {
+  # GET /analytics/sales/summary — as the Branch Manager
+
+  Same request as the owner's, pinned to the manager's branch by data scope.
+  Naming another branch in `branchId` is a `403` from `BranchGuard`.
+}
