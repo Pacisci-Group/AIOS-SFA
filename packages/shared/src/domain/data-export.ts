@@ -159,6 +159,20 @@ export interface DataExportTooLargeError {
   maxRows: number;
 }
 
+/**
+ * The `code` on the 409 a duplicate request is refused with: the caller
+ * already has this export (same dataset, format and filters) queued, being
+ * prepared, or ready to download. A failed or expired one does not count.
+ */
+export const DATA_EXPORT_DUPLICATE = 'EXPORT_DUPLICATE';
+
+/** The body of that 409. `existing` is the export the caller already has. */
+export interface DataExportDuplicateError {
+  code: typeof DATA_EXPORT_DUPLICATE;
+  message: string;
+  existing: DataExportHistoryRow;
+}
+
 /** The filters an export ran with, as recorded on its history row. */
 export interface DataExportFilterEcho {
   dateField: string;
@@ -218,9 +232,20 @@ export interface DataExportHistoryRow {
   notifiedAt: string | null;
   createdById: string | null;
   createdByName: string | null;
+  /**
+   * The caller may re-run this export: it is theirs, it `failed` (not refused
+   * as too large, which a re-run would only refuse again), and it has not
+   * been re-run already.
+   */
+  canRerun: boolean;
+  /** The failed export this one re-ran; `null` for an ordinary request. */
+  rerunOfId: string | null;
 }
 
-/** `POST /data-export/:dataset/exports` — 202, the queued row. */
+/**
+ * `POST /data-export/:dataset/exports` and `POST /data-export/exports/:id/rerun`
+ * — 202, the queued row.
+ */
 export interface DataExportRequestResponse {
   export: DataExportHistoryRow;
 }

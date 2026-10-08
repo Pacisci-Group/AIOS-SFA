@@ -65,7 +65,7 @@ export const dataExportRequestSchema = z
 
 export type DataExportRequestDto = z.infer<typeof dataExportRequestSchema>;
 
-/** `:id` on `GET /data-export/exports/:id/url`. */
+/** `:id` on `GET /data-export/exports/:id/url` and `POST …/:id/rerun`. */
 export const dataExportIdSchema = objectId;
 
 export const dataExportHistoryQuerySchema = z.object({

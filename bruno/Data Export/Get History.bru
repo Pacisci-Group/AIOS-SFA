@@ -64,6 +64,10 @@ docs {
   file stops at the cap. The page polls this while any row is `queued` or
   `processing`.
 
+  `canRerun` is true on a `failed` export the caller requested themselves,
+  unless it was refused as too large or has been re-run already (**Re-run
+  Export**). A re-run's `rerunOfId` points at the export it re-ran.
+
   ## Query
   `page` (default 1), `pageSize` (1–100, default 20).
 
@@ -93,7 +97,9 @@ docs {
         "downloadCount": 1,
         "notifiedAt": "2026-10-06T11:20:03.000Z",
         "createdById": "…",
-        "createdByName": "Dana Park"
+        "createdByName": "Dana Park",
+        "canRerun": false,
+        "rerunOfId": null
       }
     ],
     "page": 1, "pageSize": 20, "total": 2, "totalPages": 1

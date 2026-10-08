@@ -21,13 +21,16 @@ body:json {
 }
 
 tests {
-  test("returns 202 Accepted", function () {
-    expect(res.getStatus()).to.equal(202);
+  test("returns 202 Accepted, or 409 EXPORT_DUPLICATE on a repeat run", function () {
+    expect([202, 409]).to.include(res.getStatus());
+    if (res.getStatus() === 409) {
+      expect(res.getBody().code).to.equal("EXPORT_DUPLICATE");
+    }
   });
 
-  test("is a queued .xlsx export", function () {
-    const row = res.getBody().export;
-    expect(row.status).to.equal("queued");
+  test("is an .xlsx export", function () {
+    const row = res.getBody().export ?? res.getBody().existing;
+    if (res.getStatus() === 202) expect(row.status).to.equal("queued");
     expect(row.format).to.equal("xlsx");
     expect(row.filename).to.match(/_leads_all_all\.xlsx$/);
   });

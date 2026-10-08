@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { Download, Loader2 } from "lucide-react";
+import { Download, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { DataPanel } from "@/components/common/DataPanel";
 import { TablePagination } from "@/components/common/TablePagination";
@@ -19,6 +19,7 @@ import {
   dataExportHistoryKey,
   getDataExportFileUrl,
   getDataExportHistory,
+  rerunDataExport,
   startDownload,
   type DataExportHistoryRow,
 } from "@/lib/data-export-api";
@@ -29,6 +30,7 @@ import {
   formatBytes,
   formatExpiry,
   isPendingExport,
+  toastExportRefusal,
 } from "../export-format";
 
 const PAGE_SIZE = 10;
@@ -98,6 +100,9 @@ function Figure({
  * too), and offers Download until retention deletes it. The table polls while
  * any row on the page is still being prepared, so a job finishes in front of
  * the user without a refresh.
+ *
+ * A failed export the user requested offers Re-run, which queues a new export
+ * with the same parameters. The failed row stays, as part of the log.
  */
 export function RecentExports() {
   const [page, setPage] = useState(1);
@@ -124,6 +129,17 @@ export function RecentExports() {
     onSettled: () => void history.refetch(),
   });
 
+  const rerun = useMutation({
+    mutationFn: (id: string) => rerunDataExport(id),
+    onSuccess: (row) =>
+      toast.success(`${row.datasetLabel} export re-run`, {
+        description:
+          "We'll email you when it's ready. You can download it from Recent exports.",
+      }),
+    onError: toastExportRefusal,
+    onSettled: () => void history.refetch(),
+  });
+
   return (
     <DataPanel
       title="Recent exports"
@@ -147,7 +163,7 @@ export function RecentExports() {
             <TableHead className="hidden md:table-cell">By</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="text-right">
-              <span className="sr-only">Download</span>
+              <span className="sr-only">Actions</span>
             </TableHead>
           </TableRow>
         </TableHeader>
@@ -208,6 +224,22 @@ export function RecentExports() {
                         <span className="hidden sm:inline">Download</span>
                       </Button>
                     </div>
+                  ) : row.canRerun ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => rerun.mutate(row.id)}
+                      disabled={rerun.isPending && rerun.variables === row.id}
+                      aria-label={`Re-run the ${row.datasetLabel} export`}
+                      title="Request this export again with the same filters"
+                    >
+                      {rerun.isPending && rerun.variables === row.id ? (
+                        <Loader2 aria-hidden className="size-4 animate-spin" />
+                      ) : (
+                        <RotateCcw aria-hidden className="size-4" />
+                      )}
+                      <span className="hidden sm:inline">Re-run</span>
+                    </Button>
                   ) : null}
                 </TableCell>
               </TableRow>

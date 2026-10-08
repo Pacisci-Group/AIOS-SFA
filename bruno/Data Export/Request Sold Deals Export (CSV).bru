@@ -22,17 +22,25 @@ body:json {
 }
 
 script:post-response {
+  // A repeat run is refused as a duplicate of the last run's export, which
+  // the 409 hands back: either way, that is the export the folder follows.
   if (res.getStatus() === 202) {
     bru.setVar("dataExportId", res.getBody().export.id);
+  } else if (res.getStatus() === 409) {
+    bru.setVar("dataExportId", res.getBody().existing.id);
   }
 }
 
 tests {
-  test("returns 202 Accepted", function () {
-    expect(res.getStatus()).to.equal(202);
+  test("returns 202 Accepted, or 409 EXPORT_DUPLICATE on a repeat run", function () {
+    expect([202, 409]).to.include(res.getStatus());
+    if (res.getStatus() === 409) {
+      expect(res.getBody().code).to.equal("EXPORT_DUPLICATE");
+    }
   });
 
   test("is queued, not downloaded", function () {
+    if (res.getStatus() !== 202) return;
     const row = res.getBody().export;
     expect(row.status).to.equal("queued");
     expect(row.canDownload).to.equal(false);
@@ -40,7 +48,8 @@ tests {
   });
 
   test("is named for the agency, dataset and window", function () {
-    expect(res.getBody().export.filename).to.match(/_sold_deals_2026-01-01_all\.csv$/);
+    const row = res.getBody().export ?? res.getBody().existing;
+    expect(row.filename).to.match(/_sold_deals_2026-01-01_all\.csv$/);
   });
 }
 
@@ -63,6 +72,13 @@ docs {
 
   The requester's data scope is snapshotted on the row now, so the file holds
   what they could see when they asked.
+
+  **One live export per request.** A caller who already has this export
+  (same dataset, `format` and filters, the multi-selects in any order)
+  `queued`, `processing` or `ready` gets a `409` carrying it instead of a
+  second one. A `failed` or `expired` export does not count, and another user
+  may ask for the same thing. A unique index enforces it, so two racing
+  requests queue one export.
 
   ## `:dataset`
   `leads` · `quote_recaps` · `sold_deals` · `policies` · `households` · `contacts`
@@ -92,4 +108,7 @@ docs {
     — over `DATA_EXPORT_MAX_ROWS`. Nothing is queued; the refusal is logged
     as `failed`. Narrow the range.
   - `403` — no `data_export:read`, or the module is disabled.
+  - `409` `{ "code": "EXPORT_DUPLICATE", "message": "…", "existing": <history row> }`
+    — the caller already has this export. Nothing is queued or logged.
+    Download `existing` once it is ready, or wait for it to expire.
 }

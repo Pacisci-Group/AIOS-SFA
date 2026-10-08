@@ -2,7 +2,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileClock, FileSpreadsheet, FileText, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  DATA_EXPORT_TOO_LARGE,
   LEAD_SOURCE_NONE,
   POLICY_TYPES,
   type LeadSourceOption,
@@ -19,7 +18,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAuth } from "@/contexts/auth-context";
-import { ApiError } from "@/lib/api-client";
 import type { UrlRange } from "@/lib/date-range";
 import {
   dataExportHistoryKey,
@@ -28,10 +26,13 @@ import {
   type DataExportFormat,
   type DataExportOptionsResponse,
   type DataExportParams,
-  type DataExportTooLargeError,
 } from "@/lib/data-export-api";
 import { cn } from "@/lib/utils";
-import { EXPORT_RANGE_CHIPS, type ExportRangeKey } from "../export-format";
+import {
+  EXPORT_RANGE_CHIPS,
+  toastExportRefusal,
+  type ExportRangeKey,
+} from "../export-format";
 
 /** `branchId` in the URL is empty for "every branch"; Radix needs a real value. */
 const ALL_BRANCHES = "all";
@@ -62,17 +63,6 @@ const FORMATS: { value: DataExportFormat; label: string; icon: typeof FileText }
   { value: "csv", label: "CSV", icon: FileText },
   { value: "xlsx", label: "Excel", icon: FileSpreadsheet },
 ];
-
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    const body = error.body as Partial<DataExportTooLargeError> | undefined;
-    if (body?.code === DATA_EXPORT_TOO_LARGE) {
-      return `This export has ${body.rowCount?.toLocaleString()} rows; the limit is ${body.maxRows?.toLocaleString()}. Narrow the date range or add a filter.`;
-    }
-    return error.message;
-  }
-  return "The export could not be requested. Try again.";
-}
 
 /**
  * The selected dataset: what goes into the file (range and filters) and the
@@ -107,7 +97,7 @@ export function ExportPanel({
           ? `We'll email ${user.email} when it's ready. You can download it from Recent exports below.`
           : "We'll email you when it's ready. You can download it from Recent exports below.",
       }),
-    onError: (error) => toast.error(errorMessage(error)),
+    onError: toastExportRefusal,
     // A refusal is logged too, so the history changes either way.
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: dataExportHistoryKey }),

@@ -10,7 +10,7 @@ import {
   type DataExportOptionsResponse,
   type DataExportTooLargeError,
 } from '@sfa/shared';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Branch } from '../branches/schemas/branch.schema';
 import { Chargeback } from '../chargebacks/schemas/chargeback.schema';
 import { filterOptionsFor } from '../common/access/filter-options';
@@ -124,20 +124,32 @@ export class DataExportService {
    * Everything that can be wrong with the request fails here, as an ordinary
    * 400, before anything is queued — the planner validates, and an export over
    * the row cap is refused with its count (and logged as `failed`) rather than
-   * accepted and failed minutes later.
+   * accepted and failed minutes later. A request the caller already has live
+   * (same dataset, format and filters) is a 409 carrying that export, and is
+   * not logged: nothing new was asked for.
    *
    * The event goes through `InngestService.send`, whose outbox row is written
    * before the send: if Inngest is down the send throws (the caller sees a
    * 500), but the sweeper re-emits it, so the row does not stay `queued`.
+   *
+   * The outbox id is minted here and written on the `queued` row before the
+   * send, so the export always points at its job, even when the send throws.
    */
   async request(
     access: AccessContext,
     branchId: string | null,
     key: DataExportDatasetKey,
     body: DataExportRequestDto,
+    rerunOf: Types.ObjectId | null = null,
   ): Promise<DataExportHistoryRow> {
     const plan = planExport(access, branchId, key, body);
     const maxRows = dataExportMaxRows();
+
+    await this.history.assertNotDuplicate(access, {
+      plan,
+      format: body.format,
+      requestBranchId: branchId,
+    });
 
     const counted = await modelFor(plan.def, this.models)
       .aggregate<{ n: number }>(countStages(plan))
@@ -145,7 +157,7 @@ export class DataExportService {
     const rowCount = counted[0]?.n ?? 0;
 
     if (rowCount > maxRows) {
-      await this.history.create(access, {
+      const refused = await this.history.create(access, {
         plan,
         format: body.format,
         status: 'failed',
@@ -153,7 +165,13 @@ export class DataExportService {
         error: DATA_EXPORT_TOO_LARGE,
         filename: '',
         requestBranchId: branchId,
+        eventLogId: null,
+        rerunOf,
       });
+      // A re-run refused as too large still answers the failed export: hide
+      // its Re-run, which could only log the same refusal again.
+      if (rerunOf)
+        await this.history.markRerun(rerunOf, refused._id.toString());
       const error: DataExportTooLargeError = {
         code: DATA_EXPORT_TOO_LARGE,
         message: `This export has ${rowCount.toLocaleString('en-US')} rows; the limit is ${maxRows.toLocaleString('en-US')}. Narrow the date range or add a filter.`,
@@ -174,6 +192,7 @@ export class DataExportService {
         body.to ?? 'all',
       ].join('_') + `.${body.format}`;
 
+    const eventLogId = new Types.ObjectId();
     const row = await this.history.create(access, {
       plan,
       format: body.format,
@@ -182,16 +201,67 @@ export class DataExportService {
       error: null,
       filename,
       requestBranchId: branchId,
+      eventLogId: eventLogId.toHexString(),
+      rerunOf,
     });
 
-    await this.inngest.send(dataExportRequested, {
-      exportId: row._id.toString(),
-      agencyId: plan.agencyId,
-      requestedBy: access.userId,
-      brand: await this.emailBrand(plan.agencyId),
-    });
+    await this.inngest.send(
+      dataExportRequested,
+      {
+        exportId: row._id.toString(),
+        agencyId: plan.agencyId,
+        requestedBy: access.userId,
+        brand: await this.emailBrand(plan.agencyId),
+      },
+      { id: eventLogId },
+    );
 
-    return this.history.row(row.toObject());
+    return this.history.row(access, row.toObject());
+  }
+
+  /**
+   * Re-runs a failed export: a new request with the same dataset, format and
+   * filters, linked to the failed one by `rerunOf`. The failed row stays as it
+   * is, as part of the audit trail.
+   *
+   * It goes through `request` in full rather than resetting the old row. The
+   * filters are validated, counted and scoped again under the caller's access
+   * **now**, so a re-run never sees more than its requester can today, and
+   * the duplicate rule applies to it like any other request.
+   *
+   * `branchId` is this request's, not the one stored on the failed row. For
+   * branch and own scope `BranchGuard` pins it to the user's own branch, so
+   * the two differ only if the user has moved branch since, and then the old
+   * one is exactly what must not be reused. At agency scope the planner
+   * ignores it; the branch filter travels in the stored filters.
+   */
+  async rerun(
+    access: AccessContext,
+    branchId: string | null,
+    id: string,
+  ): Promise<DataExportHistoryRow> {
+    const failed = await this.history.rerunnable(access, id);
+    const { filters } = failed;
+    const row = await this.request(
+      access,
+      branchId,
+      failed.datasetKey as DataExportDatasetKey,
+      {
+        format: failed.format,
+        dateField: filters.dateField,
+        from: filters.from ?? undefined,
+        to: filters.to ?? undefined,
+        branchId: filters.branchId ?? undefined,
+        producerIds: filters.producerIds,
+        status: filters.status,
+        // Stored from a body this DTO already validated.
+        policyTypes: filters.policyTypes as DataExportRequestDto['policyTypes'],
+        leadSourceIds: filters.leadSourceIds,
+      },
+      failed._id,
+    );
+    await this.history.markRerun(failed._id, row.id);
+    return row;
   }
 
   /**

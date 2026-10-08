@@ -16,6 +16,7 @@ export type {
   DataExportDatasetDescriptor,
   DataExportDatasetKey,
   DataExportDictionaryResponse,
+  DataExportDuplicateError,
   DataExportFilterKey,
   DataExportFormat,
   DataExportHistoryResponse,
@@ -90,6 +91,18 @@ export async function requestDataExport(
   const { export: row } = await apiFetch<DataExportRequestResponse>(
     `/data-export/${params.dataset}/exports`,
     { method: "POST", body: JSON.stringify(dataExportBody(params)) },
+  );
+  return row;
+}
+
+/**
+ * `POST /data-export/exports/:id/rerun` — re-run a failed export. Resolves
+ * with the new `queued` row; the failed one stays in the history.
+ */
+export async function rerunDataExport(id: string): Promise<DataExportHistoryRow> {
+  const { export: row } = await apiFetch<DataExportRequestResponse>(
+    `/data-export/exports/${encodeURIComponent(id)}/rerun`,
+    { method: "POST" },
   );
   return row;
 }

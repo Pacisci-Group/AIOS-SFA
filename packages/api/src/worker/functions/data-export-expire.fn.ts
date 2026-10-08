@@ -89,7 +89,8 @@ export class DataExportExpireFn implements InngestFunctionProvider {
         }
         await this.exportModel.updateOne(
           { _id: row._id, status: 'ready' },
-          { $set: { status: 'expired', file: null } },
+          // Clearing `activeKey` lets the same export be requested again.
+          { $set: { status: 'expired', file: null, activeKey: null } },
         );
         expiredThisPage += 1;
       }

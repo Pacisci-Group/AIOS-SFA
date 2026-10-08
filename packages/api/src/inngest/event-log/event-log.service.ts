@@ -123,7 +123,7 @@ export class EventLogService {
     );
   }
 
-  /** Test/diagnostic read. */
+  /** One row: diagnostics, tests, and `DataExportGenerateFn.fail`'s check. */
   findById(eventLogId: string): Promise<EventLogEntryDocument | null> {
     return this.entries.findById(eventLogId).exec();
   }

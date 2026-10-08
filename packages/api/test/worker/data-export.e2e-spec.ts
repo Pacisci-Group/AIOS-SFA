@@ -11,6 +11,7 @@ import {
 } from '@sfa/shared';
 import { parse } from 'csv-parse/sync';
 import ExcelJS from 'exceljs';
+import { NonRetriableError } from 'inngest';
 import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -24,6 +25,7 @@ import { Deal } from '../../src/deals/schemas/deal.schema';
 import { HouseholdMember } from '../../src/households/schemas/household-member.schema';
 import { Household } from '../../src/households/schemas/household.schema';
 import type { DataExportJobData } from '../../src/inngest/events';
+import { EventLogService } from '../../src/inngest/event-log/event-log.service';
 import { InngestService } from '../../src/inngest/inngest.service';
 import { Lead } from '../../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../../src/permissions/access-resolver.service';
@@ -40,7 +42,10 @@ import {
   type SendResult,
 } from '../../src/worker/email/mail-transport';
 import { DataExportExpireFn } from '../../src/worker/functions/data-export-expire.fn';
-import { DataExportGenerateFn } from '../../src/worker/functions/data-export-generate.fn';
+import {
+  type DataExportRun,
+  DataExportGenerateFn,
+} from '../../src/worker/functions/data-export-generate.fn';
 import { authHeader, login } from '../helpers/auth.helper';
 import { FakeStorage } from '../helpers/fake-storage';
 import {
@@ -151,20 +156,44 @@ describe('Data export (PAC-152) (e2e)', () => {
     return (res.body as DataExportRequestResponse).export.id;
   };
 
-  /** Run the worker job for an export, from the event the API sent. */
-  const generate = async (exportId: string) => {
+  /** The event the API sent for an export, as the worker receives it. */
+  const sentEvent = (exportId: string) => {
     const sent = events.sent.find((event) => event.data.exportId === exportId);
     if (!sent) throw new Error(`No event was sent for ${exportId}`);
-    return generateFn.handle(
-      {
-        id: `evt-${exportId}`,
-        name: sent.name,
-        data: {
-          eventLogId: new Types.ObjectId().toHexString(),
-          ...sent.data,
-        } as DataExportJobData,
-      },
-      inlineStep().step,
+    return {
+      id: `evt-${exportId}`,
+      name: sent.name,
+      data: {
+        eventLogId: sent.id ?? new Types.ObjectId().toHexString(),
+        ...sent.data,
+      } as DataExportJobData,
+    };
+  };
+
+  /**
+   * Run the worker job for an export, from the event the API sent. A single
+   * attempt by default, which is therefore the final one.
+   */
+  const generate = async (exportId: string, run: Partial<DataExportRun> = {}) =>
+    generateFn.handle(sentEvent(exportId), inlineStep().step, {
+      runId: `run-${exportId}`,
+      attempt: 0,
+      maxAttempts: 1,
+      ...run,
+    });
+
+  /**
+   * Have the job fail an export on its final attempt. The registry "forgets"
+   * its dataset for one run, the only way a request that validated can fail
+   * to plan, then gets it back so a re-run can plan it.
+   */
+  const failExport = async (id: string) => {
+    const row = await exportModel.findById(id).lean();
+    await exportModel.updateOne({ _id: id }, { $set: { datasetKey: 'gone' } });
+    await expect(generate(id)).rejects.toThrow('Unknown dataset gone');
+    await exportModel.updateOne(
+      { _id: id },
+      { $set: { datasetKey: row!.datasetKey } },
     );
   };
 
@@ -229,6 +258,10 @@ describe('Data export (PAC-152) (e2e)', () => {
     events = app.get(InngestService);
     generateFn = app.get(DataExportGenerateFn);
     exportModel = app.get(getModelToken(DataExport.name));
+    // `dropTestDatabase` ran after `autoIndex` built the indexes, which left
+    // the collection with none. The duplicate rule needs its unique index to
+    // refuse a racing request: see `carrier-appointments.e2e-spec.ts`.
+    await exportModel.syncIndexes();
 
     const model = <T>(name: string) => app.get<Model<T>>(getModelToken(name));
     const userModel = model<User>(User.name);
@@ -431,6 +464,19 @@ describe('Data export (PAC-152) (e2e)', () => {
     csrToken = (await login(app, seed.csrEmail, TEST_PASSWORD)).accessToken;
   });
 
+  /**
+   * Tests ask for the same export again and again. Releasing every live
+   * export's key between tests stands in for those exports having expired, so
+   * the duplicate rule only applies inside a test, where `duplicates` and
+   * `re-running a failed export` check it.
+   */
+  beforeEach(async () => {
+    await exportModel.updateMany(
+      { activeKey: { $type: 'string' } },
+      { $set: { activeKey: null } },
+    );
+  });
+
   afterAll(async () => {
     delete process.env.DATA_EXPORT_MAX_ROWS;
     // Suites share one database, and a later one may seed without dropping.
@@ -530,6 +576,12 @@ describe('Data export (PAC-152) (e2e)', () => {
         to: '2026-05-31',
         dateField: 'created',
       });
+
+      // The row points at its job: the id was minted before the send and
+      // handed to it, so it is the outbox row's `_id` and the Inngest event id.
+      expect(event.id).toMatch(/^[0-9a-f]{24}$/);
+      expect(stored!.eventLogId).toBe(event.id);
+      expect(stored!.runId).toBeNull();
     });
 
     it('has no file to hand out until the job has run', async () => {
@@ -918,21 +970,27 @@ describe('Data export (PAC-152) (e2e)', () => {
         status: 'skipped',
       });
       const after = await exportModel.findById(refused!._id).lean();
-      expect(after).toMatchObject({ status: 'failed', file: null });
+      expect(after).toMatchObject({
+        status: 'failed',
+        file: null,
+        eventLogId: null,
+      });
     });
 
-    it('resumes an export it failed itself when Inngest retries it', async () => {
+    it('stamps the run that claimed it', async () => {
       const id = await requestExport('contacts');
-      await exportModel.updateOne(
-        { _id: id },
-        { $set: { datasetKey: 'gone' } },
-      );
-      await expect(generate(id)).rejects.toThrow();
-      await exportModel.updateOne(
-        { _id: id },
-        { $set: { datasetKey: 'contacts' } },
-      );
-      await expect(generate(id)).resolves.toEqual({ status: 'ready' });
+      await generate(id, { runId: 'run-abc' });
+      const row = await exportModel.findById(id).lean();
+      expect(row!.runId).toBe('run-abc');
+    });
+
+    it('leaves a failed export failed when its event is replayed', async () => {
+      const id = await requestExport('contacts');
+      await failExport(id);
+      // Re-run is the way back. A replay would skip the duplicate rule and
+      // the requester's current access, which Re-run goes through.
+      await expect(generate(id)).resolves.toEqual({ status: 'skipped' });
+      expect((await exportModel.findById(id).lean())!.status).toBe('failed');
     });
 
     it('stops at the cap when rows arrive between the request and the run', async () => {
@@ -949,6 +1007,39 @@ describe('Data export (PAC-152) (e2e)', () => {
       expect((parse(body, { bom: true }) as string[][]).length).toBe(2);
     });
 
+    it('keeps the export processing, with the error, until the final attempt', async () => {
+      const id = await requestExport('contacts');
+      await exportModel.updateOne(
+        { _id: id },
+        { $set: { datasetKey: 'gone' } },
+      );
+      await expect(
+        generate(id, { attempt: 0, maxAttempts: 3 }),
+      ).rejects.toThrow('Unknown dataset gone');
+      const row = await exportModel.findById(id).lean();
+      expect(row).toMatchObject({ status: 'processing', finishedAt: null });
+      expect(row!.error).toContain('Unknown dataset');
+    });
+
+    it('fails the export at once on an error Inngest will not retry', async () => {
+      const id = await requestExport('contacts');
+      const put = jest
+        .spyOn(app.get(StorageService), 'putObjectFromFile')
+        .mockRejectedValueOnce(new NonRetriableError('bucket gone'));
+      try {
+        await expect(
+          generate(id, { attempt: 0, maxAttempts: 3 }),
+        ).rejects.toThrow('bucket gone');
+      } finally {
+        put.mockRestore();
+      }
+      expect(await exportModel.findById(id).lean()).toMatchObject({
+        status: 'failed',
+        error: 'bucket gone',
+        activeKey: null,
+      });
+    });
+
     it('marks the export failed and rethrows when it cannot be produced', async () => {
       const id = await requestExport('contacts');
       // A dataset the registry no longer knows — the only way a request that
@@ -961,6 +1052,90 @@ describe('Data export (PAC-152) (e2e)', () => {
       const row = await exportModel.findById(id).lean();
       expect(row).toMatchObject({ status: 'failed', file: null });
       expect(row!.error).toContain('Unknown dataset');
+    });
+
+    describe('when the run fails outside the handler (onFailure)', () => {
+      const failure = (exportId: string, message: string) => ({
+        event: {
+          data: {
+            run_id: 'run-dead',
+            event: { data: sentEvent(exportId).data },
+          },
+        },
+        error: new Error(message),
+      });
+
+      it('fails an export left processing and closes its event-log row', async () => {
+        const id = await requestExport('contacts');
+        // The worker claimed it, then died on the final attempt.
+        await exportModel.updateOne(
+          { _id: id },
+          { $set: { status: 'processing', startedAt: new Date() } },
+        );
+        const eventLog = app.get(EventLogService);
+        const findById = jest
+          .spyOn(eventLog, 'findById')
+          .mockResolvedValue({ status: 'pending' } as never);
+        const markFailed = jest
+          .spyOn(eventLog, 'markFailed')
+          .mockResolvedValue();
+        try {
+          await generateFn.fail(failure(id, 'worker lost'));
+          const row = await exportModel.findById(id).lean();
+          expect(row).toMatchObject({ status: 'failed', error: 'worker lost' });
+          expect(row!.finishedAt).toBeInstanceOf(Date);
+          expect(markFailed).toHaveBeenCalledWith(
+            row!.eventLogId,
+            'run-dead',
+            2,
+            'worker lost',
+          );
+        } finally {
+          findById.mockRestore();
+          markFailed.mockRestore();
+        }
+      });
+
+      it('never overwrites an event-log row the middleware already closed', async () => {
+        const id = await requestExport('contacts');
+        // A run Inngest failed without `guard` failing the row, after the
+        // middleware recorded the real attempt count.
+        await exportModel.updateOne(
+          { _id: id },
+          { $set: { status: 'processing', startedAt: new Date() } },
+        );
+        const eventLog = app.get(EventLogService);
+        const findById = jest
+          .spyOn(eventLog, 'findById')
+          .mockResolvedValue({ status: 'failed' } as never);
+        const markFailed = jest.spyOn(eventLog, 'markFailed');
+        try {
+          await generateFn.fail(failure(id, 'gave up'));
+          expect((await exportModel.findById(id).lean())!.status).toBe(
+            'failed',
+          );
+          expect(markFailed).not.toHaveBeenCalled();
+        } finally {
+          findById.mockRestore();
+          markFailed.mockRestore();
+        }
+      });
+
+      it('leaves an export the handler already finished alone', async () => {
+        const id = await requestExport('contacts');
+        await generate(id);
+        const before = await exportModel.findById(id).lean();
+        const markFailed = jest.spyOn(app.get(EventLogService), 'markFailed');
+        try {
+          await generateFn.fail(failure(id, 'late'));
+          const after = await exportModel.findById(id).lean();
+          expect(after!.status).toBe('ready');
+          expect(after!.error).toBe(before!.error);
+          expect(markFailed).not.toHaveBeenCalled();
+        } finally {
+          markFailed.mockRestore();
+        }
+      });
     });
 
     it('keeps a finished export ready when the email cannot be sent', async () => {
@@ -1014,6 +1189,253 @@ describe('Data export (PAC-152) (e2e)', () => {
       const { row } = await storedFile(id);
       await app.get(DataExportExpireFn).sweep();
       expect(storage.objects.has(row.file!.storageKey)).toBe(true);
+    });
+  });
+
+  describe('duplicates', () => {
+    const april = {
+      format: 'csv',
+      from: '2026-04-01',
+      to: '2026-04-30',
+    } as const;
+
+    it('refuses the same request while the first is queued, and logs nothing', async () => {
+      const first = await requestExport('leads', {
+        ...april,
+        producerIds: [producerId, ownerId],
+      });
+      const events0 = events.sent.length;
+      const rows0 = await exportModel.countDocuments();
+
+      // The same producers in another order are the same export.
+      const res = await post('leads', {
+        ...april,
+        producerIds: [ownerId, producerId],
+      }).expect(409);
+      expect(res.body).toMatchObject({
+        code: 'EXPORT_DUPLICATE',
+        existing: { id: first, status: 'queued' },
+      });
+      expect((res.body as { message: string }).message).toContain(
+        'still being prepared',
+      );
+      expect(events.sent.length).toBe(events0);
+      expect(await exportModel.countDocuments()).toBe(rows0);
+    });
+
+    it('still refuses it once the export is ready', async () => {
+      const first = await requestExport('leads', april);
+      await generate(first);
+      const res = await post('leads', april).expect(409);
+      expect(res.body).toMatchObject({
+        code: 'EXPORT_DUPLICATE',
+        existing: { id: first, status: 'ready', canDownload: true },
+      });
+      expect((res.body as { message: string }).message).toContain('Download');
+    });
+
+    it('treats another format, date field or filter as another export', async () => {
+      await requestExport('leads', april);
+      await post('leads', { ...april, format: 'xlsx' }).expect(202);
+      await post('leads', { ...april, to: '2026-04-29' }).expect(202);
+      await post('leads', { ...april, status: ['Sold'] }).expect(202);
+    });
+
+    it('lets another user ask for the same thing', async () => {
+      await requestExport('contacts', { format: 'xlsx' });
+      await post('contacts', { format: 'xlsx' }, producerToken).expect(202);
+    });
+
+    it('allows the request again once the export has failed', async () => {
+      const first = await requestExport('leads', april);
+      await failExport(first);
+      expect(await exportModel.findById(first).lean()).toMatchObject({
+        status: 'failed',
+        activeKey: null,
+      });
+      await post('leads', april).expect(202);
+    });
+
+    it('allows it again once the file has expired, swept or not', async () => {
+      const first = await requestExport('leads', april);
+      await generate(first);
+      await exportModel.updateOne(
+        { _id: first },
+        { $set: { expiresAt: new Date(Date.now() - 1_000) } },
+      );
+      // Not swept yet: the page already offers no download, so neither
+      // does the rule hold the request back.
+      const second = await requestExport('leads', april);
+      expect(await exportModel.findById(first).lean()).toMatchObject({
+        status: 'ready',
+        activeKey: null,
+      });
+
+      await generate(second);
+      await exportModel.updateOne(
+        { _id: second },
+        { $set: { expiresAt: new Date(Date.now() - 1_000) } },
+      );
+      await app.get(DataExportExpireFn).sweep();
+      expect(await exportModel.findById(second).lean()).toMatchObject({
+        status: 'expired',
+        activeKey: null,
+      });
+      await post('leads', april).expect(202);
+    });
+
+    it('lets only one of two identical requests racing each other through', async () => {
+      // The pre-check alone cannot stop a race; the unique index does.
+      const indexes = await exportModel.collection.indexes();
+      expect(indexes.find((index) => index.key.activeKey === 1)).toMatchObject({
+        unique: true,
+      });
+      const statuses = (
+        await Promise.all([post('policies', april), post('policies', april)])
+      )
+        .map((res) => res.status)
+        .sort();
+      expect(statuses).toEqual([202, 409]);
+    });
+  });
+
+  describe('re-running a failed export', () => {
+    const march = {
+      format: 'xlsx',
+      from: '2026-03-01',
+      to: '2026-03-31',
+    } as const;
+
+    const rerun = (id: string, token = dataTeamToken) =>
+      request(server())
+        .post(`/api/v1/data-export/exports/${id}/rerun`)
+        .set(authHeader(token));
+
+    const historyRow = async (id: string, token = dataTeamToken) => {
+      const res = await request(server())
+        .get('/api/v1/data-export/history?pageSize=100')
+        .set(authHeader(token))
+        .expect(200);
+      return (res.body as DataExportHistoryResponse).items.find(
+        (item) => item.id === id,
+      );
+    };
+
+    /** Request an export and have the job fail it on its final attempt. */
+    const failedExport = async (
+      dataset: string,
+      body: DataExportRequestBody,
+      token = dataTeamToken,
+    ) => {
+      const id = await requestExport(dataset, body, token);
+      await failExport(id);
+      return id;
+    };
+
+    it('queues a new export with the same parameters, and links the two', async () => {
+      const failed = await failedExport('leads', march);
+      expect(await historyRow(failed)).toMatchObject({
+        status: 'failed',
+        canRerun: true,
+        rerunOfId: null,
+      });
+
+      const res = await rerun(failed).expect(202);
+      const row = (res.body as DataExportRequestResponse).export;
+      expect(row.id).not.toBe(failed);
+      expect(row).toMatchObject({
+        status: 'queued',
+        datasetKey: 'leads',
+        format: 'xlsx',
+        rerunOfId: failed,
+        canRerun: false,
+        createdById: dataTeamId,
+        filters: { from: '2026-03-01', to: '2026-03-31', dateField: 'created' },
+      });
+      expect(events.sent.some((event) => event.data.exportId === row.id)).toBe(
+        true,
+      );
+
+      // The failed export stays in the log, without its Re-run action.
+      expect(await historyRow(failed)).toMatchObject({
+        status: 'failed',
+        canRerun: false,
+      });
+      await rerun(failed).expect(409);
+
+      await expect(generate(row.id)).resolves.toEqual({ status: 'ready' });
+    });
+
+    it('is refused as a duplicate when the same export was requested again', async () => {
+      const failed = await failedExport('leads', march);
+      const again = await requestExport('leads', march);
+      const res = await rerun(failed).expect(409);
+      expect(res.body).toMatchObject({
+        code: 'EXPORT_DUPLICATE',
+        existing: { id: again },
+      });
+      // Still offered: the duplicate may fail too.
+      expect((await historyRow(failed))!.canRerun).toBe(true);
+    });
+
+    it('only re-runs a failed export', async () => {
+      const queued = await requestExport('households', march);
+      await rerun(queued).expect(409);
+      expect((await historyRow(queued))!.canRerun).toBe(false);
+    });
+
+    it('hides Re-run once a re-run is refused as too large', async () => {
+      const failed = await failedExport('leads', {});
+      process.env.DATA_EXPORT_MAX_ROWS = '1';
+      try {
+        const res = await rerun(failed).expect(400);
+        expect(res.body).toMatchObject({ code: 'EXPORT_TOO_LARGE' });
+      } finally {
+        delete process.env.DATA_EXPORT_MAX_ROWS;
+      }
+      const refusal = await exportModel
+        .findOne({ rerunOf: new Types.ObjectId(failed) })
+        .lean();
+      expect(refusal).toMatchObject({
+        status: 'failed',
+        error: 'EXPORT_TOO_LARGE',
+      });
+      // The refusal answers the failed export; another click would only log
+      // the same refusal again.
+      expect((await historyRow(failed))!.canRerun).toBe(false);
+      await rerun(failed).expect(409);
+    });
+
+    it('does not re-run an export refused as too large', async () => {
+      process.env.DATA_EXPORT_MAX_ROWS = '1';
+      try {
+        await post('leads').expect(400);
+      } finally {
+        delete process.env.DATA_EXPORT_MAX_ROWS;
+      }
+      const refused = await exportModel
+        .findOne({ error: 'EXPORT_TOO_LARGE' })
+        .sort({ createdAt: -1 })
+        .lean();
+      const id = String(refused!._id);
+      expect((await historyRow(id))!.canRerun).toBe(false);
+      await rerun(id).expect(409);
+    });
+
+    it("lets only the requester re-run it, and hides others' exports", async () => {
+      const producers = await failedExport('leads', march, producerToken);
+      // Agency scope sees the producer's export, but it is not theirs.
+      expect((await historyRow(producers))!.canRerun).toBe(false);
+      await rerun(producers).expect(403);
+      expect((await historyRow(producers, producerToken))!.canRerun).toBe(true);
+
+      const dataTeams = await failedExport('contacts', march);
+      // Own scope cannot see it at all.
+      await rerun(dataTeams, producerToken).expect(404);
+    });
+
+    it('rejects a malformed export id', async () => {
+      await rerun('not-an-id').expect(400);
     });
   });
 

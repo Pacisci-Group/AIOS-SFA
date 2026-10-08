@@ -6,6 +6,7 @@ import { finished } from 'stream/promises';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
+import { NonRetriableError } from 'inngest';
 import {
   type AccessContext,
   AccessScope,
@@ -38,6 +39,7 @@ import {
   dataExportRequested,
   type DataExportJobData,
 } from '../../inngest/events';
+import { EventLogService } from '../../inngest/event-log/event-log.service';
 import {
   INNGEST_CLIENT,
   type InngestClient,
@@ -63,6 +65,29 @@ type AnyModel = Model<any>;
 
 /** The storage purpose — `agencies/<agencyId>/data-exports/<year>/<exportId>/<file>`. */
 export const DATA_EXPORT_PURPOSE = 'data-exports';
+
+/** A retry resumes at the failed step; every step is repeat-safe. */
+const RETRIES = 2;
+
+/** The run this handler is executing, from Inngest's handler context. */
+export interface DataExportRun {
+  runId: string | null;
+  /** Zero-indexed. */
+  attempt: number;
+  maxAttempts: number;
+}
+
+/**
+ * What `onFailure` receives: Inngest's `inngest/function.failed` event, which
+ * carries the original event at `data.event`. Declared structurally because
+ * `createFunction` types the handler as `any`.
+ */
+export interface DataExportFailure {
+  event: {
+    data: { run_id: string; event: { data: DataExportJobData } };
+  };
+  error: Error;
+}
 
 /** Step results. **Ids and counts only** — see `MailerCampaignCommitFn`. */
 interface ClaimResult {
@@ -93,17 +118,35 @@ interface NotifyResult {
  *
  * ## Three steps
  *
- * 1. **claim** — compare-and-set `queued` → `processing`. A duplicate event, a
- *    replay of a finished export or a deleted row is a no-op, never a failure.
- *    A row this job failed is admitted too, so an Inngest retry of a
- *    `generate` that threw resumes rather than refusing.
+ * 1. **claim** — compare-and-set `queued` → `processing`, stamping the run id.
+ *    A duplicate event, a replay of a finished or failed export, or a deleted
+ *    row is a no-op, never a failure. (An Inngest retry never re-runs `claim`:
+ *    a retry re-runs only the failed step, and `claim`'s result is memoized.)
+ *    A failed export comes back only through Re-run, which queues a new one
+ *    through the API's checks: the duplicate rule and the requester's current
+ *    access. A dashboard replay of the failed row would bypass both.
  * 2. **generate** — cursor → temp file → object storage → `ready`. The object
  *    key is deterministic per export, so a retry overwrites its own partial
- *    upload. A throw marks the row `failed` (what the page shows) and rethrows
- *    (what makes Inngest retry).
+ *    upload. A throw records the error and rethrows (what makes Inngest
+ *    retry). Only the final attempt marks the row `failed`, so the page never
+ *    shows Failed for an export a retry then finishes.
  * 3. **notify** — the "your export is ready" email. Never throws: a mail outage
  *    must not fail, or retry, an export whose file is already stored. Its
  *    outcome is written to `notification` on the row.
+ *
+ * ## A run that dies instead of throwing
+ *
+ * `guard` only runs when `generate` throws. If the worker process dies on the
+ * final attempt (OOM on a large XLSX, a replaced container), none of this
+ * code runs, and neither does the event-log middleware's `onRunError`. Inngest
+ * fails the run on its own server and then calls `onFailure`, which is why
+ * this function has one despite the middleware: `fail` moves a row still
+ * `queued` or `processing` to `failed` and closes its event-log row, so the
+ * page stops polling and the sweeper does not re-send it once the dedupe
+ * window ends.
+ *
+ * Both failure paths clear `activeKey`, as the retention sweep does: a failed
+ * or expired export no longer blocks the same request being made again.
  *
  * ## Import boundary
  *
@@ -122,6 +165,7 @@ export class DataExportGenerateFn implements InngestFunctionProvider {
     private readonly mail: MailDeliveryService,
     private readonly tenantUrls: TenantUrlService,
     private readonly config: ConfigService,
+    private readonly eventLog: EventLogService,
     @InjectModel(DataExport.name)
     private readonly exportModel: Model<DataExportDocument>,
     @InjectModel(Lead.name) lead: AnyModel,
@@ -169,10 +213,15 @@ export class DataExportGenerateFn implements InngestFunctionProvider {
          * should queue rather than compete with the API for the database.
          */
         concurrency: { limit: 2 },
-        /** A retry resumes at the failed step; every step is repeat-safe. */
-        retries: 2,
+        retries: RETRIES,
+        onFailure: (failure: DataExportFailure) => this.fail(failure),
       },
-      ({ event, step }) => this.handle(event, step),
+      ({ event, step, runId, attempt, maxAttempts }) =>
+        this.handle(event, step, {
+          runId,
+          attempt,
+          maxAttempts: maxAttempts ?? RETRIES + 1,
+        }),
     );
   }
 
@@ -180,11 +229,12 @@ export class DataExportGenerateFn implements InngestFunctionProvider {
   async handle(
     event: { id?: string; name: string; data: DataExportJobData },
     step: StepLike,
+    run: DataExportRun,
   ): Promise<{ status: string }> {
     const { exportId } = event.data;
 
     const claim = (await step.run('claim', () =>
-      this.claim(exportId),
+      this.claim(exportId, run.runId),
     )) as ClaimResult;
     if (!claim.ok) {
       this.logger.log(`Skipping export ${exportId}: ${claim.reason}.`);
@@ -192,7 +242,7 @@ export class DataExportGenerateFn implements InngestFunctionProvider {
     }
 
     await step.run('generate', () =>
-      this.guard(exportId, () => this.generate(exportId)),
+      this.guard(exportId, run, () => this.generate(exportId)),
     );
 
     await step.run('notify', () => this.notify(event));
@@ -200,22 +250,64 @@ export class DataExportGenerateFn implements InngestFunctionProvider {
     return { status: 'ready' };
   }
 
+  /**
+   * The run died or ran out of retries — `onFailure`. See the class docblock.
+   *
+   * A row `guard` already failed is left alone. A row still in flight means
+   * the run ended without `guard` failing it: usually the worker died, so the
+   * middleware never ran either. The event-log row is closed only if it is
+   * still `pending`, so a terminal record the middleware did write (with the
+   * real attempt count) is never overwritten.
+   */
+  async fail(failure: DataExportFailure): Promise<void> {
+    const { exportId, eventLogId } = failure.event.data.event.data;
+    const message = failure.error.message;
+    const result = await this.exportModel.updateOne(
+      { _id: exportId, status: { $in: ['queued', 'processing'] } },
+      {
+        $set: {
+          status: 'failed',
+          error: message,
+          finishedAt: new Date(),
+          activeKey: null,
+        },
+      },
+    );
+    if (result.modifiedCount === 0) return;
+
+    this.logger.error(
+      `Export ${exportId} failed without finishing: ${message}`,
+    );
+    const entry = await this.eventLog.findById(eventLogId);
+    if (entry?.status !== 'pending') return;
+    await this.eventLog.markFailed(
+      eventLogId,
+      failure.event.data.run_id,
+      RETRIES,
+      message,
+    );
+  }
+
   // -------------------------------------------------------------------------
 
-  private async claim(exportId: string): Promise<ClaimResult> {
+  private async claim(
+    exportId: string,
+    runId: string | null,
+  ): Promise<ClaimResult> {
     const claimed = await this.exportModel.findOneAndUpdate(
       {
         _id: exportId,
         scope: { $ne: null },
-        // `failed` only when *this job* failed it (it had started): an Inngest
-        // retry of a `generate` that threw. A request refused at the row cap
-        // is also `failed`, but never started, and must stay refused.
-        $or: [
-          { status: 'queued' },
-          { status: 'failed', startedAt: { $ne: null } },
-        ],
+        status: 'queued',
       },
-      { $set: { status: 'processing', startedAt: new Date(), error: null } },
+      {
+        $set: {
+          status: 'processing',
+          startedAt: new Date(),
+          error: null,
+          runId,
+        },
+      },
       { new: true },
     );
     if (claimed) return { ok: true };
@@ -230,16 +322,42 @@ export class DataExportGenerateFn implements InngestFunctionProvider {
     };
   }
 
-  /** Both halves matter — see `MailerCampaignCommitFn.guard`. */
-  private async guard<T>(exportId: string, body: () => Promise<T>): Promise<T> {
+  /**
+   * Both halves matter — see `MailerCampaignCommitFn.guard`.
+   *
+   * Only the final attempt marks the row `failed`: the last one allowed, or
+   * a `NonRetriableError`, which Inngest never retries. An earlier one keeps
+   * it `processing` with the error recorded, so the page does not show Failed
+   * and then flip to Ready when a retry succeeds.
+   */
+  private async guard<T>(
+    exportId: string,
+    run: DataExportRun,
+    body: () => Promise<T>,
+  ): Promise<T> {
     try {
       return await body();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Export ${exportId} failed: ${message}`);
+      const final =
+        error instanceof NonRetriableError ||
+        run.attempt + 1 >= run.maxAttempts;
+      this.logger.error(
+        `Export ${exportId} failed on attempt ${run.attempt + 1} of ${run.maxAttempts}: ${message}`,
+      );
       await this.exportModel.updateOne(
         { _id: exportId },
-        { $set: { status: 'failed', error: message, finishedAt: new Date() } },
+        {
+          $set: final
+            ? {
+                status: 'failed',
+                error: message,
+                finishedAt: new Date(),
+                // No longer live: the same request may be made again.
+                activeKey: null,
+              }
+            : { error: message },
+        },
       );
       throw error;
     }

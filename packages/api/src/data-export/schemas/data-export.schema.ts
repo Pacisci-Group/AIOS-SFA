@@ -102,6 +102,42 @@ export class DataExport {
   @Prop({ type: String, enum: DATA_EXPORT_STATUSES, required: true })
   status: DataExportStatus;
 
+  /**
+   * The job that produces this export: the `_id` of its `eventLogs` row, which
+   * is also the Inngest event id (the 24h dedupe key that sweeper re-sends
+   * keep). That row holds the run's status, `runId`, attempts and error.
+   * Written with the `queued` row, before the event is sent. `null` for a
+   * request refused at the row cap, which never had a job.
+   */
+  @Prop({ type: String, default: null })
+  eventLogId: string | null;
+
+  /**
+   * The latest Inngest run to claim this export. A replay from the dashboard
+   * starts a new run for the same event, so `eventLogId` is the stable link
+   * and this is only the most recent attempt at it.
+   */
+  @Prop({ type: String, default: null })
+  runId: string | null;
+
+  /**
+   * What makes a request a duplicate, while this export is live. A hash of
+   * the requester, dataset, format and filters (see `dedupeKeyFor`), set on a
+   * `queued` row and cleared when the export fails or expires. The unique
+   * index below admits one live export per key, so a second identical request
+   * is refused, even one racing the first. `null` for anything not live.
+   */
+  @Prop({ type: String, default: null })
+  activeKey: string | null;
+
+  /** The failed export this one re-ran. */
+  @Prop({ type: ObjectIdType, default: null })
+  rerunOf: Types.ObjectId | null;
+
+  /** The export that re-ran this failed one. Set once; hides Re-run. */
+  @Prop({ type: ObjectIdType, default: null })
+  rerunId: Types.ObjectId | null;
+
   @Prop({ default: false })
   truncated: boolean;
 
@@ -153,3 +189,15 @@ DataExportSchema.index({ agencyId: 1, createdAt: -1 });
 DataExportSchema.index({ agencyId: 1, createdBy: 1, createdAt: -1 });
 /** The retention cron: ready files past their expiry. */
 DataExportSchema.index({ status: 1, expiresAt: 1 });
+/**
+ * One live export per request. Partial, so the `null` every finished, failed
+ * and refused row carries is not indexed. `$type` rather than `$ne: null`,
+ * which a partial filter does not accept.
+ */
+DataExportSchema.index(
+  { activeKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { activeKey: { $type: 'string' } },
+  },
+);
