@@ -7,6 +7,7 @@ import {
 } from '@sfa/shared';
 import { NonRetriableError } from 'inngest';
 import { Model, Types } from 'mongoose';
+import { NotificationBus } from '../../common/redis/notification-bus';
 import {
   notificationRequested,
   type NotificationRequestedData,
@@ -31,8 +32,15 @@ import {
  * `notification/requested.v1` and this function does the rest: render the text
  * once, insert one row per recipient, then fan out to the secondary channels.
  * The channels arrive one PR at a time as further steps: `publish` (SSE nudge,
- * PR2), `email` (PR3), `push` (PR4). Each is its own `step.run` so a crash in
- * one never re-runs the ones before it.
+ * PR2, below), `email` (PR3), `push` (PR4). Each is its own `step.run` so a
+ * crash in one never re-runs the ones before it.
+ *
+ * ## The nudge carries ids only
+ *
+ * `publish` tells the API tier `{ recipientId, notificationId }` and nothing
+ * else; whichever node holds the recipient's stream re-reads the row before
+ * writing the frame. A replayed step re-nudges, and the client invalidates
+ * rather than appends, so a duplicate nudge is harmless by construction.
  *
  * ## Exactly once, twice over
  *
@@ -51,6 +59,7 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     @Inject(INNGEST_CLIENT) private readonly inngest: InngestClient,
     @InjectModel(Notification.name)
     private readonly notificationModel: Model<NotificationDocument>,
+    private readonly bus: NotificationBus,
   ) {}
 
   build() {
@@ -89,9 +98,14 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     // ids come back as hex strings, never `ObjectId`s.
     const inserted = (await step.run('insert', () =>
       this.insert(event.data),
-    )) as { ids: string[] };
+    )) as InsertResult;
 
-    return { notificationIds: inserted.ids };
+    // Best-effort by contract (the bus swallows transport errors), so this
+    // step cannot fail the run; it is a step at all so a retry of a later
+    // channel does not nudge every tab a second time.
+    await step.run('publish', () => this.publish(inserted.rows));
+
+    return { notificationIds: inserted.rows.map((row) => row.id) };
   }
 
   /**
@@ -99,7 +113,7 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
    * now exists for this `dedupeKey` — whether this call inserted it or an
    * earlier attempt did.
    */
-  async insert(data: NotificationRequestedData): Promise<{ ids: string[] }> {
+  async insert(data: NotificationRequestedData): Promise<InsertResult> {
     const rendered = this.render(data);
     const recipientIds = [...new Set(data.recipientIds)].map(
       (id) => new Types.ObjectId(id),
@@ -132,10 +146,38 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
 
     const rows = await this.notificationModel
       .find({ recipientId: { $in: recipientIds }, dedupeKey: data.dedupeKey })
-      .select({ _id: 1 })
-      .lean<Array<{ _id: Types.ObjectId }>>();
+      .select({ _id: 1, recipientId: 1 })
+      .lean<Array<{ _id: Types.ObjectId; recipientId: Types.ObjectId }>>();
 
-    return { ids: rows.map((row) => row._id.toHexString()) };
+    return {
+      rows: rows.map((row) => ({
+        id: row._id.toHexString(),
+        recipientId: row.recipientId.toHexString(),
+      })),
+    };
+  }
+
+  /**
+   * One nudge per row, all in flight at once. Returns a count so the step
+   * result is plain JSON.
+   *
+   * Concurrent, not sequential, because a publish is best-effort and the bus
+   * swallows its own failures: while Redis is unreachable each PUBLISH waits
+   * out a full ioredis reconnect cycle before it is rejected, and awaiting
+   * them one by one would make a broadcast to N recipients pay that wait N
+   * times — minutes, holding a worker slot, with the email and push steps
+   * queued behind it. Issued together they share one wait.
+   */
+  async publish(rows: InsertedRow[]): Promise<{ published: number }> {
+    await Promise.all(
+      rows.map((row) =>
+        this.bus.publish({
+          recipientId: row.recipientId,
+          notificationId: row.id,
+        }),
+      ),
+    );
+    return { published: rows.length };
   }
 
   private render(data: NotificationRequestedData): RenderedNotification {
@@ -169,6 +211,16 @@ function isDuplicateKeyError(err: unknown): boolean {
     candidate.writeErrors.length > 0 &&
     candidate.writeErrors.every((writeError) => writeError.code === 11000)
   );
+}
+
+/** One stored row, as the `insert` step reports it to the later steps. */
+export interface InsertedRow {
+  id: string;
+  recipientId: string;
+}
+
+interface InsertResult {
+  rows: InsertedRow[];
 }
 
 /** The slice of Inngest's step tooling this handler uses — the test seam. */

@@ -24,6 +24,7 @@ import {
   DEFAULT_SHORT_LIMIT,
   HOUR_MS,
   MINUTE_MS,
+  THROTTLER_NAMES,
 } from './config/rate-limit.config';
 import { ActivitiesModule } from './activities/activities.module';
 import { AddressModule } from './address/address.module';
@@ -117,10 +118,16 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // a NoopPermissionCache fallback), so a Redis-backed throttler would
     // silently degrade to *unlimited* whenever Redis was down — strictly worse
     // than per-instance limits.
+    // Named throttlers: a bare `@SkipThrottle()` targets `default` and skips
+    // neither of these. Use `SkipAllThrottlers()` — see THROTTLER_NAMES.
     ThrottlerModule.forRoot({
       throttlers: [
-        { name: 'short', ttl: MINUTE_MS, limit: DEFAULT_SHORT_LIMIT },
-        { name: 'long', ttl: HOUR_MS, limit: DEFAULT_LONG_LIMIT },
+        {
+          name: THROTTLER_NAMES[0],
+          ttl: MINUTE_MS,
+          limit: DEFAULT_SHORT_LIMIT,
+        },
+        { name: THROTTLER_NAMES[1], ttl: HOUR_MS, limit: DEFAULT_LONG_LIMIT },
       ],
     }),
     MongoModule,

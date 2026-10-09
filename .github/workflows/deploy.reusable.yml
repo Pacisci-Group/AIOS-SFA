@@ -203,6 +203,11 @@ jobs:
           APP_PRIVATE_IP: ${{ secrets.APP_PRIVATE_IP }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           MAIL_DEFAULT_FROM: ${{ secrets.MAIL_DEFAULT_FROM }}
+          # Managed Valkey (PAC-154). Unset, the app boots and every check
+          # passes, but a notification written by the worker container only
+          # reaches a stream held by that same process — which is never, so
+          # live updates silently stop and the badge falls back to polling.
+          REDIS_URL: ${{ secrets.REDIS_URL }}
           INNGEST_ENABLED: ${{ vars.INNGEST_ENABLED }}
           # TLS. Required only where the platform issues its own certificates.
           # CERT_ENCRYPTION_KEY unset means every issuance throws and every
@@ -227,7 +232,7 @@ jobs:
                     GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION
                     STORAGE_BUCKET STORAGE_ACCESS_KEY_ID
                     STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL
-                    PLATFORM_HOST"
+                    PLATFORM_HOST REDIS_URL"
 
           # The async secrets are required only where Inngest is turned on, so
           # an environment that predates async work keeps deploying unchanged.
@@ -415,6 +420,13 @@ jobs:
           RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
           MAIL_DEFAULT_FROM=${{ secrets.MAIL_DEFAULT_FROM }}
           MAIL_REPLY_TO=${{ secrets.MAIL_REPLY_TO }}
+
+          # Managed Valkey: `terraform output -raw redis_uri`. Read by both the
+          # api and the worker containers — the worker PUBLISHes a nudge for
+          # every notification it writes, every api node SUBSCRIBEs and
+          # forwards to the SSE streams it holds (PAC-154). Also switches on
+          # the Redis permission cache, which was dormant without it.
+          REDIS_URL=${{ secrets.REDIS_URL }}
 
           # TLS certificates. The platform issues its own, for the platform
           # host and for every agency domain, and stores them in MongoDB so

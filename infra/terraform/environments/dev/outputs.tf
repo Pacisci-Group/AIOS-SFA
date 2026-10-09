@@ -24,6 +24,12 @@ output "mongodb_uri" {
   sensitive = true
 }
 
+output "redis_uri" {
+  description = "REDIS_URL. Valkey over the VPC, TLS (PAC-154)."
+  value       = module.sfa.redis_uri
+  sensitive   = true
+}
+
 output "spaces_bucket" {
   value = module.sfa.spaces_bucket
 }

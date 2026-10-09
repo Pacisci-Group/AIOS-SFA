@@ -309,6 +309,26 @@ module "mongo" {
   enable_backups       = var.enable_backups
 }
 
+# Redis (DigitalOcean Managed Valkey) — the permission cache and the
+# notification pub/sub fan-out (PAC-154). The app tier is admitted exactly the
+# way it is to MongoDB: by id for a single droplet, by TAG for a pool. Its
+# `connection_uri` is what the REDIS_URL Environment secret carries; the
+# deploy preflight refuses to run without it.
+module "redis" {
+  source = "../../modules/managed_redis"
+
+  name                 = "${local.name_prefix}-redis"
+  region               = var.region
+  size                 = var.redis_size
+  private_network_uuid = module.vpc.id
+  // Not the Inngest droplet, for the same reason as MongoDB: it is an event
+  // bus and never touches our stores. The worker that publishes nudges runs
+  // on the app tier.
+  allowed_droplet_ids  = local.app_droplet_ids
+  allowed_tags         = local.app_tags
+  allowed_ip_addresses = var.redis_allowed_ip_addresses
+}
+
 module "dns" {
   count  = var.enable_dns ? 1 : 0
   source = "../../modules/dns"
@@ -528,6 +548,7 @@ resource "digitalocean_project_resources" "sfa" {
     [
       module.vpc.urn,
       module.mongo.cluster_urn,
+      module.redis.cluster_urn,
     ],
     local.pool ? [] : [module.droplet[0].urn],
     local.pool ? [module.public_lb[0].urn, module.worker_lb[0].urn] : [],

@@ -130,6 +130,18 @@ variable "mongo_allowed_ip_addresses" {
   default     = []
 }
 
+variable "redis_size" {
+  description = "Managed Valkey (Redis) size slug. Permission cache + notification pub/sub; nothing durable, so the smallest tier. See stacks/sfa/variables.tf."
+  type        = string
+  default     = "db-s-1vcpu-1gb"
+}
+
+variable "redis_allowed_ip_addresses" {
+  description = "Developer IPs/CIDRs allowed to reach Managed Valkey directly. Declare here, never in the DO console."
+  type        = list(string)
+  default     = []
+}
+
 variable "enable_node_edge" {
   description = "Run the new scalable topology (Node TLS edge, split worker on 4001). Replaces the app droplet when flipped — see stacks/sfa/variables.tf."
   type        = bool

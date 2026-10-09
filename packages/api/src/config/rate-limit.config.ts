@@ -22,6 +22,21 @@
 export const MINUTE_MS = 60_000;
 export const HOUR_MS = 3_600_000;
 
+/**
+ * The names of the global throttlers registered in `app.module.ts`.
+ *
+ * They are named, and that has a consequence that is easy to miss:
+ * `@nestjs/throttler` keys every per-route override by throttler name, so a
+ * bare `@SkipThrottle()` writes metadata for a throttler called `default` —
+ * which does not exist here — and skips **nothing**; the route stays under
+ * both limits while reading as exempt. The notifications SSE stream shipped
+ * that way (PAC-154 PR2 review). Skip a route with `SkipAllThrottlers()` from
+ * `common/decorators/throttle.decorators.ts`, which derives from this list,
+ * and add a new throttler here so the decorator follows.
+ */
+export const THROTTLER_NAMES = ['short', 'long'] as const;
+export type ThrottlerName = (typeof THROTTLER_NAMES)[number];
+
 function limitFromEnv(name: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;

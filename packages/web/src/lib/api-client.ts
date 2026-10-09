@@ -25,7 +25,14 @@ export class ApiError extends Error {
   }
 }
 
-function getAccessToken(): string | null {
+/**
+ * The current access token, or null when signed out.
+ *
+ * Exported for the notification stream (PAC-154), whose `fetch` override reads
+ * it on every (re)connect — a header captured once would be the expired token
+ * forever. Everything else goes through {@link apiFetch}.
+ */
+export function getAccessToken(): string | null {
   return localStorage.getItem('accessToken');
 }
 
@@ -152,7 +159,33 @@ export function setStoredUser(user: AuthUser) {
   localStorage.setItem('user', JSON.stringify(user));
 }
 
-async function refreshAccessToken(): Promise<string | null> {
+/**
+ * The one refresh in flight, shared by every caller that hits a 401 at the
+ * same moment.
+ *
+ * The API rotates the refresh token on every use, so two concurrent refreshes
+ * with the same token are a race the second one loses — and it then clears the
+ * session for a 401 that was not a real sign-out. Two concurrent 401s were
+ * already possible (several queries refetching on focus); the notification
+ * stream's reconnect at the token's `exp` made it routine (PAC-154 PR2).
+ */
+let refreshInFlight: Promise<string | null> | null = null;
+
+/**
+ * Exchange the refresh token for a new pair. Single-flight: concurrent callers
+ * await the same request and get the same answer. Clears the session when the
+ * refresh is refused, so a caller that gets `null` back is signed out.
+ */
+export function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function performRefresh(): Promise<string | null> {
   const refreshToken = getRefreshToken();
   if (!refreshToken) return null;
 

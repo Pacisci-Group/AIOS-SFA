@@ -8,6 +8,10 @@ import {
 import { Test } from '@nestjs/testing';
 import { NonRetriableError } from 'inngest';
 import { Connection, Model } from 'mongoose';
+import {
+  NotificationBus,
+  type NotificationNudge,
+} from '../../src/common/redis/notification-bus';
 import { ENV_FILE_PATH } from '../../src/config/env.config';
 import type { NotificationRequestedData } from '../../src/inngest/events';
 import { InngestModule } from '../../src/inngest/inngest.module';
@@ -68,6 +72,7 @@ describe('DeliverNotificationFn (e2e)', () => {
   let app: INestApplication;
   let fn: DeliverNotificationFn;
   let notifications: Model<Notification>;
+  let bus: NotificationBus;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -92,6 +97,7 @@ describe('DeliverNotificationFn (e2e)', () => {
     await app.init();
 
     fn = app.get(DeliverNotificationFn);
+    bus = app.get(NotificationBus);
     notifications = app.get<Model<Notification>>(
       getModelToken(Notification.name),
     );
@@ -118,7 +124,7 @@ describe('DeliverNotificationFn (e2e)', () => {
 
     const result = await fn.handle(requestedEvent(), step);
 
-    expect(ran).toEqual(['insert']);
+    expect(ran).toEqual(['insert', 'publish']);
     expect(result.notificationIds).toHaveLength(2);
 
     const rows = await notifications.find({}).sort({ recipientId: 1 }).lean();
@@ -143,6 +149,34 @@ describe('DeliverNotificationFn (e2e)', () => {
       // `readAt: null` predicate both depend on it.
       expect(Object.prototype.hasOwnProperty.call(row, 'readAt')).toBe(true);
       expect(row.createdAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it('publishes one nudge per row, ids only, after the insert (PR2)', async () => {
+    const nudges: NotificationNudge[] = [];
+    const unsubscribe = bus.subscribe((nudge) => {
+      nudges.push(nudge);
+    });
+    try {
+      const result = await fn.handle(requestedEvent(), inlineStep().step);
+
+      expect(nudges).toHaveLength(2);
+      expect(nudges.map((nudge) => nudge.recipientId).sort()).toEqual([
+        ADMIN_A,
+        ADMIN_B,
+      ]);
+      expect(nudges.map((nudge) => nudge.notificationId).sort()).toEqual(
+        [...result.notificationIds].sort(),
+      );
+      // Nothing but the two ids: the API node re-reads the row itself.
+      for (const nudge of nudges) {
+        expect(Object.keys(nudge).sort()).toEqual([
+          'notificationId',
+          'recipientId',
+        ]);
+      }
+    } finally {
+      unsubscribe();
     }
   });
 

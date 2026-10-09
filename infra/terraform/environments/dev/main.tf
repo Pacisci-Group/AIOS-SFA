@@ -30,6 +30,8 @@ module "sfa" {
   mongo_size                 = var.mongo_size
   mongo_node_count           = var.mongo_node_count
   mongo_allowed_ip_addresses = var.mongo_allowed_ip_addresses
+  redis_size                 = var.redis_size
+  redis_allowed_ip_addresses = var.redis_allowed_ip_addresses
   domain_root                = var.domain_root
   dns_subdomain              = var.dns_subdomain
   domain                     = var.domain

@@ -67,7 +67,14 @@ async function bootstrap() {
   app.enableCors({
     origin: process.env.CORS_ORIGIN?.split(',') ?? ['http://localhost:3000'],
     credentials: true,
-    allowedHeaders: ['Authorization', 'Content-Type', 'X-Branch-Id'],
+    // `Last-Event-ID`: sent by the notification stream client on reconnect
+    // (PAC-154). Same-origin today, so this only matters for a split host.
+    allowedHeaders: [
+      'Authorization',
+      'Content-Type',
+      'X-Branch-Id',
+      'Last-Event-ID',
+    ],
   });
   app.useGlobalPipes(
     new ValidationPipe({

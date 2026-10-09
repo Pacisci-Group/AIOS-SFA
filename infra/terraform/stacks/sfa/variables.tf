@@ -55,6 +55,29 @@ variable "mongo_node_count" {
   default     = 1
 }
 
+variable "redis_size" {
+  description = <<-EOT
+    Managed Valkey (Redis) size slug.
+
+    The smallest tier is plenty: it holds a TTL'd permission cache and relays
+    pub/sub nudges, and stores nothing durable. Defaulted so an existing
+    environment picks the cluster up on its next apply without a tfvars edit.
+  EOT
+  type        = string
+  default     = "db-s-1vcpu-1gb"
+}
+
+variable "redis_allowed_ip_addresses" {
+  description = <<-EOT
+    Developer IPs/CIDRs allowed to reach Managed Valkey directly — for a
+    redis-cli probe of the pub/sub channel, nothing the app needs. Same rules
+    as `mongo_allowed_ip_addresses`: declare here, never in the console, and
+    keep it short.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "domain_root" {
   description = "Root domain zone in DigitalOcean DNS (e.g. example.com)"
   type        = string

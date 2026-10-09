@@ -99,3 +99,9 @@ process.env.CHANGE_PASSWORD_RATE_LIMIT =
 // it hands `.env` the chance to put the real key back. Empty is falsy, which is
 // exactly what "unconfigured" means to the address service.
 process.env.GOOGLE_MAPS_API_KEY = '';
+
+// Notifications (PAC-154). Empty for the same reason as the key above: a
+// developer who has uncommented `REDIS_URL` in `.env` would otherwise have the
+// suite open real Redis connections — and the stream suite asserts against the
+// in-process bus, which is the one `api:dev` runs too.
+process.env.REDIS_URL = '';
