@@ -17,11 +17,23 @@ import { useNotificationStreamConnected } from './notification-stream-status';
  * How often the badge re-asks the server while this tab has no live stream.
  *
  * The fallback, not the mechanism: with the SSE stream open (PR2) every event
- * invalidates these queries and polling is switched off. It comes back the
- * moment the stream drops, so a tab behind a proxy that cannot hold a stream
- * open still sees the badge move — just a minute late.
+ * invalidates these queries and polling slows to
+ * {@link UNREAD_COUNT_CONNECTED_POLL_MS}. It comes back to this the moment
+ * the stream drops, so a tab behind a proxy that cannot hold a stream open
+ * still sees the badge move — just a minute late.
  */
 export const UNREAD_COUNT_POLL_MS = 60_000;
+
+/**
+ * How often the badge re-asks the server while the stream *is* open.
+ *
+ * Slow, but never off. `ready` and `ping` come from the API node holding the
+ * socket, so the stream looks healthy even when that node has lost its Redis
+ * subscription or a PUBLISH was dropped — the row is written and nothing
+ * tells this tab. Without a poll the badge would only move on window focus,
+ * tab show or the token-expiry reconnect. This bounds the gap.
+ */
+export const UNREAD_COUNT_CONNECTED_POLL_MS = 5 * 60_000;
 
 /**
  * One tab's worth of notifications, newest first, loading more by cursor.
@@ -50,7 +62,9 @@ export function useUnreadCount(enabled = true) {
     queryKey: [...notificationsKey, 'unread-count'],
     queryFn: getUnreadCount,
     enabled,
-    refetchInterval: connected ? false : UNREAD_COUNT_POLL_MS,
+    refetchInterval: connected
+      ? UNREAD_COUNT_CONNECTED_POLL_MS
+      : UNREAD_COUNT_POLL_MS,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
   });

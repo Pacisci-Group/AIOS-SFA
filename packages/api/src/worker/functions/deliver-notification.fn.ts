@@ -157,14 +157,26 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     };
   }
 
-  /** One nudge per row. Returns a count so the step result is plain JSON. */
+  /**
+   * One nudge per row, all in flight at once. Returns a count so the step
+   * result is plain JSON.
+   *
+   * Concurrent, not sequential, because a publish is best-effort and the bus
+   * swallows its own failures: while Redis is unreachable each PUBLISH waits
+   * out a full ioredis reconnect cycle before it is rejected, and awaiting
+   * them one by one would make a broadcast to N recipients pay that wait N
+   * times — minutes, holding a worker slot, with the email and push steps
+   * queued behind it. Issued together they share one wait.
+   */
   async publish(rows: InsertedRow[]): Promise<{ published: number }> {
-    for (const row of rows) {
-      await this.bus.publish({
-        recipientId: row.recipientId,
-        notificationId: row.id,
-      });
-    }
+    await Promise.all(
+      rows.map((row) =>
+        this.bus.publish({
+          recipientId: row.recipientId,
+          notificationId: row.id,
+        }),
+      ),
+    );
     return { published: rows.length };
   }
 

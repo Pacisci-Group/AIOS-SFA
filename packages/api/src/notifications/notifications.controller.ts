@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Logger,
   type MessageEvent,
   Param,
   Patch,
@@ -9,7 +10,6 @@ import {
   Query,
   Sse,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import type {
   AccessContext,
   JwtPayload,
@@ -19,6 +19,8 @@ import type {
   UnreadCountResponse,
 } from '@sfa/shared';
 import {
+  catchError,
+  EMPTY,
   filter,
   from,
   interval,
@@ -35,6 +37,7 @@ import {
   SkipModule,
   SkipTenant,
 } from '../common/decorators/access.decorators';
+import { SkipAllThrottlers } from '../common/decorators/throttle.decorators';
 import { Access, CurrentUser } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
@@ -84,6 +87,8 @@ const STREAM_EXP_MARGIN_MS = 1_000;
 @SkipBranch()
 @SkipModule()
 export class NotificationsController {
+  private readonly logger = new Logger(NotificationsController.name);
+
   constructor(
     private readonly service: NotificationsService,
     private readonly registry: NotificationStreamRegistry,
@@ -124,11 +129,19 @@ export class NotificationsController {
    * `@Header('Cache-Control')` / `@Header('X-Accel-Buffering')`: Nest's
    * `SseStream` writes both (plus `no-transform` and `Connection: keep-alive`)
    * when it commits the headers, and `writeHead` would override a decorator's
-   * value anyway. `@SkipThrottle()` is here: a stream is one request held
-   * open, and a reconnect storm after a deploy must not 429 the badge.
+   * value anyway.
+   *
+   * ## Why `SkipAllThrottlers()` and not `@SkipThrottle()`
+   *
+   * A stream is one request held open, and a reconnect wave after a deploy —
+   * every tab in an office, through one NAT, reconnecting within seconds —
+   * must not 429 the badge. The bare `@SkipThrottle()` this first shipped with
+   * did not achieve that: it targets a throttler named `default`, and ours are
+   * named, so the stream stayed under the same per-IP budget as every other
+   * call. See `THROTTLER_NAMES`.
    */
   @Sse('stream')
-  @SkipThrottle()
+  @SkipAllThrottlers()
   stream(
     @Access() access: AccessContext,
     @CurrentUser() user: JwtPayload,
@@ -150,7 +163,27 @@ export class NotificationsController {
     );
     const rows$ = this.registry.open(access.userId).pipe(
       mergeMap((nudge) =>
-        from(this.service.findForStream(nudge.notificationId, access.userId)),
+        from(
+          this.service.findForStream(nudge.notificationId, access.userId),
+        ).pipe(
+          // Per nudge, so one failed read drops that one frame and nothing
+          // else. Left to propagate, the rejection errors the merged stream:
+          // Nest's SSE `catchError` then writes `{ type: 'error', data:
+          // err.message }` to the browser — the raw driver message, host and
+          // port included — and completes the response. A transient Mongo
+          // error would close every stream on this node that was mid-read
+          // and hand the client text it should never see. The client would
+          // recover through reconnect + refetch, but it should not have to;
+          // the row is still there and the badge's poll picks it up.
+          catchError((err: unknown) => {
+            this.logger.warn(
+              `Dropped a stream frame for ${nudge.notificationId}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+            return EMPTY;
+          }),
+        ),
       ),
       filter((row): row is NotificationRecord => row !== null),
       map((row): MessageEvent => ({

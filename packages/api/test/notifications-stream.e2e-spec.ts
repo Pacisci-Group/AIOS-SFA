@@ -7,6 +7,7 @@ import type { AddressInfo } from 'net';
 import { Model, Types } from 'mongoose';
 import { App } from 'supertest/types';
 import { NotificationBus } from '../src/common/redis/notification-bus';
+import { NotificationsService } from '../src/notifications/notifications.service';
 import { Notification } from '../src/notifications/schemas/notification.schema';
 import { NotificationStreamRegistry } from '../src/notifications/stream/notification-stream.registry';
 import { User } from '../src/users/schemas/user.schema';
@@ -241,6 +242,37 @@ describe('Notifications stream (PAC-154 PR2)', () => {
       href: '/admin/bugs',
       readAt: null,
     });
+  });
+
+  it('drops the frame, not the stream, when a row read fails — and never the error text', async () => {
+    const { reader } = await open(producerToken);
+    await reader.next('ready');
+
+    // A transient driver failure on one re-read. Without the per-nudge
+    // `catchError` this errors the merged observable: Nest writes
+    // `{ type: 'error', data: err.message }` to the client and ends the
+    // response.
+    const service = app.get(NotificationsService);
+    const failing = jest
+      .spyOn(service, 'findForStream')
+      .mockRejectedValueOnce(
+        new Error('connection 3 to 10.0.0.7:27017 closed'),
+      );
+    try {
+      const lost = await seedRow(producerId, 'Lost frame');
+      await bus.publish({ recipientId: producerId, notificationId: lost });
+
+      await expect(reader.none('error', 300)).resolves.toBe(true);
+      expect(registry.size(producerId)).toBe(1);
+
+      // The stream is still live: the next nudge arrives as normal.
+      const kept = await seedRow(producerId, 'Kept frame');
+      await bus.publish({ recipientId: producerId, notificationId: kept });
+      const frame = await reader.next('notification');
+      expect(frame.id).toBe(kept);
+    } finally {
+      failing.mockRestore();
+    }
   });
 
   it("drops a nudge for another user, and one for a row that is not the caller's", async () => {

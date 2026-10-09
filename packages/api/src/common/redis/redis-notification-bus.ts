@@ -23,9 +23,21 @@ export const NOTIFICATION_CHANNEL = 'sfa:notify:v1';
  *
  * An ioredis connection in subscriber mode can issue no other command, so the
  * subscriber is `client.duplicate()`, opened lazily by the first `subscribe()`.
- * The worker only ever publishes and therefore never opens one. `duplicate()`
- * inherits the reconnect policy and ioredis re-issues SUBSCRIBE on reconnect,
- * so a Redis restart costs a gap in delivery and nothing else.
+ * The worker only ever publishes and therefore never opens one.
+ *
+ * ## SUBSCRIBE is re-issued on every `ready`, not left to ioredis
+ *
+ * ioredis does auto-resubscribe after a reconnect — but only the channels it
+ * has a *successful* SUBSCRIBE reply for. A SUBSCRIBE issued while the
+ * connection is still coming up sits in the offline queue, and after
+ * `maxRetriesPerRequest + 1` failed attempts (`duplicate()` inherits the
+ * client's `2`) that queue is flushed with `MaxRetriesPerRequestError`. So if
+ * Valkey is unreachable for a few seconds while an API node boots, a
+ * fire-once SUBSCRIBE fails, nothing records the channel, the later reconnect
+ * re-subscribes to nothing, and that node never receives a nudge again while
+ * every health check stays green. Subscribing from the `ready` handler makes
+ * each successful connection re-assert the channel; SUBSCRIBE is idempotent,
+ * so doing it again after ioredis's own replay costs one round trip.
  */
 export class RedisNotificationBus extends NotificationBus {
   private readonly logger = new Logger(RedisNotificationBus.name);
@@ -104,10 +116,15 @@ export class RedisNotificationBus extends NotificationBus {
       this.logger.warn(`Subscriber connection error: ${err.message}`);
     });
 
-    subscriber.subscribe(NOTIFICATION_CHANNEL).catch((err: Error) => {
-      this.logger.error(
-        `SUBSCRIBE ${NOTIFICATION_CHANNEL} failed: ${err.message}`,
-      );
+    // On every `ready` — the first connection and each reconnect — not once
+    // at construction. See the class docblock for why a single SUBSCRIBE can
+    // be lost for the life of the process.
+    subscriber.on('ready', () => {
+      subscriber.subscribe(NOTIFICATION_CHANNEL).catch((err: Error) => {
+        this.logger.error(
+          `SUBSCRIBE ${NOTIFICATION_CHANNEL} failed: ${err.message}`,
+        );
+      });
     });
   }
 }
