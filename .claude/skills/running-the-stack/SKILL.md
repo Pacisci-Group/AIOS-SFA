@@ -91,6 +91,17 @@ applies identically in both modes.
 >   into the one `serviceTickets` collection the CRM reads, then syncs its
 >   indexes. `--dry-run` reports without writing. Idempotent; no SmartSuite
 >   needed. A database seeded or migrated by current code never needs it.
+> - `scrub:emails:dev` (`npm run scrub:emails:dev -w @sfa/api -- --dry-run`,
+>   then without the flag) — **run right after restoring a production dump.**
+>   Rewrites every stored address (users, contacts, mailers, CRM snapshots, bug
+>   reporters, `emailMessages`, campaign recipients, agency reply-to) to
+>   `<local>@yopmail.com`, because the local stack mails for real whenever
+>   `RESEND_API_KEY` is set. Refuses any non-local `MONGODB_URI` and
+>   `NODE_ENV=production`; idempotent; `--keep you@x.com` exempts your own
+>   login; reserved TLDs (`.local`, `.test`) are skipped so the seed logins keep
+>   working; `users.email` collisions get `-2`, `-3` suffixes and are printed.
+>   ⚠ Run it through the workspace, not the `api:scrub:emails:dev` root alias —
+>   root scripts swallow everything after `--`, so `--dry-run` would not apply.
 >
 > **Nothing needs running after the migration.** It writes its own cross-record
 > refs (`leadId` / `householdId` / `quoteRecapId`), its own match keys
