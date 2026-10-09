@@ -78,6 +78,7 @@ All of these are **required** — the deploy fails preflight if any is empty.
 | `STORAGE_ACCESS_KEY_ID` | `terraform output -raw spaces_access_key_id` |
 | `STORAGE_SECRET_ACCESS_KEY` | `terraform output -raw spaces_secret_access_key` |
 | `REDIS_URL` | Managed Valkey URI (`terraform output -raw redis_uri`). Notification fan-out between the worker and the API nodes (PAC-154) **and** the permission cache. Unset, live notifications silently stop crossing processes while every check stays green — see "Notifications" below. |
+| `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY` · `VAPID_SUBJECT` | Web push (PAC-154 PR4). One pair per environment from `npx web-push generate-vapid-keys`; the subject is a `mailto:` URI. Unset, the worker records every push as `skipped` and the opt-in switch hides itself — nothing else looks wrong, which is why all three are required. Rotating the pair invalidates every subscription. See "Web push" below. |
 
 Optional tuning knobs for the public intake routes, defaulted in
 `packages/api/src/config/rate-limit.config.ts` if left unset: `RATE_LIMIT_SHORT`,
@@ -199,6 +200,53 @@ safety-TTL'd cache that fails open; accepted).
 > badges must move without a reload. Locally: two `api:dev` processes on
 > different ports with the same `REDIS_URL`, or `make up` with
 > `--scale api=2`.
+
+### Web push: VAPID + the service worker (PAC-154 PR4)
+
+A notification whose catalog type has the push channel on is also sent, by the
+worker, to every browser the recipient has subscribed (`pushSubscriptions`).
+The service worker shows **every** push as an OS notification, focused window
+or not — WebKit treats a push that shows nothing as a silent push and revokes
+the subscription after a few, and the installed iOS app is the target — and a
+click focuses the app on the row's `href`. A subscription endpoint must be on
+a known browser push service (`packages/api/src/common/push/push-endpoint.ts`);
+the API rejects anything else and the worker soft-deletes a stored row that
+fails the same check before sending, so the worker can never be pointed at an
+arbitrary host.
+
+| What | Where it comes from |
+|------|---------------------|
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | `npx web-push generate-vapid-keys`, run **once per environment** and kept. The public key is handed to every browser; the private key signs every push. |
+| `VAPID_SUBJECT` | A `mailto:` (or `https:`) URI the push services may use to reach us, e.g. `mailto:ops@example.com`. |
+
+Deploy order for the first environment: generate the pair → set the three
+Environment secrets → deploy. The preflight refuses to run until all three
+exist. **Rotating the pair invalidates every subscription** until each
+browser comes back: on the next app load a signed-in browser compares the key
+its subscription was made with against the published one and, on a mismatch,
+unsubscribes and subscribes again (`reconcilePushSubscription`). Until then
+the push services refuse pushes to the old subscriptions with `401`/`403`;
+those are recorded as `delivery.push.status: 'failed'` on the rows and the
+subscriptions stay live (soft-deleting on a `401`/`403` would, on a
+misconfigured key, wipe every subscription in the system). A rotation is a
+deliberate act with a gap, not routine hygiene.
+
+> **A `404`/`410` from a push service soft-deletes the subscription** (sets
+> `deletedAt`; nothing is hard-deleted, PAC-155). The unique index on
+> `endpoint` is partial on `deletedAt: null`, so the same device can
+> subscribe again. A push failure of any other kind is recorded on the
+> notification row as `delivery.push.status: 'failed'` and never touches the
+> in-app row.
+
+> **`sw.js` and `manifest.webmanifest` are served `Cache-Control: no-cache`**
+> by `packages/web/nginx.conf`, like `index.html`. The service worker is
+> registered in `prompt` mode — never silent auto-update — and the app shows
+> "New version available — Reload" when a new build is waiting; without that
+> prompt a new deploy only activates once every tab of the app is closed.
+
+> **iOS delivers web push only to a home-screen-installed app.** The platform
+> manifest and icons ship here (PAC-153 §1); the per-agency manifest and the
+> install/Lighthouse QA pass are PAC-153 §2/§3.
 
 ### TLS certificates (application-managed ACME)
 

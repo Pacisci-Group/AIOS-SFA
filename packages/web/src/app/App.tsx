@@ -14,6 +14,7 @@ import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { ReportBugWidget } from '@/features/bug-report/ReportBugWidget';
 import { NotificationStream } from '@/features/notifications/NotificationStream';
+import { PwaUpdateToast } from '@/features/notifications/PwaUpdateToast';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -962,6 +963,9 @@ export function App() {
           {/* Same placement, same reasons: one live notification stream per
               signed-in tab, whose toast action needs `useNavigate` (PAC-154). */}
           <NotificationStream />
+          {/* "New version available — Reload" for the prompt-mode service
+              worker (PAC-154 PR4). Renders nothing until a build is waiting. */}
+          <PwaUpdateToast />
           </BrowserRouter>
           {/* `sonner` was installed but never mounted, so `toast()` silently
               no-opped. Used by the share-link dialog's copy action. */}

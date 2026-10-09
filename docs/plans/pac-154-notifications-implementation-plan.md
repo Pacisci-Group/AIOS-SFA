@@ -200,7 +200,7 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 ## Deploy order (both secrets fail the preflight loudly)
 
 1. **PR2**: `terraform apply` the Redis module in the target environment → copy `terraform output -raw redis_uri` into the GitHub Environment secret `REDIS_URL` → merge/deploy. The preflight refuses the deploy until the secret exists, which is the intent.
-2. **PR4**: run `npx web-push generate-vapid-keys` once per environment → set the three `VAPID_*` secrets → merge/deploy. Rotating the key invalidates every subscription (devices re-subscribe on their next visit).
+2. **PR4**: run `npx web-push generate-vapid-keys` once per environment → set the three `VAPID_*` secrets → merge/deploy. Rotating the key invalidates every subscription until each browser's next app load, when `reconcilePushSubscription` compares the subscription's key with the published one and re-subscribes on a mismatch; in between, pushes to the old subscriptions are refused (`401`/`403`) and recorded as `delivery.push: failed` — the rows are deliberately **not** soft-deleted on those statuses.
 
 ## Known traps to carry into implementation
 
@@ -211,8 +211,13 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - The function-sync deploy check only asserts `functionCount > 0`; confirm the new functions appear in the Inngest dashboard (`ssh -L 8288:localhost:8288 deploy@<inngest-ip>`) after the first deploy.
 - `lint -w @sfa/api` is eslint only; `build -w @sfa/api` + `tsc -p packages/api/tsconfig.json` catch type errors. Rebuild `@sfa/shared` before e2e, Bruno and API unit tests.
 - Every new env var goes to `.env.example`, the preflight `env:` map, `required=`, the `app.env` heredoc, `DEPLOYMENT.md`, and `test/setup-env.ts`.
+- `tsconfig.sw.json` extends the web `tsconfig.json`, which excludes `src/sw.ts` — the child must re-declare `"exclude": []` or tsc finds no inputs. `lint` and `build` run both configs.
+- `vite-plugin-pwa` 2.0 + TS 5.7: `pushManager.subscribe()` wants `Uint8Array<ArrayBuffer>`; build the key bytes over `new ArrayBuffer(n)`, not `new Uint8Array(n)`.
+- `navigator.serviceWorker.ready` never resolves when no worker is coming (the `vite` dev server); read `getRegistration()` instead and treat `null` as "not available here".
+- The embedded browser pane denies `Notification` permission, so the subscribe path cannot be walked there; use a real Chrome against `vite preview` (`web-preview` in `.claude/launch.json`). The update toast *can* be proven in the pane: rebuild with a marker, `registration.update()`, Reload.
+- No image tooling in the sandbox (`qlmanage`, headless Chrome, ImageMagick all refused); the platform icons were rendered by a throwaway Node PNG writer. Re-render the same way if the mark changes.
 
-### Found in review (Abu Bakar, #139 / #141, 2026-10-08) — each shipped once before it was caught
+### Found in review (Abu Bakar, #139 / #141 / #143, 2026-10-08–09) — each shipped once before it was caught
 
 - **Our throttlers are named** (`short`, `long`), so a bare `@SkipThrottle()` writes metadata for a throttler called `default` and skips **nothing**. Use `SkipAllThrottlers()` (`common/decorators/throttle.decorators.ts`), which derives from `THROTTLER_NAMES`; the ACME controller had the same latent bug.
 - **ioredis only auto-resubscribes channels it has a successful SUBSCRIBE reply for.** A SUBSCRIBE queued while the connection is coming up is flushed with `MaxRetriesPerRequestError` after `maxRetriesPerRequest + 1` attempts (`duplicate()` inherits the client's `2`) and never retried — the node then looks healthy and receives no nudges until restart. Subscribe from the `ready` handler, every time.
@@ -224,6 +229,13 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - **A live `RESEND_API_KEY` outside production** now reaches only `MAIL_DEV_ALLOWED_RECIPIENTS`; with a key and no list nothing is sent and the API logs an error. The PR3 Bruno run had mailed two real admins.
 - The `publish` and `email` steps **await their rows sequentially**: a Redis outage made each publish pay a full ioredis retry cycle. Fan out with `Promise.all` where the call is best-effort.
 - `emailMessages` **`record` is not atomic** (insert, then `delivery.email`): a blip between the two can duplicate the row, and an exhausted `record` leaves a sent mail reading `failed`. The invite function has the same shape. Deferred to its own ticket — the fix is an upsert on the idempotency key inside `MailDeliveryService.record`, which is mail-platform (PAC-66) territory.
+- **A push endpoint is a URL the worker will POST to.** `https://` alone is SSRF: any signed-in user could aim the worker at an internal host. `isAllowedPushEndpoint` (`common/push/push-endpoint.ts`) allowlists the browser push services; the DTO refuses anything else and `WebPushService` re-checks every stored row before sending (soft-deleting a failure) so rows that predate a tightening are covered.
+- **Every push must show a notification on WebKit.** Suppressing the OS notification while a window is focused counts as a silent push under `userVisibleOnly`, and Safari revokes the subscription after a few — on the installed iOS app this ticket targets. The service worker now always calls `showNotification` (a generic one for an unreadable payload); the ticket's "suppressed when the app is open" rule is withdrawn.
+- **`login()` must drop the browser's push subscription when the previous user differs or is unknown.** A session that ends by a failed refresh clears tokens without `logout()`, so the subscription row still names user A while user B signs in on the same machine and A's titles appear on B's screen. Local `unsubscribe()` only — the only token left is B's, so a DELETE would 404. Never from inside a `setUser` updater (StrictMode runs it twice).
+- **A VAPID rotation does not heal itself.** `pushManager.getSubscription()` happily returns a subscription made with the old key. Compare `options.applicationServerKey` byte for byte (`subscriptionUsesKey`), re-subscribe on a mismatch, and run that on every app load (`usePushSubscriptionRefresh`). Do **not** treat `401`/`403` from the push service as "gone": a misconfigured private key would soft-delete every subscription.
+- **The `push` step re-reads only rows with `delivery.push: null`.** Same replay shape as the `email` step: without the filter a failure on the last row pushes everyone already reached a second time.
+- **`serviceWorker.getRegistration()` is `undefined` on a first visit until after window `load`**, when `useRegisterSW` registers. Race `serviceWorker.ready` against a timeout rather than reading once (`ready` never resolves in `vite` dev).
+- **A dismissed update toast does not return for the same worker**: workbox-window fires `waiting` once per installed worker. Re-offering on `visibilitychange` while `registration.waiting` is set is PAC-153 §3.
 
 ## Out of scope (per the ticket)
 

@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AgencyOps</title>
     <!--
+      PWA shell (PAC-154 PR4 · PAC-153 §1). The browser chrome colour follows
+      the two `--background` values in `src/styles/theme.css`; the manifest
+      link itself is injected by vite-plugin-pwa at build time, and the icons
+      live in `public/`. These are the platform's — per-agency is PAC-153 §2.
+    -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F8FAFC" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B0F19" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="AgencyOps" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!--
       Applies the theme class before first paint. next-themes only sets it in an
       effect, which in a Vite SPA (no SSR) lands *after* the first paint — every
       dark-mode load would flash light. Must stay in sync with the provider in

@@ -4,10 +4,15 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  forgetPushSubscriptionLocally,
+  forgetPushSubscriptionOnSignOut,
+} from '@/features/notifications/push-subscription';
 import {
   clearTokens,
   fetchMe,
@@ -47,6 +52,10 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(() => getStoredUser());
+  // Who was signed in a moment ago, readable from a callback without going
+  // through a `setUser` updater — updaters must stay side-effect free.
+  const userRef = useRef(user);
+  userRef.current = user;
 
   /**
    * Keep the in-memory user in step with the server.
@@ -88,7 +97,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const login = useCallback(async (email: string, password: string) => {
+    // Whoever subscribed this browser to push is not necessarily who is
+    // signing in: a session that ended by a failed refresh (`clearTokens()`,
+    // never `logout()`), or a second person at the same machine. The
+    // subscription row still names the previous user, so their notifications
+    // would keep appearing here as OS notifications (PAC-154 PR4 review).
+    // Unknown or different previous user → drop the browser's subscription;
+    // the same user signing back in keeps theirs.
+    const previousId = userRef.current?.id ?? getStoredUser()?.id ?? null;
     const data = await apiLogin(email, password);
+    if (previousId !== data.user.id) forgetPushSubscriptionLocally();
     setUser(data.user);
   }, []);
 
@@ -99,12 +117,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // React Query cache is keyed by resource, not by user — so leftover
       // entries would render the previous user's records to the new one.
       queryClient.clear();
+      // Same for this browser's push subscription (PAC-154 PR4): it was the
+      // previous user's — or nobody we know of — and would keep delivering
+      // their notifications to whoever just took the seat. Local unsubscribe
+      // only: the new tokens are already stored, so a DELETE would carry the
+      // wrong user's token and 404. Read from the ref, not inside a `setUser`
+      // updater — updaters run twice under StrictMode and must have no side
+      // effects.
+      if (userRef.current?.id !== nextUser.id) forgetPushSubscriptionLocally();
       setUser(nextUser);
     },
     [queryClient],
   );
 
   const logout = useCallback(() => {
+    // This browser's push subscription first, while the token still exists
+    // to withdraw it with (PAC-154 PR4). Best-effort and not awaited —
+    // signing out must not wait on the network.
+    forgetPushSubscriptionOnSignOut();
     // Nuke persisted storage (tokens, user, branch) and the in-memory
     // React Query cache so no stale session data survives into the next login.
     clearTokens();
