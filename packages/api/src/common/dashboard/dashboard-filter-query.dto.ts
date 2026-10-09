@@ -7,7 +7,9 @@ import { z } from 'zod';
 import { multiValue } from '../../leads/dto/multi-value';
 import { refineCustomRange } from '../../performance/dto/custom-range.refine';
 
-const objectId = z.string().regex(/^[a-f0-9]{24}$/i, 'must be a record id');
+export const objectId = z
+  .string()
+  .regex(/^[a-f0-9]{24}$/i, 'must be a record id');
 
 /**
  * Bounds on the multi-selects. Generous — no agency has fifty producers or

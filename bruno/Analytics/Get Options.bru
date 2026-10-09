@@ -1,0 +1,56 @@
+meta {
+  name: Get Options
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/analytics/options
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists branches, producers, assignees and carriers", function () {
+    const body = res.getBody();
+    expect(body.branches.length).to.be.at.least(1);
+    expect(body.producers.length).to.be.at.least(1);
+    expect(body).to.have.property("assignees");
+    expect(body.carriers).to.be.an("array");
+    // Alias codes are folded into their carrier.
+    expect(body.carriers).to.not.include("B4tEH");
+  });
+}
+
+docs {
+  # GET /analytics/options — what the filter bar can offer
+
+  - **Module:** `analytics`
+  - **Permission:** `analytics:read` (Agency Owner via enabled modules, Branch Manager by template; grantable to anyone)
+  - **Data scope:** sales use the dashboards' clamp — agency sees the agency, branch sees their branch, own sees their own sales. `branchId` narrows an **agency-scope** caller to one office; a branch- or own-scope caller may name only their own branch, and `BranchGuard` refuses any other with a `403`.
+
+  Served behind `analytics:read` alone, so a producer granted the page can
+  filter without `agency:users:read`. Branches and producers are the Data
+  Export page's list (same scope rules). `assignees` are the people tickets in
+  the caller's ticket scope are assigned to — the Service tab's person filter.
+  `carriers` are the agency's policy carriers, normalised and deduplicated.
+
+  ## Response `200`
+
+  ```json
+  {
+    "branches": [{ "id": "…", "name": "Main" }],
+    "producers": [{ "id": "…", "name": "Pat Producer" }],
+    "assignees": [{ "id": "…", "name": "Casey Kim" }],
+    "carriers": ["Allstate", "Progressive"]
+  }
+  ```
+}

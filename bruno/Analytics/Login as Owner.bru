@@ -1,0 +1,51 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("analyticsToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the owner holds analytics:read through enabled modules", function () {
+    expect(res.getBody().user.permissions).to.include("analytics:read");
+  });
+}
+
+docs {
+  # Sign in as the Agency Owner (PAC-152, part 2)
+
+  Every request in this folder carries its own token rather than
+  `auth: inherit`: Bruno runs folders alphabetically, so this folder runs
+  before `Auth/Login` has captured the collection token.
+
+  The owner holds `analytics:read` through `grantsAllEnabledModules` — once
+  the `analytics` module is enabled for the agency. On a database older than
+  PAC-152 part 2 that is the `analytics_module` migration's job; start the API
+  once (it applies pending migrations at boot) or run `npm run db:migrate`.
+}

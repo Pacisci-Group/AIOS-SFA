@@ -1,5 +1,7 @@
 import {
   BarChart3,
+  ChartColumn,
+  FileDown,
   Home,
   LayoutDashboard,
   SlidersHorizontal,
@@ -86,6 +88,14 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: BarChart3,
         module: ModuleKey.Management,
       },
+      {
+        // PAC-152, part 2. Its own module, so it shows for anyone granted
+        // `analytics:read` — not only holders of `management:read`.
+        to: "/analytics",
+        label: "Analytics",
+        icon: ChartColumn,
+        module: ModuleKey.Analytics,
+      },
     ],
   },
   {
@@ -115,6 +125,22 @@ export const NAV_SECTIONS: NavSection[] = [
        * accepts either permission. `GET /households` does not, so pointing the
        * nav item at the list for them would only produce a 403.
        */
+    ],
+  },
+  {
+    /*
+     * The Data Export page (PAC-152). Its own section rather than a
+     * Management entry: it is tooling for the data team, a different persona
+     * from the dashboards above, and gated by its own module.
+     */
+    title: "Data",
+    items: [
+      {
+        to: "/data-export",
+        label: "Data Export",
+        icon: FileDown,
+        module: ModuleKey.DataExport,
+      },
     ],
   },
   {

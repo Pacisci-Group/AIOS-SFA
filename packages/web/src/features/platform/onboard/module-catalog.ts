@@ -77,6 +77,16 @@ export const MODULE_CATALOG: Record<ModuleKey, ModuleDescriptor> = {
     description:
       "The office leaderboard and goal tracking. Aggregates only — never another producer's rows.",
   },
+  [ModuleKey.DataExport]: {
+    label: "Data Export",
+    description:
+      "Downloading report-ready datasets as CSV or Excel for the data team's own tools — Alteryx, spreadsheets, reconciliation.",
+  },
+  [ModuleKey.Analytics]: {
+    label: "Analytics",
+    description:
+      "Sales and service analytics — breakdowns by producer, lead source, line, carrier, branch and ZIP, trends over time and goal pacing.",
+  },
 };
 
 /** The catalog in a stable display order, grouped the way the nav groups pages. */
@@ -103,6 +113,11 @@ export const MODULE_GROUPS: { title: string; modules: ModuleKey[] }[] = [
       ModuleKey.CommandCenter,
       ModuleKey.Performance,
       ModuleKey.Leaderboard,
+      ModuleKey.Analytics,
     ],
+  },
+  {
+    title: "Data",
+    modules: [ModuleKey.DataExport],
   },
 ];

@@ -43,6 +43,10 @@ describe('User removal (e2e)', () => {
     deals = app.get<Model<Deal>>(getModelToken(Deal.name));
     roleAssignments = app.get(RoleAssignmentsService);
 
+    // Suites share one database, and not every suite drops it when it
+    // finishes — seeding on top of another suite's agency is an E11000 on
+    // `slug_1`, so which suite jest happens to run first decided the result.
+    await dropTestDatabase(app);
     ctx = await seedTestData(app);
     ownerToken = (await login(app, ctx.ownerEmail, TEST_PASSWORD)).accessToken;
 

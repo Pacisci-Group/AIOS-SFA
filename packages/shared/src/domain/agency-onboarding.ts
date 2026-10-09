@@ -53,6 +53,17 @@ export const ONBOARDING_DEFAULT_MODULES: readonly ModuleKey[] = [
   ModuleKey.Leads,
   ModuleKey.Clients,
   ModuleKey.Performance,
+  /*
+   * PAC-152. On by default: a module that starts disabled leaves the Data Team
+   * template holding `data_export:read` that `resolvePermissionSet` filters
+   * away, and an owner cannot enable modules — only a super admin can.
+   */
+  ModuleKey.DataExport,
+  /*
+   * PAC-152, part 2 — same reason: the Branch Manager template holds
+   * `analytics:read`, which a disabled module would filter away.
+   */
+  ModuleKey.Analytics,
 ];
 
 /** `GET /platform/agencies/availability` — live checks for the wizard's fields. */

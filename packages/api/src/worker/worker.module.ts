@@ -11,6 +11,8 @@ import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
 import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
 import { SetUsersAwayFn } from './functions/set-users-away.fn';
+import { DataExportExpireFn } from './functions/data-export-expire.fn';
+import { DataExportGenerateFn } from './functions/data-export-generate.fn';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { AcmeAccountService } from './acme/acme-account.service';
@@ -61,6 +63,36 @@ import {
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { StorageModule } from '../storage/storage.module';
+import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
+import {
+  Chargeback,
+  ChargebackSchema,
+} from '../chargebacks/schemas/chargeback.schema';
+import {
+  DataExport,
+  DataExportSchema,
+} from '../data-export/schemas/data-export.schema';
+import {
+  DealAudit,
+  DealAuditSchema,
+} from '../deal-audits/schemas/deal-audit.schema';
+import { Deal, DealSchema } from '../deals/schemas/deal.schema';
+import {
+  HouseholdMember,
+  HouseholdMemberSchema,
+} from '../households/schemas/household-member.schema';
+import {
+  InterestedParty,
+  InterestedPartySchema,
+} from '../interested-parties/schemas/interested-party.schema';
+import {
+  LeadSource,
+  LeadSourceSchema,
+} from '../lead-sources/schemas/lead-source.schema';
+import {
+  QuoteRecap,
+  QuoteRecapSchema,
+} from '../quote-recaps/schemas/quote-recap.schema';
 import {
   AcmeAccount,
   AcmeAccountSchema,
@@ -142,6 +174,20 @@ import {
       { name: Certificate.name, schema: CertificateSchema },
       { name: AcmeChallenge.name, schema: AcmeChallengeSchema },
       { name: AcmeAccount.name, schema: AcmeAccountSchema },
+      // The Data Export job's collections (PAC-152). It reads every dataset
+      // and the label/child lookups behind them, and writes the export row.
+      // `Lead`, `Policy`, `Household`, `Contact` and `User` are registered
+      // above for other jobs; these are the rest. The engine itself lives in
+      // `common/data-export/` so this boundary holds.
+      { name: DataExport.name, schema: DataExportSchema },
+      { name: Deal.name, schema: DealSchema },
+      { name: QuoteRecap.name, schema: QuoteRecapSchema },
+      { name: HouseholdMember.name, schema: HouseholdMemberSchema },
+      { name: DealAudit.name, schema: DealAuditSchema },
+      { name: InterestedParty.name, schema: InterestedPartySchema },
+      { name: Chargeback.name, schema: ChargebackSchema },
+      { name: Branch.name, schema: BranchSchema },
+      { name: LeadSource.name, schema: LeadSourceSchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports
@@ -199,6 +245,10 @@ import {
     MailerCampaignOutputEmailFn,
     IssueCertificateFn,
     RenewCertificatesFn,
+    // Data Export (PAC-152): produce a requested file into object storage and
+    // email the requester; delete files past retention.
+    DataExportGenerateFn,
+    DataExportExpireFn,
   ],
 })
 export class WorkerModule {}

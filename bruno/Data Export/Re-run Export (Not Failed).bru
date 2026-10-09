@@ -1,0 +1,58 @@
+meta {
+  name: Re-run Export (Not Failed)
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{baseUrl}}/data-export/exports/{{dataExportId}}/rerun
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+tests {
+  test("only a failed export can be re-run", function () {
+    // The folder's export is queued, being prepared or ready, never failed.
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # POST /data-export/exports/:id/rerun — re-run a failed export
+
+  - **Module:** `data_export`
+  - **Permission:** `data_export:read`
+  - **Data scope:** the caller must have **requested** the export. Agency
+    scope can see a colleague's export, but re-running it is a `403`; a row
+    the caller cannot see is a `404`.
+
+  Queues a **new** export with the failed one's dataset, format and filters,
+  linked to it by `rerunOfId`. The failed export stays in the history (with
+  `canRerun: false` from then on). The re-run goes through **Request Sold
+  Deals Export (CSV)** in full: it is validated, counted against the row cap
+  and scoped under the caller's access *now*, and the duplicate rule applies.
+  `X-Branch-Id` is the current request's, as for any request.
+
+  This request runs against the folder's export, which never fails, so it
+  asserts the `409`. The page offers Re-run wherever a history row has
+  `canRerun: true`.
+
+  ## Response `202`
+  `{ "export": <history row> }`, the new `queued` export.
+
+  ## Errors
+  - `400` — `:id` is not an ObjectId; or the dataset or filters no longer
+    validate; or `EXPORT_TOO_LARGE`, as for a request.
+  - `403` — someone else's export, no `data_export:read`, or the module is
+    disabled.
+  - `404` — no such export visible to the caller.
+  - `409` — not `failed`, refused as `EXPORT_TOO_LARGE` (narrow the filters
+    and request it instead), or already re-run. A re-run that was itself
+    refused as too large counts as the re-run.
+  - `409` `{ "code": "EXPORT_DUPLICATE", … }` — the caller already has this
+    export live, for example because they requested it again by hand.
+}

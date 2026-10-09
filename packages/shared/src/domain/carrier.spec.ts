@@ -1,4 +1,5 @@
 import {
+  carrierQueryValues,
   CARRIER_OTHER,
   carrierPolicyNumberMatches,
   carrierSlug,
@@ -83,5 +84,20 @@ describe('CARRIER_OTHER', () => {
     expect(CARRIER_OTHER).toBe('__other__');
     expect(carrierSlug(CARRIER_OTHER)).toBe('other');
     expect(CARRIER_OTHER).not.toBe('Other');
+  });
+});
+
+describe('carrierQueryValues', () => {
+  it('matches the display name and every alias code', () => {
+    expect(carrierQueryValues('Allstate')).toEqual(['Allstate', 'B4tEH']);
+    expect(carrierQueryValues('B4tEH')).toEqual(['Allstate', 'B4tEH']);
+  });
+
+  it('passes a carrier with no alias through, trimmed', () => {
+    expect(carrierQueryValues('  Progressive ')).toEqual(['Progressive']);
+  });
+
+  it('is empty for a blank name', () => {
+    expect(carrierQueryValues('  ')).toEqual([]);
   });
 });

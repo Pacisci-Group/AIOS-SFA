@@ -1,0 +1,43 @@
+meta {
+  name: Get Service Timeseries
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/analytics/service/timeseries?range=last3Months&interval=month
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+  interval: month
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("opened and resolved per bucket", function () {
+    const buckets = res.getBody().buckets;
+    expect(buckets).to.have.length(3);
+    for (const b of buckets) {
+      expect(b.opened).to.be.a("number");
+      expect(b.resolved).to.be.a("number");
+    }
+  });
+}
+
+docs {
+  # GET /analytics/service/timeseries — opened vs resolved over time
+
+  Per `interval` bucket (`day` · `week` · `month`): tickets opened in it and
+  tickets resolved in it, whenever opened. Cut on the agency's calendar,
+  zero-filled. Use `range=last12Months` for the year view.
+}

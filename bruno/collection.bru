@@ -82,6 +82,21 @@ docs {
     no default (PAC-91 §10). Read-only, self-contained and order-independent —
     the only coupling is that `Unlinked Counts` runs first (seq 1) and stashes
     the three totals the list requests assert against.
+  - **Analytics** — the owner's and branch manager's page (PAC-152, part 2):
+    filter options, the sales KPI row with goal pacing, breakdowns by
+    producer / line / carrier (rows reconcile to the summary), the multi-line
+    split with a prior-period comparison, a monthly trend, the service
+    summary / breakdown / trend, and three refusals. Runs before `Auth`, so it
+    signs in as the owner, the branch manager and a producer itself. Read-only;
+    re-runs cleanly.
+  - **Data Export** — the data team's page (PAC-152): the data dictionary,
+    filter options, a CSV and an XLSX export request (queued for the worker),
+    the export log, a download link, and three refusals. Signs in as the demo
+    Data Team member (`dataTeamEmail`) and uses its own `dataExportToken`.
+    Writes only export rows (and, with a worker running, their files), so it
+    re-runs cleanly; `Get History` asserts the two requests just before it
+    are the newest rows, and `Get Export File URL` accepts `409` because a
+    `200` needs the worker to have finished.
   - **Management Dashboard** — the Manager view (PAC-139): three alert cards
     with their drawer lists, the Team Activity table in households, the
     producer drawer

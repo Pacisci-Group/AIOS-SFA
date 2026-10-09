@@ -1,4 +1,3 @@
-import { OWNER_DASHBOARD_RANGE_KEYS } from "@sfa/shared";
 import type { OwnerDashboardRangeKey } from "@sfa/shared";
 import type { RangeChip } from "@/components/common/RangeChips";
 
@@ -18,5 +17,13 @@ export const DASHBOARD_RANGE_CHIPS: readonly RangeChip<OwnerDashboardRangeKey>[]
 
 export const DASHBOARD_DEFAULT_RANGE_KEY: OwnerDashboardRangeKey = "mtd";
 
-/** Vocabulary guard for `useUrlState` — a stale `?range=` falls back to mtd. */
-export const DASHBOARD_RANGE_KEYS = OWNER_DASHBOARD_RANGE_KEYS;
+/**
+ * Vocabulary guard for `useUrlState` — a stale `?range=` falls back to mtd.
+ *
+ * The chips, not the API's whole vocabulary: the API also accepts
+ * `last12Months` (the Analytics page's chip), and a `?range=` no chip
+ * highlights would leave this bar showing nothing selected.
+ */
+export const DASHBOARD_RANGE_KEYS = DASHBOARD_RANGE_CHIPS.map(
+  (chip) => chip.key,
+);

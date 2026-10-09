@@ -1,0 +1,47 @@
+meta {
+  name: Request (Duplicate)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/data-export/sold_deals/exports
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+body:json {
+  {
+    "format": "csv",
+    "from": "2026-01-01"
+  }
+}
+
+tests {
+  test("the same request again is a 409", function () {
+    expect(res.getStatus()).to.equal(409);
+    expect(res.getBody().code).to.equal("EXPORT_DUPLICATE");
+  });
+
+  test("hands back the export the caller already has", function () {
+    const existing = res.getBody().existing;
+    expect(existing.id).to.equal(bru.getVar("dataExportId"));
+    expect(["queued", "processing", "ready"]).to.include(existing.status);
+  });
+}
+
+docs {
+  # POST /data-export/sold_deals/exports — the same request twice
+
+  **Request Sold Deals Export (CSV)** again. That export is still `queued`,
+  `processing` or `ready`, so this is a `409` with `code: "EXPORT_DUPLICATE"`
+  and the export in `existing`, and nothing is queued or logged.
+
+  The request's identity is the caller, their data scope, the dataset, the
+  `format` and every filter, the multi-selects in any order. A `failed` or
+  `expired` export does not count. See **Request Sold Deals Export (CSV)**.
+}

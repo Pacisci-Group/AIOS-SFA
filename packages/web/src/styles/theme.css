@@ -118,11 +118,19 @@
      it still reads correctly on any parent surface. */
   --sunken: rgba(11, 15, 25, 0.4);
   --ring: #38BDF8;
-  --chart-1: #10B981;
-  --chart-2: #38BDF8;
-  --chart-3: #F59E0B;
+  /*
+   * Chart series on the navy card (PAC-152, part 2 — the Analytics page, the
+   * first chart in the app). Validated as a categorical palette against
+   * `--card` (#161F30): the brighter 400/500 steps this used to hold sat
+   * above the dark lightness band (OKLCH L 0.48–0.67) and glared. These steps
+   * pass lightness, chroma, colour-blind separation, normal-vision separation
+   * and 3:1 contrast. Order is fixed: series 1 is always --chart-1.
+   */
+  --chart-1: #059669;
+  --chart-2: #0284C7;
+  --chart-3: #D97706;
   --chart-4: #6366F1;
-  --chart-5: #EC4899;
+  --chart-5: #DB2777;
   --sidebar: #0D1B3E;
   --sidebar-foreground: #CBD5E1;
   --sidebar-primary: #38BDF8;

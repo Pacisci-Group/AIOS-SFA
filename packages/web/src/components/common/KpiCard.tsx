@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { SectionLabel } from "@/components/common/DetailCard";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
-interface OwnerKpiCardProps {
+interface KpiCardProps {
   label: string;
   /** Headline figure, pre-formatted. */
   value: string;
@@ -14,10 +15,13 @@ interface OwnerKpiCardProps {
   /** Optional extra block under the caption (the LOB mix bar). */
   children?: ReactNode;
   isPending: boolean;
+  /** Grid placement, e.g. a span in the parent row. */
+  className?: string;
 }
 
 /**
- * One card of the Owner dashboard's KPI row (PAC-135).
+ * One card of a KPI row — the Owner dashboard's (PAC-135), where it was born,
+ * and the Analytics page's (PAC-152, part 2), which is why it lives here.
  *
  * Deliberately plainer than the Producer scorecards: those are two cards with a
  * colour each because Sold and Quoted are different *things*; these are four
@@ -26,16 +30,17 @@ interface OwnerKpiCardProps {
  * No empty state. `$0` and `0` are real information about a window — only a
  * failed request is an error, and the row handles that once for all four.
  */
-export function OwnerKpiCard({
+export function KpiCard({
   label,
   value,
   caption,
   badge,
   children,
   isPending,
-}: OwnerKpiCardProps) {
+  className,
+}: KpiCardProps) {
   return (
-    <Card className="gap-3 rounded-xl bg-card p-5">
+    <Card className={cn("gap-3 rounded-xl bg-card p-5", className)}>
       <div className="flex items-start justify-between gap-2">
         <SectionLabel>{label}</SectionLabel>
         {!isPending && badge}

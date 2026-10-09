@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { createReadStream } from 'fs';
+import { stat } from 'fs/promises';
 import type { Readable } from 'stream';
 import {
   CreateBucketCommand,
@@ -36,6 +38,18 @@ export interface BuildObjectKeyInput {
   /** Logical grouping, e.g. `deal-audits`. */
   purpose: string;
   filename: string;
+  /**
+   * Extra path segments between the year and the file, sanitized like the
+   * filename — see {@link BuildPlatformObjectKeyInput.parts}.
+   */
+  parts?: string[];
+  /**
+   * Whether to prefix the name with a UUID. Default `true` — see
+   * {@link BuildPlatformObjectKeyInput.unique}. A worker-generated file (a Data
+   * Export) passes `false` with its own id in `parts`, so a retried job
+   * overwrites its own partial write.
+   */
+  unique?: boolean;
 }
 
 /**
@@ -271,12 +285,25 @@ export class StorageService implements OnModuleInit {
    * Build a stable, agency-namespaced object key. The filename is sanitized and
    * prefixed with a UUID so uploads never collide or leak the raw name.
    */
-  buildObjectKey({ agencyId, purpose, filename }: BuildObjectKeyInput): string {
-    const safeName = objectKeySegment(filename, '');
+  buildObjectKey({
+    agencyId,
+    purpose,
+    filename,
+    parts = [],
+    unique = true,
+  }: BuildObjectKeyInput): string {
+    const safeName = objectKeySegment(filename, '') || 'file';
     const year = new Date().getUTCFullYear();
-    return `agencies/${agencyId}/${purpose}/${year}/${randomUUID()}-${
-      safeName || 'file'
-    }`;
+    const segments = parts
+      .map((part) => objectKeySegment(part, ''))
+      .filter((part) => part.length > 0);
+    const name = unique ? `${randomUUID()}-${safeName}` : safeName;
+    return [
+      `agencies/${agencyId}/${purpose}`,
+      String(year),
+      ...segments,
+      name,
+    ].join('/');
   }
 
   /**
@@ -440,6 +467,34 @@ export class StorageService implements OnModuleInit {
       }),
     );
     return { key, size: body.byteLength };
+  }
+
+  /**
+   * Upload a file we generated on local disk (PAC-152).
+   *
+   * {@link putObject}'s sibling for output too large to hold in memory
+   * comfortably: the Data Export job writes its CSV/XLSX to a temp file and
+   * streams it up from there. `ContentLength` comes from the file, which is
+   * what lets a plain `PutObjectCommand` take a stream without the multipart
+   * machinery of `@aws-sdk/lib-storage`. Internal client, like `putObject`.
+   */
+  async putObjectFromFile(
+    key: string,
+    path: string,
+    contentType: string,
+  ): Promise<{ key: string; size: number }> {
+    this.assertConfigured();
+    const { size } = await stat(path);
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: createReadStream(path),
+        ContentType: contentType,
+        ContentLength: size,
+      }),
+    );
+    return { key, size };
   }
 
   /** Seconds a presigned download stays valid — echoed to clients. */
