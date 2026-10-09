@@ -1,0 +1,108 @@
+meta {
+  name: List Notifications
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/notifications?limit=5
+  body: none
+  auth: bearer
+}
+
+params:query {
+  limit: 5
+}
+
+auth:bearer {
+  token: {{notifAdminAccessToken}}
+}
+
+script:pre-request {
+  // The row is written by the worker from a queued event. The Inngest dev
+  // server hands the event over within a second or two; wait for it rather
+  // than asserting against a list that has not been written yet.
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const items = res.getBody().items || [];
+    const mine = items.find((item) => item.entity && item.entity.id === bru.getVar("notifBugReportId"));
+    if (mine) {
+      bru.setVar("notificationId", mine.id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a keyset page", function () {
+    const body = res.getBody();
+    expect(body.items).to.be.an("array");
+    expect(body).to.have.property("nextCursor");
+  });
+
+  test("the bug report just filed produced a notification for the admin", function () {
+    const items = res.getBody().items;
+    const mine = items.find((item) => item.entity.id === bru.getVar("notifBugReportId"));
+    expect(mine, "needs the Inngest dev server + worker — see the folder's Login docs").to.not.equal(undefined);
+    expect(mine.type).to.equal("bug_report.filed");
+    expect(mine.title).to.equal("New bug report");
+    expect(mine.href).to.equal("/admin/bugs");
+    expect(mine.readAt).to.equal(null);
+    expect(mine.agencyId).to.equal(null);
+  });
+
+  test("items are newest first", function () {
+    const stamps = res.getBody().items.map((item) => item.createdAt);
+    const sorted = [...stamps].sort().reverse();
+    expect(stamps).to.deep.equal(sorted);
+  });
+}
+
+docs {
+  # GET /notifications — the caller's own notifications, newest first
+
+  - **Module:** none (`@SkipModule()`)
+  - **Permission:** **none** — a notification is addressed to you (PAC-154
+    decision 8). The page its `href` opens keeps its own permission gate.
+  - **Data scope:** none (`@SkipTenant()`, `@SkipBranch()`). Scoped to
+    `request.access.userId`; an impersonated session sees the *target's* rows.
+
+  ## Query
+  | param  | type   | notes |
+  |--------|--------|-------|
+  | cursor | string | opaque, from the previous page's `nextCursor`; malformed → `400` |
+  | unread | `1`    | only unread rows (the Unread tab) |
+  | limit  | int    | 1–50, default 20; above 50 is a `400`, not a clamp |
+
+  Keyset-paged on `(createdAt, _id)` rather than offset-paged like the rest of
+  the API: new rows land at the top while the reader scrolls, and an offset
+  would skip or repeat across the insert.
+
+  ## Response `200`
+  ```json
+  {
+    "items": [{
+      "id": "…", "type": "bug_report.filed",
+      "title": "New bug report", "body": "Pat Producer: …", "href": "/admin/bugs",
+      "entity": { "kind": "bugReport", "id": "…" },
+      "actorId": "…", "agencyId": null, "data": { "...": "per-type" },
+      "readAt": null, "createdAt": "2026-10-07T12:00:00.000Z"
+    }],
+    "nextCursor": "MjAyNi0…" 
+  }
+  ```
+
+  `title` / `body` / `href` were rendered **at write time** by the shared
+  `renderNotification` — the same words reach the toast, the push and the
+  email. `href` is a **path**; navigate to it as-is.
+
+  ## Errors
+  - `400 Bad Request` — malformed cursor, or `limit` outside 1–50.
+  - `401 Unauthorized` — missing/expired token.
+}

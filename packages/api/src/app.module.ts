@@ -33,6 +33,7 @@ import { AgencyEmailModule } from './agency-email/agency-email.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { CarriersModule } from './carriers/carriers.module';
 import { LeadSourcesModule } from './lead-sources/lead-sources.module';
 import { ClientsModule } from './clients/clients.module';
@@ -219,6 +220,10 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // a prefix of anything above, so its position here carries no ordering
     // constraint — unlike PoliciesModule and ShareLinksModule.
     BugReportsModule,
+    // The caller's own notifications (PAC-154): list, unread count, mark
+    // read. Routes on `notifications`, a prefix of nothing above. The rows
+    // are written by the worker, never here.
+    NotificationsModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,

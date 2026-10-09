@@ -1052,3 +1052,65 @@ Plan file: `~/.claude/plans/create-an-implementation-plan-humming-codd.md`.
 - Per-user / per-branch hours; a morning reset (§6a); weekend/holiday skipping (PAC-148).
 - The Super Admin onboarding wizard does not ask for the hour — new agencies start at 8 PM.
 
+## 18. PAC-154 — Notifications, PR1 of 4: foundation (handoff, 2026-10-07)
+
+Branch `asad/pac-154-notifications-in-app-notification-centre-web-push`, base `dev`.
+Plan: `docs/plans/pac-154-notifications-implementation-plan.md` (four PRs; the ticket's
+Decisions table is authoritative, the plan is the execution order). This section is PR1 only.
+
+### Decisions — do not re-litigate
+- **Redis pub/sub stays for PR2's SSE fan-out, and PAC-154 provisions it.** Production has
+  *no* Redis today (`REDIS_URL` is absent from terraform, the deploy preflight and `app.env`).
+  Asad was offered a Mongo change stream (replica set everywhere, zero new infra) and chose to
+  keep the ticket's decision 2. PR2 therefore adds a `managed_redis` terraform module, the
+  secret in every deploy touchpoint, and a `LocalNotificationBus` fallback for `api:dev`/e2e.
+  Accepted side effect: the Redis permission cache switches on in production too.
+- **PR4 ships a minimal "New version available — Reload" toast** on `needRefresh` (a
+  prompt-mode service worker with nothing that prompts strands installed apps). PAC-153 §3
+  keeps only the install/Lighthouse QA.
+- **Unique `{ recipientId, dedupeKey }` index** on `notifications`. Inngest's function
+  `idempotency` is 24-hour scoped; the index is the durable exactly-once guard, and the writer
+  tolerates the E11000 it produces. A `dedupeKey` must be stable per business fact.
+- **The catalog has one type, `bug_report.filed`.** Only types with a real producer are listed;
+  PAC-127 adds a row + a renderer case per trigger as each sender is wired. Its `href` is
+  `/admin/bugs` — the queue page has no per-report URL.
+
+### What exists now
+- `@sfa/shared` `notifications/`: `NOTIFICATION_TYPES` (category + default channels),
+  `renderNotification(type, data) → { title, body, href }` (pure, throws
+  `NotificationRenderError`), `NotificationRecord` / `NotificationListResponse { items,
+  nextCursor }` — the repo's first keyset envelope. Spec: `render.spec.ts` (fixture per type).
+- `api/src/inngest/events/notification.events.ts`: `notification/requested.v1` — `{ type,
+  recipientIds[], agencyId|null, actorId|null, entity { kind, id }, data, dedupeKey }`.
+- `api/src/notifications/`: schema (does **not** extend `TenantRecord`; `readAt` is a Date
+  stored as an explicit null; three indexes), `NotificationsService` (keyset list on
+  `(createdAt, _id)` with a base64url cursor, unread count, mark read, read-all,
+  `findForStream` for PR2), controller on `notifications` with `@SkipTenant() @SkipBranch()
+  @SkipModule()` and **no permission** (decision 8). `notifications` is now in the eslint
+  `FEATURE_DIRS`.
+- `api/src/worker/functions/deliver-notification.fn.ts`: the **sole writer**.
+  `idempotency: 'event.data.dedupeKey'`, one `insert` step (render once, `insertMany`
+  unordered, swallow E11000, re-read ids). `publish` / `email` / `push` steps arrive in PR2–4.
+  Registered in `WorkerModule`; the schema is deliberately **not** in `WorkerIndexesService`.
+- **First real producer:** `BugReportsService.create` emits to every active platform admin
+  except the reporter, best-effort (a failed emit is logged; the outbox sweep replays it).
+- Web: `lib/notifications-api.ts`, `features/notifications/` (page with Unread/All on
+  `?tab=all`, `useInfiniteQuery` + "Load more", click = mark read + `navigate(href)`),
+  `/notifications` route under `ProtectedRoute` with no gate, sidebar row in Workspace with
+  the unread pill (expanded) / dot (collapsed). Unread count polls every 60 s — PR2 demotes
+  that to the fallback.
+- Bruno `Notifications/` (9 requests) — ⚠ needs the Inngest dev server + worker, like the
+  campaigns folder: the row is written off the queue.
+
+### Verified
+`build -w @sfa/shared` · shared spec 5/5 · `build -w @sfa/api` · `tsc -p packages/api`
+(no errors in touched files; the test-file baseline is unchanged) · web `lint` (tsc) ·
+eslint clean on every touched API file · e2e `notifications` 10/10 + `worker/deliver-notification`
+6/6 · Bruno `Auth` + `Notifications` 15/15 requests, 29/29 tests against the running
+`api:dev` · browser: badge "1" and row after a producer files a report, click → read +
+`/admin/bugs`, collapsed-rail dot, light theme, 375px.
+
+### Not in PR1 (per the plan)
+SSE + Redis + terraform (PR2) · email channel (PR3) · push + PWA shell + update toast (PR4) ·
+every trigger but bug reports (PAC-127) · a per-report URL on `/admin/bugs`.
+

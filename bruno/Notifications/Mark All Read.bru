@@ -1,0 +1,38 @@
+meta {
+  name: Mark All Read
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/notifications/read-all
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{notifAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("reports how many rows it changed", function () {
+    expect(res.getBody().updated).to.be.a("number");
+  });
+}
+
+docs {
+  # POST /notifications/read-all — mark everything read
+
+  Authenticated, no permission, scoped to the caller. `200` (not `201`): nothing
+  is created. Returns how many rows went from unread to read **in this call**,
+  so a second call reports `0`.
+
+  ## Response `200`
+  ```json
+  { "updated": 3 }
+  ```
+}

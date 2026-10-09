@@ -18,6 +18,15 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Bug Reports | Create Bug Report | `POST /bug-reports` | File a report. **No permission.** Captures `bugReportId` for the platform folder. |
 | Bug Reports | Create Bug Report (Too Short) | `POST /bug-reports` | The 10-char description floor (400). |
 | Bug Reports | Create Bug Report (Foreign Screenshot Key) | `POST /bug-reports` | The key-ownership check: a key from another user's namespace must 400. |
+| Notifications | Login as Super Admin | `POST /auth/login` | Its own token: the admin is who a filed bug report notifies (PAC-154 PR1). ⚠ The folder needs the Inngest dev server + worker. |
+| Notifications | File Bug Report (as Producer) | `POST /bug-reports` | The trigger — emits `notification/requested.v1` to every platform admin. |
+| Notifications | List Notifications | `GET /notifications` | The caller's own rows, keyset-paged on `(createdAt, _id)`. **No permission.** Waits ~3 s for the worker, then captures `notificationId`. |
+| Notifications | Unread Count | `GET /notifications/unread-count` | The sidebar badge's number. |
+| Notifications | Mark Read | `PATCH /notifications/:id/read` | Idempotent; returns the row. |
+| Notifications | Mark Read (Other User, 404) | `PATCH /notifications/:id/read` | Somebody else's row is a 404, not a 403. |
+| Notifications | Mark All Read | `POST /notifications/read-all` | `{ updated }` — how many flipped in this call. |
+| Notifications | List Unread (Empty After Read All) | `GET /notifications?unread=1` | The Unread tab; always empty here, whatever earlier runs left. |
+| Notifications | List Notifications (Bad Cursor, 400) | `GET /notifications?cursor=…` | A cursor the API did not mint is a 400, never an empty page. |
 | CRM Service | Login as CRM Manager | `POST /auth/login` | The one folder the producer bearer cannot run: a producer holds **no** `crm_service` permission. Captures `crmAccessToken` under its own name. |
 | CRM Service | Find Transfer Client | `GET /crm/service-tickets` | The desk queue. Picks a household for the transfer chain, sorted by id so every run picks the same one. `crm_service:read`. |
 | CRM Service | Get Transfer Policy | `GET /households/:id` | The **active** policy to transfer, re-read every run — a transfer retires the old policy and writes its replacement, so the line-up rotates. `clients:read`. |
