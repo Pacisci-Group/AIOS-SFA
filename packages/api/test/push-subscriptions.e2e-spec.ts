@@ -82,6 +82,11 @@ describe('Push subscriptions (PAC-154 PR4)', () => {
   });
 
   afterAll(async () => {
+    // Drop on the way out as well as on the way in. The suite seeds
+    // `test-agency`; a suite that runs next and seeds before dropping
+    // (`platform-users`) dies on `slug_1` E11000 otherwise — which is what
+    // failed the PR4 CI run, with this suite directly ahead of it.
+    await dropTestDatabase(app);
     await closeTestApp(app);
   });
 

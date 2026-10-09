@@ -45,6 +45,11 @@ describe('Platform user directory (e2e)', () => {
 
   beforeAll(async () => {
     app = await createTestApp();
+    // Drop before seeding, not only after: Jest orders suites by their last
+    // run time, so whichever suite ran before this one changes between runs,
+    // and one that cleans up only in `afterAll` leaves `test-agency` behind.
+    // Same fix as `mailer-lookup` and `carrier-appointments`.
+    await dropTestDatabase(app);
     ctx = await seedTestData(app);
     superAdminToken = (await login(app, ctx.superAdminEmail, TEST_PASSWORD))
       .accessToken;
