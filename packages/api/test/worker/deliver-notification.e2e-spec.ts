@@ -6,6 +6,7 @@ import {
   getModelToken,
 } from '@nestjs/mongoose';
 import { Test } from '@nestjs/testing';
+import { NOTIFICATION_TYPES } from '@sfa/shared';
 import { NonRetriableError } from 'inngest';
 import { Connection, Model } from 'mongoose';
 import {
@@ -15,30 +16,16 @@ import {
 import { ENV_FILE_PATH } from '../../src/config/env.config';
 import type { NotificationRequestedData } from '../../src/inngest/events';
 import { InngestModule } from '../../src/inngest/inngest.module';
+import { InngestService } from '../../src/inngest/inngest.service';
 import { Notification } from '../../src/notifications/schemas/notification.schema';
 import { DeliverNotificationFn } from '../../src/worker/functions/deliver-notification.fn';
 import { WorkerModule } from '../../src/worker/worker.module';
+import { inlineStep } from '../helpers/inline-step';
+import { CapturedInngestService } from '../helpers/test-app';
 
 const ADMIN_A = '507f1f77bcf86cd799439021';
 const ADMIN_B = '507f1f77bcf86cd799439022';
 const REPORTER = '507f1f77bcf86cd799439011';
-
-/** Runs each step inline — the platform's memoisation is Inngest's to prove. */
-function inlineStep() {
-  const ran: string[] = [];
-  return {
-    ran,
-    step: {
-      run: async <T>(
-        id: string,
-        fn: () => Promise<T> | T,
-      ): Promise<unknown> => {
-        ran.push(id);
-        return await fn();
-      },
-    },
-  };
-}
 
 function requestedEvent(overrides: Partial<NotificationRequestedData> = {}): {
   id: string;
@@ -73,6 +60,8 @@ describe('DeliverNotificationFn (e2e)', () => {
   let fn: DeliverNotificationFn;
   let notifications: Model<Notification>;
   let bus: NotificationBus;
+  /** What the `email` step handed to the outbox (PR3). */
+  const emitted = new CapturedInngestService();
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -91,7 +80,10 @@ describe('DeliverNotificationFn (e2e)', () => {
         InngestModule,
         WorkerModule,
       ],
-    }).compile();
+    })
+      .overrideProvider(InngestService)
+      .useValue(emitted)
+      .compile();
 
     app = moduleRef.createNestApplication();
     await app.init();
@@ -117,6 +109,7 @@ describe('DeliverNotificationFn (e2e)', () => {
 
   beforeEach(async () => {
     await notifications.deleteMany({});
+    emitted.sent.length = 0;
   });
 
   it('writes one rendered, unread row per recipient', async () => {
@@ -124,7 +117,7 @@ describe('DeliverNotificationFn (e2e)', () => {
 
     const result = await fn.handle(requestedEvent(), step);
 
-    expect(ran).toEqual(['insert', 'publish']);
+    expect(ran).toEqual(['insert', 'publish', 'email']);
     expect(result.notificationIds).toHaveLength(2);
 
     const rows = await notifications.find({}).sort({ recipientId: 1 }).lean();
@@ -178,6 +171,84 @@ describe('DeliverNotificationFn (e2e)', () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  describe('email hand-off (PR3)', () => {
+    it('requests one email per row, ids only, for a type whose defaults include email', async () => {
+      const result = await fn.handle(requestedEvent(), inlineStep().step);
+
+      expect(emitted.sent).toHaveLength(2);
+      for (const event of emitted.sent) {
+        expect(event.name).toBe('notification/email.requested.v1');
+        // Nothing but the three ids: the mail function re-reads the row, so
+        // the email can never say something the in-app list does not.
+        expect(Object.keys(event.data).sort()).toEqual([
+          'agencyId',
+          'notificationId',
+          'recipientId',
+        ]);
+        expect(event.data.agencyId).toBeNull();
+      }
+      expect(
+        emitted.sent.map((event) => event.data.notificationId).sort(),
+      ).toEqual([...result.notificationIds].sort());
+      expect(
+        emitted.sent.map((event) => event.data.recipientId).sort(),
+      ).toEqual([ADMIN_A, ADMIN_B]);
+    });
+
+    it('requests nothing for a type whose defaults leave email off', async () => {
+      // The catalog is the only switch until per-user preferences exist
+      // (decision 4). With one type listed today there is no "off" row to
+      // emit, so swap the one there is for the duration of this test — a
+      // replaced property, never a mutation of the shared constant, so a
+      // failure here cannot leak into the next suite.
+      const type = NOTIFICATION_TYPES['bug_report.filed'];
+      const replaced = jest.replaceProperty(type, 'defaultChannels', {
+        ...type.defaultChannels,
+        email: false,
+      } as typeof type.defaultChannels);
+      try {
+        const result = await fn.handle(requestedEvent(), inlineStep().step);
+
+        expect(result.notificationIds).toHaveLength(2);
+        expect(emitted.sent).toHaveLength(0);
+      } finally {
+        replaced.restore();
+      }
+    });
+
+    it('gives every request a stable id, so a replayed step deduplicates instead of duplicating', async () => {
+      // The `email` step is one `step.run` over every row. A failure on the
+      // last emit replays them all; with fresh ids the earlier rows would each
+      // gain a second outbox row that nothing ever marks terminal.
+      await fn.handle(requestedEvent(), inlineStep().step);
+      const first = emitted.sent.map((event) => event.id);
+      emitted.sent.length = 0;
+      await fn.handle(requestedEvent(), inlineStep().step);
+      const second = emitted.sent.map((event) => event.id);
+
+      expect(first).toHaveLength(2);
+      expect(first.every((id) => typeof id === 'string')).toBe(true);
+      expect(new Set(first).size).toBe(2);
+      expect(second).toEqual(first);
+    });
+
+    it("carries the row's agency, not the recipient's", async () => {
+      const AGENCY = '507f1f77bcf86cd799439041';
+      await fn.handle(
+        requestedEvent({
+          agencyId: AGENCY,
+          dedupeKey: 'bug_report.filed:507f1f77bcf86cd799439033',
+        }),
+        inlineStep().step,
+      );
+
+      expect(emitted.sent.map((event) => event.data.agencyId)).toEqual([
+        AGENCY,
+        AGENCY,
+      ]);
+    });
   });
 
   it('is idempotent: a retry of the same event adds no rows and returns the same ids', async () => {
