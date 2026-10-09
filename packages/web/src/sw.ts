@@ -20,9 +20,15 @@ declare let self: ServiceWorkerGlobalScope;
  * 1. **Precache the shell** (every hashed chunk, the stylesheet, the fonts,
  *    the icons) and serve navigations from the cached `index.html`, so an
  *    installed app opens instantly and offline.
- * 2. **Show pushes** from the worker's `deliver-notification` function, but
- *    only when no window of the app is focused — the in-app toast already
- *    covered that case, and two notifications for one event reads as a bug.
+ * 2. **Show every push** from the worker's `deliver-notification` function
+ *    as an OS notification — focused window or not. The first cut suppressed
+ *    it while a window was focused (the in-app toast had already said it),
+ *    which is fine in Chrome and fatal on WebKit: Safari counts a push that
+ *    shows nothing as a *silent push* under `userVisibleOnly`, and after a
+ *    few of them revokes the subscription — and the installed iOS app is
+ *    exactly what this targets. So a user with the app in front may see the
+ *    toast and the notification for one event; the `tag` keeps it to one
+ *    notification per row. Ticket rule amended 2026-10-09 (PR4 review).
  * 3. **Deep-link a click** into an open window, or open one.
  *
  * ## `/api/v1/*` is never cached — by omission, on purpose
@@ -70,6 +76,20 @@ export interface PushClickMessage {
 
 const FALLBACK_HREF = '/notifications';
 
+/**
+ * Shown when a push arrives whose payload cannot be read. Dropping it would be
+ * a silent push in every browser (WebKit revokes the subscription for those),
+ * and something *did* happen — the list has it. No `id`, so a click opens the
+ * list rather than trying to mark a row read.
+ */
+const FALLBACK_PAYLOAD: PushPayload = {
+  id: '',
+  title: 'AgencyOps',
+  body: 'You have a new notification.',
+  href: FALLBACK_HREF,
+  icon: '/icon-192.png',
+};
+
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 
@@ -97,27 +117,19 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 clientsClaim();
 
 self.addEventListener('push', (event: PushEvent) => {
-  const payload = parsePayload(event.data);
-  if (!payload) return;
+  // Always shown — see the docblock. A push that shows nothing is a silent
+  // push, and WebKit revokes the subscription after a few of those.
+  const payload = parsePayload(event.data) ?? FALLBACK_PAYLOAD;
 
   event.waitUntil(
-    (async () => {
-      const windows = await self.clients.matchAll({
-        type: 'window',
-        includeUncontrolled: true,
-      });
-      // A focused window means the SSE toast already said this. No
-      // server-side presence tracking: the browser knows, so ask it.
-      if (windows.some((client) => client.focused)) return;
-
-      await self.registration.showNotification(payload.title, {
-        body: payload.body,
-        icon: payload.icon,
-        // Same row twice (a replayed step) replaces rather than stacks.
-        tag: payload.id,
-        data: { id: payload.id, href: payload.href },
-      });
-    })(),
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: payload.icon,
+      // Same row twice (a replayed step) replaces rather than stacks; every
+      // unreadable payload collapses into one.
+      tag: payload.id || 'agencyops-notification',
+      data: { id: payload.id, href: payload.href },
+    }),
   );
 });
 

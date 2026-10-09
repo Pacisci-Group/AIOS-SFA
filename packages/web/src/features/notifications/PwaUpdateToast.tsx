@@ -17,8 +17,13 @@ const UPDATE_CHECK_MS = 60 * 60 * 1000;
  *
  * Never silent auto-update: swapping the worker under a tab whose lazy chunks
  * the deploy just deleted is the blank-page failure the shell is built to
- * avoid. Dismissing the toast is allowed — the next check, or the next open,
- * offers it again.
+ * avoid. Dismissing the toast is allowed, and **for this worker it does not
+ * come back**: workbox-window fires `waiting` once per installed worker, so
+ * the hourly `update()` finds nothing new and `onNeedRefresh` stays quiet
+ * until the *next* deploy or the next open. An installed app that is never
+ * closed can therefore sit on the old build after a dismissal. Re-offering
+ * on `visibilitychange` while `registration.waiting` is set is PAC-153 §3's
+ * update UX, not this minimal prompt (PR4 review).
  *
  * Renders nothing; mounted once in `App.tsx` beside `NotificationStream`. In
  * `vite` dev the virtual module is a no-op (`devOptions.enabled: false`).

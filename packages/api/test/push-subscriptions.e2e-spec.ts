@@ -200,8 +200,18 @@ describe('Push subscriptions (PAC-154 PR4)', () => {
       ).resolves.toBe(2);
     });
 
-    it('rejects a non-https endpoint and a body missing the keys', async () => {
+    it('rejects a non-https endpoint, an https endpoint off the known push services, and a body missing the keys', async () => {
       await put(producerToken, body('http://example.com/push')).expect(400);
+      // SSRF (PR4 review): https alone would let any signed-in user point the
+      // worker at any host from inside the network.
+      await put(
+        producerToken,
+        body('https://169.254.169.254/latest/meta-data/'),
+      ).expect(400);
+      await put(
+        producerToken,
+        body('https://fcm.googleapis.com.evil.net/send/x'),
+      ).expect(400);
       await put(producerToken, { endpoint: ENDPOINT }).expect(400);
       await put(producerToken, {
         endpoint: ENDPOINT,

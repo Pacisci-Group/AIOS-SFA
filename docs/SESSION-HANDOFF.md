@@ -1479,3 +1479,34 @@ per-user / per-type / per-channel preferences (decision 4) · digests · marking
 a row read on a cold-start `openWindow` click · every trigger but bug reports
 (PAC-127).
 
+### Review follow-ups on #143 (2026-10-09)
+Rebased onto the PR3 fix commit, then: **SSRF** — `isAllowedPushEndpoint`
+(`common/push/push-endpoint.ts`) allowlists the browser push services
+(FCM, Mozilla, Apple, WNS); the DTO refuses anything else and
+`WebPushService` re-checks every stored row before sending, soft-deleting a
+failure. **Another user's pushes after sign-in** — `login()` and
+`adoptSession` call `forgetPushSubscriptionLocally()` when the previous user
+differs or is unknown (read from a ref, never inside a `setUser` updater);
+`logout()` keeps the `DELETE` + local path. **VAPID rotation** —
+`subscriptionUsesKey` compares `options.applicationServerKey` byte for byte;
+`subscribeThisBrowser` re-subscribes on a mismatch and
+`usePushSubscriptionRefresh` (mounted in `NotificationStream`) runs
+`reconcilePushSubscription` once per sign-in when permission is already
+granted; `401`/`403` from the push service are logged as a VAPID rejection
+and recorded `failed`, deliberately **not** soft-deleted (decision: a
+misconfigured key must not wipe every subscription). **Retry-safe `push`
+step** — the re-read filters `'delivery.push': null`. **Safari** — the
+service worker always calls `showNotification` (a generic fallback for an
+unreadable payload); the ticket's "suppressed when a window is focused" rule
+is withdrawn (decision, Asad 2026-10-09: always show, over a user-agent
+check). **`hasWorker`** — `getRegistration()` races `serviceWorker.ready`
+against 3 s when nothing is registered yet. `forgetPushSubscriptionOnSignOut`
+uses `API_BASE`. `iconFor` goes through the shared
+`TenantBrandingService.pushIconFor` (agency favicon/logo on the agency's own
+host, else the platform icon on the platform host). The catalog flip in the
+e2e is `jest.replaceProperty`'d. New e2e cases: replayed step pushes nobody
+twice; a stored off-allowlist endpoint is soft-deleted and never sent;
+off-allowlist `PUT`s are 400. **Not fixed here, by decision:** the dismissed
+update toast not returning for the same worker is PAC-153 §3 (comment on the
+ticket; the `PwaUpdateToast` docblock now says what actually happens).
+

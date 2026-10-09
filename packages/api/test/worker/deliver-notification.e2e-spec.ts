@@ -481,21 +481,67 @@ describe('DeliverNotificationFn (e2e)', () => {
 
     it('sends nothing, and records nothing, for a type whose defaults leave push off', async () => {
       await subscribe(ADMIN_A, ENDPOINT_A1);
-      const defaults = NOTIFICATION_TYPES['bug_report.filed']
-        .defaultChannels as { push: boolean };
-      defaults.push = false;
+      const type = NOTIFICATION_TYPES['bug_report.filed'];
+      const replaced = jest.replaceProperty(type, 'defaultChannels', {
+        ...type.defaultChannels,
+        push: false,
+      } as typeof type.defaultChannels);
       try {
         await fn.handle(
           requestedEvent({ recipientIds: [ADMIN_A] }),
           inlineStep().step,
         );
       } finally {
-        defaults.push = true;
+        replaced.restore();
       }
 
       expect(pushes.sent).toHaveLength(0);
       const row = await notifications.findOne({ recipientId: ADMIN_A }).lean();
       expect(row?.delivery.push).toBeNull();
+    });
+
+    it('does not push a row again when the step is replayed', async () => {
+      // One `step.run` over every row: a failure on the last one replays
+      // them all. Rows that already carry a `delivery.push` outcome are
+      // skipped, so a recipient is reached once (PR4 review).
+      await subscribe(ADMIN_A, ENDPOINT_A1);
+      await fn.handle(requestedEvent(), inlineStep().step);
+      const first = await notifications
+        .findOne({ recipientId: ADMIN_A })
+        .lean();
+      expect(pushes.sent).toHaveLength(1);
+
+      await fn.handle(requestedEvent(), inlineStep().step);
+
+      expect(pushes.sent).toHaveLength(1);
+      const second = await notifications
+        .findOne({ recipientId: ADMIN_A })
+        .lean();
+      expect(second?.delivery.push?.at).toEqual(first?.delivery.push?.at);
+    });
+
+    it('soft-deletes, and never sends to, a stored endpoint that is not a known push service', async () => {
+      // Written straight through the model, past the DTO: a row from before
+      // the allowlist, or from a host since removed from it. The worker is
+      // the last line (PR4 review: SSRF).
+      const rogue = await subscribe(
+        ADMIN_A,
+        'https://169.254.169.254/latest/meta-data/',
+      );
+      await subscribe(ADMIN_A, ENDPOINT_A1);
+
+      await fn.handle(
+        requestedEvent({ recipientIds: [ADMIN_A] }),
+        inlineStep().step,
+      );
+
+      expect(pushes.sent.map((push) => push.target.endpoint)).toEqual([
+        ENDPOINT_A1,
+      ]);
+      const stored = await subscriptions.findById(rogue._id).lean();
+      expect(stored?.deletedAt).toBeInstanceOf(Date);
+      const row = await notifications.findOne({ recipientId: ADMIN_A }).lean();
+      expect(row?.delivery.push?.status).toBe('sent');
     });
   });
 

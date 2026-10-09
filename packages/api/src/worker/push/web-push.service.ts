@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { WebPushError } from 'web-push';
+import { isAllowedPushEndpoint } from '../../common/push/push-endpoint';
 import {
   PushSubscription,
   type PushSubscriptionDocument,
@@ -56,10 +57,28 @@ const PUSH_TTL_SECONDS = 3600;
  * ## Dead subscriptions are soft-deleted
  *
  * The push service answers `404`/`410` for a subscription the browser has
- * dropped (user revoked permission, browser profile gone, key rotated). That
- * row gets `deletedAt` — never a hard delete (PAC-155) — and the partial unique
- * index lets the same device subscribe again later. Nothing else about a
- * failure touches the row.
+ * dropped (user revoked permission, browser profile gone). That row gets
+ * `deletedAt` — never a hard delete (PAC-155) — and the partial unique index
+ * lets the same device subscribe again later. Nothing else about a failure
+ * touches the row.
+ *
+ * ## The endpoint is re-checked here, not only at the API
+ *
+ * `isAllowedPushEndpoint` ran when the row was written, but a row written
+ * before the allowlist existed, or before a host was removed from it, is
+ * still a URL this worker would POST to from inside the network. So every
+ * send checks again; a row that fails is soft-deleted like a dead one and the
+ * device re-subscribes through the (now stricter) API on its next visit.
+ *
+ * ## A `401`/`403` is a failure, not a dead subscription
+ *
+ * The push service answers these when the VAPID signature does not match the
+ * key the browser subscribed with — after a key rotation, or a misconfigured
+ * private key. Soft-deleting on them would, on a misconfiguration, silently
+ * wipe every subscription in the system. They are recorded as `failed` with
+ * the status in the message; the browser compares its key against the
+ * published one on every app load and re-subscribes on a mismatch
+ * (`reconcilePushSubscription` in the web app), which is the repair path.
  */
 @Injectable()
 export class WebPushService {
@@ -132,6 +151,17 @@ export class WebPushService {
     const errors: string[] = [];
 
     for (const target of targets) {
+      if (!isAllowedPushEndpoint(target.endpoint)) {
+        removed += 1;
+        await this.subscriptions.updateOne(
+          { _id: target._id, deletedAt: null },
+          { $set: { deletedAt: new Date() } },
+        );
+        this.logger.warn(
+          `Push subscription ${target._id.toHexString()} points at a host that is not a known push service; soft-deleted, not sent.`,
+        );
+        continue;
+      }
       try {
         await this.transport.send(
           { endpoint: target.endpoint, keys: target.keys },
@@ -159,7 +189,9 @@ export class WebPushService {
         const message = err instanceof Error ? err.message : String(err);
         errors.push(message);
         this.logger.warn(
-          `Push to subscription ${target._id.toHexString()} failed: ${message}`,
+          isVapidRejection(err)
+            ? `Push to subscription ${target._id.toHexString()} was refused (${err.statusCode}): the push service rejected the VAPID signature — a rotated or mismatched key. The browser re-subscribes on its next visit; the row stays live.`
+            : `Push to subscription ${target._id.toHexString()} failed: ${message}`,
         );
       }
     }
@@ -186,5 +218,13 @@ function isGone(err: unknown): err is WebPushError {
   return (
     err instanceof WebPushError &&
     (err.statusCode === 404 || err.statusCode === 410)
+  );
+}
+
+/** The push service's "your VAPID signature is not the key this device subscribed with". */
+function isVapidRejection(err: unknown): err is WebPushError {
+  return (
+    err instanceof WebPushError &&
+    (err.statusCode === 401 || err.statusCode === 403)
   );
 }

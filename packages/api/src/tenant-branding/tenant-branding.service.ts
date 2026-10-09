@@ -115,6 +115,35 @@ export class TenantBrandingService {
   }
 
   /**
+   * The absolute icon for a web push about an agency: its favicon, else its
+   * logo, on its **own** host — else `platformIconPath` on the platform host.
+   *
+   * Same rule as {@link emailBrandFor}, for the same reason: the favicon and
+   * logo endpoints resolve the agency from `Host`, so an agency served on the
+   * platform host (no verified domain yet) cannot have either fetched from
+   * there. A service worker fetches the icon with no origin of its own, so
+   * the URL must be absolute and publicly reachable. The platform icon is a
+   * bundled asset the web container serves on every host.
+   */
+  async pushIconFor(
+    agencyId: string | null | undefined,
+    platformIconPath: string,
+  ): Promise<string> {
+    if (agencyId) {
+      const branding = await this.forAgency(agencyId);
+      const path =
+        branding.kind === 'agency'
+          ? (branding.faviconUrl ?? branding.logoUrl)
+          : null;
+      if (path) {
+        const ownBase = await this.tenantUrls.agencyBaseUrlFor(agencyId);
+        if (ownBase) return `${ownBase}${path}`;
+      }
+    }
+    return `${this.tenantUrls.platformBaseUrl()}${platformIconPath}`;
+  }
+
+  /**
    * Branding for the tenant a request's host names.
    *
    * @throws NotFoundException on an unknown host — the same answer

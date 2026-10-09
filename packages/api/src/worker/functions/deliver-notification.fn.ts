@@ -10,7 +10,6 @@ import {
 import { NonRetriableError } from 'inngest';
 import { Model, Types } from 'mongoose';
 import { NotificationBus } from '../../common/redis/notification-bus';
-import { TenantUrlService } from '../../common/tenancy/tenant-url.service';
 import {
   notificationEmailRequested,
   notificationRequested,
@@ -97,7 +96,6 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     private readonly bus: NotificationBus,
     private readonly webPush: WebPushService,
     private readonly branding: TenantBrandingService,
-    private readonly tenantUrls: TenantUrlService,
   ) {}
 
   build() {
@@ -275,10 +273,11 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
    * Web push for every row, for a type whose defaults include the channel.
    *
    * The payload is built from the **stored** row — title, body and path as the
-   * list shows them — plus an absolute icon on the row's tenant host
-   * (`TenantUrlService.baseUrlFor`, never `APP_BASE_URL`: a service worker
-   * fetches the icon with no session, and only the tenant host serves the
-   * agency's files). Returns counts so the step result is plain JSON.
+   * list shows them — plus an absolute icon from
+   * `TenantBrandingService.pushIconFor` (the agency's mark on its own host,
+   * else the platform icon; never `APP_BASE_URL`: a service worker fetches
+   * the icon with no session, and only the agency's own host serves its
+   * files). Returns counts so the step result is plain JSON.
    */
   async pushRows(
     type: NotificationType,
@@ -295,8 +294,15 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
       return summary;
     }
 
+    // Only rows with no push outcome yet. This step is one `step.run` over
+    // every row, so a failure on the ninth row replays all nine; without the
+    // filter the eight already pushed would be pushed again, and the shared
+    // `tag` only merges the two if the first is still on screen (PR4 review).
     const stored = await this.notificationModel
-      .find({ _id: { $in: rows.map((row) => new Types.ObjectId(row.id)) } })
+      .find({
+        _id: { $in: rows.map((row) => new Types.ObjectId(row.id)) },
+        'delivery.push': null,
+      })
       .select({ _id: 1, recipientId: 1, title: 1, body: 1, href: 1 })
       .lean<
         Array<{
@@ -350,19 +356,14 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
   }
 
   /**
-   * The agency's favicon, else its logo, else the platform icon — made absolute
-   * on the row's tenant host. The same rule as the email masthead.
+   * The agency's favicon, else its logo, on the agency's **own** host; else
+   * the platform icon. The same helper, and the same rule, as the email
+   * masthead — the agency asset endpoints 404 on the platform host, so an
+   * agency without a domain gets the platform mark rather than a broken
+   * image (PR3/PR4 review).
    */
-  private async iconFor(agencyId: string | null): Promise<string> {
-    const baseUrl = await this.tenantUrls.baseUrlFor(agencyId);
-    const branding = agencyId
-      ? await this.branding.forAgency(agencyId)
-      : this.branding.platformBranding();
-    const path =
-      branding.kind === 'agency'
-        ? (branding.faviconUrl ?? branding.logoUrl ?? PLATFORM_ICON_PATH)
-        : PLATFORM_ICON_PATH;
-    return `${baseUrl}${path}`;
+  private iconFor(agencyId: string | null): Promise<string> {
+    return this.branding.pushIconFor(agencyId, PLATFORM_ICON_PATH);
   }
 
   private render(data: NotificationRequestedData): RenderedNotification {

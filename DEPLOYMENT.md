@@ -205,9 +205,14 @@ safety-TTL'd cache that fails open; accepted).
 
 A notification whose catalog type has the push channel on is also sent, by the
 worker, to every browser the recipient has subscribed (`pushSubscriptions`).
-The service worker shows it only when **no window of the app is focused** —
-the in-app toast already covered that case — and a click focuses the app on
-the row's `href`.
+The service worker shows **every** push as an OS notification, focused window
+or not — WebKit treats a push that shows nothing as a silent push and revokes
+the subscription after a few, and the installed iOS app is the target — and a
+click focuses the app on the row's `href`. A subscription endpoint must be on
+a known browser push service (`packages/api/src/common/push/push-endpoint.ts`);
+the API rejects anything else and the worker soft-deletes a stored row that
+fails the same check before sending, so the worker can never be pointed at an
+arbitrary host.
 
 | What | Where it comes from |
 |------|---------------------|
@@ -216,10 +221,15 @@ the row's `href`.
 
 Deploy order for the first environment: generate the pair → set the three
 Environment secrets → deploy. The preflight refuses to run until all three
-exist. **Rotating the pair invalidates every subscription**: the browsers
-re-subscribe on their next visit (`pushManager.subscribe()` with the new key
-replaces the old subscription), so a rotation is a deliberate act with a gap,
-not routine hygiene.
+exist. **Rotating the pair invalidates every subscription** until each
+browser comes back: on the next app load a signed-in browser compares the key
+its subscription was made with against the published one and, on a mismatch,
+unsubscribes and subscribes again (`reconcilePushSubscription`). Until then
+the push services refuse pushes to the old subscriptions with `401`/`403`;
+those are recorded as `delivery.push.status: 'failed'` on the rows and the
+subscriptions stay live (soft-deleting on a `401`/`403` would, on a
+misconfigured key, wipe every subscription in the system). A rotation is a
+deliberate act with a gap, not routine hygiene.
 
 > **A `404`/`410` from a push service soft-deletes the subscription** (sets
 > `deletedAt`; nothing is hard-deleted, PAC-155). The unique index on
