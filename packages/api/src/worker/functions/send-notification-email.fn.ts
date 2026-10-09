@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { NonRetriableError } from 'inngest';
 import type { Model } from 'mongoose';
 import { TenantUrlService } from '../../common/tenancy/tenant-url.service';
 import {
@@ -32,7 +33,12 @@ import type { NotificationEmailData } from '../email/templates/notification.temp
  * and replayed, so there is no `ObjectId` or `Date` in here.
  */
 type LoadResult =
-  | { kind: 'ready'; data: NotificationEmailData }
+  | {
+      kind: 'ready';
+      /** The row's agency — the mail's tenancy for `emailMessages` and `From:`. */
+      agencyId: string | null;
+      data: NotificationEmailData;
+    }
   /** The row is gone; nothing to mail and nothing to record it on. */
   | { kind: 'missing' }
   /** A previous run already mailed it — the guard past Inngest's 24 h window. */
@@ -98,7 +104,17 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
         idempotency: 'event.data.notificationId',
         /** Same reasoning as the invite: enough to ride out a Resend blip. */
         retries: 4,
-        /** Resend's default account limit is 2 requests/second. */
+        /**
+         * Resend's default account limit is 2 requests/second, and `throttle`
+         * is what enforces it: at most `limit` runs *start* per `period`,
+         * across every run of this function, the rest queue. `concurrency`
+         * is a different knob — it caps runs in flight and says nothing about
+         * rate — and was all this shipped with, so one bug report fanning out
+         * to three admins could 429, burn a retry each and briefly write
+         * `delivery.email: failed` on the rows (PR3 review).
+         */
+        throttle: { limit: 2, period: '1s' },
+        /** Bounds worker slots. The rate is `throttle`'s job. */
         concurrency: { limit: 5 },
       },
       ({ event, step }) => this.handle(event, step),
@@ -110,10 +126,10 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
     event: { id?: string; name: string; data: NotificationEmailRequestedData },
     step: StepLike,
   ): Promise<{ sent: boolean; reason?: string; emailMessageId?: string }> {
-    const { notificationId, recipientId, agencyId } = event.data;
+    const { notificationId } = event.data;
 
     const loaded = (await step.run('load', () =>
-      this.load(notificationId, recipientId, agencyId),
+      this.load(event.data),
     )) as LoadResult;
 
     if (loaded.kind !== 'ready') {
@@ -127,7 +143,7 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
     // re-recorded row rather than a second email. The cast is sound because
     // `SentEmail` is entirely strings.
     const sent = (await step.run('send', () =>
-      this.send(notificationId, loaded.data, agencyId),
+      this.send(notificationId, loaded.data, loaded.agencyId),
     )) as SentEmail;
 
     const recorded = (await step.run('record', () =>
@@ -135,7 +151,7 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
         {
           eventId: event.id ?? '',
           eventType: event.name,
-          agencyId,
+          agencyId: loaded.agencyId,
           branchId: null,
         },
         notificationId,
@@ -149,26 +165,58 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
   /**
    * Everything the template needs, read now rather than carried on the event.
    *
-   * The link is built on the **tenant host** — `TenantUrlService.baseUrlFor`,
-   * never `APP_BASE_URL` — because `HostTenantGuard` refuses the recipient on
-   * any other (AGENTS.md §11). The logo is made absolute against the same
-   * base: a mail client has no origin to resolve a path against.
+   * ## The row is the authority, the event only names it
+   *
+   * Who is mailed, and under which agency, is read from the **stored row** —
+   * the event's `recipientId` and `agencyId` are checked against it and a
+   * disagreement is a `NonRetriableError`. Today the only producer copies both
+   * from the row, so they cannot differ; a mis-wired emit or a hand-edited
+   * outbox replay could, and the failure mode would be notification X's title
+   * and body in user B's inbox.
+   *
+   * ## Two hosts, deliberately
+   *
+   * The **link** is built on the *recipient's* host (`TenantUrlService` from
+   * `User.agencyId`; `null` is a platform admin on the platform host).
+   * `HostTenantGuard` binds a session to the host it was created on, so a link
+   * has to land where the recipient can sign in — and that is a property of
+   * the recipient, not of the row. A platform admin notified about an
+   * agency-scoped row gets a platform-host link; an agency user always gets
+   * their agency's. The **brand** is the *row's* agency, through
+   * `emailBrandFor`, which puts the logo on that agency's own host or leaves
+   * it out when there is none (AGENTS.md §11; PR3 review).
    */
   private async load(
-    notificationId: string,
-    recipientId: string,
-    agencyId: string | null,
+    event: NotificationEmailRequestedData,
   ): Promise<LoadResult> {
+    const { notificationId } = event;
     const row = await this.notificationModel.findById(notificationId).lean();
     if (!row) return { kind: 'missing' };
     if (row.delivery?.email?.status === 'sent') return { kind: 'already-sent' };
 
+    const recipientId = row.recipientId.toHexString();
+    const agencyId = row.agencyId ? row.agencyId.toHexString() : null;
+    if (recipientId !== event.recipientId || agencyId !== event.agencyId) {
+      throw new NonRetriableError(
+        `Event for notification ${notificationId} names recipient ` +
+          `${event.recipientId} / agency ${event.agencyId ?? 'null'}, but the ` +
+          `row says ${recipientId} / ${agencyId ?? 'null'}. Not mailing.`,
+      );
+    }
+
     const user = await this.userModel
       .findById(recipientId)
-      .select({ email: 1, firstName: 1, isActive: 1 })
+      .select({ email: 1, firstName: 1, isActive: 1, agencyId: 1 })
       .lean();
-    if (!user?.email || !user.isActive) {
-      const reason = user ? 'recipient is deactivated' : 'recipient not found';
+    if (!user || !user.isActive || !user.email) {
+      // Three reasons, kept apart: whoever reads `delivery.email.error` on
+      // the row should learn what actually happened, and "deactivated" for
+      // an active user with no address sends them down the wrong path.
+      const reason = !user
+        ? 'recipient not found'
+        : !user.isActive
+          ? 'recipient is deactivated'
+          : 'recipient has no email address';
       await this.setEmailDelivery(notificationId, {
         status: 'skipped',
         at: new Date(),
@@ -178,28 +226,21 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
       return { kind: 'skipped', reason };
     }
 
-    const baseUrl = await this.tenantUrls.baseUrlFor(agencyId);
-    const branding = agencyId
-      ? await this.branding.forAgency(agencyId)
-      : this.branding.platformBranding();
+    const [baseUrl, brand] = await Promise.all([
+      this.tenantUrls.baseUrlFor(user.agencyId?.toHexString() ?? null),
+      this.branding.emailBrandFor(agencyId),
+    ]);
 
     return {
       kind: 'ready',
+      agencyId,
       data: {
         to: user.email,
         recipientName: user.firstName?.trim() || null,
         title: row.title,
         body: row.body,
         href: `${baseUrl}${row.href}`,
-        brand:
-          branding.kind === 'agency'
-            ? {
-                name: branding.name,
-                logoUrl: branding.logoUrl
-                  ? `${baseUrl}${branding.logoUrl}`
-                  : null,
-              }
-            : undefined,
+        brand,
       },
     };
   }

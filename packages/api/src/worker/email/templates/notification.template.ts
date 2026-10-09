@@ -34,9 +34,18 @@ export interface NotificationEmailData {
 
 const THERE = 'there';
 
-/** Preview-pane copy: the body, cut so the inbox row stays one line. */
+/**
+ * Preview-pane copy: the body, cut so the inbox row stays one line.
+ *
+ * Cut on code points, not UTF-16 units: `String#slice` can split a surrogate
+ * pair, and an emoji straddling the cut shows as a replacement character in
+ * the inbox preview.
+ */
 function preheader(body: string): string {
-  return body.length > 120 ? `${body.slice(0, 117).trimEnd()}…` : body;
+  const chars = Array.from(body);
+  return chars.length > 120
+    ? `${chars.slice(0, 117).join('').trimEnd()}…`
+    : body;
 }
 
 /**

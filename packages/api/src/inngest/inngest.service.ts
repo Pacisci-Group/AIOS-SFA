@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { INNGEST_CLIENT, type InngestClient } from './inngest.client';
@@ -21,6 +22,42 @@ import {
 interface CatalogEvent<TData> {
   readonly name: string;
   create(data: TData, options?: { id?: string }): { validate(): Promise<void> };
+}
+
+export interface SendOptions {
+  /**
+   * The event's id, when the producer wants a **stable** one rather than a
+   * fresh mint. Build it with {@link deterministicEventId}.
+   *
+   * Use it where one emit sits inside a loop that a retry replays — a worker
+   * step that fans one event out per row. With fresh ids, a retry after a
+   * partial failure re-emits every row, and the rows that already went out
+   * gain a duplicate event: Inngest's *function* idempotency skips the
+   * duplicate run, so the eventLog middleware never marks the duplicate's
+   * outbox row terminal, and the sweeper re-emits it every few minutes for a
+   * day. With a stable id the re-emit *is* the first event: Inngest dedupes
+   * it, and `recordPending` finds the row already there.
+   */
+  id?: Types.ObjectId;
+}
+
+/**
+ * A stable event id for "this fact, once": the same `(namespace, key)` always
+ * yields the same id, so a replayed emit deduplicates instead of duplicating.
+ *
+ * `namespace` is the event's purpose (`'notification-email'`), `key` the
+ * business fact (the notification id). Both go into the hash so two events
+ * about the same record never collide on the outbox's `_id`.
+ */
+export function deterministicEventId(
+  namespace: string,
+  key: string,
+): Types.ObjectId {
+  const hex = createHash('sha1')
+    .update(`${namespace}:${key}`)
+    .digest('hex')
+    .slice(0, 24);
+  return new Types.ObjectId(hex);
 }
 
 /**
@@ -81,8 +118,9 @@ export class InngestService {
   async send<TData extends { eventLogId: string }>(
     event: CatalogEvent<TData>,
     data: Omit<TData, 'eventLogId'>,
+    options: SendOptions = {},
   ): Promise<void> {
-    const eventLogId = new Types.ObjectId();
+    const eventLogId = options.id ?? new Types.ObjectId();
     const payload = {
       ...data,
       eventLogId: eventLogId.toHexString(),

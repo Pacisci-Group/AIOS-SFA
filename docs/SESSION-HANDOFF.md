@@ -1190,6 +1190,22 @@ Email channel (PR3) · push + PWA shell + update toast (PR4) · sharing the Redi
 client with the permission cache · `BroadcastChannel` multi-tab dedupe.
 
 
+### Review follow-ups on #139 (2026-10-09, commit `6b53a9a`)
+Abu Bakar's five findings plus the edge one, all confirmed against the
+installed library source and fixed: `edge.ts` destroys the upstream request
+on client close (an aborted stream used to orphan edge→nginx→API until `exp`);
+`RedisNotificationBus` SUBSCRIBEs from `ready` on every (re)connect (ioredis
+only replays channels with a successful reply, so a boot-time SUBSCRIBE lost
+in the offline queue was never retried); the bare `@SkipThrottle()` skipped
+nothing because our throttlers are named — `THROTTLER_NAMES` +
+`SkipAllThrottlers()` now, on the stream and the ACME route; a rejected
+`findForStream` no longer errors the stream or leaks the driver message
+(per-nudge `catchError → EMPTY`); the worker `publish` step is `Promise.all`;
+the badge keeps a 5-minute poll while connected
+(`UNREAD_COUNT_CONNECTED_POLL_MS`). New: `redis-notification-bus.unit-spec`,
+`throttle.decorators.unit-spec`, a stream e2e case for the failed read. Full
+list in the plan's "Found in review".
+
 ## 20. PAC-154 — Notifications, PR3 of 4: email channel (handoff, 2026-10-07)
 
 Branch `asad/pac-154-pr3-email-channel`, stacked on PR2's branch
@@ -1280,3 +1296,27 @@ and both `eventLog` rows `succeeded`. ⚠ That run went through **real Resend**
 Digests · per-user opt-out / preferences (decision 4) · "only if still unread
 after N minutes" · push + PWA shell + update toast (PR4) · every trigger but
 bug reports (PAC-127).
+
+### Review follow-ups on #141 (2026-10-09)
+Rebased onto the PR2 fix commit, then: `throttle: { limit: 2, period: '1s' }`
+on `send-notification-email` (`concurrency` caps runs in flight, not rate);
+`load()` reads recipient + agency from the **row** and throws
+`NonRetriableError` when the event disagrees; the **link** is built on the
+recipient's host (`User.agencyId`, null → platform) and the **brand** on the
+row's agency through the new `TenantBrandingService.emailBrandFor`, which
+puts the logo on the agency's own host or omits it when there is none — the
+invite email now goes through the same helper (its logo was a broken image
+for every domainless agency since PAC-69); `TenantUrlService.agencyBaseUrlFor`
+is the no-fallback half of `baseUrlFor`; the `email` step emits with
+`deterministicEventId('notification-email', rowId)` and
+`EventLogService.recordPending` is an insert-only upsert, so a replayed step
+dedupes instead of leaving `pending` outbox rows; a third skip reason
+(`recipient has no email address`); preheader cut on code points; the
+`inlineStep` helper lives in `test/helpers/inline-step.ts`; the catalog is
+`jest.replaceProperty`'d, never mutated. **Real sends outside production**
+are now gated: with `RESEND_API_KEY` set and `NODE_ENV != production`, Resend
+is wrapped in `AllowlistedMailTransport` and reaches only
+`MAIL_DEV_ALLOWED_RECIPIENTS` (`.env.example`); with a key and no list,
+nothing is sent and the API logs an error. **Deferred to its own ticket:**
+`MailDeliveryService.record` atomicity (upsert `emailMessages` on the
+idempotency key; the invite function shares the shape).

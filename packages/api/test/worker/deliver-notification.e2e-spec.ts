@@ -20,28 +20,12 @@ import { InngestService } from '../../src/inngest/inngest.service';
 import { Notification } from '../../src/notifications/schemas/notification.schema';
 import { DeliverNotificationFn } from '../../src/worker/functions/deliver-notification.fn';
 import { WorkerModule } from '../../src/worker/worker.module';
+import { inlineStep } from '../helpers/inline-step';
 import { CapturedInngestService } from '../helpers/test-app';
 
 const ADMIN_A = '507f1f77bcf86cd799439021';
 const ADMIN_B = '507f1f77bcf86cd799439022';
 const REPORTER = '507f1f77bcf86cd799439011';
-
-/** Runs each step inline — the platform's memoisation is Inngest's to prove. */
-function inlineStep() {
-  const ran: string[] = [];
-  return {
-    ran,
-    step: {
-      run: async <T>(
-        id: string,
-        fn: () => Promise<T> | T,
-      ): Promise<unknown> => {
-        ran.push(id);
-        return await fn();
-      },
-    },
-  };
-}
 
 function requestedEvent(overrides: Partial<NotificationRequestedData> = {}): {
   id: string;
@@ -216,18 +200,38 @@ describe('DeliverNotificationFn (e2e)', () => {
     it('requests nothing for a type whose defaults leave email off', async () => {
       // The catalog is the only switch until per-user preferences exist
       // (decision 4). With one type listed today there is no "off" row to
-      // emit, so flip the one there is for the duration of this test.
-      const defaults = NOTIFICATION_TYPES['bug_report.filed']
-        .defaultChannels as { email: boolean };
-      defaults.email = false;
+      // emit, so swap the one there is for the duration of this test — a
+      // replaced property, never a mutation of the shared constant, so a
+      // failure here cannot leak into the next suite.
+      const type = NOTIFICATION_TYPES['bug_report.filed'];
+      const replaced = jest.replaceProperty(type, 'defaultChannels', {
+        ...type.defaultChannels,
+        email: false,
+      } as typeof type.defaultChannels);
       try {
         const result = await fn.handle(requestedEvent(), inlineStep().step);
 
         expect(result.notificationIds).toHaveLength(2);
         expect(emitted.sent).toHaveLength(0);
       } finally {
-        defaults.email = true;
+        replaced.restore();
       }
+    });
+
+    it('gives every request a stable id, so a replayed step deduplicates instead of duplicating', async () => {
+      // The `email` step is one `step.run` over every row. A failure on the
+      // last emit replays them all; with fresh ids the earlier rows would each
+      // gain a second outbox row that nothing ever marks terminal.
+      await fn.handle(requestedEvent(), inlineStep().step);
+      const first = emitted.sent.map((event) => event.id);
+      emitted.sent.length = 0;
+      await fn.handle(requestedEvent(), inlineStep().step);
+      const second = emitted.sent.map((event) => event.id);
+
+      expect(first).toHaveLength(2);
+      expect(first.every((id) => typeof id === 'string')).toBe(true);
+      expect(new Set(first).size).toBe(2);
+      expect(second).toEqual(first);
     });
 
     it("carries the row's agency, not the recipient's", async () => {

@@ -6,6 +6,7 @@ import {
   getModelToken,
 } from '@nestjs/mongoose';
 import { Test } from '@nestjs/testing';
+import { NonRetriableError } from 'inngest';
 import { Connection, Model, Types } from 'mongoose';
 import { ENV_FILE_PATH } from '../../src/config/env.config';
 import type { NotificationEmailRequestedData } from '../../src/inngest/events';
@@ -25,6 +26,7 @@ import {
 } from '../../src/worker/email/schemas/email-message.schema';
 import { SendNotificationEmailFn } from '../../src/worker/functions/send-notification-email.fn';
 import { WorkerModule } from '../../src/worker/worker.module';
+import { inlineStep } from '../helpers/inline-step';
 
 /**
  * The notification email (PAC-154, PR3).
@@ -50,23 +52,6 @@ class CaptureMailTransport extends MailTransport {
       providerMessageId: `capture-${this.sent.length}`,
     });
   }
-}
-
-/** Runs each step inline — the platform's memoisation is Inngest's to prove. */
-function inlineStep() {
-  const ran: string[] = [];
-  return {
-    ran,
-    step: {
-      run: async <T>(
-        id: string,
-        fn: () => Promise<T> | T,
-      ): Promise<unknown> => {
-        ran.push(id);
-        return await fn();
-      },
-    },
-  };
 }
 
 /** `test/setup-env.ts` pins both; the links below are derived from them. */
@@ -159,21 +144,32 @@ describe('SendNotificationEmailFn (e2e)', () => {
     ]);
   });
 
-  /** A recipient and a stored, unread row addressed to them. */
+  /**
+   * A recipient and a stored, unread row addressed to them. By default both
+   * belong to the branded agency; `userAgencyId: null` makes the recipient a
+   * platform admin while the row keeps the agency.
+   */
   async function seed(
     overrides: {
       agencyId?: Types.ObjectId | null;
+      userAgencyId?: Types.ObjectId | null;
       user?: Partial<User>;
     } = {},
   ) {
     const rowAgencyId =
       overrides.agencyId === undefined ? agencyId : overrides.agencyId;
+    const userAgencyId =
+      overrides.userAgencyId === undefined
+        ? rowAgencyId
+        : overrides.userAgencyId;
     const user = await users.create({
       email: 'pat@example.com',
       passwordHash: 'x',
       firstName: 'Pat',
       lastName: 'Producer',
-      ...(rowAgencyId ? { agencyId: rowAgencyId } : { isPlatformAdmin: true }),
+      ...(userAgencyId
+        ? { agencyId: userAgencyId }
+        : { isPlatformAdmin: true }),
       ...overrides.user,
     });
     const row = await notifications.create({
@@ -290,6 +286,59 @@ describe('SendNotificationEmailFn (e2e)', () => {
     expect(stored.agencyId).toBeNull();
   });
 
+  it("links on the recipient's host, branded for the row's agency", async () => {
+    // A platform admin notified about an agency-scoped row. The link has to
+    // land where *they* can sign in — `HostTenantGuard` refuses their session
+    // on the agency host — while the masthead is still the agency's, on the
+    // agency's own host, because that is where its logo is served.
+    const { row } = await seed({ userAgencyId: null });
+
+    await fn.handle(emailEvent(row, agencyId), inlineStep().step);
+
+    const { message } = transport.sent[0];
+    expect(message.text).toContain(`${PLATFORM_ORIGIN}/admin/bugs`);
+    expect(message.text).not.toContain(TENANT_HOST);
+    expect(message.html).toContain(`href="${PLATFORM_ORIGIN}/admin/bugs"`);
+    expect(message.html).toMatch(
+      new RegExp(`src="${TENANT_ORIGIN}/api/v1/public/tenant/logo\\?`),
+    );
+    expect(message.html).toContain('alt="Texas Holdings"');
+  });
+
+  it('carries the agency name but no logo when the agency has no host of its own', async () => {
+    // An agency that uploaded a logo but has not verified a domain is served
+    // on the platform host, where the logo endpoint 404s. A URL built there
+    // is a broken image; name-only is the honest brand.
+    const domainless = await agencies.create({
+      name: 'No Domain Co',
+      slug: 'no-domain-co',
+      branding: { logoKey: 'agencies/y/logo' },
+    });
+    const { row } = await seed({ agencyId: domainless._id });
+
+    await fn.handle(emailEvent(row, domainless._id), inlineStep().step);
+
+    const { message } = transport.sent[0];
+    expect(message.text).toContain(`${PLATFORM_ORIGIN}/admin/bugs`);
+    expect(message.html).toContain('<title>No Domain Co</title>');
+    expect(message.html).not.toContain('<img');
+  });
+
+  it('refuses, without retry, an event that disagrees with the row about who is mailed', async () => {
+    const { row } = await seed();
+    const stranger = new Types.ObjectId().toHexString();
+    const { step, ran } = inlineStep();
+
+    await expect(
+      fn.handle(emailEvent(row, agencyId, { recipientId: stranger }), step),
+    ).rejects.toBeInstanceOf(NonRetriableError);
+
+    expect(ran).toEqual(['load']);
+    expect(transport.sent).toHaveLength(0);
+    const stored = await notifications.findById(row._id).lean();
+    expect(stored?.delivery.email).toBeNull();
+  });
+
   it('keys the provider on the notification id', async () => {
     const { row } = await seed();
     await fn.handle(emailEvent(row, agencyId), inlineStep().step);
@@ -364,6 +413,27 @@ describe('SendNotificationEmailFn (e2e)', () => {
       status: 'skipped',
       error: 'recipient is deactivated',
     });
+  });
+
+  it('skips, with its own reason, when the recipient has no email address', async () => {
+    const { row, user } = await seed();
+    // Past the schema's `required`: the record exists, the address does not.
+    await users.updateOne({ _id: user._id }, { $unset: { email: 1 } });
+
+    const result = await fn.handle(
+      emailEvent(row, agencyId),
+      inlineStep().step,
+    );
+
+    expect(result).toEqual({
+      sent: false,
+      reason: 'recipient has no email address',
+    });
+    expect(transport.sent).toHaveLength(0);
+    const stored = await notifications.findById(row._id).lean();
+    expect(stored?.delivery.email?.error).toBe(
+      'recipient has no email address',
+    );
   });
 
   it('is a no-op for a row that no longer exists', async () => {

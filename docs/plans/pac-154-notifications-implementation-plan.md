@@ -212,6 +212,19 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - `lint -w @sfa/api` is eslint only; `build -w @sfa/api` + `tsc -p packages/api/tsconfig.json` catch type errors. Rebuild `@sfa/shared` before e2e, Bruno and API unit tests.
 - Every new env var goes to `.env.example`, the preflight `env:` map, `required=`, the `app.env` heredoc, `DEPLOYMENT.md`, and `test/setup-env.ts`.
 
+### Found in review (Abu Bakar, #139 / #141, 2026-10-08) — each shipped once before it was caught
+
+- **Our throttlers are named** (`short`, `long`), so a bare `@SkipThrottle()` writes metadata for a throttler called `default` and skips **nothing**. Use `SkipAllThrottlers()` (`common/decorators/throttle.decorators.ts`), which derives from `THROTTLER_NAMES`; the ACME controller had the same latent bug.
+- **ioredis only auto-resubscribes channels it has a successful SUBSCRIBE reply for.** A SUBSCRIBE queued while the connection is coming up is flushed with `MaxRetriesPerRequestError` after `maxRetriesPerRequest + 1` attempts (`duplicate()` inherits the client's `2`) and never retried — the node then looks healthy and receives no nudges until restart. Subscribe from the `ready` handler, every time.
+- **Nest's SSE pipeline writes `err.message` to the browser and ends the response** when anything in the merged observable errors. Wrap each inner source (`findForStream`) in its own `catchError → EMPTY`; one Mongo blip must drop one frame, not the stream.
+- **`concurrency` is not a rate limit.** It caps runs in flight; Inngest's `throttle: { limit, period }` is what enforces Resend's 2 req/s.
+- **`baseUrlFor` is right for links and wrong for assets.** It falls back to the platform host, where `GET /public/tenant/logo` 404s (the endpoint resolves the agency from `Host`). Build email logos and push icons through `TenantBrandingService.emailBrandFor` / `TenantUrlService.agencyBaseUrlFor`, which answer `null` for an agency without a domain. Invite emails had this bug since PAC-69.
+- **The link host is the recipient's, the brand is the row's.** `HostTenantGuard` refuses a session on any other host, so `href` is built from `User.agencyId` (null = platform host); the masthead is the row's agency.
+- **A fan-out emit inside one `step.run` needs stable event ids.** A partial failure replays every emit with fresh ids; the function-level `idempotency` skips the duplicate *runs*, so their outbox rows sit `pending` for 24 h and the sweeper re-emits them every few minutes. `InngestService.send(..., { id: deterministicEventId(ns, key) })` and `recordPending` is an insert-only upsert.
+- **A live `RESEND_API_KEY` outside production** now reaches only `MAIL_DEV_ALLOWED_RECIPIENTS`; with a key and no list nothing is sent and the API logs an error. The PR3 Bruno run had mailed two real admins.
+- The `publish` and `email` steps **await their rows sequentially**: a Redis outage made each publish pay a full ioredis retry cycle. Fan out with `Promise.all` where the call is best-effort.
+- `emailMessages` **`record` is not atomic** (insert, then `delivery.email`): a blip between the two can duplicate the row, and an exhausted `record` leaves a sent mail reading `failed`. The invite function has the same shape. Deferred to its own ticket — the fix is an upsert on the idempotency key inside `MailDeliveryService.record`, which is mail-platform (PAC-66) territory.
+
 ## Out of scope (per the ticket)
 
 Per-type/per-channel user preferences; per-agency manifest and the PWA QA pass (PAC-153 §2/§3); digests; every trigger other than the single bug-report producer in PR1 (PAC-127 and the feature tickets); `BroadcastChannel` multi-tab dedupe; a soft-delete convention for anything but `pushSubscriptions` (PAC-155).

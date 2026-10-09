@@ -19,7 +19,10 @@ import {
   INNGEST_CLIENT,
   type InngestClient,
 } from '../../inngest/inngest.client';
-import { InngestService } from '../../inngest/inngest.service';
+import {
+  deterministicEventId,
+  InngestService,
+} from '../../inngest/inngest.service';
 import {
   InngestFunction,
   type InngestFunctionProvider,
@@ -209,6 +212,18 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
    * The decision is the catalog's alone until per-user preferences exist
    * (ticket decision 4); when they land they filter this list, they do not
    * replace it. Returns a count so the step result is plain JSON.
+   *
+   * ## Stable event ids
+   *
+   * Each emit carries `deterministicEventId('notification-email', row.id)`.
+   * This step is one `step.run` over every row, so a failure on the ninth
+   * emit replays all nine. With fresh ids the first eight rows would each
+   * gain a second event: Inngest's function idempotency (on `notificationId`)
+   * would skip the duplicate *runs*, but nothing would ever mark the
+   * duplicates' outbox rows terminal, and the sweeper would re-emit them for
+   * 24 hours — no second email, but a day of stale-outbox noise for work that
+   * succeeded. With a stable id the replay *is* the original event: Inngest
+   * dedupes it and the outbox finds its row already written.
    */
   async requestEmails(
     type: NotificationType,
@@ -219,11 +234,15 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
       return { requested: 0 };
     }
     for (const row of rows) {
-      await this.events.send(notificationEmailRequested, {
-        notificationId: row.id,
-        recipientId: row.recipientId,
-        agencyId,
-      });
+      await this.events.send(
+        notificationEmailRequested,
+        {
+          notificationId: row.id,
+          recipientId: row.recipientId,
+          agencyId,
+        },
+        { id: deterministicEventId('notification-email', row.id) },
+      );
     }
     return { requested: rows.length };
   }

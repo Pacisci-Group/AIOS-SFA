@@ -4,6 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import type { HostTenant } from '../common/tenancy/host-tenant.resolver';
+import { TenantUrlService } from '../common/tenancy/tenant-url.service';
 
 /** What the platform is called when no agency branding applies. */
 export const PLATFORM_BRAND_NAME = 'AgencyOps';
@@ -32,6 +33,17 @@ export interface TenantBrandingView {
 }
 
 /**
+ * The brand an outbound email carries. Structurally the templates' `EmailBrand`
+ * (`worker/email/templates/layout.ts`), declared here so this module does not
+ * import from the worker tier.
+ */
+export interface OutboundEmailBrand {
+  name: string;
+  /** Absolute and publicly fetchable, or `null` when there is nothing to show. */
+  logoUrl: string | null;
+}
+
+/**
  * Resolves what to *show* for a given host.
  *
  * Read by three callers with different needs and one rule: the app shell, the
@@ -49,7 +61,45 @@ export class TenantBrandingService {
   constructor(
     @InjectModel(Agency.name)
     private readonly agencyModel: Model<AgencyDocument>,
+    private readonly tenantUrls: TenantUrlService,
   ) {}
+
+  /**
+   * The brand to put on an outbound email about an agency — or `undefined`
+   * for a platform message, which the templates render under the platform
+   * identity.
+   *
+   * The logo comes back **absolute, on the agency's own host, or `null`**.
+   * A mail client has no origin to resolve a path against, and the logo
+   * endpoint resolves the agency from its `Host` — so on the platform host it
+   * 404s. An agency that has uploaded a logo but has no verified domain yet is
+   * therefore served on the platform host *and* cannot have its logo fetched
+   * from there; the only honest brand for it is name-only.
+   *
+   * One helper because the rule was copied three times (invite email,
+   * notification email, push icon) and all three built the URL on
+   * `baseUrlFor`, whose platform fallback is right for a link and wrong for
+   * an asset — every one of them was a broken image for exactly those
+   * agencies (PAC-154 PR3 review).
+   */
+  async emailBrandFor(
+    agencyId: string | null | undefined,
+  ): Promise<OutboundEmailBrand | undefined> {
+    if (!agencyId) return undefined;
+
+    const branding = await this.forAgency(agencyId);
+    if (branding.kind !== 'agency') return undefined;
+
+    const ownBase = branding.logoUrl
+      ? await this.tenantUrls.agencyBaseUrlFor(agencyId)
+      : null;
+
+    return {
+      name: branding.name,
+      logoUrl:
+        ownBase && branding.logoUrl ? `${ownBase}${branding.logoUrl}` : null,
+    };
+  }
 
   /** The default identity, used on the platform host and as every fallback. */
   platformBranding(): TenantBrandingView {
