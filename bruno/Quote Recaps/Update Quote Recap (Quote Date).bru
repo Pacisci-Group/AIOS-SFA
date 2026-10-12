@@ -1,0 +1,78 @@
+meta {
+  name: Update Quote Recap (Quote Date)
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/quote-recaps/{{createdQuoteRecapId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "quoteDate": "2026-02-01"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("moves the quote to the named day, as an agency-calendar day", function () {
+    expect(res.getBody().quoteDate).to.equal("2026-02-01");
+  });
+
+  test("nothing but the date moved", function () {
+    // The totals `Update Quote Recap` (seq 9) left behind.
+    const body = res.getBody();
+    expect(body.premium).to.equal(2250.25);
+    expect(body.itemCount).to.equal(3);
+    expect(body.insuranceRenewalMonth).to.equal("September");
+  });
+}
+
+docs {
+  # PATCH /quote-recaps/:id — re-date a quote (PAC-159 §1)
+
+  A quote is sometimes given before the record is typed in, so the date has to
+  be correctable, the way the sold date is (PAC-104). Mirrors
+  `PATCH /sold-deals/:id` step for step.
+
+  - **Module:** `quote_recaps` · **Permission:** `quote_recaps:write` ·
+    **Scope:** `own` — another producer's recap **404s**.
+
+  ## What moves
+  - `quoteDate`, stored at the new day's first instant in `Agency.timezone`.
+    The Quoted scorecard, the leaderboard's Motivation Hub and both management
+    dashboards read recaps **live** — nothing is pre-computed — so the figure
+    for the old period changes on the next request. Intended, and recorded.
+  - The recap's `quoted` timeline row (its meaning is "occurred on the quote
+    date"). A migrated recap's row carries only `legacySubjectId` and stays.
+  - A `field_changed` row, summary `Quote recap edited`, carrying
+    `Quote date: <old> → 2026-02-01`.
+
+  ## What does not
+  - The lead status is **not** re-advanced (PAC-38 made it freely editable).
+  - Nothing is checked on a patch that leaves the date alone — a migrated pair
+    that already breaks a rule below stays editable.
+
+  ## Rules (`400`, judged on the agency's calendar; same day allowed)
+  - not in the future — **Update Quote Recap (Future Date)**;
+  - not before the lead's `createdDate` — **Update Quote Recap (Before Lead)**;
+  - not after the sold date of any sale sold **from this recap**
+    (`Deal.quoteRecapId`) — **Update Quote Recap (After Sale)** in the Sold
+    Deals folder, once such a sale exists. Other quotes and sales on the lead
+    are not consulted: a requote after a sale is normal.
+
+  ## Run order
+  Depends on `createdQuoteRecapId` (seq 4). **Get Performance (Quote Moved To
+  February)** (seq 14) proves the scorecard followed it.
+}

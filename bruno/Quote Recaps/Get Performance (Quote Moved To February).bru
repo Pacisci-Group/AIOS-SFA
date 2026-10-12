@@ -1,0 +1,47 @@
+meta {
+  name: Get Performance (Quote Moved To February)
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/performance?range=custom&from=2026-02-01&to=2026-02-28
+  body: none
+  auth: inherit
+}
+
+params:query {
+  range: custom
+  from: 2026-02-01
+  to: 2026-02-28
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the re-dated recap now counts in February", function () {
+    // `Update Quote Recap (Quote Date)` moved the 2250.25 recap to Feb 1.
+    const quoted = res.getBody().quoted;
+    expect(quoted.recordCount).to.be.at.least(1);
+    expect(quoted.premium).to.be.at.least(2250.25);
+  });
+}
+
+docs {
+  # GET /performance — a re-dated quote moves on the scorecard (PAC-159)
+
+  Not a new endpoint: this re-reads the Quoted scorecard for February 2026 to
+  pin the side effect of **Update Quote Recap (Quote Date)** (seq 13). The
+  recap was created today and would not have counted here before the patch.
+
+  Every window is cut on the agency's calendar **once, in Node**, and the query
+  is a plain indexed range on `quoteRecaps.quoteDate` — there is no stored
+  calendar label to keep in step, which is what makes a re-date a single
+  write. The same holds for `deals.soldDate` and the Sold card.
+}

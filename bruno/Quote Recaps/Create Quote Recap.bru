@@ -14,9 +14,20 @@ headers {
   ~X-Branch-Id: {{branchId}}
 }
 
+script:pre-request {
+  // The day the quote was given (PAC-159): today on the agency's calendar
+  // (the demo agency keeps the default, America/Chicago). Not the UTC day,
+  // which is already tomorrow from 7 PM Central and would be refused.
+  bru.setVar(
+    "quoteRecapQuoteDay",
+    new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }),
+  );
+}
+
 body:json {
   {
     "leadId": "{{createdLeadId}}",
+    "quoteDate": "{{quoteRecapQuoteDay}}",
     "policies": [
       { "policyType": "Auto", "premium": 1200.10, "itemCount": 2 },
       {
@@ -86,6 +97,7 @@ docs {
   | field            | type    | required | rules                                              |
   |------------------|---------|----------|----------------------------------------------------|
   | leadId           | string  | yes      | 24-char ObjectId; household is resolved from it     |
+  | quoteDate        | string  | **yes**  | `YYYY-MM-DD`, the day the quote was given, on the agency's calendar (PAC-159). Not in the future; not before the lead's date. The form pre-fills the agency's today |
   | policies[]       | array   | yes      | 1–12 rows                                          |
   | policies[].policyType | string | yes  | canonical label from `POLICY_TYPES`; raw SmartSuite codes are rejected |
   | policies[].premium    | number | yes  | ≥ 0, ≤ 1,000,000                                   |
@@ -133,8 +145,15 @@ docs {
   in IEEE-754. Any `premium` / `itemCount` / `productsQuoted` sent in the body is
   ignored.
 
-  **`quoteDate` is the submission date and `producerId` comes from the token.**
-  A recap with a null `quoteDate` would be invisible to the scorecard.
+  **`quoteDate` is the day the quote was given (PAC-159), and `producerId`
+  comes from the token.** A quote is sometimes recorded days after it was
+  given, so the form asks for the date, exactly as the Sold form asks for the
+  sold date. It is stored at that day's first instant in `Agency.timezone` —
+  never UTC midnight — and every scorecard, leaderboard and dashboard cuts its
+  window on the agency's calendar at read time, so a quote back-dated into last
+  month counts in last month. Rejected with a `400` for the field when it is
+  after today on the agency's calendar or before the lead's `createdDate`.
+  Editable afterwards — see **Update Quote Recap (Quote Date)**.
 
   **The document is verified against storage, not against the request.** The key
   must start with `agencies/<agencyId>/quote-recaps/<leadId>/`, and the server

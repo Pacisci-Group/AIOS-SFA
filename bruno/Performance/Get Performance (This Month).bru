@@ -81,10 +81,11 @@ docs {
   ### Windows
   All boundaries are **calendar days in the agency's time zone**
   (`Agency.timezone`, default `America/Chicago` — see **Update Agency
-  Profile**), compared as `YYYYMMDD` integers against the indexed
-  `deals.soldDateYmd` / `quoteRecaps.quoteDateYmd`. "Today" is resolved once
-  per request from the caller's agency, never from the browser or the server
-  clock.
+  Profile**). The window is turned into two instants **once, in Node**, and
+  matched as a plain indexed range on `deals.soldDate` /
+  `quoteRecaps.quoteDate` (PAC-159) — there is no stored day label. "Today"
+  is resolved once per request from the caller's agency, never from the
+  browser or the server clock.
 
   | range | window |
   |-------|--------|

@@ -49,6 +49,7 @@ tests {
       // (PAC-70). Always present so the web's stored blob never keeps a stale
       // value after switching back to an ordinary login.
       "impersonatedBy",
+      "timeZone",
     );
     expect(res.getBody().impersonatedBy).to.equal(null);
   });
@@ -97,7 +98,8 @@ docs {
     "scope": "agency",
     "dataScope": "agency",
     "isPlatformAdmin": false,
-    "impersonatedBy": null
+    "impersonatedBy": null,
+    "timeZone": "America/Chicago"
   }
   ```
 

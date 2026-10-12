@@ -1,0 +1,44 @@
+meta {
+  name: Update Quote Recap (Before Lead)
+  type: http
+  seq: 16
+}
+
+patch {
+  url: {{baseUrl}}/quote-recaps/{{createdQuoteRecapId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "quoteDate": "2025-12-31"
+  }
+}
+
+tests {
+  test("rejects a quote dated before the lead came in", function () {
+    expect(res.getStatus()).to.equal(400);
+    expect(res.getBody().message).to.contain("Quote date cannot be before the lead was created");
+  });
+}
+
+docs {
+  # PATCH /quote-recaps/:id — the lead date is the floor (PAC-159 §1b)
+
+  A quote cannot precede the lead it was given on. The floor is the lead's
+  `createdDate` (`createdAt` for a migrated lead that never had one), read as
+  an agency-calendar day; the same day is allowed. The lead in this collection
+  was re-dated to **2026-01-03** by **Update Lead (Lead Date)**. The same
+  floor guards `POST /quote-recaps`, `POST /sold-deals` and
+  `PATCH /sold-deals/:id`.
+
+  The floor is only safe because the lead date itself is editable (§1c): a
+  record typed in after the quote is fixed by moving the lead date back, not by
+  loosening this rule.
+}

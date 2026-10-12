@@ -1,0 +1,35 @@
+meta {
+  name: Update Quote Recap (After Sale)
+  type: http
+  seq: 20
+}
+
+patch {
+  url: {{baseUrl}}/quote-recaps/{{createdQuoteRecapId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  { "quoteDate": "2026-02-16" }
+}
+
+tests {
+  test("rejects a quote dated after the sale it was sold on", function () {
+    expect(res.getStatus()).to.equal(400);
+    expect(res.getBody().message).to.contain("Quote date cannot be after the sale it was sold on");
+  });
+}
+
+docs {
+  # PATCH /quote-recaps/:id — a quote cannot post-date its sale (PAC-159 §1b)
+
+  The other side of **Update Sold Deal (Before Quote)**: the sale booked from
+  this recap (seq 7, moved to 2026-02-14 at seq 15) is the ceiling on the
+  recap's date. Lives in this folder because it needs the sale to exist.
+}
