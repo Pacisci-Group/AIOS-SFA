@@ -168,7 +168,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         leadSourceId: mailer,
         householdId: householdOne,
         soldDate: onDay('2026-05-04'),
-        soldDateYmd: 20260504,
       },
       [
         { policyType: 'Auto', premium: 1200, items: 3 },
@@ -183,7 +182,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         leadSourceId: facebook,
         householdId: new Types.ObjectId(),
         soldDate: onDay('2026-05-11'),
-        soldDateYmd: 20260511,
       },
       [{ policyType: 'Auto', premium: 1000, items: 2 }],
     );
@@ -194,7 +192,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         leadSourceId: mailer,
         householdId: householdOne,
         soldDate: onDay('2026-05-18'),
-        soldDateYmd: 20260518,
       },
       [{ policyType: 'Landlords', premium: 500, items: 1 }],
     );
@@ -203,7 +200,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       ...base,
       producerId: producer!._id,
       soldDate: onDay('2026-05-20'),
-      soldDateYmd: 20260520,
       premium: 700,
       itemCount: 1,
       policyTypes: ['Renters'],
@@ -216,33 +212,34 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         leadSourceId: facebook,
         householdId: new Types.ObjectId(),
         soldDate: onDay('2026-05-25'),
-        soldDateYmd: 20260525,
       },
       [{ policyType: 'Auto', premium: 300, items: 1 }],
     );
 
     // Must never be counted.
     await sell(
-      { producerId: producer!._id, soldDateYmd: 20260506, isTestRecord: true },
+      {
+        producerId: producer!._id,
+        soldDate: onDay('2026-05-06'),
+        isTestRecord: true,
+      },
       [{ policyType: 'Auto', premium: 99_999, items: 99 }],
     );
     await sell(
       {
         producerId: producer!._id,
         soldDate: onDay('2026-05-07'),
-        soldDateYmd: 20260507,
         businessType: 'company_transfer',
       },
       [{ policyType: 'Auto', premium: 88_888, items: 88 }],
     );
-    await sell({ producerId: producer!._id, soldDateYmd: 20260601 }, [
+    await sell({ producerId: producer!._id, soldDate: onDay('2026-06-01') }, [
       { policyType: 'Auto', premium: 55_555, items: 55 },
     ]);
     const foreign = await dealModel.create({
       agencyId: seed.otherAgencyId,
       branchId: seed.branchId,
       soldDate: onDay('2026-05-08'),
-      soldDateYmd: 20260508,
       premium: 123_456,
       itemCount: 12,
     });
@@ -261,7 +258,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         producerId: producer!._id,
         householdId: new Types.ObjectId(),
         soldDate: onDay('2026-04-15'),
-        soldDateYmd: 20260415,
       },
       [{ policyType: 'Auto', premium: 4000, items: 2 }],
     );
@@ -272,7 +268,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         producerId: producer!._id,
         leadId: l1._id,
         quoteDate: onDay('2026-05-02'),
-        quoteDateYmd: 20260502,
         premium: 5000,
         itemCount: 4,
         productsQuoted: ['Auto', 'Home'],
@@ -287,7 +282,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         producerId: owner!._id,
         leadId: l2._id,
         quoteDate: onDay('2026-05-09'),
-        quoteDateYmd: 20260509,
         premium: 4000,
         itemCount: 2,
         productsQuoted: ['PYgez'],
@@ -296,7 +290,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         ...base,
         producerId: producer!._id,
         quoteDate: onDay('2026-05-19'),
-        quoteDateYmd: 20260519,
         premium: 1000,
         itemCount: 1,
         productsQuoted: ['Renters'],
@@ -307,7 +300,6 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         ...base,
         producerId: producer!._id,
         quoteDate: onDay('2026-04-14'),
-        quoteDateYmd: 20260414,
         premium: 8000,
         itemCount: 2,
         productsQuoted: ['Auto'],

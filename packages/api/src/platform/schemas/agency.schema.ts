@@ -387,17 +387,19 @@ export class Agency {
    * `PATCH /agency/profile` (PAC-141). Read by: the worker's end-of-day Away
    * sweep; `PermissionsService`, which copies it onto `AccessContext.timeZone`
    * once per request, from where every dashboard window ("today", MTD,
-   * business-day aging, the leaderboard's month) is cut; and the quote-recap
-   * write path, which files a recap on this calendar.
+   * business-day aging, the leaderboard's month) is cut; and the sold, quote
+   * and lead write paths, which anchor a day-only date on this calendar
+   * (`businessDateInstant`, PAC-159).
    *
-   * ## A change is only half retroactive
+   * ## A change is retroactive for everything but goals
    *
-   * Lead creation days are computed at read time, so lead history re-buckets
-   * on the next request. `Deal.soldDateYmd`, `QuoteRecap.quoteDateYmd` and
-   * `ProducerGoal.month` are **stored** on the calendar in force when they were
-   * written and are not rewritten — an agency that moves zones keeps every past
-   * sale and quote on the day it was filed. Rows the SmartSuite migration
-   * imported carry the day SmartSuite stated regardless.
+   * Sales, quotes and leads are stored as instants and bucketed on this
+   * calendar at read time, so changing the zone re-files the agency's whole
+   * history on the next request — consistently, which is the point (PAC-159;
+   * before it, sales and quotes carried a stored day label and stayed put
+   * while leads moved). The one stored calendar key left is
+   * `ProducerGoal.month`, which names a month rather than an instant and does
+   * not move.
    *
    * The validator keeps a typo out of the row; the write paths additionally
    * probe MongoDB (`assertMongoKnowsTimeZone`), whose zone table is not the

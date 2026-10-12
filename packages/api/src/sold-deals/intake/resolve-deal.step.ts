@@ -34,7 +34,11 @@ export class ResolveDealStep {
     aggregates: ReturnType<typeof deriveDealAggregates>;
   }> {
     const { ctx } = deps;
-    const aggregates = deriveDealAggregates(dto.policies, dto.soldDate);
+    const aggregates = deriveDealAggregates(
+      dto.policies,
+      dto.soldDate,
+      ctx.timeZone,
+    );
 
     const [deal] = await this.dealModel.create(
       [
@@ -49,7 +53,6 @@ export class ResolveDealStep {
             (ctx.leadId ?? ctx.householdId).toString(),
           ),
           soldDate: aggregates.soldDate,
-          soldDateYmd: aggregates.soldDateYmd,
           premium: aggregates.premium,
           // Honest provenance: these totals were submitted with the deal, not
           // rolled up from linked rows the way a migrated deal's were.

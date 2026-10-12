@@ -105,7 +105,7 @@ const key = (id: GroupKey): string => (id ? id.toString() : '');
  * ## Live
  *
  * No rollup collection and no job. An agency-year is a few thousand rows behind
- * `{ agencyId, soldDateYmd }`; and distinct households are not additive across
+ * `{ agencyId, soldDate }`; and distinct households are not additive across
  * days, so there is nothing a rollup could pre-compute that survives an
  * arbitrary range plus three multi-select filters.
  */

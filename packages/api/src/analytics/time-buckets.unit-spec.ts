@@ -1,8 +1,4 @@
-import {
-  bucketsBetween,
-  fillBuckets,
-  instantBucketExpr,
-} from './time-buckets';
+import { bucketsBetween, fillBuckets, instantBucketExpr } from './time-buckets';
 
 describe('bucketsBetween', () => {
   it('lists every day, inclusive of both ends', () => {

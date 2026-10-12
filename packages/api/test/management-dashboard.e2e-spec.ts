@@ -22,7 +22,6 @@ import { Lead } from '../src/leads/schemas/lead.schema';
 import {
   addDays,
   toIsoDate,
-  toYmd,
   zonedDate,
   zonedDayStart,
 } from '../src/performance/performance.range';
@@ -129,13 +128,9 @@ describe('Management dashboard (PAC-139) (e2e)', () => {
       soldDate: new Date(
         zonedDayStart(day, TIME_ZONE).getTime() + 12 * 3_600_000,
       ),
-      soldDateYmd: toYmd(day),
     };
   };
-  const soldDaysAgo = (n: number) => ({
-    soldDate: daysAgo(n),
-    soldDateYmd: toYmd(zonedDate(daysAgo(n), TIME_ZONE)),
-  });
+  const soldDaysAgo = (n: number) => ({ soldDate: daysAgo(n) });
 
   const get = async <T>(path: string, query: string, token = ownerToken) => {
     const res = await request(app.getHttpServer())
@@ -444,10 +439,7 @@ describe('Management dashboard (PAC-139) (e2e)', () => {
         policies: [{ policyType: 'Auto', premium: 1000, itemCount: 1 }],
         ...fields,
       });
-    const quoted = (n: number) => ({
-      quoteDate: daysAgo(n),
-      quoteDateYmd: toYmd(zonedDate(daysAgo(n), TIME_ZONE)),
-    });
+    const quoted = (n: number) => ({ quoteDate: daysAgo(n) });
     await recap({
       householdId: d1.householdId,
       leadId: l1._id,

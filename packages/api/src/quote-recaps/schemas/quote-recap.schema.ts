@@ -102,6 +102,12 @@ export class QuoteRecap extends TenantRecord {
   @Prop()
   quoteRecapAutoNumber?: number;
 
+  /**
+   * When the quote was given — a UTC instant the Quoted scorecard buckets on
+   * the agency's calendar at read time (PAC-159). A day-only entry (the Quote
+   * form's date, a migrated row) sits at that day's first instant in
+   * `Agency.timezone`; see `businessDateInstant`.
+   */
   @Prop({ type: Date, index: true })
   quoteDate?: Date;
 
@@ -202,22 +208,6 @@ export class QuoteRecap extends TenantRecord {
   @Prop()
   legacyHouseholdId?: string;
 
-  /**
-   * `YYYYMMDD` calendar-day label, the counterpart to `Deal.soldDateYmd`.
-   *
-   * Lets the Quoted scorecard (PAC-10) run the same indexed integer range
-   * comparison the Sold scorecard uses, rather than a second `Date`-bounded
-   * code path with its own timezone edge cases. Derived by `quoteDateYmd` in
-   * `../quote.normalize`, which reads the agency's calendar or UTC parts
-   * depending on the recap's provenance — see that docblock. Written once:
-   * a later change to `Agency.timezone` does not move it.
-   *
-   * Optional only for recaps written before PAC-9; the migration has set it
-   * on every import since.
-   */
-  @Prop({ index: true })
-  quoteDateYmd?: number;
-
   @Prop({ default: false, index: true })
   isTestRecord: boolean;
 }
@@ -231,15 +221,11 @@ QuoteRecapSchema.index(
 QuoteRecapSchema.index({ agencyId: 1, producerId: 1, quoteDate: -1 });
 
 /**
- * The Quoted scorecard's own-scope aggregation (PAC-10). The `quoteDate` index
- * above is on the **Date**; it cannot serve a range over the `YYYYMMDD`
- * integer, so this is a separate index rather than a reordering. Mirrors
- * `{ agencyId, producerId, soldDateYmd }` on `deals` exactly. Do not reorder.
+ * Its agency-scope counterpart, for a caller reading beyond their own rows
+ * (the Owner dashboard, analytics). Built on existing databases by the
+ * PAC-159 migration.
  */
-QuoteRecapSchema.index({ agencyId: 1, producerId: 1, quoteDateYmd: -1 });
-
-/** Its agency-scope counterpart, for a caller reading beyond their own rows. */
-QuoteRecapSchema.index({ agencyId: 1, quoteDateYmd: -1 });
+QuoteRecapSchema.index({ agencyId: 1, quoteDate: -1 });
 
 /**
  * `{ agencyId, leadId }` is a prefix of this, so lead-detail lookups are served

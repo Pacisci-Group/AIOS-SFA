@@ -25,7 +25,6 @@ import { HouseholdMember } from '../../households/schemas/household-member.schem
 import { Household } from '../../households/schemas/household.schema';
 import { Contact } from '../../contacts/schemas/contact.schema';
 import { Lead } from '../../leads/schemas/lead.schema';
-import { quoteDateYmd } from '../../quote-recaps/quote.normalize';
 import { QuoteRecap } from '../../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../../deals/schemas/deal.schema';
 import { Policy } from '../../policies/schemas/policy.schema';
@@ -126,7 +125,7 @@ export type DemoSeedSummary = {
 interface Ctx {
   agencyId: string;
   agencyObjectId: Types.ObjectId;
-  /** `Agency.timezone` — the calendar `quoteDateYmd` files recaps on. */
+  /** `Agency.timezone` — the calendar day-only business dates are anchored on. */
   timeZone: string;
   branchIdBySlug: Record<BranchSlug, string>;
   branchObjectIdBySlug: Record<BranchSlug, Types.ObjectId>;
@@ -963,9 +962,6 @@ export class DemoSeedService {
             title: hh ? `${hh.name} — Quote` : `Quote ${i}`,
             quoteRecapAutoNumber: 1000 + i,
             quoteDate,
-            // Written here so a fresh demo tenant drives the Quoted scorecard
-            // (PAC-10) without anyone having to run the backfill first.
-            quoteDateYmd: quoteDateYmd(quoteDate, ctx.timeZone),
             premium,
             // Summed the way a real recap's rows sum: a vehicle line can
             // carry several, every other line carries exactly one.
@@ -1082,7 +1078,6 @@ export class DemoSeedService {
           title: `${clientName} — ${dealType}`,
           dealAutoNumber: 5000 + i,
           soldDate,
-          soldDateYmd: this.ymd(soldDate),
           premium,
           premiumSource: 'rollup',
           // Summed the way `deriveDealAggregates` sums the real thing.
@@ -2336,12 +2331,6 @@ export class DemoSeedService {
 
   private addMonths(n: number): Date {
     return new Date(this.now.getFullYear(), this.now.getMonth() + n, 1);
-  }
-
-  private ymd(date: Date): number {
-    return (
-      date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate()
-    );
   }
 
   private monthKey(date: Date): string {

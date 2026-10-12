@@ -15,10 +15,10 @@ import { quoteDocumentSchema } from './presign-quote-document.dto';
  * `leadId` / `householdId` — re-parenting a recap to a different lead is a merge,
  * not an edit, and nothing in the UI can express it.
  *
- * `quoteDate` / `quoteDateYmd` — the day the quote was given. `quoteDateYmd` is
- * the **Quoted scorecard's** indexed bucket key, so moving it would retroactively
- * change a number that has already been reported. A producer fixing a premium on
- * Thursday is correcting Monday's quote, not re-quoting today.
+ * `quoteDate` — the day the quote was given, which the Quoted scorecard
+ * buckets on; moving it would retroactively change a number that has already
+ * been reported. A producer fixing a premium on Thursday is correcting Monday's
+ * quote, not re-quoting today.
  *
  * `premium` / `itemCount` / `productsQuoted` — derived server-side from
  * `policies`, and recomputed on every patch that sends them.

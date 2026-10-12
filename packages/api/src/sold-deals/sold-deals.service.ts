@@ -28,7 +28,6 @@ import type {
 import { FilterQuery, Model, Types } from 'mongoose';
 import {
   ChangeSnapshot,
-  changeDate,
   diffSnapshots,
   snapshot,
 } from '../activities/change-log';
@@ -89,10 +88,12 @@ import { SoldDealAmendmentService } from './intake/sold-deal-amendment.service';
 import {
   buildSoldAdditionToken,
   buildSoldSubmissionToken,
-  parseFormDate,
-  soldDateYmd,
 } from './intake/sold.normalize';
 import type { SoldIntakeContext } from './intake/sold-intake.types';
+import {
+  businessDateInstant,
+  businessDay,
+} from '../common/dates/business-dates';
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
@@ -362,6 +363,7 @@ export class SoldDealsService {
     const ctx: SoldIntakeContext = {
       agencyId: tenant.agencyId,
       branchId: tenant.branchId,
+      timeZone: access.timeZone,
       producerId: new Types.ObjectId(access.userId),
       leadId: lead._id,
       /*
@@ -515,7 +517,7 @@ export class SoldDealsService {
     dealId: string,
   ): Promise<SoldDealEditView> {
     const deal = await this.loadOwnedDeal(access, branchId, dealId);
-    return this.buildEditView(deal);
+    return this.buildEditView(deal, access.timeZone);
   }
 
   /**
@@ -523,10 +525,11 @@ export class SoldDealsService {
    *
    * ## What moves
    *
-   * `soldDate` and `soldDateYmd` move **together**, in one write. The Sold
-   * scorecard and the leaderboard bucket on the integer at query time, so the
-   * deal simply lands in the new period — the correction the producer asked
-   * for, and a reported figure that changes after the fact, which is intended.
+   * `soldDate`, stored as the new day's first instant in the agency's zone
+   * (PAC-159). The Sold scorecard and the leaderboard cut their windows on
+   * that calendar at query time, so the deal simply lands in the new period —
+   * the correction the producer asked for, and a reported figure that changes
+   * after the fact, which is intended.
    *
    * The deal's `sold` timeline row moves with it: its meaning is "occurred on
    * the sold date", and a correction that left it behind would have the
@@ -554,9 +557,10 @@ export class SoldDealsService {
     const deal = await this.loadOwnedDeal(access, branchId, dealId);
     const policies = await this.loadDealPolicies(deal);
 
-    // A Save with the date unchanged: nothing to write, nothing to log.
-    if (changeDate(deal.soldDate) === dto.soldDate) {
-      return this.buildEditView(deal, policies);
+    // A Save with the date unchanged: nothing to write, nothing to log. The
+    // comparison is on the agency's calendar, the same one the form shows.
+    if (businessDay(deal.soldDate, access.timeZone) === dto.soldDate) {
+      return this.buildEditView(deal, access.timeZone, policies);
     }
 
     const before = snapshot(
@@ -564,17 +568,15 @@ export class SoldDealsService {
       { deal, policies },
       { timeZone: access.timeZone },
     );
-    const soldDate = parseFormDate(dto.soldDate);
-    const ymd = soldDateYmd(dto.soldDate);
+    const soldDate = businessDateInstant(dto.soldDate, access.timeZone);
 
     await this.dealModel.updateOne(
       { _id: deal._id, agencyId: deal.agencyId },
-      { $set: { soldDate, soldDateYmd: ymd } },
+      { $set: { soldDate } },
     );
     // Mirrored onto the loaded document for the log and the response, rather
     // than re-read. Never saved — the update above is the write.
     deal.soldDate = soldDate;
-    deal.soldDateYmd = ymd;
 
     await this.moveSoldActivity(deal, soldDate);
     await this.recordDealChanges(
@@ -585,7 +587,7 @@ export class SoldDealsService {
       'Sold deal edited',
     );
 
-    return this.buildEditView(deal, policies);
+    return this.buildEditView(deal, access.timeZone, policies);
   }
 
   /**
@@ -627,7 +629,7 @@ export class SoldDealsService {
     // A retry of an addition that already landed. Checked before the blocks
     // below, so the retry still succeeds if the audit has moved on since.
     if (deal.policyAdditionTokens?.includes(token)) {
-      return this.additionResponse(deal, true);
+      return this.additionResponse(deal, access.timeZone, true);
     }
 
     const block = this.addPoliciesBlock(deal, await this.loadAuditStatus(deal));
@@ -643,7 +645,7 @@ export class SoldDealsService {
     // The steps are typed on the create pipeline's DTO. None of them reads the
     // sold date; it is carried only so the shape is honest.
     const intakeDto: SoldIntakeDto = {
-      soldDate: changeDate(deal.soldDate) ?? '',
+      soldDate: businessDay(deal.soldDate, access.timeZone) ?? '',
       policies: dto.policies,
       submissionToken: dto.submissionToken,
     };
@@ -671,6 +673,7 @@ export class SoldDealsService {
     const ctx: SoldIntakeContext = {
       agencyId: deal.agencyId,
       branchId: deal.branchId,
+      timeZone: access.timeZone,
       producerId,
       leadId,
       businessType: deal.businessType,
@@ -689,7 +692,8 @@ export class SoldDealsService {
       access,
     );
     const fresh = (await this.dealModel.findById(deal._id)) ?? deal;
-    if (outcome.replayed) return this.additionResponse(fresh, true);
+    if (outcome.replayed)
+      return this.additionResponse(fresh, access.timeZone, true);
 
     const policies = await this.loadDealPolicies(fresh);
     await this.recordDealChanges(
@@ -726,7 +730,7 @@ export class SoldDealsService {
     });
 
     return {
-      deal: await this.buildEditView(fresh, policies),
+      deal: await this.buildEditView(fresh, access.timeZone, policies),
       addedPolicyIds: outcome.addedPolicyIds.map((id) => id.toString()),
       auditItemCount: audit.itemCount,
       replayed: false,
@@ -810,6 +814,7 @@ export class SoldDealsService {
 
   private async buildEditView(
     deal: DealDocument,
+    timeZone: string,
     policies?: PolicyDocument[],
   ): Promise<SoldDealEditView> {
     const [rows, household, auditStatus, producerName] = await Promise.all([
@@ -835,7 +840,8 @@ export class SoldDealsService {
       clientName:
         deal.clientName?.trim() || household?.name?.trim() || 'Unnamed client',
       producerName: producerName ?? null,
-      soldDate: changeDate(deal.soldDate),
+      // The agency-calendar day, which is what the form edits (PAC-159).
+      soldDate: businessDay(deal.soldDate, timeZone),
       premium: deal.premium ?? 0,
       itemCount: deal.itemCount ?? 0,
       policyCount: deal.policyCount ?? 0,
@@ -855,10 +861,11 @@ export class SoldDealsService {
 
   private async additionResponse(
     deal: DealDocument,
+    timeZone: string,
     replayed: boolean,
   ): Promise<AddSoldDealPoliciesResponse> {
     return {
-      deal: await this.buildEditView(deal),
+      deal: await this.buildEditView(deal, timeZone),
       addedPolicyIds: [],
       auditItemCount: deal.auditItemCount ?? 0,
       replayed,

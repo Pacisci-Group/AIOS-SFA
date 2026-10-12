@@ -4372,7 +4372,6 @@ describe('SFA API (e2e)', () => {
             producerId: producer!._id,
             householdId: householdOne,
             soldDate: onDay('2026-05-04'),
-            soldDateYmd: 20260504,
             premium: 1000,
             itemCount: 2,
           },
@@ -4381,7 +4380,6 @@ describe('SFA API (e2e)', () => {
             producerId: producer!._id,
             householdId: householdOne,
             soldDate: onDay('2026-05-11'),
-            soldDateYmd: 20260511,
             premium: 500,
             itemCount: 1,
           },
@@ -4391,7 +4389,6 @@ describe('SFA API (e2e)', () => {
             producerId: producer!._id,
             legacyHouseholdId: 'legacy-hh-1',
             soldDate: onDay('2026-05-18'),
-            soldDateYmd: 20260518,
             premium: 300,
             itemCount: 1,
           },
@@ -4400,7 +4397,6 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             soldDate: onDay('2026-05-25'),
-            soldDateYmd: 20260525,
             premium: 200,
             itemCount: 1,
           },
@@ -4410,7 +4406,6 @@ describe('SFA API (e2e)', () => {
             producerId: producer!._id,
             householdId: new Types.ObjectId(),
             soldDate: onDay('2026-05-05'),
-            soldDateYmd: 20260505,
             premium: 99_999,
             itemCount: 99,
             isTestRecord: true,
@@ -4421,7 +4416,6 @@ describe('SFA API (e2e)', () => {
             producerId: owner!._id,
             householdId: new Types.ObjectId(),
             soldDate: onDay('2026-05-06'),
-            soldDateYmd: 20260506,
             premium: 77_777,
             itemCount: 77,
           },
@@ -4431,7 +4425,6 @@ describe('SFA API (e2e)', () => {
             producerId: producer!._id,
             householdId: new Types.ObjectId(),
             soldDate: onDay('2026-06-01'),
-            soldDateYmd: 20260601,
             premium: 55_555,
             itemCount: 55,
           },
@@ -4443,7 +4436,6 @@ describe('SFA API (e2e)', () => {
             producerId: producer!._id,
             householdId: householdOne,
             quoteDate: onDay('2026-05-04'),
-            quoteDateYmd: 20260504,
             premium: 800,
             itemCount: 2,
           },
@@ -5016,7 +5008,6 @@ describe('SFA API (e2e)', () => {
           ...base,
           producerId: producer!._id,
           soldDate: onDay('2026-04-10'),
-          soldDateYmd: 20260410,
           premium: 2000,
           itemCount: 2,
         },
@@ -5024,7 +5015,6 @@ describe('SFA API (e2e)', () => {
           ...base,
           producerId: owner!._id,
           soldDate: onDay('2026-04-15'),
-          soldDateYmd: 20260415,
           premium: 77_777,
           itemCount: 9,
         },
@@ -5033,7 +5023,6 @@ describe('SFA API (e2e)', () => {
           ...base,
           producerId: producer!._id,
           soldDate: onDay('2026-04-20'),
-          soldDateYmd: 20260420,
           premium: 500_000,
           itemCount: 1,
           isTestRecord: true,
@@ -5043,7 +5032,6 @@ describe('SFA API (e2e)', () => {
           ...base,
           producerId: producer!._id,
           soldDate: onDay('2026-03-31'),
-          soldDateYmd: 20260331,
           premium: 400_000,
           itemCount: 1,
         },
@@ -13341,7 +13329,10 @@ describe('SFA API (e2e)', () => {
       expect(deal!.premium).toBe(2100.05);
       // Honest provenance: submitted, not rolled up from linked rows.
       expect(deal!.premiumSource).toBe('snapshot');
-      expect(deal!.soldDateYmd).toBe(20260215);
+      // Stored at agency-local midnight of the form's day (PAC-159).
+      expect(deal!.soldDate?.toISOString()).toBe(
+        onDay('2026-02-15').toISOString(),
+      );
       expect(deal!.producerId?.toString()).toBe(producerId.toString());
       // The refs that did not exist before this story.
       expect(deal!.leadId?.toString()).toBe(lead._id.toString());
@@ -13971,7 +13962,7 @@ describe('SFA API (e2e)', () => {
       });
 
       describe('PATCH /sold-deals/:id', () => {
-        it('moves soldDate and soldDateYmd together, and the sold timeline entry with them', async () => {
+        it('moves soldDate to the new day at agency-local midnight, and the sold timeline entry with it', async () => {
           const { created } = await bookAuto();
 
           const res = await patchSoldDate(
@@ -13986,10 +13977,10 @@ describe('SFA API (e2e)', () => {
           expect(view.policyCount).toBe(1);
 
           const deal = await soldDealModel.findById(created.id);
-          // The Sold scorecard's bucket key — the deal now reports in January.
-          expect(deal!.soldDateYmd).toBe(20260120);
+          // The deal now reports in January: the new day's first instant in
+          // the agency's zone (CST), never UTC midnight.
           expect(deal!.soldDate?.toISOString()).toBe(
-            '2026-01-20T00:00:00.000Z',
+            '2026-01-20T06:00:00.000Z',
           );
 
           const sold = await soldActivityModel.findOne({
@@ -13997,7 +13988,7 @@ describe('SFA API (e2e)', () => {
             type: 'sold',
           });
           expect(sold!.occurredAt?.toISOString()).toBe(
-            '2026-01-20T00:00:00.000Z',
+            '2026-01-20T06:00:00.000Z',
           );
         });
 
@@ -14027,7 +14018,6 @@ describe('SFA API (e2e)', () => {
             branchId: seed.branchId,
             producerId,
             soldDate: onDay('2025-11-03'),
-            soldDateYmd: 20251103,
             premium: 9999,
             premiumSource: 'rollup',
             legacySmartSuiteId: 'legacy-deal-pac104-date',
@@ -14040,7 +14030,9 @@ describe('SFA API (e2e)', () => {
           );
 
           const after = await soldDealModel.findById(migrated._id);
-          expect(after!.soldDateYmd).toBe(20251104);
+          expect(after!.soldDate?.toISOString()).toBe(
+            onDay('2025-11-04').toISOString(),
+          );
           expect(after!.premium).toBe(9999);
         });
 
@@ -14074,7 +14066,9 @@ describe('SFA API (e2e)', () => {
 
           const deal = await soldDealModel.findById(created.id);
           // Adding a policy never re-dates the sale.
-          expect(deal!.soldDateYmd).toBe(20260215);
+          expect(deal!.soldDate?.toISOString()).toBe(
+            onDay('2026-02-15').toISOString(),
+          );
           expect(deal!.premiumSource).toBe('snapshot');
 
           const added = await soldPolicyModel.findById(body.addedPolicyIds[0]);
@@ -14260,7 +14254,6 @@ describe('SFA API (e2e)', () => {
             leadId: lead._id,
             householdId: household._id,
             soldDate: onDay('2025-10-01'),
-            soldDateYmd: 20251001,
             premium: 9999,
             itemCount: 42,
             policyCount: 7,
@@ -14288,7 +14281,9 @@ describe('SFA API (e2e)', () => {
           const after = await soldDealModel.findById(migrated._id);
           // So later per-policy corrections keep the new total in step.
           expect(after!.premiumSource).toBe('snapshot');
-          expect(after!.soldDateYmd).toBe(20251001);
+          expect(after!.soldDate?.toISOString()).toBe(
+            onDay('2025-10-01').toISOString(),
+          );
         });
 
         it("keeps a manager's addition in the producer's book", async () => {
@@ -14431,7 +14426,7 @@ describe('SFA API (e2e)', () => {
         expect((await soldPolicyModel.findById(policy._id))!.items).toBe(7);
       });
 
-      it('never moves soldDateYmd — the Sold scorecard buckets on it', async () => {
+      it('never moves soldDate — the Sold scorecard buckets on it', async () => {
         const { lead } = await seedSoldLead(producerId);
         const created = await createAs(
           producerToken,
@@ -14449,7 +14444,6 @@ describe('SFA API (e2e)', () => {
         const after = await soldDealModel.findById(created.id);
         expect(after!.premium).toBe(900);
         // A Thursday correction must not re-date a Monday sale.
-        expect(after!.soldDateYmd).toBe(before!.soldDateYmd);
         expect(after!.soldDate?.toISOString()).toBe(
           before!.soldDate?.toISOString(),
         );
@@ -14587,7 +14581,6 @@ describe('SFA API (e2e)', () => {
           premium,
           itemCount: 1,
           policyCount: 1,
-          soldDateYmd: 20260301,
           soldDate: onDay('2026-03-01'),
           businessType: 'new_business',
           isTestRecord: false,
@@ -14977,7 +14970,6 @@ describe('SFA API (e2e)', () => {
           premium: 777,
           itemCount: 1,
           policyCount: 1,
-          soldDateYmd: 20260310,
           soldDate: onDay('2026-03-10'),
           isTestRecord: false,
         });

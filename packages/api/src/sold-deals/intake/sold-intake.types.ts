@@ -15,6 +15,12 @@ export interface SoldIntakeContext {
   /** String, matching `TenantRecord.agencyId` — NOT the ObjectId on `User`. */
   agencyId: string;
   branchId: string;
+  /**
+   * The agency's IANA zone (`AccessContext.timeZone`): the calendar the form's
+   * `YYYY-MM-DD` sold date is anchored on — stored as that day's first instant
+   * there, never UTC midnight (PAC-159).
+   */
+  timeZone: string;
   /** The authenticated caller; becomes `Deal.producerId`. */
   producerId: Types.ObjectId;
   /**

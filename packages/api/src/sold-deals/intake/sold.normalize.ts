@@ -21,6 +21,7 @@ import type {
 import { emptyAuditTriggers } from '../../deals/schemas/deal.schema';
 import type { SoldUploadKind } from '../dto/presign-sold-document.dto';
 import type { Types } from 'mongoose';
+import { businessDateInstant } from '../../common/dates/business-dates';
 
 /**
  * Pure derivations for the Sold write path (PAC-40).
@@ -53,20 +54,16 @@ export function buildSoldAdditionToken(raw: string): string {
   return `SOLDADD|${raw.trim().toUpperCase()}`;
 }
 
-/** `YYYY-MM-DD` → the `YYYYMMDD` integer the sold-date range filters use. */
-export function soldDateYmd(isoDate: string): number | undefined {
-  const digits = isoDate.slice(0, 10).replace(/-/g, '');
-  const value = Number(digits);
-  return Number.isNaN(value) ? undefined : value;
-}
-
 /**
- * Parse a `YYYY-MM-DD` form date as **UTC midnight**.
+ * Parse a `YYYY-MM-DD` form date as **UTC midnight** — for a **calendar-only**
+ * fact: a policy's effective date, a prior policy's cancellation date. Those
+ * are read back with the same UTC truncation (`changeDate`, `policyDate`,
+ * `dateOnly`), so the pair round-trips on any server in any zone.
  *
- * `new Date('2026-01-15')` is already UTC, but `new Date(2026, 0, 15)` is local
- * — mixing them puts sold dates a few hours either side of midnight, which
- * moves a deal between days in `soldDateYmd` and therefore between buckets on
- * the scorecard. Being explicit keeps the two representations consistent.
+ * ⚠ Not for a business date. `soldDate`, `quoteDate` and `Lead.createdDate`
+ * are instants the dashboards bucket on the agency's calendar, and UTC
+ * midnight is the previous evening in every US zone — use
+ * `businessDateInstant` (`common/dates/business-dates.ts`) for those.
  */
 export function parseFormDate(isoDate: string): Date {
   return new Date(`${isoDate.slice(0, 10)}T00:00:00.000Z`);
@@ -79,8 +76,8 @@ export interface DealAggregates {
   policyTypes: string[];
   isBundle: boolean;
   dealType: DealType;
+  /** The sold day at agency-local midnight — see `businessDateInstant`. */
   soldDate: Date;
-  soldDateYmd?: number;
 }
 
 /**
@@ -93,6 +90,7 @@ export interface DealAggregates {
 export function deriveDealAggregates(
   policies: SoldPolicyInput[],
   soldDate: string,
+  timeZone: string,
 ): DealAggregates {
   const policyTypes = [
     ...new Set(policies.map((p) => normalizePolicyType(p.policyType))),
@@ -115,8 +113,7 @@ export function deriveDealAggregates(
     policyTypes,
     isBundle,
     dealType: deriveDealType(isBundle, policyTypes),
-    soldDate: parseFormDate(soldDate),
-    soldDateYmd: soldDateYmd(soldDate),
+    soldDate: businessDateInstant(soldDate, timeZone),
   };
 }
 
@@ -152,9 +149,9 @@ export interface PersistedPolicyTotals {
  *     `normalizePolicyType` (the DTO version's input is already canonical);
  *   - everything is optional, because migrated rows are.
  *
- * ⚠ **`soldDate` / `soldDateYmd` are deliberately absent.** `soldDateYmd` is
- * the Sold scorecard's indexed bucket key; correcting a premium must not move
- * the deal between reporting days.
+ * ⚠ **`soldDate` is deliberately absent.** It is what the Sold scorecard
+ * buckets on; correcting a premium must not move the deal between reporting
+ * days.
  */
 export function derivePersistedDealAggregates(
   policies: PersistedPolicyTotals[],

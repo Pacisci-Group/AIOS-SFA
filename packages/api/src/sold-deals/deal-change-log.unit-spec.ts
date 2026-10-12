@@ -1,4 +1,5 @@
 import { diffSnapshots, snapshot } from '../activities/change-log';
+import { businessDateInstant } from '../common/dates/business-dates';
 import {
   DEAL_CHANGE_FIELDS,
   policyChangeLabel,
@@ -8,13 +9,16 @@ import {
 const AUTO = { policyType: 'Auto', policyNumber: '1789062605977' };
 const HOME = { policyType: 'Home', policyNumber: '1789062605978' };
 
+/** A sold date as the app stores it: that day's first instant in Chicago. */
+const soldOn = (iso: string) => businessDateInstant(iso, 'America/Chicago');
+
 function subject(
   deal: Partial<DealChangeSubject['deal']> = {},
   policies: DealChangeSubject['policies'] = [AUTO],
 ): DealChangeSubject {
   return {
     deal: {
-      soldDate: new Date('2026-02-15T00:00:00.000Z'),
+      soldDate: soldOn('2026-02-15'),
       premium: 1276,
       itemCount: 3,
       dealType: 'Auto',
@@ -37,7 +41,7 @@ describe('deal change log (PAC-104)', () => {
   it('logs a sold-date correction as a calendar date, and nothing else', () => {
     const changes = diff(
       subject(),
-      subject({ soldDate: new Date('2026-02-12T00:00:00.000Z') }),
+      subject({ soldDate: soldOn('2026-02-12') }),
     );
 
     expect(changes).toEqual([

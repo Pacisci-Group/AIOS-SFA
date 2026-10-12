@@ -45,7 +45,6 @@ import {
   ResolvedTenantContext,
   TenantContextResolver,
 } from '../common/tenancy/tenant-context.resolver';
-import { quoteDateYmd } from './quote.normalize';
 import { HouseholdDocument } from '../households/schemas/household.schema';
 import { LeadAccessService } from '../leads/lead-access.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
@@ -152,9 +151,7 @@ function deriveTotals(policies: StoredQuotedPolicy[]) {
  *   row as changed on an insert or a reorder. The totals are what the product
  *   owner actually named ("price changes"), they are recomputed server-side, and
  *   `policyCount` carries the shape change the totals alone would hide.
- * - **`quoteDate` / `quoteDateYmd` are absent** because the patch cannot move
- *   them — `quoteDateYmd`'s opportunistic backfill fires on the first touch of
- *   every migrated recap and would report a change nobody made.
+ * - **`quoteDate` is absent** because the patch cannot move it yet.
  * - **`insuranceRenewalMonth` is normalized on read**, like every other display
  *   of it: migrated recaps hold SmartSuite choice values, and a change row is
  *   never re-normalized once written.
@@ -441,11 +438,10 @@ export class QuoteRecapsService {
    * ## What it deliberately does not do
    *
    * **It never moves `quoteDate`.** That is the day the quote was given, and
-   * `quoteDateYmd` is the Quoted scorecard's indexed bucket. Re-dating a
-   * correction to today would retroactively change a number that has already
-   * been reported. It *is* opportunistically backfilled when missing, which
-   * self-heals migrated recaps the first time one is touched — the same idiom
-   * as `LeadAccessService.findHousehold`.
+
+   * the Quoted scorecard buckets on it. Re-dating a correction to today would
+
+   * retroactively change a number that has already been reported.
    *
    * **It does not re-run `advanceLeadStatus`.** PAC-38 made lead status freely
    * editable in both directions so a producer can undo a mis-click; silently
@@ -532,11 +528,6 @@ export class QuoteRecapsService {
         size: stored.size,
         uploadedAt: new Date(),
       };
-    }
-
-    // Opportunistic, never recomputed — see the docblock.
-    if (recap.quoteDate && recap.quoteDateYmd == null) {
-      recap.quoteDateYmd = quoteDateYmd(recap.quoteDate, access.timeZone);
     }
 
     await recap.save();
@@ -745,10 +736,6 @@ export class QuoteRecapsService {
         branchId: tenant.branchId,
         title: household.name ? `${household.name} — Quote` : 'Quote',
         quoteDate,
-        // The indexed calendar-day label the Quoted scorecard buckets by
-        // (PAC-10). Derived here rather than at read time so the scorecard is a
-        // plain integer range — the same reason `Deal.soldDateYmd` is persisted.
-        quoteDateYmd: quoteDateYmd(quoteDate, access.timeZone),
         // Derived server-side and never taken from the client: these three back
         // the Quoted scorecard, so a client-supplied total would corrupt it.
         ...deriveTotals(policies),
