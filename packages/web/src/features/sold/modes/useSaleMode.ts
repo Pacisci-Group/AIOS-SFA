@@ -144,6 +144,9 @@ export function useSaleMode({
          * Fired before the navigate on purpose: `canvas-confetti` renders into
          * its own canvas on `document.body`, outside React's tree, so the burst
          * outlives the route change instead of being unmounted mid-animation.
+         * The pop (PAC-158) rides inside the same call, on a module-level
+         * `Audio` element, for the same reason — and so a transfer or rewrite,
+         * which skips this branch, gets neither.
          */
         celebrate();
       }
