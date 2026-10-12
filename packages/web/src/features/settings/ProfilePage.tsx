@@ -26,6 +26,7 @@ import {
   toUpdateProfileInput,
   type ProfileFormValues,
 } from './profile-schema';
+import { CelebrationSoundCard } from './components/CelebrationSoundCard';
 import { SettingsPage } from './SettingsPage';
 import { NOT_AVAILABLE } from '@/lib/not-available';
 
@@ -89,6 +90,10 @@ export default function ProfilePage() {
             Notification preferences are coming soon.
           </p>
         </DetailCard>
+
+        {/* The sale-booked chime's mute (PAC-158). A device preference, like
+            the theme, so it sits here rather than in anything the API owns. */}
+        <CelebrationSoundCard />
       </div>
     </SettingsPage>
   );

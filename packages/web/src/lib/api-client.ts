@@ -50,7 +50,12 @@ export function setTokens(accessToken: string, refreshToken: string) {
  * Keep this list short, and only add a key when leaking it to the next user of
  * the same machine would be harmless.
  */
-const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
+const PRESERVED_UI_PREFERENCE_KEYS = [
+  'theme',
+  'sidebar:collapsed',
+  // Whether the sale-booked chime plays on this device (PAC-158).
+  'celebration:sound',
+] as const;
 
 /**
  * Key prefixes preserved alongside {@link PRESERVED_UI_PREFERENCE_KEYS}, for
