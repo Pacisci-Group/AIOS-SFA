@@ -1,0 +1,33 @@
+meta {
+  name: Request (Unknown Dataset)
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/data-export/mailers/exports
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("an unknown dataset is a 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /data-export/mailers/exports — not a dataset
+
+  `:dataset` is validated against the dataset list, so an unknown key is a
+  `400` like every other zod-validated param. `mailers` (~738k rows,
+  platform-wide rather than per agency) is deliberately not a dataset.
+}

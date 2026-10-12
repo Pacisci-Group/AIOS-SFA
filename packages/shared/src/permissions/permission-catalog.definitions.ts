@@ -176,6 +176,16 @@ const ADMIN_COPY: Record<string, { label: string; description: string }> = {
     description:
       'Hand a person’s open tickets, clients, leads and audits to a colleague — typically when someone leaves. Completed work stays credited to whoever did it.',
   },
+  [AgencyPermission.SettingsRead]: {
+    label: 'View agency settings',
+    description:
+      'See the agency’s working day: its time zone and the hour everyone is set Away.',
+  },
+  [AgencyPermission.SettingsWrite]: {
+    label: 'Manage agency settings',
+    description:
+      'Change the agency’s time zone, which every dashboard’s day is cut on, and the hour everyone in the agency is set Away each night.',
+  },
 };
 
 function moduleDefinitions(): PermissionDefinition[] {

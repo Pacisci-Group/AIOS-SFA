@@ -150,7 +150,7 @@ export const AgencyStep = withForm({
             {(f) => (
               <f.ComboboxField
                 label="Time zone"
-                description="Their working day: dashboard date windows and the 8 PM end-of-day Away run follow it. The owner can change it later."
+                description="Their working day: dashboard date windows and the end-of-day Away run follow it. The owner can change it later."
                 options={timeZones}
                 searchPlaceholder="Search by city or zone…"
                 emptyText="No zone matches."

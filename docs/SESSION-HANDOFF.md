@@ -910,6 +910,7 @@ that automatically when the base branch is deleted after merge).
 ### What David asked for (relayed by Asad, 25 Sep)
 - Statuses **Available / Busy / Away**; the sidebar menu shows the three names and **no sub-text**.
 - **Every active user of every role, the owner included, is set Away at 8 PM in the agency's timezone.**
+  (The hour is per agency since §17 / PAC-149 — `Agency.endOfDayHour`, default 8 PM.)
 - **No morning reset** — each person sets themself Available when they start work.
 - Agencies get a stored timezone, defaulted to Oklahoma / US Central.
 
@@ -921,10 +922,11 @@ that automatically when the base branch is deleted after merge).
   **`Agency.availabilitySweep { lastAwayDate, lastAwayAt }`** — the "done tonight" marker.
   Migration **`20260924233638-agency_timezone_backfill`** sets the default where missing.
 - **`common/dates/time-zones.ts`** (`DEFAULT_AGENCY_TIME_ZONE`, `isIanaTimeZone`, `localClock`) and
-  **`common/dates/end-of-day.ts`** (`END_OF_DAY_LOCAL_HOUR = 20`, `endOfDaySweepDate`). Both unit-tested,
-  DST and half-hour zones included.
+  **`common/dates/end-of-day.ts`** (~~`END_OF_DAY_LOCAL_HOUR = 20`~~ deleted in §17 — the hour is now a
+  required argument read off `Agency.endOfDayHour`; `endOfDaySweepDate`). Both unit-tested, DST and
+  half-hour zones included.
 - **`worker/functions/set-users-away.fn.ts`** — Inngest cron `*/30 * * * *` (UTC), `forEachAgency`,
-  per agency: local clock ≥ 20:00 and marker ≠ today's local date → **claim the marker with a
+  per agency: local clock ≥ its end-of-day hour (20:00 until §17) and marker ≠ today's local date → **claim the marker with a
   conditional `updateOne`, then `updateMany` users** (`isActive`, not platform admin, not already `away`).
   Claim-first is deliberate: a crash between the two skips a night rather than re-flipping someone who
   came back after 8 PM. e2e: `test/worker/set-users-away.e2e-spec.ts` (8 cases, fixture-scoped, all
@@ -952,12 +954,14 @@ One PR, branch `asad/pac-141-agency-timezone`, base `dev`. Plan file:
 - **Settings home:** `/settings/agency` ("Agency" card on the hub) backed by **`GET/PATCH /agency/profile`**,
   reusing **`agency:branding:read/write`** — same argument as `agency/setup`. No new permission string,
   no `api:sync:roles`. `/settings/profile` is the *personal* profile; keep the names apart.
+  **Superseded by §17 (PAC-149):** the page and endpoint moved to their own `agency:settings:read/write`.
 - **Zone resolution:** a required **`AccessContext.timeZone`**, filled by `PermissionsService` from the
   agency read it already does (validated fallback `DEFAULT_AGENCY_TIME_ZONE`). **Redis prefix bumped
   `sfa:perm:v4:` → `v5:`.** `PATCH /agency/profile` invalidates the agency after the write.
 - **Away marker on a zone change:** re-stamped in the same `updateOne` so the next sweep is the next
   8 PM on the new clock (`sweepMarkerAfterZoneChange`: tonight's date if ≥ 20:00 there, else `null`),
-  and only when the zone actually changes. Written up on `AgencyAvailabilitySweep`.
+  and only when the zone actually changes. Written up on `AgencyAvailabilitySweep`. (§17 renamed it
+  `sweepMarkerAfterScheduleChange` and extended the rule to an hour change.)
 - **A zone change is half retroactive:** lead `createdYmd` is computed at read time (re-buckets);
   `soldDateYmd`, `quoteDateYmd`, `ProducerGoal.month` are stored and stay put. Said on
   `Agency.timezone` and in Bruno — deliberately **not** on the settings page (Asad: it confused
@@ -974,7 +978,7 @@ One PR, branch `asad/pac-141-agency-timezone`, base `dev`. Plan file:
   `quoteDateYmd(date, tz)`. Migration and demo seed read the tenant's zone from `provisionTenant`
   (`TenantCtx.timeZone`, `Ctx.timeZone`) — no Central literal outside the schema default.
 - `DEFAULT_AGENCY_TIME_ZONE` moved to `@sfa/shared` (`domain/agency-time-zone.ts`, with
-  `AgencyProfileView`); `common/dates/time-zones.ts` re-exports it. **Build shared before API unit
+  `AgencyProfileView` — renamed `domain/agency-profile.ts` in §17); `common/dates/time-zones.ts` re-exports it. **Build shared before API unit
   tests too.**
 - Two validators on every write: `timeZoneSchema` (zod: shape + runtime) and
   `assertMongoKnowsTimeZone` (a `$documents` + `$dateToString` probe — Mongo's zone table is not
@@ -995,3 +999,201 @@ One PR, branch `asad/pac-141-agency-timezone`, base `dev`. Plan file:
 - `service-tickets.service.ts` host-local midnight; demo seed `ymd()`/`monthKey()` host-local dates.
 - No Super Admin agency *edit* page (the Agencies tile is still "Coming soon"): a platform account
   changes a zone post-onboarding by impersonating the owner.
+
+## 17. PAC-149 — configurable end-of-day Away hour + `agency:settings:*` (handoff, 2026-10-06)
+
+One PR, branch `asad/pac-149-agency-settings-configurable-end-of-day-away-hour-and-a`, base `dev`.
+Plan file: `~/.claude/plans/create-an-implementation-plan-humming-codd.md`.
+
+### Decisions — do not re-litigate
+- **Own permission pair:** `agency:settings:read` / `agency:settings:write` (appended to
+  `AgencyPermission`, catalog rows "View/Manage agency settings"). The page sets the whole office Away
+  each night, so delegating "branding" must not hand it over. Owner-only by default (the Agency Owner
+  template spreads `AgencyPermission`); everyone else 403s and has no hub card. **PAC-148's working-days
+  calendar and holidays belong under this pair too.**
+- **Rollout by migration, not a manual `api:sync:roles` (Asad, 6 Oct).** The ticket asked for a deploy
+  step; the check found that without one the Super Admin **Onboard Agency** wizard 400s too ("Permission
+  catalog is missing" — the owner template names keys with no catalog row). So
+  **`20261006120100-agency_settings_permission_grant`** upserts both catalog rows (`$setOnInsert`, values
+  copied in) and grants both keys to every `agency_owner` role, at API boot, on every environment.
+  `api:sync:roles` remains the fallback. A signed-in owner sees the card after their next token refresh
+  or login (the web reads permissions from the `localStorage` user blob).
+- **`Agency.endOfDayHour`:** integer 0–23, default `20` (`DEFAULT_AGENCY_END_OF_DAY_HOUR` in
+  `@sfa/shared`, schema default + `.lean()` fallback only). **Whole hours** because the cron ticks every
+  30 min. Backfilled by **`20261006120000-agency_end_of_day_hour_backfill`**. Not on `AccessContext` — an
+  hour-only change invalidates no cache.
+- **Marker rule for an hour change** (same as a zone change): new hour already past on the agency's clock →
+  stamp today; still ahead → clear, so tonight's new hour runs. Only when the zone or hour actually changes.
+- **No explanatory copy** on the settings card: label + control + Save. The hour field is a `SelectField`
+  labelled "Set everyone Away at", options `12:00 AM`…`11:00 PM`.
+
+### What exists now
+- `common/dates/end-of-day.ts`: `END_OF_DAY_LOCAL_HOUR` **deleted**; `requireEndOfDayHour` (throws on
+  anything but an integer 0–23 — specs are not type-checked, a stale 3-arg call would otherwise read
+  as "due" every tick); `endOfDaySweepDate(now, tz, endOfDayHour, lastAwayDate)`;
+  `sweepMarkerAfterScheduleChange(now, tz, endOfDayHour)` (was `sweepMarkerAfterZoneChange`).
+- `SetUsersAwayFn` selects `endOfDayHour`, falls back to the shared default.
+- `GET /agency/profile` → `{ agencyName, timezone, endOfDayHour }`; `PATCH` takes either or both
+  (zod `.refine`, `{}` is 400, `"20"` is 400). The service reads the stored pair first (an hour-only
+  change is re-stamped on the stored zone), skips the write when nothing changed, then one conditional
+  `updateOne` with `$or` on the two fields.
+- `@sfa/shared` `domain/agency-time-zone.ts` → **`domain/agency-profile.ts`**.
+- Web: `/settings/agency` has its own `RequirePermission` (`agency:settings:read`); hub entry on
+  `SettingsRead`; `lib/end-of-day-hour.ts` (labels formatted in UTC so the viewer's zone cannot shift
+  them); card retitled "Working day"; the onboarding wizard's zone description no longer says "8 PM".
+- Bruno: `White Label/Get` + `Update Agency Profile` (permission, body, docs), `Login as Owner` asserts
+  the pair, `Profile/Set My Availability` docs.
+- Tests: `end-of-day.unit-spec` (guard + non-20 cases), new `agency-profile.dto.unit-spec`,
+  `white-label-controllers.unit-spec` on the new pair; e2e `agency-profile` (hour 400s, hour-only and
+  combined saves, marker past/ahead/unchanged, an owner **without** `agency:settings:write` but with
+  `agency:branding:write` gets 403 here and 200 on branding); e2e `set-users-away` gains a 6 PM fixture.
+
+### Not done (out of scope per the ticket)
+- Per-user / per-branch hours; a morning reset (§6a); weekend/holiday skipping (PAC-148).
+- The Super Admin onboarding wizard does not ask for the hour — new agencies start at 8 PM.
+
+---
+
+## 18. PAC-152 — Data Export page (handoff, 2026-10-06)
+
+Plan: `docs/plans/pac-152-data-export-implementation-plan.md`. Three PRs. **PR1 (API) and
+PR2 (web page) are built**, uncommitted, on `awaris/pac-152-data-export-api`; their file
+sets are disjoint apart from the docs, so they can be committed as two PRs. PR3 (deal audits,
+audit items, activities, service tickets, chargebacks) edits the same API files as PR1 and
+should start once PR1 is committed.
+
+Web (PR2): `features/data-export/` (`DataExportPage`, `DatasetList`, `ExportPanel`,
+`ColumnPreview`, `RecentExports`), `lib/data-export-api.ts`, `DateRangePicker`/`RangeChips`
+gained `maxSpanDays`, route `/data-export`, nav section "Data".
+
+**Background exports (user decision, 6 Oct, same day).** Downloads are no longer
+synchronous. *Request export* queues the export and toasts that the user will be emailed;
+the worker writes the file to object storage; Recent exports polls while a row is
+`Queued`/`Preparing` and offers **Download** once it is `Ready`. See "Background exports"
+below.
+
+### Decisions (user, 6 Oct) — do not re-litigate
+- **Curated joined datasets**, not raw table dumps: one row per entity, labels resolved, child
+  rollups computed, ids kept beside every label. Shaped after `docs/smartsuite-tables/`.
+- **CSV + XLSX**, one column model; each column's `type` decides the encoding.
+- **PII included** (contact name, phone, email, DOB, notes). Never storage keys or tokens.
+- **New module key `data_export`**; `data_export:read` is the whole gate, held by Data Team.
+
+### What exists now
+- **Engine** in `packages/api/src/common/data-export/` (in `common/` so the worker may import
+  it): `engine/` (types, date windows, cells, batched `ExportLookups`, registry +
+  `modelFor`), `writers/export-writer.ts` (streaming CSV with BOM, streaming XLSX),
+  `datasets/*.dataset.ts` (leads, quote recaps, sold deals, policies, households, contacts),
+  `plan.ts` (`planExport` — pure; validates and builds the pipeline) and `run.ts`
+  (`runExport` — cursor → lookups → writer → any `Writable`).
+- **API** in `packages/api/src/data-export/`: service (dictionary, options, `request`),
+  history service (`create`, `list`, `fileUrl`), controller. Routes:
+  `GET /data-export/datasets`, `/options`, `/history`,
+  `POST /data-export/:dataset/exports` (202, queued), `GET /data-export/exports/:id/url`
+  (presigned link; 409 while preparing, 410 once expired, 404 if not visible).
+- **Worker**: `DataExportGenerateFn` (`data-export/export.requested.v1`: claim → generate →
+  notify) and `DataExportExpireFn` (hourly cron).
+- Migration `20261006111528-data_export_module.js`: catalog rows, **module enabled on every
+  existing agency** (only where the key is absent), Data Team grant. Rehearsed up/down/up.
+- `dataExports` collection = the job and the audit trail (refusals included; the row
+  outlives its file).
+- Tests: unit specs beside the engine (`plan.unit-spec.ts` included) and the
+  `dataExportReady` template; e2e `test/worker/data-export.e2e-spec.ts` drives the real
+  request endpoint and then the worker function against `FakeStorage` and a capturing mail
+  transport. Bruno `Data Export/` (10 requests).
+
+### Background exports — how it works
+- `POST …/exports` plans and counts the export (over `DATA_EXPORT_MAX_ROWS` → immediate
+  `400 EXPORT_TOO_LARGE`, logged `failed`), writes a `queued` row carrying the filter echo
+  **and a scope snapshot** (user, branch, `X-Branch-Id`, data scope, role ids, timezone),
+  and sends the event through the outbox. It also resolves the agency's email brand (the
+  worker cannot import `TenantBrandingService`) and carries it on the event.
+- The worker **re-plans** from the row: a pipeline cannot be stored (`$` keys), so it rebuilds
+  an `AccessContext` from the snapshot and runs the same `planExport`. The file holds what the
+  requester could see when they asked.
+- File goes to a temp file, then `StorageService.putObjectFromFile` at
+  `agencies/<agencyId>/data-exports/<year>/<exportId>/<filename>` — deterministic, so a retry
+  overwrites itself (`buildObjectKey` gained `parts`/`unique`).
+- `claim` admits `queued`, or `failed` only when the job itself had started — a cap refusal
+  is never run. A replayed event is a no-op.
+- The email (`dataExportReady`) links to `/data-export` on the agency's host — **never** a
+  presigned link; the file is PII in bulk. A mail failure is recorded on
+  `notification.error` and never fails the export.
+- Statuses: `queued → processing → ready | failed → expired`. `truncated` is now a boolean.
+  Retention: `DATA_EXPORT_RETENTION_DAYS` (default 7, 1–30).
+- `data-export` and `lead-sources` were added to the worker boundary's `FEATURE_DIRS`;
+  `client-scope.ts` moved to `common/access/` (re-exported from `clients/`) and
+  `contactDisplayName` to `common/domain/contact-names.ts` (re-exported) so the engine has
+  no feature imports. `ExportLookups` reads the `LeadSource` model directly.
+- **Local end to end needs the Inngest dev server** pointed at the API (compose `inngest`
+  targets `:4000`). Without it a request stays `Queued`; Bruno's `Get Export File URL`
+  accepts `409` for that reason.
+- Removed with the synchronous path: `GET :dataset/download`, `apiFetchDownload`/`saveBlob`
+  (the API client is back to `HEAD`), CORS `exposedHeaders`, `common/http/`.
+
+### Gotchas
+- The scope clamps ignore `X-Branch-Id` at agency scope, so the export takes an explicit
+  `branchId` body field (agency scope only).
+- `csv-stringify` writes booleans as `1` / empty by default — `cells.ts` writes words.
+- Some list columns are **aligned** (household member ids/names/roles); blanks are kept.
+- Bruno against a local API needs `PLATFORM_HOST` to match the host Bruno calls.
+
+### Open for David / Carl (on the ticket)
+Net vs gross premium; audit item `days_open` anchor; over-cap refusals in history; CSV has no
+formula escaping (Excel users take XLSX).
+
+## 19. PAC-152, part 2 — Analytics page (handoff, 2026-10-07)
+
+Plan: `docs/plans/pac-152-analytics-implementation-plan.md` (decisions B1–B14 plus an
+"As built" table of where the build departed from it). Tracked on PAC-152 at the user's
+request. Uncommitted, on the same branch as the Data Export work.
+
+### Decisions (user, 7 Oct) — do not re-litigate
+- **New module key `analytics`**; `analytics:read` is the gate. Branch Manager by template
+  (and the `analytics_module` migration for existing agencies), Agency Owner via enabled
+  modules, anyone else by grant. Data Team is *not* granted by default.
+- **Sales and Service tabs** in v1.
+- **Headline = bound premium** (the Owner dashboard's definition), net of chargebacks beside it.
+
+### What exists now
+- **API** `packages/api/src/analytics/`: `GET /analytics/options`,
+  `sales/{summary,breakdown,timeseries}`, `service/{summary,breakdown,timeseries}`.
+  - Sales go through `soldMatch` + `linesPrefix` — the Owner dashboard's pipeline — so the
+    summary equals `/owner-dashboard/summary` for the same filters (asserted in e2e).
+  - `sales-dimensions.ts` is the registry: producer, leadSource (through the lead),
+    policyType and carrier (**per policy**, `$unwind lines`), branch, zip and csr (one
+    `$lookup households`). `segmentBy` splits rows by a second dimension in the same `$facet`.
+  - `time-buckets.ts`: day / Monday-week / month keys from the `YYYYMMDD` ints (no zone) and
+    from ticket instants (agency zone); zero-filled.
+  - `goal-pacing.ts`: month windows starting on the 1st, no line/source/carrier filter,
+    goals from `producerGoals` under the sales clamp.
+  - `linesPrefix` gained `LinesOptions { carrier, carriers }`; default stages unchanged
+    (unit-tested). `shared/domain/carrier.ts` gained `carrierQueryValues`.
+  - `OWNER_DASHBOARD_RANGE_KEYS` gained `last12Months`; the Owner/Manager chip guard is now
+    their own chip list.
+  - `common/access/filter-options.ts`: Data Export's branch/producer options, shared.
+- **Migration** `20261007085957-analytics_module.js` (catalog 140/141, enable where absent,
+  Branch Manager grant). Rehearsed up → down → up on a scratch DB.
+- **Web** `features/analytics/`: page with Sales | Service tabs, filter bar (period incl.
+  Last 12 Months, branch for agency scope, producers/assignees from `/analytics/options`,
+  lead sources, lines, carriers), KPI rows (goal pacing meter), breakdown panel (group by,
+  split by, measure, compare, Download CSV), trend panel (day/week/month). First charts in
+  the app: shadcn `chart` + `recharts@3.8`. Nav item under Management; route `/analytics`.
+  `KpiCard` and `TrendBadge` promoted to `components/common/`.
+- **Tests:** unit specs beside the engine; e2e `test/analytics.e2e-spec.ts` (41); Bruno
+  `Analytics/` (15 requests, re-runnable). Whole suites green: API unit 1,278, e2e 1,215,
+  shared 296.
+
+### Gotchas
+- `BranchGuard` 403s a `branchId` query param outside a branch- or own-scope caller's branch.
+- Tickets' `own` scope collapses to branch (CRM rule); sales' `own` pins to self.
+- Carrier is free text: alias codes (`B4tEH`) fold into their name, spelling variants don't.
+- Under a carrier filter, quote figures and the closing ratio are N/A, never 0.
+- Recharts sorts legend items by data key unless `itemSorter={null}`.
+- The dark `--chart-*` tokens were re-stepped to pass the palette validator on `--card`.
+
+### Open for David
+1. "Completed" tickets = `resolvedAt` in the window; `closed` tickets carry no timestamp.
+2. Canonicalise carrier spellings through the carrier catalog?
+3. Goal pacing reads `producerGoals`; until PAC-116 ships most months say "No goals set".
+4. Should Data Team hold `analytics:read` by default?

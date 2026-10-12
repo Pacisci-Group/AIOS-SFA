@@ -18,9 +18,10 @@ import { User, type UserDocument } from '../../src/users/schemas/user.schema';
  * in `end-of-day.unit-spec.ts`. What only the database can answer is the rest:
  * that the claim on the agency marker really is conditional, that the user
  * filter excludes exactly who it should (`isActive`, `isPlatformAdmin`,
- * already-`away`), that an agency with no `timezone` field falls back to
- * Central time, and that `forEachAgency` skips a suspended tenant. Every one of
- * those failures is silent — a status that does not change throws nothing.
+ * already-`away`), that each agency's own `endOfDayHour` is read off the row
+ * (PAC-149), that an agency with neither field falls back to Central time and
+ * 8 PM, and that `forEachAgency` skips a suspended tenant. Every one of those
+ * failures is silent — a status that does not change throws nothing.
  *
  * ## The sweep is not scoped, so the assertions are
  *
@@ -43,6 +44,8 @@ const FIXTURE_DOMAIN = 'away-fixture.local';
 
 // 2025-09-25 in Chicago is Central Daylight Time (UTC-5): 20:00 CDT is
 // 01:00Z on the 26th. Kolkata is UTC+5:30, so its 20:00 is 14:30Z.
+const CHICAGO_1759 = new Date('2025-09-25T22:59:00Z');
+const CHICAGO_1800 = new Date('2025-09-25T23:00:00Z');
 const CHICAGO_1959 = new Date('2025-09-26T00:59:00Z');
 const CHICAGO_2000 = new Date('2025-09-26T01:00:00Z');
 const CHICAGO_2030 = new Date('2025-09-26T01:30:00Z');
@@ -60,11 +63,13 @@ describe('SetUsersAwayFn (e2e)', () => {
   const kolkataAgencyId = new Types.ObjectId();
   const legacyAgencyId = new Types.ObjectId();
   const suspendedAgencyId = new Types.ObjectId();
+  const sixPmAgencyId = new Types.ObjectId();
   const allAgencyIds = [
     chicagoAgencyId,
     kolkataAgencyId,
     legacyAgencyId,
     suspendedAgencyId,
+    sixPmAgencyId,
   ];
 
   /**
@@ -160,6 +165,7 @@ describe('SetUsersAwayFn (e2e)', () => {
         slug: 'fixture-away-chicago',
         status: 'active',
         timezone: 'America/Chicago',
+        endOfDayHour: 20,
       },
       {
         _id: kolkataAgencyId,
@@ -167,9 +173,20 @@ describe('SetUsersAwayFn (e2e)', () => {
         slug: 'fixture-away-kolkata',
         status: 'active',
         timezone: 'Asia/Kolkata',
+        endOfDayHour: 20,
       },
       {
-        // Predates the field: no `timezone`, no `availabilitySweep`.
+        // Same clock as Chicago, but the owner ends the day at 6 PM.
+        _id: sixPmAgencyId,
+        name: 'Fixture Six PM',
+        slug: 'fixture-away-chicago-6pm',
+        status: 'active',
+        timezone: 'America/Chicago',
+        endOfDayHour: 18,
+      },
+      {
+        // Predates both fields: no `timezone`, no `endOfDayHour`, no
+        // `availabilitySweep`.
         _id: legacyAgencyId,
         name: 'Fixture Legacy',
         slug: 'fixture-away-legacy',
@@ -181,6 +198,7 @@ describe('SetUsersAwayFn (e2e)', () => {
         slug: 'fixture-away-suspended',
         status: 'suspended',
         timezone: 'America/Chicago',
+        endOfDayHour: 20,
       },
     ]);
   });
@@ -277,6 +295,36 @@ describe('SetUsersAwayFn (e2e)', () => {
     expect(await markerOf(chicagoAgencyId)).toBeUndefined();
   });
 
+  it('keys each agency off its own end-of-day hour (PAC-149)', async () => {
+    const sixPm = await seedUser({
+      agencyId: sixPmAgencyId,
+      handle: 'six-pm',
+      availability: 'available',
+    });
+    const eightPm = await seedUser({
+      agencyId: chicagoAgencyId,
+      handle: 'eight-pm',
+      availability: 'available',
+    });
+
+    // 17:59 CDT: nobody's evening yet.
+    await fn.handle(inlineStep(), CHICAGO_1759);
+    expect(await availabilityOf(sixPm)).toBe('available');
+    expect(await markerOf(sixPmAgencyId)).toBeUndefined();
+
+    // 18:00 CDT: the 6 PM agency is swept, the same clock at 8 PM is not.
+    await fn.handle(inlineStep(), CHICAGO_1800);
+    expect(await availabilityOf(sixPm)).toBe('away');
+    expect((await markerOf(sixPmAgencyId))?.lastAwayDate).toBe('2025-09-25');
+    expect(await availabilityOf(eightPm)).toBe('available');
+    expect(await markerOf(chicagoAgencyId)).toBeUndefined();
+
+    // 19:59 CDT: still not 8 PM, and the 6 PM agency is done for tonight.
+    await fn.handle(inlineStep(), CHICAGO_1959);
+    expect(await availabilityOf(eightPm)).toBe('available');
+    expect((await markerOf(sixPmAgencyId))?.lastAwayAt).toEqual(CHICAGO_1800);
+  });
+
   it('runs once per local date, so a user who comes back stays back', async () => {
     const user = await seedUser({
       agencyId: chicagoAgencyId,
@@ -316,7 +364,7 @@ describe('SetUsersAwayFn (e2e)', () => {
     expect((await markerOf(chicagoAgencyId))?.lastAwayDate).toBe('2025-09-25');
   });
 
-  it('falls back to Central time for an agency that predates the timezone field', async () => {
+  it('falls back to Central time and 8 PM for an agency that predates both fields', async () => {
     const user = await seedUser({
       agencyId: legacyAgencyId,
       handle: 'legacy',

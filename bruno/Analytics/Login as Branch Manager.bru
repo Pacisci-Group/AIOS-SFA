@@ -1,0 +1,47 @@
+meta {
+  name: Login as Branch Manager
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{managerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("analyticsManagerToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the Branch Manager template holds analytics:read", function () {
+    expect(res.getBody().user.permissions).to.include("analytics:read");
+  });
+}
+
+docs {
+  # Sign in as the Branch Manager
+
+  `manager@demoagency.local` is the demo seed's Branch Manager. The template
+  grants `analytics:read`; on an older database the `analytics_module`
+  migration adds it. `npm run api:sync:roles` grants the role too but does
+  **not** enable the module on an existing agency.
+}

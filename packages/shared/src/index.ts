@@ -1,6 +1,6 @@
 export * from './domain/activity';
 export * from './domain/agency-onboarding';
-export * from './domain/agency-time-zone';
+export * from './domain/agency-profile';
 export * from './domain/subdomain';
 export * from './domain/address';
 export * from './domain/bug-report';
@@ -25,6 +25,8 @@ export * from './domain/lead-detail';
 export * from './domain/lead-intake';
 export * from './domain/lead-replacement-intent';
 export * from './domain/lead-source';
+export * from './domain/analytics';
+export * from './domain/data-export';
 export * from './domain/owner-dashboard';
 export * from './domain/management-dashboard';
 export * from './domain/lead-status';

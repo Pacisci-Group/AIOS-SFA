@@ -62,7 +62,8 @@ export class User {
    * Presence — taking leads, busy, or away (PAC-139 §6, §6a). Set by the user
    * themself via `PATCH /me/availability`, and by exactly one job: the
    * worker's `SetUsersAwayFn` sets every active user of an agency to `away`
-   * at 8 PM in the agency's timezone (`Agency.timezone`). Nothing flips
+   * at the agency's end-of-day hour (`Agency.endOfDayHour`, default 8 PM) in
+   * its timezone (`Agency.timezone`). Nothing flips
    * anyone back; the morning click is the person saying "I'm here".
    *
    * Unrelated to {@link isActive}, which is whether the *account* exists in

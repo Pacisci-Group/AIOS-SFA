@@ -73,6 +73,33 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Management Dashboard | Get Producer Drawer | `GET /management-dashboard/producers/:producerId` | **PAC-139** — the row's figures, the Active Pipeline (stage = lead status) and the open items one row each. |
 | Management Dashboard | Get Alerts (Forbidden for Producer) | `GET /management-dashboard/alerts` | **PAC-139** — a producer is a `403`. |
 | Management Dashboard | Get Alerts (Invalid Range) | `GET /management-dashboard/alerts` | **PAC-139** — the producer dashboard's `week` chip must 400 here. |
+| Data Export | Login as Data Team | `POST /auth/login` | **PAC-152** — runs as `dana.park@demoagency.local`. Asserts `data_export:read`, which proves the template on a fresh seed and the `data_export_module` migration on an older database. Captures `dataExportToken`. |
+| Data Export | List Datasets | `GET /data-export/datasets` | **PAC-152** — the data dictionary: every dataset, its date fields, filters, status values and columns (header, type, description). |
+| Data Export | Get Options | `GET /data-export/options` | **PAC-152** — branches and producers the caller may filter by, behind `data_export:read` alone. |
+| Data Export | Request Sold Deals Export (CSV) | `POST /data-export/:dataset/exports` | **PAC-152** — queues an export (202); a worker writes the file to storage and emails the requester. Every body field, the scope rules, the `EXPORT_TOO_LARGE` refusal and the duplicate rule are documented here. Accepts the `409 EXPORT_DUPLICATE` of a repeat run. Captures `dataExportId`. |
+| Data Export | Request Leads Export (XLSX) | `POST /data-export/:dataset/exports` | **PAC-152** — the same request for a typed workbook. |
+| Data Export | Get History | `GET /data-export/history` | **PAC-152** — the export log: who, which dataset, filters, status (`queued` → `processing` → `ready`/`failed` → `expired`), rows, expiry. Asserts the two requests above are the newest rows. |
+| Data Export | Get Export File URL | `GET /data-export/exports/:id/url` | **PAC-152** — a presigned link to a finished export, minted on click. Accepts `409` too: a `200` needs the worker (inline API + Inngest dev server) to have run. |
+| Data Export | Request (Forbidden for Producer) | `POST /data-export/:dataset/exports` | **PAC-152** — a producer is a `403`. |
+| Data Export | Request (Unknown Dataset) | `POST /data-export/:dataset/exports` | **PAC-152** — `mailers` is not a dataset: a `400`. |
+| Data Export | Request (Invalid Range) | `POST /data-export/:dataset/exports` | **PAC-152** — `to` before `from` is a `400`. |
+| Data Export | Request (Duplicate) | `POST /data-export/:dataset/exports` | **PAC-152** — the sold-deals request again: `409 EXPORT_DUPLICATE` with the export the caller already has. One live export per request. |
+| Data Export | Re-run Export (Not Failed) | `POST /data-export/exports/:id/rerun` | **PAC-152** — re-runs a failed export as a new one with the same parameters (202). Documents the endpoint; against the folder's live export it asserts the `409`. |
+| Analytics | Login as Owner | `POST /auth/login` | **PAC-152 part 2** — the folder runs before `Auth`, so it signs in itself. Asserts the owner holds `analytics:read` (enabled module → `grantsAllEnabledModules`). Captures `analyticsToken`. |
+| Analytics | Login as Branch Manager | `POST /auth/login` | **PAC-152 part 2** — `manager@demoagency.local`; asserts the template / `analytics_module` migration grant. Captures `analyticsManagerToken`. |
+| Analytics | Login as Producer | `POST /auth/login` | **PAC-152 part 2** — asserts a producer does *not* hold the page by default. Captures `analyticsProducerToken`. |
+| Analytics | Get Options | `GET /analytics/options` | **PAC-152 part 2** — branches, producers, ticket assignees and carriers (alias codes folded) behind `analytics:read` alone. |
+| Analytics | Get Sales Summary | `GET /analytics/sales/summary` | **PAC-152 part 2** — the KPI row (bound premium = the Owner dashboard's, net of chargebacks, items, policies, households, closing ratio) with trends, plus goal pacing or the reason there is none. Every filter param is documented here. Captures the premium the next requests reconcile against. |
+| Analytics | Get Sales Breakdown (Producer) | `GET /analytics/sales/breakdown` | **PAC-152 part 2** — sales by any dimension (`groupBy`), optional split (`segmentBy`) and prior-period comparison (`compare`). Asserts the rows add up to the summary. |
+| Analytics | Get Sales Breakdown (Producer x Line, compare) | `GET /analytics/sales/breakdown` | **PAC-152 part 2** — the multi-line view: segments add up to their row; `previous` / `change` present. |
+| Analytics | Get Sales Breakdown (Carrier) | `GET /analytics/sales/breakdown?groupBy=carrier` | **PAC-152 part 2** — per-policy carrier; no quote side, no net premium (`unavailable`). |
+| Analytics | Get Sales Timeseries (Month) | `GET /analytics/sales/timeseries` | **PAC-152 part 2** — zero-filled day/week/month buckets of sales and quotes, optional segments and aligned prior window. Asserts the buckets add up to the summary. |
+| Analytics | Get Service Summary | `GET /analytics/service/summary` | **PAC-152 part 2** — tickets opened and resolved in the window, average hours to resolve, open work now. CRM scope rule (own → branch). |
+| Analytics | Get Service Breakdown (Category) | `GET /analytics/service/breakdown` | **PAC-152 part 2** — tickets opened in the window by category, line, status, priority, assignee or branch. |
+| Analytics | Get Service Timeseries | `GET /analytics/service/timeseries` | **PAC-152 part 2** — opened vs resolved per bucket. |
+| Analytics | Get Sales Summary (Branch Manager) | `GET /analytics/sales/summary` | **PAC-152 part 2** — pinned to the manager's branch; never more than the owner's figure. |
+| Analytics | Get Sales Summary (Forbidden for Producer) | `GET /analytics/sales/summary` | **PAC-152 part 2** — a producer without the grant is a `403`. |
+| Analytics | Get Sales Breakdown (Invalid groupBy) | `GET /analytics/sales/breakdown` | **PAC-152 part 2** — `segmentBy` equal to `groupBy` is a `400`. |
 | Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |

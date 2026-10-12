@@ -23,10 +23,23 @@ import { InngestService } from '../../src/inngest/inngest.service';
  * covered by the deploy workflow's function-sync check, not here.
  */
 export class CapturedInngestService {
-  readonly sent: Array<{ name: string; data: Record<string, unknown> }> = [];
+  readonly sent: Array<{
+    name: string;
+    data: Record<string, unknown>;
+    /** The `options.id` the producer passed, when it minted the id itself. */
+    id?: string;
+  }> = [];
 
-  send(event: { name: string }, data: Record<string, unknown>): Promise<void> {
-    this.sent.push({ name: event.name, data });
+  send(
+    event: { name: string },
+    data: Record<string, unknown>,
+    options: { id?: { toHexString(): string } } = {},
+  ): Promise<void> {
+    this.sent.push({
+      name: event.name,
+      data,
+      ...(options.id ? { id: options.id.toHexString() } : {}),
+    });
     return Promise.resolve();
   }
 }

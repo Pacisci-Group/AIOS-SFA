@@ -15,17 +15,20 @@ import {
 } from './dto/agency-profile.dto';
 
 /**
- * The agency's own profile — its time zone (PAC-141).
+ * The agency's own profile — its working day: the time zone (PAC-141) and the
+ * hour everyone is set Away (PAC-149).
  *
- * Same decorator stack and the same permission as `agency/branding`, for the
- * reason `AgencySetupController` gives: the permission vocabulary is a fixed
- * contract, a new `agency:profile:*` pair would reach existing owners only
- * after `api:sync:roles` on every environment (the PAC-133 lock-out), and the
- * people who may rename the agency are the people who may say where it is.
- * The branding permission is, in practice, "may edit the agency's identity".
+ * Gated on its own pair, `agency:settings:read` / `:write`. PAC-141 reused
+ * the branding pair for the zone alone, on the `AgencySetupController`
+ * precedent; with the end-of-day hour beside it the page now does something
+ * to every user every night, and the role matrix would have shown an owner
+ * delegating "branding" nothing to say they were also handing over that
+ * clock. By default the Agency Owner holds the pair and nobody else does —
+ * existing owners got it from the `agency_settings_permission_grant`
+ * migration (see `AgencyPermission.SettingsRead`).
  *
  * Platform accounts hold no `agency:*` permission, so after onboarding a super
- * admin changes a zone the way they change anything tenant-side: by
+ * admin changes either field the way they change anything tenant-side: by
  * impersonating the owner (PAC-70).
  *
  * `@SkipModule` because the agency's identity is not a product module that
@@ -39,13 +42,13 @@ export class AgencyProfileController {
   constructor(private readonly profile: AgencyProfileService) {}
 
   @Get()
-  @RequirePermissions(AgencyPermission.BrandingRead)
+  @RequirePermissions(AgencyPermission.SettingsRead)
   get(@AgencyId() agencyId: string) {
     return this.profile.get(agencyId);
   }
 
   @Patch()
-  @RequirePermissions(AgencyPermission.BrandingWrite)
+  @RequirePermissions(AgencyPermission.SettingsWrite)
   update(
     @AgencyId() agencyId: string,
     @Body(new ZodValidationPipe(updateAgencyProfileSchema))

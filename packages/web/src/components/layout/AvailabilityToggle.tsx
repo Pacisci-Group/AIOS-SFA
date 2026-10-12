@@ -36,8 +36,9 @@ import { AVAILABILITY_DOT_CLASS } from '@/components/common/AvailabilityBadge';
  * affordance.
  *
  * The menu lists the three names and nothing under them (David, 25 Sep). The
- * worker sets everyone Away at 8 PM agency time; this is where a person comes
- * back the next morning, which is why the row is always one click away.
+ * worker sets everyone Away at the agency's end-of-day hour (8 PM unless the
+ * owner changed it, PAC-149); this is where a person comes back the next
+ * morning, which is why the row is always one click away.
  *
  * On success the returned auth blob is written straight into the `['auth',
  * 'me']` query, which is what `AuthProvider` mirrors into `user` — no refetch,

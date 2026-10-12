@@ -1,0 +1,108 @@
+meta {
+  name: Get History
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/data-export/history?page=1&pageSize=20
+  body: none
+  auth: bearer
+}
+
+params:query {
+  page: 1
+  pageSize: 20
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("records the requests above, newest first", function () {
+    const { items } = res.getBody();
+    expect(items.length).to.be.at.least(2);
+    expect(items[0].datasetKey).to.equal("leads");
+    expect(items[0].format).to.equal("xlsx");
+    expect(items[1].datasetKey).to.equal("sold_deals");
+    expect(items[1].filters.from).to.equal("2026-01-01");
+  });
+
+  test("each is queued, being prepared or ready", function () {
+    // Which one depends on whether a worker is running — see Get Export File URL.
+    for (const item of res.getBody().items.slice(0, 2)) {
+      expect(["queued", "processing", "ready"]).to.include(item.status);
+      expect(item.canDownload).to.equal(item.status === "ready");
+    }
+  });
+
+  test("says who asked", function () {
+    expect(res.getBody().items[0].createdByName).to.be.a("string");
+  });
+}
+
+docs {
+  # GET /data-export/history — the export log
+
+  - **Module:** `data_export`
+  - **Permission:** `data_export:read`
+  - **Data scope:** agency → every export in the agency; branch/own → the
+    caller's own exports only
+
+  One row per request — the job, the pointer to its stored file, and the
+  audit trail for a page that hands out contact details in bulk. A row moves
+  `queued` → `processing` → `ready` (downloadable until `expiresAt`) or
+  `failed`, then `expired` once retention deletes the file; the row itself is
+  kept. An over-cap refusal is written straight as `failed`
+  (`error: "EXPORT_TOO_LARGE"`, `rowCount` = what it would have held).
+  `truncated: true` means rows arrived between the request and the run and the
+  file stops at the cap. The page polls this while any row is `queued` or
+  `processing`.
+
+  `canRerun` is true on a `failed` export the caller requested themselves,
+  unless it was refused as too large or has been re-run already (**Re-run
+  Export**). A re-run's `rerunOfId` points at the export it re-ran.
+
+  ## Query
+  `page` (default 1), `pageSize` (1–100, default 20).
+
+  ## Response `200`
+
+  ```json
+  {
+    "items": [
+      {
+        "id": "…",
+        "datasetKey": "leads",
+        "datasetLabel": "Leads",
+        "format": "xlsx",
+        "filters": { "dateField": "created", "from": null, "to": null, "branchId": null, "producerIds": [], "status": [], "policyTypes": [], "leadSourceIds": [] },
+        "rowCount": 412,
+        "bytes": 58211,
+        "durationMs": 230,
+        "status": "ready",
+        "truncated": false,
+        "error": null,
+        "filename": "demo-agency_leads_all_all.xlsx",
+        "createdAt": "2026-10-06T11:20:00.000Z",
+        "startedAt": "2026-10-06T11:20:01.000Z",
+        "finishedAt": "2026-10-06T11:20:02.000Z",
+        "expiresAt": "2026-10-13T11:20:02.000Z",
+        "canDownload": true,
+        "downloadCount": 1,
+        "notifiedAt": "2026-10-06T11:20:03.000Z",
+        "createdById": "…",
+        "createdByName": "Dana Park",
+        "canRerun": false,
+        "rerunOfId": null
+      }
+    ],
+    "page": 1, "pageSize": 20, "total": 2, "totalPages": 1
+  }
+  ```
+}

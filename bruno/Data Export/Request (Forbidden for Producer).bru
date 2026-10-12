@@ -1,0 +1,30 @@
+meta {
+  name: Request (Forbidden for Producer)
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/data-export/leads/exports
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("a producer is refused", function () {
+    // `auth: inherit` is the collection token — the producer's.
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # POST /data-export/leads/exports — without `data_export:read`
+
+  The Producer template does not hold `data_export:read`. An owner can grant
+  it to an individual producer from **Settings → Users → Permissions**; they
+  would then export only their own leads, quotes and sales.
+}

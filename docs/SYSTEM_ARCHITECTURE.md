@@ -393,6 +393,7 @@ household. Everything else in the `clients` module remains out of their reach.
 | `command_center` | Command Center | Data team reconciliation |
 | `performance` | Performance | Producer performance |
 | `leaderboard` | Leaderboard | Rankings and competition |
+| `data_export` | Data Export | Curated CSV/XLSX datasets for the data team (PAC-152) |
 
 ### 8.2 Entitlement rules
 
