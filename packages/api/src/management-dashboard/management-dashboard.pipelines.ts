@@ -110,7 +110,7 @@ export const LATEST_QUOTE_LOOKUP: PipelineStage = {
 
 /**
  * Aging audits: deals sold before the business-day cutoff whose audit is not
- * `Pass`. The caller folds the cutoff into `match`'s `soldDateYmd` window, so
+ * `Pass`. The caller folds the cutoff into `match`'s `soldDate` window, so
  * this stays a plain indexed range on `deals`; the audit is joined afterwards.
  *
  * One row per **deal**: a legacy re-audit can leave two `dealAudits` rows on

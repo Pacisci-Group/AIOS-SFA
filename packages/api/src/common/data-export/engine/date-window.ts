@@ -38,8 +38,6 @@ export function dateWindowStages(
   });
 
   switch (field.kind) {
-    case 'ymd':
-      return [{ $match: { [field.path]: bounds(toYmd) } }];
     case 'instant':
       return [
         {

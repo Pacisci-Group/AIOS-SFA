@@ -24,6 +24,15 @@ import {
   createTestApp,
   dropTestDatabase,
 } from './helpers/test-app';
+import { businessDateInstant } from '../src/common/dates/business-dates';
+
+/**
+ * A business date stored the way the app stores a day-only entry (PAC-159):
+ * midnight of that day in the seeded agency's zone — `America/Chicago`, the
+ * schema default — never UTC midnight, which Chicago reads as the evening
+ * before.
+ */
+const onDay = (iso: string) => businessDateInstant(iso, 'America/Chicago');
 
 /**
  * The Owner View dashboard (PAC-135).
@@ -107,13 +116,12 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       leadSourceId: mailer,
       createdDate: new Date('2026-05-03T15:00:00.000Z'),
     });
-    // Date-only, as the migration writes it: exactly UTC midnight. Read as a
-    // Chicago instant it would land on May 9 — still in the window — so the
-    // real tell is the June 1 lead below.
+    // Day-only, as the migration now stores it: agency-local midnight (PAC-159),
+    // which the Chicago calendar reads as May 10 — not the evening of May 9.
     const l2 = await lead({
       producerId: owner!._id,
       leadSourceId: facebook,
-      createdDate: new Date('2026-05-10T00:00:00.000Z'),
+      createdDate: onDay('2026-05-10'),
     });
     // Nobody has said where this one came from.
     const l3 = await lead({
@@ -127,11 +135,12 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       createdDate: new Date('2026-04-15T15:00:00.000Z'),
     });
     await lead({
-      // Migrated shape on **June 1**. Read in Chicago it is the evening of
-      // May 31 and would be miscounted into the window.
+      // Day-only on **June 1**, the first instant of that day in Chicago.
+      // Before PAC-159 this sat at UTC midnight, i.e. the evening of May 31,
+      // and needed a special case not to be counted into the window.
       producerId: producer!._id,
       leadSourceId: mailer,
-      createdDate: new Date('2026-06-01T00:00:00.000Z'),
+      createdDate: onDay('2026-06-01'),
     });
 
     const sell = async (
@@ -158,6 +167,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         leadId: l1._id,
         leadSourceId: mailer,
         householdId: householdOne,
+        soldDate: onDay('2026-05-04'),
         soldDateYmd: 20260504,
       },
       [
@@ -172,6 +182,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         leadId: l2._id,
         leadSourceId: facebook,
         householdId: new Types.ObjectId(),
+        soldDate: onDay('2026-05-11'),
         soldDateYmd: 20260511,
       },
       [{ policyType: 'Auto', premium: 1000, items: 2 }],
@@ -182,6 +193,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       {
         leadSourceId: mailer,
         householdId: householdOne,
+        soldDate: onDay('2026-05-18'),
         soldDateYmd: 20260518,
       },
       [{ policyType: 'Landlords', premium: 500, items: 1 }],
@@ -190,6 +202,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
     await dealModel.create({
       ...base,
       producerId: producer!._id,
+      soldDate: onDay('2026-05-20'),
       soldDateYmd: 20260520,
       premium: 700,
       itemCount: 1,
@@ -202,6 +215,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         leadId: l3._id,
         leadSourceId: facebook,
         householdId: new Types.ObjectId(),
+        soldDate: onDay('2026-05-25'),
         soldDateYmd: 20260525,
       },
       [{ policyType: 'Auto', premium: 300, items: 1 }],
@@ -215,6 +229,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
     await sell(
       {
         producerId: producer!._id,
+        soldDate: onDay('2026-05-07'),
         soldDateYmd: 20260507,
         businessType: 'company_transfer',
       },
@@ -226,6 +241,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
     const foreign = await dealModel.create({
       agencyId: seed.otherAgencyId,
       branchId: seed.branchId,
+      soldDate: onDay('2026-05-08'),
       soldDateYmd: 20260508,
       premium: 123_456,
       itemCount: 12,
@@ -244,6 +260,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       {
         producerId: producer!._id,
         householdId: new Types.ObjectId(),
+        soldDate: onDay('2026-04-15'),
         soldDateYmd: 20260415,
       },
       [{ policyType: 'Auto', premium: 4000, items: 2 }],
@@ -254,6 +271,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         ...base,
         producerId: producer!._id,
         leadId: l1._id,
+        quoteDate: onDay('2026-05-02'),
         quoteDateYmd: 20260502,
         premium: 5000,
         itemCount: 4,
@@ -268,6 +286,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         ...base,
         producerId: owner!._id,
         leadId: l2._id,
+        quoteDate: onDay('2026-05-09'),
         quoteDateYmd: 20260509,
         premium: 4000,
         itemCount: 2,
@@ -276,6 +295,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       {
         ...base,
         producerId: producer!._id,
+        quoteDate: onDay('2026-05-19'),
         quoteDateYmd: 20260519,
         premium: 1000,
         itemCount: 1,
@@ -286,6 +306,7 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       {
         ...base,
         producerId: producer!._id,
+        quoteDate: onDay('2026-04-14'),
         quoteDateYmd: 20260414,
         premium: 8000,
         itemCount: 2,

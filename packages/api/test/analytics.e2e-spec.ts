@@ -37,6 +37,15 @@ import {
   createTestApp,
   dropTestDatabase,
 } from './helpers/test-app';
+import { businessDateInstant } from '../src/common/dates/business-dates';
+
+/**
+ * A business date stored the way the app stores a day-only entry (PAC-159):
+ * midnight of that day in the seeded agency's zone — `America/Chicago`, the
+ * schema default — never UTC midnight, which Chicago reads as the evening
+ * before.
+ */
+const onDay = (iso: string) => businessDateInstant(iso, 'America/Chicago');
 
 /** May 2026, the window every assertion below is about. */
 const MAY = 'range=custom&from=2026-05-01&to=2026-05-31';
@@ -181,6 +190,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         producerId: producer!._id,
         leadId: l1._id,
         householdId: h1._id,
+        soldDate: onDay('2026-05-04'),
         soldDateYmd: 20260504,
         premium: 3000,
         chargebackAdjustment: -200,
@@ -193,6 +203,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         leadId: l2._id,
         householdId: h2._id,
         assignedCrmId: producer!._id,
+        soldDate: onDay('2026-05-20'),
         soldDateYmd: 20260520,
         premium: 1000,
         itemCount: 2,
@@ -200,6 +211,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
       },
       {
         ...main,
+        soldDate: onDay('2026-05-12'),
         soldDateYmd: 20260512,
         premium: 500,
         itemCount: 1,
@@ -209,6 +221,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         ...main,
         producerId: producer!._id,
         householdId: h1._id,
+        soldDate: onDay('2026-04-15'),
         soldDateYmd: 20260415,
         premium: 800,
         itemCount: 1,
@@ -217,6 +230,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
       {
         ...elsewhere,
         producerId: owner!._id,
+        soldDate: onDay('2026-05-10'),
         soldDateYmd: 20260510,
         premium: 2000,
         itemCount: 2,
@@ -283,6 +297,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         producerId: producer!._id,
         leadId: l1._id,
         householdId: h1._id,
+        quoteDate: onDay('2026-05-02'),
         quoteDateYmd: 20260502,
         premium: 5000,
         itemCount: 4,
@@ -296,6 +311,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         producerId: owner!._id,
         leadId: l2._id,
         householdId: h2._id,
+        quoteDate: onDay('2026-05-15'),
         quoteDateYmd: 20260515,
         premium: 2500,
         itemCount: 2,

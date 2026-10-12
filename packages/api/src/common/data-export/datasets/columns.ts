@@ -248,21 +248,6 @@ export async function primeTenant(
   ]);
 }
 
-/** Whole days between two `YYYYMMDD` dates, or null when either is missing. */
-export function daysBetweenYmd(
-  from: number | null | undefined,
-  to: number | null | undefined,
-): number | null {
-  if (!from || !to) return null;
-  const toUtc = (ymd: number) =>
-    Date.UTC(
-      Math.floor(ymd / 10_000),
-      (Math.floor(ymd / 100) % 100) - 1,
-      ymd % 100,
-    );
-  return Math.round((toUtc(to) - toUtc(from)) / 86_400_000);
-}
-
 /** Distinct, non-empty values in first-seen order. */
 export function distinct(
   values: Iterable<string | null | undefined>,

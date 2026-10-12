@@ -5,6 +5,7 @@ import type { AccessContext, PerformanceResponse } from '@sfa/shared';
 import { FilterQuery, Model, PipelineStage } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
 import { HOUSEHOLD_KEY_EXPR } from '../common/sales-metrics/household-key';
+import { dateWindow } from '../common/sales-metrics/sales-pipelines';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   QuoteRecap,
@@ -57,23 +58,31 @@ export class PerformanceService {
      *
      * Sold and transfers are two passes over `deals` split on `businessType`
      * rather than one `$facet`, because they are separate cards that must add
-     * up independently and the `{agencyId, businessType, soldDateYmd}` index
+     * up independently and the `{agencyId, businessType, soldDate}` index
      * serves each directly.
      */
     const [sold, quoted, transfers] = await Promise.all([
       this.rollup(
         this.dealModel,
         scope,
-        'soldDateYmd',
+        'soldDate',
         range,
+        access.timeZone,
         NEW_BUSINESS_MATCH,
       ),
-      this.rollup(this.quoteRecapModel, scope, 'quoteDateYmd', range),
+      this.rollup(
+        this.quoteRecapModel,
+        scope,
+        'quoteDate',
+        range,
+        access.timeZone,
+      ),
       this.rollup(
         this.dealModel,
         scope,
-        'soldDateYmd',
+        'soldDate',
         range,
+        access.timeZone,
         COMPANY_TRANSFER_MATCH,
       ),
     ]);
@@ -88,15 +97,16 @@ export class PerformanceService {
 
   /**
    * Roll one collection up over the range. Identical shape for deals and
-   * recaps — the only differences are the model and the date field, which is
-   * why `Deal.soldDateYmd` and `QuoteRecap.quoteDateYmd` were given the same
-   * `YYYYMMDD` representation in the first place.
+   * recaps — the only differences are the model and the date field. The
+   * window is cut on the agency's calendar once, in Node (`dateWindow`), so
+   * the match is a plain indexed range on the stored instant (PAC-159).
    */
   private async rollup(
     model: Model<DealDocument> | Model<QuoteRecapDocument>,
     scope: FilterQuery<DealDocument | QuoteRecapDocument>,
-    dateField: 'soldDateYmd' | 'quoteDateYmd',
+    dateField: 'soldDate' | 'quoteDate',
     range: YmdRange,
+    timeZone: string,
     /**
      * The business-type split, applied only to the `deals` passes. Kept here
      * rather than folded into `buildScopeFilter`, which is shared with `find()`
@@ -110,7 +120,7 @@ export class PerformanceService {
         $match: {
           ...scope,
           ...businessType,
-          [dateField]: { $gte: range.startYmd, $lt: range.endYmd },
+          ...dateWindow(dateField, range, timeZone),
         },
       },
       {

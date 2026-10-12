@@ -8,8 +8,8 @@ import {
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import { Deal } from '../../../deals/schemas/deal.schema';
-import { fromYmd } from '../../../performance/performance.range';
-import { ymdDate } from '../engine/cells';
+import { zonedDate } from '../../../performance/performance.range';
+import { agencyCalendarDate } from '../engine/cells';
 import { defineDataset } from '../engine/dataset.types';
 import type { AuditLite, ExportLookups, PolicyLite } from '../engine/lookups';
 import {
@@ -43,7 +43,6 @@ interface DealRow extends TenantFields {
   title?: string;
   dealAutoNumber?: number;
   soldDate?: Date;
-  soldDateYmd?: number;
   premium?: number;
   premiumSource?: string;
   chargebackAdjustment?: number;
@@ -158,8 +157,8 @@ export const soldDealsDataset = defineDataset<DealRow, DealJoins>({
     {
       key: 'sold_date',
       label: 'Sold date',
-      path: 'soldDateYmd',
-      kind: 'ymd',
+      path: 'soldDate',
+      kind: 'instant',
       isDefault: true,
     },
     {
@@ -201,17 +200,22 @@ export const soldDealsDataset = defineDataset<DealRow, DealJoins>({
       (row) => row.dealAutoNumber,
     ),
     col('title', 'string', 'Record title.', (row) => row.title),
-    col('sold_date', 'date', "Sold date, on the agency's calendar.", (row) =>
-      ymdDate(row.soldDateYmd),
+    col(
+      'sold_date',
+      'date',
+      "Sold date, on the agency's calendar.",
+      (row, ctx) => agencyCalendarDate(row.soldDate, ctx.timeZone),
     ),
-    col('sold_year', 'number', 'Sold year.', (row) =>
-      row.soldDateYmd ? fromYmd(row.soldDateYmd).year : null,
+    col('sold_year', 'number', 'Sold year.', (row, ctx) =>
+      row.soldDate ? zonedDate(row.soldDate, ctx.timeZone).year : null,
     ),
-    col('sold_month', 'number', 'Sold month, 1–12.', (row) =>
-      row.soldDateYmd ? fromYmd(row.soldDateYmd).month : null,
+    col('sold_month', 'number', 'Sold month, 1–12.', (row, ctx) =>
+      row.soldDate ? zonedDate(row.soldDate, ctx.timeZone).month : null,
     ),
-    col('sold_month_name', 'string', 'Sold month name.', (row) =>
-      row.soldDateYmd ? MONTH_NAMES[fromYmd(row.soldDateYmd).month - 1] : null,
+    col('sold_month_name', 'string', 'Sold month name.', (row, ctx) =>
+      row.soldDate
+        ? MONTH_NAMES[zonedDate(row.soldDate, ctx.timeZone).month - 1]
+        : null,
     ),
     col(
       'sold_at',

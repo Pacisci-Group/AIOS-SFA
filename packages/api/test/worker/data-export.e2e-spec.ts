@@ -59,6 +59,15 @@ import {
   createTestApp,
   dropTestDatabase,
 } from '../helpers/test-app';
+import { businessDateInstant } from '../../src/common/dates/business-dates';
+
+/**
+ * A business date stored the way the app stores a day-only entry (PAC-159):
+ * midnight of that day in the seeded agency's zone — `America/Chicago`, the
+ * schema default — never UTC midnight, which Chicago reads as the evening
+ * before.
+ */
+const onDay = (iso: string) => businessDateInstant(iso, 'America/Chicago');
 
 type Row = Record<string, string>;
 
@@ -374,7 +383,7 @@ describe('Data export (PAC-152) (e2e)', () => {
     const l2 = await lead({
       producerId: owner!._id,
       leadSourceId: facebook,
-      createdDate: new Date('2026-05-10T00:00:00.000Z'),
+      createdDate: onDay('2026-05-10'),
     });
     const l3 = await lead({
       producerId: producer!._id,
@@ -384,7 +393,7 @@ describe('Data export (PAC-152) (e2e)', () => {
     const l4 = await lead({
       producerId: producer!._id,
       leadSourceId: mailer,
-      createdDate: new Date('2026-06-01T00:00:00.000Z'),
+      createdDate: onDay('2026-06-01'),
     });
 
     const q1 = await recapModel.create({
@@ -404,6 +413,7 @@ describe('Data export (PAC-152) (e2e)', () => {
       leadId: l1._id,
       quoteRecapId: q1._id,
       householdId: h1._id,
+      soldDate: onDay('2026-05-20'),
       soldDateYmd: 20260520,
       premium: 3000,
       chargebackAdjustment: -200,
@@ -675,8 +685,8 @@ describe('Data export (PAC-152) (e2e)', () => {
       expect(l1.first_deal_id).toBe(ids.d1);
       expect(l1.first_sold_date).toBe('2026-05-20');
 
-      // A migrated date-only value reads as the date it names, not as the
-      // evening before in Chicago.
+      // A day-only value sits at agency-local midnight and reads as the date
+      // it names (PAC-159).
       expect(byId.get(ids.l2)!.created_date).toBe('2026-05-10');
       expect(byId.get(ids.l2)!.sold).toBe('false');
     });

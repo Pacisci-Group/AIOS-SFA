@@ -84,7 +84,7 @@ import {
   soldBreakdownStages,
   soldMetrics,
 } from './sales-dimensions';
-import { bucketsBetween, ymdBucketExpr } from './time-buckets';
+import { bucketsBetween, instantBucketExpr } from './time-buckets';
 
 /** Which batch a dimension's keys are labelled from. */
 const LABEL_KIND: Record<DimensionKey, LabelKind> = {
@@ -540,7 +540,7 @@ export class SalesAnalyticsService {
     segmentKeys: Map<string, string | null>;
     segmentLabels: Map<string, string | null>;
   }> {
-    const bucket = ymdBucketExpr('soldDateYmd', query.interval);
+    const bucket = instantBucketExpr('soldDate', query.interval, access.timeZone);
     const quotesWanted = !query.carriers?.length;
     const needs = prefixNeeds([segment]);
 
@@ -602,7 +602,11 @@ export class SalesAnalyticsService {
             ),
             {
               $group: {
-                _id: ymdBucketExpr('quoteDateYmd', query.interval),
+                _id: instantBucketExpr(
+                  'quoteDate',
+                  query.interval,
+                  access.timeZone,
+                ),
                 quotes: { $sum: 1 },
                 quotedPremium: { $sum: '$linePremium' },
               },

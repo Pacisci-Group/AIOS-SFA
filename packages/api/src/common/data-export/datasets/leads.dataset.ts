@@ -6,7 +6,7 @@ import {
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import { Lead } from '../../../leads/schemas/lead.schema';
-import { agencyCalendarDate, ymdDate } from '../engine/cells';
+import { agencyCalendarDate } from '../engine/cells';
 import { defineDataset } from '../engine/dataset.types';
 import type { AddressLike, DealLite, QuoteLite } from '../engine/lookups';
 import {
@@ -314,7 +314,11 @@ export const leadsDataset = defineDataset<LeadRow, LeadJoins>({
       'latest_quote_date',
       'date',
       'Quote date of the most recent recap.',
-      (row, ctx) => ymdDate(latestQuote(row, ctx.joins)?.quoteDateYmd),
+      (row, ctx) =>
+        agencyCalendarDate(
+          latestQuote(row, ctx.joins)?.quoteDate,
+          ctx.timeZone,
+        ),
     ),
     col(
       'latest_quote_premium',
@@ -341,7 +345,7 @@ export const leadsDataset = defineDataset<LeadRow, LeadJoins>({
       (row, ctx) => firstDeal(row, ctx.joins)?._id,
     ),
     col('first_sold_date', 'date', 'Sold date of that deal.', (row, ctx) =>
-      ymdDate(firstDeal(row, ctx.joins)?.soldDateYmd),
+      agencyCalendarDate(firstDeal(row, ctx.joins)?.soldDate, ctx.timeZone),
     ),
     col(
       'first_sold_premium',

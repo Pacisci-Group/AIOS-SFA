@@ -11,31 +11,42 @@ const field = (kind: DateFieldDef['kind'], path = 'f'): DateFieldDef => ({
 
 describe('dateWindowStages', () => {
   it('adds nothing when neither end is given', () => {
-    expect(dateWindowStages(field('ymd'), undefined, undefined, 'UTC')).toEqual(
-      [],
-    );
+    expect(
+      dateWindowStages(field('instant'), undefined, undefined, 'UTC'),
+    ).toEqual([]);
   });
 
-  it('cuts a ymd field half-open, with `to` inclusive', () => {
+  it('cuts a business instant half-open on the agency calendar, with `to` inclusive', () => {
     expect(
       dateWindowStages(
-        field('ymd', 'soldDateYmd'),
+        field('instant', 'soldDate'),
         '2026-01-01',
         '2026-01-31',
-        'UTC',
+        'America/Chicago',
       ),
-    ).toEqual([{ $match: { soldDateYmd: { $gte: 20260101, $lt: 20260201 } } }]);
+    ).toEqual([
+      {
+        $match: {
+          soldDate: {
+            $gte: new Date('2026-01-01T06:00:00.000Z'),
+            $lt: new Date('2026-02-01T06:00:00.000Z'),
+          },
+        },
+      },
+    ]);
   });
 
   it('leaves an open end open', () => {
     expect(
-      dateWindowStages(field('ymd'), '2026-01-01', undefined, 'UTC'),
-    ).toEqual([{ $match: { f: { $gte: 20260101 } } }]);
+      dateWindowStages(field('instant'), '2026-01-01', undefined, 'UTC'),
+    ).toEqual([
+      { $match: { f: { $gte: new Date('2026-01-01T00:00:00.000Z') } } },
+    ]);
     expect(
-      dateWindowStages(field('ymd'), undefined, '2024-02-28', 'UTC'),
+      dateWindowStages(field('instant'), undefined, '2024-02-28', 'UTC'),
     ).toEqual([
       // Leap year: the day after Feb 28 is Feb 29.
-      { $match: { f: { $lt: 20240229 } } },
+      { $match: { f: { $lt: new Date('2024-02-29T00:00:00.000Z') } } },
     ]);
   });
 

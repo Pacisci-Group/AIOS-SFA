@@ -326,16 +326,16 @@ export function linesPrefix(
  * A lead's creation day as a `YYYYMMDD` integer, comparable with the windows
  * {@link YmdRange} describes.
  *
- * Leads carry an instant, not a calendar day, and the instant has two
- * provenances: the app writes a real one, while the migration wrote SmartSuite's
- * **date-only** value as UTC midnight. Reading a UTC-midnight value in a US
- * zone lands it on the previous day — the same trap `quoteDateYmd` documents in
- * `quote.normalize.ts`, solved the same way: exactly-midnight-UTC is read as a
- * UTC date, anything else on the agency's calendar (`timeZone`).
+ * `createdDate` is the business "lead received on" instant (the migration's
+ * SmartSuite date, or the New Lead form's date), with the Mongoose `createdAt`
+ * as the fallback for a migrated lead that never had one. Both are real
+ * instants — a day-only value sits at agency-local midnight (PAC-159) — so the
+ * day is simply read on the agency's calendar. Computed at **read** time, like
+ * every sales window, so a change to the agency's zone re-buckets lead history
+ * on the next request. Documented on `Agency.timezone`.
  *
- * Unlike `quoteDateYmd`, this is computed at **read** time, so a change to the
- * agency's zone re-buckets lead history on the next request while stored quote
- * and sale days stay where they were filed. Documented on `Agency.timezone`.
+ * Not a `$match`-able expression: leads are counted, never range-scanned, by
+ * creation day, and the `$ifNull` fallback has no index to ride anyway.
  *
  * The zone is also validated on write (`assertMongoKnowsTimeZone`): a name
  * Node accepts but Mongo's zone table does not would make this stage throw,
@@ -343,22 +343,11 @@ export function linesPrefix(
  */
 export function leadCreatedYmdExpr(timeZone: string) {
   return {
-    $let: {
-      vars: { created: { $ifNull: ['$createdDate', '$createdAt'] } },
-      in: {
-        $toInt: {
-          $dateToString: {
-            date: '$$created',
-            format: '%Y%m%d',
-            timezone: {
-              $cond: [
-                { $eq: [{ $mod: [{ $toLong: '$$created' }, 86_400_000] }, 0] },
-                'UTC',
-                requireTimeZone(timeZone),
-              ],
-            },
-          },
-        },
+    $toInt: {
+      $dateToString: {
+        date: { $ifNull: ['$createdDate', '$createdAt'] },
+        format: '%Y%m%d',
+        timezone: requireTimeZone(timeZone),
       },
     },
   } as const;

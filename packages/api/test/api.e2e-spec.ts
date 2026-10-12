@@ -80,6 +80,15 @@ import {
   createTestApp,
   dropTestDatabase,
 } from './helpers/test-app';
+import { businessDateInstant } from '../src/common/dates/business-dates';
+
+/**
+ * A business date stored the way the app stores a day-only entry (PAC-159):
+ * midnight of that day in the seeded agency's zone — `America/Chicago`, the
+ * schema default — never UTC midnight, which Chicago reads as the evening
+ * before.
+ */
+const onDay = (iso: string) => businessDateInstant(iso, 'America/Chicago');
 
 /**
  * `GET /crm/service-tickets` returns a paginated envelope (PAC-98), and
@@ -4362,6 +4371,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: householdOne,
+            soldDate: onDay('2026-05-04'),
             soldDateYmd: 20260504,
             premium: 1000,
             itemCount: 2,
@@ -4370,6 +4380,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: householdOne,
+            soldDate: onDay('2026-05-11'),
             soldDateYmd: 20260511,
             premium: 500,
             itemCount: 1,
@@ -4379,6 +4390,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             legacyHouseholdId: 'legacy-hh-1',
+            soldDate: onDay('2026-05-18'),
             soldDateYmd: 20260518,
             premium: 300,
             itemCount: 1,
@@ -4387,6 +4399,7 @@ describe('SFA API (e2e)', () => {
           {
             ...base,
             producerId: producer!._id,
+            soldDate: onDay('2026-05-25'),
             soldDateYmd: 20260525,
             premium: 200,
             itemCount: 1,
@@ -4396,6 +4409,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: new Types.ObjectId(),
+            soldDate: onDay('2026-05-05'),
             soldDateYmd: 20260505,
             premium: 99_999,
             itemCount: 99,
@@ -4406,6 +4420,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: owner!._id,
             householdId: new Types.ObjectId(),
+            soldDate: onDay('2026-05-06'),
             soldDateYmd: 20260506,
             premium: 77_777,
             itemCount: 77,
@@ -4415,6 +4430,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: new Types.ObjectId(),
+            soldDate: onDay('2026-06-01'),
             soldDateYmd: 20260601,
             premium: 55_555,
             itemCount: 55,
@@ -4426,7 +4442,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: householdOne,
-            quoteDate: new Date('2026-05-04T00:00:00.000Z'),
+            quoteDate: onDay('2026-05-04'),
             quoteDateYmd: 20260504,
             premium: 800,
             itemCount: 2,
@@ -4999,6 +5015,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           producerId: producer!._id,
+          soldDate: onDay('2026-04-10'),
           soldDateYmd: 20260410,
           premium: 2000,
           itemCount: 2,
@@ -5006,6 +5023,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           producerId: owner!._id,
+          soldDate: onDay('2026-04-15'),
           soldDateYmd: 20260415,
           premium: 77_777,
           itemCount: 9,
@@ -5014,6 +5032,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           producerId: producer!._id,
+          soldDate: onDay('2026-04-20'),
           soldDateYmd: 20260420,
           premium: 500_000,
           itemCount: 1,
@@ -5023,6 +5042,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           producerId: producer!._id,
+          soldDate: onDay('2026-03-31'),
           soldDateYmd: 20260331,
           premium: 400_000,
           itemCount: 1,
@@ -7959,7 +7979,7 @@ describe('SFA API (e2e)', () => {
         householdId: household._id,
         primaryContactId: primary._id,
         memberContactIds: [spouse._id],
-        createdDate: new Date('2026-07-01T00:00:00.000Z'),
+        createdDate: onDay('2026-07-01'),
         lastActivityAt: new Date('2026-07-28T00:00:00.000Z'),
         intakeSource: { channel: 'internal' },
         isTestRecord: false,
@@ -8006,7 +8026,7 @@ describe('SFA API (e2e)', () => {
 
       const older = await recapModel.create({
         ...base,
-        quoteDate: new Date('2026-07-10T00:00:00.000Z'),
+        quoteDate: onDay('2026-07-10'),
         premium: 1500,
         itemCount: 1,
         productsQuoted: ['PYgez'],
@@ -8019,7 +8039,7 @@ describe('SFA API (e2e)', () => {
 
       const newer = await recapModel.create({
         ...base,
-        quoteDate: new Date('2026-07-24T00:00:00.000Z'),
+        quoteDate: onDay('2026-07-24'),
         premium: 1872,
         itemCount: 2,
         // Raw SmartSuite codes, exactly as the migration writes them.
@@ -8045,7 +8065,7 @@ describe('SFA API (e2e)', () => {
       // Linked to the lead only by legacy id — the fallback's whole point.
       await recapModel.create({
         ...base,
-        quoteDate: new Date('2025-03-02T00:00:00.000Z'),
+        quoteDate: onDay('2025-03-02'),
         premium: 990,
         itemCount: 1,
         productsQuoted: ['sNMRK'],
@@ -8054,7 +8074,7 @@ describe('SFA API (e2e)', () => {
 
       const deal = await dealModel.create({
         ...base,
-        soldDate: new Date('2026-07-30T00:00:00.000Z'),
+        soldDate: onDay('2026-07-30'),
         premium: 1872,
         itemCount: 2,
         policyCount: 2,
@@ -8113,7 +8133,7 @@ describe('SFA API (e2e)', () => {
           subjectType: 'lead',
           leadId: lead._id,
           userId: producer!._id,
-          occurredAt: new Date('2026-07-01T00:00:00.000Z'),
+          occurredAt: onDay('2026-07-01'),
           summary: 'Lead created',
           source: 'internal',
         },
@@ -8124,7 +8144,7 @@ describe('SFA API (e2e)', () => {
           leadId: lead._id,
           quoteRecapId: newer._id,
           userId: producer!._id,
-          occurredAt: new Date('2026-07-24T00:00:00.000Z'),
+          occurredAt: onDay('2026-07-24'),
           summary: 'Quote recap created',
           source: 'internal',
         },
@@ -8135,7 +8155,7 @@ describe('SFA API (e2e)', () => {
           leadId: lead._id,
           dealId: deal._id,
           userId: producer!._id,
-          occurredAt: new Date('2026-07-30T00:00:00.000Z'),
+          occurredAt: onDay('2026-07-30'),
           summary: 'Deal marked as sold',
           source: 'internal',
         },
@@ -13940,7 +13960,7 @@ describe('SFA API (e2e)', () => {
             agencyId: seed.agencyId,
             branchId: seed.branchId,
             producerId,
-            soldDate: new Date('2026-02-15T00:00:00.000Z'),
+            soldDate: onDay('2026-02-15'),
             premiumSource: 'snapshot',
           });
 
@@ -14006,7 +14026,7 @@ describe('SFA API (e2e)', () => {
             agencyId: seed.agencyId,
             branchId: seed.branchId,
             producerId,
-            soldDate: new Date('2025-11-03T00:00:00.000Z'),
+            soldDate: onDay('2025-11-03'),
             soldDateYmd: 20251103,
             premium: 9999,
             premiumSource: 'rollup',
@@ -14239,7 +14259,7 @@ describe('SFA API (e2e)', () => {
             producerId,
             leadId: lead._id,
             householdId: household._id,
-            soldDate: new Date('2025-10-01T00:00:00.000Z'),
+            soldDate: onDay('2025-10-01'),
             soldDateYmd: 20251001,
             premium: 9999,
             itemCount: 42,
@@ -14568,7 +14588,7 @@ describe('SFA API (e2e)', () => {
           itemCount: 1,
           policyCount: 1,
           soldDateYmd: 20260301,
-          soldDate: new Date('2026-03-01T00:00:00.000Z'),
+          soldDate: onDay('2026-03-01'),
           businessType: 'new_business',
           isTestRecord: false,
         });
@@ -14958,7 +14978,7 @@ describe('SFA API (e2e)', () => {
           itemCount: 1,
           policyCount: 1,
           soldDateYmd: 20260310,
-          soldDate: new Date('2026-03-10T00:00:00.000Z'),
+          soldDate: onDay('2026-03-10'),
           isTestRecord: false,
         });
 
