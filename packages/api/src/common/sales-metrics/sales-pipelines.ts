@@ -5,7 +5,10 @@ import {
 } from '@sfa/shared';
 import { PipelineStage, Types } from 'mongoose';
 import { requireTimeZone } from '../dates/time-zones';
-import type { YmdRange } from '../../performance/performance.range';
+import {
+  instantWindow,
+  type YmdRange,
+} from '../../performance/performance.range';
 
 /**
  * The shared front half of every Owner dashboard aggregation (PAC-135).
@@ -361,10 +364,23 @@ export function leadCreatedYmdExpr(timeZone: string) {
   } as const;
 }
 
-/** The half-open Ymd window as a `$match` clause on `field`. */
+/** The half-open Ymd window as a `$match` clause on a computed `YYYYMMDD` `field`. */
 export function ymdWindow(
   field: string,
   range: YmdRange,
 ): Record<string, unknown> {
   return { [field]: { $gte: range.startYmd, $lt: range.endYmd } };
+}
+
+/**
+ * The same calendar window as a `$match` clause on a stored **instant**
+ * (`soldDate`, `quoteDate`), cut on the agency's clock (PAC-159). The bounds
+ * are computed once here, so the clause stays a plain indexed range.
+ */
+export function dateWindow(
+  field: string,
+  range: YmdRange,
+  timeZone: string,
+): Record<string, unknown> {
+  return { [field]: instantWindow(range, timeZone) };
 }

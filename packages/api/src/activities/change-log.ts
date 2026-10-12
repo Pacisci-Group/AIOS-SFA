@@ -1,4 +1,5 @@
 import type { ActivityChange, ActivityChangeKind } from '@sfa/shared';
+import { businessDay } from '../common/dates/business-dates';
 
 /**
  * The quote/sold edit log (PAC-65 #9) — turning a `PATCH` into a
@@ -9,10 +10,9 @@ import type { ActivityChange, ActivityChangeKind } from '@sfa/shared';
  * `doc.modifiedPaths()` and `doc.getChanges()` report **new** values only;
  * Mongoose exposes no supported accessor for the old one. Even if it did, both
  * `update()` paths write fields the producer did not edit — `policyNumberKey`
- * is kept in lockstep with `policyNumber`, `quoteDateYmd` self-heals on the
- * first touch of any migrated recap, and `deriveTotals` reassigns `premium` /
- * `itemCount` / `productsQuoted` on every patch carrying `policies`. A
- * path-driven diff would report all of those as user edits.
+ * is kept in lockstep with `policyNumber`, and `deriveTotals` reassigns
+ * `premium` / `itemCount` / `productsQuoted` on every patch carrying
+ * `policies`. A path-driven diff would report all of those as user edits.
  *
  * A declared spec makes "which fields does the log speak about" a reviewable
  * decision instead of a side effect of assignment order, and leaves this file a
@@ -25,9 +25,24 @@ import type { ActivityChange, ActivityChangeKind } from '@sfa/shared';
  * `normalizeInsuranceMonth` on the way out, because migrated records hold raw
  * SmartSuite select codes (`carrier: 'B4tEH'`, `policyType: 'eCEuV'`). A change
  * row is written once and read forever, so the **spec's `read` must return the
- * display value** — normalizer applied, date already truncated to a calendar
+ * display value** — normalizer applied, date already reduced to a calendar
  * day. Get this wrong and the log preserves gibberish permanently.
+ *
+ * Which calendar depends on what the date is. A calendar-only fact (a policy's
+ * effective date) is stored at UTC midnight and reads back through
+ * {@link changeDate}. A **business date** — when a sale or quote happened
+ * (PAC-159) — is a real instant, and its day is the agency's: it reads back
+ * through {@link changeBusinessDate}, which is why every `read` is handed the
+ * caller's zone in a {@link ChangeContext}. A business date frozen on the UTC
+ * calendar would be the previous day for any agency east of Greenwich, and
+ * there is no re-deriving it later.
  */
+
+/** What a `read` needs beyond the document itself. */
+export interface ChangeContext {
+  /** The agency's IANA zone — `AccessContext.timeZone`. */
+  timeZone: string;
+}
 
 /** How to pull one logged field out of a document, and how to label it. */
 export interface ChangeFieldSpec<T> {
@@ -40,23 +55,35 @@ export interface ChangeFieldSpec<T> {
    * The **display-ready** value: normalizer applied, `Date` already reduced to
    * `YYYY-MM-DD`. Return `null` for absent or cleared — never `undefined`.
    */
-  read: (doc: T) => string | number | string[] | null;
+  read: (doc: T, ctx: ChangeContext) => string | number | string[] | null;
 }
 
 /** A field's value at one point in time, keyed by `ChangeFieldSpec.field`. */
 export type ChangeSnapshot = Record<string, string | number | string[] | null>;
 
 /**
- * `YYYY-MM-DD`, or `null`.
+ * A **calendar-only** date as `YYYY-MM-DD`, or `null`.
  *
  * The same truncation `lead-detail.service.ts`'s `dateOnly` and
  * `policy-view.ts`'s `policyDate` perform, and for the same reason: an
- * effective date is a calendar date, and storing the instant is what renders it
- * as the previous day for anyone west of Greenwich. Here it matters more than
- * usual — the value is frozen into the log rather than re-derived per request.
+ * effective date is a calendar date stored at UTC midnight, and reading the
+ * instant in a local zone is what renders it as the previous day for anyone
+ * west of Greenwich. Not for a business date — see {@link changeBusinessDate}.
  */
 export function changeDate(value?: Date | null): string | null {
   return value ? value.toISOString().slice(0, 10) : null;
+}
+
+/**
+ * A **business** date — a sold, quote or lead date — as the agency-calendar
+ * `YYYY-MM-DD` it falls on, or `null` (PAC-159). The value the log freezes
+ * must be the day the agency means, so the zone is required.
+ */
+export function changeBusinessDate(
+  value: Date | null | undefined,
+  timeZone: string,
+): string | null {
+  return businessDay(value, timeZone);
 }
 
 /**
@@ -77,10 +104,11 @@ export function changeText(value?: string | null, limit = 120): string | null {
 export function snapshot<T>(
   specs: ChangeFieldSpec<T>[],
   doc: T,
+  ctx: ChangeContext,
 ): ChangeSnapshot {
   const result: ChangeSnapshot = {};
   for (const spec of specs) {
-    result[spec.field] = spec.read(doc) ?? null;
+    result[spec.field] = spec.read(doc, ctx) ?? null;
   }
   return result;
 }

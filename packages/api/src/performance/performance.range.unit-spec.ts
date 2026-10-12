@@ -1,8 +1,10 @@
 import {
   addDays,
+  agencyTodayIso,
   currentMonthIn,
   customRange,
   fromYmd,
+  instantWindow,
   isValidIsoDate,
   recentMonthsIn,
   resolveComparison,
@@ -652,5 +654,46 @@ describe('fromYmd', () => {
   it('inverts toYmd', () => {
     const date = { year: 2026, month: 9, day: 23 };
     expect(fromYmd(toYmd(date))).toEqual(date);
+  });
+});
+
+describe('instantWindow', () => {
+  it('cuts a calendar range into the agency-zone instants it spans', () => {
+    // Half-open on both representations: `endYmd` is the day after `to`.
+    const window = instantWindow(
+      customRange('2026-10-01', '2026-10-31'),
+      CHICAGO,
+    );
+    expect(window.$gte.toISOString()).toBe('2026-10-01T05:00:00.000Z');
+    expect(window.$lt.toISOString()).toBe('2026-11-01T05:00:00.000Z');
+  });
+
+  it('holds a sale at 11 PM on the last day and excludes the next minute', () => {
+    // The case the YYYYMMDD integers used to protect (PAC-159).
+    const window = instantWindow(
+      customRange('2026-10-01', '2026-10-31'),
+      CHICAGO,
+    );
+    const lateSale = new Date('2026-11-01T04:00:00.000Z'); // 23:00 CDT Oct 31
+    const midnightNov = new Date('2026-11-01T05:00:00.000Z');
+    expect(lateSale >= window.$gte && lateSale < window.$lt).toBe(true);
+    expect(midnightNov < window.$lt).toBe(false);
+  });
+
+  it('follows the zone, not UTC', () => {
+    const window = instantWindow(
+      customRange('2026-08-06', '2026-08-06'),
+      KOLKATA,
+    );
+    expect(window.$gte.toISOString()).toBe('2026-08-05T18:30:00.000Z');
+    expect(window.$lt.toISOString()).toBe('2026-08-06T18:30:00.000Z');
+  });
+});
+
+describe('agencyTodayIso', () => {
+  it('is the agency day, which can differ from the UTC day', () => {
+    const at = new Date('2026-08-06T01:00:00.000Z');
+    expect(agencyTodayIso(CHICAGO, at)).toBe('2026-08-05');
+    expect(agencyTodayIso(KOLKATA, at)).toBe('2026-08-06');
   });
 });

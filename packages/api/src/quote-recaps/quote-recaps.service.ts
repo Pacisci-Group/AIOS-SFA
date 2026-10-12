@@ -494,7 +494,9 @@ export class QuoteRecapsService {
     // Before anything is assigned — `deriveTotals` below overwrites `premium`,
     // `itemCount` and `productsQuoted` in place, so there is no reading them
     // back afterwards.
-    const before = snapshot(RECAP_CHANGE_FIELDS, recap);
+    const before = snapshot(RECAP_CHANGE_FIELDS, recap, {
+      timeZone: access.timeZone,
+    });
 
     if (dto.policies) {
       const household = await this.leadAccess.findHousehold(lead, access);
@@ -579,7 +581,7 @@ export class QuoteRecapsService {
     const changes = diffSnapshots(
       RECAP_CHANGE_FIELDS,
       before,
-      snapshot(RECAP_CHANGE_FIELDS, recap),
+      snapshot(RECAP_CHANGE_FIELDS, recap, { timeZone: access.timeZone }),
     );
     // A patch that set every field to what it already held. Nothing happened,
     // so the timeline should not claim otherwise.

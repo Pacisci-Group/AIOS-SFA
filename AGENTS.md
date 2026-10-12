@@ -192,6 +192,15 @@ temperature/aging that aren't first-class in legacy payloads. See
   dimensions (line, carrier) unwind `lines[]`, and `linesPrefix` gained an
   opt-in `carrier` line field. The web page is the first to chart anything:
   shadcn `chart` (recharts) over the validated `--chart-*` tokens.
+- `docs/plans/pac-159-business-dates-implementation-plan.md` — business dates
+  (PAC-159): `soldDateYmd` / `quoteDateYmd` are removed; every business date is a
+  UTC instant, bucketed in the agency zone at read time through one
+  `instantWindow(range, timeZone)`; a day-only entry (back-dated sale or quote,
+  migrated row) is stored at **agency-local midnight**, never UTC midnight. Quote
+  date and lead date become inputs and are editable, with cross-checks (no
+  future dates; a sale on or after its linked quote; the lead date as the
+  floor). ⚠ `parseFormDate` stays UTC-midnight for policy effective dates —
+  business dates go through `businessDateInstant`.
 - `docs/plans/pac-71-mailer-campaigns-implementation-plan.md` — the four-PR
   execution order for mailer campaigns (PAC-71). ⚠ **Add Mailers is gone** (page,
   route, panel tile, endpoints and worker function): a mailer now belongs to a

@@ -58,9 +58,9 @@ import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import {
   YmdRange,
   fromYmd,
+  instantWindow,
   toYmd,
   zonedDate,
-  zonedDayStart,
 } from '../performance/performance.range';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import {
@@ -616,11 +616,11 @@ export class ManagementDashboardService {
   ): PipelineStage[] {
     // `openedAt` is a real instant, so the agency's calendar window has to be
     // turned into two instants; `endYmd` is exclusive already.
-    const window = {
-      from: zonedDayStart(fromYmd(range.startYmd), access.timeZone),
-      to: zonedDayStart(fromYmd(range.endYmd), access.timeZone),
-    };
-    return overdueTicketsPrefix(ticketTenantFilter(access), query, window);
+    const { $gte: from, $lt: to } = instantWindow(range, access.timeZone);
+    return overdueTicketsPrefix(ticketTenantFilter(access), query, {
+      from,
+      to,
+    });
   }
 
   private async householdsSoldBy(

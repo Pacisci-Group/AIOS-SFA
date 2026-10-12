@@ -1,5 +1,6 @@
 import {
   ChangeFieldSpec,
+  changeBusinessDate,
   changeDate,
   changeText,
   diffSnapshots,
@@ -47,8 +48,14 @@ const SPECS: ChangeFieldSpec<Doc>[] = [
   },
 ];
 
+const CTX = { timeZone: 'America/Chicago' };
+
 const diff = (before: Doc, after: Doc) =>
-  diffSnapshots(SPECS, snapshot(SPECS, before), snapshot(SPECS, after));
+  diffSnapshots(
+    SPECS,
+    snapshot(SPECS, before, CTX),
+    snapshot(SPECS, after, CTX),
+  );
 
 describe('change-log', () => {
   it('reports nothing when nothing moved', () => {
@@ -145,5 +152,18 @@ describe('changeText', () => {
   it('leaves text at the limit alone', () => {
     const exact = 'y'.repeat(120);
     expect(changeText(exact)).toBe(exact);
+  });
+});
+
+describe('changeBusinessDate (PAC-159)', () => {
+  it('freezes the agency-calendar day, not the UTC one', () => {
+    const eveningCentral = new Date('2026-08-06T01:00:00.000Z');
+    expect(changeBusinessDate(eveningCentral, 'America/Chicago')).toBe(
+      '2026-08-05',
+    );
+    expect(changeBusinessDate(eveningCentral, 'Asia/Kolkata')).toBe(
+      '2026-08-06',
+    );
+    expect(changeBusinessDate(null, 'America/Chicago')).toBeNull();
   });
 });

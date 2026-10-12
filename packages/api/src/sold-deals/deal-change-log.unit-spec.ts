@@ -24,11 +24,13 @@ function subject(
   };
 }
 
+const CTX = { timeZone: 'America/Chicago' };
+
 const diff = (before: DealChangeSubject, after: DealChangeSubject) =>
   diffSnapshots(
     DEAL_CHANGE_FIELDS,
-    snapshot(DEAL_CHANGE_FIELDS, before),
-    snapshot(DEAL_CHANGE_FIELDS, after),
+    snapshot(DEAL_CHANGE_FIELDS, before, CTX),
+    snapshot(DEAL_CHANGE_FIELDS, after, CTX),
   );
 
 describe('deal change log (PAC-104)', () => {

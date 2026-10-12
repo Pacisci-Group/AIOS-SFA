@@ -559,7 +559,11 @@ export class SoldDealsService {
       return this.buildEditView(deal, policies);
     }
 
-    const before = snapshot(DEAL_CHANGE_FIELDS, { deal, policies });
+    const before = snapshot(
+      DEAL_CHANGE_FIELDS,
+      { deal, policies },
+      { timeZone: access.timeZone },
+    );
     const soldDate = parseFormDate(dto.soldDate);
     const ymd = soldDateYmd(dto.soldDate);
 
@@ -655,7 +659,11 @@ export class SoldDealsService {
       soldDocumentPurpose(leadId.toString(), kind),
     );
 
-    const before = snapshot(DEAL_CHANGE_FIELDS, { deal, policies: stored });
+    const before = snapshot(
+      DEAL_CHANGE_FIELDS,
+      { deal, policies: stored },
+      { timeZone: access.timeZone },
+    );
     // A migrated deal whose producer never resolved has none; the caller is
     // then the only person its new items can reasonably reach.
     const producerId = deal.producerId ?? new Types.ObjectId(access.userId);
@@ -953,7 +961,7 @@ export class SoldDealsService {
     const changes = diffSnapshots(
       DEAL_CHANGE_FIELDS,
       before,
-      snapshot(DEAL_CHANGE_FIELDS, after),
+      snapshot(DEAL_CHANGE_FIELDS, after, { timeZone: access.timeZone }),
     );
     if (!changes.length) return;
 

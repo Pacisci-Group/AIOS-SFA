@@ -22,11 +22,7 @@ import {
 } from '../crm/schemas/service-ticket.schema';
 import { buildTicketScopeFilter } from '../crm/ticket-scope';
 import { toTrend } from '../owner-dashboard/owner-dashboard.normalize';
-import {
-  fromYmd,
-  type YmdRange,
-  zonedDayStart,
-} from '../performance/performance.range';
+import { instantWindow, type YmdRange } from '../performance/performance.range';
 import {
   AnalyticsLabelsService,
   type LabelKind,
@@ -437,9 +433,7 @@ export class ServiceAnalyticsService {
 
   /** A calendar window on the agency's clock, as two instants. */
   private window(range: YmdRange, timeZone: string): Window {
-    return {
-      from: zonedDayStart(fromYmd(range.startYmd), timeZone),
-      to: zonedDayStart(fromYmd(range.endYmd), timeZone),
-    };
+    const { $gte: from, $lt: to } = instantWindow(range, timeZone);
+    return { from, to };
   }
 }
