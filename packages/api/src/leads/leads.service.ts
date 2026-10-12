@@ -45,6 +45,7 @@ import {
   addDays,
   zonedDayStart,
 } from '../performance/performance.range';
+import { assertNotInFuture } from '../common/dates/business-date-rules';
 
 /**
  * How many contacts one email/phone term may resolve into an `$in`.
@@ -162,7 +163,12 @@ export class LeadsService {
       ? await this.resolveReplacement(access, dto)
       : null;
 
+    if (dto.createdDate) {
+      assertNotInFuture('Lead date', dto.createdDate, access.timeZone);
+    }
+
     const outcome = await this.intake.process(ctx, {
+      createdDate: dto.createdDate,
       primaryContact: dto.primaryContact,
       address: dto.address,
       members: dto.members,
@@ -413,6 +419,7 @@ export class LeadsService {
     return {
       agencyId: tenant.agencyId,
       branchId: tenant.branchId,
+      timeZone: access.timeZone,
       producerId: new Types.ObjectId(access.userId),
       channel: 'internal',
       leadSourceId,

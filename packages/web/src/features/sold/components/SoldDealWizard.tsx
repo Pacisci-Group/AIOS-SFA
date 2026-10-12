@@ -8,7 +8,8 @@ import { Loader2, Plus, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { FormError, FormSection } from "@/components/form";
 import { Button } from "@/components/ui/button";
-import { localTodayYmd } from "@/lib/dates";
+import { agencyTodayYmd } from "@/lib/dates";
+import { getStoredUser } from "@/lib/api-client";
 import { BlockedReasons } from "./BlockedReasons";
 import { PolicyDraftStepper } from "./PolicyDraftStepper";
 import { PolicyReviewList } from "./PolicyReviewList";
@@ -106,11 +107,14 @@ export function SoldDealWizard({
   uploadScope,
 }: SoldDealWizardProps) {
   /**
-   * Today, in the producer's own time zone — see `localTodayYmd` for why not
-   * `toISOString()`. The initial value is kept so a date nobody touched does not
-   * count as unsaved work.
+   * Today on the **agency's** calendar (PAC-159) — the day the API's
+   * "not in the future" rule is judged on, which is neither UTC nor the
+   * producer's own zone. The initial value is kept so a date nobody touched
+   * does not count as unsaved work.
    */
-  const [initialSoldDate] = useState(localTodayYmd);
+  const [initialSoldDate] = useState(() =>
+    agencyTodayYmd(getStoredUser()?.timeZone),
+  );
   const [soldDate, setSoldDate] = useState(initialSoldDate);
   const [policies, setPolicies] = useState<SoldPolicyFormValues[]>([]);
 
@@ -209,6 +213,7 @@ export function SoldDealWizard({
           {context.householdName && <> · {context.householdName}</>}
         </p>
         <SoldDateCard
+          max={initialSoldDate}
           value={soldDate}
           onChange={setSoldDate}
           disabled={submitting}

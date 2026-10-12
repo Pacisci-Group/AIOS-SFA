@@ -62,6 +62,7 @@ import {
   type HouseholdDocument,
 } from '../households/schemas/household.schema';
 import {
+  Lead,
   replacementIntentOf,
   type LeadDocument,
 } from '../leads/schemas/lead.schema';
@@ -94,6 +95,10 @@ import {
   businessDateInstant,
   businessDay,
 } from '../common/dates/business-dates';
+import {
+  assertNotBefore,
+  assertNotInFuture,
+} from '../common/dates/business-date-rules';
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
@@ -128,6 +133,8 @@ export class SoldDealsService {
     private readonly leadTickets: LeadTicketsService,
     private readonly memberships: HouseholdMembersService,
     @InjectModel(Deal.name) private readonly dealModel: Model<DealDocument>,
+    /** Read-only: a sold date is bounded by its lead's date (PAC-159). */
+    @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
     @InjectModel(Policy.name)
     private readonly policyModel: Model<PolicyDocument>,
     @InjectModel(Household.name)
@@ -360,6 +367,17 @@ export class SoldDealsService {
      */
     const replacement = replacementIntentOf(lead);
 
+    // The quote this sale was sold from, if the form named one. Verified to be
+    // this agency's and this lead's before it is written onto the deal — the
+    // id used to be taken as given — and it bounds the sold date (PAC-159).
+    const quoteRecap = await this.linkedQuoteRecap(dto.quoteRecapId, lead);
+    this.assertSoldDateAllowed(
+      dto.soldDate,
+      lead,
+      quoteRecap?.quoteDate,
+      access.timeZone,
+    );
+
     const ctx: SoldIntakeContext = {
       agencyId: tenant.agencyId,
       branchId: tenant.branchId,
@@ -562,6 +580,25 @@ export class SoldDealsService {
     if (businessDay(deal.soldDate, access.timeZone) === dto.soldDate) {
       return this.buildEditView(deal, access.timeZone, policies);
     }
+
+    // Only a date that is actually moving is bounded (PAC-159 §1b): a migrated
+    // pair may already break a rule, and that must not freeze the record.
+    const lead = deal.leadId
+      ? await this.leadModel
+          .findOne({ _id: deal.leadId, agencyId: deal.agencyId })
+          .select('createdDate createdAt')
+      : null;
+    const quoteRecap = deal.quoteRecapId
+      ? await this.quoteRecapModel
+          .findOne({ _id: deal.quoteRecapId, agencyId: deal.agencyId })
+          .select('quoteDate')
+      : null;
+    this.assertSoldDateAllowed(
+      dto.soldDate,
+      lead,
+      quoteRecap?.quoteDate,
+      access.timeZone,
+    );
 
     const before = snapshot(
       DEAL_CHANGE_FIELDS,
@@ -930,6 +967,57 @@ export class SoldDealsService {
         'That policy is already on another sale. Correct it there instead.',
       );
     }
+  }
+
+  /**
+   * The bounds on a sold date (PAC-159 §1b): not in the future, not before
+   * the lead came in, not before the quote it was sold from. Same day is
+   * always allowed — quoted and sold on one visit is normal. A deal without a
+   * linked recap is checked against no quote; a transfer has no lead and is
+   * checked against no lead.
+   */
+  private assertSoldDateAllowed(
+    day: string,
+    lead: Pick<LeadDocument, 'createdDate' | 'createdAt'> | null,
+    quoteDate: Date | null | undefined,
+    timeZone: string,
+  ): void {
+    assertNotInFuture('Sold date', day, timeZone);
+    if (lead) {
+      assertNotBefore(
+        'Sold date',
+        day,
+        lead.createdDate ?? lead.createdAt,
+        'the lead was created',
+        timeZone,
+      );
+    }
+    assertNotBefore('Sold date', day, quoteDate, 'the quote date', timeZone);
+  }
+
+  /**
+   * The recap `?quoteRecapId=` names, verified to belong to this agency and
+   * this lead (PAC-159). The Sold form passes the lead's latest recap, so a
+   * mismatch is a stale link or a crafted request, and either is a 400 rather
+   * than a deal that quietly claims the wrong quote.
+   */
+  private async linkedQuoteRecap(
+    quoteRecapId: string | undefined,
+    lead: LeadDocument,
+  ): Promise<Pick<QuoteRecapDocument, 'quoteDate'> | null> {
+    if (!quoteRecapId) return null;
+    const recap = await this.quoteRecapModel
+      .findOne({
+        _id: new Types.ObjectId(quoteRecapId),
+        agencyId: lead.agencyId,
+      })
+      .select('leadId quoteDate');
+    if (!recap || String(recap.leadId) !== String(lead._id)) {
+      throw new BadRequestException(
+        'The quote recap named is not on this lead.',
+      );
+    }
+    return recap;
   }
 
   /** Best-effort: the date is already corrected, which is what was asked for. */

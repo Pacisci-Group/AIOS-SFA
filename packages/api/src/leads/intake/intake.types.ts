@@ -24,6 +24,13 @@ export interface IntakeContext {
   agencyId: string;
   branchId: string;
   /**
+   * The agency's IANA zone (`AccessContext.timeZone`): the calendar a
+   * day-only `IntakeInput.createdDate` is anchored on (PAC-159). Set on the
+   * internal path; absent on the public one, which never carries a date, and
+   * `ResolveLeadStep` throws rather than guessing if the two ever meet.
+   */
+  timeZone?: string;
+  /**
    * Always set. Manual entry credits the current user; a share-link submission
    * credits the link's producer. With round-robin out of scope (PAC-53) there
    * is no unassigned case to represent.
@@ -71,6 +78,11 @@ export interface IntakeMailerLink {
 }
 
 export interface IntakeInput {
+  /**
+   * The day the lead came in, `YYYY-MM-DD` (PAC-159). Stored at that day's
+   * first instant in the agency's zone; absent means now.
+   */
+  createdDate?: string;
   primaryContact: IntakePerson;
   address?: IntakeAddress;
   members: IntakeMember[];
@@ -186,11 +198,15 @@ export interface ResolvedHousehold {
 export interface ResolvedLead {
   leadId: Types.ObjectId;
   isNew: boolean;
+  /** Set on a freshly created lead: the business date it was filed on. */
+  createdDate?: Date;
 }
 
 export interface IntakeOutcome {
   leadId: Types.ObjectId;
   leadIsNew: boolean;
+  /** The new lead's `createdDate`, so the `lead_created` row lands on it. */
+  leadCreatedDate?: Date;
   contactIsNew: boolean;
   householdIsNew: boolean;
   /**

@@ -10,6 +10,7 @@ import {
   requirePolicyPropertyAddress,
 } from '../../common/address/policy-property-address';
 import { quoteDocumentSchema } from './presign-quote-document.dto';
+import { ymd } from '../../common/dto/business-date.dto';
 
 /**
  * One quoted policy row.
@@ -47,6 +48,12 @@ export const quotedPolicySchema = z
 
 export const createQuoteRecapSchema = z.object({
   leadId: z.string().trim().length(24),
+  /**
+   * The day the quote was given (PAC-159) — the Sold form's own `ymd` rule,
+   * so the two paths cannot disagree about what a date is. Stored at that
+   * day's first instant in the agency's zone; bounded in the service.
+   */
+  quoteDate: ymd,
   policies: z
     .array(quotedPolicySchema)
     .min(1, 'At least one policy is required')

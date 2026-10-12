@@ -13,6 +13,7 @@ import {
   requirePolicyPropertyAddress,
 } from "@/lib/property-address-rule";
 import { numericString } from "@/lib/zod-helpers";
+import { localTodayYmd } from "@/lib/dates";
 
 /**
  * One policy the submitter wants quoted (PAC-56 #2).
@@ -57,15 +58,37 @@ export function emptyPolicyOfInterest(): LeadPolicyFormValues {
   };
 }
 
-const dateOfBirth = z
+/**
+ * `today` is the agency's calendar day (PAC-159), supplied by the form —
+ * `new Date().toISOString()` is the UTC day, already tomorrow from 7 PM CDT.
+ */
+const dateOfBirthOn = (today: string) =>
+  z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+    // A birth date in the future is always a typo, and it would poison contact
+    // matching — DOB is the strongest signal the server has.
+    .refine((value) => value <= today, {
+      message: "Date of birth can't be in the future",
+    });
+
+/**
+ * The contact-details shape is shared with the contact edit dialog, which has
+ * no agency day in hand, so it keeps the browser-day bound; the intake form
+ * overrides the primary contact's rule with the agency day below.
+ */
+const dateOfBirth = dateOfBirthOn(localTodayYmd());
+
+/**
+ * The day the lead came in (PAC-159), `YYYY-MM-DD` on the agency's calendar.
+ * Shape only — the API judges "not in the future" on the agency's clock and
+ * answers with a message for the field; the input's `max` keeps the common
+ * case from a round trip.
+ */
+const leadDate = z
   .string()
-  .trim()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
-  // A birth date in the future is always a typo, and it would poison contact
-  // matching — DOB is the strongest signal the server has.
-  .refine((value) => value <= new Date().toISOString().slice(0, 10), {
-    message: "Date of birth can't be in the future",
-  });
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Pick the lead date");
 
 /**
  * The three contact details a captured primary contact must carry — the
@@ -111,7 +134,11 @@ export type LeadIntakeVariant = "internal" | "public";
  * `LeadIntakeFormValues` type: what differs is which fields are *required*, a
  * runtime rule rather than a difference in shape.
  */
-export function makeLeadIntakeSchema(variant: LeadIntakeVariant) {
+export function makeLeadIntakeSchema(
+  variant: LeadIntakeVariant,
+  /** Today on the agency's calendar; the browser's day where there is no session. */
+  today: string = localTodayYmd(),
+) {
   const isPublic = variant === "public";
   const name = z.string().trim().min(1, "Required").max(60, "Too long");
 
@@ -120,10 +147,17 @@ export function makeLeadIntakeSchema(variant: LeadIntakeVariant) {
       // No `.superRefine` here any more: the property-address rule moved onto
       // the policy row (PAC-56 #14), where the address now lives.
       .object({
+        /**
+         * Internal form only (PAC-159); the public variant never renders it
+         * and sends nothing, which the API reads as "now".
+         */
+        createdDate: isPublic ? z.string().optional() : leadDate,
         primaryContact: z.object({
           firstName: name,
           lastName: name,
           ...contactDetailsShape,
+          // Bounded by the agency's today rather than the browser's (PAC-159).
+          dateOfBirth: dateOfBirthOn(today),
         }),
         // Required in the UI even though the API accepts a partial address: the
         // address powers a dedupe signal, and a producer filling this in has it.
@@ -190,8 +224,12 @@ export function toPolicyOfInterestInputs(
  * Blank form state. Takes no variant: the two entry points differ only in which
  * fields are *required*, and every default is now the same on both.
  */
-export function emptyLeadIntake(): LeadIntakeFormValues {
+export function emptyLeadIntake(
+  /** The agency's today for the internal form; `""` on the public one. */
+  createdDate = "",
+): LeadIntakeFormValues {
   return {
+    createdDate,
     primaryContact: {
       firstName: "",
       lastName: "",

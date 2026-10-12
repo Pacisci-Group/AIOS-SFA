@@ -8,6 +8,7 @@ import {
   policyAddressFields,
   requirePolicyPropertyAddress,
 } from '../../common/address/policy-property-address';
+import { ymd } from '../../common/dto/business-date.dto';
 
 /**
  * A `leadSources` row id. Only the *shape* is checked here — whether the row
@@ -120,6 +121,13 @@ export const leadIntakeBaseSchema = z.object({
  * `.superRefine` of its own — which also means `.extend` still works here.
  */
 export const createLeadSchema = leadIntakeBaseSchema.extend({
+  /**
+   * The day the lead came in (PAC-159) — the Sold and Quote forms' own `ymd`
+   * rule. Optional on the wire: the form pre-fills today and always sends it,
+   * while an older client (or the public form, which never asks) gets now.
+   * Not on `publicCreateLeadSchema`: a prospect does not date their enquiry.
+   */
+  createdDate: ymd.optional(),
   leadSourceId: leadSourceIdField,
   /**
    * Pin the lead to a household the caller already has on screen — the

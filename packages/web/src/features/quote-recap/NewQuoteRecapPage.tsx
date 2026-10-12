@@ -19,6 +19,10 @@ import {
   toPolicyInputs,
   type QuoteRecapFormValues,
 } from "./components/quote-recap-schema";
+import { agencyTodayYmd } from "@/lib/dates";
+import { getStoredUser } from "@/lib/api-client";
+import { managementDashboardKey } from "@/lib/management-dashboard-api";
+import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
 
@@ -37,6 +41,8 @@ export default function NewQuoteRecapPage() {
   const [error, setError] = useState<string | null>(null);
 
   const leadId = searchParams.get("leadId") ?? "";
+  // The agency's today (PAC-159): the default and the ceiling of the quote date.
+  const agencyToday = agencyTodayYmd(getStoredUser()?.timeZone);
 
   // Held in a ref so a retry after a failed submit reuses the same token —
   // that is what makes the retry idempotent server-side rather than creating a
@@ -53,6 +59,8 @@ export default function NewQuoteRecapPage() {
     mutationFn: (values: QuoteRecapFormValues) =>
       createQuoteRecapWithDocument({
         leadId,
+        // The day the quote was given, on the agency's calendar (PAC-159).
+        quoteDate: values.quoteDate,
         // Each row carries its own property address (PAC-56 #14).
         policies: toPolicyInputs(values.policies),
         // Recap-level, not per-row (PAC-56 #16) — one client, one current
@@ -64,6 +72,13 @@ export default function NewQuoteRecapPage() {
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["leads"] });
+      // A recap dated into an earlier period moves every figure that reads
+      // quotes live (PAC-159): the Quoted scorecard, the Motivation Hub and
+      // both management dashboards.
+      void queryClient.invalidateQueries({ queryKey: ["performance"] });
+      void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
+      void queryClient.invalidateQueries({ queryKey: ownerDashboardKey });
+      void queryClient.invalidateQueries({ queryKey: managementDashboardKey });
       /*
        * The lead we are about to navigate to. Without this the Lead Detail page
        * serves its cached `LeadDetail` (`staleTime: 30_000`) and shows the
@@ -140,7 +155,8 @@ export default function NewQuoteRecapPage() {
           {contextQuery.data && (
             <QuoteRecapForm
               context={contextQuery.data}
-              initialValues={emptyQuoteRecap()}
+              initialValues={emptyQuoteRecap(agencyToday)}
+              maxQuoteDate={agencyToday}
               submitting={mutation.isPending}
               errorMessage={error}
               onSubmit={(values) => {

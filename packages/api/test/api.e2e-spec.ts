@@ -81,6 +81,7 @@ import {
   dropTestDatabase,
 } from './helpers/test-app';
 import { businessDateInstant } from '../src/common/dates/business-dates';
+import { agencyTodayIso } from '../src/performance/performance.range';
 
 /**
  * A business date stored the way the app stores a day-only entry (PAC-159):
@@ -9147,6 +9148,10 @@ describe('SFA API (e2e)', () => {
       overrides: Record<string, unknown> = {},
     ) => ({
       leadId,
+      // Required on create since PAC-159: the day the quote was given, on the
+      // agency's calendar. Today, so it is never ahead of the clock and never
+      // behind the lead's date.
+      quoteDate: agencyTodayIso('America/Chicago'),
       policies: [{ policyType: 'Auto', premium: 1200.1, itemCount: 2 }],
       // Required on create since PAC-56 #16.
       insuranceRenewalMonth: 'March',
@@ -9192,6 +9197,8 @@ describe('SFA API (e2e)', () => {
         status: 'New',
         producerId,
         householdId: household._id,
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
         ...overrides,
       });
       return { lead, household };
@@ -10488,6 +10495,8 @@ describe('SFA API (e2e)', () => {
         status: 'Quoted',
         producerId: card5ProducerId,
         householdId: household._id,
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
       });
       return lead;
     };
@@ -11649,6 +11658,8 @@ describe('SFA API (e2e)', () => {
         status: 'Quoted',
         producerId: genProducerId,
         householdId: household._id,
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
       });
       return { lead, household, clientName: who };
     };
@@ -13263,6 +13274,8 @@ describe('SFA API (e2e)', () => {
         status: 'Quoted',
         producerId: owner,
         householdId: household._id,
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
         ...overrides,
       });
       return { lead, household };
@@ -13575,6 +13588,8 @@ describe('SFA API (e2e)', () => {
         status: 'New',
         producerId,
         legacyHouseholdId: 'legacy-hh-sold-1',
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
       });
 
       const body = await createAs(producerToken, payload(lead._id.toString()));
@@ -14636,6 +14651,8 @@ describe('SFA API (e2e)', () => {
           },
           members: [],
           leadSourceId: seed.leadSourceIds.mailer,
+          // The sale below is dated in March; a lead cannot post-date it.
+          createdDate: '2026-01-01',
           replacementIntent: { policyId, reason },
           ...overrides,
         })

@@ -13,16 +13,16 @@
  * fix it. This is parity work, not a new capability.
  */
 
-import type { StructuredAddress } from './address';
+import type { StructuredAddress } from "./address";
 import type {
   LeadDetailQuoteRecap,
   LeadDetailQuoteRecapPolicy,
-} from './lead-detail';
+} from "./lead-detail";
 import type {
   QuoteDocumentMeta,
   QuoteRecapLeadContext,
   QuoteRecapPolicyInput,
-} from './quote-recap';
+} from "./quote-recap";
 
 /**
  * A quoted policy as the **edit form** needs it — the display row plus the one
@@ -70,9 +70,10 @@ export interface QuoteRecapEditView {
     uploadedAt: string;
   } | null;
   /**
-   * ISO. **Read-only** — {@link UpdateQuoteRecapInput} cannot move it, because
-   * it is the Quoted scorecard's bucket key. Shown so the form says which
-   * quote it is amending.
+   * The day the quote was given, `YYYY-MM-DD` on the agency's calendar
+   * (PAC-159) — the value the date input edits. Editable through
+   * {@link UpdateQuoteRecapInput.quoteDate}; `null` only on a migrated recap
+   * that never had one.
    */
   quoteDate: string | null;
   status: string | null;
@@ -94,6 +95,15 @@ export interface QuoteRecapEditView {
  * Omitted means "leave alone" throughout, matching `UpdatePolicyInput`.
  */
 export interface UpdateQuoteRecapInput {
+  /**
+   * Move the quote to another day, `YYYY-MM-DD` on the agency's calendar
+   * (PAC-159). A quote given before the record was typed in has to be
+   * correctable, the way the sold date is (PAC-104); the Quoted scorecard,
+   * the leaderboard and the lead timeline all follow it. Bounded by the
+   * rules on the create input, plus: not after the sold date of any sale
+   * linked to this recap. Sent only when changed.
+   */
+  quoteDate?: string;
   /**
    * **Full replacement** of the policy list, 1–12 rows — not a per-row patch.
    *

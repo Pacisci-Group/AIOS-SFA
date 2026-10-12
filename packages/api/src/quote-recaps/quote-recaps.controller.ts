@@ -115,8 +115,9 @@ export class QuoteRecapsController {
    *
    * `policies` is a full replacement when present; `quoteDocument` replaces the
    * attachment when present and keeps it when absent. Totals are recomputed;
-   * `quoteDate` never moves, because it buckets the Quoted scorecard. See the
-   * service docblock for the full list of what this deliberately leaves alone.
+   * `quoteDate` moves only when present and different (PAC-159), bounded by
+   * the lead's date, today and any sale sold from the recap. See the service
+   * docblock for what this deliberately leaves alone.
    */
   @Patch(':id')
   @RequireWrite(ModuleKey.QuoteRecaps)

@@ -10,6 +10,7 @@ import { QuoteRecapsController } from './quote-recaps.controller';
 import { QuoteRecapsService } from './quote-recaps.service';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { QuoteRecap, QuoteRecapSchema } from './schemas/quote-recap.schema';
+import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 
 @Module({
   imports: [
@@ -22,6 +23,8 @@ import { QuoteRecap, QuoteRecapSchema } from './schemas/quote-recap.schema';
       // Only to resolve the recap author's name on the PATCH response, so the
       // client gets back the same shape `GET /leads/:id` returns.
       { name: User.name, schema: UserSchema },
+      // Read-only: the sales sold from a recap bound its date (PAC-159).
+      { name: Deal.name, schema: DealSchema },
     ]),
     // For `LeadAccessService` — the shared lead scope clamp and household
     // resolver. It owns the Household model, so this module no longer needs it.
