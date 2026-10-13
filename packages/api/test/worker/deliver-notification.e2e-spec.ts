@@ -237,6 +237,38 @@ describe('DeliverNotificationFn (e2e)', () => {
     }
   });
 
+  it('resumes a run whose insert step was memoised under PR1 as { ids } (PR2 review)', async () => {
+    // Inngest replays a completed step's stored result on resume. A run that
+    // finished `insert` before the deploy that changed its shape must not
+    // crash on `.rows` for every retry.
+    const nudges: NotificationNudge[] = [];
+    const unsubscribe = bus.subscribe((nudge) => {
+      nudges.push(nudge);
+    });
+    const ran: string[] = [];
+    const replayingStep = {
+      run: async <T>(id: string, work: () => Promise<T> | T) => {
+        ran.push(id);
+        const result = await work();
+        if (id !== 'insert') return result;
+        const legacy = result as { rows: Array<{ id: string }> };
+        return { ids: legacy.rows.map((row) => row.id) };
+      },
+    };
+    try {
+      const result = await fn.handle(requestedEvent(), replayingStep);
+
+      expect(ran).toEqual(['insert', 'insert-rows', 'publish', 'email']);
+      expect(result.notificationIds).toHaveLength(2);
+      expect(nudges.map((nudge) => nudge.recipientId).sort()).toEqual([
+        ADMIN_A,
+        ADMIN_B,
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   describe('email hand-off (PR3)', () => {
     it('requests one email per row, ids only, for a type whose defaults include email', async () => {
       const result = await fn.handle(requestedEvent(), inlineStep().step);
@@ -296,6 +328,28 @@ describe('DeliverNotificationFn (e2e)', () => {
       expect(first.every((id) => typeof id === 'string')).toBe(true);
       expect(new Set(first).size).toBe(2);
       expect(second).toEqual(first);
+    });
+
+    it("carries each row's own agency, even when an earlier event stored it under another", async () => {
+      // `insert` returns every row for the dedupeKey, including one a prior
+      // event created under a different agency. Stamping this event's agency
+      // on that row's request would make the mail function refuse it as a
+      // mismatch and the recipient would never be mailed (PR3 review, round 2).
+      const FIRST = '507f1f77bcf86cd799439041';
+      const SECOND = '507f1f77bcf86cd799439042';
+      await fn.handle(
+        requestedEvent({ agencyId: FIRST, recipientIds: [ADMIN_A] }),
+        inlineStep().step,
+      );
+      emitted.sent.length = 0;
+
+      await fn.handle(requestedEvent({ agencyId: SECOND }), inlineStep().step);
+
+      const byRecipient: Record<string, unknown> = {};
+      for (const event of emitted.sent) {
+        byRecipient[String(event.data.recipientId)] = event.data.agencyId;
+      }
+      expect(byRecipient).toEqual({ [ADMIN_A]: FIRST, [ADMIN_B]: SECOND });
     });
 
     it("carries the row's agency, not the recipient's", async () => {

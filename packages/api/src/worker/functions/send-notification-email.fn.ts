@@ -41,7 +41,12 @@ type LoadResult =
     }
   /** The row is gone; nothing to mail and nothing to record it on. */
   | { kind: 'missing' }
-  /** A previous run already mailed it — the guard past Inngest's 24 h window. */
+  /**
+   * A previous run already mailed it — the guard past Inngest's 24 h window.
+   * Either the row says so, or `emailMessages` holds the row for this key
+   * (the mail went out, the `record` step never finished): that case is
+   * reconciled onto the row here, so it reads `sent` from now on.
+   */
   | { kind: 'already-sent' }
   /** The recipient cannot be mailed; recorded on the row as `skipped`. */
   | { kind: 'skipped'; reason: string };
@@ -105,16 +110,19 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
         /** Same reasoning as the invite: enough to ride out a Resend blip. */
         retries: 4,
         /**
-         * Resend's default account limit is 2 requests/second, and `throttle`
-         * is what enforces it: at most `limit` runs *start* per `period`,
-         * across every run of this function, the rest queue. `concurrency`
-         * is a different knob — it caps runs in flight and says nothing about
-         * rate — and was all this shipped with, so one bug report fanning out
-         * to three admins could 429, burn a retry each and briefly write
-         * `delivery.email: failed` on the rows (PR3 review).
+         * At most `limit` runs of *this function* start per `period`, across
+         * every worker process (Inngest enforces it server-side). It bounds a
+         * notification fan-out's share of the mail budget; it is **not** the
+         * account limit. Resend's 2 requests/second applies to everything sent
+         * with the key — invites, password resets, campaign output, data
+         * exports — and a per-function throttle cannot see the others, so the
+         * account rate is paid in `ResendTransport` (`RateGate`), in front of
+         * every send from the process (PR3 review, second round). This shipped
+         * first with only `concurrency`, which caps runs in flight and says
+         * nothing about rate, so three admins could 429 on one bug report.
          */
         throttle: { limit: 2, period: '1s' },
-        /** Bounds worker slots. The rate is `throttle`'s job. */
+        /** Bounds worker slots. The rate is the transport's job. */
         concurrency: { limit: 5 },
       },
       ({ event, step }) => this.handle(event, step),
@@ -194,6 +202,24 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
     if (!row) return { kind: 'missing' };
     if (row.delivery?.email?.status === 'sent') return { kind: 'already-sent' };
 
+    // The durable guard behind the row's own status (PAC-157): the mail is
+    // recorded under its idempotency key the moment `record` runs, so a run
+    // that died between `record` and the row write — and is replayed after
+    // Inngest's and Resend's 24-hour windows — must not mail again. Point the
+    // row at the record it already has and stop.
+    const recorded = await this.mail.findRecorded(
+      `notification:${notificationId}`,
+    );
+    if (recorded) {
+      await this.setEmailDelivery(notificationId, {
+        status: 'sent',
+        at: new Date(),
+        error: null,
+        emailMessageId: recorded.emailMessageId,
+      });
+      return { kind: 'already-sent' };
+    }
+
     const recipientId = row.recipientId.toHexString();
     const agencyId = row.agencyId ? row.agencyId.toHexString() : null;
     if (recipientId !== event.recipientId || agencyId !== event.agencyId) {
@@ -252,6 +278,12 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
    * from the transport short-circuits). The write before it is why a row whose
    * mail never went out reads `failed` rather than nothing — and a later
    * successful attempt overwrites it with `sent`.
+   *
+   * The status write is guarded on its own: if *it* throws (a Mongo blip in
+   * the middle of a provider outage), its error must not replace the
+   * transport's — a `NonRetriableError` would turn into four more attempts
+   * against a condition that cannot improve, and the run log would show the
+   * database instead of the real cause (PR3 review, second round).
    */
   private async send(
     notificationId: string,
@@ -266,12 +298,20 @@ export class SendNotificationEmailFn implements InngestFunctionProvider {
         agencyId,
       );
     } catch (err) {
-      await this.setEmailDelivery(notificationId, {
-        status: 'failed',
-        at: new Date(),
-        error: err instanceof Error ? err.message : String(err),
-        emailMessageId: null,
-      });
+      try {
+        await this.setEmailDelivery(notificationId, {
+          status: 'failed',
+          at: new Date(),
+          error: err instanceof Error ? err.message : String(err),
+          emailMessageId: null,
+        });
+      } catch (writeErr) {
+        this.logger.warn(
+          `Could not record the failed send on notification ${notificationId}: ${
+            writeErr instanceof Error ? writeErr.message : String(writeErr)
+          }`,
+        );
+      }
       throw err;
     }
   }

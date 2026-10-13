@@ -49,6 +49,10 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       // 2026-09-23; existing agencies get it from the
       // `management_read_for_branch_managers` migration, not from this line.
       modulePermission(ModuleKey.Management, "read"),
+      // The Analytics page (PAC-152, part 2). Added 2026-10-07; existing
+      // agencies get it from the `analytics_module` migration, not from this
+      // line. Read only — `:write` grants nothing on that page.
+      modulePermission(ModuleKey.Analytics, "read"),
       modulePermission(ModuleKey.CrmService, "read"),
       modulePermission(ModuleKey.CrmService, "write"),
       modulePermission(ModuleKey.Mailers, "read"),
@@ -142,6 +146,14 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Performance, "read"),
       modulePermission(ModuleKey.Leaderboard, "read"),
       modulePermission(ModuleKey.Mailers, "read"),
+      /*
+       * PAC-152 — the Data Export page is built for this persona. Added
+       * 2026-10-06: this line reaches agencies provisioned from now on;
+       * existing agencies get the grant (and the module itself) from the
+       * `data_export_module` migration, not from here. Read only — `:write`
+       * grants nothing on that page.
+       */
+      modulePermission(ModuleKey.DataExport, "read"),
     ],
   },
 ];

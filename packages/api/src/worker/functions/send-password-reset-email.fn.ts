@@ -54,7 +54,10 @@ export class SendPasswordResetEmailFn implements InngestFunctionProvider {
         /** Same reasoning as the invite: enough to ride out a Resend blip. */
         retries: 4,
 
-        /** Resend's default account limit is 2 requests/second. */
+        /**
+         * Bounds runs in flight, not the rate: Resend's 2 requests/second is
+         * account-wide and enforced in `ResendTransport` (`RateGate`).
+         */
         concurrency: { limit: 5 },
       },
       ({ event, step }) => this.handle(event, step),

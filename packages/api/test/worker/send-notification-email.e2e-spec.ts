@@ -365,6 +365,76 @@ describe('SendNotificationEmailFn (e2e)', () => {
     await expect(messages.countDocuments({})).resolves.toBe(1);
   });
 
+  it('records once however many times the record step runs, and the row points at that one row', async () => {
+    // `record` is `mail.record()` then the row write; a blip on the second
+    // used to retry the step into a second `emailMessages` row (PAC-157).
+    const { row } = await seed();
+    const recordRuns: unknown[] = [];
+    const step = {
+      run: async <T>(id: string, work: () => Promise<T> | T) => {
+        if (id !== 'record') return await work();
+        recordRuns.push(await work());
+        return await work();
+      },
+    };
+
+    const result = await fn.handle(emailEvent(row, agencyId), step);
+
+    await expect(messages.countDocuments({})).resolves.toBe(1);
+    const message = (await messages.findOne({}).lean()) as EmailMessageDocument;
+    expect(recordRuns).toEqual([{ emailMessageId: message._id.toHexString() }]);
+    expect(result.emailMessageId).toBe(message._id.toHexString());
+    // The hash is stored, never the key.
+    expect(JSON.stringify(message)).not.toContain(
+      `notification:${row._id.toHexString()}`,
+    );
+    expect(typeof message.idempotencyKeyHash).toBe('string');
+  });
+
+  it('does not mail again when the record exists but the row was never marked', async () => {
+    // The process died between `mail.record()` and the row write, and the
+    // event is replayed after Inngest's and Resend's 24-hour windows: the
+    // `emailMessages` row is the durable proof the mail went out (PAC-157).
+    const { row } = await seed();
+    await fn.handle(emailEvent(row, agencyId), inlineStep().step);
+    await notifications.updateOne(
+      { _id: row._id },
+      { $set: { 'delivery.email': null } },
+    );
+
+    const { step, ran } = inlineStep();
+    const second = await fn.handle(emailEvent(row, agencyId), step);
+
+    expect(second).toEqual({ sent: false, reason: 'already-sent' });
+    expect(ran).toEqual(['load']);
+    expect(transport.sent).toHaveLength(1);
+    await expect(messages.countDocuments({})).resolves.toBe(1);
+    const message = (await messages.findOne({}).lean()) as EmailMessageDocument;
+    const stored = await notifications.findById(row._id).lean();
+    expect(stored?.delivery.email).toMatchObject({
+      status: 'sent',
+      emailMessageId: message._id.toHexString(),
+    });
+  });
+
+  it('rethrows the transport error even when the failed-status write throws', async () => {
+    // A Mongo blip inside the catch must not replace a NonRetriableError with
+    // a retriable one — four more attempts against a bad address — nor hide
+    // the real cause from the run log (PR3 review, second round).
+    const { row } = await seed();
+    transport.failWith = new NonRetriableError('Resend rejected the message');
+    const failingWrite = jest
+      .spyOn(notifications, 'updateOne')
+      .mockRejectedValueOnce(new Error('connection to 10.0.0.7:27017 closed'));
+    try {
+      await expect(
+        fn.handle(emailEvent(row, agencyId), inlineStep().step),
+      ).rejects.toBeInstanceOf(NonRetriableError);
+    } finally {
+      failingWrite.mockRestore();
+    }
+  });
+
   it('records a failed send on the row, leaves the rest alone, and rethrows', async () => {
     const { row } = await seed();
     const before = await notifications.findById(row._id).lean();

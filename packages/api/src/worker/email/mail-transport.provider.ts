@@ -80,7 +80,7 @@ export const mailTransportProvider: Provider = {
     );
     return new AllowlistedMailTransport(
       resend,
-      new LoggingMailTransport(),
+      new LoggingMailTransport('recipient not on MAIL_DEV_ALLOWED_RECIPIENTS'),
       allowed,
     );
   },

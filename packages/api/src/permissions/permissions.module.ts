@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { RedisModule } from '../common/redis/redis.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import {
   AgencyRole,
@@ -46,6 +47,8 @@ import { UserRole, UserRoleSchema } from './schemas/user-role.schema';
       { name: UserRole.name, schema: UserRoleSchema },
       { name: UserPermission.name, schema: UserPermissionSchema },
     ]),
+    // For the shared `REDIS_CLIENT` behind `permissionCacheProvider`.
+    RedisModule,
   ],
   controllers: [PermissionsController],
   providers: [

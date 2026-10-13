@@ -57,7 +57,8 @@ export class AllowlistedMailTransport extends MailTransport {
       return this.real.send(message, idempotencyKey);
     }
     this.logger.warn(
-      `Not sending to ${message.to}: not on MAIL_DEV_ALLOWED_RECIPIENTS. Logged instead.`,
+      `Not sending to ${message.to}: not on MAIL_DEV_ALLOWED_RECIPIENTS. ` +
+        'Logged instead, and recorded as sent with a `local-` provider id.',
     );
     return this.fallback.send(message, idempotencyKey);
   }

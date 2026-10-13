@@ -9,7 +9,10 @@ import { App } from 'supertest/types';
 import { NotificationBus } from '../src/common/redis/notification-bus';
 import { NotificationsService } from '../src/notifications/notifications.service';
 import { Notification } from '../src/notifications/schemas/notification.schema';
-import { NotificationStreamRegistry } from '../src/notifications/stream/notification-stream.registry';
+import {
+  MAX_STREAMS_PER_USER,
+  NotificationStreamRegistry,
+} from '../src/notifications/stream/notification-stream.registry';
 import { User } from '../src/users/schemas/user.schema';
 import { login } from './helpers/auth.helper';
 import {
@@ -288,18 +291,57 @@ describe('Notifications stream (PAC-154 PR2)', () => {
     await expect(reader.none('notification', 400)).resolves.toBe(true);
   });
 
-  it('feeds every open stream of the same user', async () => {
+  it('feeds every open stream of the same user from one read of the row', async () => {
     const one = await open(producerToken);
     const two = await open(producerToken);
     await one.reader.next('ready');
     await two.reader.next('ready');
     expect(registry.size(producerId)).toBe(2);
 
-    const notificationId = await seedRow(producerId, 'Both tabs');
-    await bus.publish({ recipientId: producerId, notificationId });
+    const service = app.get(NotificationsService);
+    const reads = jest.spyOn(service, 'findForStream');
+    try {
+      const notificationId = await seedRow(producerId, 'Both tabs');
+      await bus.publish({ recipientId: producerId, notificationId });
 
-    expect((await one.reader.next('notification')).id).toBe(notificationId);
-    expect((await two.reader.next('notification')).id).toBe(notificationId);
+      expect((await one.reader.next('notification')).id).toBe(notificationId);
+      expect((await two.reader.next('notification')).id).toBe(notificationId);
+      // N tabs used to cost N identical reads per nudge (PR2 review).
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  it(`admits ${MAX_STREAMS_PER_USER} streams per user on a node and answers 429 to the next`, async () => {
+    for (let i = 0; i < MAX_STREAMS_PER_USER; i += 1) {
+      const { reader } = await open(producerToken);
+      await reader.next('ready');
+    }
+    expect(registry.size(producerId)).toBe(MAX_STREAMS_PER_USER);
+
+    // The stream skips every throttler, so this cap is the only bound on
+    // what a reconnect loop, or one token used on purpose, can hold open.
+    const refused = await fetch(`${baseUrl}/notifications/stream`, {
+      headers: {
+        Authorization: `Bearer ${producerToken}`,
+        Accept: 'text/event-stream',
+      },
+    });
+    expect(refused.status).toBe(429);
+    expect(registry.size(producerId)).toBe(MAX_STREAMS_PER_USER);
+
+    // Another user is counted on their own.
+    const csrToken = (await login(app, ctx.csrEmail, TEST_PASSWORD))
+      .accessToken;
+    const { reader } = await open(csrToken);
+    await reader.next('ready');
+
+    // Closing one admits one again.
+    controllers[0].abort();
+    await waitFor(() => registry.size(producerId) === MAX_STREAMS_PER_USER - 1);
+    const again = await open(producerToken);
+    await again.reader.next('ready');
   });
 
   it('forgets the stream when the client goes away', async () => {
@@ -310,6 +352,28 @@ describe('Notifications stream (PAC-154 PR2)', () => {
     controller.abort();
 
     await waitFor(() => registry.size(producerId) === 0);
+  });
+
+  it('ends every open stream when the module shuts down', async () => {
+    // `merge(ready$, ping$, rows$)` never completes on its own: the
+    // heartbeat is endless. Without `takeUntil(registry.closed$)`,
+    // `app.close()` would wait for every open token to expire (PR2 review).
+    const { reader } = await open(producerToken);
+    await reader.next('ready');
+
+    registry.onModuleDestroy();
+    try {
+      await Promise.race([
+        reader.done,
+        sleep(2_000).then(() => {
+          throw new Error('Stream outlived the module.');
+        }),
+      ]);
+      expect(registry.size()).toBe(0);
+    } finally {
+      // Re-arm the registry for the suites that follow.
+      registry.onModuleInit();
+    }
   });
 
   it("ends the stream at the token's exp", async () => {
