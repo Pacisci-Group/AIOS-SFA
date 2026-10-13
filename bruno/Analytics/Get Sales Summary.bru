@@ -1,0 +1,91 @@
+meta {
+  name: Get Sales Summary
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/analytics/sales/summary?range=last3Months
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+  ~from: 2026-08-01
+  ~to: 2026-08-31
+  ~branchId: 
+  ~producerIds: 
+  ~leadSourceIds: 
+  ~policyTypes: Auto,Home
+  ~carriers: Allstate
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    bru.setVar("analyticsPremium", res.getBody().premium.current);
+    bru.setVar("analyticsItems", res.getBody().items.current);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the KPI row with trends", function () {
+    const body = res.getBody();
+    for (const key of ["premium", "netPremium", "items", "policies", "households", "avgPremiumPerHousehold"]) {
+      expect(body[key]).to.have.property("status");
+    }
+    expect(body.period.key).to.equal("last3Months");
+  });
+
+  test("explains why a three-month window has no pacing card", function () {
+    expect(res.getBody().pacing).to.equal(null);
+    expect(res.getBody().pacingGap).to.equal("not_one_month");
+  });
+}
+
+docs {
+  # GET /analytics/sales/summary — the KPI row
+
+  - **Module:** `analytics`
+  - **Permission:** `analytics:read` (Agency Owner via enabled modules, Branch Manager by template; grantable to anyone)
+  - **Data scope:** sales use the dashboards' clamp — agency sees the agency, branch sees their branch, own sees their own sales. `branchId` narrows an **agency-scope** caller to one office; a branch- or own-scope caller may name only their own branch, and `BranchGuard` refuses any other with a `403`.
+
+  Each figure for the window and for its comparison window (`resolveComparison`:
+  mtd → the same days of last month, presets → the previous unit, custom → the
+  preceding equal span), as an `OwnerTrend`. **Bound premium is the Owner
+  dashboard's figure** — the same pipeline, so the two pages agree for the same
+  filters. `netPremium` subtracts chargebacks (`deal.premium +
+  chargebackAdjustment`) and is `null` under a line or carrier filter.
+  `closingRatio` is `null` under a carrier filter.
+
+  ## Filter (every sales endpoint)
+  | Param | Notes |
+  |---|---|
+  | `range` | `mtd` (default) · `lastMonth` · `last3Months` · `last12Months` · `ytd` · `lastYear` · `custom` |
+  | `from`, `to` | `YYYY-MM-DD`, required with `custom`, inclusive, at most 366 days |
+  | `branchId` | Agency scope only — see above |
+  | `producerIds` | Comma-separated or repeated; narrows within scope, ignored under own |
+  | `leadSourceIds` | Through the lead; `__none__` = no source |
+  | `policyTypes` | Every stored spelling matches |
+  | `carriers` | Display names; alias codes (`B4tEH`) match too. **Sales only** — quotes record no carrier, so quote figures read `null` while this is set |
+
+  ## Goal pacing
+  `pacing` when the window starts on the 1st inside one calendar month, no
+  line/source/carrier filter is on, and goals exist for that month
+  (`producerGoals`, summed over everyone in scope): goal, bound, elapsed days,
+  expected-to-date, projected month, attainment %, and `achieved | ahead |
+  behind`. Otherwise `pacing: null` with `pacingGap`: `not_one_month`,
+  `filtered` or `no_goals_for_month`.
+
+  ## Errors
+  - `400` — bad range.
+  - `403` — no `analytics:read`, module disabled, or another branch's `branchId`.
+}

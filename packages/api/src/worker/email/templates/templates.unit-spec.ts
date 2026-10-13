@@ -1,4 +1,8 @@
 import { EMAIL_TEMPLATES, type TemplateKey } from './registry';
+import {
+  dataExportReadyTemplate,
+  type DataExportReadyData,
+} from './data-export-ready.template';
 import { inviteTemplate } from './invite.template';
 import {
   mailerCampaignOutputTemplate,
@@ -92,6 +96,24 @@ function notificationData(
   };
 }
 
+/** A finished Data Export, as the ready notice sees it. */
+function dataExportReadyData(
+  overrides: Partial<DataExportReadyData> = {},
+): DataExportReadyData {
+  return {
+    to: 'dana@agency.example',
+    firstName: 'Dana',
+    datasetLabel: 'Sold deals',
+    format: 'xlsx',
+    rowCount: 1713,
+    bytes: 482_000,
+    truncated: false,
+    expiresAt: '2026-10-13T15:00:00.000Z',
+    pageUrl: 'https://smith.example.com/data-export',
+    ...overrides,
+  };
+}
+
 const ALL_KEYS = Object.keys(EMAIL_TEMPLATES) as TemplateKey[];
 
 /**
@@ -109,6 +131,7 @@ describe('email template registry', () => {
     passwordReset: passwordResetData(),
     mailerCampaignOutput: mailerCampaignOutputData(),
     notification: notificationData(),
+    dataExportReady: dataExportReadyData(),
   };
 
   it('has a fixture for every registered template', () => {
@@ -495,5 +518,46 @@ describe('notification template', () => {
     const platform = notificationTemplate.render(notificationData());
     expect(platform.html).toContain('<title>AgencyOps</title>');
     expect(platform.text).toContain('automated message from AgencyOps');
+  });
+});
+
+describe('data export ready template', () => {
+  it('links the page, never a file', () => {
+    const { html, text } = dataExportReadyTemplate.render(
+      dataExportReadyData(),
+    );
+    expect(html).toContain('href="https://smith.example.com/data-export"');
+    expect(text).toContain('https://smith.example.com/data-export');
+    // The file is PII in bulk: a bearer link in an inbox is exactly what the
+    // template exists not to send.
+    expect(`${html}${text}`).not.toMatch(/storage|signed|X-Amz/i);
+  });
+
+  it('says what is in the file and when it goes', () => {
+    const data = dataExportReadyData();
+    expect(dataExportReadyTemplate.subject(data)).toBe(
+      'Your Sold deals export is ready',
+    );
+    const { text } = dataExportReadyTemplate.render(data);
+    expect(text).toContain('XLSX, 1,713 rows, 470.7 KB');
+    expect(text).toContain('October 13, 2026');
+    expect(text).toContain('UTC');
+    expect(text).toContain('Hi Dana,');
+  });
+
+  it('explains a truncated file', () => {
+    const { text } = dataExportReadyTemplate.render(
+      dataExportReadyData({ truncated: true, firstName: null }),
+    );
+    expect(text).toContain('stops at the limit');
+    expect(text).toContain('Hello,');
+  });
+
+  it('renders under the agency brand when the event carried one', () => {
+    const { html, text } = dataExportReadyTemplate.render(
+      dataExportReadyData({ brand: { name: 'Smith Family', logoUrl: null } }),
+    );
+    expect(html).toContain('<title>Smith Family</title>');
+    expect(text).toContain('automated message from Smith Family');
   });
 });

@@ -210,6 +210,7 @@ export function recentMonthsIn(
  * | `mtd` | `[1st of T's month, T+1)` |
  * | `lastMonth` | `[1st of previous month, 1st of T's month)` |
  * | `last3Months` | the three **complete** calendar months before T's month |
+ * | `last12Months` | the twelve **complete** calendar months before T's month |
  * | `ytd` | `[Jan 1 of T's year, T+1)` |
  * | `lastYear` | the whole previous calendar year |
  * | `custom` | `[from, to+1)` — the API's `to` is inclusive |
@@ -255,6 +256,8 @@ export function resolveRange(
       return wholeMonths(today, -1, 1);
     case 'last3Months':
       return wholeMonths(today, -3, 3);
+    case 'last12Months':
+      return wholeMonths(today, -12, 12);
     case 'ytd':
       return build({ year: today.year, month: 1, day: 1 }, today);
     case 'lastYear':
@@ -281,6 +284,7 @@ export function customRange(from: string, to: string): YmdRange {
  * | `mtd` | the same elapsed days of the previous month: Sep 1–21 → Aug 1–21 |
  * | `lastMonth` | the month before it |
  * | `last3Months` | the three months before those |
+ * | `last12Months` | the twelve months before those |
  * | `ytd` | Jan 1 → the same day, one year earlier |
  * | `lastYear` | the year before it |
  * | anything else | the immediately preceding span of equal length |
@@ -314,6 +318,8 @@ export function resolveComparison(
       return wholeMonths(today, -2, 1);
     case 'last3Months':
       return wholeMonths(today, -6, 3);
+    case 'last12Months':
+      return wholeMonths(today, -24, 12);
     case 'ytd': {
       const year = today.year - 1;
       return build(

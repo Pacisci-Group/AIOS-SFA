@@ -71,6 +71,8 @@ each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 | Service Dashboard | `/crm/service` | Service rep |
 | Ticket Workspace | `/crm/tickets` | CRM/service |
 | Household Details | `/clients/:id`, `/clients/demo` | 360° client view |
+| Analytics (PAC-152, part 2) | `/analytics` | Agency Owner + Branch Manager (`analytics:read`, grantable) — sales by producer / lead source / line / carrier / branch / ZIP / CSR, split by a second dimension, over time, with goal pacing; a Service tab for tickets |
+| Data Export (PAC-152) | `/data-export` | Data team (`data_export:read`) — request curated CSV/XLSX datasets; a worker prepares them, the requester is emailed, the file is downloaded from the export log |
 
 ---
 
@@ -171,6 +173,25 @@ temperature/aging that aren't first-class in legacy payloads. See
   the docblocks under `packages/api/src/mailers/**` and
   `packages/api/src/common/mailers/**` — read those before re-deciding
   something.
+- `docs/plans/pac-152-data-export-implementation-plan.md` — the Data Export page
+  (PAC-152): a new `data_export` module and curated CSV/XLSX datasets. An
+  export is **requested, not downloaded**: `POST /data-export/:dataset/exports`
+  queues it, the `DataExportGenerateFn` worker job writes the file to object
+  storage and emails the requester, and the page downloads it later from the
+  `dataExports` log through a presigned link; an hourly job deletes files past
+  `DATA_EXPORT_RETENTION_DAYS`. The engine (one file per dataset, registered
+  in `engine/registry.ts`) lives in `packages/api/src/common/data-export/` so
+  the worker may import it. The first module key added since the scaffold —
+  its migration enables the module on existing agencies, which
+  `api:sync:roles` never does.
+- `docs/plans/pac-152-analytics-implementation-plan.md` — the Analytics page
+  (PAC-152, part 2): a new `analytics` module (Branch Manager by template and
+  migration, owner via enabled modules). `packages/api/src/analytics/` breaks
+  sales down by any dimension through the **same** `soldMatch` + `linesPrefix`
+  pipeline as the Owner dashboard, so totals agree by construction; per-policy
+  dimensions (line, carrier) unwind `lines[]`, and `linesPrefix` gained an
+  opt-in `carrier` line field. The web page is the first to chart anything:
+  shadcn `chart` (recharts) over the validated `--chart-*` tokens.
 - `docs/plans/pac-71-mailer-campaigns-implementation-plan.md` — the four-PR
   execution order for mailer campaigns (PAC-71). ⚠ **Add Mailers is gone** (page,
   route, panel tile, endpoints and worker function): a mailer now belongs to a

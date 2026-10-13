@@ -1,0 +1,79 @@
+meta {
+  name: Get Sales Breakdown (Producer)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/analytics/sales/breakdown?range=last3Months&groupBy=producer
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+  groupBy: producer
+  ~segmentBy: policyType
+  ~compare: true
+  ~carriers: 
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("rows add up to the summary — null rows included", function () {
+    const body = res.getBody();
+    const premium = body.rows.reduce((sum, row) => sum + row.metrics.premium, 0);
+    const items = body.rows.reduce((sum, row) => sum + row.metrics.items, 0);
+    expect(Math.round(premium * 100) / 100).to.equal(Number(bru.getVar("analyticsPremium")));
+    expect(items).to.equal(Number(bru.getVar("analyticsItems")));
+    expect(body.totals.premium).to.equal(Number(bru.getVar("analyticsPremium")));
+  });
+
+  test("each row has a label and a share", function () {
+    for (const row of res.getBody().rows) {
+      expect(row.label).to.be.a("string");
+      expect(row).to.have.property("share");
+    }
+  });
+}
+
+docs {
+  # GET /analytics/sales/breakdown — sales by any dimension
+
+  - **Module:** `analytics`
+  - **Permission:** `analytics:read` (Agency Owner via enabled modules, Branch Manager by template; grantable to anyone)
+  - **Data scope:** sales use the dashboards' clamp — agency sees the agency, branch sees their branch, own sees their own sales. `branchId` narrows an **agency-scope** caller to one office; a branch- or own-scope caller may name only their own branch, and `BranchGuard` refuses any other with a `403`.
+
+  ## Query (plus the filter — see Get Sales Summary)
+  | Param | Notes |
+  |---|---|
+  | `groupBy` | `producer` (default) · `leadSource` · `policyType` · `carrier` · `branch` · `zip` · `csr` |
+  | `segmentBy` | Optional second dimension (≠ `groupBy`): `policyType` · `carrier` · `leadSource` · `producer` · `branch`. `groupBy=producer&segmentBy=policyType` is the multi-line view |
+  | `compare` | `true` adds each row's `previous` metrics and `change` (% for amounts, points for the closing ratio) |
+
+  ## Rows
+  One per key, **null keys included** ("Unassigned", "No source",
+  "Unspecified", "Unknown carrier", "No ZIP"), so premium, items and policies
+  always add up to `totals`. Sales and households are distinct counts: under a
+  per-policy dimension (line, carrier) a bundle counts in each of its lines.
+  Line and carrier split a sale's premium by policy; `B4tEH` and `Allstate`
+  are one carrier row. ZIP is the household's property ZIP; CSR is the deal's
+  CRM, else the household's.
+
+  `metrics`: `premium`, `netPremium` (null per policy), `items`, `deals`,
+  `policies`, `households`, `quotes`, `quotedPremium`, `closingPct`,
+  `closingGap`. `unavailable` lists the metrics null in every row for this
+  grouping (carrier has no quote side). `series` lists every segment in
+  display order when `segmentBy` is set.
+
+  ## Errors
+  - `400` — unknown `groupBy`/`segmentBy`, `segmentBy` equal to `groupBy`, bad range.
+  - `403` — as Get Sales Summary.
+}

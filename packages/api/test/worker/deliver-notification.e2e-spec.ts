@@ -173,6 +173,38 @@ describe('DeliverNotificationFn (e2e)', () => {
     }
   });
 
+  it('resumes a run whose insert step was memoised under PR1 as { ids } (PR2 review)', async () => {
+    // Inngest replays a completed step's stored result on resume. A run that
+    // finished `insert` before the deploy that changed its shape must not
+    // crash on `.rows` for every retry.
+    const nudges: NotificationNudge[] = [];
+    const unsubscribe = bus.subscribe((nudge) => {
+      nudges.push(nudge);
+    });
+    const ran: string[] = [];
+    const replayingStep = {
+      run: async <T>(id: string, work: () => Promise<T> | T) => {
+        ran.push(id);
+        const result = await work();
+        if (id !== 'insert') return result;
+        const legacy = result as { rows: Array<{ id: string }> };
+        return { ids: legacy.rows.map((row) => row.id) };
+      },
+    };
+    try {
+      const result = await fn.handle(requestedEvent(), replayingStep);
+
+      expect(ran).toEqual(['insert', 'insert-rows', 'publish', 'email']);
+      expect(result.notificationIds).toHaveLength(2);
+      expect(nudges.map((nudge) => nudge.recipientId).sort()).toEqual([
+        ADMIN_A,
+        ADMIN_B,
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   describe('email hand-off (PR3)', () => {
     it('requests one email per row, ids only, for a type whose defaults include email', async () => {
       const result = await fn.handle(requestedEvent(), inlineStep().step);

@@ -212,6 +212,7 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - `lint -w @sfa/api` is eslint only; `build -w @sfa/api` + `tsc -p packages/api/tsconfig.json` catch type errors. Rebuild `@sfa/shared` before e2e, Bruno and API unit tests.
 - Every new env var goes to `.env.example`, the preflight `env:` map, `required=`, the `app.env` heredoc, `DEPLOYMENT.md`, and `test/setup-env.ts`.
 
+<<<<<<< HEAD
 ### Found in review (Abu Bakar, #139 / #141, 2026-10-08) — each shipped once before it was caught
 
 - **Our throttlers are named** (`short`, `long`), so a bare `@SkipThrottle()` writes metadata for a throttler called `default` and skips **nothing**. Use `SkipAllThrottlers()` (`common/decorators/throttle.decorators.ts`), which derives from `THROTTLER_NAMES`; the ACME controller had the same latent bug.
@@ -224,6 +225,19 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - **A live `RESEND_API_KEY` outside production** now reaches only `MAIL_DEV_ALLOWED_RECIPIENTS`; with a key and no list nothing is sent and the API logs an error. The PR3 Bruno run had mailed two real admins.
 - The `publish` and `email` steps **await their rows sequentially**: a Redis outage made each publish pay a full ioredis retry cycle. Fan out with `Promise.all` where the call is best-effort.
 - `emailMessages` **`record` is not atomic** (insert, then `delivery.email`): a blip between the two can duplicate the row, and an exhausted `record` leaves a sent mail reading `failed`. The invite function has the same shape. Deferred to its own ticket — the fix is an upsert on the idempotency key inside `MailDeliveryService.record`, which is mail-platform (PAC-66) territory.
+=======
+### Found in the second review round (Abu Bakar's review agent, 2026-10-12) — PR2
+
+- **The stream skips every throttler, so nothing bounded how many a user could hold open.** `MAX_STREAMS_PER_USER` (8) per node in the registry; the controller answers a plain `429` *before* building the observable (headers are not committed until the first frame), which the client already treats as retriable.
+- **`merge(ready$, ping$, rows$)` never completes on its own**, so `onModuleDestroy` completing each Subject did not end the response and `app.close()` would wait out every token. The registry fires `closed$` on destroy and the controller `takeUntil`s it. Inert in production today — `main.ts` never enables shutdown hooks — but it would have stalled the first deploy that did.
+- **A memoised step result outlives a deploy.** PR1's `insert` returned `{ ids }`, PR2's returns `{ rows }`; a run resumed across that deploy replays the old shape. `handle` accepts both and reads the rows through an extra `insert-rows` step on the legacy path only (deterministic: the cached value picks the branch).
+- **Reconnecting at the token's `exp` with the token that just expired** cost a 1 s backoff plus either an immediate re-close or a 401 → refresh → 2 s, every fifteen minutes in every tab. The `fetch` override now refreshes first when the token is within 30 s of `exp` (`getAccessTokenExpiry` reads the JWT payload, unverified), and a clean close after a stream that lived ≥ 5 s reconnects at once; anything shorter backs off.
+- **A token with no `exp` held a stream forever.** Not reachable — `JWT_ACCESS_EXPIRES` defaults to 15m in both signers — but `Infinity` is gone: `STREAM_MAX_MS` (15 min) caps every stream.
+- **N tabs cost N identical `findForStream` reads per nudge.** The read moved from the controller into the registry: once per recipient per nudge, the same record handed to every Subject; a failed read drops that nudge for that user with a `warn`.
+- **Every reopen refetched the count and every loaded list page, on top of TanStack's focus refetch.** `invalidateQueries` only refetches *active* queries, so the list cost only applied on `/notifications` — but it was still two refetches per tab show. While the stream is connected `refetchOnWindowFocus` is off for both queries and the reopen is the one signal; without a stream, focus is.
+- **Three Redis connections per API process.** The permission cache now injects the shared `REDIS_CLIENT` (`PermissionsModule` imports `RedisModule`); `RedisPermissionCache` no longer owns, closes or listens to the client. Two sockets per API process (client + subscriber duplicate), one per worker.
+- **`GET /notifications/stream` had no `.bru`.** `Notifications/Stream (SSE, skipped in runs).bru` carries the full docs block and calls `bru.runner.skipRequest()` in its pre-request script, so the CLI never hangs on it and the rule holds.
+>>>>>>> asad/pac-154-pr2-live-sse-redis
 
 ## Out of scope (per the ticket)
 

@@ -1,0 +1,55 @@
+meta {
+  name: Get Service Summary
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/analytics/service/summary?range=last3Months
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+  ~branchId: 
+  ~assigneeIds: 
+  ~policyTypes: Auto
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("opened and resolved trends, open work now", function () {
+    const body = res.getBody();
+    expect(body.opened).to.have.property("current");
+    expect(body.resolved).to.have.property("current");
+    expect(body.openNow).to.be.a("number");
+    expect(body.byStatusNow).to.be.an("array");
+  });
+}
+
+docs {
+  # GET /analytics/service/summary — the Service tab's KPI row
+
+  - **Module:** `analytics` · **Permission:** `analytics:read`
+  - **Data scope:** the **CRM's** rule (`buildTicketScopeFilter`): agency sees
+    the agency, branch and **own** see their branch — a ticket belongs to the
+    office's service desk. `branchId` narrows an agency-scope caller.
+
+  ## Query
+  `range`/`from`/`to` as the sales filter; `branchId`; `assigneeIds`
+  (assigned user ids); `policyTypes`. No lead source or carrier.
+
+  ## Response
+  `opened` (tickets opened in the window), `resolved` (whose `resolvedAt` falls
+  in the window — `closed` tickets carry no timestamp and are not counted),
+  `avgHoursToResolve`, each an `OwnerTrend`; and a snapshot of open work now,
+  within the filters: `openNow`, `overdueNow`, `byStatusNow`.
+}

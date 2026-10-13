@@ -1,0 +1,114 @@
+meta {
+  name: Request Sold Deals Export (CSV)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/data-export/sold_deals/exports
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+body:json {
+  {
+    "format": "csv",
+    "from": "2026-01-01"
+  }
+}
+
+script:post-response {
+  // A repeat run is refused as a duplicate of the last run's export, which
+  // the 409 hands back: either way, that is the export the folder follows.
+  if (res.getStatus() === 202) {
+    bru.setVar("dataExportId", res.getBody().export.id);
+  } else if (res.getStatus() === 409) {
+    bru.setVar("dataExportId", res.getBody().existing.id);
+  }
+}
+
+tests {
+  test("returns 202 Accepted, or 409 EXPORT_DUPLICATE on a repeat run", function () {
+    expect([202, 409]).to.include(res.getStatus());
+    if (res.getStatus() === 409) {
+      expect(res.getBody().code).to.equal("EXPORT_DUPLICATE");
+    }
+  });
+
+  test("is queued, not downloaded", function () {
+    if (res.getStatus() !== 202) return;
+    const row = res.getBody().export;
+    expect(row.status).to.equal("queued");
+    expect(row.canDownload).to.equal(false);
+    expect(row.expiresAt).to.equal(null);
+  });
+
+  test("is named for the agency, dataset and window", function () {
+    const row = res.getBody().export ?? res.getBody().existing;
+    expect(row.filename).to.match(/_sold_deals_2026-01-01_all\.csv$/);
+  });
+}
+
+docs {
+  # POST /data-export/:dataset/exports — request an export
+
+  - **Module:** `data_export`
+  - **Permission:** `data_export:read`
+  - **Data scope:** never bypassed. Producer-owned datasets (leads, quote
+    recaps, sold deals) honour `own` scope — a producer granted the page gets
+    their own rows. Client records (policies, households, contacts) have no
+    owner, so `own` collapses to the caller's branch, as on the Clients pages.
+
+  **Nothing is downloaded here.** The request is validated, counted against
+  the row cap and queued; a worker job (`data-export/export.requested.v1`)
+  writes the file to object storage and emails the requester a link to the
+  Data Export page. The file is then fetched from the history with
+  **Get Export File URL**, until retention (`DATA_EXPORT_RETENTION_DAYS`,
+  default 7) deletes it.
+
+  The requester's data scope is snapshotted on the row now, so the file holds
+  what they could see when they asked.
+
+  **One live export per request.** A caller who already has this export
+  (same dataset, `format` and filters, the multi-selects in any order)
+  `queued`, `processing` or `ready` gets a `409` carrying it instead of a
+  second one. A `failed` or `expired` export does not count, and another user
+  may ask for the same thing. A unique index enforces it, so two racing
+  requests queue one export.
+
+  ## `:dataset`
+  `leads` · `quote_recaps` · `sold_deals` · `policies` · `households` · `contacts`
+
+  ## Body (JSON — every field optional)
+  | Field | Notes |
+  |---|---|
+  | `format` | `csv` (default) or `xlsx`. CSV is UTF-8 with a BOM and **no formula escaping** — values stay intact for joins; spreadsheet users should take `xlsx`, whose cells are typed. |
+  | `from`, `to` | `YYYY-MM-DD`, inclusive, cut on the agency's timezone. Omitted means open-ended; both omitted means all time. No span cap — the row cap bounds the work. |
+  | `dateField` | Which of the dataset's date fields the window applies to (see the dictionary); its default when omitted. |
+  | `branchId` | Narrows an **agency-scope** caller to one branch (the scope clamps ignore `X-Branch-Id` at agency scope). Ignored under branch/own scope. |
+  | `producerIds` | Array. Narrows within scope; ignored under `own`. |
+  | `leadSourceIds` | Array. Leads filter on their own source; sales and quotes are credited through their lead (the deal's own as fallback). `__none__` = no source. |
+  | `policyTypes` | Array. Every stored spelling matches, raw SmartSuite codes included. |
+  | `status` | Array. Leads, policies and households only; values from the dictionary. |
+
+  A filter the dataset cannot apply is a `400`, never silently ignored.
+
+  ## Response `202`
+  `{ "export": <history row> }` with `status: "queued"` — the same shape as a
+  **Get History** item. The page polls the history until it is `ready`.
+
+  ## Errors
+  - `400` — bad date, `to` before `from`, unknown `dateField`/`format`/`status`,
+    a filter the dataset cannot apply, or an unknown dataset.
+  - `400` `{ "code": "EXPORT_TOO_LARGE", "rowCount": 123456, "maxRows": 100000, "message": "…" }`
+    — over `DATA_EXPORT_MAX_ROWS`. Nothing is queued; the refusal is logged
+    as `failed`. Narrow the range.
+  - `403` — no `data_export:read`, or the module is disabled.
+  - `409` `{ "code": "EXPORT_DUPLICATE", "message": "…", "existing": <history row> }`
+    — the caller already has this export. Nothing is queued or logged.
+    Download `existing` once it is ready, or wait for it to expire.
+}
