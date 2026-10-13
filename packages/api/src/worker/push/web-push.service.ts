@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { WebPushError } from 'web-push';
+import { mapWithConcurrency } from '../../common/async/map-with-concurrency';
 import { isAllowedPushEndpoint } from '../../common/push/push-endpoint';
 import {
   PushSubscription,
@@ -44,6 +45,13 @@ export interface PushSendOutcome {
 
 /** An hour: long enough for a phone to wake up, short enough to be stale after. */
 const PUSH_TTL_SECONDS = 3600;
+
+/**
+ * Devices of one user pushed at once. Each push is a round trip with a 10 s
+ * timeout; one at a time, a hanging push service would make a user with four
+ * devices cost forty seconds of worker slot (PR4 review, second round).
+ */
+const DEVICE_CONCURRENCY = 4;
 
 /**
  * Web push to a user's subscribed browsers (PAC-154, PR4).
@@ -150,49 +158,19 @@ export class WebPushService {
     let removed = 0;
     const errors: string[] = [];
 
-    for (const target of targets) {
-      if (!isAllowedPushEndpoint(target.endpoint)) {
-        removed += 1;
-        await this.subscriptions.updateOne(
-          { _id: target._id, deletedAt: null },
-          { $set: { deletedAt: new Date() } },
-        );
-        this.logger.warn(
-          `Push subscription ${target._id.toHexString()} points at a host that is not a known push service; soft-deleted, not sent.`,
-        );
-        continue;
-      }
-      try {
-        await this.transport.send(
-          { endpoint: target.endpoint, keys: target.keys },
-          body,
-          options,
-        );
-        sent += 1;
-        await this.subscriptions.updateOne(
-          { _id: target._id },
-          { $set: { lastSuccessAt: new Date() } },
-        );
-      } catch (err) {
-        if (isGone(err)) {
-          removed += 1;
-          await this.subscriptions.updateOne(
-            { _id: target._id, deletedAt: null },
-            { $set: { deletedAt: new Date() } },
-          );
-          this.logger.log(
-            `Push subscription ${target._id.toHexString()} is gone (${err.statusCode}); soft-deleted.`,
-          );
-          continue;
-        }
+    // Bounded, not sequential: a push service that hangs costs one timeout
+    // per *batch* of devices, not one per device.
+    const outcomes = await mapWithConcurrency(
+      targets,
+      DEVICE_CONCURRENCY,
+      (target) => this.sendToTarget(target, body, options),
+    );
+    for (const outcome of outcomes) {
+      if (outcome.kind === 'sent') sent += 1;
+      else if (outcome.kind === 'removed') removed += 1;
+      else {
         failed += 1;
-        const message = err instanceof Error ? err.message : String(err);
-        errors.push(message);
-        this.logger.warn(
-          isVapidRejection(err)
-            ? `Push to subscription ${target._id.toHexString()} was refused (${err.statusCode}): the push service rejected the VAPID signature — a rotated or mismatched key. The browser re-subscribes on its next visit; the row stays live.`
-            : `Push to subscription ${target._id.toHexString()} failed: ${message}`,
-        );
+        errors.push(outcome.error);
       }
     }
 
@@ -210,6 +188,63 @@ export class WebPushService {
             ? errors.join('; ').slice(0, 1000)
             : `every subscription (${removed}) had expired`,
     };
+  }
+
+  /**
+   * One device. Never throws: the outcome says what happened, and the
+   * soft-delete / `lastSuccessAt` writes happen here, per device.
+   */
+  private async sendToTarget(
+    target: {
+      _id: Types.ObjectId;
+      endpoint: string;
+      keys: { p256dh: string; auth: string };
+    },
+    body: string,
+    options: { TTL: number; urgency: 'normal'; topic: string },
+  ): Promise<
+    { kind: 'sent' } | { kind: 'removed' } | { kind: 'failed'; error: string }
+  > {
+    if (!isAllowedPushEndpoint(target.endpoint)) {
+      await this.subscriptions.updateOne(
+        { _id: target._id, deletedAt: null },
+        { $set: { deletedAt: new Date() } },
+      );
+      this.logger.warn(
+        `Push subscription ${target._id.toHexString()} points at a host that is not a known push service; soft-deleted, not sent.`,
+      );
+      return { kind: 'removed' };
+    }
+    try {
+      await this.transport.send(
+        { endpoint: target.endpoint, keys: target.keys },
+        body,
+        options,
+      );
+      await this.subscriptions.updateOne(
+        { _id: target._id },
+        { $set: { lastSuccessAt: new Date() } },
+      );
+      return { kind: 'sent' };
+    } catch (err) {
+      if (isGone(err)) {
+        await this.subscriptions.updateOne(
+          { _id: target._id, deletedAt: null },
+          { $set: { deletedAt: new Date() } },
+        );
+        this.logger.log(
+          `Push subscription ${target._id.toHexString()} is gone (${err.statusCode}); soft-deleted.`,
+        );
+        return { kind: 'removed' };
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        isVapidRejection(err)
+          ? `Push to subscription ${target._id.toHexString()} was refused (${err.statusCode}): the push service rejected the VAPID signature — a rotated or mismatched key. The browser re-subscribes on its next visit; the row stays live.`
+          : `Push to subscription ${target._id.toHexString()} failed: ${message}`,
+      );
+      return { kind: 'failed', error: message };
+    }
   }
 }
 

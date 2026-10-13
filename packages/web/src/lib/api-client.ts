@@ -32,6 +32,9 @@ export class ApiError extends Error {
  * it on every (re)connect — a header captured once would be the expired token
  * forever. Everything else goes through {@link apiFetch}.
  */
+/** Where `push-subscription.ts` records which user this browser is subscribed for. */
+export const PUSH_OWNER_STORAGE_KEY = 'push:ownerUserId';
+
 export function getAccessToken(): string | null {
   return localStorage.getItem('accessToken');
 }
@@ -78,7 +81,16 @@ export function setTokens(accessToken: string, refreshToken: string) {
  * Keep this list short, and only add a key when leaking it to the next user of
  * the same machine would be harmless.
  */
-const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
+const PRESERVED_UI_PREFERENCE_KEYS = [
+  'theme',
+  'sidebar:collapsed',
+  // Whose push subscription this browser holds (`push-subscription.ts`). It
+  // describes the *browser* — the subscription outlives the session — and
+  // wiping it is what made push turn itself off for the same user signing
+  // back in after an expired refresh token (PAC-154 PR4 review). An opaque
+  // ObjectId; the next person at the machine learns nothing from it.
+  PUSH_OWNER_STORAGE_KEY,
+] as const;
 
 /**
  * Key prefixes preserved alongside {@link PRESERVED_UI_PREFERENCE_KEYS}, for

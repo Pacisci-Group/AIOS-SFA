@@ -1,4 +1,10 @@
-import { API_BASE, ApiError, getAccessToken } from '@/lib/api-client';
+import {
+  API_BASE,
+  ApiError,
+  getAccessToken,
+  getStoredUser,
+  PUSH_OWNER_STORAGE_KEY,
+} from '@/lib/api-client';
 import {
   getVapidPublicKey,
   registerPushSubscription,
@@ -47,15 +53,47 @@ export async function getRegistration(): Promise<ServiceWorkerRegistration | nul
   if (!pushSupported()) return null;
   try {
     const existing = await navigator.serviceWorker.getRegistration();
-    if (existing) return existing;
+    // A registration that is still installing has no `active` worker, and
+    // `pushManager.subscribe()` rejects on it ("no active Service Worker").
+    // `ready` resolves once it is active — bounded, as below (PR4 review,
+    // second round).
+    if (existing?.active) return existing;
     return await Promise.race([
       navigator.serviceWorker.ready,
-      new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), REGISTRATION_WAIT_MS),
+      new Promise<ServiceWorkerRegistration | null>((resolve) =>
+        setTimeout(() => resolve(existing ?? null), REGISTRATION_WAIT_MS),
       ),
     ]);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Which user this browser's subscription was registered for, or null.
+ *
+ * Kept in `localStorage` under a key `clearTokens()` preserves: the
+ * subscription outlives the session, so the fact of whose it is must too.
+ * Without it, a session that ended by a failed refresh (which wipes the
+ * stored user) left `login()` unable to tell "the same person is back" from
+ * "someone else sat down", and it dropped the subscription either way —
+ * push silently off for the same user after every refresh-token expiry,
+ * on exactly the installed-app users push is for (PR4 review, second round).
+ */
+export function getPushOwnerId(): string | null {
+  try {
+    return localStorage.getItem(PUSH_OWNER_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setPushOwnerId(userId: string | null): void {
+  try {
+    if (userId) localStorage.setItem(PUSH_OWNER_STORAGE_KEY, userId);
+    else localStorage.removeItem(PUSH_OWNER_STORAGE_KEY);
+  } catch {
+    // Storage unavailable: the next sign-in treats the owner as unknown.
   }
 }
 
@@ -136,7 +174,10 @@ async function subscriptionFor(
   });
 }
 
-/** `PUT` the subscription to the API. `false` when the browser gave us nothing usable. */
+/**
+ * `PUT` the subscription to the API and remember whose it is. `false` when
+ * the browser gave us nothing usable.
+ */
 async function registerSubscription(
   subscription: PushSubscription,
 ): Promise<boolean> {
@@ -147,6 +188,7 @@ async function registerSubscription(
     keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
     userAgent: navigator.userAgent.slice(0, 512),
   });
+  setPushOwnerId(getStoredUser()?.id ?? null);
   return true;
 }
 
@@ -211,6 +253,7 @@ export async function unsubscribeThisBrowser(): Promise<void> {
     // Nothing to do: the browser refused, the next push 410s and the worker
     // soft-deletes the row.
   }
+  setPushOwnerId(null);
 }
 
 /**
@@ -230,6 +273,7 @@ export async function unsubscribeThisBrowser(): Promise<void> {
 export function forgetPushSubscriptionOnSignOut(): void {
   if (!pushSupported()) return;
   const token = getAccessToken();
+  setPushOwnerId(null);
   void (async () => {
     const subscription = await getCurrentSubscription();
     if (!subscription) return;
@@ -270,6 +314,7 @@ export function forgetPushSubscriptionOnSignOut(): void {
  */
 export function forgetPushSubscriptionLocally(): void {
   if (!pushSupported()) return;
+  setPushOwnerId(null);
   void (async () => {
     const subscription = await getCurrentSubscription();
     if (!subscription) return;

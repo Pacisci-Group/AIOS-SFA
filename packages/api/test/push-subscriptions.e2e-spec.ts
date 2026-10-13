@@ -162,13 +162,51 @@ describe('Push subscriptions (PAC-154 PR4)', () => {
       expect(stored?.userAgent).toBe('Mozilla/5.0 (Macintosh) Chrome/131');
     });
 
-    it('moves a shared device to whoever signs in on it', async () => {
+    it('moves a shared device to whoever signs in on it — when they hold its keys', async () => {
+      // The same browser subscription (same endpoint *and* keys) presented
+      // by a different session: the seat changed hands.
       await put(producerToken, body()).expect(200);
       await put(csrToken, body()).expect(200);
 
       await expect(model.countDocuments({})).resolves.toBe(1);
       const stored = await model.findOne({ endpoint: ENDPOINT }).lean();
       expect(stored?.userId.toHexString()).toBe(csrId);
+    });
+
+    it("refuses to move another user's endpoint without its keys, and leaves the row alone", async () => {
+      // Knowing the endpoint URL is not owning the subscription: a caller
+      // with other keys would stop the owner's pushes and encrypt the new
+      // ones for a browser that cannot read them (PR4 review, second round).
+      await put(producerToken, body()).expect(200);
+
+      await put(csrToken, {
+        ...body(),
+        keys: { p256dh: 'BPk-somebody-else', auth: 'auth-else-16bytes' },
+      }).expect(409);
+
+      await expect(model.countDocuments({})).resolves.toBe(1);
+      const stored = await model.findOne({ endpoint: ENDPOINT }).lean();
+      expect(stored?.userId.toHexString()).toBe(producerId);
+      expect(stored?.keys).toEqual(KEYS);
+    });
+
+    it('survives two first registrations of the same endpoint racing (E11000 → retry)', async () => {
+      // Two tabs reconciling after a VAPID rotation both upsert a new
+      // endpoint; the loser's insert trips the unique index.
+      const duplicate = Object.assign(new Error('E11000 duplicate key'), {
+        code: 11000,
+      });
+      const once = jest.spyOn(model, 'findOneAndUpdate').mockReturnValueOnce({
+        lean: () => Promise.reject(duplicate),
+      } as never);
+      try {
+        await put(producerToken, body()).expect(200);
+      } finally {
+        once.mockRestore();
+      }
+      await expect(model.countDocuments({ endpoint: ENDPOINT })).resolves.toBe(
+        1,
+      );
     });
 
     it('lets a device subscribe again after its row was soft-deleted', async () => {

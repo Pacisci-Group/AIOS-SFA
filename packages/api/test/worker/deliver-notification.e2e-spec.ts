@@ -258,7 +258,13 @@ describe('DeliverNotificationFn (e2e)', () => {
     try {
       const result = await fn.handle(requestedEvent(), replayingStep);
 
-      expect(ran).toEqual(['insert', 'insert-rows', 'publish', 'email']);
+      expect(ran).toEqual([
+        'insert',
+        'insert-rows',
+        'publish',
+        'email',
+        'push',
+      ]);
       expect(result.notificationIds).toHaveLength(2);
       expect(nudges.map((nudge) => nudge.recipientId).sort()).toEqual([
         ADMIN_A,

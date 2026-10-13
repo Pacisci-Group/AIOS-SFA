@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   forgetPushSubscriptionLocally,
   forgetPushSubscriptionOnSignOut,
+  getPushOwnerId,
 } from '@/features/notifications/push-subscription';
 import {
   clearTokens,
@@ -102,9 +103,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // never `logout()`), or a second person at the same machine. The
     // subscription row still names the previous user, so their notifications
     // would keep appearing here as OS notifications (PAC-154 PR4 review).
-    // Unknown or different previous user → drop the browser's subscription;
+    // The owner is read from the record `push-subscription.ts` keeps under a
+    // key `clearTokens()` preserves — the stored user is gone by the time a
+    // failed refresh brings someone back to the login page, and reading it
+    // alone made the *same* user lose push on every sign-back-in (second
+    // round). Unknown or different owner → drop the browser's subscription;
     // the same user signing back in keeps theirs.
-    const previousId = userRef.current?.id ?? getStoredUser()?.id ?? null;
+    const previousId =
+      userRef.current?.id ?? getStoredUser()?.id ?? getPushOwnerId();
     const data = await apiLogin(email, password);
     if (previousId !== data.user.id) forgetPushSubscriptionLocally();
     setUser(data.user);
@@ -124,7 +130,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // wrong user's token and 404. Read from the ref, not inside a `setUser`
       // updater — updaters run twice under StrictMode and must have no side
       // effects.
-      if (userRef.current?.id !== nextUser.id) forgetPushSubscriptionLocally();
+      const previousId = userRef.current?.id ?? getPushOwnerId();
+      if (previousId !== nextUser.id) forgetPushSubscriptionLocally();
       setUser(nextUser);
     },
     [queryClient],
