@@ -25,6 +25,8 @@ export * from './domain/lead-detail';
 export * from './domain/lead-intake';
 export * from './domain/lead-replacement-intent';
 export * from './domain/lead-source';
+export * from './domain/analytics';
+export * from './domain/data-export';
 export * from './domain/owner-dashboard';
 export * from './domain/management-dashboard';
 export * from './domain/lead-status';

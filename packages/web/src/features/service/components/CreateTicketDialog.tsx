@@ -453,7 +453,12 @@ export function CreateTicketDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      {/*
+        Capped to the viewport with only the form body scrolling: the Notes
+        textarea grows with its content, and without the cap a long note pushed
+        Create Ticket below the fold with no way to reach it.
+      */}
+      <DialogContent className="max-h-[90dvh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Service Ticket</DialogTitle>
           <DialogDescription>
@@ -462,7 +467,8 @@ export function CreateTicketDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 py-2">
+        {/* Bled into the dialog's padding so focus rings are not clipped. */}
+        <div className="-mx-6 grid gap-4 overflow-y-auto px-6 py-2">
           <div className="grid gap-1.5">
             <Label htmlFor="ticket-policy">Policy</Label>
             <SearchableSelect

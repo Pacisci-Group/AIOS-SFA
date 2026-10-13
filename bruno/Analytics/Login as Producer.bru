@@ -1,0 +1,46 @@
+meta {
+  name: Login as Producer
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{producerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("analyticsProducerToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("a producer does not hold analytics:read by default", function () {
+    expect(res.getBody().user.permissions).to.not.include("analytics:read");
+  });
+}
+
+docs {
+  # Sign in as a Producer — for the refusal below
+
+  The Producer template does not hold `analytics:read`. An owner can grant it
+  per user from **Settings → Users → Permissions**; the producer would then
+  see their own sales and their branch's tickets.
+}

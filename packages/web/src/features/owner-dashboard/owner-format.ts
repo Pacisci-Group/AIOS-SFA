@@ -73,6 +73,8 @@ export function comparisonLabel(period: OwnerDashboardPeriod): string {
       return monthName(previous.from);
     case "last3Months":
       return "previous 3 months";
+    case "last12Months":
+      return "previous 12 months";
     case "ytd":
       return "same dates last year";
     case "lastYear":

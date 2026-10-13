@@ -33,6 +33,12 @@ export const OWNER_DASHBOARD_RANGE_KEYS = [
   'last3Months',
   'ytd',
   'lastYear',
+  /**
+   * The twelve complete calendar months before this one (PAC-152, part 2) —
+   * the Analytics page's service trend. Accepted by every endpoint on this
+   * vocabulary; the Owner and Manager chip lists simply do not offer it.
+   */
+  'last12Months',
   'custom',
 ] as const;
 

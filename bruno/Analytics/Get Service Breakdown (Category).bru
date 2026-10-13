@@ -1,0 +1,43 @@
+meta {
+  name: Get Service Breakdown (Category)
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/analytics/service/breakdown?range=last3Months&groupBy=category
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: last3Months
+  groupBy: category
+  ~compare: true
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("rows add up to the totals", function () {
+    const body = res.getBody();
+    const opened = body.rows.reduce((sum, row) => sum + row.metrics.opened, 0);
+    expect(opened).to.equal(body.totals.opened);
+  });
+}
+
+docs {
+  # GET /analytics/service/breakdown — tickets by any dimension
+
+  Tickets **opened in the window**, grouped by `groupBy`: `category`
+  (default) · `policyType` · `status` · `priority` · `assignee` · `branch`.
+  Per row: `opened`, `resolved` (since), `stillOpen`, `overdue`,
+  `avgHoursToResolve`, and `share` of opened. `compare=true` adds `previous`
+  and `change`. Scope and filters as **Get Service Summary**.
+}

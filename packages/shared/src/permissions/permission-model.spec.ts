@@ -138,6 +138,70 @@ describe('page-level permission model', () => {
     }
   });
 
+  /**
+   * PAC-152. The page exports PII (contact phone, email, DOB) for the whole
+   * agency, so who holds it by default is asserted rather than trusted.
+   */
+  describe('data export permission', () => {
+    const holder = (slug: string) =>
+      DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === slug)!;
+
+    it('is read-only on the Data Team', () => {
+      expect(holder('data_team').permissions).toContain('data_export:read');
+      expect(holder('data_team').permissions).not.toContain(
+        'data_export:write',
+      );
+    });
+
+    it.each(['producer', 'csr', 'crm', 'branch_manager'])(
+      'is withheld from %s',
+      (slug) => {
+        const resolved = resolvePermissionSet({
+          rolePermissions: holder(slug).permissions,
+        });
+        expect(resolved).not.toContain('data_export:read');
+      },
+    );
+
+    it('reaches the Agency Owner through enabled modules, not a listed string', () => {
+      const owner = holder('agency_owner');
+      expect(owner.permissions).not.toContain('data_export:read');
+      expect(owner.grantsAllEnabledModules).toBe(true);
+    });
+  });
+
+  /**
+   * PAC-152, part 2. The page is the owner's and the branch manager's; anyone
+   * else gets it only by an explicit grant.
+   */
+  describe('analytics permission', () => {
+    const holder = (slug: string) =>
+      DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === slug)!;
+
+    it('is read-only on the Branch Manager', () => {
+      expect(holder('branch_manager').permissions).toContain('analytics:read');
+      expect(holder('branch_manager').permissions).not.toContain(
+        'analytics:write',
+      );
+    });
+
+    it.each(['producer', 'csr', 'crm', 'data_team'])(
+      'is withheld from %s',
+      (slug) => {
+        const resolved = resolvePermissionSet({
+          rolePermissions: holder(slug).permissions,
+        });
+        expect(resolved).not.toContain('analytics:read');
+      },
+    );
+
+    it('reaches the Agency Owner through enabled modules, not a listed string', () => {
+      const owner = holder('agency_owner');
+      expect(owner.permissions).not.toContain('analytics:read');
+      expect(owner.grantsAllEnabledModules).toBe(true);
+    });
+  });
+
   describe('CSR role template', () => {
     const csr = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === 'csr');
 
@@ -168,6 +232,8 @@ describe('page-level permission model', () => {
         [ModuleKey.OwnerDashboard]: 'none',
         [ModuleKey.CommandCenter]: 'none',
         [ModuleKey.Leaderboard]: 'none',
+        [ModuleKey.DataExport]: 'none',
+        [ModuleKey.Analytics]: 'none',
       };
 
       for (const moduleKey of ALL_MODULE_KEYS) {

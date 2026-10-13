@@ -20,8 +20,8 @@ import {
   formatPct,
 } from "../owner-format";
 import { LobMixBar } from "./LobMixBar";
-import { OwnerKpiCard } from "./OwnerKpiCard";
-import { TrendBadge } from "./TrendBadge";
+import { KpiCard as OwnerKpiCard } from "@/components/common/KpiCard";
+import { TrendBadge } from "@/components/common/TrendBadge";
 
 /** Why a closing ratio is "N/A", in words an owner can act on. */
 function closingCaption(ratio: OwnerClosingRatio): string {
