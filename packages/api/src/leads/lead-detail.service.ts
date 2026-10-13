@@ -59,6 +59,58 @@ import { UpdateLeadDto } from './dto/update-lead.dto';
 import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { LeadAccessService } from './lead-access.service';
 import { Lead, LeadDocument } from './schemas/lead.schema';
+import {
+  type ChangeFieldSpec,
+  type ChangeSnapshot,
+  changeBusinessDate,
+  diffSnapshots,
+  snapshot,
+} from '../activities/change-log';
+import {
+  businessDateInstant,
+  businessDay,
+} from '../common/dates/business-dates';
+import {
+  assertNotAfter,
+  assertNotInFuture,
+} from '../common/dates/business-date-rules';
+
+/**
+ * The fields `PATCH /leads/:id` speaks about in the edit log (PAC-159). The
+ * lead date is logged as the agency-calendar day the page shows; status and
+ * temperature as their canonical labels. The lead source is resolved to its
+ * **name** by the caller (`LEAD_SOURCE_CHANGE_FIELD`), since a change row is
+ * never re-normalized once written and an id would be frozen in forever.
+ */
+const LEAD_CHANGE_FIELDS: ChangeFieldSpec<LeadDocument>[] = [
+  {
+    field: 'createdDate',
+    label: 'Lead date',
+    kind: 'date',
+    read: (lead, { timeZone }) =>
+      changeBusinessDate(lead.createdDate ?? lead.createdAt, timeZone),
+  },
+  {
+    field: 'status',
+    label: 'Status',
+    kind: 'text',
+    read: (lead) => normalizeLeadStatus(lead.status),
+  },
+  {
+    field: 'temperature',
+    label: 'Temperature',
+    kind: 'text',
+    read: (lead) => lead.temperature ?? null,
+  },
+];
+
+/** The source's name, supplied by the caller — `read` is never consulted. */
+const LEAD_SOURCE_CHANGE_FIELD: ChangeFieldSpec<LeadDocument> = {
+  field: 'leadSource',
+  label: 'Lead source',
+  kind: 'text',
+  read: () => null,
+};
 
 /** Newest recaps considered. A lead with more than this has bigger problems. */
 const RECAP_LIMIT = 10;
@@ -221,7 +273,8 @@ export class LeadDetailService {
       // carry. Clients render it as the fallback when no row has its own.
       propertyAddress: normalizeStoredAddress(lead.propertyAddress),
       agingDays: this.agingDays(lead),
-      createdDate: iso(lead.createdDate),
+      // The agency-calendar day (PAC-159), which is what the page edits.
+      createdDate: businessDay(lead.createdDate, access.timeZone),
       lastActivityAt: iso(lead.lastActivityAt),
       intakeChannel: lead.intakeSource?.channel ?? null,
       producerName: lead.producerId
@@ -246,14 +299,14 @@ export class LeadDetailService {
       primaryContact: this.findPrimaryContact(lead, household, roster),
       household: this.toHousehold(household, lead, roster, policies),
       latestQuoteRecap: latestRecap
-        ? this.toQuoteRecap(latestRecap, userNames)
+        ? this.toQuoteRecap(latestRecap, userNames, access.timeZone)
         : null,
       // Full recaps, not summaries (PAC-56 #11): the expander has to answer
       // "what changed since the last quote", which needs the rows.
       earlierQuoteRecaps: earlierRecaps.map((recap) =>
-        this.toQuoteRecap(recap, userNames),
+        this.toQuoteRecap(recap, userNames, access.timeZone),
       ),
-      deal: deal ? this.toDeal(deal, policies) : null,
+      deal: deal ? this.toDeal(deal, policies, access.timeZone) : null,
       priorInsurance,
       activities: activities.map((activity) =>
         this.toActivity(activity, userNames),
@@ -278,9 +331,15 @@ export class LeadDetailService {
    *    correcting a mistake, and Sold → Requote is a real operation. A one-way
    *    control would strand the record.
    *
-   * No `Activity` row is written. None of the `ACTIVITY_TYPES` members means
-   * "status changed", and adding one ripples through the migration, the demo
-   * seed and the shared union — a follow-up, not a side effect of this ticket.
+   * Every edit writes a `field_changed` row (PAC-159), the same mechanism the
+   * quote and sold edits use: an owner asking "who moved this lead back to
+   * Contacted" or "who re-dated it" reads the answer off the timeline, behind
+   * `agency:changelogs:read`. A patch that changes nothing writes nothing.
+   *
+   * **The lead date** (`createdDate`) moves only when the day differs, bounded
+   * by today and by the lead's first quote or sale — the floor the sold and
+   * quote dates are held to (§1b) must not be pulled out from under them.
+   * The `lead_created` timeline row moves with it.
    *
    * One cross-entity side effect *does* fire: moving the lead to a terminal
    * status resolves its quote service ticket, if it has one. This is the only
@@ -297,6 +356,20 @@ export class LeadDetailService {
     dto: UpdateLeadDto,
   ): Promise<UpdateLeadResult> {
     const lead = await this.leadAccess.loadOwnedLead(access, branchId, leadId);
+    const ctx = { timeZone: access.timeZone };
+    const before = {
+      ...snapshot(LEAD_CHANGE_FIELDS, lead, ctx),
+      leadSource: (await this.toLeadSource(lead)).label || null,
+    };
+
+    const leadDateMoved =
+      dto.createdDate !== undefined &&
+      businessDay(lead.createdDate ?? lead.createdAt, access.timeZone) !==
+        dto.createdDate;
+    if (leadDateMoved && dto.createdDate !== undefined) {
+      await this.assertLeadDateAllowed(dto.createdDate, lead, access.timeZone);
+      lead.createdDate = businessDateInstant(dto.createdDate, access.timeZone);
+    }
 
     if (dto.status !== undefined) {
       lead.status = dto.status;
@@ -319,6 +392,8 @@ export class LeadDetailService {
     lead.lastActivityAt = new Date();
     await lead.save();
 
+    if (leadDateMoved) await this.moveLeadCreatedActivity(lead);
+
     if (dto.status !== undefined) {
       await this.leadTickets.resolveForLead(
         lead._id,
@@ -327,13 +402,118 @@ export class LeadDetailService {
       );
     }
 
+    const leadSource = await this.toLeadSource(lead);
+    await this.recordLeadChanges(access, lead, before, {
+      ...snapshot(LEAD_CHANGE_FIELDS, lead, ctx),
+      leadSource: leadSource.label || null,
+    });
+
     return {
       id: lead._id.toString(),
+      createdDate: businessDay(lead.createdDate, access.timeZone),
+      agingDays: this.agingDays(lead),
       status: normalizeLeadStatus(lead.status),
       temperature: lead.temperature ?? 'Unknown',
-      leadSource: await this.toLeadSource(lead),
+      leadSource,
       lastActivityAt: lead.lastActivityAt.toISOString(),
     };
+  }
+
+  /**
+   * The bounds on a lead date (PAC-159 §1c): not in the future, and not after
+   * the earliest quote or sale on the lead — otherwise the floor those dates
+   * are held to would be violated retroactively. Same day allowed.
+   */
+  private async assertLeadDateAllowed(
+    day: string,
+    lead: LeadDocument,
+    timeZone: string,
+  ): Promise<void> {
+    assertNotInFuture('Lead date', day, timeZone);
+    const scope = {
+      agencyId: lead.agencyId,
+      leadId: lead._id,
+      isTestRecord: { $ne: true },
+    };
+    const [quote, sale] = await Promise.all([
+      this.quoteRecapModel
+        .findOne({ ...scope, quoteDate: { $type: 'date' } }, { quoteDate: 1 })
+        .sort({ quoteDate: 1 })
+        .lean<{ quoteDate: Date }>(),
+      this.dealModel
+        .findOne({ ...scope, soldDate: { $type: 'date' } }, { soldDate: 1 })
+        .sort({ soldDate: 1 })
+        .lean<{ soldDate: Date }>(),
+    ]);
+    const earliest = [quote?.quoteDate, sale?.soldDate]
+      .filter((value): value is Date => value instanceof Date)
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+    assertNotAfter(
+      'Lead date',
+      day,
+      earliest,
+      'the first quote/sale on this lead',
+      timeZone,
+    );
+  }
+
+  /**
+   * The lead's `lead_created` timeline row means "occurred on the lead date",
+   * so a re-date moves it (PAC-159). Best-effort, like the sold and quoted
+   * rows' moves.
+   */
+  private async moveLeadCreatedActivity(lead: LeadDocument): Promise<void> {
+    try {
+      await this.activityModel.updateMany(
+        { agencyId: lead.agencyId, leadId: lead._id, type: 'lead_created' },
+        { $set: { occurredAt: lead.createdDate } },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to move the lead_created timeline entry for lead ${lead._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /**
+   * The edit log row for a lead edit (PAC-159), in the shape the quote and
+   * sold edits write (PAC-65 #9). Post-commit and best-effort, but logged at
+   * `error`: a dropped row is a hole in an audit trail. `summary` carries no
+   * values — see the schema. Nothing is written when nothing changed.
+   */
+  private async recordLeadChanges(
+    access: AccessContext,
+    lead: LeadDocument,
+    before: ChangeSnapshot,
+    after: ChangeSnapshot,
+  ): Promise<void> {
+    const changes = diffSnapshots(
+      [...LEAD_CHANGE_FIELDS, LEAD_SOURCE_CHANGE_FIELD],
+      before,
+      after,
+    );
+    if (!changes.length) return;
+    try {
+      await this.activityModel.create({
+        agencyId: lead.agencyId,
+        branchId: lead.branchId,
+        type: 'field_changed',
+        subjectType: 'lead',
+        leadId: lead._id,
+        userId: new Types.ObjectId(access.userId),
+        occurredAt: new Date(),
+        summary: 'Lead edited',
+        changes,
+        source: 'internal',
+        isTestRecord: false,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to record the edit log for lead ${lead._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /** `{ id: null, label: '' }` for a lead nobody has attributed yet. */
@@ -732,10 +912,14 @@ export class LeadDetailService {
 
   private toQuoteRecapSummary(
     recap: QuoteRecapDocument,
+    timeZone: string,
   ): LeadDetailQuoteRecapSummary {
     return {
       id: recap._id.toString(),
-      quoteDate: iso(recap.quoteDate),
+      // The agency-calendar day (PAC-159): a day-only value sits at agency
+      // midnight, which a viewer west of the agency would otherwise see as the
+      // evening before.
+      quoteDate: businessDay(recap.quoteDate, timeZone),
       premium: recap.premium ?? 0,
       itemCount: recap.itemCount ?? 0,
       // Migrated recaps store raw SmartSuite codes here; the app writes labels.
@@ -749,9 +933,10 @@ export class LeadDetailService {
   private toQuoteRecap(
     recap: QuoteRecapDocument,
     userNames: Map<string, string>,
+    timeZone: string,
   ): LeadDetailQuoteRecap {
     return {
-      ...this.toQuoteRecapSummary(recap),
+      ...this.toQuoteRecapSummary(recap, timeZone),
       // Attribution for the notes block (PAC-56 #13). Falls back to `null`
       // rather than a placeholder — a migrated recap genuinely has no author,
       // and "Unknown" would read as a person.
@@ -802,12 +987,13 @@ export class LeadDetailService {
   private toDeal(
     deal: DealDocument,
     policies: PolicyDocument[],
+    timeZone: string,
   ): LeadDetailDeal {
     const dealId = deal._id.toString();
 
     return {
       id: dealId,
-      soldDate: iso(deal.soldDate),
+      soldDate: businessDay(deal.soldDate, timeZone),
       premium: deal.premium ?? 0,
       itemCount: deal.itemCount ?? 0,
       policyCount: deal.policyCount ?? 0,

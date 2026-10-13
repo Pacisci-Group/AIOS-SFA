@@ -84,8 +84,20 @@ const quoteDocumentFile = z
     "File must be under 10MB",
   );
 
+/**
+ * `YYYY-MM-DD` on the agency's calendar (PAC-159). Bounded here only by
+ * shape; the API judges "not in the future", "not before the lead" and "not
+ * after the sale" on the agency's clock and answers with a message for the
+ * field. The input's `max` keeps the common case from a round trip.
+ */
+const quoteDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Pick the quote date");
+
 /** Everything both forms agree on. */
 const quoteRecapBaseShape = {
+  /** The day the quote was given — first on the form, like the Sold date. */
+  quoteDate,
   policies: z
     .array(quotedPolicySchema)
     .min(1, "Add at least one policy")
@@ -186,8 +198,10 @@ export function parseQuoteRecapEdit(
  * an "Auto ×1" the producer never opened would be a row they never confirmed.
  * The schema's `.min(1)` is what insists on one.
  */
-export function emptyQuoteRecap(): QuoteRecapFormState {
+export function emptyQuoteRecap(quoteDate: string): QuoteRecapFormState {
   return {
+    // Pre-filled with the agency's today so the common case is one click.
+    quoteDate,
     policies: [],
     insuranceRenewalMonth: "",
     notes: "",
@@ -208,6 +222,9 @@ export function toQuoteRecapFormValues(
   const canCopyHouseholdAddress = Boolean(view.context.householdAddress);
 
   return {
+    // The agency-calendar day the API serves; `""` only for a migrated recap
+    // that never had one, which the producer then has to fill in.
+    quoteDate: view.quoteDate ?? "",
     policies: view.policies.map((policy) => ({
       /*
        * Seeded verbatim, even though a migrated row can hold a type that
@@ -262,8 +279,15 @@ export function toQuoteRecapFormValues(
 export function toUpdateQuoteRecapInput(
   values: QuoteRecapFormState,
   quoteDocument?: QuoteDocumentMeta,
+  /** The day the recap currently holds, so an untouched date is not sent. */
+  storedQuoteDate?: string | null,
 ): UpdateQuoteRecapInput {
   return {
+    // Sent only when changed (PAC-159): the API treats an absent date as
+    // "leave alone" and never re-checks a date that is not moving.
+    ...(values.quoteDate && values.quoteDate !== (storedQuoteDate ?? "")
+      ? { quoteDate: values.quoteDate }
+      : {}),
     policies: toPolicyInputs(values.policies),
     // Sent only when set. `""` — a migrated recap the producer left alone —
     // would fail the API's enum, and the patch has no way to express "clear

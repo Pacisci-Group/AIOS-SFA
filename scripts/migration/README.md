@@ -77,8 +77,9 @@ npm run build && npm run migrate   # compiled, as a server runs it
 
 **Nothing needs running afterwards.** The migration writes its own cross-record
 refs (`leadId` / `householdId` / `quoteRecapId`), its own match keys
-(`policies.policyNumberKey`, `quoteRecaps.quoteDateYmd`) and reconciles household
-`HH-…` numbering at the end of its household pass. The repair passes that used to
+(`policies.policyNumberKey`), anchors every date-only SmartSuite business date
+(`created_date`, `quote_date`, `sold_date`) at agency-local midnight (PAC-159)
+and reconciles household `HH-…` numbering at the end of its household pass. The repair passes that used to
 follow it existed for databases migrated by older code and have been removed.
 
 **One exception, for databases migrated before September 2026.** Those runs

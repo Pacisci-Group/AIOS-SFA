@@ -39,6 +39,8 @@ import {
 import { SoldDateCard } from "./components/WizardCards";
 import { managementDashboardKey } from "@/lib/management-dashboard-api";
 import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
+import { agencyTodayYmd } from "@/lib/dates";
+import { getStoredUser } from "@/lib/api-client";
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
 
@@ -255,6 +257,7 @@ function SaleDetailsSection({ deal }: { deal: SoldDealEditView }) {
       </div>
 
       <SoldDateCard
+        max={agencyTodayYmd(getStoredUser()?.timeZone)}
         value={soldDate}
         onChange={setSoldDate}
         disabled={mutation.isPending}

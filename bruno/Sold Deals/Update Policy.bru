@@ -207,9 +207,8 @@ docs {
   this landed they were left alone, so the Sold card's footer total could
   disagree with the row directly above it.
 
-  **`soldDate` / `soldDateYmd` are never recomputed.** `soldDateYmd` is the Sold
-  scorecard's indexed bucket key; a Thursday correction must not re-date a
-  Monday sale.
+  **`soldDate` is never recomputed.** The Sold scorecard buckets on it; a
+  Thursday correction must not re-date a Monday sale.
 
   ⚠ **This moves reported numbers.** The Sold scorecard sums `deals.premium` and
   the leaderboard ranks on it, so a premium correction here changes a producer's

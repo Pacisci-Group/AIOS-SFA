@@ -9,7 +9,7 @@
  * are what both agree the shape is.
  */
 
-import type { StructuredAddress } from './address';
+import type { StructuredAddress } from "./address";
 
 export interface QuoteRecapPolicyInput {
   /** A canonical label from `POLICY_TYPES` — raw SmartSuite codes are rejected. */
@@ -59,6 +59,14 @@ export interface CreateQuoteRecapInput {
    * submission without one. The API resolves the household from the lead.
    */
   leadId: string;
+  /**
+   * The day the quote was given, `YYYY-MM-DD` on the agency's calendar
+   * (PAC-159). Required: a quote is sometimes recorded days after it was
+   * given, and the Quoted scorecard files it on this day. The form defaults
+   * it to the agency's today. Not in the future, and not before the lead was
+   * created — the API rejects both with a message for the field.
+   */
+  quoteDate: string;
   /**
    * Each row carries its own insured-property address (PAC-56 #14) — see
    * {@link QuoteRecapPolicyInput}. There is deliberately no recap-level

@@ -67,7 +67,7 @@ export interface LeadRow {
 
 export interface DealRow {
   dealAutoNumber: number | null;
-  soldDateYmd: number | null;
+  soldDate: Date | null;
   producerId: Types.ObjectId | null;
   dealType: string | null;
 }
@@ -96,7 +96,7 @@ export interface AuditLite {
 export interface QuoteLite {
   _id: Types.ObjectId;
   leadId: Types.ObjectId;
-  quoteDateYmd?: number;
+  quoteDate?: Date;
   premium?: number;
 }
 
@@ -104,7 +104,7 @@ export interface DealLite {
   _id: Types.ObjectId;
   leadId?: Types.ObjectId;
   quoteRecapId?: Types.ObjectId;
-  soldDateYmd?: number;
+  soldDate?: Date;
   premium?: number;
   chargebackAdjustment?: number;
 }
@@ -338,13 +338,13 @@ export class ExportLookups {
       const rows = await models.deal
         .find(
           { ...tenant, _id: { $in: oids(ids) } },
-          { dealAutoNumber: 1, soldDateYmd: 1, producerId: 1, dealType: 1 },
+          { dealAutoNumber: 1, soldDate: 1, producerId: 1, dealType: 1 },
         )
         .lean<
           {
             _id: Types.ObjectId;
             dealAutoNumber?: number;
-            soldDateYmd?: number;
+            soldDate?: Date;
             producerId?: Types.ObjectId;
             dealType?: string;
           }[]
@@ -354,7 +354,7 @@ export class ExportLookups {
           String(row._id),
           {
             dealAutoNumber: row.dealAutoNumber ?? null,
-            soldDateYmd: row.soldDateYmd ?? null,
+            soldDate: row.soldDate ?? null,
             producerId: row.producerId ?? null,
             dealType: row.dealType ?? null,
           },
@@ -473,9 +473,9 @@ export class ExportLookups {
     const rows = await this.models.quoteRecap
       .find(
         { ...this.tenant, leadId: { $in: oids(ids) } },
-        { leadId: 1, quoteDateYmd: 1, premium: 1 },
+        { leadId: 1, quoteDate: 1, premium: 1 },
       )
-      .sort({ quoteDateYmd: 1, _id: 1 })
+      .sort({ quoteDate: 1, _id: 1 })
       .lean<QuoteLite[]>();
     return groupBy(rows, (row) => row.leadId);
   }
@@ -492,12 +492,12 @@ export class ExportLookups {
         {
           leadId: 1,
           quoteRecapId: 1,
-          soldDateYmd: 1,
+          soldDate: 1,
           premium: 1,
           chargebackAdjustment: 1,
         },
       )
-      .sort({ soldDateYmd: 1, _id: 1 })
+      .sort({ soldDate: 1, _id: 1 })
       .lean<DealLite[]>();
     return groupBy(rows, (row) => row[field]);
   }

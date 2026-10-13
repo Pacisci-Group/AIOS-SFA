@@ -50,6 +50,8 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Leads | Get Lead (Foreign Lead) | `GET /leads/:id` | **PAC-38** — asserts an out-of-scope lead 404s, not 403s. |
 | Leads | Update Lead | `PATCH /leads/:id` | **PAC-38** — inline status / temperature / source. `leads:write`. |
 | Leads | Update Lead (Invalid) | `PATCH /leads/:id` | **PAC-38** — pins the write vocabulary (400). |
+| Leads | Update Lead (Lead Date) | `PATCH /leads/:id` | **PAC-159** — re-date the lead; `createdDate` echoed as the agency day, `agingDays` recomputed. Writes a `Lead edited` change-log row. |
+| Leads | Update Lead (Future Date) | `PATCH /leads/:id` | **PAC-159** — a lead date after the agency's today is a 400. |
 | Leads | Update Primary Contact | `PATCH /contacts/:id` | **PAC-38** — edit a lead's contact. **`clients:write`** — see its docs. |
 | Leads | Update Primary Contact (Foreign Contact) | `PATCH /contacts/:id` | **PAC-38** — the derived-ownership clamp (404). |
 | Leads | List Hot Leads | `GET /leads/hot` | **PAC-15** — Priority Contact List, stalest first. `leads:read`. Captures `hotLeadId`. |
@@ -166,6 +168,11 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Quote Recaps | Create Quote Recap | `POST /quote-recaps` | **PAC-39** — record the proposal. `quote_recaps:write`. |
 | Quote Recaps | Create Quote Recap (Replay) | `POST /quote-recaps` | **PAC-39** — submission-token idempotency check. |
 | Quote Recaps | Create Quote Recap (Foreign Lead) | `POST /quote-recaps` | **PAC-39** — asserts an out-of-scope lead 404s. |
+| Quote Recaps | Update Quote Recap (Quote Date) | `PATCH /quote-recaps/:id` | **PAC-159** — re-date a quote; moves the `quoted` timeline row and writes a change-log row. |
+| Quote Recaps | Get Performance (Quote Moved To February) | `GET /performance` | **PAC-159** — proves the re-dated recap counts in its new month. |
+| Quote Recaps | Update Quote Recap (Future Date) | `PATCH /quote-recaps/:id` | **PAC-159** — a quote date after the agency's today is a 400. |
+| Quote Recaps | Update Quote Recap (Before Lead) | `PATCH /quote-recaps/:id` | **PAC-159** — the lead date is the floor (400). |
+| Quote Recaps | Update Lead (After First Quote) | `PATCH /leads/:id` | **PAC-159** — the first quote/sale is the lead date's ceiling (400). |
 | Sold Deals | Get Sold Context | `GET /sold-deals/context` | **PAC-40** — lead + household + contacts for the wizard. `deal_audits:read`. |
 | Sold Deals | Presign Sold Document | `POST /sold-deals/documents/presign` | **PAC-40** — Card 5 proof upload URL. `deal_audits:write`. |
 | Sold Deals | Upload Sold Document | `PUT <uploadUrl>` | **PAC-40** — raw PUT straight to storage. `auth: none` by design. |
@@ -173,6 +180,10 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Sold Deals | Create Sold Deal (Replay) | `POST /sold-deals` | **PAC-40** — submission-token idempotency check. |
 | Sold Deals | Create Sold Deal (Foreign Lead) | `POST /sold-deals` | **PAC-40** — asserts an out-of-scope lead 404s. |
 | Sold Deals | Check Policy Number (Match) | `GET /policies/check` | **PAC-40** — the duplicate-found branch. |
+| Sold Deals | Update Sold Deal (Before Quote) | `PATCH /sold-deals/:id` | **PAC-159** — a sale cannot precede the quote it was sold from (400). |
+| Sold Deals | Update Quote Recap (After Sale) | `PATCH /quote-recaps/:id` | **PAC-159** — a quote cannot post-date the sale sold from it (400). |
+| Sold Deals | Update Sold Deal (Future Date) | `PATCH /sold-deals/:id` | **PAC-159** — a sold date after the agency's today is a 400. |
+| Sold Deals | Update Sold Deal (Before Lead) | `PATCH /sold-deals/:id` | **PAC-159** — the lead date is the floor (400). |
 
 > ⚠ **This table is not exhaustive.** `Carriers`, `Households`, `Unlinked
 > Records` and `Users` are in the collection but were never added here; every

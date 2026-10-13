@@ -1,31 +1,23 @@
 import type { DataExportColumnType } from '@sfa/shared';
 import { Types } from 'mongoose';
-import { fromYmd, zonedDate } from '../../../performance/performance.range';
+import { zonedDate } from '../../../performance/performance.range';
 import type { CellValue } from './dataset.types';
 
 /** Separator for a `list` cell. Not a comma: CSV readers split on those. */
 export const LIST_SEPARATOR = '; ';
 
-/** A `YYYYMMDD` integer as the UTC-midnight `Date` a `date` column expects. */
-export function ymdDate(ymd: number | null | undefined): Date | null {
-  if (!ymd) return null;
-  const { year, month, day } = fromYmd(ymd);
-  return new Date(Date.UTC(year, month - 1, day));
-}
-
 /**
- * An instant's calendar date in the agency's timezone, as UTC midnight —
- * except an instant that already *is* UTC midnight, which a migrated
- * SmartSuite date-only field always is and which is therefore read as that
- * date. The rule `leadCreatedYmdExpr` applies in Mongo, restated for a column.
+ * A business instant's calendar date in the agency's timezone, as the
+ * UTC-midnight `Date` a `date` column expects — the day the dashboards file
+ * the row under (PAC-159). Every stored business date is a real instant now
+ * (a day-only entry sits at agency-local midnight), so there is no longer a
+ * "UTC midnight means a date-only value" special case.
  */
 export function agencyCalendarDate(
   value: Date | null | undefined,
   timeZone: string,
 ): Date | null {
-  if (!value) return null;
-  const ms = value.getTime();
-  if (ms % 86_400_000 === 0) return new Date(ms);
+  if (!value || Number.isNaN(value.getTime())) return null;
   const { year, month, day } = zonedDate(value, timeZone);
   return new Date(Date.UTC(year, month - 1, day));
 }

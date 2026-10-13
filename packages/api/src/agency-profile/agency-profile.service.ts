@@ -33,9 +33,9 @@ type WorkingDayLean = { timezone?: string; endOfDayHour?: number };
  *    zone once. The hour is not on the context (only the worker reads it), so
  *    an hour-only change leaves the cache alone.
  *
- * It does **not** touch stored day labels — `soldDateYmd`, `quoteDateYmd`,
- * goal months. Those stay on the calendar they were filed on; see
- * `Agency.timezone`.
+ * It rewrites no record: sales, quotes and leads are instants that every
+ * reader buckets on the new zone from the next request, and goal months are
+ * calendar keys that do not move. See `Agency.timezone`.
  */
 @Injectable()
 export class AgencyProfileService {

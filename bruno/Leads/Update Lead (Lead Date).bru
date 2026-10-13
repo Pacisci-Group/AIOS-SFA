@@ -1,0 +1,66 @@
+meta {
+  name: Update Lead (Lead Date)
+  type: http
+  seq: 22
+}
+
+patch {
+  url: {{baseUrl}}/leads/{{createdLeadId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "createdDate": "2026-01-03"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes the new lead date as an agency-calendar day", function () {
+    expect(res.getBody().createdDate).to.equal("2026-01-03");
+  });
+
+  test("recomputes aging from the new date", function () {
+    expect(res.getBody().agingDays).to.be.a("number");
+    expect(res.getBody().agingDays).to.be.greaterThan(0);
+  });
+}
+
+docs {
+  # PATCH /leads/:id — re-date the lead (PAC-159 §1c)
+
+  The business "lead received on" day, corrected after the fact. Every lead
+  count, aging figure and lead-source matrix buckets `createdDate` on the
+  agency's calendar at read time, so a lead typed in late *has* to be
+  correctable or those figures are wrong in exactly the way the quote and sold
+  dates were.
+
+  - **Module:** `leads` · **Permission:** `leads:write` · **Scope:** the lead's.
+
+  ## What moves
+  - `createdDate`, stored at the new day's first instant in `Agency.timezone`.
+  - The `lead_created` timeline row, whose meaning is "occurred on the lead date".
+  - A `field_changed` row (`Lead edited`, `Lead date: 2026-01-05 → 2026-01-03`).
+
+  ## Rules (`400`, judged on the agency's calendar; same day allowed)
+  - not in the future — **Update Lead (Future Date)**;
+  - not after the lead's first quote or sale — **Update Lead (After First
+    Quote)** in the Quote Recaps folder, once a quote exists.
+
+  Only a date that actually differs is checked and written: a patch that edits
+  the status alone is never refused for a pre-existing (migrated) violation.
+
+  ## Response `200`
+  `UpdateLeadResult` with `createdDate` (agency day) and `agingDays`
+  recomputed from it.
+}

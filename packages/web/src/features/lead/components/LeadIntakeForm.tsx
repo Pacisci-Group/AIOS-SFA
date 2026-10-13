@@ -26,6 +26,8 @@ import {
   type IntakeStep,
   type IntakeStepId,
 } from "./lead-intake-sections";
+import { agencyTodayYmd } from "@/lib/dates";
+import { getStoredUser } from "@/lib/api-client";
 
 interface LeadIntakeFormProps {
   /**
@@ -108,9 +110,19 @@ export function LeadIntakeForm({
   // One schema for the whole component: `validators` below and the per-step
   // checks both read it, and rebuilding it per render would hand the form a new
   // validator object on every keystroke.
-  const schema = useMemo(() => makeLeadIntakeSchema(variant), [variant]);
+  // Today on the agency's calendar (PAC-159): the lead date's default and
+  // ceiling, and the DOB rule's "not in the future".
+  const agencyToday = useMemo(
+    () => agencyTodayYmd(getStoredUser()?.timeZone),
+    [],
+  );
+  const schema = useMemo(
+    () => makeLeadIntakeSchema(variant, agencyToday),
+    [variant, agencyToday],
+  );
   const form = useAppForm({
-    defaultValues: initialValues ?? emptyLeadIntake(),
+    defaultValues:
+      initialValues ?? emptyLeadIntake(isPublic ? "" : agencyToday),
     validators: { onBlur: schema },
     onSubmit: ({ value }) => onSubmit(value),
   });
@@ -210,6 +222,8 @@ export function LeadIntakeForm({
    * the content.
    */
   const cardDescriptions: Partial<Record<IntakeStepId, React.ReactNode>> = {
+    leadDate:
+      "The day the lead came in. Today unless you are entering an earlier one.",
     address: isPublic
       ? // The public form asks for the dwelling per policy on a later card, so
         // pointing at the quote would send the submitter looking for a step
@@ -226,6 +240,18 @@ export function LeadIntakeForm({
    * one of these, so the rest cost nothing.
    */
   const cardContent: Record<IntakeStepId, React.ReactNode> = {
+    leadDate: (
+      <form.AppField name="createdDate">
+        {(f) => (
+          <f.TextField
+            label="Lead date"
+            type="date"
+            max={agencyToday}
+            inputClassName="bg-card border-border sm:max-w-xs"
+          />
+        )}
+      </form.AppField>
+    ),
     primaryContact: (
       <FormGrid>
           <form.AppField name="primaryContact.firstName">

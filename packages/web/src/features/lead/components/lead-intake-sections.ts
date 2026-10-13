@@ -6,6 +6,7 @@ import type {
 
 /** One card of the intake form — a page of its own on the public variant. */
 export type IntakeStepId =
+  | "leadDate"
   | "primaryContact"
   | "address"
   | "leadSource"
@@ -44,6 +45,14 @@ const BOTH_VARIANTS = ["internal", "public"] as const;
  * list top to bottom. One order, one source.
  */
 const STEPS: readonly IntakeStep[] = [
+  {
+    // First, where the Sold wizard and the Quote form put their dates
+    // (PAC-159). Internal only: a prospect does not date their own enquiry.
+    id: "leadDate",
+    title: "Lead date",
+    fields: ["createdDate"],
+    variants: ["internal"],
+  },
   {
     id: "primaryContact",
     title: "Primary contact",

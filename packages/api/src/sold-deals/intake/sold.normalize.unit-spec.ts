@@ -12,7 +12,6 @@ import {
   mergeAuditTriggers,
   mergePriorInsuranceSummary,
   parseFormDate,
-  soldDateYmd,
   yesNo,
 } from './sold.normalize';
 
@@ -55,27 +54,21 @@ describe('buildSoldSubmissionToken', () => {
 });
 
 describe('date handling', () => {
-  it('parses a form date as UTC midnight, not local', () => {
+  it('parses a calendar-only form date as UTC midnight, not local', () => {
     // Local parsing would shift the day either side of midnight depending on
-    // the server's timezone, moving a deal between scorecard buckets.
+    // the server's timezone; policy effective dates round-trip through UTC.
     expect(parseFormDate('2026-01-15').toISOString()).toBe(
       '2026-01-15T00:00:00.000Z',
     );
   });
 
-  it('derives the YYYYMMDD integer the range filters use', () => {
-    expect(soldDateYmd('2026-01-15')).toBe(20260115);
-    expect(soldDateYmd('2026-12-31')).toBe(20261231);
-  });
-
-  it('agrees with the parsed date', () => {
-    const iso = '2026-07-04';
-    const parsed = parseFormDate(iso);
-    const expected =
-      parsed.getUTCFullYear() * 10000 +
-      (parsed.getUTCMonth() + 1) * 100 +
-      parsed.getUTCDate();
-    expect(soldDateYmd(iso)).toBe(expected);
+  it('anchors the sold date at agency-local midnight, never UTC midnight (PAC-159)', () => {
+    const { soldDate } = deriveDealAggregates(
+      [policy({ premium: 100 })],
+      '2026-01-15',
+      'America/Chicago',
+    );
+    expect(soldDate.toISOString()).toBe('2026-01-15T06:00:00.000Z');
   });
 });
 
@@ -86,6 +79,7 @@ describe('deriveDealAggregates', () => {
     const result = deriveDealAggregates(
       [policy({ premium: 1200.1 }), policy({ premium: 899.95 })],
       '2026-01-15',
+      'America/Chicago',
     );
     expect(result.premium).toBe(2100.05);
   });
@@ -94,6 +88,7 @@ describe('deriveDealAggregates', () => {
     const result = deriveDealAggregates(
       [policy({ itemCount: 2 }), policy({ itemCount: 3 })],
       '2026-01-15',
+      'America/Chicago',
     );
     expect(result.itemCount).toBe(5);
     expect(result.policyCount).toBe(2);
@@ -107,6 +102,7 @@ describe('deriveDealAggregates', () => {
         policy({ policyType: 'Auto' }),
       ],
       '2026-01-15',
+      'America/Chicago',
     );
     expect(result.policyTypes).toEqual(['Auto', 'Home']);
   });
@@ -115,6 +111,7 @@ describe('deriveDealAggregates', () => {
     const result = deriveDealAggregates(
       [policy({ policyType: 'mCt4m' })],
       '2026-01-15',
+      'America/Chicago',
     );
     expect(result.policyTypes).toEqual(['Landlord']);
   });
@@ -123,6 +120,7 @@ describe('deriveDealAggregates', () => {
     const bundle = deriveDealAggregates(
       [policy({ policyType: 'Auto' }), policy({ policyType: 'Home' })],
       '2026-01-15',
+      'America/Chicago',
     );
     expect(bundle.isBundle).toBe(true);
     expect(bundle.dealType).toBe('Bundle');
@@ -132,6 +130,7 @@ describe('deriveDealAggregates', () => {
     const result = deriveDealAggregates(
       [policy({ policyType: 'Home' }), policy({ policyType: 'Landlord' })],
       '2026-01-15',
+      'America/Chicago',
     );
     expect(result.isBundle).toBe(false);
     expect(result.dealType).toBe('Home');
@@ -152,6 +151,7 @@ describe('deriveDealAggregates', () => {
       const result = deriveDealAggregates(
         [policy({ policyType })],
         '2026-01-15',
+        'America/Chicago',
       );
       expect([policyType, result.dealType]).toEqual([policyType, expected]);
     }
@@ -208,7 +208,6 @@ describe('derivePersistedDealAggregates (PAC-56 #25)', () => {
       { policyType: 'Auto', premium: 100, items: 1 },
     ]);
     expect(totals).not.toHaveProperty('soldDate');
-    expect(totals).not.toHaveProperty('soldDateYmd');
   });
 });
 

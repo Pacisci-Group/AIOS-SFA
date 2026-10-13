@@ -37,6 +37,15 @@ import {
   createTestApp,
   dropTestDatabase,
 } from './helpers/test-app';
+import { businessDateInstant } from '../src/common/dates/business-dates';
+
+/**
+ * A business date stored the way the app stores a day-only entry (PAC-159):
+ * midnight of that day in the seeded agency's zone — `America/Chicago`, the
+ * schema default — never UTC midnight, which Chicago reads as the evening
+ * before.
+ */
+const onDay = (iso: string) => businessDateInstant(iso, 'America/Chicago');
 
 /** May 2026, the window every assertion below is about. */
 const MAY = 'range=custom&from=2026-05-01&to=2026-05-31';
@@ -181,7 +190,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         producerId: producer!._id,
         leadId: l1._id,
         householdId: h1._id,
-        soldDateYmd: 20260504,
+        soldDate: onDay('2026-05-04'),
         premium: 3000,
         chargebackAdjustment: -200,
         itemCount: 4,
@@ -193,14 +202,14 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         leadId: l2._id,
         householdId: h2._id,
         assignedCrmId: producer!._id,
-        soldDateYmd: 20260520,
+        soldDate: onDay('2026-05-20'),
         premium: 1000,
         itemCount: 2,
         policyTypes: ['Auto'],
       },
       {
         ...main,
-        soldDateYmd: 20260512,
+        soldDate: onDay('2026-05-12'),
         premium: 500,
         itemCount: 1,
         policyTypes: ['Renters'],
@@ -209,7 +218,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         ...main,
         producerId: producer!._id,
         householdId: h1._id,
-        soldDateYmd: 20260415,
+        soldDate: onDay('2026-04-15'),
         premium: 800,
         itemCount: 1,
         policyTypes: ['Auto'],
@@ -217,7 +226,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
       {
         ...elsewhere,
         producerId: owner!._id,
-        soldDateYmd: 20260510,
+        soldDate: onDay('2026-05-10'),
         premium: 2000,
         itemCount: 2,
         policyTypes: ['Auto'],
@@ -283,7 +292,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         producerId: producer!._id,
         leadId: l1._id,
         householdId: h1._id,
-        quoteDateYmd: 20260502,
+        quoteDate: onDay('2026-05-02'),
         premium: 5000,
         itemCount: 4,
         policies: [
@@ -296,7 +305,7 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
         producerId: owner!._id,
         leadId: l2._id,
         householdId: h2._id,
-        quoteDateYmd: 20260515,
+        quoteDate: onDay('2026-05-15'),
         premium: 2500,
         itemCount: 2,
         policies: [{ policyType: 'Auto', premium: 2500, itemCount: 2 }],

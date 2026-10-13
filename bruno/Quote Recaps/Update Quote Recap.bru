@@ -112,9 +112,10 @@ docs {
   This collection logs in as a producer, so the row will not appear in
   `GET /leads/:id` here.
 
-  Logged: the three server-derived totals (`premium`, `itemCount`,
-  `productsQuoted`), the policy row count, `insuranceRenewalMonth`, `notes` and
-  the quote document's filename. The `policies` rows themselves are **not**
+  Logged: `quoteDate` (as the agency-calendar day, PAC-159), the three
+  server-derived totals (`premium`, `itemCount`, `productsQuoted`), the policy
+  row count, `insuranceRenewalMonth`, `notes` and the quote document's
+  filename. The `policies` rows themselves are **not**
   diffed row-by-row — they are an `_id: false` array with no per-row identity, so
   a positional diff would report every row as changed on an insert or a reorder.
 
@@ -124,6 +125,7 @@ docs {
 
   | field         | type   | semantics                                             |
   |---------------|--------|-------------------------------------------------------|
+  | quoteDate     | string | `YYYY-MM-DD` on the agency's calendar (PAC-159). Moved only when the day differs — see **Update Quote Recap (Quote Date)**. Omit to leave alone. |
   | policies      | array  | **Full replacement**, 1–12 rows. Omit to leave alone.  |
   | insuranceRenewalMonth | string | One of the twelve month labels. **Optional here, required on create** — see below. No `null` clear. |
   | notes         | string \| null | `null` (or `""`) clears. Omit to leave alone.  |
@@ -156,11 +158,11 @@ docs {
 
   ## What this deliberately does not do
 
-  - **Move `quoteDate` / `quoteDateYmd`.** That is the day the quote was given,
-    and `quoteDateYmd` is the **Quoted scorecard's** indexed bucket key (PAC-10).
-    Re-dating a Thursday correction onto a Monday quote would retroactively
-    change a number that has already been reported. It *is* backfilled when
-    missing, which self-heals migrated recaps on first touch.
+  - **Move `quoteDate` unless asked to** (PAC-159). A patch that does not name
+    a date, or names the day already stored, leaves it alone — a Thursday
+    correction stays on Monday's quote. One that does name another day moves
+    the recap, the `quoted` timeline row and every figure that reads quotes
+    live; see **Update Quote Recap (Quote Date)**.
   - **Re-run the lead-status advance.** PAC-38 made lead status freely editable
     in both directions so a producer can undo a mis-click; silently re-asserting
     `Quoted` here would undo a deliberate move back to `Contacted`.

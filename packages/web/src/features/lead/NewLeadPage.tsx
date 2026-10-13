@@ -104,6 +104,8 @@ export default function NewLeadPage() {
   const mutation = useMutation({
     mutationFn: (values: LeadIntakeFormValues) =>
       createLead({
+        // The day the lead came in (PAC-159); the form always fills it.
+        createdDate: values.createdDate || undefined,
         primaryContact: values.primaryContact,
         address: values.address,
         members: values.members,

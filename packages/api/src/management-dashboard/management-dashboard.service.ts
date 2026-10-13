@@ -57,10 +57,9 @@ import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import {
   YmdRange,
-  fromYmd,
+  instantWindow,
   toYmd,
   zonedDate,
-  zonedDayStart,
 } from '../performance/performance.range';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import {
@@ -127,7 +126,6 @@ interface AgingDealLean {
   producerId?: Types.ObjectId;
   householdId?: Types.ObjectId;
   soldDate?: Date;
-  soldDateYmd?: number;
   _audit: {
     _id: Types.ObjectId;
     auditStatus?: string;
@@ -332,7 +330,7 @@ export class ManagementDashboardService {
       this.dealModel,
       this.agingPrefix(access, branchId, query, current, now),
       // Oldest sale first — the one that has been waiting longest.
-      { soldDateYmd: 1, _id: 1 },
+      { soldDate: 1, _id: 1 },
       query,
     );
 
@@ -353,8 +351,11 @@ export class ManagementDashboardService {
         auditStatus: audit.auditStatus ?? 'Not Submitted',
         openFailedCount: audit.openFailedCount ?? 0,
         soldDate: iso(deal.soldDate),
-        businessDaysOpen: deal.soldDateYmd
-          ? businessDaysBetween(fromYmd(deal.soldDateYmd), today)
+        businessDaysOpen: deal.soldDate
+          ? businessDaysBetween(
+              zonedDate(deal.soldDate, access.timeZone),
+              today,
+            )
           : 0,
       };
     });
@@ -582,8 +583,10 @@ export class ManagementDashboardService {
   }
 
   /**
-   * The business-day cutoff is folded into the sold-date window, so the
-   * predicate is a plain indexed range: aging ⇔ `soldDateYmd < cutoff`.
+   * The business-day cutoff is folded into the sold-date window — the range's
+   * `endYmd` becomes the cutoff day, and `soldMatch` turns that calendar range
+   * into instants — so the predicate stays a plain indexed range:
+   * aging ⇔ `soldDate < start of the cutoff day in the agency's zone`.
    */
   private agingPrefix(
     access: AccessContext,
@@ -616,11 +619,11 @@ export class ManagementDashboardService {
   ): PipelineStage[] {
     // `openedAt` is a real instant, so the agency's calendar window has to be
     // turned into two instants; `endYmd` is exclusive already.
-    const window = {
-      from: zonedDayStart(fromYmd(range.startYmd), access.timeZone),
-      to: zonedDayStart(fromYmd(range.endYmd), access.timeZone),
-    };
-    return overdueTicketsPrefix(ticketTenantFilter(access), query, window);
+    const { $gte: from, $lt: to } = instantWindow(range, access.timeZone);
+    return overdueTicketsPrefix(ticketTenantFilter(access), query, {
+      from,
+      to,
+    });
   }
 
   private async householdsSoldBy(

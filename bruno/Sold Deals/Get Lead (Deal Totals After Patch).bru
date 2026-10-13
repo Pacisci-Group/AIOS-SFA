@@ -38,8 +38,8 @@ tests {
   });
 
   test("the sold date did NOT move", function () {
-    // The Sold scorecard buckets on `soldDateYmd`, derived from this date. A
-    // premium correction must not re-date the sale.
+    // The Sold scorecard buckets on this date. A premium correction must not
+    // re-date the sale. Served as the agency-calendar day since PAC-159.
     expect(res.getBody().deal.soldDate).to.contain("2026-02-15");
   });
 
@@ -67,9 +67,8 @@ docs {
   beneath a row it disagreed with. The final test states the invariant that was
   broken: **the rows and the total agree.**
 
-  `soldDate` is asserted *unchanged* for the opposite reason — `soldDateYmd` is
-  the Sold scorecard's indexed bucket key, so a correction must never re-date
-  the sale.
+  `soldDate` is asserted *unchanged* for the opposite reason — the Sold
+  scorecard buckets on it, so a correction must never re-date the sale.
 
   ⚠ Downstream consequence, worth saying out loud when this is demoed: the Sold
   scorecard sums `deals.premium` and the leaderboard ranks on it, so the patch

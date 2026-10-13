@@ -962,10 +962,11 @@ One PR, branch `asad/pac-141-agency-timezone`, base `dev`. Plan file:
   8 PM on the new clock (`sweepMarkerAfterZoneChange`: tonight's date if ≥ 20:00 there, else `null`),
   and only when the zone actually changes. Written up on `AgencyAvailabilitySweep`. (§17 renamed it
   `sweepMarkerAfterScheduleChange` and extended the rule to an hour change.)
-- **A zone change is half retroactive:** lead `createdYmd` is computed at read time (re-buckets);
-  `soldDateYmd`, `quoteDateYmd`, `ProducerGoal.month` are stored and stay put. Said on
-  `Agency.timezone` and in Bruno — deliberately **not** on the settings page (Asad: it confused
-  users). No re-derive job.
+- **A zone change is retroactive for everything but goals** (PAC-159 superseded the "half
+  retroactive" rule): sales, quotes and leads are instants bucketed on the agency calendar at read
+  time, so all three re-file on the next request; only `ProducerGoal.month` is a stored calendar key.
+  Said on `Agency.timezone` and in Bruno — deliberately **not** on the settings page (Asad: it
+  confused users). No re-derive job.
 
 ### What exists now
 - `performance.range.ts`: `AGENCY_TIME_ZONE` **deleted**. `zonedDate(at, tz)`, `currentMonthIn(tz)`,
@@ -974,9 +975,13 @@ One PR, branch `asad/pac-141-agency-timezone`, base `dev`. Plan file:
   UTC+12), `customRange(from, to)` (zone-free, the leaderboard's month). `requireTimeZone` throws on a
   missing zone because specs are not type-checked (`isolatedModules`) — a stale call would otherwise
   fall back to the host zone silently.
-- `leadCreatedYmdExpr(tz)` replaces the `LEAD_CREATED_YMD_EXPR` constant; `resolvePeriod(query, tz)`;
-  `quoteDateYmd(date, tz)`. Migration and demo seed read the tenant's zone from `provisionTenant`
-  (`TenantCtx.timeZone`, `Ctx.timeZone`) — no Central literal outside the schema default.
+- `leadCreatedYmdExpr(tz)` replaces the `LEAD_CREATED_YMD_EXPR` constant; `resolvePeriod(query, tz)`.
+  (`quoteDateYmd(date, tz)` and the stored `soldDateYmd` / `quoteDateYmd` integers were removed in
+  PAC-159 — see `docs/plans/pac-159-business-dates-implementation-plan.md`: every business date is an
+  instant, day-only entries sit at agency-local midnight via `businessDateInstant`, and readers match
+  a `Date` range from `instantWindow(range, tz)`.) Migration and demo seed read the tenant's zone from
+  `provisionTenant` (`TenantCtx.timeZone`, `Ctx.timeZone`) — no Central literal outside the schema
+  default.
 - `DEFAULT_AGENCY_TIME_ZONE` moved to `@sfa/shared` (`domain/agency-time-zone.ts`, with
   `AgencyProfileView` — renamed `domain/agency-profile.ts` in §17); `common/dates/time-zones.ts` re-exports it. **Build shared before API unit
   tests too.**

@@ -5,14 +5,14 @@ import {
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import { QuoteRecap } from '../../../quote-recaps/schemas/quote-recap.schema';
-import { ymdDate } from '../engine/cells';
+import { businessDay, businessDaysDiff } from '../../dates/business-dates';
+import { agencyCalendarDate } from '../engine/cells';
 import { defineDataset } from '../engine/dataset.types';
 import type { AddressLike, DealLite } from '../engine/lookups';
 import {
   addressColumns,
   columnsFor,
   contactColumns,
-  daysBetweenYmd,
   householdColumns,
   leadSourceColumns,
   primeTenant,
@@ -25,7 +25,6 @@ interface QuoteRecapRow extends TenantFields {
   title?: string;
   quoteRecapAutoNumber?: number;
   quoteDate?: Date;
-  quoteDateYmd?: number;
   premium?: number;
   itemCount?: number;
   productsQuoted?: string[];
@@ -64,12 +63,15 @@ const conversionOf = (row: QuoteRecapRow, joins: QuoteRecapJoins) =>
  * The deal a quote turned into. The sold form links a deal to its recap
  * (`Deal.quoteRecapId`), and that link wins. Most migrated deals carry none,
  * so the fallback is the lead's first deal sold on or after the quote date —
- * flagged as such in `converted_matched_by`, so it can be told apart.
+ * compared as agency-calendar **days**, so a quote and a sale on one visit
+ * match whatever their times — flagged as such in `converted_matched_by`, so
+ * it can be told apart.
  */
 function conversions(
   rows: readonly QuoteRecapRow[],
   byRecap: Map<string, DealLite[]>,
   byLead: Map<string, DealLite[]>,
+  timeZone: string,
 ): Map<string, Conversion> {
   const out = new Map<string, Conversion>();
   for (const row of rows) {
@@ -78,12 +80,14 @@ function conversions(
       out.set(String(row._id), { deal: direct, matchedBy: 'quote_recap' });
       continue;
     }
-    const quoted = row.quoteDateYmd ?? 0;
+    const quoted = businessDay(row.quoteDate, timeZone) ?? '';
     const viaLead = row.leadId
       ? byLead
           .get(String(row.leadId))
           ?.find(
-            (deal) => (deal.soldDateYmd ?? 0) >= quoted && !deal.quoteRecapId,
+            (deal) =>
+              (businessDay(deal.soldDate, timeZone) ?? '') >= quoted &&
+              !deal.quoteRecapId,
           )
       : undefined;
     if (viaLead) out.set(String(row._id), { deal: viaLead, matchedBy: 'lead' });
@@ -104,8 +108,8 @@ export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
       {
         key: 'quote_date',
         label: 'Quote date',
-        path: 'quoteDateYmd',
-        kind: 'ymd',
+        path: 'quoteDate',
+        kind: 'instant',
         isDefault: true,
       },
       {
@@ -119,7 +123,7 @@ export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
     policyTypePath: 'productsQuoted',
     leadSource: { kind: 'viaLead', ownFallback: false },
 
-    async joins(rows, { lookups }) {
+    async joins(rows, { lookups, timeZone }) {
       await primeTenant(
         lookups,
         rows,
@@ -144,7 +148,7 @@ export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
           rows.map((row) => row.leadId),
         ),
       ]);
-      return { conversions: conversions(rows, byRecap, byLead) };
+      return { conversions: conversions(rows, byRecap, byLead, timeZone) };
     },
 
     columns: [
@@ -160,7 +164,7 @@ export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
         'quote_date',
         'date',
         "Quote date, on the agency's calendar.",
-        (row) => ymdDate(row.quoteDateYmd),
+        (row, ctx) => agencyCalendarDate(row.quoteDate, ctx.timeZone),
       ),
       col(
         'quote_at',
@@ -274,7 +278,11 @@ export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
         'converted_sold_date',
         'date',
         'Sold date of that deal.',
-        (row, ctx) => ymdDate(conversionOf(row, ctx.joins)?.deal.soldDateYmd),
+        (row, ctx) =>
+          agencyCalendarDate(
+            conversionOf(row, ctx.joins)?.deal.soldDate,
+            ctx.timeZone,
+          ),
       ),
       col(
         'converted_premium',
@@ -282,12 +290,12 @@ export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
         'Sold premium of that deal.',
         (row, ctx) => conversionOf(row, ctx.joins)?.deal.premium,
       ),
-      col('days_to_close', 'number', 'Days from quote to sale.', (row, ctx) =>
-        daysBetweenYmd(
-          row.quoteDateYmd,
-          conversionOf(row, ctx.joins)?.deal.soldDateYmd,
-        ),
-      ),
+      col('days_to_close', 'number', 'Days from quote to sale.', (row, ctx) => {
+        const sold = conversionOf(row, ctx.joins)?.deal.soldDate;
+        return row.quoteDate && sold
+          ? businessDaysDiff(row.quoteDate, sold, ctx.timeZone)
+          : null;
+      }),
       col(
         'quote_document_filename',
         'string',

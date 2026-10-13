@@ -15,7 +15,13 @@ import {
   ProducerGoalDocument,
 } from '../producer-goals/schemas/producer-goal.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import { currentMonthIn, customRange } from '../performance/performance.range';
+import {
+  type InstantWindow,
+  type YmdRange,
+  currentMonthIn,
+  customRange,
+  instantWindow,
+} from '../performance/performance.range';
 import { GetLeaderboardDto } from './dto/get-leaderboard.dto';
 import { initialsFrom } from '../common/domain/initials';
 import { LeaderboardRow, attainment, rankRows } from './leaderboard.normalize';
@@ -77,7 +83,7 @@ export class LeaderboardService {
     const agencyId = access.agencyId;
 
     const [facet] = await this.dealModel.aggregate<LeaderboardFacet>(
-      this.pipeline(agencyId, range.startYmd, range.endYmd),
+      this.pipeline(agencyId, instantWindow(range, access.timeZone)),
     );
 
     const premiumByProducer = new Map<string, number>(
@@ -176,13 +182,14 @@ export class LeaderboardService {
     };
   }
 
-  /** The whole calendar month, as the `YYYYMMDD` bounds deals are indexed by. */
-  private monthRange(month: string): { startYmd: number; endYmd: number } {
+  /** The whole calendar month, as a calendar range; the zone is applied at the match. */
+  private monthRange(month: string): YmdRange {
     const [year, monthPart] = month.split('-');
     const first = `${year}-${monthPart}-01`;
     // The last day of the month, found by stepping back from the 1st of the
     // next one — `resolveRange('lastMonth')` does the same walk. No zone is
-    // involved: the month is already a pair of calendar dates.
+    // involved yet: the month is a pair of calendar dates, and `instantWindow`
+    // turns it into the agency-zone instants when the match is built.
     const nextMonth = new Date(Date.UTC(Number(year), Number(monthPart), 1));
     const lastDay = new Date(nextMonth.getTime() - 86_400_000);
     const to = lastDay.toISOString().slice(0, 10);
@@ -191,8 +198,7 @@ export class LeaderboardService {
 
   private pipeline(
     agencyId: string | null,
-    startYmd: number,
-    endYmd: number,
+    window: InstantWindow,
   ): PipelineStage[] {
     return [
       {
@@ -212,7 +218,7 @@ export class LeaderboardService {
            * no exclusion for free.
            */
           ...NEW_BUSINESS_MATCH,
-          soldDateYmd: { $gte: startYmd, $lt: endYmd },
+          soldDate: window,
         },
       },
       {

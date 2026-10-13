@@ -18,6 +18,7 @@ headers {
 body:json {
   {
     "leadId": "{{createdLeadId}}",
+    "quoteRecapId": "{{createdQuoteRecapId}}",
     "soldDate": "2026-02-15",
     "submissionToken": "{{soldSubmissionToken}}",
     "policies": [
@@ -227,10 +228,25 @@ docs {
 
   ## Derived server-side — never trusted from the client
   `premium` (summed and rounded to cents), `itemCount`, `policyCount`,
-  `policyTypes`, `isBundle`, `dealType`, `soldDateYmd`, `clientName` and
+  `policyTypes`, `isBundle`, `dealType`, `clientName` and
   `leadSourceId` (stamped from the lead). Legacy received these pre-aggregated from Fillout because
   SmartSuite maintained them as rollups; Mongo has none, so they are computed
   here — and a client-supplied total would corrupt the Sold scorecard (PAC-11).
+
+  ## The sold date is a business date (PAC-159)
+  `soldDate` is stored at the named day's **first instant in `Agency.timezone`**
+  (`2026-02-15T06:00:00.000Z` for a Chicago agency in February) — never UTC
+  midnight, which a US calendar reads as the evening before. Every scorecard,
+  leaderboard and dashboard cuts its window on the agency's calendar at read
+  time; there is no stored `YYYYMMDD` label any more. Rejected with a `400` for
+  the field when it is after today on the agency's calendar, before the lead's
+  `createdDate`, or before the `quoteDate` of the recap named by
+  `quoteRecapId`; the same day is allowed in each case.
+
+  `quoteRecapId`, when sent, must name a recap **on this lead** (a `400`
+  otherwise) — it used to be written onto the deal as given. This collection
+  links the recap the Quote Recaps folder created, which is what the
+  cross-check negatives at seq 19–22 lean on.
 
   ## `itemCount` is only asked of vehicle policies
   A count is stored **as sent** for `Auto`, `Auto - Special`, `Motorcycle` and
@@ -375,7 +391,7 @@ docs {
     "id": "665f…d31", "leadId": "665f…ac1",
     "premium": 2100.05, "itemCount": 3, "policyCount": 2,
     "policyTypes": ["Auto", "Home"], "dealType": "Bundle", "isBundle": true,
-    "soldDate": "2026-02-15T00:00:00.000Z", "leadStatus": "Sold",
+    "soldDate": "2026-02-15T06:00:00.000Z", "leadStatus": "Sold",
     "auditItemCount": 0, "crmAssigned": false
   }
   ```

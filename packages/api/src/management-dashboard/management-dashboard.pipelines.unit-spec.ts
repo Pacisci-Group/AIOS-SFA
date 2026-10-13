@@ -52,12 +52,13 @@ describe('stalledLeadsPrefix', () => {
   it('buckets the lead on the agency calendar it is given (PAC-141)', () => {
     const stages = stalledLeadsPrefix({}, {}, RANGE, NOW, 'Asia/Kolkata');
     // The `$addFields` just before the window match carries the zone into
-    // Mongo's `$dateToString`; a UTC-midnight (migrated) value stays UTC.
+    // Mongo's `$dateToString`. Every stored instant is read on that calendar
+    // — there is no UTC special case for migrated rows any more (PAC-159).
     const added = (
       stages[stages.length - 2] as { $addFields: { createdYmd: unknown } }
     ).$addFields.createdYmd;
     expect(JSON.stringify(added)).toContain('"Asia/Kolkata"');
-    expect(JSON.stringify(added)).toContain('"UTC"');
+    expect(JSON.stringify(added)).not.toContain('"UTC"');
     expect(JSON.stringify(added)).not.toContain('Chicago');
     expect(() => stalledLeadsPrefix({}, {}, RANGE, NOW, '')).toThrow(
       /time zone is required/i,

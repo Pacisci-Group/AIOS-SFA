@@ -20,6 +20,8 @@ import {
 } from "./components/quote-recap-schema";
 import { managementDashboardKey } from "@/lib/management-dashboard-api";
 import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
+import { agencyTodayYmd } from "@/lib/dates";
+import { getStoredUser } from "@/lib/api-client";
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
 
@@ -58,7 +60,7 @@ export default function EditQuoteRecapPage() {
     mutationFn: (values: QuoteRecapFormState) =>
       updateQuoteRecapWithDocument(id, {
         leadId,
-        ...toUpdateQuoteRecapInput(values),
+        ...toUpdateQuoteRecapInput(values, undefined, view?.quoteDate),
         // Absent unless the producer picked a replacement — which is what tells
         // the API to keep the document already attached.
         file: values.quoteDocument,
@@ -71,6 +73,9 @@ export default function EditQuoteRecapPage() {
       // The Owner dashboard sums the same sales and quotes (PAC-135).
       void queryClient.invalidateQueries({ queryKey: ownerDashboardKey });
       void queryClient.invalidateQueries({ queryKey: managementDashboardKey });
+      // The Motivation Hub's quoted figures and % to goal follow a re-dated
+      // recap too (PAC-159) — `EditSoldDealPage` already does this for sales.
+      void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
       void queryClient.invalidateQueries({ queryKey: quoteRecapEditKey(id) });
       toast.success("Quote recap updated");
       navigate(`/leads/${leadId}`, { replace: true });
@@ -173,6 +178,7 @@ export default function EditQuoteRecapPage() {
               context={view.context}
               initialValues={toQuoteRecapFormValues(view)}
               attachedDocument={view.document}
+              maxQuoteDate={agencyTodayYmd(getStoredUser()?.timeZone)}
               submitLabel="Save changes"
               submitting={mutation.isPending}
               errorMessage={error}

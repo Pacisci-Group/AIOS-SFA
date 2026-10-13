@@ -162,6 +162,16 @@ export interface AuthUser {
   dataScope: string;
   isPlatformAdmin: boolean;
   /**
+   * The agency's IANA zone (PAC-159) — what "today" means for a sold, quote
+   * or lead date. Feed it to `agencyTodayYmd` (`@/lib/dates`); never default a
+   * business date from the browser's clock.
+   *
+   * Optional only because a blob stored before the field existed deserializes
+   * without it; `agencyTodayYmd` falls back to the browser's day until the
+   * next `/auth/me` refresh rewrites the blob.
+   */
+  timeZone?: string;
+  /**
    * Whether this user still owes their agency its first-run setup (PAC-69).
    *
    * True only for the owner of an agency onboarded through the Super Admin

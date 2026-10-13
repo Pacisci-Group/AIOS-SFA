@@ -15,11 +15,9 @@ import {
  * tickets alike: `YYYY-MM-DD` for a day, the **Monday** a week starts on for a
  * week, `YYYY-MM` for a month.
  *
- * Sales and quotes are filed on the agency's calendar already (`soldDateYmd`,
- * `quoteDateYmd` are `YYYYMMDD` integers), so their buckets are pure calendar
- * arithmetic: the integer is turned into a UTC date from its parts and no zone
- * is involved — the trick `performance.range.ts` uses to stay DST-proof.
- * Tickets store real instants, so theirs are cut in the agency's zone.
+ * Sales, quotes and tickets all store real instants (PAC-159), so every
+ * bucket is cut in the agency's zone by Mongo's own `timezone` option — the
+ * same calendar `instantWindow` selects the rows on.
  */
 
 const FORMAT: Record<AnalyticsInterval, string> = {
@@ -27,36 +25,6 @@ const FORMAT: Record<AnalyticsInterval, string> = {
   week: '%Y-%m-%d',
   month: '%Y-%m',
 };
-
-/** A `YYYYMMDD` integer field as a UTC-midnight date, built from its parts. */
-export function ymdDateExpr(field: string) {
-  const value = `$${field}`;
-  return {
-    $dateFromParts: {
-      year: { $toInt: { $trunc: [{ $divide: [value, 10_000] }, 0] } },
-      month: {
-        $toInt: {
-          $trunc: [{ $divide: [{ $mod: [value, 10_000] }, 100] }, 0],
-        },
-      },
-      day: { $toInt: { $mod: [value, 100] } },
-    },
-  };
-}
-
-/** The bucket key of a `YYYYMMDD` integer field. */
-export function ymdBucketExpr(field: string, interval: AnalyticsInterval) {
-  const date = ymdDateExpr(field);
-  return {
-    $dateToString: {
-      format: FORMAT[interval],
-      date:
-        interval === 'week'
-          ? { $dateTrunc: { date, unit: 'week', startOfWeek: 'monday' } }
-          : date,
-    },
-  };
-}
 
 /** The bucket key of an instant field, on the agency's calendar. */
 export function instantBucketExpr(

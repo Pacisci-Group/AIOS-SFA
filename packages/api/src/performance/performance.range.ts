@@ -1,26 +1,31 @@
 /**
- * Calendar-day windows on the agency's own clock (PAC-9, PAC-141).
+ * Calendar-day windows on the agency's own clock (PAC-9, PAC-141, PAC-159).
  *
- * Every range-driven read on the dashboards compares against a `YYYYMMDD`
- * integer — `Deal.soldDateYmd` and `QuoteRecap.quoteDateYmd` — so this module's
- * only job is turning a range key into a half-open `[startYmd, endYmd)` pair.
+ * A dashboard range is a span of **agency calendar days**: "this month",
+ * "the last 7 days", "1–31 Oct". This module turns a range key into that
+ * half-open `[startYmd, endYmd)` pair of `YYYYMMDD` integers, and — since
+ * PAC-159 — into the pair of UTC instants the stored timestamps are matched
+ * against ({@link instantWindow}).
  *
- * **No instants are involved.** All arithmetic runs on the bare
- * `{year, month, day}` triple via a UTC anchor, which is what makes it
- * DST-immune: there is no 05:00Z-vs-06:00Z offset to get wrong, because no
- * offset is ever applied. The timezone is consulted exactly once, to ask "what
- * is today's date *here*?" — and "here" is `Agency.timezone`, passed in by the
- * caller as a **required** argument. It used to be a module constant
+ * The calendar arithmetic runs on the bare `{year, month, day}` triple via a
+ * UTC anchor, which is what makes it DST-immune: no offset is applied until
+ * the very last step, where {@link zonedDayStart} finds the instant each day
+ * begins in `Agency.timezone`. The zone is passed in by the caller as a
+ * **required** argument. It used to be a module constant
  * (`AGENCY_TIME_ZONE = 'America/Chicago'`); the constant is gone rather than
  * demoted to a default, because a default is how it would have survived.
  *
- * ## Stored day labels do not move with the zone
+ * ## Every business date is a UTC instant, bucketed at read time
  *
- * `Deal.soldDateYmd`, `QuoteRecap.quoteDateYmd` and `ProducerGoal.month` are
- * written once, on the agency's calendar *at the time of writing*. Changing an
- * agency's zone later does not rewrite them — history keeps the day it was
- * filed on, and only windows resolved from now on move. Rows the SmartSuite
- * migration imported carry the day SmartSuite stated, whatever the zone.
+ * `Deal.soldDate`, `QuoteRecap.quoteDate` and `Lead.createdDate` are instants.
+ * A day-only entry (a back-dated sale or quote, a migrated row) is stored at
+ * **agency-local midnight** of that day — `common/dates/business-dates.ts` —
+ * so it sits inside the day's `[zonedDayStart(d), zonedDayStart(d+1))` window
+ * like any real instant does. Nothing stores a calendar label any more: the
+ * `soldDateYmd` / `quoteDateYmd` integers that used to be the match target
+ * were removed in PAC-159, so an agency that changes its zone sees every
+ * sale, quote and lead re-bucket on the next request, consistently. Only
+ * `ProducerGoal.month` is a stored calendar key, by design.
  *
  * Ported from `SFA/app/api/leaderboard/route.ts` (`getChicagoParts` /
  * `getMtdChicagoYyyymmddRange`), which is the cleanest of the three date
@@ -396,9 +401,10 @@ const MAX_AHEAD_OF_UTC_MS = 15 * 3_600_000;
 const MAX_BEHIND_UTC_MS = 13 * 3_600_000;
 
 /**
- * The UTC instant at which `date` begins in `timeZone` — for windowing a
- * collection that stores real instants (`serviceTickets.openedAt`) rather than
- * a `YYYYMMDD` integer.
+ * The UTC instant at which `date` begins in `timeZone` — the lower bound of
+ * every window cut on a stored instant (`deals.soldDate`,
+ * `quoteRecaps.quoteDate`, `serviceTickets.openedAt`, …), and the value a
+ * day-only business date is stored as (`businessDateInstant`).
  *
  * A binary search for the first instant whose {@link zonedDate} is on or after
  * `date`, bracketed by the widest offsets any zone has. The local calendar
@@ -428,4 +434,41 @@ export function zonedDayStart(date: CalendarDate, timeZone: string): Date {
     }
   }
   return new Date(hi);
+}
+
+/** The two instants a stored timestamp is matched between. */
+export interface InstantWindow {
+  /** Inclusive. */
+  $gte: Date;
+  /** Exclusive. */
+  $lt: Date;
+}
+
+/**
+ * The calendar range as the instant window a stored timestamp is matched
+ * against: `[start of range.from, start of the day after range.to)` in
+ * `timeZone`. Spread it into a `$match` on a `Date` field, or read `$gte` /
+ * `$lt` as `from` / `to` where a prefix wants a named pair.
+ *
+ * Computed once per request, in Node, so the query itself stays a plain
+ * indexed range on the `Date` — no per-row `$dateToString`. A `custom` range
+ * has no zone of its own, which is why the zone is an argument here rather
+ * than a property of the range.
+ */
+export function instantWindow(
+  range: YmdRange,
+  timeZone: string,
+): InstantWindow {
+  return {
+    $gte: zonedDayStart(fromYmd(range.startYmd), timeZone),
+    $lt: zonedDayStart(fromYmd(range.endYmd), timeZone),
+  };
+}
+
+/** Today on the agency's calendar, `YYYY-MM-DD` — the bound for "not in the future". */
+export function agencyTodayIso(
+  timeZone: string,
+  now: Date = new Date(),
+): string {
+  return toIsoDate(zonedDate(now, timeZone));
 }

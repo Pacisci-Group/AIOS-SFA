@@ -1,0 +1,38 @@
+meta {
+  name: Update Sold Deal (Before Quote)
+  type: http
+  seq: 19
+}
+
+patch {
+  url: {{baseUrl}}/sold-deals/{{createdSoldDealId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  { "soldDate": "2026-01-20" }
+}
+
+tests {
+  test("rejects a sale dated before the quote it was sold from", function () {
+    expect(res.getStatus()).to.equal(400);
+    expect(res.getBody().message).to.contain("Sold date cannot be before the quote date (2026-02-01)");
+  });
+}
+
+docs {
+  # PATCH /sold-deals/:id — a sale cannot precede its quote (PAC-159 §1b)
+
+  The deal was sold from the recap the Quote Recaps folder re-dated to
+  **2026-02-01** (`Deal.quoteRecapId`), so 2026-01-20 is refused. The pair is
+  the deal and **its** recap only: a lead can hold several quotes and several
+  deals, and a requote after the first sale is legitimate. A deal with no
+  linked recap (every migrated deal) is checked against no quote. Same day is
+  allowed — quoted and sold on one visit is normal.
+}

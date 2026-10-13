@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { agencyCalendarDate, csvCell, xlsxCell, ymdDate } from './cells';
+import { agencyCalendarDate, csvCell, xlsxCell } from './cells';
 
 describe('data export cells', () => {
   const id = new Types.ObjectId('64b7f0c2a1b2c3d4e5f60718');
@@ -64,13 +64,6 @@ describe('data export cells', () => {
     });
   });
 
-  describe('ymdDate', () => {
-    it('turns YYYYMMDD into that UTC midnight', () => {
-      expect(ymdDate(20240229)?.toISOString()).toBe('2024-02-29T00:00:00.000Z');
-      expect(ymdDate(undefined)).toBeNull();
-    });
-  });
-
   describe('agencyCalendarDate', () => {
     it("cuts a real instant on the agency's calendar", () => {
       // 02:00 UTC on the 6th is still the 5th in Chicago.
@@ -80,11 +73,18 @@ describe('data export cells', () => {
       ).toBe('2026-10-05T00:00:00.000Z');
     });
 
-    it('reads a UTC-midnight value as the date it names (migrated date-only fields)', () => {
-      const migrated = new Date('2026-06-01T00:00:00.000Z');
+    it('reads agency-local midnight as that day, and UTC midnight as the previous one', () => {
+      // A day-only entry is stored at agency-local midnight (PAC-159)…
+      const local = new Date('2026-06-01T05:00:00.000Z');
+      expect(agencyCalendarDate(local, 'America/Chicago')?.toISOString()).toBe(
+        '2026-06-01T00:00:00.000Z',
+      );
+      // …so a UTC-midnight value is no longer special: it is the evening before.
+      const utcMidnight = new Date('2026-06-01T00:00:00.000Z');
       expect(
-        agencyCalendarDate(migrated, 'America/Chicago')?.toISOString(),
-      ).toBe('2026-06-01T00:00:00.000Z');
+        agencyCalendarDate(utcMidnight, 'America/Chicago')?.toISOString(),
+      ).toBe('2026-05-31T00:00:00.000Z');
+      expect(agencyCalendarDate(null, 'America/Chicago')).toBeNull();
     });
   });
 });

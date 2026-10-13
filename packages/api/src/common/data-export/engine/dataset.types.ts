@@ -26,17 +26,16 @@ export type CellValue =
  * How a date field is stored, which decides how a calendar `from`/`to` becomes
  * a Mongo window:
  *
- * - `ymd`         — a `YYYYMMDD` integer already cut on the agency calendar
- *                   (`soldDateYmd`, `quoteDateYmd`).
- * - `instant`     — a real moment (`createdAt`, `lastActivityAt`): bounds are
- *                   the start of each day in the agency's timezone.
+ * - `instant`     — a real moment (`soldDate`, `quoteDate`, `createdAt`,
+ *                   `lastActivityAt`): bounds are the start of each day in the
+ *                   agency's timezone (PAC-159).
  * - `utcDate`     — a calendar date stored as UTC midnight (`effectiveDate`,
  *                   `dateOfBirth`): bounds are UTC midnights.
  * - `leadCreated` — `createdDate ?? createdAt`, bucketed by
  *                   `leadCreatedYmdExpr`: the rule the Owner and Manager views
  *                   count leads by, so an export agrees with them.
  */
-export type DateFieldKind = 'ymd' | 'instant' | 'utcDate' | 'leadCreated';
+export type DateFieldKind = 'instant' | 'utcDate' | 'leadCreated';
 
 export interface DateFieldDef {
   key: string;

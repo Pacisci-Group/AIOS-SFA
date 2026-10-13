@@ -8,7 +8,7 @@ import {
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import { Policy } from '../../../policies/schemas/policy.schema';
-import { ymdDate } from '../engine/cells';
+import { agencyCalendarDate } from '../engine/cells';
 import { defineDataset } from '../engine/dataset.types';
 import type { InterestedPartyLite } from '../engine/lookups';
 import {
@@ -221,7 +221,10 @@ export const policiesDataset = defineDataset<PolicyRow, PolicyJoins>({
       (row, ctx) => ctx.lookups.deals.get(row.dealId)?.dealAutoNumber,
     ),
     col('sold_date', 'date', 'That deal’s sold date.', (row, ctx) =>
-      ymdDate(ctx.lookups.deals.get(row.dealId)?.soldDateYmd),
+      agencyCalendarDate(
+        ctx.lookups.deals.get(row.dealId)?.soldDate,
+        ctx.timeZone,
+      ),
     ),
     col(
       'deal_type',

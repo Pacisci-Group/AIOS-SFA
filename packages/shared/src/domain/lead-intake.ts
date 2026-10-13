@@ -8,8 +8,8 @@
  * web app with its own (`features/lead/components/lead-intake-schema.ts`); these
  * interfaces are what both agree the shape is.
  */
-import type { HouseholdMemberRole } from './household-role';
-import type { PolicyType } from './policy-type';
+import type { HouseholdMemberRole } from "./household-role";
+import type { PolicyType } from "./policy-type";
 
 /**
  * How a lead entered the platform. Stored on `leads.intakeSource.channel`.
@@ -20,7 +20,7 @@ import type { PolicyType } from './policy-type';
  * The two answer different questions: the channel says which surface wrote the
  * record, the source says where the prospect came from.
  */
-export type IntakeChannel = 'internal' | 'share_link' | 'mailer';
+export type IntakeChannel = "internal" | "share_link" | "mailer";
 
 export interface LeadIntakePerson {
   firstName: string;
@@ -80,6 +80,14 @@ export interface LeadPolicyOfInterestInput {
 }
 
 export interface LeadIntakeInput {
+  /**
+   * The day the lead came in, `YYYY-MM-DD` on the agency's calendar
+   * (PAC-159). The New Lead form asks for it, pre-filled with today, so a
+   * lead typed in late is filed on the day it actually arrived. Optional on
+   * the wire — the public form never asks, and a missing value means now.
+   * Not in the future.
+   */
+  createdDate?: string;
   primaryContact: LeadIntakePerson;
   address?: LeadIntakeAddress;
   members: LeadIntakeMember[];

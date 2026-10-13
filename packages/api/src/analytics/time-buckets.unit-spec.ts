@@ -1,9 +1,4 @@
-import {
-  bucketsBetween,
-  fillBuckets,
-  instantBucketExpr,
-  ymdBucketExpr,
-} from './time-buckets';
+import { bucketsBetween, fillBuckets, instantBucketExpr } from './time-buckets';
 
 describe('bucketsBetween', () => {
   it('lists every day, inclusive of both ends', () => {
@@ -78,20 +73,17 @@ describe('fillBuckets', () => {
 });
 
 describe('bucket expressions', () => {
-  it('builds a ymd field into a UTC date from its parts — no zone involved', () => {
-    const expr = ymdBucketExpr('soldDateYmd', 'day');
-    expect(expr.$dateToString.format).toBe('%Y-%m-%d');
-    expect(JSON.stringify(expr)).toContain('$dateFromParts');
-    expect(JSON.stringify(expr)).not.toContain('timezone');
-  });
-
-  it('truncates a week to Monday and formats a month without the day', () => {
-    expect(JSON.stringify(ymdBucketExpr('soldDateYmd', 'week'))).toContain(
+  it('formats a day, truncates a week to Monday and formats a month without the day', () => {
+    const tz = 'America/Chicago';
+    expect(instantBucketExpr('soldDate', 'day', tz).$dateToString.format).toBe(
+      '%Y-%m-%d',
+    );
+    expect(JSON.stringify(instantBucketExpr('soldDate', 'week', tz))).toContain(
       '"startOfWeek":"monday"',
     );
-    expect(ymdBucketExpr('soldDateYmd', 'month').$dateToString.format).toBe(
-      '%Y-%m',
-    );
+    expect(
+      instantBucketExpr('quoteDate', 'month', tz).$dateToString.format,
+    ).toBe('%Y-%m');
   });
 
   it('cuts instants on the agency calendar', () => {

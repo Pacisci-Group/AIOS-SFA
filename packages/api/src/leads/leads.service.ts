@@ -40,6 +40,12 @@ import { LeadIntakeService } from './intake/lead-intake.service';
 import { IntakeContext } from './intake/intake.types';
 import { LeadListResponse, LeadRow } from './leads.types';
 import { Lead, LeadDocument } from './schemas/lead.schema';
+import {
+  type CalendarDate,
+  addDays,
+  zonedDayStart,
+} from '../performance/performance.range';
+import { assertNotInFuture } from '../common/dates/business-date-rules';
 
 /**
  * How many contacts one email/phone term may resolve into an `$in`.
@@ -157,7 +163,12 @@ export class LeadsService {
       ? await this.resolveReplacement(access, dto)
       : null;
 
+    if (dto.createdDate) {
+      assertNotInFuture('Lead date', dto.createdDate, access.timeZone);
+    }
+
     const outcome = await this.intake.process(ctx, {
+      createdDate: dto.createdDate,
       primaryContact: dto.primaryContact,
       address: dto.address,
       members: dto.members,
@@ -408,6 +419,7 @@ export class LeadsService {
     return {
       agencyId: tenant.agencyId,
       branchId: tenant.branchId,
+      timeZone: access.timeZone,
       producerId: new Types.ObjectId(access.userId),
       channel: 'internal',
       leadSourceId,
@@ -511,7 +523,7 @@ export class LeadsService {
       filter.leadSourceId = new Types.ObjectId(query.leadSourceId);
     }
 
-    const dateRange = this.buildDateRange(query);
+    const dateRange = this.buildDateRange(query, access.timeZone);
     if (dateRange) {
       // `createdDate` is the source-system creation date; fall back to the
       // Mongoose timestamp for records the migration left without one.
@@ -534,20 +546,29 @@ export class LeadsService {
     return filter;
   }
 
-  /** Inclusive `createdDate` range; `dateTo` covers the whole day. */
+  /**
+   * Inclusive `createdDate` range on the **agency's** calendar: `dateFrom` /
+   * `dateTo` name days, and each day starts in `Agency.timezone` (PAC-159).
+   * The DTO coerces the `YYYY-MM-DD` strings to UTC-midnight `Date`s, so the
+   * calendar day is read back from the UTC parts.
+   */
   private buildDateRange(
     query: ListLeadsDto,
-  ): { $gte?: Date; $lte?: Date } | null {
+    timeZone: string,
+  ): { $gte?: Date; $lt?: Date } | null {
     if (!query.dateFrom && !query.dateTo) return null;
 
-    const range: { $gte?: Date; $lte?: Date } = {};
+    const day = (value: Date): CalendarDate => ({
+      year: value.getUTCFullYear(),
+      month: value.getUTCMonth() + 1,
+      day: value.getUTCDate(),
+    });
+    const range: { $gte?: Date; $lt?: Date } = {};
     if (query.dateFrom) {
-      range.$gte = query.dateFrom;
+      range.$gte = zonedDayStart(day(query.dateFrom), timeZone);
     }
     if (query.dateTo) {
-      const end = new Date(query.dateTo);
-      end.setUTCHours(23, 59, 59, 999);
-      range.$lte = end;
+      range.$lt = zonedDayStart(addDays(day(query.dateTo), 1), timeZone);
     }
     return range;
   }

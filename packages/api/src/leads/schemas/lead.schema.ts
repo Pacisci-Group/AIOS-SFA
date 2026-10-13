@@ -189,6 +189,14 @@ export class Lead extends TenantRecord {
   @Prop({ default: 0 })
   agingDays: number;
 
+  /**
+   * The business "lead received on" instant (PAC-159), distinct from the
+   * Mongoose `createdAt` entry timestamp: the migration fills it from
+   * SmartSuite's `created_date`, the New Lead form from its date field, and
+   * it is editable on the lead page. A day-only value sits at that day's
+   * first instant in `Agency.timezone`. Every analytics reader buckets
+   * `createdDate ?? createdAt` on the agency calendar at read time.
+   */
   @Prop({ type: Date })
   createdDate?: Date;
 

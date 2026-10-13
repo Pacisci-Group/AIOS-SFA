@@ -10,6 +10,9 @@ interface TextFieldProps {
   inputMode?: React.ComponentProps<"input">["inputMode"];
   autoComplete?: string;
   placeholder?: string;
+  /** For `type="date"`: the bounds the picker offers (`YYYY-MM-DD`). The API re-checks them. */
+  min?: string;
+  max?: string;
   /** DOM `disabled` only — never the library's, which nulls the value. */
   disabled?: boolean;
   /** On the wrapper, e.g. `sm:col-span-2`. */
@@ -38,6 +41,8 @@ export function TextField({
   inputMode,
   autoComplete,
   placeholder,
+  min,
+  max,
   disabled,
   className,
   labelClassName,
@@ -64,6 +69,8 @@ export function TextField({
           inputMode={inputMode}
           autoComplete={autoComplete}
           placeholder={placeholder}
+          min={min}
+          max={max}
           disabled={disabled}
           className={inputClassName}
           aria-describedby={describedBy}

@@ -87,12 +87,14 @@ export class Deal extends TenantRecord {
   @Prop()
   dealAutoNumber?: number;
 
+  /**
+   * When the sale happened — a UTC instant the scorecards bucket on the
+   * agency's calendar at read time (PAC-159). A day-only entry (the Sold form,
+   * a migrated row) sits at that day's first instant in `Agency.timezone`;
+   * see `businessDateInstant`.
+   */
   @Prop({ type: Date, index: true })
   soldDate?: Date;
-
-  /** YYYYMMDD integer, mirrors legacy sold_yyyymmdd_num for fast range filters. */
-  @Prop({ index: true })
-  soldDateYmd?: number;
 
   /** Effective premium: rollup (s0675d21ce) with total_premium_snapshot fallback. */
   @Prop({ default: 0 })
@@ -324,28 +326,27 @@ DealSchema.index({ agencyId: 1, producerId: 1, soldDate: -1 });
 DealSchema.index({ agencyId: 1, householdId: 1, soldDate: -1 });
 
 /**
- * The Sold scorecard's own-scope aggregation (PAC-11). The `soldDate` index
- * above is on the **Date**; it cannot serve a range over the `YYYYMMDD`
- * integer the dashboard buckets by, so this is a separate index rather than a
- * reordering. Do not reorder.
- */
-DealSchema.index({ agencyId: 1, producerId: 1, soldDateYmd: -1 });
-
-/**
  * The Leaderboard (PAC-13), which groups by producer across the whole agency
  * and so cannot use the producer-prefixed index above. Also serves the Sold
- * scorecard for an agency-scoped caller. `soldDateYmd` carries only a
+ * scorecard for an agency-scoped caller. `soldDate` carries only a
  * single-field index on its own, which leaves `agencyId` unindexed for this
- * query shape.
+ * query shape. Built on existing databases by the PAC-159 migration.
  */
-DealSchema.index({ agencyId: 1, soldDateYmd: -1 });
+DealSchema.index({ agencyId: 1, soldDate: -1 });
 
 /**
  * The scorecards' business-type split. Both the Sold card (`$ne` transfer) and
  * the Transfers card (`$eq` transfer) filter on `businessType` *before* the
- * `soldDateYmd` range, so it leads the range key here.
+ * `soldDate` range, so it leads the range key here.
  */
-DealSchema.index({ agencyId: 1, businessType: 1, soldDateYmd: -1 });
+DealSchema.index({ agencyId: 1, businessType: 1, soldDate: -1 });
+
+/**
+ * The deals sold from one quote (PAC-159): the date cross-checks ask "is any
+ * sale linked to this recap dated before the day it is being moved to?", and
+ * the data export's quote-to-sale conversion asks the same question.
+ */
+DealSchema.index({ agencyId: 1, quoteRecapId: 1 });
 
 /**
  * One policy transfer per service ticket — the uniqueness rule *and* the

@@ -1,5 +1,5 @@
 import { normalizePolicyType } from '@sfa/shared';
-import { ChangeFieldSpec, changeDate } from '../activities/change-log';
+import { ChangeFieldSpec, changeBusinessDate } from '../activities/change-log';
 import type { Deal } from '../deals/schemas/deal.schema';
 
 /**
@@ -39,15 +39,17 @@ export function policyChangeLabel(policy: {
  *
  * The totals are logged alongside the list because they are what a manager is
  * actually auditing: adding a policy moves the premium the Sold scorecard sums
- * and can turn an Auto deal into a Bundle. `soldDateYmd` and `policyCount` are
- * left out — the first mirrors `soldDate`, the second is the list's length.
+ * and can turn an Auto deal into a Bundle. `policyCount` is left out — it is
+ * the list's length. The sold date is logged as the agency-calendar day it
+ * falls on (PAC-159), which is the day the form shows and edits.
  */
 export const DEAL_CHANGE_FIELDS: ChangeFieldSpec<DealChangeSubject>[] = [
   {
     field: 'soldDate',
     label: 'Sold date',
     kind: 'date',
-    read: ({ deal }) => changeDate(deal.soldDate),
+    read: ({ deal }, { timeZone }) =>
+      changeBusinessDate(deal.soldDate, timeZone),
   },
   {
     field: 'policies',

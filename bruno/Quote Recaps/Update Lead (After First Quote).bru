@@ -1,0 +1,41 @@
+meta {
+  name: Update Lead (After First Quote)
+  type: http
+  seq: 17
+}
+
+patch {
+  url: {{baseUrl}}/leads/{{createdLeadId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "createdDate": "2026-02-02"
+  }
+}
+
+tests {
+  test("rejects a lead date after the lead's first quote", function () {
+    expect(res.getStatus()).to.equal(400);
+    expect(res.getBody().message).to.contain("Lead date cannot be after the first quote/sale on this lead (2026-02-01)");
+  });
+}
+
+docs {
+  # PATCH /leads/:id — the first quote or sale is the lead date's ceiling (PAC-159 §1c)
+
+  The sold and quote dates are held to the lead date as a floor, so moving the
+  lead date past the earliest of them would break that floor retroactively.
+  The earliest `quoteDate` among the lead's recaps and the earliest `soldDate`
+  among its deals is the ceiling; the same day is allowed. In this folder the
+  recap was moved to **2026-02-01** by seq 13, so 2026-02-02 is refused.
+
+  Lives here rather than in the Leads folder because it needs a quote to exist.
+}

@@ -18,12 +18,12 @@
  * every policy type are always canonical labels.
  */
 
-import type { StructuredAddress } from './address';
-import type { ActivityChange, ActivityOrigin, ActivityType } from './activity';
-import type { ContactDetail } from './contact';
-import type { IntakeChannel } from './lead-intake';
-import type { LeadSourceRef } from './lead-source';
-import type { LeadTemperature } from './lead-temperature';
+import type { StructuredAddress } from "./address";
+import type { ActivityChange, ActivityOrigin, ActivityType } from "./activity";
+import type { ContactDetail } from "./contact";
+import type { IntakeChannel } from "./lead-intake";
+import type { LeadSourceRef } from "./lead-source";
+import type { LeadTemperature } from "./lead-temperature";
 
 /**
  * One person on the household roster.
@@ -323,6 +323,10 @@ export interface LeadDetail {
   propertyAddress: StructuredAddress | null;
   /** Recomputed live from `createdDate`, not the value migration froze in. */
   agingDays: number;
+  /**
+   * The day the lead came in, `YYYY-MM-DD` on the agency's calendar
+   * (PAC-159) — editable through {@link UpdateLeadInput.createdDate}.
+   */
   createdDate: string | null;
   lastActivityAt: string | null;
   /** How the lead arrived; `null` on migrated records. */
@@ -380,6 +384,15 @@ export interface LeadDetail {
  * Requote is a real operation, and a one-way control would strand the record.
  */
 export interface UpdateLeadInput {
+  /**
+   * The day the lead came in, `YYYY-MM-DD` on the agency's calendar (PAC-159)
+   * — the business "lead received on" date, distinct from when the record was
+   * typed in. Every lead count, aging figure and lead-source matrix reads it,
+   * so a lead entered late has to be correctable. Not in the future, and not
+   * after the lead's first quote or sale; same day allowed. Sent only when
+   * changed.
+   */
+  createdDate?: string;
   /** A canonical `LEAD_STATUSES` label. */
   status?: string;
   /** `Unknown` is display-only and never selectable — see `LEAD_TEMPERATURE_OPTIONS`. */
@@ -404,6 +417,10 @@ export interface UpdateLeadInput {
  */
 export interface UpdateLeadResult {
   id: string;
+  /** The agency-calendar day the lead came in (PAC-159), `null` if unknown. */
+  createdDate: string | null;
+  /** Recomputed from `createdDate`, so a re-dated lead ages correctly at once. */
+  agingDays: number;
   status: string;
   temperature: LeadTemperature;
   leadSource: LeadSourceRef;

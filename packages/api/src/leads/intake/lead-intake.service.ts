@@ -152,6 +152,7 @@ export class LeadIntakeService {
         return {
           leadId: lead.leadId,
           leadIsNew: lead.isNew,
+          leadCreatedDate: lead.createdDate,
           contactIsNew: contact.isNew,
           householdIsNew: household.isNew,
           contactConflicts: [
@@ -278,7 +279,9 @@ export class LeadIntakeService {
         subjectType: 'lead',
         leadId: outcome.leadId,
         userId: ctx.producerId,
-        occurredAt: new Date(),
+        // On the lead's own date (PAC-159): a lead typed in late still has
+        // its first timeline entry on the day it came in.
+        occurredAt: outcome.leadCreatedDate ?? new Date(),
         summary: CREATED_SUMMARY[ctx.channel],
         source: ctx.channel,
         isTestRecord: false,

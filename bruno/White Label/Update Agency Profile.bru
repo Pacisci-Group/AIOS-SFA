@@ -67,11 +67,11 @@ docs {
     request on — the agency's cached access contexts are invalidated after the
     write (`AccessResolverService.invalidateAgency`), the same as a module
     toggle. An hour-only change invalidates nothing: no request reads it.
-  - **Lead history re-buckets; sold and quoted history does not.** A lead's
-    creation day is computed at read time; `Deal.soldDateYmd`,
-    `QuoteRecap.quoteDateYmd` and producer-goal months are **stored** on the
-    calendar in force when they were written and are not rewritten. An agency
-    that moves zones keeps every past sale and quote on the day it was filed.
+  - **Sales, quotes and leads all re-bucket** (PAC-159). They are stored as
+    instants and every reader cuts its window on the agency's calendar at
+    read time, so changing the zone re-files the agency's whole history on the
+    next request — consistently. Only producer-goal months are stored calendar
+    keys, and they do not move.
 
   ## The nightly Away sweep follows the new schedule from the next end of day
   The sweep's marker (`Agency.availabilitySweep.lastAwayDate`) says whether

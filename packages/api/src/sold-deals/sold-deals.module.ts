@@ -29,6 +29,7 @@ import { PoliciesModule } from '../policies/policies.module';
 import { SoldIntakeModule } from './intake/sold-intake.module';
 import { SoldDealsController } from './sold-deals.controller';
 import { SoldDealsService } from './sold-deals.service';
+import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 
 /**
  * Sold form write path (PAC-40).
@@ -53,6 +54,8 @@ import { SoldDealsService } from './sold-deals.service';
       { name: Household.name, schema: HouseholdSchema },
       { name: DealAudit.name, schema: DealAuditSchema },
       { name: Activity.name, schema: ActivitySchema },
+      // Read-only: a sold date is bounded by its lead's date (PAC-159).
+      { name: Lead.name, schema: LeadSchema },
     ]),
     // The pipeline itself, shared with `CrmModule`'s Policy Transfer. It writes
     // across six collections in one transaction and owns their schemas.

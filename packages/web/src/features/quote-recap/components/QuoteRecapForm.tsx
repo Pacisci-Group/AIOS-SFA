@@ -39,6 +39,8 @@ interface QuoteRecapFormProps {
   initialValues: QuoteRecapFormState;
   /** The document already on the recap, if any. Edit mode only. */
   attachedDocument?: AttachedQuoteDocument | null;
+  /** Today on the agency's calendar — the latest day the quote may carry. */
+  maxQuoteDate: string;
   submitLabel?: string;
   submitting: boolean;
   errorMessage: string | null;
@@ -65,6 +67,7 @@ export function QuoteRecapForm({
   context,
   initialValues,
   attachedDocument = null,
+  maxQuoteDate,
   submitLabel,
   submitting,
   errorMessage,
@@ -109,6 +112,28 @@ export function QuoteRecapForm({
         noValidate
       >
         <LeadContextHeader context={context} />
+
+        {/*
+          * First on the form, where the Sold wizard puts its date (PAC-159): a
+          * quote is sometimes recorded days after it was given, and the Quoted
+          * scorecard files it on this day. Editable afterwards too.
+          */}
+        <FormSection
+          title="Quote date"
+          description="The day the quote was given. Today unless you are recording an earlier one."
+        >
+          <form.AppField name="quoteDate">
+            {(f) => (
+              <f.TextField
+                label="Quote date"
+                type="date"
+                max={maxQuoteDate}
+                disabled={submitting || blocked}
+                inputClassName="bg-card border-border sm:max-w-xs"
+              />
+            )}
+          </form.AppField>
+        </FormSection>
 
         <FormSection
           title="Quoted policies"
