@@ -33,6 +33,17 @@ export type EmailMessageDocument = HydratedDocument<EmailMessage>;
  * the users list's invite status and for support. It is written after the send,
  * and a write that fails does not un-send anything.
  *
+ * ## One row per mail, keyed on the provider idempotency key
+ * {@link idempotencyKeyHash} is the SHA-256 of the string handed to Resend (an
+ * invite URL, `notification:<id>`, …): unique per message by construction, and
+ * `MailDeliveryService.record` upserts on it. A retried `record` step — the
+ * write after it failed, the process died — finds its row rather than inserting
+ * a second one, and a caller that keeps a one-to-one link to this row (the
+ * notification's `delivery.email.emailMessageId`) gets the same id back
+ * (PAC-157). **Hashed, not stored raw**, for the same reason the body is not:
+ * the invite's key *is* its bearer URL. Rows written before the field existed
+ * have no hash; the index is partial on a string so they are left alone.
+ *
  * ## Why it does not extend `TenantRecord`
  * `TenantRecord` requires `branchId`, and plenty of email is agency-scoped with
  * no branch (an invite to a user not yet pinned to one). Rather than write a
@@ -74,6 +85,14 @@ export class EmailMessage {
   /** Key into `EMAIL_TEMPLATES`. A stored value: renaming one is a migration. */
   @Prop({ required: true })
   templateKey: string;
+
+  /**
+   * SHA-256 of the provider idempotency key this mail was sent under — one
+   * per message, the upsert key for `record` (see the class note). Null only
+   * on rows that predate the field.
+   */
+  @Prop({ type: String, default: null })
+  idempotencyKeyHash: string | null;
 
   @Prop({ required: true, lowercase: true, trim: true })
   to: string;
@@ -143,6 +162,20 @@ export const EmailMessageSchema = SchemaFactory.createForClass(EmailMessage);
 EmailMessageSchema.index(
   { providerMessageId: 1 },
   { partialFilterExpression: { providerMessageId: { $type: 'string' } } },
+);
+
+/**
+ * One row per mail. Partial on a string so the rows written before the key
+ * existed (null) neither collide nor count. Built by the worker's
+ * `WorkerIndexesService.syncIndexes()` (and `autoIndex` when the worker runs
+ * inline) — a new index, so no migrate-mongo migration is needed.
+ */
+EmailMessageSchema.index(
+  { idempotencyKeyHash: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKeyHash: { $type: 'string' } },
+  },
 );
 
 /** The users-list invite-status lookup, and per-agency support queries. */

@@ -212,7 +212,6 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - `lint -w @sfa/api` is eslint only; `build -w @sfa/api` + `tsc -p packages/api/tsconfig.json` catch type errors. Rebuild `@sfa/shared` before e2e, Bruno and API unit tests.
 - Every new env var goes to `.env.example`, the preflight `env:` map, `required=`, the `app.env` heredoc, `DEPLOYMENT.md`, and `test/setup-env.ts`.
 
-<<<<<<< HEAD
 ### Found in review (Abu Bakar, #139 / #141, 2026-10-08) — each shipped once before it was caught
 
 - **Our throttlers are named** (`short`, `long`), so a bare `@SkipThrottle()` writes metadata for a throttler called `default` and skips **nothing**. Use `SkipAllThrottlers()` (`common/decorators/throttle.decorators.ts`), which derives from `THROTTLER_NAMES`; the ACME controller had the same latent bug.
@@ -225,7 +224,7 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - **A live `RESEND_API_KEY` outside production** now reaches only `MAIL_DEV_ALLOWED_RECIPIENTS`; with a key and no list nothing is sent and the API logs an error. The PR3 Bruno run had mailed two real admins.
 - The `publish` and `email` steps **await their rows sequentially**: a Redis outage made each publish pay a full ioredis retry cycle. Fan out with `Promise.all` where the call is best-effort.
 - `emailMessages` **`record` is not atomic** (insert, then `delivery.email`): a blip between the two can duplicate the row, and an exhausted `record` leaves a sent mail reading `failed`. The invite function has the same shape. Deferred to its own ticket — the fix is an upsert on the idempotency key inside `MailDeliveryService.record`, which is mail-platform (PAC-66) territory.
-=======
+
 ### Found in the second review round (Abu Bakar's review agent, 2026-10-12) — PR2
 
 - **The stream skips every throttler, so nothing bounded how many a user could hold open.** `MAX_STREAMS_PER_USER` (8) per node in the registry; the controller answers a plain `429` *before* building the observable (headers are not committed until the first frame), which the client already treats as retriable.
@@ -237,7 +236,14 @@ e2e for subscribe/remove/410 path; `npm run build -w @sfa/web` emits `sw.js` + `
 - **Every reopen refetched the count and every loaded list page, on top of TanStack's focus refetch.** `invalidateQueries` only refetches *active* queries, so the list cost only applied on `/notifications` — but it was still two refetches per tab show. While the stream is connected `refetchOnWindowFocus` is off for both queries and the reopen is the one signal; without a stream, focus is.
 - **Three Redis connections per API process.** The permission cache now injects the shared `REDIS_CLIENT` (`PermissionsModule` imports `RedisModule`); `RedisPermissionCache` no longer owns, closes or listens to the client. Two sockets per API process (client + subscriber duplicate), one per worker.
 - **`GET /notifications/stream` had no `.bru`.** `Notifications/Stream (SSE, skipped in runs).bru` carries the full docs block and calls `bru.runner.skipRequest()` in its pre-request script, so the CLI never hangs on it and the rule holds.
->>>>>>> asad/pac-154-pr2-live-sse-redis
+
+### Found in the second review round — PR3
+
+- **A per-function `throttle` is not the account limit.** Resend's 2 req/s covers everything sent with the key, and Inngest has no cross-function throttle key. The account rate is now paid in `ResendTransport` through a process-wide sliding-window `RateGate` (`worker/email/rate-gate.ts`) in front of every send; correct because the worker is one container (the Aug-19 decision), and documented as the thing to revisit if it is ever scaled out. The notification function keeps its `throttle` as a bound on its *share*; the three other mail functions' `concurrency` docblocks no longer claim to be a rate limit.
+- **The email hand-off stamped the event's `agencyId` on rows an earlier event had stored under another**, and `load` then refused the mismatch as a `NonRetriableError` — that recipient's mail vanished with no `delivery.email` record. `insert` now returns each row's own `agencyId` and the request carries it; the row is the authority all the way through.
+- **The failed-status write inside `send`'s catch could replace the transport error.** A Mongo blip there turned a `NonRetriableError` into four more retries and hid the real cause. The write has its own try/catch and the original error is always rethrown.
+- **`record` was not atomic** (PAC-157, previously deferred — now done here, since the agent raised it again and the shape was already on the table): `emailMessages` gains `idempotencyKeyHash` (SHA-256 of the provider key — the invite's key is its bearer URL, which must not sit in the collection) with a partial unique index, and `MailDeliveryService.record` is a `$setOnInsert` upsert on it, returning the existing row's id. `SendNotificationEmailFn.load` also consults `findRecorded()`: a mail recorded but never marked on the row (the process died between the two writes) is reconciled onto the row and not sent again, which closes the replay-after-24-hours hole. The campaign-output e2e's "three rows" expectation encoded the old insert; it is now two rows plus one for a new attempt.
+- **Dev mail to an address off the allowlist was logged as "no RESEND_API_KEY"** while a key was set. `LoggingMailTransport` takes a reason; the allowlist fallback names `MAIL_DEV_ALLOWED_RECIPIENTS`, and the warning says the row is recorded `sent` with a `local-` id.
 
 ## Out of scope (per the ticket)
 

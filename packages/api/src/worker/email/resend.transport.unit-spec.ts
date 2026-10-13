@@ -1,7 +1,8 @@
 import { NonRetriableError } from 'inngest';
 import { Resend } from 'resend';
-import { ResendTransport } from './resend.transport';
 import type { OutboundMessage } from './mail-transport';
+import { RateGate } from './rate-gate';
+import { ResendTransport } from './resend.transport';
 
 const message: OutboundMessage = {
   to: 'pat@example.com',
@@ -15,7 +16,7 @@ const message: OutboundMessage = {
 type SendArgs = [Record<string, unknown>, { idempotencyKey: string }];
 
 /** Build a transport whose Resend client returns a canned response. */
-function transportReturning(response: unknown) {
+function transportReturning(response: unknown, gate?: RateGate) {
   // Typed rather than a bare jest.fn(): the assertions below read
   // `send.mock.calls[0][0]`, and an untyped mock makes every one of those an
   // unchecked `any`.
@@ -23,7 +24,7 @@ function transportReturning(response: unknown) {
     .fn<Promise<unknown>, SendArgs>()
     .mockResolvedValue(response);
   const resend = { emails: { send } } as unknown as Resend;
-  return { transport: new ResendTransport(resend), send };
+  return { transport: new ResendTransport(resend, gate), send };
 }
 
 /**
@@ -72,6 +73,33 @@ describe('ResendTransport', () => {
       await transport.send(message, 'k');
 
       expect(send.mock.calls[0][0]).not.toHaveProperty('replyTo');
+    });
+  });
+
+  describe('rate', () => {
+    it('waits for the account-wide gate before every request', async () => {
+      // Resend's 2 req/s is for the whole key, shared by five functions, so
+      // the gate sits here rather than in any one function's `throttle`.
+      const order: string[] = [];
+      const gate = {
+        acquire: jest.fn(() => {
+          order.push('gate');
+          return Promise.resolve();
+        }),
+      } as unknown as RateGate;
+      const { transport, send } = transportReturning(
+        { data: { id: 'x' }, error: null },
+        gate,
+      );
+      send.mockImplementation(() => {
+        order.push('send');
+        return Promise.resolve({ data: { id: 'x' }, error: null });
+      });
+
+      await transport.send(message, 'k1');
+      await transport.send(message, 'k2');
+
+      expect(order).toEqual(['gate', 'send', 'gate', 'send']);
     });
   });
 

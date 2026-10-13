@@ -266,6 +266,28 @@ describe('DeliverNotificationFn (e2e)', () => {
       expect(second).toEqual(first);
     });
 
+    it("carries each row's own agency, even when an earlier event stored it under another", async () => {
+      // `insert` returns every row for the dedupeKey, including one a prior
+      // event created under a different agency. Stamping this event's agency
+      // on that row's request would make the mail function refuse it as a
+      // mismatch and the recipient would never be mailed (PR3 review, round 2).
+      const FIRST = '507f1f77bcf86cd799439041';
+      const SECOND = '507f1f77bcf86cd799439042';
+      await fn.handle(
+        requestedEvent({ agencyId: FIRST, recipientIds: [ADMIN_A] }),
+        inlineStep().step,
+      );
+      emitted.sent.length = 0;
+
+      await fn.handle(requestedEvent({ agencyId: SECOND }), inlineStep().step);
+
+      const byRecipient: Record<string, unknown> = {};
+      for (const event of emitted.sent) {
+        byRecipient[String(event.data.recipientId)] = event.data.agencyId;
+      }
+      expect(byRecipient).toEqual({ [ADMIN_A]: FIRST, [ADMIN_B]: SECOND });
+    });
+
     it("carries the row's agency, not the recipient's", async () => {
       const AGENCY = '507f1f77bcf86cd799439041';
       await fn.handle(

@@ -1367,6 +1367,14 @@ list in the plan's "Found in review".
 
 ## 22. PAC-154 — Notifications, PR3 of 4: email channel (handoff, 2026-10-07)
 
+> **Second review round (2026-10-13):** five more points from Abu Bakar's review
+> agent, all in — the account-wide Resend `RateGate` in the transport, each row's
+> own `agencyId` on the email hand-off, the guarded failed-status write, the
+> atomic `record` (PAC-157, done here: `emailMessages.idempotencyKeyHash` +
+> upsert + `findRecorded()` in `load`), and the honest dev-mail log line. See
+> the plan's "Found in the second review round — PR3". ⚠ PAC-157 can be closed
+> when #141 merges.
+
 Branch `asad/pac-154-pr3-email-channel`, stacked on PR2's branch
 (`asad/pac-154-pr2-live-sse-redis`, PR #139 → PR #138 → `dev`). Rebase onto
 `dev` as the stack merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md`

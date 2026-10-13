@@ -224,6 +224,12 @@ describe('MailerCampaignOutputEmailFn (e2e)', () => {
       'david@apex.example',
       'print@vendor.example',
     ]);
+    // The third send is the same (campaign, attempt, recipient) triple as the
+    // first — the same idempotency key, so the same mail as far as the
+    // provider is concerned — and `record` upserts on that key (PAC-157):
+    // one mail, one row. A new attempt is a new mail and a new row.
+    await expect(messages.countDocuments({})).resolves.toBe(2);
+    await run(campaign, ['print@vendor.example'], inlineStep().step, 2);
     await expect(messages.countDocuments({})).resolves.toBe(3);
   });
 

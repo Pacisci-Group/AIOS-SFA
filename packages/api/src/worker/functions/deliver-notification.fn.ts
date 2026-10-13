@@ -131,14 +131,9 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     // channel does not nudge every tab a second time.
     await step.run('publish', () => this.publish(rows));
 
-<<<<<<< HEAD
     // A hand-off to the mail function, never a send — see the class note.
-    await step.run('email', () =>
-      this.requestEmails(event.data.type, event.data.agencyId, inserted.rows),
-    );
+    await step.run('email', () => this.requestEmails(event.data.type, rows));
 
-    return { notificationIds: inserted.rows.map((row) => row.id) };
-=======
     return { notificationIds: rows.map((row) => row.id) };
   }
 
@@ -153,13 +148,9 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
   async rowsForIds(ids: string[]): Promise<InsertedRow[]> {
     const rows = await this.notificationModel
       .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } })
-      .select({ _id: 1, recipientId: 1 })
-      .lean<Array<{ _id: Types.ObjectId; recipientId: Types.ObjectId }>>();
-    return rows.map((row) => ({
-      id: row._id.toHexString(),
-      recipientId: row.recipientId.toHexString(),
-    }));
->>>>>>> asad/pac-154-pr2-live-sse-redis
+      .select({ _id: 1, recipientId: 1, agencyId: 1 })
+      .lean<StoredRowKeys[]>();
+    return rows.map(toInsertedRow);
   }
 
   /**
@@ -200,15 +191,10 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
 
     const rows = await this.notificationModel
       .find({ recipientId: { $in: recipientIds }, dedupeKey: data.dedupeKey })
-      .select({ _id: 1, recipientId: 1 })
-      .lean<Array<{ _id: Types.ObjectId; recipientId: Types.ObjectId }>>();
+      .select({ _id: 1, recipientId: 1, agencyId: 1 })
+      .lean<StoredRowKeys[]>();
 
-    return {
-      rows: rows.map((row) => ({
-        id: row._id.toHexString(),
-        recipientId: row.recipientId.toHexString(),
-      })),
-    };
+    return { rows: rows.map(toInsertedRow) };
   }
 
   /**
@@ -241,6 +227,16 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
    * (ticket decision 4); when they land they filter this list, they do not
    * replace it. Returns a count so the step result is plain JSON.
    *
+   * ## The row's agency, not the event's
+   *
+   * `insert` returns every row that exists for the `dedupeKey`, including
+   * ones an earlier event created — and those carry their own `agencyId`.
+   * Stamping each request with *this* event's agency would make
+   * `SendNotificationEmailFn.load` refuse the mismatch (`NonRetriableError`)
+   * and that recipient's mail would vanish with no `delivery.email` record
+   * (PR3 review, second round). The row is the authority: the request
+   * carries what it stores.
+   *
    * ## Stable event ids
    *
    * Each emit carries `deterministicEventId('notification-email', row.id)`.
@@ -255,7 +251,6 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
    */
   async requestEmails(
     type: NotificationType,
-    agencyId: string | null,
     rows: InsertedRow[],
   ): Promise<{ requested: number }> {
     if (!NOTIFICATION_TYPES[type].defaultChannels.email) {
@@ -267,7 +262,7 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
         {
           notificationId: row.id,
           recipientId: row.recipientId,
-          agencyId,
+          agencyId: row.agencyId,
         },
         { id: deterministicEventId('notification-email', row.id) },
       );
@@ -312,6 +307,22 @@ function isDuplicateKeyError(err: unknown): boolean {
 export interface InsertedRow {
   id: string;
   recipientId: string;
+  /** The row's own agency — the later steps use it, never the event's. */
+  agencyId: string | null;
+}
+
+interface StoredRowKeys {
+  _id: Types.ObjectId;
+  recipientId: Types.ObjectId;
+  agencyId: Types.ObjectId | null;
+}
+
+function toInsertedRow(row: StoredRowKeys): InsertedRow {
+  return {
+    id: row._id.toHexString(),
+    recipientId: row.recipientId.toHexString(),
+    agencyId: row.agencyId ? row.agencyId.toHexString() : null,
+  };
 }
 
 interface InsertResult {
