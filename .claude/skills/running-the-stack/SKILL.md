@@ -46,10 +46,17 @@ stops the app containers for you. `make down` tears down either.
 Every service is published on its **standard default port** — nothing is
 remapped, so any client's out-of-the-box connection settings just work.
 
-Redis is **optional at runtime**: the API caches resolved permission sets only
-when `REDIS_URL` is set, otherwise it reads MongoDB per request. The container
-runs regardless, so uncommenting `REDIS_URL` in `.env` is the whole switch and it
-applies identically in both modes.
+Redis is **required** (PAC-154). The worker PUBLISHes a nudge for every
+notification it writes and every API node SUBSCRIBEs, forwarding to the SSE
+streams it holds; resolved permission sets are cached there too. `.env.example`
+ships with `REDIS_URL` set — keep it that way. The code still boots without it
+(e2e pins it empty and uses an in-process bus), but that fallback only delivers
+live notifications while the worker runs inside the API process: it looks fine
+under `npm run api:dev` and silently delivers nothing under `make up`, where the
+worker is its own container. Both compose app services rewrite the value onto
+the compose network, so one `.env` line serves both modes. Deployed
+environments get it from the `REDIS_URL` secret (`terraform output -raw
+redis_uri`), which the deploy preflight requires.
 
 
 > **Three ways to populate Mongo:**

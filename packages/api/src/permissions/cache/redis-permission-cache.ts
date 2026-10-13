@@ -1,6 +1,6 @@
-import { Logger, OnModuleDestroy } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { AccessContext } from '@sfa/shared';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import { PermissionCache } from './permission-cache';
 
 /**
@@ -30,11 +30,12 @@ const KEY_PREFIX = 'sfa:perm:v5:';
  * so that any missed invalidation self-heals within the TTL window. Explicit
  * invalidation (on role/permission/module changes) keeps entries fresh in the
  * common case.
+ *
+ * The client is borrowed, not owned: it is the shared `REDIS_CLIENT`, whose
+ * `error` events are logged and whose `quit()` is called by `RedisModule`.
+ * Nothing here closes it or listens to it (PAC-154 PR2 review).
  */
-export class RedisPermissionCache
-  extends PermissionCache
-  implements OnModuleDestroy
-{
+export class RedisPermissionCache extends PermissionCache {
   private readonly logger = new Logger(RedisPermissionCache.name);
 
   constructor(
@@ -42,9 +43,6 @@ export class RedisPermissionCache
     private readonly ttlSeconds: number,
   ) {
     super();
-    this.client.on('error', (err) =>
-      this.logger.error(`Redis permission cache error: ${err.message}`),
-    );
   }
 
   private key(userId: string): string {
@@ -92,9 +90,5 @@ export class RedisPermissionCache
     } catch (err) {
       this.logger.warn(`Cache delMany failed: ${String(err)}`);
     }
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    await this.client.quit().catch(() => this.client.disconnect());
   }
 }

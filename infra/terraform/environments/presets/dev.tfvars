@@ -4,6 +4,8 @@ spaces_region    = "nyc3"
 droplet_size     = "s-1vcpu-2gb"
 mongo_size       = "db-s-1vcpu-1gb"
 mongo_node_count = 1
+# Permission cache + notification pub/sub (PAC-154). Nothing durable lives in it.
+redis_size = "db-s-1vcpu-1gb"
 
 # dev is live at https://dev.smithfamily.agency (droplet 174.138.117.56).
 # The zone is hosted at GoDaddy, not DigitalOcean, so the A record is managed

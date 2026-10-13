@@ -7,6 +7,7 @@ spaces_region   = "nyc3"
 droplet_size    = "s-1vcpu-2gb"
 mongo_size      = "db-s-1vcpu-1gb"
 mongo_node_count = 1
+redis_size      = "db-s-1vcpu-1gb"
 
 domain_root     = "example.com"       # Your domain zone in DigitalOcean DNS
 dns_subdomain   = "{{ENV}}"

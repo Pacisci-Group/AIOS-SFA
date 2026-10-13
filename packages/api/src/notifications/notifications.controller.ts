@@ -2,30 +2,77 @@ import {
   Controller,
   Get,
   HttpCode,
+  HttpException,
+  HttpStatus,
+  type MessageEvent,
   Param,
   Patch,
   Post,
   Query,
+  Sse,
 } from '@nestjs/common';
 import type {
   AccessContext,
+  JwtPayload,
   MarkAllNotificationsReadResponse,
   NotificationListResponse,
   NotificationRecord,
   UnreadCountResponse,
 } from '@sfa/shared';
 import {
+  interval,
+  map,
+  merge,
+  type Observable,
+  of,
+  takeUntil,
+  timer,
+} from 'rxjs';
+import {
   SkipBranch,
   SkipModule,
   SkipTenant,
 } from '../common/decorators/access.decorators';
-import { Access } from '../common/decorators/user.decorators';
+import { SkipAllThrottlers } from '../common/decorators/throttle.decorators';
+import { Access, CurrentUser } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
   listNotificationsSchema,
   type ListNotificationsDto,
 } from './dto/notifications.dto';
 import { NotificationsService } from './notifications.service';
+import {
+  MAX_STREAMS_PER_USER,
+  NotificationStreamRegistry,
+} from './stream/notification-stream.registry';
+
+/**
+ * How often the stream sends a `ping` while nothing happens. Load-bearing:
+ * the DigitalOcean balancer and the edge both drop a connection that stays
+ * silent past their idle timeout (60 s is the common default), and a dropped
+ * stream is a reconnect, a refetch, and a gap. 25 s clears every hop with
+ * room to spare.
+ */
+export const STREAM_PING_MS = 25_000;
+
+/** What the client should wait before reconnecting after a close. */
+const STREAM_RETRY_MS = 3_000;
+
+/**
+ * Closed this long before the token's `exp`, so the server ends the stream
+ * cleanly and the client reconnects with a refreshed token — rather than the
+ * JWT guard refusing the reconnect of a token that expired mid-flight.
+ */
+const STREAM_EXP_MARGIN_MS = 1_000;
+
+/**
+ * The longest a stream may live when the token carries no `exp` at all.
+ * `JWT_ACCESS_EXPIRES` defaults to 15 minutes in both signers, so every token
+ * we mint has one and this is a backstop, not a path: without it a token with
+ * no expiry would hold a stream open for the life of the connection, and
+ * `tokenVersion` is only checked at connect (PR2 review).
+ */
+const STREAM_MAX_MS = 15 * 60_000;
 
 /**
  * The caller's own notifications (PAC-154).
@@ -48,7 +95,113 @@ import { NotificationsService } from './notifications.service';
 @SkipBranch()
 @SkipModule()
 export class NotificationsController {
-  constructor(private readonly service: NotificationsService) {}
+  constructor(
+    private readonly service: NotificationsService,
+    private readonly registry: NotificationStreamRegistry,
+  ) {}
+
+  /**
+   * The live stream (PAC-154, decision 3): one Server-Sent Events connection
+   * per tab, carrying every notification addressed to the caller as it is
+   * written.
+   *
+   * ## Frames
+   *
+   * - `ready` — the first frame, sent at once. Nest commits the response
+   *   headers lazily on the first message; without this a quiet user would
+   *   sit on an uncommitted response that a proxy may hold indefinitely. The
+   *   client treats every open as a reason to refetch the count and the list,
+   *   which is what makes the lossy bus behind this acceptable.
+   * - `ping` — every {@link STREAM_PING_MS}. A named event rather than an SSE
+   *   comment because Nest's `MessageEvent` cannot emit a bare `: ping`; the
+   *   effect on idle timeouts is the same, and the client ignores it.
+   * - `notification` — the stored row, re-read by id after the worker's
+   *   nudge. `id:` is the row id. The registry reads it once per recipient
+   *   and hands the same record to every tab; a nudge for a row that is not
+   *   the caller's is dropped there.
+   *
+   * ## Authentication, and why it is checked once
+   *
+   * Every global guard runs, at connect: a Bearer header from the
+   * fetch-based client (native `EventSource` cannot set one, and a token in
+   * the URL would land in every proxy log). Nothing re-checks `tokenVersion`
+   * mid-stream; instead the stream ends itself at the token's `exp` — 15
+   * minutes at most — and the client reconnects with a refreshed token. A
+   * password reset therefore stops the old session's stream within one token
+   * lifetime, which is the same bound every other request already lives under
+   * between refreshes. A token with no `exp` gets {@link STREAM_MAX_MS}.
+   *
+   * ## Bounded per user
+   *
+   * The throttlers are skipped (below), so the only limit on open streams is
+   * {@link MAX_STREAMS_PER_USER} per node, enforced here as a plain `429`
+   * before the observable exists — the headers are not committed until the
+   * first frame, so this is an ordinary error response the client backs off
+   * from and retries.
+   *
+   * ## What is deliberately not here
+   *
+   * `@Header('Cache-Control')` / `@Header('X-Accel-Buffering')`: Nest's
+   * `SseStream` writes both (plus `no-transform` and `Connection: keep-alive`)
+   * when it commits the headers, and `writeHead` would override a decorator's
+   * value anyway.
+   *
+   * ## Why `SkipAllThrottlers()` and not `@SkipThrottle()`
+   *
+   * A stream is one request held open, and a reconnect wave after a deploy —
+   * every tab in an office, through one NAT, reconnecting within seconds —
+   * must not 429 the badge. The bare `@SkipThrottle()` this first shipped with
+   * did not achieve that: it targets a throttler named `default`, and ours are
+   * named, so the stream stayed under the same per-IP budget as every other
+   * call. See `THROTTLER_NAMES`.
+   */
+  @Sse('stream')
+  @SkipAllThrottlers()
+  stream(
+    @Access() access: AccessContext,
+    @CurrentUser() user: JwtPayload,
+  ): Observable<MessageEvent> {
+    if (!this.registry.canOpen(access.userId)) {
+      throw new HttpException(
+        `Too many open notification streams (limit ${MAX_STREAMS_PER_USER}); close a tab and retry.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const untilExp =
+      user.exp !== undefined
+        ? Math.min(
+            STREAM_MAX_MS,
+            Math.max(0, user.exp * 1000 - Date.now() - STREAM_EXP_MARGIN_MS),
+          )
+        : STREAM_MAX_MS;
+
+    const ready$ = of<MessageEvent>({
+      type: 'ready',
+      data: '',
+      retry: STREAM_RETRY_MS,
+    });
+    const ping$ = interval(STREAM_PING_MS).pipe(
+      map((): MessageEvent => ({ type: 'ping', data: '' })),
+    );
+    const rows$ = this.registry.open(access.userId).pipe(
+      map((row): MessageEvent => ({
+        type: 'notification',
+        id: row.id,
+        data: row,
+      })),
+    );
+
+    // Completing the observable is how Nest ends the response; `finalize` in
+    // the registry then drops this stream from the map. Two reasons to
+    // complete: the token's `exp`, and the module shutting down — `ping$`
+    // never completes on its own, so without the second `app.close()` would
+    // wait for every open token to expire.
+    return merge(ready$, ping$, rows$).pipe(
+      takeUntil(timer(untilExp)),
+      takeUntil(this.registry.closed$),
+    );
+  }
 
   @Get()
   list(
