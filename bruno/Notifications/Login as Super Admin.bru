@@ -1,0 +1,55 @@
+meta {
+  name: Login as Super Admin
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{adminEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  // Its own variable, not `accessToken`: the collection-level bearer stays the
+  // producer, who files the report in the next request. The admin is the one
+  // who gets notified about it.
+  if (res.getStatus() === 201) {
+    bru.setVar("notifAdminAccessToken", res.getBody().accessToken);
+    bru.setVar("notifAdminUserId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the caller is a platform admin", function () {
+    expect(res.getBody().user.isPlatformAdmin).to.equal(true);
+  });
+}
+
+docs {
+  # POST /auth/login — as the platform super admin
+
+  Captured as `notifAdminAccessToken` for this folder only. The notification a
+  filed bug report produces is addressed to every active platform admin
+  (PAC-154 PR1's one real producer), so this is the session that reads it.
+
+  ⚠ **Needs the Inngest dev server and a running worker** (`npm run api:dev`
+  keeps the worker inline). The row is written by `deliver-notification.fn`
+  from the `notification/requested.v1` event, not in the request path, so
+  without a queue the list below stays empty.
+}

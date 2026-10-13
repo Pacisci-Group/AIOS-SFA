@@ -11,9 +11,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Badge } from "@/components/ui/badge";
 import { AvailabilityToggle } from "@/components/layout/AvailabilityToggle";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { cn } from "@/lib/utils";
+import { NOTIFICATIONS_PATH } from "@/lib/notifications-api";
+import { useUnreadCount } from "@/features/notifications/use-notifications";
 import { isNavItemActive, NAV_SECTIONS, type NavItem } from "./nav-items";
 
 function nameFromEmail(email: string | undefined): string {
@@ -106,14 +109,23 @@ function SidebarNavItem({
   item,
   collapsed,
   onNavigate,
+  badge,
 }: {
   item: NavItem;
   collapsed: boolean;
   onNavigate?: () => void;
+  /**
+   * An unread count to show on the row (PAC-154). A pill after the label when
+   * expanded; a dot on the icon when collapsed, where a number would not fit.
+   * Omitted or zero renders nothing.
+   */
+  badge?: number;
 }) {
   const { pathname } = useLocation();
   const isActive = isNavItemActive(pathname, item.to);
   const Icon = item.icon;
+  const badgeLabel =
+    badge && badge > 0 ? (badge > 99 ? "99+" : String(badge)) : null;
 
   return (
     <RailTooltip collapsed={collapsed} label={item.label}>
@@ -129,22 +141,47 @@ function SidebarNavItem({
             : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
         )}
       >
-        <Icon
-          className={cn(
-            "size-4 shrink-0 transition-colors",
-            isActive ? "text-primary" : "text-muted-foreground",
+        <span className="relative flex shrink-0">
+          <Icon
+            className={cn(
+              "size-4 shrink-0 transition-colors",
+              isActive ? "text-primary" : "text-muted-foreground",
+            )}
+          />
+          {collapsed && badgeLabel && (
+            // The rail has no room for a number; the dot says "something is
+            // waiting" and the tooltip plus `sr-only` text carry the count.
+            <span
+              aria-hidden
+              className="absolute -top-1 -right-1 size-2 rounded-full bg-primary ring-2 ring-sidebar"
+            />
           )}
-        />
+        </span>
         {collapsed ? (
           // The tooltip is not an accessible name — without this the rail is a
           // column of unlabelled links.
-          <span className="sr-only">{item.label}</span>
+          <span className="sr-only">
+            {item.label}
+            {badgeLabel ? ` (${badge} unread)` : ""}
+          </span>
         ) : (
-          // No active-state chevron. It duplicated what the filled background
-          // and primary text already say, and the 26px it took was the
-          // difference between "Producer Dashboard" fitting and reading
-          // "Producer Dashbo…" on the one row that is always selected.
-          <span className="flex-1 truncate text-base">{item.label}</span>
+          <>
+            {/* No active-state chevron. It duplicated what the filled
+                background and primary text already say, and the 26px it took
+                was the difference between "Producer Dashboard" fitting and
+                reading "Producer Dashbo…" on the one row that is always
+                selected. */}
+            <span className="flex-1 truncate text-base">{item.label}</span>
+            {badgeLabel && (
+              <Badge
+                size="sm"
+                className="tabular-nums"
+                aria-label={`${badge} unread`}
+              >
+                {badgeLabel}
+              </Badge>
+            )}
+          </>
         )}
       </Link>
     </RailTooltip>
@@ -170,9 +207,13 @@ export function SidebarBody({
   collapsed = false,
   onNavigate,
 }: SidebarBodyProps) {
-  const { user, logout } = useAuth();
+  const { user, logout, isAuthenticated } = useAuth();
   const { canRead, can, canAny } = usePermissions();
   const navigate = useNavigate();
+  // The one badge in the nav (PAC-154). Polled while PR1's polling is all
+  // there is; PR2's stream invalidates the same query on each event.
+  const { data: unreadData } = useUnreadCount(isAuthenticated);
+  const unread = unreadData?.unread ?? 0;
 
   const isVisible = (item: NavItem) => {
     if (item.permission) return can(item.permission);
@@ -224,6 +265,7 @@ export function SidebarBody({
                 item={item}
                 collapsed={collapsed}
                 onNavigate={onNavigate}
+                badge={item.to === NOTIFICATIONS_PATH ? unread : undefined}
               />
             ))}
           </div>

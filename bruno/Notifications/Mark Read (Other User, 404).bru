@@ -1,0 +1,25 @@
+meta {
+  name: Mark Read (Other User, 404)
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{baseUrl}}/notifications/{{notificationId}}/read
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 404 Not Found", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # PATCH /notifications/:id/read — somebody else's row
+
+  The collection bearer (the producer) marking the admin's notification. The
+  row exists, but not for this caller, so it is a **404** — the response must
+  not confirm the id is real.
+}

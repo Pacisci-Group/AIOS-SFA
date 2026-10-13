@@ -1,0 +1,43 @@
+meta {
+  name: Mark Read
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/notifications/{{notificationId}}/read
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{notifAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the row with readAt set", function () {
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("notificationId"));
+    expect(body.readAt).to.be.a("string");
+  });
+}
+
+docs {
+  # PATCH /notifications/:id/read — mark one read
+
+  Authenticated, no permission, scoped to the caller. Idempotent: a second
+  call returns the row with its **original** `readAt` — a second click is not
+  a second fact. The web app calls this on click, then navigates to `href`.
+
+  ## Response `200`
+  The updated `NotificationRecord`.
+
+  ## Errors
+  - `404 Not Found` — no such row **for this caller**. Somebody else's id is a
+    404, not a 403: the id tells you nothing.
+  - `401 Unauthorized`.
+}

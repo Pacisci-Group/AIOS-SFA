@@ -14,4 +14,5 @@ export * from './envelope';
 export * from './data-export.events';
 export * from './email.events';
 export * from './mailer.events';
+export * from './notification.events';
 export * from './tls.events';

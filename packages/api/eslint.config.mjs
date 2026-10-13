@@ -33,7 +33,7 @@ const FEATURE_DIRS = [
   'carriers', 'clients', 'contacts', 'crm', 'crm-rotations', 'data-export',
   'deal-audit-items', 'deal-audits', 'deals', 'feature-modules', 'households',
   'interested-parties', 'leaderboard', 'lead-sources', 'leads', 'mail',
-  'mailers', 'performance', 'permissions', 'platform', 'policies',
+  'mailers', 'notifications', 'performance', 'permissions', 'platform', 'policies',
   'prior-insurance', 'prior-policies', 'producer-assignments', 'producer-goals',
   'quote-recaps', 'roles', 'service-tickets', 'share-links', 'sold-deals',
   'time-off-requests', 'tls', 'users',
