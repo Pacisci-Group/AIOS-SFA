@@ -1333,7 +1333,18 @@ merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md` §2.
   and the compose / Makefile / `running-the-stack` wording says so. The code's
   in-process fallback stays for e2e only.
 
+### Second review round (2026-10-13)
+Abu Bakar's review agent raised nine more points on #139; all are in. Per-user
+stream cap (`MAX_STREAMS_PER_USER` = 8 per node, 429 past it), `closed$` from the
+registry so `app.close()` ends every stream, the PR1 `{ ids }` step shape accepted
+on resume, token refreshed *before* the `exp` reconnect (+ immediate reconnect
+after a clean close), `Infinity` → `STREAM_MAX_MS`, one `findForStream` per
+recipient per nudge (the read now lives in the registry), focus refetch off while
+the stream is up, the permission cache on the shared `REDIS_CLIENT`, and a
+self-skipping `.bru` for the stream. Details and reasoning: the plan's "Found in
+the second review round" list.
+
 ### Not in PR2 (per the plan)
-Email channel (PR3) · push + PWA shell + update toast (PR4) · sharing the Redis
-client with the permission cache · `BroadcastChannel` multi-tab dedupe.
+Email channel (PR3) · push + PWA shell + update toast (PR4) · `BroadcastChannel`
+multi-tab dedupe.
 

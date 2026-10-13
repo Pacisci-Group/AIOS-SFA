@@ -43,11 +43,17 @@ export const UNREAD_COUNT_CONNECTED_POLL_MS = 5 * 60_000;
  * landed at the top mid-scroll. `nextCursor: null` is the end.
  */
 export function useNotificationsList(unread: boolean) {
+  const connected = useNotificationStreamConnected();
   return useInfiniteQuery({
     queryKey: [...notificationsKey, 'list', { unread }],
     queryFn: ({ pageParam }) => listNotifications({ cursor: pageParam, unread }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
+    // Every loaded page is re-read on a refetch, so it should happen once per
+    // tab show, not twice: while the stream is up its reopen on `visible`
+    // invalidates this (`use-notification-stream.ts`), and the focus refetch
+    // would duplicate it (PR2 review). Without a stream, focus is the signal.
+    refetchOnWindowFocus: !connected,
   });
 }
 
@@ -66,7 +72,9 @@ export function useUnreadCount(enabled = true) {
       ? UNREAD_COUNT_CONNECTED_POLL_MS
       : UNREAD_COUNT_POLL_MS,
     refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
+    // One refetch per tab show, not two: the stream's reopen on `visible`
+    // already invalidates this while connected (see `useNotificationsList`).
+    refetchOnWindowFocus: !connected,
   });
 }
 

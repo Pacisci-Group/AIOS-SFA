@@ -8,10 +8,10 @@ export const REDIS_CLIENT = Symbol('REDIS_CLIENT');
 export type RedisClient = Redis | null;
 
 /**
- * One Redis connection per process, for everything that is not the permission
- * cache (which keeps its own client in
- * `permissions/cache/permission-cache.provider.ts` — sharing the two is a
- * follow-up, not this ticket).
+ * The one Redis connection per process: the permission cache
+ * (`permissions/cache/permission-cache.provider.ts`) and the notification
+ * publisher both use it, and the subscriber is a `duplicate()` of it — two
+ * sockets per API process, one per worker. `RedisModule` closes it.
  *
  * ## Fails open locally, loud in production
  *

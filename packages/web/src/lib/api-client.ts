@@ -36,6 +36,27 @@ export function getAccessToken(): string | null {
   return localStorage.getItem('accessToken');
 }
 
+/**
+ * When the stored access token expires, as epoch milliseconds — or null when
+ * there is no token or it carries no `exp`. Read from the JWT's payload
+ * without verifying it: the browser cannot verify, and does not need to; this
+ * only decides whether to refresh *before* a long-lived request (the
+ * notification stream) rather than be refused mid-way (PAC-154 PR2).
+ */
+export function getAccessTokenExpiry(): number | null {
+  const token = getAccessToken();
+  const payload = token?.split('.')[1];
+  if (!payload) return null;
+  try {
+    const json = JSON.parse(
+      atob(payload.replace(/-/g, '+').replace(/_/g, '/')),
+    ) as { exp?: unknown };
+    return typeof json.exp === 'number' ? json.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getRefreshToken(): string | null {
   return localStorage.getItem('refreshToken');
 }

@@ -98,14 +98,38 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     // ids come back as hex strings, never `ObjectId`s.
     const inserted = (await step.run('insert', () =>
       this.insert(event.data),
-    )) as InsertResult;
+    )) as InsertResult | LegacyInsertResult;
+    const rows = isLegacyInsertResult(inserted)
+      ? ((await step.run('insert-rows', () =>
+          this.rowsForIds(inserted.ids),
+        )) as InsertedRow[])
+      : inserted.rows;
 
     // Best-effort by contract (the bus swallows transport errors), so this
     // step cannot fail the run; it is a step at all so a retry of a later
     // channel does not nudge every tab a second time.
-    await step.run('publish', () => this.publish(inserted.rows));
+    await step.run('publish', () => this.publish(rows));
 
-    return { notificationIds: inserted.rows.map((row) => row.id) };
+    return { notificationIds: rows.map((row) => row.id) };
+  }
+
+  /**
+   * The rows behind a PR1-shaped `insert` result. Inngest memoises a step's
+   * result for the life of the run, so a run that completed `insert` under
+   * PR1 and resumes under this code sees `{ ids }` and must not read
+   * `.rows` off it (PR2 review). The extra step only exists on that path —
+   * deterministic, because the cached result decides it — and is gone the
+   * moment every run started before the deploy has finished.
+   */
+  async rowsForIds(ids: string[]): Promise<InsertedRow[]> {
+    const rows = await this.notificationModel
+      .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } })
+      .select({ _id: 1, recipientId: 1 })
+      .lean<Array<{ _id: Types.ObjectId; recipientId: Types.ObjectId }>>();
+    return rows.map((row) => ({
+      id: row._id.toHexString(),
+      recipientId: row.recipientId.toHexString(),
+    }));
   }
 
   /**
@@ -221,6 +245,17 @@ export interface InsertedRow {
 
 interface InsertResult {
   rows: InsertedRow[];
+}
+
+/** What the `insert` step returned before PR2 — ids only. See `rowsForIds`. */
+interface LegacyInsertResult {
+  ids: string[];
+}
+
+function isLegacyInsertResult(
+  result: InsertResult | LegacyInsertResult,
+): result is LegacyInsertResult {
+  return !('rows' in result) && Array.isArray(result.ids);
 }
 
 /** The slice of Inngest's step tooling this handler uses — the test seam. */

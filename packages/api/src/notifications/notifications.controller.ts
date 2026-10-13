@@ -2,7 +2,8 @@ import {
   Controller,
   Get,
   HttpCode,
-  Logger,
+  HttpException,
+  HttpStatus,
   type MessageEvent,
   Param,
   Patch,
@@ -19,14 +20,9 @@ import type {
   UnreadCountResponse,
 } from '@sfa/shared';
 import {
-  catchError,
-  EMPTY,
-  filter,
-  from,
   interval,
   map,
   merge,
-  mergeMap,
   type Observable,
   of,
   takeUntil,
@@ -45,7 +41,10 @@ import {
   type ListNotificationsDto,
 } from './dto/notifications.dto';
 import { NotificationsService } from './notifications.service';
-import { NotificationStreamRegistry } from './stream/notification-stream.registry';
+import {
+  MAX_STREAMS_PER_USER,
+  NotificationStreamRegistry,
+} from './stream/notification-stream.registry';
 
 /**
  * How often the stream sends a `ping` while nothing happens. Load-bearing:
@@ -65,6 +64,15 @@ const STREAM_RETRY_MS = 3_000;
  * JWT guard refusing the reconnect of a token that expired mid-flight.
  */
 const STREAM_EXP_MARGIN_MS = 1_000;
+
+/**
+ * The longest a stream may live when the token carries no `exp` at all.
+ * `JWT_ACCESS_EXPIRES` defaults to 15 minutes in both signers, so every token
+ * we mint has one and this is a backstop, not a path: without it a token with
+ * no expiry would hold a stream open for the life of the connection, and
+ * `tokenVersion` is only checked at connect (PR2 review).
+ */
+const STREAM_MAX_MS = 15 * 60_000;
 
 /**
  * The caller's own notifications (PAC-154).
@@ -87,8 +95,6 @@ const STREAM_EXP_MARGIN_MS = 1_000;
 @SkipBranch()
 @SkipModule()
 export class NotificationsController {
-  private readonly logger = new Logger(NotificationsController.name);
-
   constructor(
     private readonly service: NotificationsService,
     private readonly registry: NotificationStreamRegistry,
@@ -110,8 +116,9 @@ export class NotificationsController {
    *   comment because Nest's `MessageEvent` cannot emit a bare `: ping`; the
    *   effect on idle timeouts is the same, and the client ignores it.
    * - `notification` — the stored row, re-read by id after the worker's
-   *   nudge. `id:` is the row id. A nudge for a row that is not the caller's
-   *   is dropped by `findForStream`.
+   *   nudge. `id:` is the row id. The registry reads it once per recipient
+   *   and hands the same record to every tab; a nudge for a row that is not
+   *   the caller's is dropped there.
    *
    * ## Authentication, and why it is checked once
    *
@@ -122,7 +129,15 @@ export class NotificationsController {
    * minutes at most — and the client reconnects with a refreshed token. A
    * password reset therefore stops the old session's stream within one token
    * lifetime, which is the same bound every other request already lives under
-   * between refreshes.
+   * between refreshes. A token with no `exp` gets {@link STREAM_MAX_MS}.
+   *
+   * ## Bounded per user
+   *
+   * The throttlers are skipped (below), so the only limit on open streams is
+   * {@link MAX_STREAMS_PER_USER} per node, enforced here as a plain `429`
+   * before the observable exists — the headers are not committed until the
+   * first frame, so this is an ordinary error response the client backs off
+   * from and retries.
    *
    * ## What is deliberately not here
    *
@@ -146,12 +161,20 @@ export class NotificationsController {
     @Access() access: AccessContext,
     @CurrentUser() user: JwtPayload,
   ): Observable<MessageEvent> {
+    if (!this.registry.canOpen(access.userId)) {
+      throw new HttpException(
+        `Too many open notification streams (limit ${MAX_STREAMS_PER_USER}); close a tab and retry.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const untilExp =
       user.exp !== undefined
-        ? Math.max(0, user.exp * 1000 - Date.now() - STREAM_EXP_MARGIN_MS)
-        : // No `exp` on the token at all (`JWT_ACCESS_EXPIRES` unset): nothing
-          // bounds the session, so nothing bounds the stream either.
-          Infinity;
+        ? Math.min(
+            STREAM_MAX_MS,
+            Math.max(0, user.exp * 1000 - Date.now() - STREAM_EXP_MARGIN_MS),
+          )
+        : STREAM_MAX_MS;
 
     const ready$ = of<MessageEvent>({
       type: 'ready',
@@ -162,30 +185,6 @@ export class NotificationsController {
       map((): MessageEvent => ({ type: 'ping', data: '' })),
     );
     const rows$ = this.registry.open(access.userId).pipe(
-      mergeMap((nudge) =>
-        from(
-          this.service.findForStream(nudge.notificationId, access.userId),
-        ).pipe(
-          // Per nudge, so one failed read drops that one frame and nothing
-          // else. Left to propagate, the rejection errors the merged stream:
-          // Nest's SSE `catchError` then writes `{ type: 'error', data:
-          // err.message }` to the browser — the raw driver message, host and
-          // port included — and completes the response. A transient Mongo
-          // error would close every stream on this node that was mid-read
-          // and hand the client text it should never see. The client would
-          // recover through reconnect + refetch, but it should not have to;
-          // the row is still there and the badge's poll picks it up.
-          catchError((err: unknown) => {
-            this.logger.warn(
-              `Dropped a stream frame for ${nudge.notificationId}: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-            return EMPTY;
-          }),
-        ),
-      ),
-      filter((row): row is NotificationRecord => row !== null),
       map((row): MessageEvent => ({
         type: 'notification',
         id: row.id,
@@ -193,12 +192,15 @@ export class NotificationsController {
       })),
     );
 
-    const stream$ = merge(ready$, ping$, rows$);
     // Completing the observable is how Nest ends the response; `finalize` in
-    // the registry then drops this stream from the map.
-    return Number.isFinite(untilExp)
-      ? stream$.pipe(takeUntil(timer(untilExp)))
-      : stream$;
+    // the registry then drops this stream from the map. Two reasons to
+    // complete: the token's `exp`, and the module shutting down — `ping$`
+    // never completes on its own, so without the second `app.close()` would
+    // wait for every open token to expire.
+    return merge(ready$, ping$, rows$).pipe(
+      takeUntil(timer(untilExp)),
+      takeUntil(this.registry.closed$),
+    );
   }
 
   @Get()
