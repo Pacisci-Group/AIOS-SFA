@@ -27,6 +27,8 @@ import {
   EmailMessage,
   EmailMessageSchema,
 } from './email/schemas/email-message.schema';
+import { webPushTransportProvider } from './push/web-push.provider';
+import { WebPushService } from './push/web-push.service';
 import { WorkerIndexesService } from './worker-indexes.service';
 import { TenantUrlService } from '../common/tenancy/tenant-url.service';
 import { TenantBrandingService } from '../tenant-branding/tenant-branding.service';
@@ -69,6 +71,10 @@ import {
   Notification,
   NotificationSchema,
 } from '../notifications/schemas/notification.schema';
+import {
+  PushSubscription,
+  PushSubscriptionSchema,
+} from '../notifications/schemas/push-subscription.schema';
 import { RedisModule } from '../common/redis/redis.module';
 import { StorageModule } from '../storage/storage.module';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
@@ -182,6 +188,10 @@ import {
       // else. Do not add it to `WorkerIndexesService` — `syncIndexes()` would
       // drop the API's indexes on it.
       { name: Notification.name, schema: NotificationSchema },
+      // Same ownership as `Notification`: the API builds the indexes, the
+      // worker reads the live rows to fan out and soft-deletes the ones the
+      // push service reports gone (PAC-154 PR4). Not in `WorkerIndexesService`.
+      { name: PushSubscription.name, schema: PushSubscriptionSchema },
       // TLS certificate lifecycle. Owned by `src/tls/`, registered here
       // because the worker is what runs ACME — schemas are the one thing
       // the worker boundary lets across, and the issuer needs all three.
@@ -235,6 +245,12 @@ import {
     // depends only on the `Agency` model, registered above, and
     // `tenant-branding/` is not a feature directory in the eslint boundary.
     TenantBrandingService,
+    // Web push (PAC-154 PR4). The transport is picked from the VAPID settings
+    // the way the mail transport is from RESEND_API_KEY — disabled and loud
+    // when they are missing. Lives in `push/`, never `notifications/`: that is
+    // a feature directory name and the boundary regex matches import strings.
+    webPushTransportProvider,
+    WebPushService,
     // Certificate issuance. Lives in `src/worker/acme/` rather than
     // `src/worker/tls/`: these patterns match the import *string*, and
     // `tls` is a feature directory, so a worker subdirectory sharing that

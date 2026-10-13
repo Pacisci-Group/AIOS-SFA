@@ -2,6 +2,7 @@ import path from 'path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 const sharedSrc = path.resolve(__dirname, '../shared/src/index.ts');
 const repoRoot = path.resolve(__dirname, '../..');
@@ -12,7 +13,65 @@ export default defineConfig(({ mode }) => {
   const env = { ...loadEnv(mode, repoRoot, ''), ...process.env };
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      /**
+       * The PWA shell (PAC-154 PR4 · PAC-153 §1): service worker, platform
+       * manifest, icons.
+       *
+       * `injectManifest`, not `generateSW`: the worker is our own `src/sw.ts`
+       * (precache + push + notificationclick), and the plugin only writes
+       * the precache list into it. `registerType: 'prompt'` is load-bearing
+       * — a new build installs and *waits*, and `PwaUpdateToast` offers the
+       * reload; `autoUpdate` would swap the worker under a tab whose lazy
+       * chunks the deploy just deleted.
+       *
+       * Off in dev (`devOptions.enabled: false`): a worker that precaches
+       * the shell fights HMR, and the dev server's tenant-host proxying is
+       * exactly the thing a stale shell would hide. Push is verified against
+       * `vite preview` or the nginx container.
+       *
+       * The manifest is the **platform's** — AgencyOps, Allstate blue. A
+       * per-agency manifest is PAC-153 §2.
+       */
+      VitePWA({
+        strategies: 'injectManifest',
+        srcDir: 'src',
+        filename: 'sw.ts',
+        registerType: 'prompt',
+        injectRegister: false,
+        includeAssets: ['apple-touch-icon.png'],
+        injectManifest: {
+          globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+          // The main chunk is well past Workbox's 2 MiB default.
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+        },
+        manifest: {
+          name: 'AgencyOps',
+          short_name: 'AgencyOps',
+          description: 'Insurance agency operations platform.',
+          start_url: '/',
+          scope: '/',
+          display: 'standalone',
+          // `--primary` and the dark `--background` from `src/styles/theme.css`:
+          // a manifest cannot read a CSS variable, so these are the literals.
+          theme_color: '#0076A8',
+          background_color: '#0B0F19',
+          icons: [
+            { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+            { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+            {
+              src: '/icon-maskable-512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
+          ],
+        },
+        devOptions: { enabled: false },
+      }),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

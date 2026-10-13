@@ -56,5 +56,45 @@ export interface MarkAllNotificationsReadResponse {
   updated: number;
 }
 
+/**
+ * `PUT /notifications/push-subscriptions` — one browser's push subscription,
+ * exactly as `PushSubscription.toJSON()` hands it over, plus the user agent so
+ * a support conversation can tell devices apart.
+ *
+ * `endpoint` is the identity: a device re-subscribing upserts its own row, and
+ * a shared machine re-subscribing under a new login moves the row to that
+ * user. Removal (`DELETE /notifications/push-subscriptions`) takes
+ * `{ endpoint }` in the **body**, never as a path param — the endpoint is a
+ * long URL with `/` and `%` in it, and a proxy that re-normalises encoded
+ * slashes would mangle it.
+ */
+export interface PushSubscriptionInput {
+  endpoint: string;
+  /** `expirationTime` is dropped: the push service tells us with a 410. */
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  userAgent?: string | null;
+}
+
+export interface RemovePushSubscriptionInput {
+  endpoint: string;
+}
+
+/** What the API echoes back after an upsert — never the keys. */
+export interface PushSubscriptionResponse {
+  id: string;
+  endpoint: string;
+  userAgent: string | null;
+  createdAt: string;
+  lastSuccessAt: string | null;
+}
+
+/** `GET /public/push/vapid-public-key`. Absent entirely (404) when push is not configured. */
+export interface VapidPublicKeyResponse {
+  publicKey: string;
+}
+
 export const NOTIFICATION_LIST_DEFAULT_LIMIT = 20;
 export const NOTIFICATION_LIST_MAX_LIMIT = 50;

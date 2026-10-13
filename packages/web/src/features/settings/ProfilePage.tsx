@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Bell, KeyRound, Trash2, Upload, UserRound } from 'lucide-react';
+import { KeyRound, Trash2, Upload, UserRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { DataRow, DetailCard } from '@/components/common/DetailCard';
 import { UserAvatar } from '@/components/common/UserAvatar';
@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/auth-context';
 import { useTenant } from '@/contexts/tenant-context';
+import { PushOptIn } from '@/features/notifications/PushOptIn';
 import { useAppForm } from '@/hooks/form';
 import { ApiError, type AuthUser } from '@/lib/api-client';
 import {
@@ -82,13 +83,11 @@ export default function ProfilePage() {
           </div>
         </DetailCard>
 
-        {/* Reserved: notification preferences are a planned sibling feature,
-            and the page should already read as the place they will live. */}
-        <DetailCard title="Notifications" icon={Bell}>
-          <p className="text-sm text-muted-foreground">
-            Notification preferences are coming soon.
-          </p>
-        </DetailCard>
+        {/* Browser notifications for this device (PAC-154 PR4). Per-type /
+            per-channel preferences are deferred (ticket decision 4) and will
+            live in this card when they land. Hidden where push is not
+            available at all. */}
+        <PushOptIn />
       </div>
     </SettingsPage>
   );

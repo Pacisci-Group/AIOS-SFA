@@ -2,9 +2,12 @@ import type {
   MarkAllNotificationsReadResponse,
   NotificationListResponse,
   NotificationRecord,
+  PushSubscriptionInput,
+  PushSubscriptionResponse,
   UnreadCountResponse,
+  VapidPublicKeyResponse,
 } from '@sfa/shared';
-import { apiFetch } from '@/lib/api-client';
+import { apiFetch, publicFetch } from '@/lib/api-client';
 
 /**
  * The caller's own notification centre (PAC-154).
@@ -55,5 +58,36 @@ export function markNotificationRead(id: string): Promise<NotificationRecord> {
 export function markAllNotificationsRead(): Promise<MarkAllNotificationsReadResponse> {
   return apiFetch<MarkAllNotificationsReadResponse>('/notifications/read-all', {
     method: 'POST',
+  });
+}
+
+/**
+ * Web push (PAC-154 PR4). The subscription is this browser's; the three
+ * calls are what `features/notifications/push-subscription.ts` wraps.
+ */
+
+/** `@Public()` — read before any session; 404 when push is not configured. */
+export function getVapidPublicKey(): Promise<VapidPublicKeyResponse> {
+  return publicFetch<VapidPublicKeyResponse>('/public/push/vapid-public-key');
+}
+
+/** Upsert on `endpoint`; `200` both the first time and every time after. */
+export function registerPushSubscription(
+  input: PushSubscriptionInput,
+): Promise<PushSubscriptionResponse> {
+  return apiFetch<PushSubscriptionResponse>('/notifications/push-subscriptions', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * The endpoint goes in the **body**, never the path — it is a URL with `/`
+ * and `%` in it, and nginx re-normalises encoded slashes on `proxy_pass`.
+ */
+export function removePushSubscription(endpoint: string): Promise<void> {
+  return apiFetch<void>('/notifications/push-subscriptions', {
+    method: 'DELETE',
+    body: JSON.stringify({ endpoint }),
   });
 }

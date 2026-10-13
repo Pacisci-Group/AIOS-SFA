@@ -105,3 +105,11 @@ process.env.GOOGLE_MAPS_API_KEY = '';
 // suite open real Redis connections — and the stream suite asserts against the
 // in-process bus, which is the one `api:dev` runs too.
 process.env.REDIS_URL = '';
+
+// Web push (PAC-154 PR4). Empty so the worker suites run the *disabled*
+// transport unless they override it: a developer with a real VAPID pair in
+// `.env` would otherwise have `deliver-notification` try the push services
+// for real. The suites that exercise sending substitute a capture transport.
+process.env.VAPID_PUBLIC_KEY = '';
+process.env.VAPID_PRIVATE_KEY = '';
+process.env.VAPID_SUBJECT = '';
