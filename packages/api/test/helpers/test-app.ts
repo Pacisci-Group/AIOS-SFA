@@ -26,19 +26,19 @@ export class CapturedInngestService {
   readonly sent: Array<{
     name: string;
     data: Record<string, unknown>;
-    /** The `options.id` the producer passed, when it minted the id itself. */
-    id?: string;
+    /** The producer's stable id (`SendOptions.id`), or `null` when it minted none. */
+    id: string | null;
   }> = [];
 
   send(
     event: { name: string },
     data: Record<string, unknown>,
-    options: { id?: { toHexString(): string } } = {},
+    options?: { id?: { toHexString(): string } },
   ): Promise<void> {
     this.sent.push({
       name: event.name,
       data,
-      ...(options.id ? { id: options.id.toHexString() } : {}),
+      id: options?.id?.toHexString() ?? null,
     });
     return Promise.resolve();
   }

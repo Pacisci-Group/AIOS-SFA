@@ -1,14 +1,17 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
+  NOTIFICATION_TYPES,
   NotificationRenderError,
   renderNotification,
+  type NotificationType,
   type RenderedNotification,
 } from '@sfa/shared';
 import { NonRetriableError } from 'inngest';
 import { Model, Types } from 'mongoose';
 import { NotificationBus } from '../../common/redis/notification-bus';
 import {
+  notificationEmailRequested,
   notificationRequested,
   type NotificationRequestedData,
 } from '../../inngest/events';
@@ -16,6 +19,10 @@ import {
   INNGEST_CLIENT,
   type InngestClient,
 } from '../../inngest/inngest.client';
+import {
+  deterministicEventId,
+  InngestService,
+} from '../../inngest/inngest.service';
 import {
   InngestFunction,
   type InngestFunctionProvider,
@@ -32,7 +39,7 @@ import {
  * `notification/requested.v1` and this function does the rest: render the text
  * once, insert one row per recipient, then fan out to the secondary channels.
  * The channels arrive one PR at a time as further steps: `publish` (SSE nudge,
- * PR2, below), `email` (PR3), `push` (PR4). Each is its own `step.run` so a
+ * PR2), `email` (PR3, below), `push` (PR4). Each is its own `step.run` so a
  * crash in one never re-runs the ones before it.
  *
  * ## The nudge carries ids only
@@ -41,6 +48,18 @@ import {
  * else; whichever node holds the recipient's stream re-reads the row before
  * writing the frame. A replayed step re-nudges, and the client invalidates
  * rather than appends, so a duplicate nudge is harmless by construction.
+ *
+ * ## Email is a hand-off, not a send
+ *
+ * `email` emits one `notification/email.requested.v1` per row whose catalog
+ * type has the channel on (no user preferences yet — ticket decision 4) and
+ * `SendNotificationEmailFn` does the mailing. A separate function for the same
+ * reason the campaign commit mails from one: a mail provider outage must never
+ * fail, or retry, a notification that is already stored and already live.
+ * Emitting from inside a step is the `MailerCampaignCommitFn` precedent — it
+ * goes through `InngestService`, so the outbox row exists before the send and
+ * the sweeper replays a stranded one; a replayed step re-emits, and the mail
+ * function's `idempotency: 'event.data.notificationId'` collapses that.
  *
  * ## Exactly once, twice over
  *
@@ -57,6 +76,8 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
 
   constructor(
     @Inject(INNGEST_CLIENT) private readonly inngest: InngestClient,
+    /** The outbox-backed sender — for events emitted *by* this function. */
+    private readonly events: InngestService,
     @InjectModel(Notification.name)
     private readonly notificationModel: Model<NotificationDocument>,
     private readonly bus: NotificationBus,
@@ -110,6 +131,9 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
     // channel does not nudge every tab a second time.
     await step.run('publish', () => this.publish(rows));
 
+    // A hand-off to the mail function, never a send — see the class note.
+    await step.run('email', () => this.requestEmails(event.data.type, rows));
+
     return { notificationIds: rows.map((row) => row.id) };
   }
 
@@ -124,12 +148,9 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
   async rowsForIds(ids: string[]): Promise<InsertedRow[]> {
     const rows = await this.notificationModel
       .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } })
-      .select({ _id: 1, recipientId: 1 })
-      .lean<Array<{ _id: Types.ObjectId; recipientId: Types.ObjectId }>>();
-    return rows.map((row) => ({
-      id: row._id.toHexString(),
-      recipientId: row.recipientId.toHexString(),
-    }));
+      .select({ _id: 1, recipientId: 1, agencyId: 1 })
+      .lean<StoredRowKeys[]>();
+    return rows.map(toInsertedRow);
   }
 
   /**
@@ -170,15 +191,10 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
 
     const rows = await this.notificationModel
       .find({ recipientId: { $in: recipientIds }, dedupeKey: data.dedupeKey })
-      .select({ _id: 1, recipientId: 1 })
-      .lean<Array<{ _id: Types.ObjectId; recipientId: Types.ObjectId }>>();
+      .select({ _id: 1, recipientId: 1, agencyId: 1 })
+      .lean<StoredRowKeys[]>();
 
-    return {
-      rows: rows.map((row) => ({
-        id: row._id.toHexString(),
-        recipientId: row.recipientId.toHexString(),
-      })),
-    };
+    return { rows: rows.map(toInsertedRow) };
   }
 
   /**
@@ -202,6 +218,56 @@ export class DeliverNotificationFn implements InngestFunctionProvider {
       ),
     );
     return { published: rows.length };
+  }
+
+  /**
+   * One email request per row, for a type whose defaults include the channel.
+   *
+   * The decision is the catalog's alone until per-user preferences exist
+   * (ticket decision 4); when they land they filter this list, they do not
+   * replace it. Returns a count so the step result is plain JSON.
+   *
+   * ## The row's agency, not the event's
+   *
+   * `insert` returns every row that exists for the `dedupeKey`, including
+   * ones an earlier event created — and those carry their own `agencyId`.
+   * Stamping each request with *this* event's agency would make
+   * `SendNotificationEmailFn.load` refuse the mismatch (`NonRetriableError`)
+   * and that recipient's mail would vanish with no `delivery.email` record
+   * (PR3 review, second round). The row is the authority: the request
+   * carries what it stores.
+   *
+   * ## Stable event ids
+   *
+   * Each emit carries `deterministicEventId('notification-email', row.id)`.
+   * This step is one `step.run` over every row, so a failure on the ninth
+   * emit replays all nine. With fresh ids the first eight rows would each
+   * gain a second event: Inngest's function idempotency (on `notificationId`)
+   * would skip the duplicate *runs*, but nothing would ever mark the
+   * duplicates' outbox rows terminal, and the sweeper would re-emit them for
+   * 24 hours — no second email, but a day of stale-outbox noise for work that
+   * succeeded. With a stable id the replay *is* the original event: Inngest
+   * dedupes it and the outbox finds its row already written.
+   */
+  async requestEmails(
+    type: NotificationType,
+    rows: InsertedRow[],
+  ): Promise<{ requested: number }> {
+    if (!NOTIFICATION_TYPES[type].defaultChannels.email) {
+      return { requested: 0 };
+    }
+    for (const row of rows) {
+      await this.events.send(
+        notificationEmailRequested,
+        {
+          notificationId: row.id,
+          recipientId: row.recipientId,
+          agencyId: row.agencyId,
+        },
+        { id: deterministicEventId('notification-email', row.id) },
+      );
+    }
+    return { requested: rows.length };
   }
 
   private render(data: NotificationRequestedData): RenderedNotification {
@@ -241,6 +307,22 @@ function isDuplicateKeyError(err: unknown): boolean {
 export interface InsertedRow {
   id: string;
   recipientId: string;
+  /** The row's own agency — the later steps use it, never the event's. */
+  agencyId: string | null;
+}
+
+interface StoredRowKeys {
+  _id: Types.ObjectId;
+  recipientId: Types.ObjectId;
+  agencyId: Types.ObjectId | null;
+}
+
+function toInsertedRow(row: StoredRowKeys): InsertedRow {
+  return {
+    id: row._id.toHexString(),
+    recipientId: row.recipientId.toHexString(),
+    agencyId: row.agencyId ? row.agencyId.toHexString() : null,
+  };
 }
 
 interface InsertResult {

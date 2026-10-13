@@ -53,10 +53,10 @@ export class SendInviteEmailFn implements InngestFunctionProvider {
         retries: 4,
 
         /**
-         * Resend's default account limit is 2 requests/second. This cap is
-         * per-function across every worker process (Inngest enforces it
-         * server-side), which a per-process limit could not do once the worker
-         * scales past one container.
+         * Bounds this function's runs in flight — a worker-capacity knob, not
+         * a rate. Resend's 2 requests/second is account-wide and enforced in
+         * `ResendTransport` (`RateGate`), in front of every mail this process
+         * sends, whichever function it came from (PAC-154 PR3 review).
          */
         concurrency: { limit: 5 },
       },

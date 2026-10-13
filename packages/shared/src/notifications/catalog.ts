@@ -48,10 +48,14 @@ export const NOTIFICATION_TYPES = {
    * A bug report was filed (PAC-82 queue, PAC-127 "nothing is sent yet").
    * Recipients: every active platform admin other than the reporter.
    * `data`: `{ bugReportId, summary, severity, reporterName, agencyId }`.
+   *
+   * Email is on (PAC-154 PR3): a platform admin is rarely *in* the app when a
+   * report lands, and the queue has no other way to reach them. It is also
+   * the only producer wired today, so this is what exercises the channel.
    */
   'bug_report.filed': {
     category: 'platform',
-    defaultChannels: { email: false, push: true },
+    defaultChannels: { email: true, push: true },
   },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 

@@ -49,17 +49,27 @@ export class EventLogService {
     eventName: string,
     payload: Record<string, unknown>,
   ): Promise<void> {
-    await this.entries.create({
-      _id: id,
-      eventName,
-      payload,
-      status: 'pending',
-      // Tenancy is read off the payload rather than passed separately: every
-      // event that belongs to a tenant already carries these, and requiring
-      // producers to repeat them would be a second place to get them wrong.
-      agencyId: readString(payload, 'agencyId'),
-      branchId: readString(payload, 'branchId'),
-    });
+    // An upsert that only ever *inserts*: a producer using a deterministic id
+    // (`InngestService.SendOptions.id`) legitimately sends the same event
+    // twice, and the second send must find the first row — whatever state
+    // it has reached — rather than fail on `_id` or reset it to `pending`.
+    await this.entries.updateOne(
+      { _id: id },
+      {
+        $setOnInsert: {
+          eventName,
+          payload,
+          status: 'pending',
+          // Tenancy is read off the payload rather than passed separately:
+          // every event that belongs to a tenant already carries these, and
+          // requiring producers to repeat them would be a second place to get
+          // them wrong.
+          agencyId: readString(payload, 'agencyId'),
+          branchId: readString(payload, 'branchId'),
+        },
+      },
+      { upsert: true },
+    );
   }
 
   /** Terminal: the run completed. */

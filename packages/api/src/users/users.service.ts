@@ -892,11 +892,12 @@ export class UsersService {
       this.resolveUserName(invitedByUserId),
     ]);
 
-    // Same origin as the invite link, so the logo is fetched from the host the
-    // invitee is about to visit — and so a tenant with its own domain never
-    // makes a mail client load an asset from a name the recipient has never
-    // heard of.
-    const brand = await this.resolveEmailBrand(agencyIdString, minted.baseUrl);
+    // The agency's name and, when it has a host of its own, its logo on that
+    // host. Deliberately not built on `minted.baseUrl`: the link's base falls
+    // back to the platform host for an agency without a domain, and the logo
+    // endpoint 404s there — every such invite carried a broken image until
+    // the rule moved into `emailBrandFor` (PAC-154 PR3 review).
+    const brand = await this.tenantBranding.emailBrandFor(agencyIdString);
 
     // `agencyId` is optional on the schema (a platform super admin has none)
     // but is guaranteed on every path into here: `inviteUser` sets it from a
@@ -993,35 +994,6 @@ export class UsersService {
       );
     }
     return user;
-  }
-
-  /**
-   * Absolute, because the link is opened from an email client that has no origin
-   * to resolve a relative path against.
-   */
-  /**
-   * The agency's identity for the email masthead, or `undefined` to fall back
-   * to the platform wordmark.
-   *
-   * The logo URL is made **absolute against the same base as the invite link**.
-   * It cannot be a relative path (a mail client has no origin to resolve it
-   * against) and it cannot be a presigned storage URL (those expire, and an
-   * invite may sit unread for days — a broken image in a "set your password"
-   * email is exactly the thing that makes it look like phishing).
-   */
-  private async resolveEmailBrand(
-    agencyId: string | null,
-    baseUrl: string,
-  ): Promise<{ name: string; logoUrl: string | null } | undefined> {
-    if (!agencyId) return undefined;
-
-    const branding = await this.tenantBranding.forAgency(agencyId);
-    if (branding.kind !== 'agency') return undefined;
-
-    return {
-      name: branding.name,
-      logoUrl: branding.logoUrl ? `${baseUrl}${branding.logoUrl}` : null,
-    };
   }
 
   /**

@@ -175,6 +175,16 @@ describe('SendInviteEmailFn (e2e)', () => {
     expect(row.sentAt).toBeInstanceOf(Date);
   });
 
+  it('records one row however many times the record step runs (PAC-157)', async () => {
+    const event = inviteEvent();
+    await fn.handle(event, inlineStep().step);
+    // The same mail recorded again — a retried `record` step, or a replay of
+    // the whole run inside the provider's idempotency window.
+    await fn.handle(event, inlineStep().step);
+
+    await expect(messages.countDocuments({})).resolves.toBe(1);
+  });
+
   it('never persists the invite URL', async () => {
     // The invite link is a bearer credential. A delivery record is readable by
     // support and by any future admin UI, so a working password-set URL must
