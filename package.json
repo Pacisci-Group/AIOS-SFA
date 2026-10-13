@@ -13,6 +13,7 @@
     "api:seed:dev": "npm run seed:dev -w @sfa/api",
     "api:seed:demo": "npm run seed:demo -w @sfa/api",
     "api:seed:demo:dev": "npm run seed:demo:dev -w @sfa/api",
+    "api:scrub:emails:dev": "npm run scrub:emails:dev -w @sfa/api",
     "api:migrate": "npm run migrate -w @sfa/api",
     "api:migrate:dev": "npm run migrate:dev -w @sfa/api",
     "api:migrate:mailers": "npm run migrate:mailers -w @sfa/api",

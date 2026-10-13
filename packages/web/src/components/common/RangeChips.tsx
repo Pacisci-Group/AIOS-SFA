@@ -17,6 +17,8 @@ interface RangeChipsProps<K extends string> {
   range: UrlRange<K>;
   onChange: (next: UrlRange<K>) => void;
   className?: string;
+  /** Passed to the custom picker; see `DateRangePicker`. */
+  maxSpanDays?: number;
 }
 
 /**
@@ -38,6 +40,7 @@ export function RangeChips<K extends string>({
   range,
   onChange,
   className,
+  maxSpanDays,
 }: RangeChipsProps<K>) {
   return (
     <div
@@ -52,6 +55,7 @@ export function RangeChips<K extends string>({
             key={chip.key}
             range={range}
             isActive={range.key === "custom"}
+            maxSpanDays={maxSpanDays}
             onApply={(from, to) => onChange({ key: "custom", from, to })}
           />
         ) : (

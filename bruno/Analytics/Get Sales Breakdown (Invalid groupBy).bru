@@ -1,0 +1,32 @@
+meta {
+  name: Get Sales Breakdown (Invalid groupBy)
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}/analytics/sales/breakdown?groupBy=producer&segmentBy=producer
+  body: none
+  auth: bearer
+}
+
+params:query {
+  groupBy: producer
+  segmentBy: producer
+}
+
+auth:bearer {
+  token: {{analyticsToken}}
+}
+
+tests {
+  test("segmentBy equal to groupBy is a 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # GET /analytics/sales/breakdown — `segmentBy` equal to `groupBy`
+
+  A segment must split the rows by a different dimension.
+}

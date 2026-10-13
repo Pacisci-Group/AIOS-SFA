@@ -1,4 +1,8 @@
-import { LEAD_SOURCE_NONE, policyTypeQueryValues } from '@sfa/shared';
+import {
+  carrierQueryValues,
+  LEAD_SOURCE_NONE,
+  policyTypeQueryValues,
+} from '@sfa/shared';
 import { PipelineStage, Types } from 'mongoose';
 import { requireTimeZone } from '../dates/time-zones';
 import type { YmdRange } from '../../performance/performance.range';
@@ -57,6 +61,36 @@ export interface OwnerFilterClauses {
   policyTypes?: readonly string[];
   /** `leadSources` ids and/or `LEAD_SOURCE_NONE`, or none for "every source". */
   leadSourceIds?: readonly string[];
+}
+
+/**
+ * Opt-in extras for {@link linesPrefix} (PAC-152, part 2 — the Analytics page).
+ *
+ * The Owner and Manager dashboards pass none, and their stages are then
+ * byte-for-byte what they were before this existed.
+ */
+export interface LinesOptions {
+  /**
+   * Carry each policy's `carrier` on its line, so a pipeline can group or
+   * split by carrier. Only a looked-up source has one: quote recaps record no
+   * carrier, so their lines carry `null`.
+   */
+  carrier?: boolean;
+  /**
+   * Keep only lines whose carrier is one of these display names (every alias
+   * code included — see `carrierQueryValues`). Implies `carrier`. A record
+   * left with no line drops out, and a lineless record never matches: it has
+   * no carrier to match on.
+   */
+  carriers?: readonly string[];
+}
+
+/** Every stored spelling of the selected carriers; `null` for "no filter". */
+export function carrierValues(
+  carriers: readonly string[] | undefined,
+): string[] | null {
+  if (!carriers?.length) return null;
+  return [...new Set(carriers.flatMap(carrierQueryValues))];
 }
 
 /**
@@ -149,8 +183,11 @@ export function linesPrefix(
   source: LinesSource,
   filter: OwnerFilterClauses,
   withSource: boolean,
+  options: LinesOptions = {},
 ): PipelineStage[] {
   const stages: PipelineStage[] = [{ $match: match }];
+  const carrierFilter = carrierValues(options.carriers);
+  const withCarrier = Boolean(options.carrier || carrierFilter);
 
   const needsSource = withSource || Boolean(filter.leadSourceIds?.length);
   if (needsSource) {
@@ -166,7 +203,15 @@ export function linesPrefix(
         foreignField: source.lines.foreignField,
         pipeline: [
           { $match: { isTestRecord: { $ne: true } } },
-          { $project: { _id: 0, policyType: 1, premium: 1, items: 1 } },
+          {
+            $project: {
+              _id: 0,
+              policyType: 1,
+              premium: 1,
+              items: 1,
+              ...(withCarrier ? { carrier: 1 } : {}),
+            },
+          },
         ],
         as: '_rows',
       },
@@ -192,6 +237,9 @@ export function linesPrefix(
                 premium: { $ifNull: ['$$row.premium', 0] },
                 items: { $ifNull: [rowItems, 0] },
                 typed: true,
+                ...(withCarrier
+                  ? { carrier: { $ifNull: ['$$row.carrier', null] } }
+                  : {}),
               },
             },
           },
@@ -201,6 +249,7 @@ export function linesPrefix(
               premium: { $ifNull: ['$premium', 0] },
               items: { $ifNull: [`$${source.itemsField}`, 0] },
               typed: false,
+              ...(withCarrier ? { carrier: null } : {}),
             },
           ],
         ],
@@ -239,6 +288,23 @@ export function linesPrefix(
         },
       },
       // Nothing of the selected types on this record at all.
+      { $match: { 'lines.0': { $exists: true } } },
+    );
+  }
+
+  if (carrierFilter) {
+    stages.push(
+      {
+        $addFields: {
+          lines: {
+            $filter: {
+              input: '$lines',
+              as: 'line',
+              cond: { $in: ['$$line.carrier', carrierFilter] },
+            },
+          },
+        },
+      },
       { $match: { 'lines.0': { $exists: true } } },
     );
   }

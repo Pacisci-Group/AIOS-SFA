@@ -77,12 +77,19 @@ export class InngestService {
    * `data` omits `eventLogId` — producers neither know nor set it. The generic
    * constraint means an event schema that forgot to spread `eventEnvelope` is a
    * compile error here rather than a row that never reaches a terminal state.
+   *
+   * `options.id` lets a producer mint the id itself, for a record that must
+   * point at its job: write the id onto the record **first**, then send. If the
+   * send throws, the outbox row and the record still agree. Patching the
+   * record after `send` returns would leave it pointing at nothing. Omitted,
+   * the id is minted here as before.
    */
   async send<TData extends { eventLogId: string }>(
     event: CatalogEvent<TData>,
     data: Omit<TData, 'eventLogId'>,
+    options: { id?: Types.ObjectId } = {},
   ): Promise<void> {
-    const eventLogId = new Types.ObjectId();
+    const eventLogId = options.id ?? new Types.ObjectId();
     const payload = {
       ...data,
       eventLogId: eventLogId.toHexString(),
