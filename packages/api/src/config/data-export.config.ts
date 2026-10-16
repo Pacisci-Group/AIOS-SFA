@@ -65,3 +65,25 @@ export const DEFAULT_DATA_EXPORT_RETENTION_DAYS = 7;
 export function dataExportRetentionDays(raw: string | undefined): number {
   return boundedInt(raw, DEFAULT_DATA_EXPORT_RETENTION_DAYS, 1, 30);
 }
+
+/** An hour: the same export may be requested once an hour. */
+export const DEFAULT_DATA_EXPORT_DUPLICATE_WINDOW_MINUTES = 60;
+
+/**
+ * How long after a request the same request (same caller, dataset, format and
+ * filters) is refused as a duplicate, in milliseconds.
+ *
+ * Clamped to 1 minute to 24 hours. The cap keeps the window inside the
+ * shortest retention (1 day), so an export's file never expires while its
+ * request still blocks a new one.
+ */
+export function dataExportDuplicateWindowMs(): number {
+  return (
+    boundedInt(
+      process.env.DATA_EXPORT_DUPLICATE_WINDOW_MINUTES,
+      DEFAULT_DATA_EXPORT_DUPLICATE_WINDOW_MINUTES,
+      1,
+      1_440,
+    ) * 60_000
+  );
+}

@@ -90,9 +90,9 @@ export class DataExportController {
 
   /**
    * Queues an export. Validation errors and an over-cap refusal are ordinary
-   * JSON 400s; a request the caller already has live is a 409
-   * (`EXPORT_DUPLICATE`, with that export); anything accepted is a 202 with
-   * the `queued` row.
+   * JSON 400s; a request the caller made within the last hour is a 409
+   * (`EXPORT_DUPLICATE`, with that export and `retryAt`); anything accepted is
+   * a 202 with the `queued` row.
    */
   @Post(':dataset/exports')
   @HttpCode(HttpStatus.ACCEPTED)
@@ -112,8 +112,9 @@ export class DataExportController {
   /**
    * Re-runs a failed export as a new request with the same parameters (202,
    * the new `queued` row). Only its requester may, and not for an export
-   * refused as too large or already re-run (409). A re-run the caller already
-   * has live is the request's `EXPORT_DUPLICATE` 409.
+   * refused as too large or already re-run (409). A re-run of a request the
+   * caller made again within the last hour is the request's `EXPORT_DUPLICATE`
+   * 409.
    */
   @Post('exports/:id/rerun')
   @HttpCode(HttpStatus.ACCEPTED)

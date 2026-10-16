@@ -1207,6 +1207,25 @@ describe('Data export (PAC-152) (e2e)', () => {
       to: '2026-04-30',
     } as const;
 
+    const HOUR = 60 * 60_000;
+
+    /**
+     * Make an export look as if it was requested `ms` ago. Through the raw
+     * driver, so Mongoose's timestamps handling cannot touch `createdAt`.
+     */
+    const requestedAgo = (id: string, ms: number) =>
+      exportModel.collection.updateOne(
+        { _id: new Types.ObjectId(id) },
+        { $set: { createdAt: new Date(Date.now() - ms) } },
+      );
+
+    /** The 409's `retryAt` falls within the hour from now. */
+    const expectRetryWithinHour = (body: unknown) => {
+      const retryAt = Date.parse((body as { retryAt: string }).retryAt);
+      expect(retryAt).toBeGreaterThan(Date.now());
+      expect(retryAt).toBeLessThanOrEqual(Date.now() + HOUR);
+    };
+
     it('refuses the same request while the first is queued, and logs nothing', async () => {
       const first = await requestExport('leads', {
         ...april,
@@ -1227,6 +1246,7 @@ describe('Data export (PAC-152) (e2e)', () => {
       expect((res.body as { message: string }).message).toContain(
         'still being prepared',
       );
+      expectRetryWithinHour(res.body);
       expect(events.sent.length).toBe(events0);
       expect(await exportModel.countDocuments()).toBe(rows0);
     });
@@ -1240,6 +1260,45 @@ describe('Data export (PAC-152) (e2e)', () => {
         existing: { id: first, status: 'ready', canDownload: true },
       });
       expect((res.body as { message: string }).message).toContain('Download');
+      expectRetryWithinHour(res.body);
+    });
+
+    it('still refuses it before the hour is up, and says when', async () => {
+      const first = await requestExport('leads', april);
+      await generate(first);
+      await requestedAgo(first, HOUR - 60_000);
+      const res = await post('leads', april).expect(409);
+      expect(res.body).toMatchObject({
+        code: 'EXPORT_DUPLICATE',
+        existing: { id: first },
+      });
+      const retryAt = Date.parse((res.body as { retryAt: string }).retryAt);
+      expect(retryAt).toBeGreaterThan(Date.now());
+      expect(retryAt).toBeLessThanOrEqual(Date.now() + 2 * 60_000);
+      expect((res.body as { message: string }).message).toContain(
+        'request it again in 1 minute.',
+      );
+    });
+
+    it('allows the same request again an hour after the earlier one, ready or not', async () => {
+      // Ready: a new export is queued, and the earlier file stays downloadable.
+      const ready = await requestExport('leads', april);
+      await generate(ready);
+      await requestedAgo(ready, HOUR + 60_000);
+      const second = await requestExport('leads', april);
+      expect(second).not.toBe(ready);
+      const earlier = await exportModel.findById(ready).lean();
+      expect(earlier).toMatchObject({ status: 'ready', activeKey: null });
+      expect(earlier!.file).not.toBeNull();
+      await post('leads', april).expect(409);
+
+      // Still queued an hour on (a stuck job): it no longer holds it back.
+      await requestedAgo(second, HOUR + 60_000);
+      await post('leads', april).expect(202);
+      expect(await exportModel.findById(second).lean()).toMatchObject({
+        status: 'queued',
+        activeKey: null,
+      });
     });
 
     it('treats another format, date field or filter as another export', async () => {
@@ -1264,28 +1323,15 @@ describe('Data export (PAC-152) (e2e)', () => {
       await post('leads', april).expect(202);
     });
 
-    it('allows it again once the file has expired, swept or not', async () => {
+    it('allows it again once the file has been swept', async () => {
       const first = await requestExport('leads', april);
       await generate(first);
       await exportModel.updateOne(
         { _id: first },
         { $set: { expiresAt: new Date(Date.now() - 1_000) } },
       );
-      // Not swept yet: the page already offers no download, so neither
-      // does the rule hold the request back.
-      const second = await requestExport('leads', april);
-      expect(await exportModel.findById(first).lean()).toMatchObject({
-        status: 'ready',
-        activeKey: null,
-      });
-
-      await generate(second);
-      await exportModel.updateOne(
-        { _id: second },
-        { $set: { expiresAt: new Date(Date.now() - 1_000) } },
-      );
       await app.get(DataExportExpireFn).sweep();
-      expect(await exportModel.findById(second).lean()).toMatchObject({
+      expect(await exportModel.findById(first).lean()).toMatchObject({
         status: 'expired',
         activeKey: null,
       });
