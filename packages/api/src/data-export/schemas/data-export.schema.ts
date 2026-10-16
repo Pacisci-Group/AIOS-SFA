@@ -121,11 +121,13 @@ export class DataExport {
   runId: string | null;
 
   /**
-   * What makes a request a duplicate, while this export is live. A hash of
-   * the requester, dataset, format and filters (see `dedupeKeyFor`), set on a
-   * `queued` row and cleared when the export fails or expires. The unique
-   * index below admits one live export per key, so a second identical request
-   * is refused, even one racing the first. `null` for anything not live.
+   * What makes a request a duplicate, for the duplicate window (an hour by
+   * default) after it was made. A hash of the requester, dataset, format and
+   * filters (see `dedupeKeyFor`), set on a `queued` row; cleared when the
+   * export fails or expires, or by the next identical request once this one is
+   * older than the window. The unique index below admits one holder per key,
+   * so a second identical request is refused, even one racing the first.
+   * `null` for anything that no longer blocks.
    */
   @Prop({ type: String, default: null })
   activeKey: string | null;

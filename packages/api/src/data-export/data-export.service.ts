@@ -124,9 +124,10 @@ export class DataExportService {
    * Everything that can be wrong with the request fails here, as an ordinary
    * 400, before anything is queued — the planner validates, and an export over
    * the row cap is refused with its count (and logged as `failed`) rather than
-   * accepted and failed minutes later. A request the caller already has live
-   * (same dataset, format and filters) is a 409 carrying that export, and is
-   * not logged: nothing new was asked for.
+   * accepted and failed minutes later. A request the caller made within the
+   * duplicate window (same dataset, format and filters; an hour by default) is
+   * a 409 carrying that export and when to ask again, and is not logged:
+   * nothing new was asked for.
    *
    * The event goes through `InngestService.send`, whose outbox row is written
    * before the send: if Inngest is down the send throws (the caller sees a

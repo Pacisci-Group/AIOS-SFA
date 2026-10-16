@@ -25,6 +25,7 @@ import type { ExportPlan } from '../common/data-export/plan';
 import { DATASETS } from '../common/data-export/engine/registry';
 import { displayNamesFor } from '../common/domain/user-names';
 import { isDuplicateKeyError } from '../common/mongo/duplicate-key';
+import { dataExportDuplicateWindowMs } from '../config/data-export.config';
 import { StorageService } from '../storage/storage.service';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import type { DataExportHistoryQueryDto } from './dto/data-export-query.dto';
@@ -78,9 +79,10 @@ export class DataExportHistoryService {
    * an access context from. `createdBy` is set explicitly: this row *is* the
    * "who", and the worker that finishes it has no request context.
    *
-   * A `queued` row takes the request's `activeKey`. If an identical request
-   * slipped past `assertNotDuplicate` (a double click), the unique index
-   * refuses this one, and the caller gets the same 409.
+   * A `queued` row takes the request's `activeKey`, which holds the same
+   * request back for the duplicate window. If an identical request slipped
+   * past `assertNotDuplicate` (a double click), the unique index refuses this
+   * one, and the caller gets the same 409.
    *
    * @throws ConflictException (`EXPORT_DUPLICATE`) on that race.
    */
@@ -103,9 +105,16 @@ export class DataExportHistoryService {
   }
 
   /**
-   * Refuses a request the caller already has: the same dataset, format and
-   * filters, queued, being prepared or ready to download. A failed or expired
-   * export does not count, so the way out of either is to ask again.
+   * Refuses a request the caller made less than the duplicate window ago (an
+   * hour by default, `DATA_EXPORT_DUPLICATE_WINDOW_MINUTES`): the same
+   * dataset, format and filters. A failed export does not count (the worker
+   * releases its key), so the way out of a failure is to ask again.
+   *
+   * Once the earlier request is older than the window its key is released,
+   * whatever its status, and this request is queued as a new export. The
+   * earlier one stays as it is: a ready file is still downloadable until it
+   * expires. The release is conditional on the key, so two requests racing to
+   * release it both proceed, and the unique index lets only one be created.
    *
    * @throws ConflictException (`EXPORT_DUPLICATE`) with the existing export.
    */
@@ -119,21 +128,15 @@ export class DataExportHistoryService {
       .lean<LeanExport | null>();
     if (!existing) return;
 
-    // A ready export past its expiry is already gone as far as the page is
-    // concerned (no download is offered); only the hourly sweep has not
-    // reached it. Release its key rather than refuse for up to an hour.
-    if (
-      existing.status === 'ready' &&
-      existing.expiresAt &&
-      existing.expiresAt <= new Date()
-    ) {
+    const now = new Date();
+    if (retryAtFor(existing) <= now) {
       await this.exportModel.updateOne(
         { _id: existing._id, activeKey },
         { $set: { activeKey: null } },
       );
       return;
     }
-    throw await this.duplicate(access, existing);
+    throw await this.duplicate(access, existing, now);
   }
 
   /**
@@ -222,20 +225,31 @@ export class DataExportHistoryService {
     return toRow(doc, names, access.userId);
   }
 
-  /** The 409 for a request the caller already has. */
+  /**
+   * The 409 for a request the caller made within the duplicate window, with
+   * when they may make it again.
+   */
   private async duplicate(
     access: AccessContext,
     existing: LeanExport,
+    now = new Date(),
   ): Promise<ConflictException> {
     const row = await this.row(access, existing);
+    const retryAt = retryAtFor(existing);
+    const minutes = Math.max(
+      1,
+      Math.ceil((retryAt.getTime() - now.getTime()) / 60_000),
+    );
+    const wait = `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
     const message =
       existing.status === 'ready'
-        ? `You already have this ${row.datasetLabel} export. Download it from Recent exports.`
-        : `You already requested this ${row.datasetLabel} export. It is still being prepared, and you will be emailed when it is ready.`;
+        ? `You already have this ${row.datasetLabel} export. Download it from Recent exports, or request it again in ${wait}.`
+        : `You already requested this ${row.datasetLabel} export. It is still being prepared, and you will be emailed when it is ready. You can request it again in ${wait}.`;
     const body: DataExportDuplicateError = {
       code: DATA_EXPORT_DUPLICATE,
       message,
       existing: row,
+      retryAt: retryAt.toISOString(),
     };
     return new ConflictException(body);
   }
@@ -367,6 +381,15 @@ function rerunRefusal(row: LeanExport, viewerId: string): RerunRefusal | null {
   if (row.error === DATA_EXPORT_TOO_LARGE) return 'too_large';
   if (row.rerunId) return 'already_rerun';
   return null;
+}
+
+/**
+ * When the same request may be made again: the duplicate window after this
+ * one was made. A row without `createdAt` (none should exist) never blocks.
+ */
+function retryAtFor(row: LeanExport): Date {
+  const madeAt = row.createdAt ? new Date(row.createdAt).getTime() : 0;
+  return new Date(madeAt + dataExportDuplicateWindowMs());
 }
 
 /**

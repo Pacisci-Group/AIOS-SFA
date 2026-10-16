@@ -53,6 +53,6 @@ docs {
   - `409` — not `failed`, refused as `EXPORT_TOO_LARGE` (narrow the filters
     and request it instead), or already re-run. A re-run that was itself
     refused as too large counts as the re-run.
-  - `409` `{ "code": "EXPORT_DUPLICATE", … }` — the caller already has this
-    export live, for example because they requested it again by hand.
+  - `409` `{ "code": "EXPORT_DUPLICATE", …, "retryAt": "<ISO>" }` — the
+    caller requested the same export again by hand within the last hour.
 }

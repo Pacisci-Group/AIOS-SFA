@@ -73,12 +73,13 @@ docs {
   The requester's data scope is snapshotted on the row now, so the file holds
   what they could see when they asked.
 
-  **One live export per request.** A caller who already has this export
-  (same dataset, `format` and filters, the multi-selects in any order)
-  `queued`, `processing` or `ready` gets a `409` carrying it instead of a
-  second one. A `failed` or `expired` export does not count, and another user
-  may ask for the same thing. A unique index enforces it, so two racing
-  requests queue one export.
+  **The same export once per hour.** A caller who requested this export
+  (same dataset, `format` and filters, the multi-selects in any order) less
+  than `DATA_EXPORT_DUPLICATE_WINDOW_MINUTES` ago (default 60) gets a `409`
+  carrying it instead of a second one. After that, the same request queues a
+  new export, whatever the earlier one's status. A `failed` export does not
+  count, and another user may ask for the same thing. A unique index enforces
+  it, so two racing requests queue one export.
 
   ## `:dataset`
   `leads` · `quote_recaps` · `sold_deals` · `policies` · `households` · `contacts`
@@ -108,7 +109,8 @@ docs {
     — over `DATA_EXPORT_MAX_ROWS`. Nothing is queued; the refusal is logged
     as `failed`. Narrow the range.
   - `403` — no `data_export:read`, or the module is disabled.
-  - `409` `{ "code": "EXPORT_DUPLICATE", "message": "…", "existing": <history row> }`
-    — the caller already has this export. Nothing is queued or logged.
-    Download `existing` once it is ready, or wait for it to expire.
+  - `409` `{ "code": "EXPORT_DUPLICATE", "message": "…", "existing": <history row>, "retryAt": "<ISO>" }`
+    — the caller requested this export within the last hour. Nothing is
+    queued or logged. Download `existing` once it is ready, or ask again from
+    `retryAt`.
 }

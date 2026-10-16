@@ -32,16 +32,26 @@ tests {
     expect(existing.id).to.equal(bru.getVar("dataExportId"));
     expect(["queued", "processing", "ready"]).to.include(existing.status);
   });
+
+  test("says when the same request will be accepted again", function () {
+    const retryAt = Date.parse(res.getBody().retryAt);
+    expect(Number.isNaN(retryAt)).to.equal(false);
+    expect(retryAt).to.be.above(Date.now());
+  });
 }
 
 docs {
   # POST /data-export/sold_deals/exports — the same request twice
 
-  **Request Sold Deals Export (CSV)** again. That export is still `queued`,
-  `processing` or `ready`, so this is a `409` with `code: "EXPORT_DUPLICATE"`
-  and the export in `existing`, and nothing is queued or logged.
+  **Request Sold Deals Export (CSV)** again. That request was made less than
+  an hour ago, so this is a `409` with `code: "EXPORT_DUPLICATE"`, the export
+  in `existing` and `retryAt`, the ISO instant from which the same request is
+  accepted again. Nothing is queued or logged.
 
   The request's identity is the caller, their data scope, the dataset, the
-  `format` and every filter, the multi-selects in any order. A `failed` or
-  `expired` export does not count. See **Request Sold Deals Export (CSV)**.
+  `format` and every filter, the multi-selects in any order. The window is
+  `DATA_EXPORT_DUPLICATE_WINDOW_MINUTES` (default 60), counted from when the
+  earlier request was made. A `failed` export does not count. After the
+  window a new export is queued, and the earlier one stays downloadable until
+  it expires. See **Request Sold Deals Export (CSV)**.
 }

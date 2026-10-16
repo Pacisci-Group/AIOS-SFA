@@ -161,8 +161,9 @@ export interface DataExportTooLargeError {
 
 /**
  * The `code` on the 409 a duplicate request is refused with: the caller
- * already has this export (same dataset, format and filters) queued, being
- * prepared, or ready to download. A failed or expired one does not count.
+ * requested this export (same dataset, format and filters) less than the
+ * duplicate window ago (`DATA_EXPORT_DUPLICATE_WINDOW_MINUTES`, default an
+ * hour). A failed one does not count.
  */
 export const DATA_EXPORT_DUPLICATE = 'EXPORT_DUPLICATE';
 
@@ -171,6 +172,8 @@ export interface DataExportDuplicateError {
   code: typeof DATA_EXPORT_DUPLICATE;
   message: string;
   existing: DataExportHistoryRow;
+  /** ISO instant from which the same request will be accepted again. */
+  retryAt: string;
 }
 
 /** The filters an export ran with, as recorded on its history row. */
