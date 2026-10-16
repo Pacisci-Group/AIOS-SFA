@@ -4,6 +4,10 @@ import {
   toClosingRatio,
   toLobMix,
   toTrend,
+  blendPct,
+  toBlendedClosingRatio,
+  toQuoteClosingRatio,
+  toUnsoldQuotesClosed,
 } from './owner-dashboard.normalize';
 
 describe('toTrend', () => {
@@ -227,5 +231,142 @@ describe('toLobMix', () => {
 
   it('is empty rather than NaN when nothing was sold', () => {
     expect(toLobMix([])).toEqual({ policyCount: 0, top: [], otherPct: 0 });
+  });
+});
+
+describe('toQuoteClosingRatio', () => {
+  it('is quotes sold over quotes written, moved in points', () => {
+    const ratio = toQuoteClosingRatio(
+      { written: 3, sold: 2 },
+      { written: 4, sold: 1 },
+    );
+    expect(ratio).toMatchObject({
+      current: 66.7,
+      previous: 25,
+      change: 41.7,
+      unit: 'points',
+      status: 'ok',
+      written: 3,
+      sold: 2,
+      reason: null,
+    });
+  });
+
+  it('says no_quotes, not 0%, when nothing was written', () => {
+    const ratio = toQuoteClosingRatio(
+      { written: 0, sold: 0 },
+      { written: 2, sold: 1 },
+    );
+    expect(ratio.current).toBeNull();
+    expect(ratio.reason).toBe('no_quotes');
+  });
+
+  it('has no prior data when the comparison window wrote nothing', () => {
+    const ratio = toQuoteClosingRatio(
+      { written: 2, sold: 1 },
+      { written: 0, sold: 0 },
+    );
+    expect(ratio.status).toBe('no_prior_data');
+    expect(ratio.change).toBeNull();
+  });
+});
+
+describe('blendPct', () => {
+  it('averages both sides', () => expect(blendPct(55, 66.7)).toBe(60.9));
+  it('takes the one side that has a figure', () => {
+    expect(blendPct(null, 40)).toBe(40);
+    expect(blendPct(40, null)).toBe(40);
+  });
+  it('is null when neither does', () =>
+    expect(blendPct(null, null)).toBeNull());
+});
+
+describe('toBlendedClosingRatio', () => {
+  const premium = (current: number | null, previous: number | null) =>
+    toClosingRatio(
+      {
+        soldPremium: current ?? 0,
+        quotedPremium: current === null ? 0 : 100,
+        quoteCount: current === null ? 0 : 10,
+        soldCount: 1,
+      },
+      {
+        soldPremium: previous ?? 0,
+        quotedPremium: previous === null ? 0 : 100,
+        quoteCount: previous === null ? 0 : 10,
+        soldCount: 1,
+      },
+    );
+
+  it('averages both sides and trends the average', () => {
+    const ratio = toBlendedClosingRatio(
+      premium(55, 50),
+      toQuoteClosingRatio({ written: 3, sold: 2 }, { written: 4, sold: 0 }),
+    );
+    expect(ratio).toMatchObject({
+      basis: 'both',
+      current: 60.9,
+      previous: 25,
+      change: 35.9,
+      unit: 'points',
+      reason: null,
+    });
+    expect(ratio.premium.current).toBe(55);
+    expect(ratio.quote.current).toBe(66.7);
+  });
+
+  it('falls back to the quote side when the premium side has none', () => {
+    const ratio = toBlendedClosingRatio(
+      premium(null, null),
+      toQuoteClosingRatio({ written: 4, sold: 1 }, { written: 0, sold: 0 }),
+    );
+    expect(ratio).toMatchObject({
+      basis: 'quote',
+      current: 25,
+      status: 'no_prior_data',
+      reason: null,
+    });
+  });
+
+  it("is N/A with the premium side's reason when neither side has a figure", () => {
+    const ratio = toBlendedClosingRatio(
+      premium(null, null),
+      toQuoteClosingRatio({ written: 0, sold: 0 }, { written: 0, sold: 0 }),
+    );
+    expect(ratio).toMatchObject({
+      basis: 'none',
+      current: null,
+      reason: 'no_quotes',
+    });
+  });
+});
+
+describe('toUnsoldQuotesClosed', () => {
+  it('rates recoveries against the backlog at the start', () => {
+    const card = toUnsoldQuotesClosed(
+      { backlogAtStart: 3, recovered: 1, recoveredPremium: 2000.004 },
+      { backlogAtStart: 4, recovered: 2, recoveredPremium: 0 },
+    );
+    expect(card).toEqual({
+      recovered: {
+        current: 1,
+        previous: 2,
+        change: -50,
+        unit: 'percent',
+        status: 'ok',
+      },
+      recoveredPremium: 2000,
+      backlogAtStart: 3,
+      ratePct: 33.3,
+    });
+  });
+
+  it('has no rate over an empty backlog, and no trend over an empty prior one', () => {
+    const card = toUnsoldQuotesClosed(
+      { backlogAtStart: 0, recovered: 0, recoveredPremium: 0 },
+      { backlogAtStart: 0, recovered: 0, recoveredPremium: 0 },
+    );
+    expect(card.ratePct).toBeNull();
+    expect(card.recovered.status).toBe('no_prior_data');
   });
 });

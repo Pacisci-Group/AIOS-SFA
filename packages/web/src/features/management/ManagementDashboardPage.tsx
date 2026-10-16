@@ -10,13 +10,22 @@ import { ManagerDashboard } from "./ManagerDashboard";
 
 type View = "owner" | "manager";
 
-const VIEW_DEFAULTS = { view: "" } as const;
+/**
+ * `view` plus every drawer key either tab writes, so a tab switch can clear
+ * them: `useUrlState` only writes the keys it was given defaults for.
+ */
+const VIEW_DEFAULTS = {
+  view: "",
+  drawer: "",
+  producer: "",
+  quotesProducer: "",
+} as const;
 const VIEW_ALLOWED = { view: ["owner", "manager"] } as const;
 
 const COPY: Record<View, { title: string; blurb: string }> = {
   owner: {
     title: "Strategy Hub",
-    blurb: "Everything going on in the agency: premium, mix, producers and lead sources.",
+    blurb: "Everything going on in the agency: premium, mix, producers, lead sources and open quotes.",
   },
   manager: {
     title: "Action Hub",
@@ -77,11 +86,16 @@ export default function ManagementDashboardPage() {
         {canSeeOwner && (
           <Tabs
             value={view}
-            // Owner is the default, so it is written as "no param". The
-            // drawers are Manager-only state; leaving them in the URL would
-            // pop one open again the next time the tab is chosen.
+            // Owner is the default, so it is written as "no param". Each
+            // tab's drawers are its own state; leaving them in the URL would
+            // pop one open again the next time that tab is chosen.
             onValueChange={(next) =>
-              setUrl({ view: next === "manager" ? "manager" : "" })
+              setUrl({
+                view: next === "manager" ? "manager" : "",
+                drawer: "",
+                producer: "",
+                quotesProducer: "",
+              })
             }
           >
             <TabsList>

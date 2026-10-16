@@ -1,11 +1,14 @@
 import {
   LEAD_STATUSES,
+  LOST_LEAD_STATUSES,
   QUOTE_ADVANCEABLE_LEAD_STATUSES,
   QUOTE_ADVANCE_TARGET,
   QUOTE_NON_ADVANCING_LEAD_STATUSES,
   SOLD_ADVANCEABLE_LEAD_STATUSES,
   SOLD_ADVANCE_TARGET,
   SOLD_NON_ADVANCING_LEAD_STATUSES,
+  TERMINAL_LEAD_STATUSES,
+  isLostLeadStatus,
   quoteAdvanceableStatusValues,
   soldAdvanceableStatusValues,
 } from './lead-status';
@@ -122,6 +125,33 @@ describe('sold-deal lead-status advance', () => {
     // a lead could be quotable but not sellable — nonsense in the pipeline.
     for (const status of QUOTE_ADVANCEABLE_LEAD_STATUSES) {
       expect(SOLD_ADVANCEABLE_LEAD_STATUSES).toContain(status);
+    }
+  });
+});
+
+describe('lost lead statuses (Owner dashboard open quotes)', () => {
+  it('are the terminal statuses that are not a sale', () => {
+    expect([...LOST_LEAD_STATUSES].sort()).toEqual(
+      TERMINAL_LEAD_STATUSES.filter(
+        (status) => status !== 'Sold' && status !== 'Converted',
+      ).sort(),
+    );
+  });
+
+  it('normalizes a raw SmartSuite code before judging', () => {
+    expect(isLostLeadStatus('jp76g')).toBe(true);
+    expect(isLostLeadStatus('not qualified')).toBe(true);
+  });
+
+  it('leaves a Sold lead, an open lead and a missing status open', () => {
+    expect(isLostLeadStatus('Sold')).toBe(false);
+    expect(isLostLeadStatus('Quoted')).toBe(false);
+    expect(isLostLeadStatus(null)).toBe(false);
+  });
+
+  it('only names real statuses', () => {
+    for (const status of LOST_LEAD_STATUSES) {
+      expect(LEAD_STATUSES).toContain(status);
     }
   });
 });

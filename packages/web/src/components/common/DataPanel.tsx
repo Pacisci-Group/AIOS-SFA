@@ -6,6 +6,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 interface DataPanelProps {
   title: string;
+  /** Shown on hover or focus of the title; see `DetailCard`. */
+  titleHint?: string;
   subheading?: ReactNode;
   isPending: boolean;
   isError: boolean;
@@ -33,6 +35,7 @@ interface DataPanelProps {
  */
 export function DataPanel({
   title,
+  titleHint,
   subheading,
   isPending,
   isError,
@@ -47,6 +50,7 @@ export function DataPanel({
   return (
     <DetailCard
       title={title}
+      titleHint={titleHint}
       subheading={subheading}
       bodyless
       className={className}

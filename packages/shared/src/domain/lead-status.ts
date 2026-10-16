@@ -165,6 +165,33 @@ export function isTerminalLeadStatus(status?: string | null): boolean {
   );
 }
 
+/**
+ * Terminal statuses meaning **nobody is going to buy** — the lead is finished
+ * without a sale. The subset of {@link TERMINAL_LEAD_STATUSES} that leaves out
+ * Sold and Converted.
+ *
+ * What makes a quote *lost* rather than *open* on the Owner dashboard's quote
+ * figures: an unsold quote on a lead in one of these is not uncaptured revenue,
+ * and listing it under "open quotes" would undersell the ones that are. A lead
+ * marked Sold with no deal behind it is deliberately **not** here — that quote
+ * stays open, a data gap the owner should see.
+ */
+export const LOST_LEAD_STATUSES: readonly LeadStatus[] = [
+  'Not Qualified',
+  'Lost',
+  'Closed',
+];
+
+/**
+ * Is this lead finished without a sale? Normalizes first, so a migrated lead
+ * stored as a raw choice code (`jp76g` for Lost) answers correctly.
+ */
+export function isLostLeadStatus(status?: string | null): boolean {
+  return (LOST_LEAD_STATUSES as readonly string[]).includes(
+    normalizeLeadStatus(status),
+  );
+}
+
 /** Where a submitted sold deal moves the lead (PAC-40). */
 export const SOLD_ADVANCE_TARGET: LeadStatus = 'Sold';
 

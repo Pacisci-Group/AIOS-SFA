@@ -33,6 +33,7 @@ script:post-response {
     const body = res.getBody();
     bru.setVar("ownerSummaryPremium", body.premium.current);
     bru.setVar("ownerSummaryItems", body.items.current);
+    bru.setVar("ownerSummaryQuotesWritten", body.closingRatio.quote.written);
   }
 }
 
@@ -52,9 +53,14 @@ tests {
 
   test("every KPI is a trend: current, previous, change, unit, status", function () {
     const body = res.getBody();
-    for (const key of ["premium", "items", "avgPremiumPerHousehold", "closingRatio"]) {
-      expect(body[key]).to.include.all.keys("current", "previous", "change", "unit", "status");
-      expect(["ok", "no_prior_data"]).to.include(body[key].status);
+    const trends = [
+      body.premium, body.items, body.avgPremiumPerHousehold,
+      body.closingRatio, body.closingRatio.premium, body.closingRatio.quote,
+      body.unsoldQuotesClosed.recovered,
+    ];
+    for (const trend of trends) {
+      expect(trend).to.include.all.keys("current", "previous", "change", "unit", "status");
+      expect(["ok", "no_prior_data"]).to.include(trend.status);
     }
   });
 
@@ -74,8 +80,36 @@ tests {
     }
   });
 
-  test("the closing ratio carries both of its sides, or says why it has none", function () {
+  test("the closing ratio is the average of the premium and quote ratios", function () {
     const ratio = res.getBody().closingRatio;
+    const { premium, quote } = ratio;
+    if (premium.current !== null && quote.current !== null) {
+      expect(ratio.basis).to.equal("both");
+      expect(ratio.current).to.equal(Math.round(((premium.current + quote.current) / 2) * 10) / 10);
+    } else if (premium.current !== null || quote.current !== null) {
+      expect(ratio.current).to.equal(premium.current ?? quote.current);
+    } else {
+      expect(ratio.basis).to.equal("none");
+      expect(ratio.current).to.equal(null);
+    }
+    expect(ratio.unit).to.equal("points");
+  });
+
+  test("the quote ratio is quotes sold over quotes written", function () {
+    const { quote } = res.getBody().closingRatio;
+    expect(quote.sold).to.be.at.most(quote.written);
+    if (quote.written === 0) expect(quote.reason).to.equal("no_quotes");
+    else expect(quote.current).to.equal(Math.round((quote.sold / quote.written) * 1000) / 10);
+  });
+
+  test("unsold quotes closed never exceed the backlog", function () {
+    const card = res.getBody().unsoldQuotesClosed;
+    expect(card.recovered.current).to.be.at.most(card.backlogAtStart);
+    if (card.backlogAtStart === 0) expect(card.ratePct).to.equal(null);
+  });
+
+  test("the premium closing ratio carries both of its sides, or says why it has none", function () {
+    const ratio = res.getBody().closingRatio.premium;
     expect(ratio.soldPremium).to.be.a("number");
     expect(ratio.quotedPremium).to.be.a("number");
     if (ratio.current === null) {
@@ -99,8 +133,8 @@ docs {
   # GET /owner-dashboard/summary — the Owner View KPI row (PAC-135)
 
   Total Bound Premium · Items Bound / LOB Mix · Avg Premium per Household ·
-  Agency Closing Ratio — each for the selected window **and** for the window it
-  is compared with.
+  Agency Closing Ratio · Unsold Quotes Closed — each for the selected window
+  **and** for the window it is compared with.
 
   - **Module:** `owner_dashboard` (must be enabled for the agency)
   - **Permission:** `owner_dashboard:read`
@@ -113,13 +147,14 @@ docs {
   > owner's view is per-producer dollars, so it lives behind its own permission
   > rather than widening a contract producers rely on.
 
-  ## Query — shared by all three `/owner-dashboard/*` reads
-  One schema on purpose: the three reads promise to agree, which is only true if
-  they can never be asked slightly different questions.
+  ## Query — shared by every `/owner-dashboard/*` read
+  One schema on purpose: the reads promise to agree, which is only true if they
+  can never be asked slightly different questions. (`open-quotes` adds
+  `producer`, `page` and `pageSize`.)
 
   | param | type | default | notes |
   |---|---|---|---|
-  | range | enum | `mtd` | `mtd` · `lastMonth` · `last3Months` · `ytd` · `lastYear` · `custom` |
+  | range | enum | `mtd` | `today` · `yesterday` · `mtd` · `lastMonth` · `last3Months` · `ytd` · `lastYear` · `custom` (also accepts `last12Months`, the Analytics page's chip) |
   | from, to | `YYYY-MM-DD` | — | required with `custom`; calendar days in the agency's time zone, `to` inclusive, ≤ 366 days |
   | producerIds | id[] | — | user ids; narrow-only |
   | leadSourceIds | id[] | — | from `GET /lead-sources`, and/or `__none__` for "no source" |
@@ -131,6 +166,8 @@ docs {
   ## The windows
   | range | window | compared with |
   |---|---|---|
+  | `today` | today | yesterday |
+  | `yesterday` | yesterday | the day before it |
   | `mtd` | 1st → today | the **same elapsed days** of last month (Sep 1–21 → Aug 1–21) |
   | `lastMonth` | last calendar month | the month before it |
   | `last3Months` | the 3 complete months before this one | the 3 before those |
@@ -166,8 +203,22 @@ docs {
     "items":   { "current": 130, "previous": 171, "change": -24, "unit": "percent", "status": "ok" },
     "avgPremiumPerHousehold": { "current": 3643.81, "previous": 3722.51, "change": -2.1, "unit": "percent", "status": "ok" },
     "closingRatio": {
-      "current": 112.9, "previous": 88.2, "change": 24.7, "unit": "points", "status": "ok",
-      "soldPremium": 185834.12, "quotedPremium": 164594, "reason": null
+      "current": 84.2, "previous": 72.4, "change": 11.8, "unit": "points", "status": "ok",
+      "basis": "both", "reason": null,
+      "premium": {
+        "current": 112.9, "previous": 88.2, "change": 24.7, "unit": "points", "status": "ok",
+        "soldPremium": 185834.12, "quotedPremium": 164594, "reason": null
+      },
+      "quote": {
+        "current": 55.4, "previous": 56.6, "change": -1.2, "unit": "points", "status": "ok",
+        "written": 56, "sold": 31, "reason": null
+      }
+    },
+    "unsoldQuotesClosed": {
+      "recovered": { "current": 9, "previous": 7, "change": 28.6, "unit": "percent", "status": "ok" },
+      "recoveredPremium": 14210.5,
+      "backlogAtStart": 61,
+      "ratePct": 14.8
     },
     "lobMix": {
       "policyCount": 92,
@@ -187,14 +238,21 @@ docs {
   | `*.change` | `percent`: relative change. `points`: difference, for a figure that is already a percentage — 50% → 55% is **+5 points**, not +10% |
   | `items` | items, not policies — three cars on one auto policy is three |
   | `avgPremiumPerHousehold` | sold premium ÷ distinct households with a sale; `null` at zero. Same ladder as the producer scorecard, so the two screens cannot disagree |
-  | `closingRatio.current` | sold ÷ quoted premium × 100. **May exceed 100**: a period's sales are not only that period's quotes |
-  | `closingRatio.reason` | `no_quotes`, or `too_few_quotes` — fewer than one quote recap per ten sales. Recaps were barely recorded before 2026 (9 against 1,112 deals in 2025), and dividing one by the other is a five-figure percentage, not a closing rate |
+  | `closingRatio.current` | the **average of the premium and quote closing ratios** (David, 14 Oct 2026). With one side N/A it is the other side; `basis` says which (`both` · `premium` · `quote` · `none`). Trend in points |
+  | `closingRatio.reason` | set only when `basis` is `none`: the premium side's reason |
+  | `closingRatio.premium.current` | sold ÷ quoted premium × 100. **May exceed 100**: a period's sales are not only that period's quotes. Unchanged, and still what the Analytics page shows |
+  | `closingRatio.premium.reason` | `no_quotes`, or `too_few_quotes` — fewer than one quote recap per ten sales. Recaps were barely recorded before 2026 (9 against 1,112 deals in 2025), and dividing one by the other is a five-figure percentage, not a closing rate |
+  | `closingRatio.quote` | of the quote recaps **written in the window** (`written` — the leaderboard's `totals.quotes`), how many have **since** sold (`sold`). A cohort, so it never exceeds 100 and has no `too_few_quotes` guard; an older window has had longer to convert. "Sold" is the one quote-to-sale rule (`common/sales-metrics/quote-conversion.ts`): a deal naming the recap, else the lead's new-business sale on or after the quote day, one sale to the latest quote before it. Company transfers never count |
+  | `unsoldQuotesClosed.backlogAtStart` | quotes written in the 365 days before the window that were still open when it began — unsold then, and not on a lead that is now Not Qualified, Lost or Closed (judged on today's status) |
+  | `unsoldQuotesClosed.recovered` | how many of those sold **inside** the window, trended against the comparison window (`no_prior_data` when its backlog was empty) |
+  | `unsoldQuotesClosed.recoveredPremium` | premium of those sales, each deal once, **whole-deal** — a line-of-business filter narrows which quotes count, not this sum |
+  | `unsoldQuotesClosed.ratePct` | `recovered ÷ backlogAtStart × 100`; `null` over an empty backlog |
   | `lobMix.top[].pct` | share of **policies** sold — not items, not premium. An uncatalogued legacy code counts as a policy but is never a named slice |
 
   ## Errors
   | status | when |
   |---|---|
-  | 400 | unknown `range` (including the producer dashboard's `today` / `week`); `custom` without both bounds, reversed, impossible, or over 366 days; a malformed id; a `policyTypes` value that is not on the Sold form |
+  | 400 | unknown `range` (including the producer dashboard's `week`); `custom` without both bounds, reversed, impossible, or over 366 days; a malformed id; a `policyTypes` value that is not on the Sold form |
   | 401 | no / expired token |
   | 403 | no `owner_dashboard:read`, or the module is off for the agency |
 }

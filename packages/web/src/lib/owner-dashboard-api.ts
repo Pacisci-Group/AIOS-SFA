@@ -1,6 +1,8 @@
 import type {
   OwnerDashboardSummary,
   OwnerLeadSourcesResponse,
+  OwnerOpenQuotesResponse,
+  OwnerProducerQuotesResponse,
   OwnerProducersResponse,
 } from "@sfa/shared";
 import { apiFetch } from "./api-client";
@@ -12,6 +14,7 @@ import {
 // Re-exported so components import the contract from the client module, the
 // same way they do for `performance-api`.
 export type {
+  OwnerBlendedClosingRatio,
   OwnerClosingRatio,
   OwnerDashboardPeriod,
   OwnerDashboardRangeKey,
@@ -19,9 +22,15 @@ export type {
   OwnerLeadSourceRow,
   OwnerLeadSourcesResponse,
   OwnerLobMix,
+  OwnerOpenQuoteRow,
+  OwnerOpenQuotesResponse,
+  OwnerProducerQuotesResponse,
+  OwnerProducerQuotesRow,
   OwnerProducerRow,
   OwnerProducersResponse,
+  OwnerQuoteClosingRatio,
   OwnerTrend,
+  OwnerUnsoldQuotesClosed,
 } from "@sfa/shared";
 
 /**
@@ -52,5 +61,26 @@ export function getOwnerProducers(params: OwnerDashboardParams) {
 export function getOwnerLeadSources(params: OwnerDashboardParams) {
   return apiFetch<OwnerLeadSourcesResponse>(
     `/owner-dashboard/lead-sources?${dashboardFilterSearch(params)}`,
+  );
+}
+
+/** `GET /owner-dashboard/producer-quotes` — the Quotes by producer card. */
+export function getOwnerProducerQuotes(params: OwnerDashboardParams) {
+  return apiFetch<OwnerProducerQuotesResponse>(
+    `/owner-dashboard/producer-quotes?${dashboardFilterSearch(params)}`,
+  );
+}
+
+/**
+ * `GET /owner-dashboard/open-quotes` — one producer's open quotes, paged.
+ * `producer` is a user id or `PRODUCER_NONE` for the Unassigned row.
+ */
+export function getOwnerOpenQuotes(
+  params: OwnerDashboardParams,
+  producer: string,
+  page: number,
+) {
+  return apiFetch<OwnerOpenQuotesResponse>(
+    `/owner-dashboard/open-quotes?${dashboardFilterSearch(params, { producer, page })}`,
   );
 }

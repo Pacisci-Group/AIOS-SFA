@@ -5,7 +5,11 @@ import {
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import { QuoteRecap } from '../../../quote-recaps/schemas/quote-recap.schema';
-import { businessDay, businessDaysDiff } from '../../dates/business-dates';
+import {
+  resolveQuoteConversions,
+  type QuoteConversion,
+} from '../../sales-metrics/quote-conversion';
+import { businessDaysDiff } from '../../dates/business-dates';
 import { agencyCalendarDate } from '../engine/cells';
 import { defineDataset } from '../engine/dataset.types';
 import type { AddressLike, DealLite } from '../engine/lookups';
@@ -45,55 +49,20 @@ interface QuoteRecapRow extends TenantFields {
   sourceId?: Types.ObjectId | null;
 }
 
-interface Conversion {
-  deal: DealLite;
-  matchedBy: 'quote_recap' | 'lead';
-}
-
 interface QuoteRecapJoins {
-  conversions: Map<string, Conversion>;
+  conversions: Map<string, QuoteConversion<DealLite>>;
 }
 
 const col = columnsFor<QuoteRecapRow, QuoteRecapJoins>();
 
+/**
+ * The deal a quote turned into, by the one rule the Owner dashboard also uses
+ * (`common/sales-metrics/quote-conversion.ts`): the deal naming this recap,
+ * else the lead's new-business sale on or after the quote day — one sale to
+ * one quote, the latest quote before it.
+ */
 const conversionOf = (row: QuoteRecapRow, joins: QuoteRecapJoins) =>
   joins.conversions.get(String(row._id));
-
-/**
- * The deal a quote turned into. The sold form links a deal to its recap
- * (`Deal.quoteRecapId`), and that link wins. Most migrated deals carry none,
- * so the fallback is the lead's first deal sold on or after the quote date —
- * compared as agency-calendar **days**, so a quote and a sale on one visit
- * match whatever their times — flagged as such in `converted_matched_by`, so
- * it can be told apart.
- */
-function conversions(
-  rows: readonly QuoteRecapRow[],
-  byRecap: Map<string, DealLite[]>,
-  byLead: Map<string, DealLite[]>,
-  timeZone: string,
-): Map<string, Conversion> {
-  const out = new Map<string, Conversion>();
-  for (const row of rows) {
-    const direct = byRecap.get(String(row._id))?.[0];
-    if (direct) {
-      out.set(String(row._id), { deal: direct, matchedBy: 'quote_recap' });
-      continue;
-    }
-    const quoted = businessDay(row.quoteDate, timeZone) ?? '';
-    const viaLead = row.leadId
-      ? byLead
-          .get(String(row.leadId))
-          ?.find(
-            (deal) =>
-              (businessDay(deal.soldDate, timeZone) ?? '') >= quoted &&
-              !deal.quoteRecapId,
-          )
-      : undefined;
-    if (viaLead) out.set(String(row._id), { deal: viaLead, matchedBy: 'lead' });
-  }
-  return out;
-}
 
 /** Quote recaps (SmartSuite *Quote Recaps*), with quote-to-sold conversion. */
 export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
@@ -138,17 +107,22 @@ export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
           (row) => lookups.households.get(row.householdId)?.primaryContactId,
         ),
       );
-      const [byRecap, byLead] = await Promise.all([
+      const leadIds = rows.map((row) => row.leadId);
+      const [byRecap, byLead, siblings] = await Promise.all([
         lookups.dealsBy(
           'quoteRecapId',
           rows.map((row) => row._id),
         ),
-        lookups.dealsBy(
-          'leadId',
-          rows.map((row) => row.leadId),
-        ),
+        lookups.dealsBy('leadId', leadIds),
+        lookups.quotesByLead(leadIds),
       ]);
-      return { conversions: conversions(rows, byRecap, byLead, timeZone) };
+      return {
+        conversions: resolveQuoteConversions(
+          rows,
+          { byRecap, byLead, siblings },
+          timeZone,
+        ),
+      };
     },
 
     columns: [
@@ -259,13 +233,13 @@ export const quoteRecapsDataset = defineDataset<QuoteRecapRow, QuoteRecapJoins>(
       col(
         'converted',
         'boolean',
-        'Whether the quote turned into a sale.',
+        'Whether the quote turned into a new-business sale (company transfers do not count).',
         (row, ctx) => Boolean(conversionOf(row, ctx.joins)),
       ),
       col(
         'converted_matched_by',
         'string',
-        'quote_recap when the deal names this recap; lead when inferred as the lead’s first deal sold on or after the quote date.',
+        'quote_recap when the deal names this recap; lead when inferred as the lead’s sale on or after the quote date (a requoted lead’s sale goes to the latest quote before it).',
         (row, ctx) => conversionOf(row, ctx.joins)?.matchedBy,
       ),
       col(

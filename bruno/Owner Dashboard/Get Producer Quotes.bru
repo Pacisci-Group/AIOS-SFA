@@ -1,0 +1,113 @@
+meta {
+  name: Get Producer Quotes
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/owner-dashboard/producer-quotes?range=lastMonth
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: lastMonth
+  ~producerIds: 
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+auth:bearer {
+  token: {{ownerDashboardToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every quote is sold, open or lost", function () {
+    for (const row of res.getBody().rows) {
+      expect(row.sold + row.open + row.lost).to.equal(row.written);
+      if (row.written === 0) expect(row.closePct).to.equal(null);
+    }
+  });
+
+  test("most open quotes first, with Unassigned always last", function () {
+    const rows = res.getBody().rows;
+    const named = rows.filter((row) => row.producerId !== null);
+    for (let i = 1; i < named.length; i++) {
+      expect(named[i - 1].open).to.be.at.least(named[i].open);
+    }
+    const unassigned = rows.findIndex((row) => row.producerId === null);
+    if (unassigned !== -1) {
+      expect(unassigned).to.equal(rows.length - 1);
+      expect(rows[unassigned].name).to.equal("Unassigned");
+    }
+  });
+
+  test("the totals are the sum of the rows", function () {
+    const { rows, totals } = res.getBody();
+    const sum = (key) => Math.round(rows.reduce((s, r) => s + r[key], 0) * 100) / 100;
+    for (const key of ["written", "sold", "open", "lost", "openPremium"]) {
+      expect(totals[key]).to.equal(sum(key));
+    }
+  });
+
+  test("counts the quotes the summary's quote ratio counts", function () {
+    // Run `Get Summary` first — same `range`, so the same matched rows.
+    expect(res.getBody().totals.written).to.equal(bru.getVar("ownerSummaryQuotesWritten"));
+  });
+}
+
+docs {
+  # GET /owner-dashboard/producer-quotes — Quotes by producer (Oct 2026 follow-up)
+
+  Per producer, the quote recaps **written** in the window and what became of
+  them: **sold**, **open** or **lost**, the **open quoted premium** (the
+  uncaptured revenue David asked to see), and the quote close %. Reacts to every
+  filter.
+
+  - **Module / permission / scope / query:** identical to
+    `GET /owner-dashboard/summary` — see that request's docs.
+
+  ## What each word means
+  - **written** — the same rows as the leaderboard's `quotes` column and the
+    summary's `closingRatio.quote.written`, so `totals.written` equals both
+    under any filter.
+  - **sold** — converted to a new-business sale *as of now*, by the one
+    quote-to-sale rule: a deal naming the recap, else the lead's sale on or
+    after the quote day (one sale to the latest quote before it). Company
+    transfers never count.
+  - **lost** — not sold, and the lead is Not Qualified, Lost or Closed today.
+  - **open** — everything else: no sale, no lead, or a lead marked Sold with no
+    deal behind it (a data gap worth seeing).
+
+  Every row satisfies `sold + open + lost === written`. Quotes with no producer
+  form an **Unassigned** row (`producerId: null`), always last. Rows are ordered
+  by `open` descending, then `written`, then name.
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "lastMonth", "current": { "from": "2026-09-01", "to": "2026-09-30" }, "previous": { "from": "2026-08-01", "to": "2026-08-31" } },
+    "rows": [
+      { "producerId": "66f0…11", "name": "Jessica Yates", "initials": "JY", "written": 18, "sold": 9, "open": 8, "lost": 1, "openPremium": 14320, "closePct": 50 },
+      { "producerId": null, "name": "Unassigned", "initials": "?", "written": 1, "sold": 0, "open": 1, "lost": 0, "openPremium": 900, "closePct": 0 }
+    ],
+    "totals": { "written": 19, "sold": 9, "open": 9, "lost": 1, "openPremium": 15220, "closePct": 47.4 }
+  }
+  ```
+
+  | field | notes |
+  |---|---|
+  | openPremium | quoted premium on the open quotes, narrowed by a line-of-business filter like every quoted figure |
+  | closePct | `sold ÷ written × 100`; `null` when nothing was written |
+
+  ## Errors
+  Same as `GET /owner-dashboard/summary`: `400` bad query · `401` · `403`.
+}

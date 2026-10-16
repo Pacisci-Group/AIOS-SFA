@@ -460,7 +460,11 @@ describe('Analytics (PAC-152, part 2) (e2e)', () => {
       expect(summary.premium.current).toBe(owner.premium.current);
       expect(summary.premium.current).toBe(6500);
       expect(summary.items.current).toBe(owner.items.current);
-      expect(summary.closingRatio?.current).toBe(owner.closingRatio.current);
+      // The owner card averages this with the quote ratio (Oct 2026); its
+      // premium side is still exactly this figure.
+      expect(summary.closingRatio?.current).toBe(
+        owner.closingRatio.premium.current,
+      );
     });
 
     it('reports net premium after chargebacks, and households', async () => {

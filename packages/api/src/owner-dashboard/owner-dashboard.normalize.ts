@@ -4,10 +4,14 @@ import {
   normalizePolicyType,
 } from '@sfa/shared';
 import type {
+  OwnerBlendedClosingRatio,
   OwnerClosingRatio,
+  OwnerClosingRatioBasis,
   OwnerLobMix,
+  OwnerQuoteClosingRatio,
   OwnerRatioGap,
   OwnerTrend,
+  OwnerUnsoldQuotesClosed,
 } from '@sfa/shared';
 
 /** One decimal place — enough for a badge, stable enough to assert on. */
@@ -107,6 +111,106 @@ export function toClosingRatio(
   };
 }
 
+/** Quotes sold ÷ quotes written, one side of the quote closing ratio. */
+export interface QuoteSide {
+  written: number;
+  sold: number;
+}
+
+function quotePct(side: QuoteSide): number | null {
+  return side.written > 0 ? round1((side.sold / side.written) * 100) : null;
+}
+
+/**
+ * The quote closing ratio, moved in percentage **points**. No
+ * `MIN_QUOTES_PER_SALE` guard: it is a cohort (`sold ⊆ written`), so it cannot
+ * run past 100 the way sold ÷ quoted premium can.
+ */
+export function toQuoteClosingRatio(
+  current: QuoteSide,
+  previous: QuoteSide,
+): OwnerQuoteClosingRatio {
+  const prior = quotePct(previous);
+  return {
+    ...toTrend(quotePct(current), prior, prior !== null, 'points'),
+    written: current.written,
+    sold: current.sold,
+    reason: current.written > 0 ? null : 'no_quotes',
+  };
+}
+
+/** The mean of whichever sides have a figure; `null` when neither does. */
+export function blendPct(
+  premium: number | null,
+  quote: number | null,
+): number | null {
+  if (premium !== null && quote !== null) return round1((premium + quote) / 2);
+  return premium ?? quote;
+}
+
+function basisOf(
+  premium: number | null,
+  quote: number | null,
+): OwnerClosingRatioBasis {
+  if (premium !== null && quote !== null) return 'both';
+  if (premium !== null) return 'premium';
+  if (quote !== null) return 'quote';
+  return 'none';
+}
+
+/**
+ * The Agency Closing Ratio card: the average of the premium and quote closing
+ * ratios (David, 14 Oct 2026), with both sides kept so the card can say which
+ * figures it averaged. The headline's trend is the blend now against the blend
+ * of the comparison window, in points.
+ */
+export function toBlendedClosingRatio(
+  premium: OwnerClosingRatio,
+  quote: OwnerQuoteClosingRatio,
+): OwnerBlendedClosingRatio {
+  const now = blendPct(premium.current, quote.current);
+  const prior = blendPct(premium.previous, quote.previous);
+  const basis = basisOf(premium.current, quote.current);
+  return {
+    ...toTrend(now, prior, prior !== null, 'points'),
+    basis,
+    premium,
+    quote,
+    reason: basis === 'none' ? premium.reason : null,
+  };
+}
+
+/** One window's backlog figures. */
+export interface BacklogSide {
+  backlogAtStart: number;
+  recovered: number;
+  recoveredPremium: number;
+}
+
+/**
+ * The "Unsold quotes closed" card. "Anything to compare with" is asked of the
+ * comparison window's backlog: one that held no open quotes has no recovery
+ * figure to trend against, which is a state, not a −100%.
+ */
+export function toUnsoldQuotesClosed(
+  current: BacklogSide,
+  previous: BacklogSide,
+): OwnerUnsoldQuotesClosed {
+  return {
+    recovered: toTrend(
+      current.recovered,
+      previous.recovered,
+      previous.backlogAtStart > 0,
+    ),
+    recoveredPremium: roundCents(current.recoveredPremium),
+    backlogAtStart: current.backlogAtStart,
+    ratePct:
+      current.backlogAtStart > 0
+        ? round1((current.recovered / current.backlogAtStart) * 100)
+        : null,
+  };
+}
+
 /**
  * Top three policy types by share of **policies** sold.
  *
@@ -148,4 +252,4 @@ export function toLobMix(
   return { policyCount, top, otherPct: Math.max(0, round1(100 - shown)) };
 }
 
-export { roundCents };
+export { round1, roundCents };
