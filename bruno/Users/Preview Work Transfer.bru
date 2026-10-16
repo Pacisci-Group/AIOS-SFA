@@ -1,0 +1,63 @@
+meta {
+  name: Preview Work Transfer
+  type: http
+  seq: 19
+}
+
+get {
+  url: {{baseUrl}}/users/{{activeUserId}}/work-transfer/preview?toUserId={{successorUserId}}
+  auth: bearer
+}
+
+params:query {
+  toUserId: {{successorUserId}}
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("counts every kind of open work", function () {
+    const body = res.getBody();
+    for (const key of [
+      "tickets",
+      "onboardings",
+      "renewalCycles",
+      "households",
+      "deals",
+      "leads",
+      "audits",
+      "auditItems",
+      "shareLinks",
+      "rotationsTakenOver",
+      "rotationsDeactivated",
+    ]) {
+      expect(body).to.have.property(key).that.is.a("number");
+    }
+  });
+}
+
+docs {
+  # GET /users/:userId/work-transfer/preview?toUserId=
+
+  What **Transfer Work** would move from `:userId` to `toUserId`, without
+  changing anything (PAC-136). Runs the same plan and the **same validation** as
+  the transfer, so a refused successor shows up here — before anyone confirms.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:work_transfer:write`
+  + `agency:users:read`.
+
+  **Query** — `toUserId` (required, 24-hex user id).
+
+  **Response `200`** — `{ tickets, onboardings, renewalCycles, households,
+  deals, leads, audits, auditItems, shareLinks, rotationsTakenOver,
+  rotationsDeactivated }`.
+  See **Transfer Work** for what each one means.
+
+  **Errors** — same as **Transfer Work**.
+}

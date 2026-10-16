@@ -474,9 +474,12 @@ export class RenewalMaterializationService {
         status: 'open',
         priority: 'medium',
         assignedUserId: cycle.assignedCsrId ?? null,
-        assignedRep: await this.resolveCsrName(
-          cycle.assignedCsrId ? String(cycle.assignedCsrId) : null,
-        ),
+        // Empty when the cycle has no CSR (never assigned, or released on a
+        // removal — PAC-136): the board renders that as Unassigned, where
+        // `resolveCsrName`'s "System" would read as an owner.
+        assignedRep: cycle.assignedCsrId
+          ? await this.resolveCsrName(String(cycle.assignedCsrId))
+          : '',
         createdByName: 'Renewal outreach',
         policyNumber: primary?.policyNumber ?? '',
         policyType: primary?.policyType ?? '',

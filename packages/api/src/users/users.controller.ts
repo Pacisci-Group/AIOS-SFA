@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -38,13 +39,25 @@ import {
   listUserOptionsSchema,
   type ListUserOptionsDto,
 } from './dto/list-user-options.dto';
+import {
+  deactivateUserSchema,
+  workTransferSchema,
+  type DeactivateUserDto,
+  type WorkTransferDto,
+} from './dto/work-transfer.dto';
+import { UserWorkReleaseService } from './user-work-release.service';
 import { UsersService } from './users.service';
+import { WorkTransferService } from './work-transfer.service';
 
 @Controller('users')
 @SkipModule()
 @UseGuards(PermissionsGuard)
 export class UsersController {
-  constructor(private usersService: UsersService) {}
+  constructor(
+    private usersService: UsersService,
+    private workTransfer: WorkTransferService,
+    private workRelease: UserWorkReleaseService,
+  ) {}
 
   /**
    * The agency directory — **paginated and searched server-side** since
@@ -83,6 +96,69 @@ export class UsersController {
     query: ListUserOptionsDto,
   ) {
     return this.usersService.listOptions(agencyId, query);
+  }
+
+  /**
+   * What removing this person would put back in the unassigned queue, for the
+   * remove dialog's confirmation copy (PAC-76 shipped the count, never a caller).
+   */
+  @Get(':userId/work-release/preview')
+  @RequirePermissions(AgencyPermission.UsersWrite)
+  previewRelease(
+    @AgencyId() agencyId: string,
+    @Param('userId') userId: string,
+  ) {
+    return this.workRelease.preview(agencyId, userId);
+  }
+
+  /**
+   * Who this person's work may go to (PAC-136): active colleagues sharing one
+   * of their roles, in the same branch — unless either person has no branch.
+   * The transfer enforces the same rule, so the picker reads from here rather
+   * than `GET /users/options`.
+   */
+  @Get(':userId/work-transfer/candidates')
+  @RequirePermissions(AgencyPermission.WorkTransfer, AgencyPermission.UsersRead)
+  transferCandidates(
+    @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
+    @Param('userId') userId: string,
+  ) {
+    return this.workTransfer.candidates(access, agencyId, userId);
+  }
+
+  /**
+   * What handing this person's open work to `toUserId` would move (PAC-136).
+   * Read-only; the same validation as the transfer itself, so a refusal shows
+   * up in the dialog before anyone clicks confirm.
+   */
+  @Get(':userId/work-transfer/preview')
+  @RequirePermissions(AgencyPermission.WorkTransfer, AgencyPermission.UsersRead)
+  previewTransfer(
+    @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
+    @Param('userId') userId: string,
+    @Query(new ZodValidationPipe(workTransferSchema)) query: WorkTransferDto,
+  ) {
+    return this.workTransfer.preview(access, agencyId, userId, query.toUserId);
+  }
+
+  /**
+   * Hand this person's open work to a colleague (PAC-136). Works on an active
+   * or an already-removed person; see `WorkTransferService` for what moves.
+   *
+   * Needs `agency:users:read` as well, like lead reassignment: choosing the
+   * colleague means reading the agency's people.
+   */
+  @Post(':userId/work-transfer')
+  @RequirePermissions(AgencyPermission.WorkTransfer, AgencyPermission.UsersRead)
+  transferWork(
+    @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
+    @Param('userId') userId: string,
+    @Body(new ZodValidationPipe(workTransferSchema)) body: WorkTransferDto,
+  ) {
+    return this.workTransfer.transfer(access, agencyId, userId, body.toUserId);
   }
 
   @Get(':userId')
@@ -170,6 +246,9 @@ export class UsersController {
    * token expiry. Returns what was released so the UI can tell the owner how
    * many tickets just went back to the unassigned queue.
    *
+   * With `successorId` (PAC-137) the open work goes to that colleague instead,
+   * and the response is the transfer's result (it carries `toUserId`).
+   *
    * `agency:users:write` rather than a new permission: managing employees is
    * already exactly what that permission means, and inventing a `users:delete`
    * would leave every existing owner role without it.
@@ -180,8 +259,24 @@ export class UsersController {
     @AgencyId() agencyId: string,
     @Access() access: AccessContext,
     @Param('userId') userId: string,
+    @Body(new ZodValidationPipe(deactivateUserSchema)) body: DeactivateUserDto,
   ) {
-    return this.usersService.deactivateUser(access, agencyId, userId);
+    // Handing the work to a named colleague is the transfer capability, not
+    // user management — checked here because it depends on the body.
+    if (
+      body.successorId &&
+      !access.permissions.includes(AgencyPermission.WorkTransfer)
+    ) {
+      throw new ForbiddenException(
+        'You do not have permission to transfer work. Remove without a successor to release it instead.',
+      );
+    }
+    return this.usersService.deactivateUser(
+      access,
+      agencyId,
+      userId,
+      body.successorId,
+    );
   }
 
   /** Restore a removed employee. Does not restore the work released on removal. */

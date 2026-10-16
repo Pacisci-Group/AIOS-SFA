@@ -61,6 +61,13 @@ docs {
     US federal holidays (observed days) are skipped, on the agency's calendar
     (`Agency.timezone`, PAC-141).
     A deal sold on a Friday has had one business day by Monday.
+  - **`producerName`** is who sold the deal and never changes;
+    **`assigneeName`** is who is responsible for the audit now — the user
+    assignee, or the seller when it was never assigned (null for a role-owned
+    audit). They differ once a departed producer's work is transferred (PAC-136).
+  - **`producerIds` filters by `assigneeId`** — who is responsible — not by the
+    seller, so it agrees with Get Team and Get Producer Drawer after a
+    transfer. An unassigned audit still counts for its seller.
   - **Open** means `auditStatus` is anything but `Pass` — Not Submitted,
     Pending and Fail all count. A deal with no audit record is not aging.
 
@@ -76,6 +83,7 @@ docs {
       {
         "dealAuditId": "66f0…c3", "dealId": "66f0…d4", "householdId": "66f0…b2",
         "clientName": "Dana Whitfield", "producerId": "66f0…11", "producerName": "Pat Producer",
+        "assigneeId": "66f0…11", "assigneeName": "Pat Producer",
         "auditStatus": "Not Submitted", "openFailedCount": 1,
         "soldDate": "2026-09-11T05:00:00.000Z", "businessDaysOpen": 8
       }

@@ -1158,7 +1158,10 @@ export class ServiceTicketsService {
         category: 'Onboarding',
         status: 'open',
         priority: 'medium',
-        assignedRep: userDisplayName(assignee),
+        // Empty, never `userDisplayName(null)`'s "System": a chain whose CSR was
+        // released (PAC-136) mints its next call unassigned, and the board
+        // renders an empty rep as Unassigned.
+        assignedRep: assignee ? userDisplayName(assignee) : '',
         assignedUserId: onboarding.assignedCsrId,
         householdId: onboarding.householdId,
         // Same client context on every call in the chain.
