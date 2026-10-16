@@ -3,6 +3,8 @@ import { getModelToken } from '@nestjs/mongoose';
 import type {
   OwnerDashboardSummary,
   OwnerLeadSourcesResponse,
+  OwnerOpenQuotesResponse,
+  OwnerProducerQuotesResponse,
   OwnerProducersResponse,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
@@ -77,6 +79,28 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
     get<OwnerProducersResponse>('producers', query);
   const leadSources = (query = MAY) =>
     get<OwnerLeadSourcesResponse>('lead-sources', query);
+  const producerQuotes = (query = MAY) =>
+    get<OwnerProducerQuotesResponse>('producer-quotes', query);
+  const openQuotes = (query: string) =>
+    get<OwnerOpenQuotesResponse>('open-quotes', query);
+
+  /**
+   * The quote figures (David, 14–15 Oct 2026) live in **July 2026**, so the May
+   * fixtures above stay exactly as they were. July compares with May 31 → Jun 30.
+   *
+   * | | producer | lead (status) | quoted | what happened |
+   * |---|---|---|---|---|
+   * | QA | producer | LA (Quoted) | **Jun 10**, Auto 2000 | sold Jul 8 → a backlog recovery |
+   * | QB | producer | LB (`jp76g` = Lost) | Jul 3, 1500 | lost |
+   * | QC | owner | LC (Quoted) | Jul 5, 900 | a company transfer Jul 6 — still open |
+   * | QD | producer | LD (Sold) | Jul 10, 700 | no deal — open, a data gap |
+   * | QE1, QE2 | producer | LE (Quoted) | Jul 2, 400 · Jul 12, 1200 | the deal names QE2 — QE1 stays open |
+   * | QF | *none* | *none* | Jul 15, 300 | Unassigned, open |
+   *
+   * The backlog at Jul 1 (quotes from the year before, still open then): the
+   * Apr 14 recap, Q3 and QA — Q1 and Q2 sold in May.
+   */
+  const JULY = 'range=custom&from=2026-07-01&to=2026-07-31';
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -307,6 +331,101 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       },
     ]);
 
+    // ---- July: the quote figures -------------------------------------------
+    const quoted = (status: string, by = producer!._id) =>
+      lead({ producerId: by, status, createdDate: onDay('2026-06-05') });
+    const recap = (fields: Record<string, unknown>, premium: number) =>
+      recapModel.create({
+        ...base,
+        premium,
+        itemCount: 1,
+        productsQuoted: ['Auto'],
+        policies: [{ policyType: 'Auto', premium, itemCount: 1 }],
+        ...fields,
+      });
+    const lA = await quoted('Quoted');
+    const lB = await quoted('jp76g');
+    const lC = await quoted('Quoted', owner!._id);
+    const lD = await quoted('Sold');
+    const lE = await quoted('Quoted');
+    await recap(
+      {
+        producerId: producer!._id,
+        leadId: lA._id,
+        quoteDate: onDay('2026-06-10'),
+      },
+      2000,
+    );
+    await sell(
+      {
+        producerId: producer!._id,
+        leadId: lA._id,
+        householdId: new Types.ObjectId(),
+        soldDate: onDay('2026-07-08'),
+      },
+      [{ policyType: 'Auto', premium: 2000, items: 1 }],
+    );
+    await recap(
+      {
+        producerId: producer!._id,
+        leadId: lB._id,
+        quoteDate: onDay('2026-07-03'),
+      },
+      1500,
+    );
+    await recap(
+      {
+        producerId: owner!._id,
+        leadId: lC._id,
+        quoteDate: onDay('2026-07-05'),
+      },
+      900,
+    );
+    await sell(
+      {
+        producerId: owner!._id,
+        leadId: lC._id,
+        soldDate: onDay('2026-07-06'),
+        businessType: 'company_transfer',
+      },
+      [{ policyType: 'Auto', premium: 900, items: 1 }],
+    );
+    await recap(
+      {
+        producerId: producer!._id,
+        leadId: lD._id,
+        quoteDate: onDay('2026-07-10'),
+      },
+      700,
+    );
+    await recap(
+      {
+        producerId: producer!._id,
+        leadId: lE._id,
+        quoteDate: onDay('2026-07-02'),
+      },
+      400,
+    );
+    const qE2 = await recap(
+      {
+        producerId: producer!._id,
+        leadId: lE._id,
+        quoteDate: onDay('2026-07-12'),
+      },
+      1200,
+    );
+    await sell(
+      {
+        producerId: producer!._id,
+        leadId: lE._id,
+        quoteRecapId: qE2._id,
+        householdId: new Types.ObjectId(),
+        soldDate: onDay('2026-07-20'),
+      },
+      [{ policyType: 'Auto', premium: 1200, items: 1 }],
+    );
+    await recap({ quoteDate: onDay('2026-07-15') }, 300);
+
     const tokenFor = async (email: string) =>
       (await login(app, email, TEST_PASSWORD)).accessToken;
     ownerToken = await tokenFor(seed.ownerEmail);
@@ -350,10 +469,33 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
     it('reports the premium closing ratio with both of its sides', async () => {
       const { closingRatio } = await summary();
 
-      expect(closingRatio.current).toBe(55);
-      expect(closingRatio.soldPremium).toBe(5500);
-      expect(closingRatio.quotedPremium).toBe(10_000);
-      expect(closingRatio.reason).toBeNull();
+      expect(closingRatio.premium.current).toBe(55);
+      expect(closingRatio.premium.soldPremium).toBe(5500);
+      expect(closingRatio.premium.quotedPremium).toBe(10_000);
+      expect(closingRatio.premium.reason).toBeNull();
+    });
+
+    it('reports the quote closing ratio as the share of quotes written that sold', async () => {
+      const { closingRatio } = await summary();
+
+      // Q1 → D1 and Q2 → D2 through their leads; Q3 has no lead and no sale.
+      expect(closingRatio.quote).toMatchObject({
+        written: 3,
+        sold: 2,
+        current: 66.7,
+        reason: null,
+      });
+    });
+
+    it('headlines the average of the two ratios', async () => {
+      const { closingRatio } = await summary();
+
+      // (55 + 66.7) ÷ 2.
+      expect(closingRatio).toMatchObject({
+        basis: 'both',
+        current: 60.9,
+        reason: null,
+      });
     });
 
     it('trends each figure against the comparison window', async () => {
@@ -373,9 +515,16 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         change: -65.6,
       });
       // 55% vs 50% is +5 *points*, not +10%.
-      expect(body.closingRatio).toMatchObject({
+      expect(body.closingRatio.premium).toMatchObject({
         previous: 50,
         change: 5,
+        unit: 'points',
+      });
+      // The April recap never sold: 0%. The blend moves from 25 to 60.9.
+      expect(body.closingRatio.quote).toMatchObject({ previous: 0 });
+      expect(body.closingRatio).toMatchObject({
+        previous: 25,
+        change: 35.9,
         unit: 'points',
       });
     });
@@ -416,7 +565,9 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
       expect(body.items.current).toBe(0);
       expect(body.avgPremiumPerHousehold.current).toBeNull();
       expect(body.closingRatio.current).toBeNull();
+      expect(body.closingRatio.basis).toBe('none');
       expect(body.closingRatio.reason).toBe('no_quotes');
+      expect(body.unsoldQuotesClosed.ratePct).toBeNull();
       expect(body.lobMix).toEqual({ policyCount: 0, top: [], otherPct: 0 });
     });
   });
@@ -436,10 +587,10 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
 
       // Q1's Auto line (2000) plus **all** of Q2: a migrated recap has nothing
       // to split by, and its `PYgez` is Auto.
-      expect(auto.closingRatio.quotedPremium).toBe(6000);
+      expect(auto.closingRatio.premium.quotedPremium).toBe(6000);
       // D4 has no policy rows but says Renters, so it counts in full.
       expect(renters.premium.current).toBe(700);
-      expect(renters.closingRatio.quotedPremium).toBe(1000);
+      expect(renters.closingRatio.premium.quotedPremium).toBe(1000);
     });
 
     it('ORs several types and finds a type stored under a legacy spelling', async () => {
@@ -560,21 +711,139 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
         .replace('PRODUCER', producerId)
         .replace('MAILER', seed.leadSourceIds.mailer);
 
-      const [kpi, board, sources] = await Promise.all([
+      const [kpi, board, sources, quotes] = await Promise.all([
         summary(query),
         producers(query),
         leadSources(query),
+        producerQuotes(query),
       ]);
 
       expect(board.totals.premium).toBe(kpi.premium.current);
       expect(sources.totals.premium).toBe(kpi.premium.current);
       expect(board.totals.bound).toBe(kpi.items.current);
-      expect(sources.totals.quotedPremium).toBe(kpi.closingRatio.quotedPremium);
+      expect(sources.totals.quotedPremium).toBe(
+        kpi.closingRatio.premium.quotedPremium,
+      );
+      // The quotes the leaderboard counts are the quotes the ratio and the
+      // quotes-by-producer card count.
+      expect(quotes.totals.written).toBe(board.totals.quotes);
+      expect(kpi.closingRatio.quote.written).toBe(board.totals.quotes);
+    });
+  });
+
+  describe('quotes: sold, open, lost', () => {
+    it('counts the backlog at the start and what of it sold in the window', async () => {
+      const { unsoldQuotesClosed, closingRatio } = await summary(JULY);
+
+      expect(unsoldQuotesClosed).toMatchObject({
+        backlogAtStart: 3,
+        recoveredPremium: 2000,
+        ratePct: 33.3,
+      });
+      expect(unsoldQuotesClosed.recovered.current).toBe(1);
+      // Six July quotes, one sold (QE2): the transfer on LC is not a sale, and
+      // the one deal on LE goes to the quote it names.
+      expect(closingRatio.quote).toMatchObject({ written: 6, sold: 1 });
+    });
+
+    it('splits each producer into sold, open and lost, most open first', async () => {
+      const body = await producerQuotes(JULY);
+
+      expect(
+        body.rows.map((r) => [
+          r.producerId,
+          r.written,
+          r.sold,
+          r.open,
+          r.lost,
+          r.openPremium,
+          r.closePct,
+        ]),
+      ).toEqual([
+        [producerId, 4, 1, 2, 1, 1100, 25],
+        [ownerId, 1, 0, 1, 0, 900, 0],
+        [null, 1, 0, 1, 0, 300, 0],
+      ]);
+      expect(body.rows[2].name).toBe('Unassigned');
+      expect(body.totals).toEqual({
+        written: 6,
+        sold: 1,
+        open: 4,
+        lost: 1,
+        openPremium: 2300,
+        closePct: 16.7,
+      });
+      expect(body.totals.written).toBe((await producers(JULY)).totals.quotes);
+    });
+
+    it("lists a producer's open quotes newest first, lost ones left out", async () => {
+      const body = await openQuotes(`${JULY}&producer=${producerId}`);
+
+      expect(body.producer.producerId).toBe(producerId);
+      expect(body.total).toBe(2);
+      expect(
+        body.items.map((i) => [
+          i.quoteDate.slice(0, 10),
+          i.quotedPremium,
+          i.leadStatus,
+          i.clientName,
+        ]),
+      ).toEqual([
+        // Jul 10 in Chicago is 05:00Z the same day.
+        ['2026-07-10', 700, 'Sold', 'Lead Fixture'],
+        ['2026-07-02', 400, 'Quoted', 'Lead Fixture'],
+      ]);
+      expect(body.items[0].productsQuoted).toEqual(['Auto']);
+      expect(body.items[0].daysOpen).toBeGreaterThan(0);
+    });
+
+    it('pages in the requested size', async () => {
+      const body = await openQuotes(
+        `${JULY}&producer=${producerId}&page=2&pageSize=1`,
+      );
+
+      expect(body).toMatchObject({
+        page: 2,
+        pageSize: 1,
+        total: 2,
+        totalPages: 2,
+      });
+      expect(body.items.map((i) => i.quotedPremium)).toEqual([400]);
+    });
+
+    it('lists the quotes nobody owns under __none__', async () => {
+      const body = await openQuotes(`${JULY}&producer=__none__`);
+
+      expect(body.producer).toMatchObject({
+        producerId: null,
+        name: 'Unassigned',
+      });
+      expect(body.items).toEqual([
+        expect.objectContaining({
+          leadId: null,
+          clientName: 'Unknown lead',
+          leadStatus: 'Unknown',
+          quotedPremium: 300,
+        }),
+      ]);
+    });
+
+    it('is empty, not an error, for a window with no quotes', async () => {
+      const body = await openQuotes(
+        `range=custom&from=2020-01-01&to=2020-01-31&producer=${producerId}`,
+      );
+      expect(body).toMatchObject({ total: 0, totalPages: 0, items: [] });
     });
   });
 
   describe('access', () => {
-    it.each(['summary', 'producers', 'lead-sources'])(
+    it.each([
+      'summary',
+      'producers',
+      'lead-sources',
+      'producer-quotes',
+      'open-quotes',
+    ])(
       'GET /owner-dashboard/%s — forbidden without owner_dashboard:read',
       async (path) => {
         for (const token of [producerToken, csrToken]) {
@@ -624,6 +893,18 @@ describe('Owner dashboard (PAC-135) (e2e)', () => {
     ])('rejects %s (400)', async (_name, query) => {
       await request(app.getHttpServer())
         .get(`/api/v1/owner-dashboard/summary?${query}`)
+        .set(authHeader(ownerToken))
+        .expect(400);
+    });
+
+    it.each([
+      ['a malformed producer', `${MAY}&producer=nope`],
+      ['page 0', `${MAY}&page=0`],
+      ['a page past the cap', `${MAY}&pageSize=201`],
+      ['custom without bounds', 'range=custom'],
+    ])('rejects open quotes with %s (400)', async (_name, query) => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/owner-dashboard/open-quotes?${query}`)
         .set(authHeader(ownerToken))
         .expect(400);
     });

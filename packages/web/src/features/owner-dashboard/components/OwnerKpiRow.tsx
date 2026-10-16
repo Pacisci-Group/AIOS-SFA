@@ -6,9 +6,10 @@ import {
   ownerDashboardKey,
 } from "@/lib/owner-dashboard-api";
 import type {
-  OwnerClosingRatio,
+  OwnerBlendedClosingRatio,
   OwnerDashboardParams,
   OwnerDashboardSummary,
+  OwnerUnsoldQuotesClosed,
 } from "@/lib/owner-dashboard-api";
 import { formatRangeLabel } from "@/lib/date-range";
 import {
@@ -23,13 +24,37 @@ import { LobMixBar } from "./LobMixBar";
 import { KpiCard as OwnerKpiCard } from "@/components/common/KpiCard";
 import { TrendBadge } from "@/components/common/TrendBadge";
 
-/** Why a closing ratio is "N/A", in words an owner can act on. */
-function closingCaption(ratio: OwnerClosingRatio): string {
-  if (ratio.reason === "no_quotes") return "No quotes recorded in this period";
-  if (ratio.reason === "too_few_quotes") {
-    return "Too few quotes recorded in this period to compare";
+/** "11 of 23 quotes sold". */
+function quotesSold(ratio: OwnerBlendedClosingRatio): string {
+  const { sold, written } = ratio.quote;
+  return `${formatCount(sold)} of ${formatCount(written)} quotes sold`;
+}
+
+/**
+ * Which two figures the headline averages, or — when it is one of them, or
+ * neither — why, in words an owner can act on.
+ */
+function closingCaption(ratio: OwnerBlendedClosingRatio): string {
+  switch (ratio.basis) {
+    case "both":
+      return `Premium ${formatPct(ratio.premium.current)} · Quote ${formatPct(ratio.quote.current)} (${quotesSold(ratio)})`;
+    case "quote":
+      return ratio.premium.reason === "too_few_quotes"
+        ? `Quote only · ${quotesSold(ratio)} · too few quotes for a premium ratio`
+        : `Quote only · ${quotesSold(ratio)}`;
+    case "premium":
+      return `Premium only · ${formatMoneyCompact(ratio.premium.soldPremium)} sold / ${formatMoneyCompact(ratio.premium.quotedPremium)} quoted`;
+    case "none":
+      return ratio.reason === "too_few_quotes"
+        ? "Too few quotes recorded in this period to compare"
+        : "No quotes recorded in this period";
   }
-  return `${formatMoneyCompact(ratio.soldPremium)} sold / ${formatMoneyCompact(ratio.quotedPremium)} quoted`;
+}
+
+/** "$12.4K premium · 18% of 56 open at the start", or why there is no rate. */
+function unsoldCaption(card: OwnerUnsoldQuotesClosed): string {
+  if (card.backlogAtStart === 0) return "No open quotes at the start of this period";
+  return `${formatMoneyCompact(card.recoveredPremium)} premium · ${formatPct(card.ratePct)} of ${formatCount(card.backlogAtStart)} open at the start`;
 }
 
 /** "vs $1.02M · Aug 1 – Aug 21", or that there is nothing to compare with. */
@@ -42,7 +67,8 @@ function premiumCaption(summary: OwnerDashboardSummary): string {
 }
 
 /**
- * The four KPI cards (PAC-135), from **one** request.
+ * The five KPI cards (PAC-135; the closing ratio's average and Unsold Quotes
+ * Closed, Oct 2026), from **one** request.
  *
  * One request for the row rather than one per card, for the reason the Producer
  * scorecards give: four figures about the same window must never half-refresh
@@ -79,7 +105,7 @@ export function OwnerKpiRow({ params }: { params: OwnerDashboardParams }) {
     data ? <TrendBadge trend={data[key]} comparedWith={comparedWith} /> : null;
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
       <OwnerKpiCard
         label="Total bound premium"
         value={formatMoney(data?.premium.current ?? null)}
@@ -116,6 +142,27 @@ export function OwnerKpiRow({ params }: { params: OwnerDashboardParams }) {
         caption={data ? closingCaption(data.closingRatio) : ""}
         badge={badge("closingRatio")}
         isPending={loading}
+      />
+
+      {/*
+       * Quotes from before the period that sold in it — the figure behind
+       * "we closed 30% more unsold quotes this month". Spans two columns where
+       * it would otherwise sit alone on its row.
+       */}
+      <OwnerKpiCard
+        label="Unsold quotes closed"
+        value={formatCount(data?.unsoldQuotesClosed.recovered.current ?? null)}
+        caption={data ? unsoldCaption(data.unsoldQuotesClosed) : ""}
+        badge={
+          data ? (
+            <TrendBadge
+              trend={data.unsoldQuotesClosed.recovered}
+              comparedWith={comparedWith}
+            />
+          ) : null
+        }
+        isPending={loading}
+        className="sm:col-span-2 lg:col-span-1 2xl:col-span-1"
       />
     </div>
   );

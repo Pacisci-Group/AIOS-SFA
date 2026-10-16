@@ -1693,3 +1693,53 @@ off-allowlist `PUT`s are 400. **Not fixed here, by decision:** the dismissed
 update toast not returning for the same worker is PAC-153 §3 (comment on the
 ticket; the `PwaUpdateToast` docblock now says what actually happens).
 
+
+---
+
+## 24. Owner dashboard follow-ups — quotes as uncaptured revenue (handoff, 2026-10-15)
+
+David (14–15 Oct 2026, chat, no PAC ticket yet): average the closing ratio with a quote closing
+ratio; a quotes-per-producer card whose rows open that producer's open quotes in a drawer; Today
+and Yesterday chips; and, "the biggest item", open quotes as uncaptured revenue with a metric like
+"we closed 30% more unsold quotes this month". Full plan and every judgment call:
+`~/.claude/plans/make-the-judgment-calls-prancy-thacker.md` — copy it to
+`docs/plans/pac-NNN-…` once a ticket exists.
+
+### What exists now
+- **Today / Yesterday** on the management bar (`dashboard-range.ts`), so the Manager view has them
+  too. The API already resolved both (`resolveRange`; a day compares with the day before).
+- **One quote-to-sale rule**, `common/sales-metrics/quote-conversion.ts`, used by the Owner
+  dashboard *and* the quote-recaps export: a deal naming the recap wins; else the lead's
+  new-business sale on or after the quote's agency day. **One sale to one quote** — the latest
+  recap before it, arbitrated over *every* recap on the lead (siblings are loaded), so a May quote
+  does not claim a June sale that a June requote owns. `ExportLookups.dealsBy` now excludes company
+  transfers for every dataset (leads' `sold` / `deal_count` / `first_*` columns included).
+- **Summary**: `closingRatio` is now `OwnerBlendedClosingRatio` — headline = mean of the premium
+  ratio (unchanged, still `OwnerClosingRatio`, still what Analytics shows) and the **quote ratio**
+  (cohort: quotes *written in the window* that have *since* sold; ≤ 100, no `MIN_QUOTES_PER_SALE`
+  guard). One side N/A → the other; `basis` says which. New `unsoldQuotesClosed`: quotes from the
+  365 days before the window (`QUOTE_BACKLOG_DAYS`) still open at its start, and how many sold
+  inside it; trend on the count, `ratePct` against the backlog.
+- **`GET /owner-dashboard/producer-quotes`** (written / sold / open / lost / open premium / close %,
+  most open first, Unassigned last) and **`GET /owner-dashboard/open-quotes`** (`producer` = id or
+  `__none__` = `PRODUCER_NONE`, paged in Node because "open" is resolved after the read).
+  `totals.written` = leaderboard `totals.quotes` = `closingRatio.quote.written`, asserted under all
+  seven filters in "the three reads agree".
+- **Lost** = `LOST_LEAD_STATUSES` (Not Qualified · Lost · Closed, on the lead's *current* status,
+  codes normalised). A quote with no lead, or on a lead marked Sold with no deal, is **open**.
+- Web: five KPI cards; `ProducerQuotesTable` full width under the 60/40 pair; `OpenQuotesDrawer`
+  keyed on `?quotesProducer=` (not `producer`, which the Manager drawer owns). The tab switch on
+  `ManagementDashboardPage` now clears both tabs' drawer keys, as its comment always claimed.
+
+### Prod dump (local `sfa`, Oct 2026), through the shared rule
+2026 YTD: 724 quotes written, 440 sold (60.8%), 278 open, 6 lost. Sep: 36 / 16 / 20 / 0.
+Aug: 43 / 31 / 11 / 1. Only 92 of 1,699 deals carry `quoteRecapId`; the lead fallback is
+load-bearing.
+
+### Still open
+- ⚠ **Not yet checked in a browser** (light + dark, the drawer's paging, narrow widths). Bruno's two
+  new requests (`Get Producer Quotes`, `List Open Quotes`) not run against a live API.
+- **For David:** the cohort definition of the quote ratio; whether the Manager view's household
+  close ratio should follow it; whether a year is the right backlog bound.
+- A requoted lead's earlier recap reads as *open* once the later recap takes the sale — visible by
+  its Sold badge in the drawer; ~6 leads a year.

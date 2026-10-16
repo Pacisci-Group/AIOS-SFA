@@ -55,6 +55,8 @@ tests {
     const { totals } = res.getBody();
     expect(totals.premium).to.equal(bru.getVar("ownerSummaryPremium"));
     expect(totals.bound).to.equal(bru.getVar("ownerSummaryItems"));
+    // The quotes counted here are the quotes the quote closing ratio counts.
+    expect(totals.quotes).to.equal(bru.getVar("ownerSummaryQuotesWritten"));
   });
 
   test("goal progress is a placeholder until goals ship", function () {

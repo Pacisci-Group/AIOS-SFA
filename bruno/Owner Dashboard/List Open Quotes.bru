@@ -1,0 +1,109 @@
+meta {
+  name: List Open Quotes
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/owner-dashboard/open-quotes?range=lastMonth&producer=__none__&page=1&pageSize=50
+  body: none
+  auth: bearer
+}
+
+params:query {
+  range: lastMonth
+  producer: __none__
+  page: 1
+  pageSize: 50
+  ~producerIds: 
+  ~leadSourceIds: {{mailerLeadSourceId}}
+  ~policyTypes: Auto
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+auth:bearer {
+  token: {{ownerDashboardToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("pages the open quotes", function () {
+    const body = res.getBody();
+    expect(body.items.length).to.be.at.most(body.pageSize);
+    expect(body.totalPages).to.equal(Math.ceil(body.total / body.pageSize));
+  });
+
+  test("newest quote first, and never a lost lead", function () {
+    const items = res.getBody().items;
+    for (let i = 1; i < items.length; i++) {
+      expect(items[i - 1].quoteDate >= items[i].quoteDate).to.equal(true);
+    }
+    for (const item of items) {
+      expect(["Not Qualified", "Lost", "Closed"]).to.not.include(item.leadStatus);
+    }
+  });
+
+  test("__none__ is the Unassigned producer", function () {
+    const { producer } = res.getBody();
+    expect(producer.producerId).to.equal(null);
+    expect(producer.name).to.equal("Unassigned");
+  });
+}
+
+docs {
+  # GET /owner-dashboard/open-quotes — one producer's open quotes (Oct 2026 follow-up)
+
+  The drawer behind a row of **Quotes by producer**: that producer's quotes
+  written in the window that are still **open** (see `Get Producer Quotes` for
+  what open means), newest first, paged.
+
+  - **Module / permission / scope:** identical to `GET /owner-dashboard/summary`.
+  - **Query:** the summary's filter, plus:
+
+  | param | type | default | notes |
+  |---|---|---|---|
+  | producer | id or `__none__` | — | one producer, or `__none__` for quotes with no producer. Omitted = everyone in scope. Narrows within the caller's scope like `producerIds`; a producer outside it gets an empty page |
+  | page | int ≥ 1 | 1 | |
+  | pageSize | 1–200 | 50 | |
+
+  Paged in the API process, not in Mongo: whether a quote is open depends on
+  its sale and its lead's current status, both resolved after the read.
+
+  ## Response `200`
+  ```json
+  {
+    "period": { "key": "lastMonth", "current": { "from": "2026-09-01", "to": "2026-09-30" }, "previous": { "from": "2026-08-01", "to": "2026-08-31" } },
+    "producer": { "producerId": "66f0…11", "name": "Jessica Yates", "initials": "JY" },
+    "page": 1, "pageSize": 50, "total": 8, "totalPages": 1,
+    "items": [
+      {
+        "quoteRecapId": "66f2…a1", "leadId": "66f1…07", "householdId": "66f1…08",
+        "clientName": "Maria Lopez", "quoteDate": "2026-09-27T05:00:00.000Z",
+        "productsQuoted": ["Auto", "Home"], "quotedPremium": 3120,
+        "leadStatus": "Quoted", "daysOpen": 18
+      }
+    ]
+  }
+  ```
+
+  | field | notes |
+  |---|---|
+  | total / totalPages | open quotes in all; `totalPages` is `0` when there are none |
+  | clientName | the lead's name; `Unknown lead` when the quote has no lead |
+  | quotedPremium | narrowed by a line-of-business filter |
+  | leadStatus | the lead's current status, normalized; `Unknown` with no lead. `Sold` here means a lead marked sold with no deal behind it |
+  | daysOpen | agency-calendar days since the quote date |
+
+  ## Errors
+  | status | when |
+  |---|---|
+  | 400 | anything the summary rejects; a `producer` that is neither an id nor `__none__`; `page` < 1; `pageSize` outside 1–200 |
+  | 401 | no / expired token |
+  | 403 | no `owner_dashboard:read`, or the module is off for the agency |
+}

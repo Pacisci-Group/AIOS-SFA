@@ -211,6 +211,7 @@ export function recentMonthsIn(
  * | key | window (agency calendar days) |
  * |---|---|
  * | `today` | `[T, T+1)` |
+ * | `yesterday` | `[T-1, T)` |
  * | `week` | `[T-6, T+1)` — rolling trailing 7 days **including today**, not a calendar week |
  * | `mtd` | `[1st of T's month, T+1)` |
  * | `lastMonth` | `[1st of previous month, 1st of T's month)` |
@@ -253,6 +254,10 @@ export function resolveRange(
   switch (key) {
     case 'today':
       return build(today, today);
+    case 'yesterday': {
+      const yesterday = addDays(today, -1);
+      return build(yesterday, yesterday);
+    }
     case 'week':
       return build(addDays(today, -6), today);
     case 'mtd':
@@ -335,7 +340,8 @@ export function resolveComparison(
     case 'lastYear':
       return wholeYear(today.year - 2);
     default: {
-      // `today`, `week` and `custom`: the span itself is the unit.
+      // `today`, `yesterday`, `week` and `custom`: the span itself is the
+      // unit, so a single day compares with the day before it.
       const current = resolveRange(key, timeZone, custom, now);
       const from = parseIsoDate(current.from);
       const days = spanDays(current.from, current.to);

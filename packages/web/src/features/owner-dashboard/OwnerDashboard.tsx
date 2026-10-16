@@ -1,18 +1,45 @@
+import { PRODUCER_NONE } from "@sfa/shared";
+import { useCallback, useState } from "react";
 import { LeadSourceMatrix } from "./components/LeadSourceMatrix";
+import { OpenQuotesDrawer } from "./components/OpenQuotesDrawer";
 import { OwnerKpiRow } from "./components/OwnerKpiRow";
 import { ProducerLeaderboard } from "./components/ProducerLeaderboard";
+import {
+  ProducerQuotesTable,
+  type QuotesProducer,
+} from "./components/ProducerQuotesTable";
 import { DashboardFilterBar } from "@/features/management/filters/DashboardFilterBar";
 import { useDashboardFilters } from "@/features/management/filters/useDashboardFilters";
+import { useUrlState } from "@/hooks/useUrlState";
+
+const OBJECT_ID = /^[a-f0-9]{24}$/i;
+
+/**
+ * The open-quotes drawer's producer, in the URL so an open drawer survives a
+ * reload and can be shared. Not `producer`: the Manager view's drawer uses that
+ * key on the same page.
+ */
+const DRAWER_DEFAULTS = { quotesProducer: "" };
+const DRAWER_ALLOWED = {
+  quotesProducer: (value: string) =>
+    value === PRODUCER_NONE || OBJECT_ID.test(value),
+} as const;
 
 /**
  * The Owner View — "Strategy Hub" (PAC-135): a compilation of everything going
  * on in the agency, for whoever owns it.
  *
- * One filter, three self-fetching units. The filter lives here (in the URL) and
- * is handed to each unit whole; nothing below this component holds filter
- * state of its own. Each unit owns its query so one failing leaves the others
- * standing — and because all three send the same filter, the leaderboard total,
- * the lead-source total and the Total Bound Premium card always agree.
+ * One filter, four self-fetching units and a drawer. The filter lives here (in
+ * the URL) and is handed to each unit whole; nothing below this component holds
+ * filter state of its own. Each unit owns its query so one failing leaves the
+ * others standing — and because all of them send the same filter, the
+ * leaderboard total, the lead-source total and the Total Bound Premium card
+ * always agree, as do the quotes the leaderboard, the closing-ratio card and
+ * the Quotes by producer card count.
+ *
+ * Quotes by producer (Oct 2026) sits full width under the two tables, as David
+ * asked ("another card needs to be at the bottom"); clicking a producer opens
+ * their open quotes in a drawer.
  *
  * Left out of v1, deliberately — see each component's docblock for the why:
  * the premium sparkline (needs a month-by-month feed nobody asked for), the
@@ -23,6 +50,24 @@ import { useDashboardFilters } from "@/features/management/filters/useDashboardF
 export function OwnerDashboard() {
   const { range, params, setRange, setFilter, clearFilters, activeCount } =
     useDashboardFilters();
+
+  const [{ quotesProducer }, setDrawer] = useUrlState({
+    defaults: DRAWER_DEFAULTS,
+    allowed: DRAWER_ALLOWED,
+  });
+  // The clicked row's name, to title the drawer before its first page lands.
+  const [pickedName, setPickedName] = useState<string>();
+  const openQuotes = useCallback(
+    (producer: QuotesProducer) => {
+      setPickedName(producer.name);
+      setDrawer({ quotesProducer: producer.id });
+    },
+    [setDrawer],
+  );
+  const closeQuotes = useCallback(
+    () => setDrawer({ quotesProducer: "" }),
+    [setDrawer],
+  );
 
   return (
     <>
@@ -57,7 +102,16 @@ export function OwnerDashboard() {
           <ProducerLeaderboard params={params} />
           <LeadSourceMatrix params={params} />
         </div>
+
+        <ProducerQuotesTable params={params} onSelect={openQuotes} />
       </div>
+
+      <OpenQuotesDrawer
+        producer={quotesProducer || null}
+        fallbackName={pickedName}
+        params={params}
+        onClose={closeQuotes}
+      />
     </>
   );
 }

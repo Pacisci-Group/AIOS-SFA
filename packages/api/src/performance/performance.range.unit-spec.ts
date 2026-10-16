@@ -210,6 +210,47 @@ describe('resolveRange', () => {
     });
   });
 
+  it('yesterday is the single agency day before today', () => {
+    expect(resolveRange('yesterday', CHICAGO, {}, now)).toEqual({
+      startYmd: 20260805,
+      endYmd: 20260806,
+      from: '2026-08-05',
+      to: '2026-08-05',
+    });
+  });
+
+  it('cuts yesterday on the zone it is given, not on UTC', () => {
+    // 19:00Z on Aug 5: still Aug 5 in Chicago, already Aug 6 in Kolkata.
+    const at = new Date('2026-08-05T19:00:00.000Z');
+    expect(resolveRange('yesterday', CHICAGO, {}, at)).toMatchObject({
+      from: '2026-08-04',
+      to: '2026-08-04',
+    });
+    expect(resolveRange('yesterday', KOLKATA, {}, at)).toMatchObject({
+      from: '2026-08-05',
+      to: '2026-08-05',
+    });
+  });
+
+  it('yesterday crosses month and year boundaries', () => {
+    expect(
+      resolveRange(
+        'yesterday',
+        CHICAGO,
+        {},
+        new Date('2026-10-01T17:00:00.000Z'),
+      ),
+    ).toMatchObject({ from: '2026-09-30', to: '2026-09-30' });
+    expect(
+      resolveRange(
+        'yesterday',
+        CHICAGO,
+        {},
+        new Date('2026-01-01T17:00:00.000Z'),
+      ),
+    ).toMatchObject({ from: '2025-12-31', to: '2025-12-31' });
+  });
+
   it('week is the trailing 7 days INCLUDING today, not a calendar week', () => {
     const range = resolveRange('week', CHICAGO, {}, now);
     expect(range).toMatchObject({ from: '2026-07-31', to: '2026-08-06' });
@@ -509,8 +550,21 @@ describe('resolveComparison', () => {
     );
   });
 
+  it('today compares with yesterday', () => {
+    expect(compare('today')).toEqual({ from: '2026-09-20', to: '2026-09-20' });
+  });
+
+  it('yesterday compares with the day before it', () => {
+    expect(compare('yesterday')).toEqual({
+      from: '2026-09-19',
+      to: '2026-09-19',
+    });
+  });
+
   it('never overlaps the window it is compared with', () => {
     for (const key of [
+      'today',
+      'yesterday',
       'mtd',
       'lastMonth',
       'last3Months',

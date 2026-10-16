@@ -182,8 +182,15 @@ function producerStats({ quotes, bound }: { quotes: number; bound: number }) {
   ].join(" · ");
 }
 
-/** Initials in a circle, or — for Unassigned — an icon. */
-function ProducerAvatar({ row }: { row: OwnerProducerRow }) {
+/**
+ * Initials in a circle, or — for Unassigned — an icon. Shared with the Quotes
+ * by producer card and its drawer.
+ */
+export function ProducerAvatar({
+  row,
+}: {
+  row: Pick<OwnerProducerRow, "producerId" | "initials">;
+}) {
   const unassigned = row.producerId === null;
 
   return (

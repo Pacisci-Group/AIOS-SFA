@@ -4,12 +4,14 @@ import type { UrlRange } from "@/lib/date-range";
 import { defaultInterval } from "../analytics-format";
 
 /**
- * The Analytics page's period chips: the management dashboards' set plus
- * "Last 12 Months" — the year view a service trend wants, and the window
- * AgencyZoom's service chart shows.
+ * The Analytics page's period chips: the management dashboards' set (Today and
+ * Yesterday included) plus "Last 12 Months" — the year view a service trend
+ * wants, and the window AgencyZoom's service chart shows.
  */
 export const ANALYTICS_RANGE_CHIPS: readonly RangeChip<OwnerDashboardRangeKey>[] =
   [
+    { key: "today", label: "Today" },
+    { key: "yesterday", label: "Yesterday" },
     { key: "mtd", label: "This Month" },
     { key: "lastMonth", label: "Last Month" },
     { key: "last3Months", label: "Last 3 Months" },
@@ -26,6 +28,8 @@ export function intervalForRange(
   range: UrlRange<OwnerDashboardRangeKey>,
 ): AnalyticsInterval {
   switch (range.key) {
+    case "today":
+    case "yesterday":
     case "mtd":
     case "lastMonth":
       return "day";

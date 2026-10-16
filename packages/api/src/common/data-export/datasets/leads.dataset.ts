@@ -329,19 +329,19 @@ export const leadsDataset = defineDataset<LeadRow, LeadJoins>({
     col(
       'sold',
       'boolean',
-      'Whether any deal is linked to the lead.',
+      'Whether any new-business deal is linked to the lead (company transfers do not count).',
       (row, ctx) => dealsOf(row, ctx.joins).length > 0,
     ),
     col(
       'deal_count',
       'number',
-      'Deals linked to the lead.',
+      'New-business deals linked to the lead.',
       (row, ctx) => dealsOf(row, ctx.joins).length,
     ),
     col(
       'first_deal_id',
       'id',
-      'First deal sold from the lead.',
+      'First new-business deal sold from the lead.',
       (row, ctx) => firstDeal(row, ctx.joins)?._id,
     ),
     col('first_sold_date', 'date', 'Sold date of that deal.', (row, ctx) =>

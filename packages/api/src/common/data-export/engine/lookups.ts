@@ -1,3 +1,4 @@
+import { NEW_BUSINESS_MATCH } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { displayName } from '../../domain/user-names';
 import { contactDisplayName } from '../../domain/contact-names';
@@ -480,6 +481,11 @@ export class ExportLookups {
     return groupBy(rows, (row) => row.leadId);
   }
 
+  /**
+   * **New-business** deals by lead or by the recap they name. Company
+   * transfers are excluded: a transfer is a CSR moving a client, not a sale,
+   * so it must not make a lead "sold" or a quote "converted".
+   */
   async dealsBy(
     field: 'leadId' | 'quoteRecapId',
     parentIds: Iterable<IdLike>,
@@ -488,7 +494,7 @@ export class ExportLookups {
     if (!ids.length) return new Map();
     const rows = await this.models.deal
       .find(
-        { ...this.tenant, [field]: { $in: oids(ids) } },
+        { ...this.tenant, ...NEW_BUSINESS_MATCH, [field]: { $in: oids(ids) } },
         {
           leadId: 1,
           quoteRecapId: 1,
